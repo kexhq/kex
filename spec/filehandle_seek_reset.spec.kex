@@ -22,7 +22,7 @@ main do
   handle.reset.try
   let Ok(Just(line)) = handle.readLine
   handle.seek(6).try
-  let Ok(Just(rest)) = handle.readLine
+  let Just(rest) = handle.getLine
   IO.printLine(line)
   IO.printLine(rest)
 end

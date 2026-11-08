@@ -473,12 +473,12 @@ using Units.Data
 
 main do
   match FS.File.size("report.pdf") do
-    Just(count) => do
+    Ok(count) => do
       let fileSize = count.byte
       IO.printLine(fileSize.to(String, in: MB).or(""))   # decimal MB
       IO.printLine(fileSize.convertTo(MiB).map { |m| m.to(String) }.or(""))
     end
-    None => IO.printError("Cannot read the file size")
+    Error(_) => IO.printError("Cannot read the file size")
   end
 end
 ```

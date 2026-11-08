@@ -131,7 +131,7 @@ private do
     let path = Tey.Broker.text(request, "path")
     return Error("the plugin was not approved to write in the workspace (FS.Write.workspace)") if !grants.writes?
     let target = Tey.Generator.safePath(grants.workspaceRoot, path).try
-    return Error("could not create directory for `${path}`") if !FS.Directory.create(FS.Path.dirname(target))
+    return Error("could not create directory for `${path}`") if !FS.Directory.create(FS.Path.dirname(target)).ok?
     return Error("could not write `${path}`") if FS.File.write(target, Tey.Broker.text(request, "content")).error?
     Tey.Broker.announce("write", path)
     return Ok(JSON.stringify({ ok: true }))
@@ -142,7 +142,7 @@ private do
     return Error("the plugin was not approved to write in the workspace (FS.Write.workspace)") if !grants.writes?
     let target = Tey.Generator.safePath(grants.workspaceRoot, path).try
     return Error("only files can be deleted: `${path}`") if FS.Directory.directory?(target)
-    return Error("could not delete `${path}`") if FS.File.exists?(target) && !FS.File.delete(target)
+    return Error("could not delete `${path}`") if FS.File.exists?(target) && !FS.File.delete(target).ok?
     Tey.Broker.announce("delete", path)
     return Ok(JSON.stringify({ ok: true }))
   end

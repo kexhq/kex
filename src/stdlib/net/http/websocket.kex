@@ -74,7 +74,7 @@ module WebSocket do
   #   let socket = WebSocket.connect("wss://events.example.com/orders").try
   #   match socket.receiveMessage.try do
   #     Text(json) => IO.printLine(json)
-  #     _          => IO.warn("unexpected non-text event")
+  #     _          => IO.printError("unexpected non-text event")
   #   end
   foul connect(url: String) -> Result<Connection, NetError> = Kex.Intrinsic.NetWebSocket.connect(url, ClientOptions {})
   # Opens a connection with ordered subprotocols and an explicit message limit.

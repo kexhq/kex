@@ -147,6 +147,13 @@ auto queryValue(const std::string& source, bool form) -> ValuePtr {
     while (start <= source.size()) {
         auto amp = source.find('&', start);
         auto piece = source.substr(start, amp == std::string::npos ? std::string::npos : amp - start);
+        // An empty piece (an empty query, or "&&") is no entry at all, as in
+        // Ruby's decode_www_form.
+        if (piece.empty()) {
+            if (amp == std::string::npos) break;
+            start = amp + 1;
+            continue;
+        }
         auto equal = piece.find('=');
         auto key = decodeComponent(piece.substr(0, equal), form);
         auto val = equal == std::string::npos ? std::optional<std::string>{} : decodeComponent(piece.substr(equal + 1), form);
@@ -209,11 +216,27 @@ auto normalized(const ParsedURI& uri) -> std::string {
         out += host;
         if (!uri.port.empty() && !((uri.scheme == "http" && uri.port == "80") || (uri.scheme == "https" && uri.port == "443"))) out += ":" + uri.port;
     }
-    auto path = removeDotSegments(uri.path);
-    for (size_t i = 0; i + 2 < path.size(); ++i) if (path[i] == '%') { path[i + 1] = static_cast<char>(std::toupper(path[i + 1])); path[i + 2] = static_cast<char>(std::toupper(path[i + 2])); i += 2; }
-    out += path;
-    if (uri.hasQuery) out += "?" + uri.query;
-    if (uri.hasFragment) out += "#" + uri.fragment;
+    // RFC 3986 6.2.2.2: an escaped unreserved character is decoded (`%7E` is
+    // `~`), and every other escape is written in upper case, as BEAM's
+    // uri_string:normalize does.
+    auto escapes = [](const std::string& text) {
+        std::string result;
+        for (size_t i = 0; i < text.size(); ++i) {
+            if (text[i] == '%' && i + 2 < text.size()) {
+                auto decoded = static_cast<unsigned char>((hexValue(text[i + 1]) << 4) | hexValue(text[i + 2]));
+                if (std::isalnum(decoded) || decoded == '-' || decoded == '.' || decoded == '_' || decoded == '~')
+                    result += static_cast<char>(decoded);
+                else
+                    result += {'%', static_cast<char>(std::toupper(static_cast<unsigned char>(text[i + 1]))),
+                               static_cast<char>(std::toupper(static_cast<unsigned char>(text[i + 2])))};
+                i += 2;
+            } else result += text[i];
+        }
+        return result;
+    };
+    out += escapes(removeDotSegments(uri.path));
+    if (uri.hasQuery) out += "?" + escapes(uri.query);
+    if (uri.hasFragment) out += "#" + escapes(uri.fragment);
     return out;
 }
 

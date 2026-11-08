@@ -77,9 +77,9 @@ device_source(Dev, Owned) ->
     fun() ->
         case file:read_line(Dev) of
             {ok, Line} ->
-                %% iolist_to_binary, not list_to_binary: the device is opened
-                %% in binary mode, so chomp answers a binary already.
-                {iolist_to_binary(string:chomp(Line)), device_source(Dev, Owned)};
+                %% One "\n" off, as FileHandle.getLine does: string:chomp would
+                %% also take the "\r" of a CRLF line.
+                {kex_file:strip_newline(Line), device_source(Dev, Owned)};
             _ ->
                 case Owned of true -> file:close(Dev); false -> ok end,
                 done

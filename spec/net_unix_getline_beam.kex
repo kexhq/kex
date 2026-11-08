@@ -10,15 +10,15 @@ main do
   let listener = Unix.bind(path).try
   let server = Task.start do
     let peer = listener.accept.try
-    assert(peer.getLine.try == Just("hello"))
-    assert(peer.getLine.try == Just(" spaced "))
-    assert(peer.getLine.try == Just("raw"))
-    match peer.getLine do
+    assert(peer.readLine.try == Just("hello"))
+    assert(peer.readLine.try == Just(" spaced "))
+    assert(peer.readLine.try == Just("raw"))
+    match peer.readLine do
       Error(error) => assert(error.kind == Parse, "invalid UTF-8 must be a Parse error")
       Ok(_) => assert(false, "invalid UTF-8 must not decode")
     end
     peer.sendAll("back\n".to(Binary).try).try
-    assert(peer.getLine.try == None)
+    assert(peer.readLine.try == None)
     peer.close
   end
   let client = Unix.connectTo(path).try
@@ -27,7 +27,7 @@ main do
   client.sendAll("aced \n".to(Binary).try).try
   client.sendAll("raw\r\n".to(Binary).try).try
   client.sendAll(Binary.fromBytes([255, 10])).try
-  assert(client.getLine.try == Just("back"))
+  assert(client.readLine.try == Just("back"))
   client.close
   server.await
   listener.close

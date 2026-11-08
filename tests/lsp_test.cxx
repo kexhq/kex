@@ -528,7 +528,7 @@ int main() {
             assertTrue(result.find("(path, content)") != std::string::npos,
                        "completion did not expose function parameter names");
             assertTrue(result.find(R"("label":"foul write")") != std::string::npos &&
-                       result.find("(path, content) : String -> String -> Bool") !=
+                       result.find("(path, content) : String -> String -> Result<Void, FS.FileError>") !=
                            std::string::npos,
                        "foul completion did not use declaration order");
             assertTrue(result.find("read : String -> Result<String, FS.FileError>") != std::string::npos,
@@ -968,7 +968,7 @@ int main() {
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             const auto selected = result.find(
-                "Selected overload**\\n\\n```kex\\nfoul copy : String -> String -> Bool");
+                "Selected overload**\\n\\n```kex\\nfoul copy : String -> String -> Result<Void, FS.FileError>");
             assertTrue(selected != std::string::npos,
                        "FS.File.copy did not select its foul filesystem overload");
             assertTrue(result.find("definitionProvider") != std::string::npos,

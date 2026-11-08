@@ -34,9 +34,9 @@ main do
   client.printLine("l2")
   client.print("p1")
   client.printLine("p2")
-  client.write("w1")
-  client.writeLine("w2")
-  client.writeBytes("raw".to(Binary).try)
+  client.write("w1").try
+  client.writeLine("w2").try
+  client.put("raw".to(Binary).try).try
   client.close
   server.await
   listener.close
@@ -57,9 +57,9 @@ main do
   unixClient.printLine("l2")
   unixClient.print("p1")
   unixClient.printLine("p2")
-  unixClient.write("w1")
-  unixClient.writeLine("w2")
-  unixClient.writeBytes("raw".to(Binary).try)
+  unixClient.write("w1").try
+  unixClient.writeLine("w2").try
+  unixClient.put("raw".to(Binary).try).try
   unixClient.close
   unixServer.await
   unixListener.close

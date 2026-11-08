@@ -4,5 +4,10 @@ binary I/O
   ✓ uses raw standard-stream writes without showing the value
   ✓ round trips a real binary file
   ✓ reads one complete Unicode scalar and reports malformed UTF-8
+Readable and Writable families
+  ✓ reads chunks with get until the end of the file
+  ✓ reads mocked chunks with get
+  ✓ answers results from write, writeLine and put
+  ✓ splits a line read into readLine and getLine
 
-5 passed, 0 failed
+9 passed, 0 failed

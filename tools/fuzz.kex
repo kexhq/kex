@@ -732,7 +732,7 @@ end
 
 foul drive(kex: String, outDir: String, seed: Integer, total: Integer, budgetMs: Integer) do
   if !FS.Directory.exists?(outDir)
-    if !FS.Directory.create(outDir)
+    if !FS.Directory.create(outDir).ok?
       IO.printError("fuzz: cannot create ${outDir}")
       return 2
     end

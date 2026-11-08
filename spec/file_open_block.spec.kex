@@ -34,7 +34,7 @@ main do
 
   # Append preserves what is there; ReadWrite exposes both halves.
   FS.File.open("block.txt", FS.Append) do |file|
-    file.writeLine("appended")
+    file.printLine("appended")
   end
   IO.print(FS.File.read("block.txt").or("(missing)"))
 

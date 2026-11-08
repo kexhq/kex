@@ -1,29 +1,27 @@
-# Complex numbers: rectangular arithmetic, polar form, and functions.
+# Complex numbers: arithmetic, the rectangular and polar views, and functions.
 #
 # Complex is opt-in, so the file opens with `using Complex`.
 
 using Complex
 
 main do
-  let z = Rectangular { re: 3, im: 4 }
-  let w = Rectangular { re: 1, im: -2 }
+  let z = Complex.from(3, 4)
+  let w = Complex.from(1, -2)
   IO.printLine("z = ${z}")
   IO.printLine("w = ${w}")
   IO.printLine("z + w = ${z + w}")
   IO.printLine("z * w = ${z * w}")
   IO.printLine("conjugate(z) = ${z.conjugate}")
 
-  # Magnitude and angle, with a polar round-trip that lands back on z.
-  IO.printLine("|z| = ${z.abs}")
-  IO.printLine("arg(z) = ${z.arg}")
-  let polar = z.polar
-  IO.printLine("polar(z) = ${polar}")
-  IO.printLine("round-trip error = ${(polar.rectangular - z).abs}")
+  # One number, two views: rectangular parts, or magnitude and angle.
+  let (re, im) = z.rectangular
+  IO.printLine("rectangular(z) = ${re}, ${im}")
+  let (radius, theta) = z.polar
+  IO.printLine("polar(z) = ${radius}, ${theta}")
 
-  # Polar values can be declared directly and converted to rectangular.
-  let declared = Polar { radius: 2, theta: 0 }
-  IO.printLine("declared = ${declared.rectangular}")
-  IO.printLine("fromPolar = ${Complex.fromPolar(3, 0)}")
+  # Building from the polar view lands back on z.
+  IO.printLine("round-trip error = ${(Complex.fromPolar(radius, theta) - z).abs}")
+  IO.printLine("fromPolar(3, 0) = ${Complex.fromPolar(3, 0)}")
 
   # i squared is -1, and e^(i * pi) + 1 is 0: Euler's identity.
   IO.printLine("i * i = ${Complex.I * Complex.I}")

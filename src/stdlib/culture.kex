@@ -24,8 +24,8 @@ record NumberSettings do
   groups : (Char, [Integer])? = None
 end
 
-# Date and time layout data. Carried by every preset; no behavior reads it
-# yet — culture-aware time parsing and printing is a later slice.
+# Date and time layout data: how +to(String, culture:)+ on a +Date+, +Time+
+# or +DateTime+ lays the value out, and the names a +Date.format+ pattern uses.
 record TimeSettings do
   # Field order as written: +:year+, +:month+ and +:day+ in written order.
   dateOrder : [Atom]
@@ -35,6 +35,65 @@ record TimeSettings do
 
   # Separates time fields, almost always +:+.
   timeSeparator : Char
+
+  # Whether the culture reads the time of day on a 12-hour clock, with a day
+  # period: +2:03 PM+ rather than +14:03+.
+  twelveHour? : Bool = false
+
+  # Month, weekday and day-period names, or +None+ to write with English
+  # ones. See +timeNames+.
+  names : TimeNames? = None
+end
+
+# The words a culture writes dates and times with: what +MMMM+, +MMM+,
+# +EEEE+, +EEE+ and +a+ in a +Date.format+ pattern turn into.
+record TimeNames do
+  # The month names, January first.
+  months : [String]
+
+  # The abbreviated month names, as +MMM+ writes them.
+  shortMonths : [String]
+
+  # The weekday names, Monday first.
+  weekdays : [String]
+
+  # The abbreviated weekday names, as +EEE+ writes them.
+  shortWeekdays : [String]
+
+  # What +a+ writes before and after noon.
+  dayPeriods : (String, String)
+end
+
+# The names English writes dates with, and the names used for any culture
+# that carries none of its own.
+ENGLISH_TIME_NAMES : TimeNames
+let ENGLISH_TIME_NAMES = TimeNames {
+  months: ["January", "February", "March", "April", "May", "June", "July",
+    "August", "September", "October", "November", "December"],
+  shortMonths: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep",
+    "Oct", "Nov", "Dec"],
+  weekdays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+    "Saturday", "Sunday"],
+  shortWeekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+  dayPeriods: ("AM", "PM")
+}
+
+# The names +culture+ writes dates with: its own when it carries them, and
+# English otherwise. Today the presets carry names for English, Hungarian,
+# German, French, Spanish, Italian, Portuguese and Dutch.
+#
+# @param culture [Culture] the culture
+# @return [TimeNames] the names to write with
+#
+# @example
+#   Culture.timeNames(Culture.of("HU_HU").or(Culture.DEFAULT)).months.first   # => Just("január")
+#   Culture.timeNames(Culture.DEFAULT).months.first                          # => Just("January")
+timeNames : Culture -> TimeNames
+let timeNames(culture) do
+  match culture.time do
+    Just(settings) => return settings.names.or(ENGLISH_TIME_NAMES)
+    None => return ENGLISH_TIME_NAMES
+  end
 end
 
 # A culture: named settings for parsing and printing.
@@ -48,7 +107,7 @@ record Culture do
   # Display name: the ISO tag for presets, anything for a custom culture.
   name : String = "custom"
 
-  # Number settings; the only part parsing and printing read today.
+  # Number settings, read by number parsing and printing.
   numbers : NumberSettings
 
   # Time layout data, or +None+ when the culture defines none.
@@ -340,7 +399,9 @@ let of(code) do
       let time = TimeSettings {
         dateOrder: order,
         dateSeparator: dateSeparator,
-        timeSeparator: timeSeparator
+        timeSeparator: timeSeparator,
+        twelveHour?: twelveHour?(tag),
+        names: languageNames(tag.split("_").first.or(tag))
       }
       found = Just(Culture { name: tag, numbers: numbers, time: Just(time) })
     end
@@ -560,6 +621,102 @@ foul local do
 end
 
 private do
+  # The presets that read the time of day on a 12-hour clock by default.
+  let twelveHour?(tag: String) -> Bool do
+    ["EN", "EN_US", "EN_AU", "EN_CA", "EN_NZ", "EN_PH", "EN_IN"].contains?(tag)
+  end
+
+  # Date and time names by language, the part of the tag before any "_".
+  # +None+ for a language this table does not cover yet.
+  let languageNames(language: String) -> TimeNames? do
+    return Just(ENGLISH_TIME_NAMES) if language == "EN"
+    return Just(HUNGARIAN_NAMES) if language == "HU"
+    return Just(GERMAN_NAMES) if language == "DE"
+    return Just(FRENCH_NAMES) if language == "FR"
+    return Just(SPANISH_NAMES) if language == "ES"
+    return Just(ITALIAN_NAMES) if language == "IT"
+    return Just(PORTUGUESE_NAMES) if language == "PT"
+    return Just(DUTCH_NAMES) if language == "NL"
+    return None
+  end
+
+  let HUNGARIAN_NAMES = TimeNames {
+    months: ["január", "február", "március", "április", "május", "június",
+      "július", "augusztus", "szeptember", "október", "november", "december"],
+    shortMonths: ["jan.", "febr.", "márc.", "ápr.", "máj.", "jún.", "júl.",
+      "aug.", "szept.", "okt.", "nov.", "dec."],
+    weekdays: ["hétfő", "kedd", "szerda", "csütörtök", "péntek", "szombat",
+      "vasárnap"],
+    shortWeekdays: ["H", "K", "Sze", "Cs", "P", "Szo", "V"],
+    dayPeriods: ("de.", "du.")
+  }
+
+  let GERMAN_NAMES = TimeNames {
+    months: ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli",
+      "August", "September", "Oktober", "November", "Dezember"],
+    shortMonths: ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni", "Juli",
+      "Aug.", "Sept.", "Okt.", "Nov.", "Dez."],
+    weekdays: ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag",
+      "Samstag", "Sonntag"],
+    shortWeekdays: ["Mo.", "Di.", "Mi.", "Do.", "Fr.", "Sa.", "So."],
+    dayPeriods: ("AM", "PM")
+  }
+
+  let FRENCH_NAMES = TimeNames {
+    months: ["janvier", "février", "mars", "avril", "mai", "juin", "juillet",
+      "août", "septembre", "octobre", "novembre", "décembre"],
+    shortMonths: ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.",
+      "août", "sept.", "oct.", "nov.", "déc."],
+    weekdays: ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi",
+      "dimanche"],
+    shortWeekdays: ["lun.", "mar.", "mer.", "jeu.", "ven.", "sam.", "dim."],
+    dayPeriods: ("AM", "PM")
+  }
+
+  let SPANISH_NAMES = TimeNames {
+    months: ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+      "agosto", "septiembre", "octubre", "noviembre", "diciembre"],
+    shortMonths: ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago",
+      "sept", "oct", "nov", "dic"],
+    weekdays: ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado",
+      "domingo"],
+    shortWeekdays: ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"],
+    dayPeriods: ("a. m.", "p. m.")
+  }
+
+  let ITALIAN_NAMES = TimeNames {
+    months: ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
+      "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"],
+    shortMonths: ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago",
+      "set", "ott", "nov", "dic"],
+    weekdays: ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì",
+      "sabato", "domenica"],
+    shortWeekdays: ["lun", "mar", "mer", "gio", "ven", "sab", "dom"],
+    dayPeriods: ("AM", "PM")
+  }
+
+  let PORTUGUESE_NAMES = TimeNames {
+    months: ["janeiro", "fevereiro", "março", "abril", "maio", "junho",
+      "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"],
+    shortMonths: ["jan.", "fev.", "mar.", "abr.", "mai.", "jun.", "jul.",
+      "ago.", "set.", "out.", "nov.", "dez."],
+    weekdays: ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira",
+      "sexta-feira", "sábado", "domingo"],
+    shortWeekdays: ["seg.", "ter.", "qua.", "qui.", "sex.", "sáb.", "dom."],
+    dayPeriods: ("AM", "PM")
+  }
+
+  let DUTCH_NAMES = TimeNames {
+    months: ["januari", "februari", "maart", "april", "mei", "juni", "juli",
+      "augustus", "september", "oktober", "november", "december"],
+    shortMonths: ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug",
+      "sep", "okt", "nov", "dec"],
+    weekdays: ["maandag", "dinsdag", "woensdag", "donderdag", "vrijdag",
+      "zaterdag", "zondag"],
+    shortWeekdays: ["ma", "di", "wo", "do", "vr", "za", "zo"],
+    dayPeriods: ("a.m.", "p.m.")
+  }
+
   # Upper-cases a lookup tag and reads +-+ as +_+, so +"hu-HU"+ finds +HU_HU+.
   let normalizeTag(code: String) -> String = code.upperCase.split("-").join("_")
 

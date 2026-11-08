@@ -33,10 +33,10 @@ foul fetch(dep: Tey.Lockfile.Dependency) -> String or! String do
 
   return Ok(path) if FS.Directory.directory?(path)
 
-  return Error("cannot create Tey cache at ${Tey.Cache.root}") if !FS.Directory.create(Tey.Cache.root)
-  return Error("cannot create Tey cache at ${Tey.Cache.root}") if !FS.Directory.create("${Tey.Cache.root}/src")
+  return Error("cannot create Tey cache at ${Tey.Cache.root}") if !FS.Directory.create(Tey.Cache.root).ok?
+  return Error("cannot create Tey cache at ${Tey.Cache.root}") if !FS.Directory.create("${Tey.Cache.root}/src").ok?
 
-  if !FS.Directory.create(sourceRoot(dep))
+  if !FS.Directory.create(sourceRoot(dep)).ok?
     return Error("cannot create Tey cache at ${Tey.Cache.root}")
   end
 
@@ -59,7 +59,7 @@ foul fetch(dep: Tey.Lockfile.Dependency) -> String or! String do
         return Error(error)
       end
       Ok(_) => do
-        return Ok(path) if FS.File.rename(staging, checkout) && FS.Directory.directory?(path)
+        return Ok(path) if FS.File.rename(staging, checkout).ok? && FS.Directory.directory?(path)
         # Another run may have finished the same checkout first. Its result
         # is this one's result — the path is content-addressed by commit.
         FS.Directory.deleteAll(staging)

@@ -1370,32 +1370,35 @@ int main() {
             assertEqual(output, std::string("ab\n"));
         });
 
-        // `String?`, so the line arrives wrapped: `Just("hello")`. It used to
-        // come back bare, which made the declared type a lie and
-        // `match ... Just(x)` match nothing (kexhq/kex#197).
-        it("IO.getLine reads a line from stdin", []() {
+        // `IO.readLine` answers `Result<String?, ReadError>`, like every Readable,
+        // so the line arrives as `Ok(Just("hello"))` (kexhq/kex#197).
+        it("IO.readLine reads a line from stdin", []() {
             std::istringstream input("hello\n");
             auto* prevCin = std::cin.rdbuf(input.rdbuf());
-            auto result = run("main do\n  IO.getLine()\nend\n");
+            auto result = run("main do\n  IO.readLine()\nend\n");
             std::cin.rdbuf(prevCin);
-            const auto& line = std::get<VariantValue>(result->data);
+            const auto& ok = std::get<VariantValue>(result->data);
+            assertEqual(ok.tag, std::string("Ok"));
+            const auto& line = std::get<VariantValue>(ok.args.at(0)->data);
             assertEqual(line.tag, std::string("Just"));
             assertEqual(std::get<StringValue>(line.args.at(0)->data).value,
                         std::string("hello"));
         });
 
-        it("IO.getLine returns None at EOF", []() {
+        it("IO.readLine returns Ok(None) at EOF", []() {
             std::istringstream input("");
             auto* prevCin = std::cin.rdbuf(input.rdbuf());
-            auto result = run("main do\n  IO.getLine()\nend\n");
+            auto result = run("main do\n  IO.readLine()\nend\n");
             std::cin.rdbuf(prevCin);
-            assertTrue(result->isNone());
+            const auto& ok = std::get<VariantValue>(result->data);
+            assertEqual(ok.tag, std::string("Ok"));
+            assertTrue(ok.args.at(0)->isNone());
         });
 
-        it("IO.get reads a single character from stdin", []() {
+        it("IO.getChar reads a single character from stdin", []() {
             std::istringstream input("ab");
             auto* prevCin = std::cin.rdbuf(input.rdbuf());
-            auto result = run("main do\n  IO.get()\nend\n");
+            auto result = run("main do\n  IO.getChar()\nend\n");
             std::cin.rdbuf(prevCin);
             const auto& character = std::get<VariantValue>(result->data);
             assertEqual(character.tag, std::string("Just"));
@@ -1403,10 +1406,10 @@ int main() {
                         std::string("a"));
         });
 
-        it("IO.get returns None at EOF", []() {
+        it("IO.getChar returns None at EOF", []() {
             std::istringstream input("");
             auto* prevCin = std::cin.rdbuf(input.rdbuf());
-            auto result = run("main do\n  IO.get()\nend\n");
+            auto result = run("main do\n  IO.getChar()\nend\n");
             std::cin.rdbuf(prevCin);
             assertTrue(result->isNone());
         });
@@ -1441,7 +1444,7 @@ int main() {
             assertTrue(std::get<BoolValue>(afterWrite->data).value);
 
             auto deleted = runFS("main do\n  FS.File.delete(\"" + path + "\")\nend\n");
-            assertTrue(std::get<BoolValue>(deleted->data).value);
+            assertEqual(std::get<VariantValue>(deleted->data).tag, std::string("Ok"));
             auto afterDelete = runFS("main do\n  FS.File.exists?(\"" + path + "\")\nend\n");
             assertFalse(std::get<BoolValue>(afterDelete->data).value);
         });
@@ -1509,9 +1512,9 @@ int main() {
                 "main do\n"
                 "  Mock.FS.File(\"mock.txt\", \"old\")\n"
                 "  let writer = FS.File.open(\"mock.txt\", FS.Write).try\n"
-                "  writer.write(\"new\")\n"
+                "  writer.print(\"new\")\n"
                 "  let appender = FS.File.open(\"mock.txt\", FS.Append).try\n"
-                "  appender.write(\"!\")\n"
+                "  appender.print(\"!\")\n"
                 "  FS.File.read(\"mock.txt\").or(\"\")\n"
                 "end\n"
             );
@@ -1595,9 +1598,12 @@ int main() {
                         std::string("one/two/one"));
         });
 
-        it("deleting a nonexistent file returns false", []() {
+        it("deleting a nonexistent file answers DeleteFailed", []() {
             auto result = runFS("main do\n  FS.File.delete(\"/nonexistent/kex/path/xyz\")\nend\n");
-            assertFalse(std::get<BoolValue>(result->data).value);
+            const auto* error = std::get_if<VariantValue>(&result->data);
+            assertTrue(error && error->tag == "Error" && !error->args.empty());
+            const auto* failure = std::get_if<VariantValue>(&error->args[0]->data);
+            assertTrue(failure && failure->tag == "DeleteFailed");
         });
 
         it("readLines materializes a list of lines", [scratchPath]() {
@@ -1661,7 +1667,7 @@ int main() {
                 "main do\n"
                 "  FS.File.write(\"" + path + "\", \"a\\nb\\nc\")\n"
                 "  let handle = FS.File.open(\"" + path + "\", Read).try\n"
-                "  handle.readLine\n"
+                "  handle.getLine\n"
                 "  handle.feed.try.take(5)\n"
                 "end\n"
             );
@@ -1672,9 +1678,10 @@ int main() {
             std::filesystem::remove(path);
         });
 
-        it("feed on a nonexistent file returns None", []() {
+        it("feed on a nonexistent file answers ReadFailed", []() {
             auto result = runFS("main do\n  FS.File.feed(\"/nonexistent/kex/path/xyz\")\nend\n");
-            assertTrue(result->isNone());
+            const auto* error = std::get_if<VariantValue>(&result->data);
+            assertTrue(error && error->tag == "Error");
         });
     });
 

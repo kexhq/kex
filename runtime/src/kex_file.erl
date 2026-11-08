@@ -9,11 +9,11 @@
 -export([exists/1, lines/1, read/1, read_bytes/1, write/2, write_bytes/2, append/2, size/1, delete/1, feed/1,
          open/2,
          basename/1, dirname/1, extension/1, join/2, absolute/1,
-         canonical/1, 'symlink?'/1, info/1, changeMode/2,
+         canonical/1, strip_newline/1, 'symlink?'/1, info/1, changeMode/2,
          'file?'/1, 'directory?'/1, copy/2, rename/2,
          handle_getLine/1, handle_get/1,
          handle_printLine/2, handle_print/2,
-         handle_read/1, handle_read_bytes/1, handle_write/2, handle_write_bytes/2,
+         handle_read/1, handle_read_bytes/1, handle_put/2, handle_get_chunk/2,
          'handle_atEnd?'/1, handle_close/1, handle_seek/2, handle_reset/1,
          dir_current/0, dir_home/0, dir_temporary/0, dir_create/1,
          dir_delete/1, dir_delete_all/1,
@@ -175,7 +175,9 @@ size(Path) ->
     case mock_content(Path) of
         undefined ->
             case file:read_file_info(pth(Path)) of
-                {ok, Info} -> {'Just', element(2, Info)};  %% #file_info.size is index 2
+                %% #file_info.size is index 2, .type 3: a directory has no
+                %% file size, as the walker reports.
+                {ok, Info} when element(3, Info) =/= directory -> {'Just', element(2, Info)};
                 _          -> 'None'
             end;
         C -> {'Just', byte_size(C)}
@@ -246,7 +248,11 @@ feed(Path) ->
 open(Path, Mode) ->
     case mock_content(Path) of
         undefined ->
-            case file:open(pth(Path), mode_flags(Mode)) of
+            %% `ReadWrite` opens an existing file, as `r+` does: file:open's
+            %% [read, write] would create a missing one.
+            Missing = Mode =:= 'ReadWrite' andalso not filelib:is_regular(pth(Path)),
+            case Missing orelse file:open(pth(Path), mode_flags(Mode)) of
+                true -> {'Error', {'OpenFailed', pth(Path)}};
                 {ok, Dev} -> {'Ok', {'FileHandle', Dev, pth(Path)}};
                 {error, _Reason} -> {'Error', {'OpenFailed', pth(Path)}}
             end;
@@ -282,12 +288,23 @@ mode_flags(_)           -> [read, binary].
 %% These clauses come first: `stdout =/= mock` would otherwise match the
 %% file clauses below and hand an atom to file:write/2.
 
+%% A line's ending off a line read in binary mode: "\n" or "\r\n", as
+%% String.lines and the walker read it (file:read_line already turns CRLF
+%% into LF, but a device opened without it would not).
+strip_newline(Line) ->
+    Bin = iolist_to_binary(Line),
+    case Bin of
+        <<Body:(byte_size(Bin) - 2)/binary, "\r\n">> -> Body;
+        <<Body:(byte_size(Bin) - 1)/binary, "\n">> -> Body;
+        _ -> Bin
+    end.
+
 %% getLine → String? (newline stripped, None at EOF).
 handle_getLine({'FileHandle', stdin, _}) -> optional_text_result(kex_io:read_line());
 handle_getLine({'FileHandle', Std, _}) when Std =:= stdout; Std =:= stderr -> {'Ok', 'None'};
 handle_getLine({'FileHandle', Dev, _}) when Dev =/= mock ->
     case file:read_line(Dev) of
-        {ok, Line} -> optional_text_result({'Just', string:trim(Line, trailing, "\n")});
+        {ok, Line} -> optional_text_result({'Just', strip_newline(Line)});
         eof        -> {'Ok', 'None'};
         _          -> {'Error', 'ReadFailed'}
     end;
@@ -378,25 +395,50 @@ read_rest(Dev, Acc) ->
     end.
 
 %% write(data) → Void (raw write).
-handle_write({'FileHandle', stdout, _}, Content) -> kex_io:print(Content);
-handle_write({'FileHandle', stderr, _}, Content) -> kex_io:print_error_raw(Content);
-handle_write({'FileHandle', stdin, _}, _) -> 'Kex.Unit';
-handle_write({'FileHandle', Dev, _}, Content) when Dev =/= mock ->
-    file:write(Dev, kex_io:to_string_bin(Content)),
-    'Kex.Unit';
-handle_write({'FileHandle', mock, Path}, Content) ->
-    mock_append(Path, kex_io:to_string_bin(Content)),
-    'Kex.Unit';
-handle_write(_, _) -> 'Kex.Unit'.
+%% put(Content) → Result<Void, WriteError>: the bytes, verbatim; a String is
+%% its UTF-8 bytes. The write that reports failure: a closed handle, a device
+%% error, or standard input.
+handle_put(H, Content) when is_binary(Content) -> handle_put(H, {'Binary', Content});
+handle_put({'FileHandle', stdout, _}, {'Binary', Bin}) ->
+    kex_io:print_binary(Bin), {'Ok', 'Kex.Unit'};
+handle_put({'FileHandle', stderr, _}, {'Binary', Bin}) ->
+    kex_io:print_error_binary(Bin), {'Ok', 'Kex.Unit'};
+handle_put({'FileHandle', mock, Path}, {'Binary', Bin}) ->
+    mock_append(Path, Bin), {'Ok', 'Kex.Unit'};
+handle_put({'FileHandle', Dev, _}, {'Binary', Bin}) when Dev =/= stdin ->
+    case file:write(Dev, Bin) of
+        ok -> {'Ok', 'Kex.Unit'};
+        _ -> {'Error', 'WriteFailed'}
+    end;
+handle_put(_, _) -> {'Error', 'WriteFailed'}.
 
-handle_write_bytes({'FileHandle', stdout, _}, {'Binary', Bin}) -> kex_io:print_binary(Bin);
-handle_write_bytes({'FileHandle', stderr, _}, {'Binary', Bin}) -> kex_io:print_error_binary(Bin);
-handle_write_bytes({'FileHandle', stdin, _}, _) -> 'Kex.Unit';
-handle_write_bytes({'FileHandle', Dev, _}, {'Binary', Bin}) when Dev =/= mock ->
-    file:write(Dev, Bin), 'Kex.Unit';
-handle_write_bytes({'FileHandle', mock, Path}, {'Binary', Bin}) ->
-    mock_append(Path, Bin), 'Kex.Unit';
-handle_write_bytes(_, _) -> 'Kex.Unit'.
+%% getChunk(Limit) → Result<Binary?, ReadError>: up to Limit bytes, None at
+%% the end. Standard input answers a line at a time, newline included, so an
+%% interactive read never waits for a full buffer.
+handle_get_chunk({'FileHandle', stdin, _}, _) ->
+    case kex_io:read_line() of
+        'None' -> {'Ok', 'None'};
+        {'Just', Line} -> {'Ok', {'Just', {'Binary', <<Line/binary, "\n">>}}}
+    end;
+handle_get_chunk({'FileHandle', Std, _}, _) when Std =:= stdout; Std =:= stderr ->
+    {'Error', 'ReadFailed'};
+handle_get_chunk({'FileHandle', mock, Path}, Limit) when is_integer(Limit), Limit > 0 ->
+    Content = mock_content(Path),
+    Pos = mock_pos(Path),
+    case byte_size(Content) - Pos of
+        Left when Left =< 0 -> {'Ok', 'None'};
+        Left ->
+            Take = min(Left, Limit),
+            set_mock_pos(Path, Pos + Take),
+            {'Ok', {'Just', {'Binary', binary:part(Content, Pos, Take)}}}
+    end;
+handle_get_chunk({'FileHandle', Dev, _}, Limit) when is_integer(Limit), Limit > 0 ->
+    case file:read(Dev, Limit) of
+        {ok, Data} -> {'Ok', {'Just', {'Binary', iolist_to_binary(Data)}}};
+        eof -> {'Ok', 'None'};
+        _ -> {'Error', 'ReadFailed'}
+    end;
+handle_get_chunk(_, _) -> {'Error', 'ReadFailed'}.
 
 mock_append(Path, Content) ->
     P = pth(Path),
@@ -411,10 +453,15 @@ mock_append(Path, Content) ->
 %% character; report "not at end" and let the read answer None.
 'handle_atEnd?'({'FileHandle', Std, _}) when Std =:= stdout; Std =:= stderr; Std =:= stdin -> false;
 'handle_atEnd?'({'FileHandle', Dev, _}) when Dev =/= mock ->
-    {ok, Pos} = file:position(Dev, cur),
-    {ok, End} = file:position(Dev, eof),
-    {ok, _} = file:position(Dev, {bof, Pos}),
-    Pos >= End;
+    %% A closed handle has nothing left to read: true, as the walker answers,
+    %% rather than a badmatch on {error, terminated}.
+    case file:position(Dev, cur) of
+        {ok, Pos} ->
+            {ok, End} = file:position(Dev, eof),
+            {ok, _} = file:position(Dev, {bof, Pos}),
+            Pos >= End;
+        {error, _} -> true
+    end;
 'handle_atEnd?'({'FileHandle', mock, Path}) ->
     mock_pos(Path) >= byte_size(mock_content(Path));
 'handle_atEnd?'(_) -> true.
@@ -625,10 +672,17 @@ dir_delete(P) ->
             end
     end.
 
+%% Only a directory tree: file:del_dir_r would delete a plain file too, so a
+%% file, a symlink or a missing path answers false without touching it.
 dir_delete_all(P) ->
-    case file:del_dir_r(pth(P)) of
-        ok -> true;
-        _  -> false
+    Path = pth(P),
+    case file:read_link_info(Path) of
+        {ok, Info} when element(3, Info) =:= directory ->  %% #file_info.type
+            case file:del_dir_r(Path) of
+                ok -> true;
+                _  -> false
+            end;
+        _ -> false
     end.
 
 %% list/files/directories → Just([String]) | 'None'. Mocked directories list

@@ -98,7 +98,7 @@ make Address do
   # @return [Bool] whether every address bit is zero
   #
   # @example Warning before binding a service on every interface
-  #   IO.warn("service will be publicly reachable") if bind.unspecified?
+  #   IO.printError("service will be publicly reachable") if bind.unspecified?
   unspecified? :> Bool
   let unspecified? -> Bool = Kex.Intrinsic.NetIP.unspecified?(this)
 

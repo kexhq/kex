@@ -1,0 +1,9 @@
+# kex: check-only
+# Reading a Feed advances its cursor, so it is an effect: a pure function
+# cannot consume one. `map` and `filter` stay pure: they only wrap the feed.
+let first(lines: Feed<Integer>) -> Integer? = lines.pull
+let doubled(lines: Feed<Integer>) -> Feed<Integer> = lines.map { |n| n * 2 }
+
+main do
+  IO.inspect(first(Feed.Elements([1])))
+end

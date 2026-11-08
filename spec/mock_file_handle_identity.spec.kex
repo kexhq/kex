@@ -14,13 +14,13 @@ main do
 
   let reader = FS.File.open("typed.txt", FS.Read).try
   IO.printLine(reader.getLine.or("(none)"))
-  IO.printLine(reader.readLine.or("(none)"))
+  IO.printLine(reader.getLine.or("(none)"))
   reader.close
 
   let writer = FS.File.open("out.txt", FS.Write).try
   # The write answers Void now, not the Bool it used to (kexhq/kex#139), so
   # the evidence that it dispatched is the content read back below.
-  writer.write("written")
+  writer.print("written")
   writer.close
   IO.printLine(FS.File.read("out.txt").or("(missing)"))
 

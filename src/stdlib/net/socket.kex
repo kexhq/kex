@@ -210,61 +210,85 @@ capability TCP do
   # @example Sending one newline-delimited request
   #   connection.sendAll("status\n".to(Binary).try).try
   foul sendAll(connection: TCPConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetTCP.sendAll(connection, data)
+  # Writes +content+ verbatim: raw bytes, no rendering, no trailing newline.
+  #
+  # @example Echoing a received chunk verbatim
+  #   connection.put(chunk).try
+  foul put(connection: TCPConnection, content: Binary) -> Result<Void, NetError> do
+    return Kex.Intrinsic.NetTCP.sendAll(connection, content).map { |_| () }
+  end
   # Writes +content+ with no trailing newline.
   #
   # @example Sending a prompt without a newline
-  #   connection.write("name? ")
-  foul write(connection: TCPConnection, content: Showable) -> Void do
-    connection.sendAll(content.showValue.to(Binary).try).try
-    ()
+  #   connection.write("name? ").try
+  foul write(connection: TCPConnection, content: Showable) -> Result<Void, NetError> do
+    let bytes = content.showValue.to(Binary).or(Binary.empty)
+    return Kex.Intrinsic.NetTCP.sendAll(connection, bytes).map { |_| () }
   end
   # Writes +content+ followed by a newline.
   #
-  # @example Answering a line-oriented client
+  # @example Answering a line-oriented peer
+  #   connection.writeLine("hello").try
+  foul writeLine(connection: TCPConnection, content: Showable) -> Result<Void, NetError> do
+    let bytes = "${content.showValue}\n".to(Binary).or(Binary.empty)
+    return Kex.Intrinsic.NetTCP.sendAll(connection, bytes).map { |_| () }
+  end
+  # Writes +content+ with no trailing newline, ignoring a failure. Use
+  # +write+ when a failure matters.
+  #
+  # @example Sending a prompt without a newline
+  #   connection.print("name? ")
+  foul print(connection: TCPConnection, content: Showable) -> Void do
+    Kex.Intrinsic.NetTCP.sendAll(connection, content.showValue.to(Binary).or(Binary.empty))
+    return ()
+  end
+  # Writes +content+ followed by a newline, ignoring a failure. Use
+  # +writeLine+ when a failure matters.
+  #
+  # @example Answering a line-oriented peer
   #   connection.printLine("hello")
   foul printLine(connection: TCPConnection, content: Showable) -> Void do
-    connection.sendAll((content.showValue + "\n").to(Binary).try).try
-    ()
-  end
-  # Writes raw bytes with no trailing newline and no rendering.
-  #
-  # @example Echoing a received line verbatim
-  #   connection.writeBytes(line)
-  foul writeBytes(connection: TCPConnection, content: Binary) -> Void do
-    connection.sendAll(content).try
-    ()
-  end
-  # Writes +content+ with no trailing newline. The same as +write+.
-  foul print(connection: TCPConnection, content: Showable) -> Void do
-    connection.sendAll(content.showValue.to(Binary).try).try
-    ()
-  end
-  # Writes +content+ followed by a newline. The same as +printLine+.
-  foul writeLine(connection: TCPConnection, content: Showable) -> Void do
-    connection.sendAll((content.showValue + "\n").to(Binary).try).try
-    ()
+    Kex.Intrinsic.NetTCP.sendAll(connection, "${content.showValue}\n".to(Binary).or(Binary.empty))
+    return ()
   end
   # Reads the next line as text, without its newline.
   #
-  # Answers +Ok(None)+ at end of input, like +FileHandle.getLine+. Lines are
+  # Answers +Ok(None)+ at end of input, like +FileHandle.readLine+. Lines are
   # capped at 64 KiB; a longer line fails with +Limit+ instead of growing
   # without bound.
   #
   # @example Echoing one line back to its sender
-  #   match connection.getLine.try do
+  #   match connection.readLine.try do
   #     Just(line) => connection.printLine(line)
   #     None => connection.close
   #   end
-  foul getLine(connection: TCPConnection) -> Result<String?, NetError> do
-    match connection.receiveLine(65536) do
+  foul readLine(connection: TCPConnection) -> Result<String?, NetError> do
+    match Kex.Intrinsic.NetTCP.receiveLine(connection, 65536) do
       Ok(bytes) => match bytes.to(String) do
         Just(text) => do
           let t = text.endsWith?("\n") then text.take(text.count - 1) else text
-          Ok(Just(t.endsWith?("\r") then t.take(t.count - 1) else t))
+          return Ok(Just(t.endsWith?("\r") then t.take(t.count - 1) else t))
         end
-        None => Error(NetError { kind: Parse, operation: TCP, message: "received line is not valid UTF-8" })
+        None => return Error(NetError { kind: Parse, operation: TCP, message: "received line is not valid UTF-8" })
       end
-      Error(e) => e.kind == Closed then Ok(None) else Error(e)
+      Error(e) => return e.kind == Closed then Ok(None) else Error(e)
+    end
+  end
+  # Reads the next line as text, without its newline: +readLine+ for when the
+  # end of input and a failed read mean the same thing.
+  #
+  # @example Printing one received line
+  #   IO.printLine(connection.getLine.or("(closed)"))
+  foul getLine(connection: TCPConnection) -> String? do
+    match Kex.Intrinsic.NetTCP.receiveLine(connection, 65536) do
+      Ok(bytes) => match bytes.to(String) do
+        Just(text) => do
+          let t = text.endsWith?("\n") then text.take(text.count - 1) else text
+          return Just(t.endsWith?("\r") then t.take(t.count - 1) else t)
+        end
+        None => return None
+      end
+      Error(_) => return None
     end
   end
 
@@ -632,58 +656,85 @@ capability Unix do
 
   # Sends every byte and returns the count.
   foul sendAll(connection: UnixConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetUnix.sendAll(connection, data)
+  # Writes +content+ verbatim: raw bytes, no rendering, no trailing newline.
+  #
+  # @example Echoing a received chunk verbatim
+  #   connection.put(chunk).try
+  foul put(connection: UnixConnection, content: Binary) -> Result<Void, NetError> do
+    return Kex.Intrinsic.NetUnix.sendAll(connection, content).map { |_| () }
+  end
   # Writes +content+ with no trailing newline.
   #
   # @example Sending a prompt without a newline
-  #   connection.write("name? ")
-  foul write(connection: UnixConnection, content: Showable) -> Void do
-    connection.sendAll(content.showValue.to(Binary).try).try
-    ()
+  #   connection.write("name? ").try
+  foul write(connection: UnixConnection, content: Showable) -> Result<Void, NetError> do
+    let bytes = content.showValue.to(Binary).or(Binary.empty)
+    return Kex.Intrinsic.NetUnix.sendAll(connection, bytes).map { |_| () }
   end
   # Writes +content+ followed by a newline.
   #
   # @example Answering a line-oriented peer
+  #   connection.writeLine("hello").try
+  foul writeLine(connection: UnixConnection, content: Showable) -> Result<Void, NetError> do
+    let bytes = "${content.showValue}\n".to(Binary).or(Binary.empty)
+    return Kex.Intrinsic.NetUnix.sendAll(connection, bytes).map { |_| () }
+  end
+  # Writes +content+ with no trailing newline, ignoring a failure. Use
+  # +write+ when a failure matters.
+  #
+  # @example Sending a prompt without a newline
+  #   connection.print("name? ")
+  foul print(connection: UnixConnection, content: Showable) -> Void do
+    Kex.Intrinsic.NetUnix.sendAll(connection, content.showValue.to(Binary).or(Binary.empty))
+    return ()
+  end
+  # Writes +content+ followed by a newline, ignoring a failure. Use
+  # +writeLine+ when a failure matters.
+  #
+  # @example Answering a line-oriented peer
   #   connection.printLine("hello")
   foul printLine(connection: UnixConnection, content: Showable) -> Void do
-    connection.sendAll((content.showValue + "\n").to(Binary).try).try
-    ()
-  end
-  # Writes raw bytes with no trailing newline and no rendering.
-  #
-  # @example Echoing a received line verbatim
-  #   connection.writeBytes(line)
-  foul writeBytes(connection: UnixConnection, content: Binary) -> Void do
-    connection.sendAll(content).try
-    ()
-  end
-  # Writes +content+ with no trailing newline. The same as +write+.
-  foul print(connection: UnixConnection, content: Showable) -> Void do
-    connection.sendAll(content.showValue.to(Binary).try).try
-    ()
-  end
-  # Writes +content+ followed by a newline. The same as +printLine+.
-  foul writeLine(connection: UnixConnection, content: Showable) -> Void do
-    connection.sendAll((content.showValue + "\n").to(Binary).try).try
-    ()
+    Kex.Intrinsic.NetUnix.sendAll(connection, "${content.showValue}\n".to(Binary).or(Binary.empty))
+    return ()
   end
   # Reads the next line as text, without its newline.
   #
-  # Answers +Ok(None)+ at end of input, like +FileHandle.getLine+. Lines are
+  # Answers +Ok(None)+ at end of input, like +FileHandle.readLine+. Lines are
   # capped at 64 KiB; a longer line fails with +Limit+ instead of growing
   # without bound.
   #
-  # @example Printing one received line
-  #   IO.printLine(connection.getLine.try.or("(closed)"))
-  foul getLine(connection: UnixConnection) -> Result<String?, NetError> do
+  # @example Echoing one line back to its sender
+  #   match connection.readLine.try do
+  #     Just(line) => connection.printLine(line)
+  #     None => connection.close
+  #   end
+  foul readLine(connection: UnixConnection) -> Result<String?, NetError> do
     match Kex.Intrinsic.NetUnix.receiveLine(connection, 65536) do
       Ok(bytes) => match bytes.to(String) do
         Just(text) => do
           let t = text.endsWith?("\n") then text.take(text.count - 1) else text
-          Ok(Just(t.endsWith?("\r") then t.take(t.count - 1) else t))
+          return Ok(Just(t.endsWith?("\r") then t.take(t.count - 1) else t))
         end
-        None => Error(NetError { kind: Parse, operation: Unix, message: "received line is not valid UTF-8" })
+        None => return Error(NetError { kind: Parse, operation: Unix, message: "received line is not valid UTF-8" })
       end
-      Error(e) => e.kind == Closed then Ok(None) else Error(e)
+      Error(e) => return e.kind == Closed then Ok(None) else Error(e)
+    end
+  end
+  # Reads the next line as text, without its newline: +readLine+ for when the
+  # end of input and a failed read mean the same thing.
+  #
+  # @example Printing one received line
+  #   IO.printLine(connection.getLine.or("(closed)"))
+  foul getLine(connection: UnixConnection) -> String? do
+    match Kex.Intrinsic.NetUnix.receiveLine(connection, 65536) do
+      Ok(bytes) => match bytes.to(String) do
+        Just(text) => do
+          let t = text.endsWith?("\n") then text.take(text.count - 1) else text
+          return Just(t.endsWith?("\r") then t.take(t.count - 1) else t)
+        end
+        None => return None
+      end
+      Error(_) => return None
     end
   end
   # Receives one bounded chunk; EOF is +Closed+.
@@ -743,39 +794,46 @@ capability TLS do
 
   # Sends every plaintext byte through the TLS stream.
   foul sendAll(connection: TLSConnection, data: Binary) -> Result<Integer, NetError> = Kex.Intrinsic.NetTLS.sendAll(connection, data)
+  # Writes +content+ verbatim: raw bytes, no rendering, no trailing newline.
+  #
+  # @example Echoing a received chunk verbatim
+  #   connection.put(chunk).try
+  foul put(connection: TLSConnection, content: Binary) -> Result<Void, NetError> do
+    return Kex.Intrinsic.NetTLS.sendAll(connection, content).map { |_| () }
+  end
   # Writes +content+ with no trailing newline.
   #
   # @example Sending a prompt without a newline
-  #   connection.write("name? ")
-  foul write(connection: TLSConnection, content: Showable) -> Void do
-    connection.sendAll(content.showValue.to(Binary).try).try
-    ()
+  #   connection.write("name? ").try
+  foul write(connection: TLSConnection, content: Showable) -> Result<Void, NetError> do
+    let bytes = content.showValue.to(Binary).or(Binary.empty)
+    return Kex.Intrinsic.NetTLS.sendAll(connection, bytes).map { |_| () }
   end
   # Writes +content+ followed by a newline.
   #
   # @example Answering a line-oriented peer
+  #   connection.writeLine("hello").try
+  foul writeLine(connection: TLSConnection, content: Showable) -> Result<Void, NetError> do
+    let bytes = "${content.showValue}\n".to(Binary).or(Binary.empty)
+    return Kex.Intrinsic.NetTLS.sendAll(connection, bytes).map { |_| () }
+  end
+  # Writes +content+ with no trailing newline, ignoring a failure. Use
+  # +write+ when a failure matters.
+  #
+  # @example Sending a prompt without a newline
+  #   connection.print("name? ")
+  foul print(connection: TLSConnection, content: Showable) -> Void do
+    Kex.Intrinsic.NetTLS.sendAll(connection, content.showValue.to(Binary).or(Binary.empty))
+    return ()
+  end
+  # Writes +content+ followed by a newline, ignoring a failure. Use
+  # +writeLine+ when a failure matters.
+  #
+  # @example Answering a line-oriented peer
   #   connection.printLine("hello")
   foul printLine(connection: TLSConnection, content: Showable) -> Void do
-    connection.sendAll((content.showValue + "\n").to(Binary).try).try
-    ()
-  end
-  # Writes raw bytes with no trailing newline and no rendering.
-  #
-  # @example Echoing a received line verbatim
-  #   connection.writeBytes(line)
-  foul writeBytes(connection: TLSConnection, content: Binary) -> Void do
-    connection.sendAll(content).try
-    ()
-  end
-  # Writes +content+ with no trailing newline. The same as +write+.
-  foul print(connection: TLSConnection, content: Showable) -> Void do
-    connection.sendAll(content.showValue.to(Binary).try).try
-    ()
-  end
-  # Writes +content+ followed by a newline. The same as +printLine+.
-  foul writeLine(connection: TLSConnection, content: Showable) -> Void do
-    connection.sendAll((content.showValue + "\n").to(Binary).try).try
-    ()
+    Kex.Intrinsic.NetTLS.sendAll(connection, "${content.showValue}\n".to(Binary).or(Binary.empty))
+    return ()
   end
   # Receives one decrypted chunk no larger than +limit+.
   foul receiveChunk(connection: TLSConnection, limit: Integer) -> Result<Binary, NetError> = Kex.Intrinsic.NetTLS.receiveChunk(connection, limit)
@@ -887,12 +945,13 @@ module Mock do
     foul accept(listener) = refusing(@failure, Net.TCP, "TCP refused to accept")
     foul accept(listener, timeout) = refusing(@failure, Net.TCP, "TCP refused to accept")
     foul sendAll(connection, data) = refusing(@failure, Net.TCP, "TCP has no connection")
-    foul write(connection, content) = ()
-    foul printLine(connection, content) = ()
-    foul writeBytes(connection, content) = ()
+    foul put(connection, content) = refusing(@failure, Net.TCP, "TCP has no connection")
+    foul write(connection, content) = refusing(@failure, Net.TCP, "TCP has no connection")
+    foul writeLine(connection, content) = refusing(@failure, Net.TCP, "TCP has no connection")
     foul print(connection, content) = ()
-    foul writeLine(connection, content) = ()
-    foul getLine(connection) = refusing(@failure, Net.TCP, "TCP has no connection")
+    foul printLine(connection, content) = ()
+    foul readLine(connection) = refusing(@failure, Net.TCP, "TCP has no connection")
+    foul getLine(connection) = None
     foul receiveChunk(connection, limit) = refusing(@failure, Net.TCP, "TCP has no connection")
     foul receiveChunk(connection, limit, timeout) do
       refusing(@failure, Net.TCP, "TCP has no connection")
@@ -945,12 +1004,13 @@ module Mock do
     foul bind(path, block) = refusing(@failure, Net.Unix, "Unix refused to listen")
     foul accept(listener) = refusing(@failure, Net.Unix, "Unix refused to accept")
     foul sendAll(connection, data) = refusing(@failure, Net.Unix, "Unix has no connection")
-    foul write(connection, content) = ()
-    foul printLine(connection, content) = ()
-    foul writeBytes(connection, content) = ()
+    foul put(connection, content) = refusing(@failure, Net.Unix, "Unix has no connection")
+    foul write(connection, content) = refusing(@failure, Net.Unix, "Unix has no connection")
+    foul writeLine(connection, content) = refusing(@failure, Net.Unix, "Unix has no connection")
     foul print(connection, content) = ()
-    foul writeLine(connection, content) = ()
-    foul getLine(connection) = refusing(@failure, Net.Unix, "Unix has no connection")
+    foul printLine(connection, content) = ()
+    foul readLine(connection) = refusing(@failure, Net.Unix, "Unix has no connection")
+    foul getLine(connection) = None
     foul receiveChunk(connection, limit) = refusing(@failure, Net.Unix, "Unix has no connection")
     foul receiveExactly(connection, count) = refusing(@failure, Net.Unix, "Unix has no connection")
     foul receiveUntil(connection, delimiter, limit) do
@@ -964,11 +1024,11 @@ module Mock do
   make TLS, implement: Net.Socket.TLS do
     foul connect(endpoint, config) = refusing(@failure, Net.TLS, "TLS refused to connect")
     foul sendAll(connection, data) = refusing(@failure, Net.TLS, "TLS has no connection")
-    foul write(connection, content) = ()
-    foul printLine(connection, content) = ()
-    foul writeBytes(connection, content) = ()
+    foul put(connection, content) = refusing(@failure, Net.TLS, "TLS has no connection")
+    foul write(connection, content) = refusing(@failure, Net.TLS, "TLS has no connection")
+    foul writeLine(connection, content) = refusing(@failure, Net.TLS, "TLS has no connection")
     foul print(connection, content) = ()
-    foul writeLine(connection, content) = ()
+    foul printLine(connection, content) = ()
     foul receiveChunk(connection, limit) = refusing(@failure, Net.TLS, "TLS has no connection")
     foul closed?(connection) = true
   end

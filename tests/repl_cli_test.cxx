@@ -825,7 +825,7 @@ int main() {
                 "using FS\n"
                 "Mock.FS.File(\"typed.txt\", \"contents\")\n"
                 "let writer = FS.File.open(\"typed.txt\", FS.Write).try\n"
-                "writer.readLine\n"
+                "writer.get\n"
                 "writer.getLine\n"
                 "writer.read\n");
             assertTrue(out.find("FileHandle<CannotRead, CanWrite>") !=
@@ -1169,14 +1169,14 @@ int main() {
                 "using FS\n"
                 "Mock.FS.File(\"typed.txt\", \"contents\")\n"
                 "let writer = FS.File.open(\"typed.txt\", FS.Write).try\n"
-                "writer.readLine\n"
-                "writer.write(\"ok\")\n");
+                "writer.getLine\n"
+                "writer.print(\"ok\")\n");
             assertTrue(out.find("error:") != std::string::npos, out);
             assertTrue(out.find("=> None : Option") == std::string::npos, out);
             // The write SUCCEEDS, and answers Void rather than the Bool it
             // used to (kexhq/kex#139) — so the REPL suppresses its result the
             // way it suppresses `IO.printLine`, and the only "error:" above is
-            // the readLine one.
+            // the getLine one.
             assertTrue(out.find("=> true : Bool") == std::string::npos, out);
             assertTrue(out.find("badarg") == std::string::npos, out);
         });

@@ -2378,10 +2378,10 @@ int main() {
                 "  let reader = FS.File.open(\"input.txt\", FS.Read).try\n"
                 "  reader.read()\n"
                 "  let writer = FS.File.open(\"output.txt\", FS.Write).try\n"
-                "  writer.write(\"ok\")\n"
+                "  writer.print(\"ok\")\n"
                 "  let both = FS.File.open(\"both.txt\", FS.ReadWrite).try\n"
                 "  both.read()\n"
-                "  both.write(\"ok\")\n"
+                "  both.print(\"ok\")\n"
                 "end\n"
             ));
         });
@@ -2402,7 +2402,7 @@ int main() {
                 "using FS\n"
                 "main do\n"
                 "  let reader = FS.File.open(\"input.txt\", FS.Read).try\n"
-                "  reader.write(\"no\")\n"
+                "  reader.print(\"no\")\n"
                 "end\n",
                 "FileHandle"
             ));
@@ -2413,7 +2413,7 @@ int main() {
                 "using FS\n"
                 "main do\n"
                 "  let writer = FS.File.open(\"output.txt\", FS.Write).try\n"
-                "  writer.readLine()\n"
+                "  writer.getLine()\n"
                 "end\n",
                 "FileHandle"
             ));

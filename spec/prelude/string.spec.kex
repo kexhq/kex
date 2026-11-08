@@ -40,9 +40,10 @@ describe("String — indexing") do
     assert("hello".at(4) == Just('o'))
   end
 
-  it("at returns None for out-of-range indices") do
+  it("at counts a negative index from the end, None past either end") do
     assert("hello".at(5) == None)
-    assert("hello".at(-1) == None)
+    assert("hello".at(-1) == Just('o'))
+    assert("hello".at(-6) == None)
     assert("".at(0) == None)
   end
 end
@@ -261,10 +262,11 @@ describe("String — slice") do
     assert("hello".slice(4, 1) == "o")
   end
 
-  it("slice(start, length) clamps out-of-range arguments") do
+  it("slice(start, length) clamps, and counts a negative start from the end") do
     assert("hello".slice(1, 99) == "ello")
     assert("hello".slice(9, 3) == "")
-    assert("hello".slice(-3, 2) == "he")
+    assert("hello".slice(-3, 2) == "ll")
+    assert("hello".slice(-9, 2) == "")
     assert("hello".slice(1, -1) == "")
     assert("".slice(0, 5) == "")
   end
@@ -279,16 +281,13 @@ describe("String — slice") do
     assert("hello".slice(2..2) == "l")
   end
 
-  it("slice(range) clamps rather than failing") do
+  it("slice(range) clamps, and counts negative ends from the end") do
     assert("hello".slice(3..99) == "lo")
     assert("hello".slice(9..20) == "")
     assert("hello".slice(3..1) == "")
-    assert("hello".slice(-3..1) == "he")
-  end
-
-  it("substring is an alias for slice") do
-    assert("hello".substring(1, 3) == "ell")
-    assert("hello".substring(1..3) == "ell")
+    assert("hello".slice(-3..1) == "")
+    assert("hello".slice(1..-1) == "ello")
+    assert("hello"[-3..-1] == "llo")
   end
 
   it("get accepts a range, so brackets index a substring") do
@@ -296,5 +295,75 @@ describe("String — slice") do
     assert("hello"[1..3] == "ell")
     assert("hello"[0..4] == "hello")
     assert("hello"[2..2] == "l")
+  end
+end
+
+describe("String padding") do
+  it("pads on the left and the right") do
+    assert("7".padLeft(3) == "  7")
+    assert("7".padLeft(3, "0") == "007")
+    assert("abc".padLeft(8, "12") == "12121abc")
+    assert("ab".padRight(5, ".") == "ab...")
+    assert("long".padLeft(2) == "long")
+    assert("x".padLeft(3, "") == "x")
+  end
+
+  it("centers with the extra character on the right") do
+    assert("ab".center(6) == "  ab  ")
+    assert("ab".center(5) == " ab  ")
+    assert("ab".center(6, "*") == "**ab**")
+  end
+end
+
+describe("String searching by substring") do
+  it("indexOf finds a substring by character index") do
+    assert("hello world".indexOf("o w") == Just(4))
+    assert("héllo".indexOf("llo") == Just(2))
+    assert("hello".indexOf("xyz") == None)
+    assert("hello".indexOf('l') == Just(2))
+  end
+
+  it("occurrences counts substrings, count counts by predicate") do
+    assert("hello".occurrences("l") == 2)
+    assert("aaaa".occurrences("aa") == 2)
+    assert("hello".occurrences("") == 0)
+    assert("hello".count { |c| c == 'l' } == 2)
+    assert("hello".count == 5)
+  end
+
+  it("replaceFirst replaces only the first match") do
+    assert("a-b-c".replaceFirst("-", "+") == "a+b-c")
+    assert("abc".replaceFirst("x", "y") == "abc")
+  end
+end
+
+describe("String trimming and affixes") do
+  it("trims Unicode whitespace, the same set space? accepts") do
+    assert("\u{A0} x y\u{2028}\t".trim == "x y")
+    assert("  hi  ".trimStart == "hi  ")
+    assert("  hi  ".trimEnd == "  hi")
+    assert("line\r\n".trimEnd == "line")
+  end
+
+  it("removes a prefix or a suffix only when present") do
+    assert("v1.2".removePrefix("v") == "1.2")
+    assert("1.2".removePrefix("v") == "1.2")
+    assert("notes.txt".removeSuffix(".txt") == "notes")
+  end
+
+  it("repeats, takes and drops while") do
+    assert("ab".repeat(3) == "ababab")
+    assert("ab".repeat(0) == "")
+    assert("123abc".takeWhile(~digit?) == "123")
+    assert("123abc".dropWhile(~digit?) == "abc")
+    assert("hello".take(-2) == "")
+  end
+end
+
+describe("String.lines and line endings") do
+  it("reads CRLF as one line ending") do
+    assert("a\r\nb\r\n".lines == ["a", "b"])
+    assert("a\nb".lines == ["a", "b"])
+    assert("a\r".lines == ["a"])
   end
 end

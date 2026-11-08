@@ -84,6 +84,20 @@ static auto writeFailed(const std::string& path) -> ValuePtr {
     return Value::error(Value::variant("WriteFailed", "FileError", {Value::string(path)}));
 }
 
+// A directory opens as an fstream on Linux and only fails at the first read,
+// so a read of one has to be refused up front, as BEAM's file module does.
+static auto isDirectoryPath(const std::string& path) -> bool {
+    std::error_code ec;
+    return std::filesystem::is_directory(path, ec);
+}
+
+// A line read off getline loses its "\n" but keeps the "\r" of a CRLF ending.
+// Every line reader drops it too, as String.lines and BEAM's file:read_line do.
+static auto chompCarriageReturn(std::string line) -> std::string {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    return line;
+}
+
 static auto optionalValueReadResult(const ValuePtr& value) -> ValuePtr {
     if (!value || value->isNone()) return Value::ok(Value::none());
     if (auto* variant = std::get_if<VariantValue>(&value->data);
@@ -163,6 +177,12 @@ auto Evaluator::registerFileBuiltins() -> void {
 
         std::shared_ptr<std::fstream> fs;
         if (!isMocked) {
+            if (isDirectoryPath(path)) {
+                auto fileError = std::make_shared<Value>();
+                fileError->data = VariantValue{
+                    "OpenFailed", "FileError", {Value::string(path)}, {}, {}};
+                return Value::error(fileError);
+            }
             fs = std::make_shared<std::fstream>(
                 path, *flags | std::ios::binary);
             if (!fs->is_open()) {
@@ -181,7 +201,7 @@ auto Evaluator::registerFileBuiltins() -> void {
         return Value::ok(handle);
     });
 
-    // --- Text I/O (mirrors IO.getLine / IO.get / IO.printLine / IO.print) ---
+    // --- Text I/O (mirrors IO.readLine / IO.getChar / IO.printLine / IO.print) ---
 
     auto mockCursor = [this](const std::string& path) -> size_t {
         std::string cursorKey = "__mock_pos__" + path;
@@ -216,17 +236,17 @@ auto Evaluator::registerFileBuiltins() -> void {
                 pos = end + 1;
             }
             setMockCursor(h->path, pos);
-            return optionalTextReadResult(std::move(line));
+            return optionalTextReadResult(chompCarriageReturn(std::move(line)));
         }
 
         if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
         std::string line;
         if (!std::getline(*h->stream, line))
             return h->stream->eof() ? Value::ok(Value::none()) : readError("ReadFailed");
-        return optionalTextReadResult(std::move(line));
+        return optionalTextReadResult(chompCarriageReturn(std::move(line)));
     });
 
-    // handle.get -> String? (single character)
+    // handle.getChar -> Result<String?, ReadError> (single character)
     reg("FileHandle::get", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         if (auto forwarded = standardRead(args, "IO::get"))
@@ -349,25 +369,6 @@ auto Evaluator::registerFileBuiltins() -> void {
         return textReadResult(buf.str());
     });
 
-    // handle.write(data) -> Void
-    reg("FileHandle::write", [this, standardWrite](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::unit();
-        if (auto forwarded = standardWrite(args, "IO::print", "IO::printErrorRaw")) return *forwarded;
-        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        if (!h) return Value::unit();
-        std::string content = args[1]->toString();
-
-        auto mockIt = m_mockFiles.find(h->path);
-        if (mockIt != m_mockFiles.end()) {
-            mockIt->second += content;
-            return Value::unit();
-        }
-
-        if (!h->stream || !h->stream->is_open()) return Value::unit();
-        *h->stream << content;
-        return Value::unit();
-    });
-
     reg("FileHandle::readBytes", [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return readError("ReadFailed");
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
@@ -390,23 +391,79 @@ auto Evaluator::registerFileBuiltins() -> void {
                                 : Value::ok(Value::binary(std::move(bytes)));
     });
 
-    reg("FileHandle::writeBytes", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::unit();
+    // handle.put(bytes) -> Result<Void, WriteError>. The bytes verbatim; a
+    // String is its UTF-8 bytes. The write that reports failure: a closed
+    // handle, a device error, or standard input.
+    reg("FileHandle::put", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        auto failed = [] { return Value::error(Value::variant("WriteFailed", "WriteError")); };
+        if (args.size() < 2) return failed();
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        auto* value = std::get_if<BinaryValue>(&args[1]->data);
-        if (!h || !value) return Value::unit();
-        const std::string bytes(value->bytes.begin(), value->bytes.end());
+        if (!h) return failed();
+        std::string bytes;
+        if (auto* value = std::get_if<BinaryValue>(&args[1]->data))
+            bytes.assign(value->bytes.begin(), value->bytes.end());
+        else if (auto* text = std::get_if<StringValue>(&args[1]->data))
+            bytes = text->value;
+        else
+            return failed();
         if (h->path == kStdoutPath || h->path == kStderrPath) {
             if (m_mockIO) m_mockIOOutput += bytes;
             else if (h->path == kStdoutPath) std::cout.write(bytes.data(), bytes.size());
             else std::cerr.write(bytes.data(), bytes.size());
-            return Value::unit();
+            return Value::ok(Value::unit());
         }
+        if (h->path == kStdinPath) return failed();
         if (auto it = m_mockFiles.find(h->path); it != m_mockFiles.end()) {
-            it->second.append(bytes); return Value::unit();
+            it->second.append(bytes);
+            return Value::ok(Value::unit());
         }
-        if (h->stream && h->stream->is_open()) h->stream->write(bytes.data(), bytes.size());
-        return Value::unit();
+        if (!h->stream || !h->stream->is_open()) return failed();
+        h->stream->write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        if (h->stream->bad()) return failed();
+        return Value::ok(Value::unit());
+    });
+
+    // handle.getChunk(limit) -> Result<Binary?, ReadError>: up to +limit+
+    // bytes, None at the end. Standard input answers a line at a time,
+    // newline included, so an interactive read never waits for a full buffer.
+    reg("FileHandle::getChunk", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return readError("ReadFailed");
+        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
+        auto* limitValue = std::get_if<IntValue>(&args[1]->data);
+        if (!h || !limitValue || limitValue->value <= 0) return readError("ReadFailed");
+        const auto limit = static_cast<size_t>(limitValue->value);
+        auto chunk = [](std::string_view bytes) {
+            return Value::ok(Value::just(Value::binary({bytes.begin(), bytes.end()})));
+        };
+        if (h->path == kStdinPath) {
+            auto line = standardRead(args, "IO::getLine");
+            if (!line || (*line)->isNone()) return Value::ok(Value::none());
+            auto* variant = std::get_if<VariantValue>(&(*line)->data);
+            if (!variant || variant->args.empty()) return readError("ReadFailed");
+            auto* text = std::get_if<StringValue>(&variant->args[0]->data);
+            if (!text) return readError("ReadFailed");
+            return chunk(text->value + "\n");
+        }
+        if (isStandardHandle(h->path)) return readError("ReadFailed");
+        if (auto it = m_mockFiles.find(h->path); it != m_mockFiles.end()) {
+            const auto pos = std::min(mockCursor(h->path), it->second.size());
+            if (pos >= it->second.size()) return Value::ok(Value::none());
+            const auto take = std::min(limit, it->second.size() - pos);
+            setMockCursor(h->path, pos + take);
+            return chunk(std::string_view(it->second).substr(pos, take));
+        }
+        if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
+        std::string buffer(limit, '\0');
+        h->stream->read(buffer.data(), static_cast<std::streamsize>(limit));
+        const auto got = static_cast<size_t>(h->stream->gcount());
+        if (h->stream->bad()) return readError("ReadFailed");
+        if (got == 0) {
+            h->stream->clear(h->stream->rdstate() & ~std::ios::failbit);
+            return Value::ok(Value::none());
+        }
+        if (h->stream->eof()) h->stream->clear(std::ios::eofbit);
+        buffer.resize(got);
+        return chunk(buffer);
     });
 
     // --- Lifecycle ---
@@ -426,8 +483,13 @@ auto Evaluator::registerFileBuiltins() -> void {
             return Value::boolean(mockCursor(h->path) >= mockIt->second.size());
         }
 
-        if (!h->stream) return Value::boolean(true);
-        return Value::boolean(h->stream->eof());
+        if (!h->stream || !h->stream->is_open()) return Value::boolean(true);
+        // Peek rather than read eofbit: a whole-file `read` (through rdbuf)
+        // drains the stream without ever setting it, and BEAM answers true
+        // there. Clear afterwards so a later seek or write is unaffected.
+        const bool atEnd = h->stream->peek() == std::char_traits<char>::eof();
+        h->stream->clear();
+        return Value::boolean(atEnd);
     });
 
     // handle.close -> Void
@@ -483,9 +545,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     // primitive ABI independent from the older internal IO-style names.
     for (const auto& [publicName, primitiveName] :
          std::initializer_list<std::pair<const char*, const char*>>{
-             {"readLine", "getLine"}, {"writeLine", "printLine"},
-             {"read", "read"}, {"write", "write"},
-             {"eof?", "atEnd?"}, {"close", "close"}}) {
+             {"readLine", "getLine"}, {"getChar", "get"}, {"eof?", "atEnd?"}}) {
         if (auto value = m_intrinsicEnv->get("FileHandle::" + std::string(primitiveName)))
             defineIntrinsic("FileHandle::" + std::string(publicName), value);
     }
@@ -513,7 +573,7 @@ auto Evaluator::registerFileBuiltins() -> void {
         return Value::just(lazy::feedValue([stream]() -> ValuePtr {
             std::string line;
             if (!std::getline(*stream, line)) return nullptr;
-            return Value::string(line);
+            return Value::string(chompCarriageReturn(line));
         }));
     });
 
@@ -529,6 +589,8 @@ auto Evaluator::registerFileBuiltins() -> void {
             return Value::ok(Value::string(std::move(content)));
         };
         if (auto mocked = mockFileContent(pathStr->value)) return finish(*mocked);
+        if (isDirectoryPath(pathStr->value))
+            return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(pathStr->value)}));
         std::ifstream file(pathStr->value, std::ios::binary);
         if (!file.is_open()) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(pathStr->value)}));
         std::ostringstream buf;
@@ -543,6 +605,8 @@ auto Evaluator::registerFileBuiltins() -> void {
         if (!path) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}));
         if (auto mocked = mockFileContent(name))
             return Value::ok(Value::binary({mocked->begin(), mocked->end()}));
+        if (isDirectoryPath(name))
+            return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}));
         std::ifstream file(name, std::ios::binary);
         if (!file) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}));
         std::vector<uint8_t> bytes(std::istreambuf_iterator<char>(file), {});
@@ -724,10 +788,11 @@ auto Evaluator::registerFileBuiltins() -> void {
             return Value::just(lazy::feedValue([text]() -> ValuePtr {
                 std::string line;
                 if (!std::getline(*text, line)) return nullptr;
-                return Value::string(line);
+                return Value::string(chompCarriageReturn(line));
             }));
         }
 
+        if (isDirectoryPath(pathStr->value)) return Value::none();
         auto file = std::make_shared<std::ifstream>(pathStr->value, std::ios::binary);
         if (!file->is_open()) return Value::none();
         return Value::just(lazy::feedValue([file]() -> ValuePtr {
@@ -736,7 +801,7 @@ auto Evaluator::registerFileBuiltins() -> void {
             // first null, so the handle closes with the last reference.
             std::string line;
             if (!std::getline(*file, line)) return nullptr;
-            return Value::string(line);
+            return Value::string(chompCarriageReturn(line));
         }));
     });
 
@@ -894,7 +959,11 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
             m_mockDirs.erase(pathStr->value);
             return Value::boolean(true);
         }
+        // A directory function never removes a file: std::filesystem::remove
+        // takes either, so check first (symlink_status: a link is not one).
         std::error_code ec;
+        if (!std::filesystem::is_directory(std::filesystem::symlink_status(pathStr->value, ec)))
+            return Value::boolean(false);
         bool removed = std::filesystem::remove(pathStr->value, ec);
         return Value::boolean(removed && !ec);
     });
@@ -916,9 +985,12 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
             }
             return Value::boolean(true);
         }
+        // Only a directory tree: a file, a symlink or a missing path is false.
         std::error_code ec;
-        std::filesystem::remove_all(pathStr->value, ec);
-        return Value::boolean(!ec);
+        if (!std::filesystem::is_directory(std::filesystem::symlink_status(pathStr->value, ec)))
+            return Value::boolean(false);
+        auto removed = std::filesystem::remove_all(pathStr->value, ec);
+        return Value::boolean(removed > 0 && !ec);
     });
 
     // Directory.list(path) -> [String]?  (entry names, not full paths)

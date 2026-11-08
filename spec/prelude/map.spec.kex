@@ -286,3 +286,37 @@ describe("Map — put! (mutation syntax)") do
     assert(m.get(:b) == Just(2))
   end
 end
+
+describe("Map construction and updates") do
+  it("from builds a map from pairs, last key wins") do
+    let m = Map.from([("a", 1), ("b", 2), ("a", 3)])
+    assert(m.get("a") == Just(3))
+    assert(m.get("b") == Just(2))
+    assert(Map.from(m.entries) == m)
+  end
+
+  it("update changes a present value and leaves a missing one alone") do
+    assert({ "a": 1 }.update("a") { |n| n + 1 } == { "a": 2 })
+    assert({ "a": 1 }.update("b") { |n| n + 1 } == { "a": 1 })
+  end
+
+  it("update with a default starts a missing value") do
+    let counts = ["x", "y", "x"].reduce({}) { |acc, w| acc.update(w, 0) { |n| n + 1 } }
+    assert(counts.get("x") == Just(2))
+    assert(counts.get("y") == Just(1))
+  end
+
+  it("none? and one? take a key/value block") do
+    assert({ "a": 1, "b": 2 }.none? { |k, v| v > 5 })
+    assert({ "a": 1, "b": 2 }.one? { |k, v| v > 1 })
+  end
+end
+
+describe("Map blocks take the key and the value") do
+  it("collect, flatMap and mapIndexed take |k, v| like map and filter") do
+    let m = { "a": 1, "b": 2 }
+    assert(m.collect { |k, v| v > 1 then Just(k) else None } == ["b"])
+    assert(m.flatMap { |k, v| [k, k] } == ["a", "a", "b", "b"])
+    assert(m.mapIndexed { |k, v, i| "${i}:${k}=${v}" } == ["0:a=1", "1:b=2"])
+  end
+end

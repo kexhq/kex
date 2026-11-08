@@ -19,7 +19,8 @@
 %%      every offset crossing into Kex is converted to a character offset.
 -module(kex_intrinsic_regex).
 -export([compile/1, tag/2, validate/1, quote/1, matches/2, 'matches?'/2,
-         scan/2, replace/3, split/2, split/3]).
+         scan/2, replace/3, replace/4, split/2, split/3]).
+
 
 %% Pinned on both backends. Without ucp, `\d` matches only [0-9] here while
 %% PCRE2_UCP makes it match Arabic-Indic digits in the interpreter.
@@ -123,16 +124,18 @@ matches(_, _) -> 'None'.
 run(Subject, Source, Offset) ->
     re:run(Subject, Source, ?COMPILE_OPTS ++ [{offset, Offset}, {capture, all, index}]).
 
-%% Builds the Match record {'Regex.Match', Captures} where Captures is a Kex map
+%% Builds the Match record {'Regex.Match', Captures, Offset} where Captures is a Kex map
 %% keyed by group number AND by name atom, exactly as the interpreter builds it.
 %% A group that did not participate is left out entirely, which is what makes
 %% get(:opt) return None while a group matching "" returns Just(<<>>).
-build_match(Subject, Source, Captures) ->
+build_match(Subject, Source, [{Start, _} | _] = Captures) ->
     Numbered = numbered_entries(Subject, Captures, 0, []),
     Named = [{Name, Value}
              || {Name, Number} <- name_table(Source),
                 {ok, Value} <- [nth_capture(Subject, Captures, Number)]],
-    {'Regex.Match', maps:from_list(Numbered ++ Named)}.
+    %% The offset counts characters, not the bytes `re` reports.
+    Offset = erlang:length(unicode:characters_to_list(binary:part(Subject, 0, Start))),
+    {'Regex.Match', maps:from_list(Numbered ++ Named), Offset}.
 
 numbered_entries(_Subject, [], _Index, Acc) -> lists:reverse(Acc);
 numbered_entries(Subject, [{-1, _} | Rest], Index, Acc) ->
@@ -224,13 +227,19 @@ scan_loop(_Subject, _Source, _Offset, Acc) -> lists:reverse(Acc).
 next_offset(Subject, Start, 0) -> next_char_boundary(Subject, Start);
 next_offset(_Subject, Start, Len) -> Start + Len.
 
-%% Replaces EVERY match (gsub, not sub). Replacement is either a literal binary,
+%% Replaces every match (gsub) by default; replace/4 limits the count. Replacement is either a literal binary,
 %% inserted verbatim with no $1/\1 syntax, or a fun receiving the Match.
-replace(Subject, {'Regex.Regex', Source}, Replacement) when is_binary(Subject) ->
-    replace_loop(Subject, Source, Replacement, 0, 0, []);
-replace(Subject, _, _) -> Subject.
+replace(Subject, Regex, Replacement) -> replace(Subject, Regex, Replacement, 0).
 
-replace_loop(Subject, Source, Replacement, Offset, Copied, Acc)
+%% replace/4 caps the replacements: 1 is Ruby's `sub`, 0 every match (`gsub`).
+replace(Subject, {'Regex.Regex', Source}, Replacement, Limit) when is_binary(Subject) ->
+    Remaining = case Limit > 0 of true -> Limit; false -> infinity end,
+    replace_loop(Subject, Source, Replacement, 0, 0, [], Remaining);
+replace(Subject, _, _, _) -> Subject.
+
+replace_loop(Subject, _Source, _Replacement, _Offset, Copied, Acc, 0) ->
+    finish_replace(Subject, Copied, Acc);
+replace_loop(Subject, Source, Replacement, Offset, Copied, Acc, Remaining)
   when Offset =< byte_size(Subject) ->
     case run(Subject, Source, Offset) of
         nomatch ->
@@ -248,9 +257,9 @@ replace_loop(Subject, Source, Replacement, Offset, Copied, Acc)
                     false -> {<<>>, Start + Len}
                 end,
             replace_loop(Subject, Source, Replacement, Next, NewCopied,
-                         [Skipped, Text, Before | Acc])
+                         [Skipped, Text, Before | Acc], count_down(Remaining))
     end;
-replace_loop(Subject, _Source, _Replacement, _Offset, Copied, Acc) ->
+replace_loop(Subject, _Source, _Replacement, _Offset, Copied, Acc, _Remaining) ->
     finish_replace(Subject, Copied, Acc).
 
 finish_replace(Subject, Copied, Acc) ->
@@ -356,3 +365,6 @@ skip_continuation(Bin, Pos) ->
         B when B band 16#C0 =:= 16#80 -> skip_continuation(Bin, Pos + 1);
         _ -> Pos
     end.
+
+count_down(infinity) -> infinity;
+count_down(N) -> N - 1.

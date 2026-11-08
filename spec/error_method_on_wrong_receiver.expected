@@ -4,6 +4,8 @@ iso : Date -> String
 
 iso : DateTime -> String
 
+iso : Duration -> String
+
 iso : Period -> String
 
 iso : Time -> String

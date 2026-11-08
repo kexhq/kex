@@ -658,9 +658,10 @@ make UnorderedSet<A>, implement: Enumerable, Foldable, Monoid, Showable do
   # @return [String] the rendered set
   #
   # @example
-  #   UnorderedSet.from([2, 1]).showValue   # => "UnorderedSet(1, 2)"
+  #   UnorderedSet.from([2, 1]).showValue    # => "UnorderedSet(1, 2)"
+  #   UnorderedSet.from([10, 2]).showValue   # => "UnorderedSet(2, 10)"
   showValue :> String
-  let showValue = "UnorderedSet(${@slots.keys.map { |x| x.showValue }.sort.join(", ")})"
+  let showValue = "UnorderedSet(${@slots.keys.sort.map { |x| x.showValue }.join(", ")})"
 end
 
 make UnorderedSet<A>, implement: Blankable do

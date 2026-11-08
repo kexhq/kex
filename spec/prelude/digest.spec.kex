@@ -6,6 +6,6 @@ describe("Digest") do
   end
 
   it("returns None for a missing file") do
-    assert(Digest.fileSha256("/this/path/does/not/exist") == None)
+    assert(Digest.fileSha256("/this/path/does/not/exist") == Error(ReadFailed))
   end
 end

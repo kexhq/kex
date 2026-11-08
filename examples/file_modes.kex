@@ -17,7 +17,7 @@ foul readAll(file: FileHandle<CanRead, W>) -> String do
 end
 
 foul writeText(file: Writable, text: String) -> Void do
-  file.write(text)
+  file.print(text)
 end
 
 # Opening returns Result<FileHandle<...>, FileError>. `.try` unwraps the
@@ -42,7 +42,7 @@ main do
   reader.close()
 
   # This would be a compile-time error, both directly and through the helper:
-  # reader.write("not allowed")
+  # reader.print("not allowed")
   # writeText(reader, "not allowed")
 
   # Write produces FileHandle<CannotRead, CanWrite> and truncates the file.
@@ -56,7 +56,7 @@ main do
 
   # Append is write-only but preserves the existing contents.
   let appender = FS.File.open("file_modes.txt", FS.Append).try
-  appender.writeLine("appended")
+  appender.printLine("appended")
   appender.close()
 
   # ReadWrite exposes both sets of operations.

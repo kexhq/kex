@@ -8,15 +8,15 @@ using FS
 
 # A simple log writer that appends timestamped entries.
 # Declared outside main so the spec can load it.
-foul writeLog(path: String, entry: String) -> Bool do
+foul writeLog(path: String, entry: String) -> Result<Void, FS.FileError> do
   FS.File.append(path, "[log] ${entry}\n")
 end
 
 # Count non-empty lines in a file.
 foul countLines(path: String) -> Int do
   match FS.File.readLines(path) do
-    None       => 0
-    Just(ls)   => ls.count { |l| !l.empty? }
+    Error(_)   => 0
+    Ok(ls)     => ls.count { |l| !l.empty? }
   end
 end
 
@@ -54,8 +54,8 @@ main do
 
   IO.printLine("first 2 via feed:")
   match FS.File.feed(tmp) do
-    None    => IO.printLine("  (unavailable)")
-    Just(s) => s.take(2).each { |l| IO.printLine("  > ${l}") }
+    Error(_) => IO.printLine("  (unavailable)")
+    Ok(s)    => s.take(2).each { |l| IO.printLine("  > ${l}") }
   end
 
   # ── Mode-safe handles ───────────────────────────────────────────────
@@ -63,23 +63,23 @@ main do
 
   # Read exposes read operations, but not write operations.
   let reader = FS.File.open(tmp, FS.Read).try
-  let first = reader.readLine
+  let first = reader.getLine
   reader.close()
   IO.printLine("first line via handle: ${first.or("(none)")}")
 
   # Append exposes write operations, but not read operations.
   let appender = FS.File.open(tmp, FS.Append).try
-  appender.writeLine("Appended via handle.")
+  appender.printLine("Appended via handle.")
   appender.close()
 
   # ReadWrite exposes both sets.
   let editable = FS.File.open(tmp, FS.ReadWrite).try
   IO.printLine("read-write handle sees ${editable.read().or("").count} chars")
-  editable.writeLine("Written through ReadWrite.")
+  editable.printLine("Written through ReadWrite.")
   editable.close()
 
   # These are compile-time errors:
-  # reader.write("not allowed")
+  # reader.print("not allowed")
   # appender.read()
 
   IO.printLine("after handle writes, lines: ${FS.File.readLines(tmp).or([]).count}")

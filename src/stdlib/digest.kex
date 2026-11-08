@@ -1,8 +1,9 @@
 # Cryptographic content digests.
 #
-# Digests are returned as lowercase hex strings, so a Kex program never has to
-# handle backend-specific binary values: they compare with +==+, print
-# directly, and go into a map key unchanged.
+# A digest of a +String+ is returned as a lowercase hex string, so a Kex
+# program never has to handle backend-specific binary values: it compares
+# with +==+, prints directly, and goes into a map key unchanged. A digest of a
+# +Binary+ is the raw digest bytes, as a +Binary+.
 #
 #   Digest.sha256("hello")
 #   # => "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
@@ -31,24 +32,36 @@ module Digest do
   sha256 : String -> String
   let sha256(content) = Kex.Intrinsic.Digest.sha256(content)
 
+  # Computes the SHA-256 digest of raw bytes, as the 32 digest bytes.
+  #
+  # @param content [Binary] the bytes to digest
+  # @return [Binary] the 32-byte digest
+  #
+  # @example
+  #   Digest.sha256(Binary.fromBytes([104, 105])).length   # => 32
   sha256 : Binary -> Binary
   let sha256(content) = Kex.Intrinsic.Digest.sha256(content)
 
-  # Returns the SHA-256 digest of the file at +path+, or +None+ when the file
-  # cannot be read.
+  # Returns the SHA-256 digest of the file at +path+, or +ReadFailed+ when the
+  # file cannot be read.
   #
   # Reads the file for you, so a large file does not have to be pulled into a
   # +String+ first.
   #
   # @param path [String] the file to hash
-  # @return [String?] the hex digest, or +None+
+  # @return [Result<String, ReadError>] the hex digest, or +ReadFailed+
   #
   # @example
-  #   Digest.fileSha256("archive.tar.gz")   # => Just("a3f1...")
-  #   Digest.fileSha256("nowhere")          # => None
+  #   Digest.fileSha256("archive.tar.gz")   # => Ok("a3f1...")
+  #   Digest.fileSha256("nowhere")          # => Error(ReadFailed)
   #
   # @example Verifying a download against a published checksum
   #   Digest.fileSha256(path).map { |actual| actual == expected }.or(false)
-  fileSha256 : String -> String?
-  let fileSha256(path) = Kex.Intrinsic.Digest.fileSha256(path)
+  fileSha256 : String -> Result<String, ReadError>
+  let fileSha256(path) do
+    match Kex.Intrinsic.Digest.fileSha256(path) do
+      Just(digest) => return Ok(digest)
+      None => return Error(ReadFailed)
+    end
+  end
 end

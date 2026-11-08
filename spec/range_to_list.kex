@@ -1,12 +1,12 @@
 # Range → List conversions agree, and List-typed values work in list methods.
-# `.list` is the non-optional spelling of `.items`; `.to(List)` answers
+# `.items` is the non-optional conversion; `.to(List)` answers
 # Optional and unwraps to a real list, so `zip` accepts it. Bare `List` and
 # `List<T>` spell the same type as `[T]`.
 
 main do
-  IO.printLine((1..5).list)
-  IO.printLine((1..5).list == (1..5).items)
-  IO.printLine(('a'..'c').list)
+  IO.printLine((1..5).items)
+  IO.printLine((1..5).items == (1..5).to(List).or([]))
+  IO.printLine(('a'..'c').items)
 
   let abc = ('A'..'Z').to(List).try
   let oneten = (1..10).to(List).try

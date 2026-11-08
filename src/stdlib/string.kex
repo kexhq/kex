@@ -126,8 +126,9 @@ make String, implement: Enumerable, Foldable do
   # @example
   #   "hi".get(1)    # => Just('i')
   #   "hi".get(9)    # => None
+  #   "hi".get(-1)   # => Just('i')
   get :> Integer -> Char?
-  let get(i: Integer) = Kex.Intrinsic.List.get(this, i)
+  let get(i: Integer) = Kex.Intrinsic.List.get(this, i < 0 then this.count + i else i)
 
   # Returns the character at index +i+, or +default+ when the index is out of
   # range. The total form of +get+, for when a missing character has an
@@ -141,7 +142,7 @@ make String, implement: Enumerable, Foldable do
   #   "hi".get(1, '?')   # => 'i'
   #   "hi".get(9, '?')   # => '?'
   get :> Integer -> Char -> Char
-  let get(i, default) = Kex.Intrinsic.List.get(this, i, default)
+  let get(i, default) = Kex.Intrinsic.List.get(this, i < 0 then this.count + i else i, default)
 
   # Returns the substring addressed by +range+, both ends included. The same
   # as +slice+ over a range, and what the +s[1..2]+ bracket spelling calls.
@@ -197,7 +198,9 @@ make String, implement: Enumerable, Foldable do
   # Characters, not bytes: the indices count what +count+ counts. The window
   # is clamped rather than refused, the way +take+ and +drop+ already behave:
   # a start past the end answers +""+, a length running past the end stops at
-  # the end, a negative start counts as 0, and a negative length answers +""+.
+  # the end, and a negative length answers +""+. A negative start counts back
+  # from the end, as in Ruby: +-1+ is the last character, and a start still
+  # before the beginning answers +""+.
   #
   # @param start [Integer] the 0-based index of the first character
   # @param length [Integer] how many characters to keep
@@ -212,16 +215,17 @@ make String, implement: Enumerable, Foldable do
   #   line.slice(0, 10).trim   # the date column of a log line
   slice :> Integer -> Integer -> String
   let slice(start, length) do
-    let from = start < 0 then 0 else start
-    let len = length < 0 then 0 else length
-    this.drop(from).take(len)
+    let from = start < 0 then this.count + start else start
+    return "" if from < 0 || length < 0
+    this.drop(from).take(length)
   end
 
   # Returns the substring addressed by +range+, both ends included.
   #
   # The bounds are clamped like the start/length form above: a range running
   # past either end is trimmed to the string, and a range whose start lies
-  # past its end answers +""+.
+  # past its end answers +""+. Either end may count back from the end, as
+  # Ruby's does: +1..-1+ is everything after the first.
   #
   # @param range [Range<Integer>] the inclusive 0-based index range
   # @return [String] the characters in that range
@@ -236,32 +240,11 @@ make String, implement: Enumerable, Foldable do
   slice :> Range<Integer> -> String
   let slice(range) do
     let (lo, hi) = Kex.Intrinsic.Range.bounds(range)
-    let from = lo < 0 then 0 else lo
-    this.slice(from, hi - from + 1)
+    let from = lo < 0 then this.count + lo else lo
+    let to = hi < 0 then this.count + hi else hi
+    return "" if from < 0
+    this.slice(from, to - from + 1)
   end
-
-  # Returns the substring of +length+ characters starting at index +start+.
-  # The same as +slice+, under the name familiar from other languages.
-  #
-  # @param start [Integer] the 0-based index of the first character
-  # @param length [Integer] how many characters to keep
-  # @return [String] the characters in that window
-  #
-  # @example
-  #   "hello".substring(1, 3)   # => "ell"
-  substring :> Integer -> Integer -> String
-  let substring(start, length) = this.slice(start, length)
-
-  # Returns the substring addressed by +range+, both ends included. The same
-  # as +slice+, under the name familiar from other languages.
-  #
-  # @param range [Range<Integer>] the inclusive 0-based index range
-  # @return [String] the characters in that range
-  #
-  # @example
-  #   "hello".substring(1..3)   # => "ell"
-  substring :> Range<Integer> -> String
-  let substring(range) = this.slice(range)
 
   # Returns the characters that do NOT satisfy +pred+: the complement of
   # +filter+.
@@ -304,7 +287,23 @@ make String, implement: Enumerable, Foldable do
   #   pair.indexOf('=').map { |i| (pair.take(i), pair.drop(i + 1)) }
   #   # => Just(("host", "localhost"))
   indexOf :> Char -> Integer?
-  let indexOf(c) = Kex.Intrinsic.List.indexOf(this, c)
+
+  # Returns the 0-based character index where +sub+ first occurs, or +None+.
+  # The empty string occurs at index 0.
+  #
+  # @param sub [String] the text to look for
+  # @return [Integer?] the index of its first character, or +None+
+  #
+  # @example
+  #   "hello world".indexOf("o w")   # => Just(4)
+  #   "hello".indexOf("xyz")         # => None
+  indexOf :> String -> Integer?
+  # One definition serves both signatures, told apart by what it is handed:
+  # a typed overload pair on one arity misroutes calls in the interpreter.
+  let indexOf(x) do
+    return Kex.Intrinsic.List.indexOf(this, x) if Kex.Intrinsic.Kex.kind(x) == :char
+    return Kex.Intrinsic.String.find(this, x)
+  end
 
   # Returns the index of the first character satisfying +pred+, or +None+.
   #
@@ -322,6 +321,27 @@ make String, implement: Enumerable, Foldable do
   #   "    text".findIndex { |c| !c.space? }   # => Just(4)
   findIndex :> ((Char) -> Bool) -> Integer?
   let findIndex(pred) = this.chars.findIndex(pred)
+
+  # Returns the leading characters that satisfy +pred+, stopping at the first
+  # that does not.
+  #
+  # @param pred [Char -> Bool] the test applied to each character
+  # @return [String] the longest matching prefix
+  #
+  # @example
+  #   "123abc".takeWhile(~digit?)   # => "123"
+  takeWhile :> (Char -> Bool) -> String
+  let takeWhile(pred) = this.take(this.findIndex { |c| !pred(c) }.or(this.count))
+
+  # Drops the leading characters that satisfy +pred+ and returns the rest.
+  #
+  # @param pred [Char -> Bool] the test applied to each character
+  # @return [String] the string from the first character that fails +pred+
+  #
+  # @example
+  #   "123abc".dropWhile(~digit?)   # => "abc"
+  dropWhile :> (Char -> Bool) -> String
+  let dropWhile(pred) = this.drop(this.findIndex { |c| !pred(c) }.or(this.count))
 
   # Pairs each character with the element at the same index in +other+,
   # stopping at the shorter of the two.
@@ -365,6 +385,20 @@ make String, implement: Enumerable, Foldable do
   #   "é".count       # => 1   (but "é".bytes.count is 2)
   count :> Integer
   let count = Kex.Intrinsic.List.length(this)
+
+  # Returns how many times +sub+ occurs, counting non-overlapping matches
+  # from the left. An empty +sub+ occurs 0 times. (Ruby spells this
+  # +scan(sub).size+; +count+ here counts characters by a predicate.)
+  #
+  # @param sub [String] the text to look for
+  # @return [Integer] the number of occurrences
+  #
+  # @example
+  #   "hello".occurrences("l")     # => 2
+  #   "aaaa".occurrences("aa")     # => 2
+  #   "hello".occurrences("xyz")   # => 0
+  occurrences :> String -> Integer
+  let occurrences(sub) = sub.empty? then 0 else this.split(sub).count - 1
 
   # Returns the number of characters. The same as +count+, under the name
   # familiar from other languages.
@@ -455,7 +489,7 @@ make String, implement: Enumerable, Foldable do
   #   "hello".at(1)   # => Just('e')
   #   "hello".at(9)   # => None
   at :> Integer -> Char?
-  let at(i) = Kex.Intrinsic.List.at(this, i)
+  let at(i) = Kex.Intrinsic.List.at(this, i < 0 then this.count + i else i)
 
   # Returns the second character, or +None+ when the string is shorter than
   # two characters.
@@ -609,15 +643,18 @@ make String, implement: Enumerable, Foldable do
   # Splits the string into lines on +\n+.
   #
   # A single trailing newline is dropped, so a file that ends in one does not
-  # produce a final empty line. Windows line endings are not stripped: split
-  # on +\r\n+ explicitly, or +trim+ each line, when that matters.
+  # produce a final empty line. A Windows +\r\n+ ending is one line ending,
+  # as Ruby's +chomp+ reads it, so no line keeps a stray +\r+. Every
+  # line-reading function (+FS.File.readLines+, +FileHandle.getLine+, a file
+  # +Feed+) reads line endings the same way.
   #
   # @return [[String]] the lines, without their newlines
   #
   # @example
-  #   "a\nb".lines      # => ["a", "b"]
-  #   "a\nb\n".lines    # => ["a", "b"]
-  #   "".lines          # => []
+  #   "a\nb".lines       # => ["a", "b"]
+  #   "a\nb\n".lines     # => ["a", "b"]
+  #   "a\r\nb".lines     # => ["a", "b"]
+  #   "".lines           # => []
   #
   # @example Numbering the lines of a file
   #   text.lines.zip((1..text.lines.count).items).each do |pair|
@@ -626,7 +663,7 @@ make String, implement: Enumerable, Foldable do
   #   end
   lines :> [String]
   let lines do
-    let parts = this.split("\n")
+    let parts = this.split("\n").map { |part| part.removeSuffix("\r") }
     match parts.last do
       Just("") => parts.take(parts.count - 1)
       _        => parts
@@ -661,9 +698,6 @@ make String, implement: Enumerable, Foldable do
     ([all.first.or("")] + rest).join("\n")
   end
 
-  split :> [String]
-  let split = Kex.Intrinsic.String.split(this)
-
   # Replaces every literal occurrence of +pattern+ with +replacement+.
   #
   # The pattern is matched literally, not as a regular expression. An empty
@@ -682,8 +716,26 @@ make String, implement: Enumerable, Foldable do
   replace :> String -> String -> String
   let replace(pattern, replacement) = Kex.Intrinsic.String.replace(this, pattern, replacement)
 
-  # Replaces every key of +replacements+ with its value, in one pass over the
-  # map.
+  # Replaces only the first literal occurrence of +pattern+. Ruby calls this
+  # +sub+, and +replace+ is its +gsub+.
+  #
+  # @param pattern [String] the text to look for
+  # @param replacement [String] what to put in its place
+  # @return [String] the string with its first match replaced, or unchanged
+  #   when there is none
+  #
+  # @example
+  #   "a-b-c".replaceFirst("-", "+")   # => "a+b-c"
+  #   "abc".replaceFirst("x", "y")     # => "abc"
+  replaceFirst :> String -> String -> String
+  let replaceFirst(pattern, replacement) do
+    match this.indexOf(pattern) do
+      Just(i) => this.take(i) + replacement + this.drop(i + pattern.count)
+      None => this
+    end
+  end
+
+  # Replaces every occurrence of each key of +replacements+ with its value.
   #
   # The keys are the placeholders exactly as written: no syntax is imposed and
   # nothing is reserved, so +$NAME$+, +__NAME__+, +{{name}}+ and +%name%+ are
@@ -695,9 +747,7 @@ make String, implement: Enumerable, Foldable do
   # compiler resolves before this ever sees the string.
   #
   # This is what a template wants instead of a chain of +replace+ calls: the
-  # chain reads as a pipeline when it is really a substitution table, and it
-  # quietly depends on its own order, since an earlier replacement's OUTPUT is
-  # still visible to every later one.
+  # chain reads as a pipeline when it is really a substitution table.
   #
   # Substitutions are applied in the map's canonical key order and each is
   # applied to the result of the last, so a value that itself contains a key
@@ -737,6 +787,140 @@ make String, implement: Enumerable, Foldable do
   #   let name = IO.getLine.or("").trim
   trim :> String
   let trim = Kex.Intrinsic.String.trim(this)
+
+  # Removes leading whitespace only. Ruby calls this +lstrip+.
+  #
+  # @return [String] the string without its leading whitespace
+  #
+  # @example
+  #   "  hi  ".trimStart   # => "hi  "
+  trimStart :> String
+  let trimStart = Kex.Intrinsic.String.trimStart(this)
+
+  # Removes trailing whitespace only. Ruby calls this +rstrip+.
+  #
+  # @return [String] the string without its trailing whitespace
+  #
+  # @example
+  #   "  hi  ".trimEnd   # => "  hi"
+  #
+  # @example Dropping a line ending, CRLF included
+  #   line.trimEnd
+  trimEnd :> String
+  let trimEnd = Kex.Intrinsic.String.trimEnd(this)
+
+  # Removes +prefix+ from the start of the string when it is there, and
+  # otherwise returns the string unchanged. Ruby calls this +delete_prefix+.
+  #
+  # @param prefix [String] the text to remove
+  # @return [String] the string without the prefix
+  #
+  # @example
+  #   "v1.2.0".removePrefix("v")   # => "1.2.0"
+  #   "1.2.0".removePrefix("v")    # => "1.2.0"
+  removePrefix :> String -> String
+  let removePrefix(prefix) = this.startsWith?(prefix) then this.drop(prefix.count) else this
+
+  # Removes +suffix+ from the end of the string when it is there, and
+  # otherwise returns the string unchanged. Ruby calls this +delete_suffix+.
+  #
+  # @param suffix [String] the text to remove
+  # @return [String] the string without the suffix
+  #
+  # @example
+  #   "notes.txt".removeSuffix(".txt")   # => "notes"
+  removeSuffix :> String -> String
+  let removeSuffix(suffix) = this.endsWith?(suffix) then this.take(this.count - suffix.count) else this
+
+  # Returns the string repeated +n+ times; +""+ when +n+ is 0 or less. Ruby
+  # spells this +*+.
+  #
+  # @param n [Integer] how many copies
+  # @return [String] the copies, joined
+  #
+  # @example
+  #   "ab".repeat(3)    # => "ababab"
+  #   "-".repeat(10)    # => "----------"
+  repeat :> Integer -> String
+  let repeat(n) = n <= 0 then "" else (1..n).items.map { |_| this }.join
+  # Pads the string on the left with spaces until it is +width+ characters
+  # long. A string already that long is returned unchanged. Ruby calls this
+  # +rjust+.
+  #
+  # @param width [Integer] the length to reach
+  # @return [String] the padded string
+  #
+  # @example
+  #   "7".padLeft(3)   # => "  7"
+  padLeft :> Integer -> String
+  let padLeft(width) = this.padLeft(width, " ")
+
+  # Pads the string on the left with +pad+, repeated and cut to fit, until it
+  # is +width+ characters long.
+  #
+  # @param width [Integer] the length to reach
+  # @param pad [String] the filler, repeated as needed; an empty filler pads
+  #   nothing
+  # @return [String] the padded string
+  #
+  # @example
+  #   "7".padLeft(3, "0")      # => "007"
+  #   "abc".padLeft(8, "12")   # => "12121abc"
+  padLeft :> Integer -> String -> String
+  let padLeft(width, pad) = filler(pad, width - this.count) + this
+
+  # Pads the string on the right with spaces until it is +width+ characters
+  # long. Ruby calls this +ljust+.
+  #
+  # @param width [Integer] the length to reach
+  # @return [String] the padded string
+  #
+  # @example
+  #   "ab".padRight(4) + "|"   # => "ab  |"
+  padRight :> Integer -> String
+  let padRight(width) = this.padRight(width, " ")
+
+  # Pads the string on the right with +pad+, repeated and cut to fit, until it
+  # is +width+ characters long.
+  #
+  # @param width [Integer] the length to reach
+  # @param pad [String] the filler, repeated as needed
+  # @return [String] the padded string
+  #
+  # @example
+  #   "ab".padRight(5, ".")   # => "ab..."
+  padRight :> Integer -> String -> String
+  let padRight(width, pad) = this + filler(pad, width - this.count)
+
+  # Centers the string in a field of +width+ characters, padding both sides
+  # with spaces. When the padding cannot split evenly, the extra character
+  # goes on the right, as Ruby's +center+ does.
+  #
+  # @param width [Integer] the length to reach
+  # @return [String] the centered string
+  #
+  # @example
+  #   "ab".center(6)   # => "  ab  "
+  #   "ab".center(5)   # => " ab  "
+  center :> Integer -> String
+  let center(width) = this.center(width, " ")
+
+  # Centers the string in a field of +width+ characters, padding both sides
+  # with +pad+.
+  #
+  # @param width [Integer] the length to reach
+  # @param pad [String] the filler, repeated as needed
+  # @return [String] the centered string
+  #
+  # @example
+  #   "ab".center(6, "*")   # => "**ab**"
+  center :> Integer -> String -> String
+  let center(width, pad) do
+    let total = width - this.count
+    return this if total <= 0
+    let left = total / 2
+    filler(pad, left) + this + filler(pad, total - left)
+  end
 
   # Returns the string with every character converted to upper case.
   #
@@ -850,6 +1034,14 @@ make String, implement: Enumerable, Foldable do
   let pascalCase = identifierWords(this.chars, None, "", []).map(~capitalize).join("")
 
   private do
+    # +pad+ repeated and cut to exactly +width+ characters: the filler the
+    # padding functions put beside the string. Nothing for a width of 0 or
+    # less, or for an empty +pad+.
+    let filler(pad: String, width: Integer) -> String do
+      return "" if width <= 0 || pad.empty?
+      return pad.repeat(width / pad.count + 1).take(width)
+    end
+
     # The words of an identifier, read one character at a time: `previous`
     # is the character before `chars`, `current` the word being read.
     identifierWords :> [Char] -> Char? -> String -> [String] -> [String]
@@ -1101,7 +1293,7 @@ make Char do
   # @example A hexadecimal-digit test
   #   let hex?(c: Char) -> Bool = c.digit? || c.lowerCase.in?('a'..'f')
   in? :> Range<Char> -> Bool
-  let in?(range) = Kex.Intrinsic.List.member(this, range)
+  let in?(range) = range.contains?(this)
 end
 
 # Constructors for +String+ values that are built from something other than

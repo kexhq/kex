@@ -1,0 +1,47 @@
+using URI
+
+describe("URI.parse agrees on both backends") do
+  it("names the problem and where it is") do
+    assert(URI.parse("http://example.com/a b").error.map { |e| (e.kind, e.position) } == Just((InvalidSyntax, Just(20))))
+    assert(URI.parse("http://example.com/%zz").error.map { |e| (e.kind, e.position) } == Just((InvalidEscape, Just(19))))
+    assert(URI.parse("http://exämple.com/").error.map { |e| e.kind } == Just(NonASCII))
+  end
+
+  it("rejects an out-of-range port and an empty authority") do
+    assert(URI.parse("http://example.com:99999/").error?)
+    assert(URI.parse("http://").error?)
+    assert(URI.parse("//host/path").ok?)
+    assert(URI.parse("mailto:a@b.c").ok?)
+  end
+
+  it("keeps an IP literal's brackets in the host") do
+    assert(URI.parse("http://[::1]:8080/").try.host.map { |h| h.display } == Just("[::1]"))
+  end
+end
+
+describe("URL agrees on both backends") do
+  it("reports the scheme in lower case") do
+    assert(URL.parse("HTTPS://Example.com").map { |u| u.scheme } == Ok("https"))
+  end
+
+  it("requires a host") do
+    assert(URL.parse("file:///etc/passwd").error.map { |e| e.kind } == Just(InvalidSyntax))
+    assert(URL.build("https", "", [], Query.from([])).error.map { |e| e.kind } == Just(MissingAuthority))
+  end
+
+  it("builds with a lower-cased scheme and host") do
+    assert(URL.build("HTTPS", "Example.COM", ["a b"], Query.from([])).map { |u| u.string } == Ok("https://example.com/a%20b"))
+  end
+end
+
+describe("Normalization and queries") do
+  it("decodes escaped unreserved characters") do
+    assert(URI.parse("http://example.com/%7eada").try.normalize.string == "http://example.com/~ada")
+    assert(URI.parse("HTTP://example.com/%7Eada").try.equivalent?(URI.parse("http://example.com/~ada").try))
+  end
+
+  it("reads an empty query and empty pieces as no entries") do
+    assert(Query.parse("").map { |q| q.entries.count } == Ok(0))
+    assert(Query.parse("&&a=1&").map { |q| q.entries } == Ok([("a", Just("1"))]))
+  end
+end

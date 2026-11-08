@@ -78,12 +78,12 @@ describe("File — exists?, delete (mocked)") do
   it("delete removes a mocked file") do
     Mock.FS.File("temp.txt", "bye")
     assert(FS.File.exists?("temp.txt"))
-    assert(FS.File.delete("temp.txt"))
+    assert(FS.File.delete("temp.txt").ok?)
     assert(!FS.File.exists?("temp.txt"))
   end
 
   it("delete returns false for a non-existent unmocked path") do
-    assert(!FS.File.delete("/no/such/kex_test_xyz.txt"))
+    assert(!FS.File.delete("/no/such/kex_test_xyz.txt").ok?)
   end
 end
 
@@ -118,8 +118,8 @@ describe("File — lines and feed (mocked)") do
     assert(ls.at(2).or("") == "three")
   end
 
-  it("lines returns None for an unmocked path") do
-    assert(FS.File.readLines("/no/such/kex_test_xyz.txt") == None)
+  it("readLines fails for an unmocked path") do
+    assert(FS.File.readLines("/no/such/kex_test_xyz.txt").error?)
   end
 
   it("feed produces a stream of lines") do
@@ -128,8 +128,8 @@ describe("File — lines and feed (mocked)") do
     assert(s.take(3).count == 3)
   end
 
-  it("feed returns None for an unmocked path") do
-    assert(FS.File.feed("/no/such/kex_test_xyz.txt") == None)
+  it("feed fails for an unmocked path") do
+    assert(FS.File.feed("/no/such/kex_test_xyz.txt").error?)
   end
 end
 
@@ -142,8 +142,8 @@ describe("File — size (mocked)") do
     assert(FS.File.size("sized.txt").or(-1) == 5)
   end
 
-  it("size returns None for an unmocked path") do
-    assert(FS.File.size("/no/such/kex_test_xyz.txt") == None)
+  it("size fails for an unmocked path") do
+    assert(FS.File.size("/no/such/kex_test_xyz.txt").error?)
   end
 end
 
@@ -154,9 +154,9 @@ describe("FS.File.open — typed Result (mocked)") do
   it("try unwraps a readable handle") do
     Mock.FS.File("lines.txt", "first\nsecond")
     let f = FS.File.open("lines.txt", FS.Read).try
-    let line = f.readLine
+    let line = f.getLine
     f.close()
-    assert(line.try.or("") == "first")
+    assert(line.or("") == "first")
   end
 
   it("returns OpenFailed when the path does not exist") do
@@ -235,6 +235,33 @@ describe("Directory — real filesystem") do
     assert(FS.Directory.exists?("/tmp"))
   end
 
+  it("every line reader strips LF and CRLF endings alike") do
+    let dir = FS.Directory.createTemporary("kex-fs-crlf").or("")
+    let path = FS.Path.join(dir, "crlf.txt")
+    FS.File.write(path, "l1\r\nl2\n")
+    assert(FS.File.readLines(path) == Ok(["l1", "l2"]))
+    assert(FS.File.feed(path).map { |lines| lines.take(5) } == Ok(["l1", "l2"]))
+    let handle = FS.File.open(path, Read).try
+    assert(handle.readLine == Ok(Just("l1")))
+    assert(handle.getLine == Just("l2"))
+    assert(handle.eof?)
+    handle.close
+    assert(handle.eof?)
+    FS.Directory.deleteAll(dir)
+  end
+
+  it("delete and deleteAll leave a regular file alone") do
+    let dir = FS.Directory.createTemporary("kex-fs-spec").or("")
+    let file = FS.Path.join(dir, "keep.txt")
+    FS.File.write(file, "data")
+    assert(!FS.Directory.delete(file).ok?)
+    assert(!FS.Directory.deleteAll(file).ok?)
+    assert(FS.File.file?(file))
+    assert(!FS.Directory.deleteAll(FS.Path.join(dir, "missing")).ok?)
+    assert(FS.Directory.deleteAll(dir).ok?)
+    assert(!FS.Directory.exists?(dir))
+  end
+
   it("home returns a non-empty string or None") do
     let h = FS.Directory.home()
     # HOME may be unset in some environments; just assert it's a String when present
@@ -292,7 +319,7 @@ describe("File — changePermission") do
     let script = FS.Path.join(root, "hello script")
     FS.File.write(script, "#!/bin/sh\necho hello\n")
     assert(Process.run(script, []).map { |ran| ran.exitCode }.or(-1) != 0, "not runnable before")
-    assert(FS.File.changePermission(script, [FS.Readable, FS.Writable, FS.Executable]), "permission changed")
+    assert(FS.File.changePermission(script, [FS.Readable, FS.Writable, FS.Executable]).ok?, "permission changed")
     assert(Process.run(script, []).map { |ran| ran.stdout }.or("") == "hello\n", "runs after")
     FS.Directory.deleteAll(root)
   end
@@ -301,8 +328,8 @@ describe("File — changePermission") do
     let root = FS.Directory.createTemporary("kex-spec").or("")
     let script = FS.Path.join(root, "script")
     FS.File.write(script, "#!/bin/sh\necho hello\n")
-    assert(FS.File.changePermission(script, [FS.Readable, FS.Writable, FS.Executable]))
-    assert(FS.File.changePermission(script, [FS.Readable, FS.Writable]))
+    assert(FS.File.changePermission(script, [FS.Readable, FS.Writable, FS.Executable]).ok?)
+    assert(FS.File.changePermission(script, [FS.Readable, FS.Writable]).ok?)
     assert(Process.run(script, []).map { |ran| ran.exitCode }.or(-1) != 0, "no longer runnable")
     FS.Directory.deleteAll(root)
   end
@@ -315,7 +342,7 @@ describe("File — changePermission") do
   end
 
   it("answers false for a missing file") do
-    assert(!FS.File.changePermission("/nonexistent/kex-spec-script", [FS.Readable]))
+    assert(!FS.File.changePermission("/nonexistent/kex-spec-script", [FS.Readable]).ok?)
   end
 end
 
@@ -324,7 +351,7 @@ describe("File — changeMode") do
     let root = FS.Directory.createTemporary("kex-spec").or("")
     let script = FS.Path.join(root, "script")
     FS.File.write(script, "#!/bin/sh\necho hello\n")
-    assert(FS.File.changeMode(script, 0o700))
+    assert(FS.File.changeMode(script, 0o700).ok?)
     assert(Process.run(script, []).map { |ran| ran.stdout }.or("") == "hello\n", "owner may run it")
     FS.Directory.deleteAll(root)
   end
@@ -333,9 +360,9 @@ describe("File — changeMode") do
     let root = FS.Directory.createTemporary("kex-spec").or("")
     let file = FS.Path.join(root, "file")
     FS.File.write(file, "")
-    assert(!FS.File.changeMode("/nonexistent/kex-spec-script", 0o644))
-    assert(!FS.File.changeMode(file, -1))
-    assert(!FS.File.changeMode(file, 0o10000))
+    assert(!FS.File.changeMode("/nonexistent/kex-spec-script", 0o644).ok?)
+    assert(!FS.File.changeMode(file, -1).ok?)
+    assert(!FS.File.changeMode(file, 0o10000).ok?)
     FS.Directory.deleteAll(root)
   end
 end

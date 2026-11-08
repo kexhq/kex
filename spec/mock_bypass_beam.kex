@@ -12,8 +12,8 @@ main do
   let port = listener.localAddress.try.port.string
   let server = Task.start do
     let peer = listener.accept.try
-    assert(peer.getLine.try == Just("hi"))
-    assert(peer.getLine.try == None)
+    assert(peer.readLine.try == Just("hi"))
+    assert(peer.readLine.try == None)
     peer.close
   end
   let client = TCP.connectTo("127.0.0.1:${port}").try

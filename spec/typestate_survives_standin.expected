@@ -1,8 +1,6 @@
-spec/typestate_survives_standin.kex:19:22: error: `write` expects argument 1 to be FileHandle<A, CanWrite>, but got FileHandle<CanRead, CannotWrite>
+spec/typestate_survives_standin.kex:19:22: error: `print` expects argument 1 to be FileHandle<A, CanWrite>, but got FileHandle<CanRead, CannotWrite>
 
-write : FileHandle<A, CanWrite> -> Showable -> Void
-
-write : String -> String -> Result<Void, FS.FileError>
+print : FileHandle<A, CanWrite> -> Showable -> Void
 spec/typestate_survives_standin.kex:24:21: error: `read` expects argument 1 to be FileHandle<CanRead, A>, but got FileHandle<CannotRead, CanWrite>
 
 read : FileHandle<CanRead, A> -> Result<String, ReadError>

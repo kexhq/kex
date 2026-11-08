@@ -1681,7 +1681,7 @@ let primes = Stream.Sequence(from: 2) { |n| n + 1 }
 primes.take(5)                          # [2, 3, 5, 7, 11]
 ```
 
-`Stream.Iterate(seed, step)` is an alias for `Sequence`. Stream functions:
+Stream functions:
 `take(n)` → list, `drop(n)` → stream, `map(f)` → stream, `filter(pred)` →
 stream.
 
@@ -2007,12 +2007,11 @@ All functions take `Number` (Integer or Float) and return `Float` unless noted.
 | `printLine(x)` | Write `x` + newline to stdout |
 | `printLine` | Blank line |
 | `print(x)` | Write `x` (no newline) |
-| `putLine`, `put` | Aliases for `printLine`/`print` |
 | `inspect(x)` | Pretty-print to stderr, return `x` |
-| `getLine` | Read a line from stdin → `String?` |
-| `get` | Read one char from stdin → `String?` |
+| `getLine` | Read a line from stdin → `String?` (`None` at end of input or on failure) |
+| `readLine` | Read a line from stdin → `Result<String?, ReadError>` (`Ok(None)` at end of input) |
+| `getChar` | Read one character from stdin → `String?` |
 | `printError(x)` | Write to stderr |
-| `warn`, `warning` | Aliases for `printError` |
 
 ### 23.9 Range
 
@@ -2034,7 +2033,6 @@ Implementing Enumerable provides its default functions (`map`, `filter`,
 | Constructor / Function | Description |
 |---|---|
 | `Stream.Sequence(from, step)` | Infinite stream from `from` |
-| `Stream.Iterate(seed, step)` | Alias for `Sequence` |
 | `take(n)` | First `n` elements as a list |
 | `drop(n)` | New stream offset by `n` |
 | `map(f)` | Lazy map |
@@ -2083,16 +2081,16 @@ modules. Paths use the `FilePath` type.
 |---|---|
 | `FS.File.read(path)` | `Result<String, FileError>` — whole file, decoded as UTF-8 |
 | `FS.File.readBytes(path)` | `Result<Binary, FileError>` — whole file, undecoded |
-| `FS.File.write(path, content)` | `Bool` — overwrite |
-| `FS.File.writeBytes(path, binary)` | `Bool` — overwrite with raw bytes |
-| `FS.File.append(path, content)` | `Bool` — append |
-| `FS.File.readLines(path)` | `[String]?` — lines |
-| `FS.File.feed(path)` | `Feed<String>?` — lazy lines |
+| `FS.File.write(path, content)` | `Result<Void, FileError>` — overwrite |
+| `FS.File.writeBytes(path, binary)` | `Result<Void, FileError>` — overwrite with raw bytes |
+| `FS.File.append(path, content)` | `Result<Void, FileError>` — append |
+| `FS.File.readLines(path)` | `Result<[String], FileError>` — lines |
+| `FS.File.feed(path)` | `Result<Feed<String>, FileError>` — lazy lines |
 | `FS.File.exists?(path)`, `file?`, `directory?` | `Bool` |
-| `FS.File.size(path)` | `Integer?` — bytes |
-| `FS.File.delete(path)`, `copy(src, dst)`, `rename(src, dst)` | `Bool` |
+| `FS.File.size(path)` | `Result<Integer, FileError>` — bytes |
+| `FS.File.delete(path)`, `copy(src, dst)`, `rename(src, dst)` | `Result<Void, FileError>` |
 | `FS.File.open(path, mode)` | Mode-specific `Result<FileHandle<R, W>, FileError>` |
-| `FS.File.absolute(path)` | `String?` — absolute path |
+| `FS.File.absolute(path)` | `Result<String, FileError>` — absolute path |
 | `FS.Path.basename(path)`, `dirname(path)`, `extension(path)`, `join(a, b)` | Pure path operations |
 
 `open` refines the handle capabilities from its mode:
@@ -2120,21 +2118,22 @@ end
 
 Read functions are only available on `FileHandle<CanRead, W>`, and write functions
 are only available on `FileHandle<R, CanWrite>`. For example, calling
-`readLine` on a handle opened with `Write` is a compile-time error. Capabilities
+`getLine` on a handle opened with `Write` is a compile-time error. Capabilities
 do not currently track whether a handle has been closed.
 
 **Directory:**
 
 | Function | Description |
 |---|---|
-| `FS.Directory.create(path)`, `delete(path)`, `deleteAll(path)` | `Bool` |
-| `FS.Directory.list(path)`, `files`, `directories` | `[String]?` |
+| `FS.Directory.create(path)`, `delete(path)`, `deleteAll(path)` | `Result<Void, FileError>` |
+| `FS.Directory.list(path)`, `files`, `directories` | `Result<[String], FileError>` |
 | `FS.Directory.exists?`, `current`, `home` | Existence / paths |
 
 **FileHandle** functions:
 
-- Read-capable: `getLine`, `get`, `readLine`, `read`, `readBytes`, `eof?`, `atEnd?`, `feed`.
-- Write-capable: `printLine`, `print`, `writeLine`, `write`.
+- Read-capable (`Readable`): `get` (the next chunk of bytes), `readLine`, `getLine`, `read`, `readBytes`, `eof?`; also `getChar` and `feed`.
+- Write-capable (`Writable`): `put` (raw bytes), `write`, `writeLine`, `print`, `printLine`.
+- The `read`/`write` functions answer a `Result`; `getLine`/`getChar` answer an Optional, and `print`/`printLine` answer `Void`.
 - All handles: `close`.
 
 ### 23.14 HTTP (`foul`)

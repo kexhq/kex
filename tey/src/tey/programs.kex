@@ -115,10 +115,10 @@ end
 # program, and on the same filesystem, so publishing it is a rename.
 foul stagingDirectory -> String or! String do
   let root = FS.Path.join(Tey.Toolchain.home, "staging")
-  return Error("could not create ${root}") if !FS.Directory.create(root)
+  return Error("could not create ${root}") if !FS.Directory.create(root).ok?
   let nonce = Digest.sha256("${DateTime.epochNanos()}").take(16)
   let path = FS.Path.join(root, nonce)
-  return Error("could not create ${path}") if !FS.Directory.create(path)
+  return Error("could not create ${path}") if !FS.Directory.create(path).ok?
   return Ok(path)
 end
 
@@ -139,7 +139,7 @@ end
 
 foul copyInto(root: String, relative: String, destination: String) -> Bool do
   let target = FS.Path.join(destination, relative)
-  return false if !FS.Directory.create(FS.Path.dirname(target))
+  return false if !FS.Directory.create(FS.Path.dirname(target)).ok?
   match Process.run("cp", ["-a", "--", FS.Path.join(root, relative), target]) do
     Ok(result) => return result.exitCode == 0
     Error(_) => return false
@@ -151,13 +151,13 @@ end
 # leaves one of the two in place.
 foul publishBuild(name: String, staged: String) -> Void or! String do
   let destination = Tey.Programs.buildDirectory(name)
-  return Error("could not create ${FS.Path.dirname(destination)}") if !FS.Directory.create(FS.Path.dirname(destination))
+  return Error("could not create ${FS.Path.dirname(destination)}") if !FS.Directory.create(FS.Path.dirname(destination)).ok?
   let previous = "${destination}.old"
   FS.Directory.deleteAll(previous)
-  if FS.Directory.directory?(destination) && !FS.File.rename(destination, previous)
+  if FS.Directory.directory?(destination) && !FS.File.rename(destination, previous).ok?
     return Error("could not replace ${destination}")
   end
-  if !FS.File.rename(staged, destination)
+  if !FS.File.rename(staged, destination).ok?
     FS.File.rename(previous, destination)
     return Error("could not publish ${destination}")
   end
@@ -280,14 +280,14 @@ end
 foul save(receipt: Receipt) -> Void or! String do
   let path = Tey.Programs.receiptPath(receipt.name)
   let staging = "${path}.new"
-  return Error("could not create ${FS.Path.dirname(path)}") if !FS.Directory.create(FS.Path.dirname(path))
+  return Error("could not create ${FS.Path.dirname(path)}") if !FS.Directory.create(FS.Path.dirname(path)).ok?
   return Error("could not write ${staging}") if FS.File.write(staging, Tey.Programs.encode(receipt)).error?
-  return Error("could not write ${path}") if !FS.File.rename(staging, path)
+  return Error("could not write ${path}") if !FS.File.rename(staging, path).ok?
   return Ok(())
 end
 
 foul remove(name: String) -> Bool do
-  return FS.Directory.deleteAll(FS.Path.join(Tey.Programs.directory, name))
+  return FS.Directory.deleteAll(FS.Path.join(Tey.Programs.directory, name)).ok?
 end
 
 # Whether `path` is an escript Tey's own target build wrote: its emulator

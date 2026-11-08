@@ -46,36 +46,6 @@ make [Number] do
   #   [].product          # => 1
   product :> Number
   let product = Kex.Intrinsic.List.product(this)
-
-  # Maps each element through +f+ and multiplies the results.
-  #
-  # @param f [X -> Number]
-  # @return [Number]
-  #
-  # @example
-  #   [[1,2],[3,4]].product { |pair| pair.first.or(1) }   # => 3
-  product :> (X -> Number) -> Number
-  let product(f) = this.map(f).product
-
-  # Returns the smallest element wrapped in +Just+, or +None+ for an empty list.
-  #
-  # @return [Number?]
-  #
-  # @example
-  #   [3, 1, 2].min   # => Just(1)
-  #   [].min          # => None
-  min :> X?
-  let min = Kex.Intrinsic.List.min(this)
-
-  # Returns the largest element wrapped in +Just+, or +None+ for an empty list.
-  #
-  # @return [Number?]
-  #
-  # @example
-  #   [3, 1, 2].max   # => Just(3)
-  #   [].max          # => None
-  max :> X?
-  let max = Kex.Intrinsic.List.max(this)
 end
 
 make [[Y]] do
@@ -288,9 +258,10 @@ make [X], implement: Enumerable, Foldable do
   #
   # @example
   #   [10, 20, 30].at(1)   # => Just(20)
-  #   [10, 20, 30].at(9)   # => None
+  #   [10, 20, 30].at(9)    # => None
+  #   [10, 20, 30].at(-1)   # => Just(30)
   at :> Integer -> X?
-  let at(i) = Kex.Intrinsic.List.at(this, i)
+  let at(i) = Kex.Intrinsic.List.at(this, i < 0 then this.count + i else i)
 
   # Returns the element at position +i+ (0-based), or +None+ when the index is
   # out of range. The same as +at+ (+get+ also accepts a +Range+, which
@@ -301,9 +272,10 @@ make [X], implement: Enumerable, Foldable do
   #
   # @example
   #   [10, 20, 30].get(1)   # => Just(20)
-  #   [10, 20, 30].get(9)   # => None
+  #   [10, 20, 30].get(9)    # => None
+  #   [10, 20, 30].get(-1)   # => Just(30)
   get :> Integer -> X?
-  let get(i: Integer) = Kex.Intrinsic.List.get(this, i)
+  let get(i: Integer) = Kex.Intrinsic.List.get(this, i < 0 then this.count + i else i)
 
   # Returns the element at position +i+ (0-based), or +default+ when the index
   # is out of range. The total form of +get+: the value comes back unwrapped.
@@ -320,7 +292,7 @@ make [X], implement: Enumerable, Foldable do
   #   let host = args.get(0, "localhost")
   #   let port = args.get(1, "8080")
   get :> Integer -> X -> X
-  let get(i, default) = Kex.Intrinsic.List.get(this, i, default)
+  let get(i, default) = Kex.Intrinsic.List.get(this, i < 0 then this.count + i else i, default)
 
   # Returns the sublist addressed by +range+, both ends included. The same
   # as +slice+ over a range, and what the +xs[1..2]+ bracket spelling calls.
@@ -472,8 +444,9 @@ make [X], implement: Enumerable, Foldable do
   #
   # The window is clamped rather than refused, the way +take+ and +drop+
   # already behave: a start past the end answers +[]+, a length running past
-  # the end stops at the end, a negative start counts as 0, and a negative
-  # length answers +[]+.
+  # the end stops at the end, and a negative length answers +[]+. A negative
+  # start counts back from the end, as in Ruby: +-1+ is the last element, and
+  # a start still before the beginning answers +[]+.
   #
   # @param start [Integer] the 0-based index of the first element
   # @param length [Integer] how many elements to keep
@@ -483,21 +456,23 @@ make [X], implement: Enumerable, Foldable do
   #   [1, 2, 3, 4].slice(1, 2)    # => [2, 3]
   #   [1, 2, 3].slice(1, 99)      # => [2, 3]
   #   [1, 2, 3].slice(9, 2)       # => []
+  #   [1, 2, 3, 4].slice(-2, 2)   # => [3, 4]
   #
   # @example Taking a page of rows
   #   rows.slice(page * 10, 10)
   slice :> Integer -> Integer -> [X]
   let slice(start, length) do
-    let from = start < 0 then 0 else start
-    let len = length < 0 then 0 else length
-    this.drop(from).take(len)
+    let from = start < 0 then this.count + start else start
+    return [] if from < 0 || length < 0
+    this.drop(from).take(length)
   end
 
   # Returns the sublist addressed by +range+, both ends included.
   #
   # The bounds are clamped like the start/length form above: a range running
   # past either end is trimmed to the list, and a range whose start lies past
-  # its end answers +[]+.
+  # its end answers +[]+. Either end may count back from the end, as
+  # Ruby's does: +1..-1+ is everything after the first.
   #
   # @param range [Range<Integer>] the inclusive 0-based index range
   # @return [[X]] the elements in that range
@@ -508,12 +483,14 @@ make [X], implement: Enumerable, Foldable do
   #   [1, 2, 3].slice(2..0)      # => []
   #
   # @example Splitting a header off its body
-  #   let body = lines.slice(1..lines.count - 1)
+  #   let body = lines.slice(1..-1)
   slice :> Range<Integer> -> [X]
   let slice(range) do
     let (lo, hi) = Kex.Intrinsic.Range.bounds(range)
-    let from = lo < 0 then 0 else lo
-    this.slice(from, hi - from + 1)
+    let from = lo < 0 then this.count + lo else lo
+    let to = hi < 0 then this.count + hi else hi
+    return [] if from < 0
+    this.slice(from, to - from + 1)
   end
 
   # Returns a new list with +x+ appended at the end.
@@ -567,27 +544,170 @@ make [X], implement: Enumerable, Foldable do
   sort :> (X -> X -> Bool) -> [X]
   let sort(comp) = Kex.Intrinsic.List.sort(this, comp)
 
-  # Returns the element with the smallest +f+ key wrapped in +Just+, or
-  # +None+ for an empty list.
+  # Returns the smallest element wrapped in +Just+, or +None+ for an empty
+  # list. Elements compare in the same natural order +sort+ uses.
   #
-  # @param f [X -> Y]
-  # @return [X?]
+  # @return [X?] the smallest element, or +None+
   #
   # @example
-  #   ["hey", "hi"].min { |s| s.count }   # => Just("hi")
-  min :> (X -> Y) -> X?
-  let min(f) = Kex.Intrinsic.List.minBy(this, f)
+  #   [3, 1, 2].min          # => Just(1)
+  #   ["pear", "fig"].min    # => Just("fig")
+  #   [].min                 # => None
+  min :> X?
+  let min = Kex.Intrinsic.List.min(this)
+
+  # Returns the largest element wrapped in +Just+, or +None+ for an empty
+  # list. Elements compare in the same natural order +sort+ uses.
+  #
+  # @return [X?] the largest element, or +None+
+  #
+  # @example
+  #   [3, 1, 2].max          # => Just(3)
+  #   ["pear", "fig"].max    # => Just("pear")
+  max :> X?
+  let max = Kex.Intrinsic.List.max(this)
+
+  # Maps each element through +f+ and multiplies the results.
+  #
+  # @param f [X -> Number]
+  # @return [Number]
+  #
+  # @example
+  #   [[1, 2], [3, 4]].product { |pair| pair.first.or(1) }   # => 3
+  product :> (X -> Number) -> Number
+  let product(f) = this.map(f).product
+  # Returns the element with the smallest +f+ key wrapped in +Just+, or
+  # +None+ for an empty list. The first of several tying elements wins.
+  #
+  # @param f [X -> Y] the key each element is compared by
+  # @return [X?] the element with the smallest key, or +None+
+  #
+  # @example
+  #   ["hey", "hi"].minBy { |s| s.count }   # => Just("hi")
+  #   [].minBy { |s| s.count }              # => None
+  minBy :> (X -> Y) -> X?
+  let minBy(f) = Kex.Intrinsic.List.minBy(this, f)
 
   # Returns the element with the largest +f+ key wrapped in +Just+, or
-  # +None+ for an empty list.
+  # +None+ for an empty list. The first of several tying elements wins.
   #
-  # @param f [X -> Y]
-  # @return [X?]
+  # @param f [X -> Y] the key each element is compared by
+  # @return [X?] the element with the largest key, or +None+
   #
   # @example
-  #   ["hey", "hi"].max { |s| s.count }   # => Just("hey")
-  max :> (X -> Y) -> X?
-  let max(f) = Kex.Intrinsic.List.maxBy(this, f)
+  #   ["hey", "hi"].maxBy { |s| s.count }   # => Just("hey")
+  maxBy :> (X -> Y) -> X?
+  let maxBy(f) = Kex.Intrinsic.List.maxBy(this, f)
+
+  # Returns the elements sorted by the key +f+ gives each one, smallest key
+  # first. The sort is stable: elements with equal keys keep their order.
+  #
+  # @param f [X -> Y] the key each element is sorted by
+  # @return [[X]] the sorted elements
+  #
+  # @example
+  #   ["pear", "fig", "apple"].sortBy { |s| s.count }   # => ["fig", "pear", "apple"]
+  #
+  # @example Newest first
+  #   posts.sortBy { |p| p.published }.reverse
+  sortBy :> (X -> Y) -> [X]
+  let sortBy(f) = this.sort { |a, b| f(a) < f(b) }
+
+  # Groups the elements by the key +f+ gives each one. Each group keeps its
+  # elements in their original order.
+  #
+  # @param f [X -> K] the key each element is grouped under
+  # @return [{K: [X]}] each key with the elements that produced it
+  #
+  # @example
+  #   [1, 2, 3, 4].groupBy { |n| n.even? }   # => { false: [1, 3], true: [2, 4] }
+  #
+  # @example Words by their first letter
+  #   words.groupBy { |w| w.first.or(' ') }
+  groupBy :> (X -> K) -> {K: [X]}
+  let groupBy(f) do
+    let groups = this.reduce({}) do |acc, item|
+      let key = f(item)
+      acc.put(key, [item | acc.get(key, [])])
+    end
+    groups.mapValues { |items| items.reverse }
+  end
+
+  # Counts how many times each distinct element occurs.
+  #
+  # @return [{X: Integer}] each distinct element with its count
+  #
+  # @example
+  #   ["a", "b", "a"].tally   # => { "a": 2, "b": 1 }
+  tally :> {X: Integer}
+  let tally = this.reduce({}) { |acc, item| acc.put(item, acc.get(item, 0) + 1) }
+
+  # Splits the list into consecutive pieces of +n+ elements; the last piece
+  # holds whatever is left over. Ruby calls this +each_slice+.
+  #
+  # @param n [Integer] the piece size, at least 1
+  # @return [[[X]]] the pieces, in order; +[]+ when +n+ is less than 1
+  #
+  # @example
+  #   [1, 2, 3, 4, 5].slices(2)   # => [[1, 2], [3, 4], [5]]
+  #
+  # @example Rows of a table, three cells each
+  #   cells.slices(3).map { |row| row.join(" | ") }
+  slices :> Integer -> [[X]]
+  let slices(n) do
+    return [] if n < 1 || this.empty?
+    [this.take(n)] + this.drop(n).slices(n)
+  end
+
+  # Every run of +n+ consecutive elements, each overlapping the next by all
+  # but one element. Ruby calls this +each_cons+.
+  #
+  # @param n [Integer] the window size, at least 1
+  # @return [[[X]]] the windows, in order; +[]+ when the list is shorter
+  #   than +n+ or +n+ is less than 1
+  #
+  # @example
+  #   [1, 2, 3, 4].windows(2)   # => [[1, 2], [2, 3], [3, 4]]
+  #
+  # @example Differences between neighbours
+  #   readings.windows(2).map { |w| w.get(1, 0) - w.get(0, 0) }
+  windows :> Integer -> [[X]]
+  let windows(n) do
+    return [] if n < 1 || this.count < n
+    (0..this.count - n).items.map { |i| this.slice(i, n) }
+  end
+
+  # The elements of this list that are not in +other+, in this list's order.
+  # Duplicates in this list are kept unless +other+ removes them.
+  #
+  # @param other [[X]] the elements to leave out
+  # @return [[X]] what remains
+  #
+  # @example
+  #   [1, 2, 2, 3].difference([2])   # => [1, 3]
+  difference :> [X] -> [X]
+  let difference(other) = this.reject { |x| other.contains?(x) }
+
+  # The distinct elements present in both lists, in this list's order.
+  #
+  # @param other [[X]] the list to intersect with
+  # @return [[X]] the shared elements, each once
+  #
+  # @example
+  #   [1, 2, 2, 3].intersect([3, 2, 5])   # => [2, 3]
+  intersect :> [X] -> [X]
+  let intersect(other) = this.uniq.filter { |x| other.contains?(x) }
+
+  # The distinct elements of both lists: this list's first, then the new ones
+  # from +other+.
+  #
+  # @param other [[X]] the list to add
+  # @return [[X]] every distinct element, each once
+  #
+  # @example
+  #   [1, 2, 2].union([2, 3])   # => [1, 2, 3]
+  union :> [X] -> [X]
+  let union(other) = (this + other).uniq
 
   # Maps each element through +f+ and sums the results.
   #

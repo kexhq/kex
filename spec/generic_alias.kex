@@ -47,7 +47,7 @@ main do
 
   # The aliases above are used in signatures that the checker accepted; that
   # acceptance IS the assertion. Transparency does not erase the refinement:
-  # `writeThrough(h: ReadOnlyFile) = h.write(...)` is still a type error,
+  # `writeThrough(h: ReadOnlyFile) = h.print(...)` is still a type error,
   # reported against `FileHandle<CanRead, CannotWrite>` — see
   # spec/error_readonly_alias_write.kex.
   IO.printLine("aliases resolved")

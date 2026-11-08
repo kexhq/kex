@@ -85,8 +85,8 @@ main(args) do
 
   files.each do |path|
     match FS.File.read(path) do
-      None => IO.printError("readcore: cannot read ${path}")
-      Just(source) => do
+      Error(_) => IO.printError("readcore: cannot read ${path}")
+      Ok(source) => do
         var body = decode(source)
 
         if fnName.present?

@@ -7,7 +7,7 @@ main do
 
   let server = Task.start do
     let peer = listener.accept.try
-    IO.printLine("server heard: ${peer.getLine.try.or("")}")
+    IO.printLine("server heard: ${peer.getLine.or("")}")
     peer.close
   end
 

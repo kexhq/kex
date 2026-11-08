@@ -1,5 +1,6 @@
 #include "../evaluator.hxx"
 #include "regex_support.hxx"
+#include "../../common/utf8.hxx"
 #include <mutex>
 #include <unordered_map>
 
@@ -130,7 +131,10 @@ auto buildMatch(const std::string& subject, pcre2_code* code,
 
     auto captures = std::make_shared<Value>();
     captures->data = MapValue{std::move(entries)};
-    return Value::record("Regex.Match", {{"captures", captures}});
+    // The offset counts characters, not the bytes PCRE2 reports.
+    const auto offset = utf8::decode(std::string_view(subject).substr(0, ovector[0])).size();
+    return Value::record("Regex.Match", {{"captures", captures},
+                                         {"offset", Value::integer(static_cast<int64_t>(offset))}});
 }
 
 // Escapes every regex metacharacter individually. Deliberately NOT \Q...\E
@@ -438,13 +442,21 @@ auto Evaluator::registerRegexBuiltins() -> void {
         auto* block = std::get_if<FunctionValue>(&args[2]->data);
         if (!literal && (!block || !block->native)) return args[0];
 
+        // An optional fourth argument caps the replacements: 1 is Ruby's `sub`,
+        // 0 (or none) every match, as `gsub`.
+        int64_t limit = 0;
+        if (args.size() >= 4)
+            if (auto* n = std::get_if<IntValue>(&args[3]->data)) limit = n->value;
+        int64_t replaced = 0;
         pcre2_match_data* matchData =
             pcre2_match_data_create_from_pattern(code, nullptr);
         std::string out;
         size_t start = 0, copied = 0, matchStart = 0, matchEnd = 0, nextStart = 0;
         int groupCount = 0;
-        while (matchAt(code, subject->value, start, matchData, matchStart,
+        while ((limit <= 0 || replaced < limit) &&
+               matchAt(code, subject->value, start, matchData, matchStart,
                        matchEnd, nextStart, groupCount)) {
+            ++replaced;
             out.append(subject->value, copied, matchStart - copied);
             if (literal) {
                 out.append(literal->value);

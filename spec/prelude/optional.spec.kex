@@ -124,3 +124,28 @@ describe("Result — optional") do
     assert(Error("oops").optional == None)
   end
 end
+
+describe("Result.mapError, Result.error and Optional.filter") do
+  it("mapError transforms only the error") do
+    assert(Error(404).mapError { |code| "HTTP ${code}" } == Error("HTTP 404"))
+    assert(Ok(1).mapError { |code| "HTTP ${code}" } == Ok(1))
+  end
+
+  it("error answers the error as an optional") do
+    assert(Error("bad").error == Just("bad"))
+    assert(Ok(1).error == None)
+  end
+
+  it("filter keeps a value the predicate accepts") do
+    assert(Just(4).filter { |n| n.even? } == Just(4))
+    assert(Just(3).filter { |n| n.even? } == None)
+    assert(None.filter { |n| n > 0 } == None)
+  end
+end
+
+describe("Result.or") do
+  it("answers the Ok value or the default") do
+    assert(Ok(42).or(0) == 42)
+    assert(Error("x").or(0) == 0)
+  end
+end

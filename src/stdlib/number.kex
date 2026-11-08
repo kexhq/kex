@@ -122,7 +122,7 @@ make Integer do
   # @example Validating a port number
   #   port.in?(1..65535)
   in? :> Range<Integer> -> Bool
-  let in?(range) = Kex.Intrinsic.List.member(this, range)
+  let in?(range) = range.contains?(this)
 
   # Calls +f+ exactly +this+ times, passing the 0-based iteration index.
   #
@@ -176,6 +176,114 @@ make Integer do
   round :> Integer
   let round = Kex.Intrinsic.Number.round(this)
 
+  # Raises the integer to a non-negative integer power, exactly: integers
+  # have no size limit, so +2.pow(100)+ is the whole 31-digit number, where
+  # +Math.pow+ answers a +Float+.
+  #
+  # A negative exponent gives the reciprocal truncated toward zero, the way
+  # +/+ divides integers: +0+ for any base but +1+ and +-1+.
+  #
+  # @param exponent [Integer] the power to raise to
+  # @return [Integer] +this+ multiplied by itself +exponent+ times
+  #
+  # @example
+  #   2.pow(10)    # => 1024
+  #   2.pow(100)   # => 1267650600228229401496703205376
+  #   (-3).pow(3)  # => -27
+  pow :> Integer -> Integer
+  let pow(exponent) do
+    return 1 / this.pow(0 - exponent) if exponent < 0
+    return 1 if exponent == 0
+    let half = this.pow(exponent / 2)
+    return exponent.even? then half * half else half * half * this
+  end
+
+  # Divides and rounds toward negative infinity: the quotient that goes with
+  # +modulo+. Plain +/+ truncates toward zero instead, so the two differ only
+  # when the signs do. Ruby's +/+ on integers is this one.
+  #
+  # @param n [Integer] the divisor, non-zero
+  # @return [Integer] the floored quotient
+  #
+  # @example
+  #   7.div(2)      # => 3
+  #   (-7).div(2)   # => -4   (-7 / 2 is -3)
+  div :> Integer -> Integer
+  let div(n) do
+    let quotient = this / n
+    return (this.modulo(n) != 0 && (this < 0) != (n < 0)) then quotient - 1 else quotient
+  end
+
+  # The floored quotient and the +modulo+ remainder together, so that
+  # +q * n + r == this+ always holds.
+  #
+  # @param n [Integer] the divisor, non-zero
+  # @return [(Integer, Integer)] +(this.div(n), this.modulo(n))+
+  #
+  # @example
+  #   7.divmod(2)      # => (3, 1)
+  #   (-7).divmod(2)   # => (-4, 1)
+  divmod :> Integer -> (Integer, Integer)
+  let divmod(n) = (this.div(n), this.modulo(n))
+
+  # The greatest common divisor, always non-negative. +0.gcd(0)+ is +0+.
+  #
+  # @param n [Integer] the other integer
+  # @return [Integer] the largest integer dividing both
+  #
+  # @example
+  #   12.gcd(18)    # => 6
+  #   (-4).gcd(6)   # => 2
+  gcd :> Integer -> Integer
+  let gcd(n) = n == 0 then this.abs else n.gcd(this.modulo(n))
+
+  # The least common multiple, always non-negative. Zero with anything is
+  # +0+.
+  #
+  # @param n [Integer] the other integer
+  # @return [Integer] the smallest positive integer both divide
+  #
+  # @example
+  #   4.lcm(6)   # => 12
+  lcm :> Integer -> Integer
+  let lcm(n) = (this == 0 || n == 0) then 0 else (this * n).abs / this.gcd(n)
+
+  # The decimal digits of the integer's magnitude, least significant first,
+  # as Ruby's +digits+ answers them. +.reverse+ gives reading order.
+  #
+  # @return [[Integer]] the digits, ones place first
+  #
+  # @example
+  #   1234.digits           # => [4, 3, 2, 1]
+  #   0.digits              # => [0]
+  #   1234.digits.reverse   # => [1, 2, 3, 4]
+  digits :> [Integer]
+  let digits do
+    let n = this.abs
+    return [n] if n < 10
+    [n.modulo(10)] + (n / 10).digits
+  end
+
+  # Returns +true+ for zero.
+  #
+  # @example
+  #   0.zero?   # => true
+  zero? :> Bool
+  let zero? = this == 0
+
+  # Returns +true+ when the number is greater than zero.
+  #
+  # @example
+  #   0.positive?   # => false
+  positive? :> Bool
+  let positive? = this > 0
+
+  # Returns +true+ when the number is less than zero.
+  #
+  # @example
+  #   0.negative?   # => false
+  negative? :> Bool
+  let negative? = this < 0
 end
 
 # Double-precision floating-point numbers.
@@ -221,11 +329,11 @@ make Float do
   # @param range [Range<Float>] the inclusive range
   # @return [Bool] +true+ when the float is in range
   #
-  # @example Comparing directly is usually clearer for floats
-  #   let ratio = 0.75
-  #   ratio >= 0.0 && ratio <= 1.0   # => true
+  # @example
+  #   0.75.in?(0.0..1.0)   # => true
+  #   1.5.in?(0.0..1.0)    # => false
   in? :> Range<Float> -> Bool
-  let in?(range) = Kex.Intrinsic.List.member(this, range)
+  let in?(range) = range.contains?(this)
 
   # Returns the largest integer that is not greater than the float: it always
   # rounds toward negative infinity, which is what separates it from
@@ -277,6 +385,27 @@ make Float do
   #   (-3.7).toInteger   # => -3   (floor would give -4)
   toInteger :> Integer
   let toInteger = Kex.Intrinsic.Number.toInteger(this)
+
+  # Returns +true+ for zero.
+  #
+  # @example
+  #   2.5.zero?   # => false
+  zero? :> Bool
+  let zero? = this == 0.0
+
+  # Returns +true+ when the number is greater than zero.
+  #
+  # @example
+  #   2.5.positive?   # => true
+  positive? :> Bool
+  let positive? = this > 0.0
+
+  # Returns +true+ when the number is less than zero.
+  #
+  # @example
+  #   2.5.negative?   # => false
+  negative? :> Bool
+  let negative? = this < 0.0
 end
 
 # Reading integers out of text.

@@ -26,24 +26,24 @@ main do
   let port = listener.localAddress.try.port.string
   let server = Task.start do
     let peer = listener.accept.try
-    assert(peer.getLine.try == Just("hello"))
-    assert(peer.getLine.try == Just(" spaced "))
-    assert(peer.getLine.try == Just("raw"))
-    match peer.getLine do
+    assert(peer.readLine.try == Just("hello"))
+    assert(peer.readLine.try == Just(" spaced "))
+    assert(peer.readLine.try == Just("raw"))
+    match peer.readLine do
       Error(error) => assert(error.kind == Parse, "invalid UTF-8 must be a Parse error")
       Ok(_) => assert(false, "invalid UTF-8 must not decode")
     end
     peer.printLine("back")
-    assert(peer.getLine.try == None)
+    assert(peer.readLine.try == None)
     peer.close
   end
   let client = TCP.connectTo("127.0.0.1:${port}").try
   client.printLine("hello")
-  client.write(" sp")
+  client.print(" sp")
   client.printLine("aced ")
-  client.writeBytes("raw\r\n".to(Binary).try)
-  client.writeBytes(Binary.fromBytes([255, 10]))
-  assert(client.getLine.try == Just("back"))
+  client.put("raw\r\n".to(Binary).try)
+  client.put(Binary.fromBytes([255, 10]))
+  assert(client.readLine.try == Just("back"))
   client.close
   server.await
   listener.close

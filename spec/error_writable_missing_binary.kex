@@ -3,6 +3,6 @@ type TextWriter
 make TextWriter, implement: Writable do
   let printLine(_) = ()
   let print(_) = ()
-  let writeLine(_) = ()
-  let write(_) = ()
+  let write(_) = Ok(())
+  let writeLine(_) = Ok(())
 end

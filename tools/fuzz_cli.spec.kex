@@ -6,8 +6,8 @@
 
 foul scratchDirectory -> String do
   match FS.Directory.createTemporary("kex-fuzz-test") do
-    Just(path) => path
-    None => die("fuzz_cli: cannot create a temporary directory")
+    Ok(path) => path
+    Error(_) => die("fuzz_cli: cannot create a temporary directory")
   end
 end
 

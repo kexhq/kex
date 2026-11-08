@@ -227,6 +227,15 @@ make Optional<X>, implement: Optionable do
   flatMap :> (X -> Y?) -> Y?
   let flatMap(@None, _) = None
   let flatMap(@Just(x), f) = f(x)
+
+  # Keeps the value only when +pred+ accepts it.
+  #
+  # @example
+  #   Just(4).filter { |n| n.even? }   # => Just(4)
+  #   Just(3).filter { |n| n.even? }   # => None
+  filter :> (X -> Bool) -> X?
+  let filter(@None, _) = None
+  let filter(@Just(x), pred) = pred(x) then Just(x) else None
 end
 
 make Result<X, E>, implement: Resultable do
@@ -328,6 +337,25 @@ make Result<X, E>, implement: Resultable do
   optional :> X?
   let optional(@Ok(x)) = Just(x)
   let optional(@Error(_)) = None
+
+  # Applies +f+ to the error, leaving a success alone: +map+ for the other
+  # side.
+  #
+  # @example
+  #   Error(404).mapError { |code| "HTTP ${code}" }   # => Error("HTTP 404")
+  #   Ok(1).mapError { |code| "HTTP ${code}" }        # => Ok(1)
+  mapError :> (E -> F) -> Result<X, F>
+  let mapError(@Ok(x), _) = Ok(x)
+  let mapError(@Error(e), f) = Error(f(e))
+
+  # The error, if this is one: the counterpart of +optional+.
+  #
+  # @example
+  #   Error("bad").error   # => Just("bad")
+  #   Ok(1).error          # => None
+  error :> E?
+  let error(@Ok(_)) = None
+  let error(@Error(e)) = Just(e)
 end
 
 # Converts +value+ to the type +t+, or +None+ if it cannot be represented.
