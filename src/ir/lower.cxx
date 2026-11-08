@@ -567,24 +567,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 }
             } else if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
                 preModuleType(td->get());
-            } else if (auto* cb = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item)) {
-                if (*cb) for (const auto& ci : (*cb)->items) {
-                    if (auto* cfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&ci))
-                        preModuleFn(cfd->get());
-                    else if (auto* crd = std::get_if<std::unique_ptr<ast::RecordDef>>(&ci)) {
-                        if (*crd) preRecord(**crd, path);
-                    } else if (auto* cmd = std::get_if<std::unique_ptr<ast::MakeDef>>(&ci)) {
-                        if (*cmd) {
-                            makeModulePath = path;
-                            makeRecordNames = declaredRecords;
-                            preMake(**cmd);
-                            makeModulePath.clear();
-                            makeRecordNames.clear();
-                        }
-                    } else if (auto* ctd = std::get_if<std::unique_ptr<ast::TypeDef>>(&ci)) {
-                        if (*ctd) preType(**ctd);
-                    }
-                }
             }
             else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
                 // Visibility changes who may name a declaration, not what it
@@ -1046,14 +1028,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                 }
                             } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&bi)) {
                                 emitMake(mk->get(), declaredRecords);
-                            } else if (auto* cb = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&bi)) {
-                                if (*cb) for (const auto& ci : (*cb)->items) {
-                                    if (auto* cfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&ci)) {
-                                        push(cfd->get());
-                                    } else if (auto* cmd = std::get_if<std::unique_ptr<ast::MakeDef>>(&ci)) {
-                                        emitMake(cmd->get(), declaredRecords);
-                                    }
-                                }
                             } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&bi)) {
                                 if (*child) lowerModuleBody(**child);
                             } else if (std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&bi) ||
@@ -1234,37 +1208,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             namedArgumentDispatchers.emplace(name, owner, arity);
             auto def = L.makeArgumentDispatcher(
                 mangleReceiverImplementation(name, owner), arity, overloads);
-            // What no overload takes continues to the generic conversion,
-            // as an unsplit make-block `to` does.
-            const bool hasGeneric = std::any_of(
-                mod.functions.begin(), mod.functions.end(),
-                [&](const FunDef& fn) {
-                    return fn.name == "to$generic" && fn.arity == arity;
-                });
-            // Inside the prelude with no generic conversion at this arity there
-            // is nowhere further to go: `kex_prelude:to` is this dispatcher's
-            // own caller, and forwarding there looped forever.
-            if (name == "to" && (hasGeneric || mod.name != names::kPreludeModule)) {
-                FunClause fallback;
-                std::vector<ExprPtr> args;
-                for (int i = 0; i < arity; ++i) {
-                    auto param = std::make_unique<Pattern>();
-                    param->kind = PatKind::Var;
-                    param->name = "_a" + std::to_string(i);
-                    fallback.params.push_back(std::move(param));
-                    args.push_back(var("_a" + std::to_string(i)));
-                }
-                if (hasGeneric) {
-                    auto body = std::make_unique<Expr>();
-                    body->node = Call{"", "to$generic", arity,
-                                      std::move(args), false};
-                    fallback.body = std::move(body);
-                } else {
-                    fallback.body = L.callE(names::kPreludeModule, "to", arity,
-                                          std::move(args));
-                }
-                def.clauses.push_back(std::move(fallback));
-            }
             mod.functions.push_back(std::move(def));
             continue;
         }
@@ -1279,36 +1222,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         fallbackModule = candidate.moduleAtom;
                         break;
                     }
-                if (fallbackModule.empty())
-                for (const auto& candidate : external->second) {
-                    if (candidate.beamArity != arity ||
-                        candidate.moduleAtom == mod.name)
-                        continue;
-                    if (fallbackModule.empty())
-                        fallbackModule = candidate.moduleAtom;
-                    else if (fallbackModule != candidate.moduleAtom) {
-                        fallbackModule.clear();
-                        break;
-                    }
-                }
             }
-            if (fallbackModule.empty()) {
-                const auto key = std::string(
-                    semantic::kFileLevelPreludeModule) + "." + name;
-                auto exported = L.externalModules->exportToBeamFn.find(key);
-                auto exportedArity = L.externalModules->exportArity.find(key);
-                auto prelude = L.externalModules->nameToAtom.find(
-                    std::string(semantic::kFileLevelPreludeModule));
-                if (exported != L.externalModules->exportToBeamFn.end() &&
-                    exportedArity != L.externalModules->exportArity.end() &&
-                    exportedArity->second == arity &&
-                    prelude != L.externalModules->nameToAtom.end() &&
-                    prelude->second != mod.name)
-                    fallbackModule = prelude->second;
-            }
-            if (fallbackModule.empty() && name == "to" &&
-                mod.name != names::kPreludeModule)
-                fallbackModule = names::kPreludeModule;
         }
         mod.functions.push_back(L.makeArgumentDispatcher(
             name, arity, overloads, fallbackModule));
@@ -1734,7 +1648,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         std::string defaultFunction = "__kex_record_default";
         if (auto declaring = L.localTypeModules.find(typeName);
             declaring != L.localTypeModules.end()) {
-            owner = mangleModulePath("Kex." + declaring->second);
+            owner = mangleModulePath(names::moduleAtom(declaring->second));
             defaultFunction += "@" + declaring->second;
         }
         auto record = L.records.find(typeName);
@@ -2166,7 +2080,7 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
 
     ModuleTargets targets;
     for (const auto& [emitted, def] : definitions)
-        targets[emitted] = {def.beamModule.empty() ? "Kex." + def.path : def.beamModule,
+        targets[emitted] = {def.beamModule.empty() ? names::moduleAtom(def.path) : def.beamModule,
                             def.sourceName};
 
     // Serving slots stay in the module that declares them. The distribution
@@ -2236,7 +2150,7 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
     std::vector<Module> stdlibModules;
     for (const auto& path : modulePaths) {
         Module module;
-        module.name = "Kex." + path;
+        module.name = names::moduleAtom(path);
         if (auto it = moduleBuckets.find(path); it != moduleBuckets.end()) {
             module.functions = std::move(it->second);
             // Two functions from UNRELATED stdlib modules can land in the
@@ -2264,7 +2178,7 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
     // runtime lookup. A slot that kept its bare name (no collision at all)
     // is left alone.
     for (const auto& slot : nestedServingSlots) {
-        const auto beamModuleName = "Kex." + slot.modulePath;
+        const auto beamModuleName = names::moduleAtom(slot.modulePath);
         auto moduleIt = std::find_if(
             stdlibModules.begin(), stdlibModules.end(),
             [&](const Module& m) { return m.name == beamModuleName; });

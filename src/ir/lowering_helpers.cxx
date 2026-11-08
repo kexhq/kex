@@ -202,7 +202,7 @@ auto Lowering::withDisplayInfo(ExprPtr body, const std::string& moduleName )
                 owner != externalMethodOwners.end())
                 return owner->second;
         return declaring != localTypeModules.end()
-            ? "Kex." + declaring->second : moduleName;
+            ? names::moduleAtom(declaring->second) : moduleName;
     };
     if (!moduleName.empty() && (!records.empty() || anyVariant)) {
         std::vector<ExprPtr> ownerPairs;

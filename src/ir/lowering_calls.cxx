@@ -444,7 +444,7 @@ auto Lowering::makeTraitDictionaryFor(const std::string& trait,
             // A source module compiled in this same unit is not in the
             // external KexI registry yet, so target its companion's
             // runtime dispatcher directly.
-            module = "Kex." + ownerModule->second;
+            module = names::moduleAtom(ownerModule->second);
             function = method.name;
         } else if (externalModules) {
             auto candidates =

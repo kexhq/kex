@@ -213,7 +213,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                     if (auto declaring = localTypeModules.find(key);
                         declaring != localTypeModules.end())
                         servingModule =
-                            mangleModulePath("Kex." + declaring->second);
+                            mangleModulePath(names::moduleAtom(declaring->second));
                     if (slotAtoms.empty() && externalModules) {
                         auto external = externalModules->servingSlots.find(stateType);
                         if (external == externalModules->servingSlots.end())
@@ -1148,12 +1148,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                 if (n.block)
                     args.push_back(atomize_ir(lower(*n.block), rb));
             }
-        const int arity = static_cast<int>(args.size());
-        // An imported FREE function competing with some other module's
-        // receiver method is decided between at run time.
-        if (auto guarded = importedFreeFunctionDispatch(
-                n, m, imported->second, arity, args))
-            return ret(std::move(guarded));
         return ret(localCallExpr(imported->second, std::move(args)));
     }
 
@@ -1196,18 +1190,11 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             const int arity = static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
                               (n.block ? 1 : 0);
             std::map<std::string, std::vector<const ExternalModules::ReceiverFunction*>> byModule;
-            for (const auto& candidate : found->second) {
-                if (candidate.beamArity != arity) continue;
-                std::string module;
-                for (const auto& [name, atom] : externalModules->nameToAtom)
-                    if (atom == candidate.moduleAtom) module = name;
-                // A unit's `make` for a type declared outside its module is
-                // in scope only through `using` that module.
-                if (candidate.compiledApart && candidate.foreignTarget && !module.empty() &&
-                    !moduleInScope(module))
-                    continue;
-                byModule[candidate.moduleAtom].push_back(&candidate);
-            }
+            // A unit's `make` for a type declared outside its module, out of
+            // scope here, was decided `Hidden` by the checker.
+            for (const auto& candidate : found->second)
+                if (candidate.beamArity == arity)
+                    byModule[candidate.moduleAtom].push_back(&candidate);
             const auto chosen = byModule.size() == 1 ? byModule.begin()
                                                      : byModule.find(names::kPreludeModule);
             if (chosen != byModule.end()) {
@@ -1264,16 +1251,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                     args.push_back(atomize(*value, binds));
             }
         }
-        int arity = static_cast<int>(args.size());
-        // The same competing-providers case as the package-provider path
-        // above, one step later: a `using`-ed module compiled in this unit
-        // owns `get` for its own type (Regex's Match), and the redirect
-        // that moves this bare call into that module claims every `get` in
-        // the program — including a Map's, which the prelude owns.
-        if (auto dual = dualProviderDispatch(n, n.method,
-                                             methodReceiverOwner(n.method),
-                                             "", n.method, arity, args))
-            return ret(wrapLets(binds, std::move(dual)));
         auto ex = std::make_unique<Expr>();
         // The receiver's own make function says whether it takes the capability
         // context. By name and arity alone a pure `Headers.remove(name)`

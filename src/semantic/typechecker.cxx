@@ -988,7 +988,7 @@ auto TypeChecker::resolveImportedModulePath(const std::string& name,
     };
     const auto canonicalModule = [&](const std::string& module) {
         if (exportsMember(module)) return module;
-        const auto backend = "Kex." + module;
+        const auto backend = names::moduleAtom(module);
         return exportsMember(backend) ? backend : module;
     };
     if (exportsMember(canonicalModule(name))) return canonicalModule(name);
@@ -4731,6 +4731,10 @@ auto TypeChecker::decideDispatch(const ast::Expr* callExpr, const std::string& n
     if (!m_importedInterfaces || !m_linkedModules || !call || !call->receiver ||
         m_resolvedCalls.contains(call))
         return;
+    if (auto choice = importedFunctionChoice(*call, name)) {
+        m_resolvedCalls[call] = std::move(*choice);
+        return;
+    }
     // A `make` method or function of this program by that name competes
     // with the import at run time: that stays the value's to decide.
     if (m_methodSignatures.contains(name) || m_userSignatures.contains(name)) return;
@@ -4800,6 +4804,56 @@ auto TypeChecker::decideDispatch(const ast::Expr* callExpr, const std::string& n
     auto target = dispatcherTarget(*prelude);
     target.alternatives = std::move(alternatives);
     m_resolvedCalls[call] = std::move(target);
+}
+
+// A free function a `using` brings into scope beside records' own methods of
+// the name, on a receiver of unknown type (`bag.get(name)` with `using Dsl`
+// and `make Bag`): each record's method for a value of its type, the import
+// for every other value, as the walker decides by the value. Functions of
+// this unit are named as lowering emits them (`Dsl.get`, a record's bare
+// dispatcher), with no module.
+auto TypeChecker::importedFunctionChoice(const ast::MethodCall& call, const std::string& name)
+    -> std::optional<ResolvedCallTarget> {
+    const auto arity = call.args.size() + call.namedArgs.size() + 1 + (call.block ? 1 : 0);
+    if (!call.namedArgs.empty()) return std::nullopt;
+    std::string imported;
+    for (const auto& module : m_localModules) {
+        const auto found = m_userSignatures.find(kex::mangle::qualify(module, name));
+        if (found == m_userSignatures.end() || !moduleMemberImported(module, name)) continue;
+        if (std::none_of(found->second.begin(), found->second.end(),
+                         [&](const Signature& signature) { return signature.params.size() == arity; }))
+            continue;
+        if (!imported.empty()) return std::nullopt;  // two imports: not this case
+        imported = module + "." + name;
+    }
+    if (imported.empty()) return std::nullopt;
+    std::vector<RuntimeAlternative> alternatives;
+    std::set<std::string> seen;
+    const auto record = [&](const TypePtr& receiver) -> std::string {
+        const auto* named = std::get_if<NamedType>(&resolve(receiver)->kind);
+        return named && m_recordFields.contains(named->name) ? named->name : std::string{};
+    };
+    if (const auto methods = m_methodSignatures.find(name); methods != m_methodSignatures.end())
+        for (const auto& method : methods->second)
+            if (method.params.size() == arity)
+                if (const auto type = record(method.params.front());
+                    !type.empty() && m_programRecords.contains(type) && seen.insert(type).second)
+                    alternatives.push_back({type, {}, name});
+    if (const auto providers = m_importedInterfaces->receiverFunctions.find(name);
+        providers != m_importedInterfaces->receiverFunctions.end())
+        for (const auto& provider : providers->second)
+            if (provider.backendArity == static_cast<int>(arity) &&
+                provider.backendFunction == name && !provider.signature.params.empty())
+                if (const auto type = record(provider.signature.params.front());
+                    !type.empty() && seen.insert(type).second)
+                    alternatives.push_back({type, provider.backendModule, provider.backendFunction});
+    if (alternatives.empty()) return std::nullopt;
+    ResolvedCallTarget target;
+    target.backendFunction = imported;
+    target.backendArity = static_cast<int>(arity);
+    target.passesReceiver = true;
+    target.alternatives = std::move(alternatives);
+    return target;
 }
 
 // A call of a module's receiver dispatcher, which picks the implementation
