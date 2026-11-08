@@ -78,6 +78,9 @@ public:
         -> const semantic::StaticTypeAnswer*;
     // The signature the checker selected for `call`, or null.
     auto selectedSignatureOf(const ast::Expr& call) const -> const semantic::Signature*;
+    // The same, for the call node inside the expression (what lowering holds).
+    auto selectedSignatureOf(const ast::FunctionCall& call) const -> const semantic::Signature*;
+    auto selectedSignatureOf(const ast::MethodCall& call) const -> const semantic::Signature*;
 
     // Every call site, in source order, with its target.
     auto callSites() const -> const std::vector<CallSite>& { return m_sites; }
@@ -96,6 +99,8 @@ private:
     // Keyed by the call node (the Expr, and the MethodCall / BinaryOp inside
     // it), so a pass holding either finds the same target.
     std::unordered_map<const void*, Target> m_targets;
+    // The selected signatures by call node.
+    std::unordered_map<const void*, const semantic::Signature*> m_selectedByNode;
 };
 
 // Several checked programs read as one, newest first: a REPL session's

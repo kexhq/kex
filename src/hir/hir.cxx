@@ -91,6 +91,8 @@ Program::Program(const ast::Program& ast,
 }
 
 auto Program::collectSites() -> void {
+    for (const auto& [expr, signature] : *m_selected)
+        if (const auto* node = callNodeOf(*expr)) m_selectedByNode.emplace(node, &signature);
     const auto& ast = *m_ast;
     // Every call site, in source order.
     const auto visit = [&](const auto& self, const ast::Expr& expr) -> void {
@@ -169,6 +171,18 @@ auto Program::selectedSignatureOf(const ast::Expr& call) const
     -> const semantic::Signature* {
     const auto found = m_selected->find(&call);
     return found == m_selected->end() ? nullptr : &found->second;
+}
+
+auto Program::selectedSignatureOf(const ast::FunctionCall& call) const
+    -> const semantic::Signature* {
+    const auto found = m_selectedByNode.find(&call);
+    return found == m_selectedByNode.end() ? nullptr : found->second;
+}
+
+auto Program::selectedSignatureOf(const ast::MethodCall& call) const
+    -> const semantic::Signature* {
+    const auto found = m_selectedByNode.find(&call);
+    return found == m_selectedByNode.end() ? nullptr : found->second;
 }
 
 namespace {

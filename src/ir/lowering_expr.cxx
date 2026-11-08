@@ -1518,44 +1518,38 @@ auto Lowering::nextExtendingModule(const std::string& method,
 }
 
 // The make-block method a receiver call binds when it does not spell out
-// every parameter in order: labels may name any subset, and defaulted
-// parameters may be left out. `owner` is the receiver's type when it is
-// known. A call already committed to this unit's methods may still take
-// the first one its arguments fit when that type declares none (`strict`
-// off); deciding whether the call is local at all may not.
-auto Lowering::makeMethodFor(const ast::MethodCall& n, std::string owner,
-                   bool strict) const -> const MakeMethod* {
+// every parameter in order (labels may name any subset, and defaulted
+// parameters may be left out): the one whose clause the checker selected.
+// Of several modules' extensions of that type at that arity, the call
+// enters by the first in module-path order that takes its labels, which
+// forwards to the rest (see `nextExtendingModule`).
+auto Lowering::makeMethodFor(const ast::MethodCall& n) const -> const MakeMethod* {
+    const auto* signature = hir->selectedSignatureOf(n);
+    if (!signature || !signature->clause) return nullptr;
     auto found = makeMethods.find(n.method);
     if (found == makeMethods.end()) return nullptr;
-    if (auto angle = owner.find('<'); angle != std::string::npos)
-        owner.resize(angle);
-    owner = canonicalRecordName(owner);
+    const auto& selected = *signature->clause;
+    const auto chosen = std::ranges::find_if(found->second, [&](const MakeMethod& method) {
+        return std::ranges::any_of(method.def->clauses, [&](const auto& clause) {
+            return &clause == &selected;
+        });
+    });
+    if (chosen == found->second.end()) return nullptr;
+    // Every parameter given, in order: nothing to place.
+    const auto positional = n.args.size() + (n.block ? 1 : 0);
+    if (n.namedArgs.empty() && positional + 1 >= ast::methodArity(selected))
+        return nullptr;
     std::vector<std::string> labels;
     for (const auto& [label, _] : n.namedArgs) labels.push_back(label);
-    const auto positional = n.args.size() + (n.block ? 1 : 0);
-    // Whether the receiver's own type declares the function at all. When
-    // it does and the call needs nothing placed — every parameter given,
-    // in order — there is no method to return, and no other type's to
-    // look for: two `Connection`s, of which only one's `send` has a
-    // default, had the other's `send(text)` padded out with it and sent
-    // to an arity nobody defined (kexhq/kex#476).
-    bool declaredByOwner = false;
-    // Of several modules' extensions that fit, the one a call enters by:
-    // the first in module-path order, which forwards to the rest (see
-    // `nextExtendingModule`).
-    const MakeMethod* entry = nullptr;
-    for (const auto& method : found->second) {
-        if (!owner.empty() && canonicalRecordName(method.owner) != owner) continue;
-        declaredByOwner = !owner.empty();
-        const auto& clause = method.def->clauses[0];
-        if (labels.empty() && positional >= clause.params.size()) continue;
-        if (namedArgumentsFit(clause, labels, positional) &&
-            (!entry || method.modulePath < entry->modulePath))
+    const auto owner = canonicalRecordName(chosen->owner);
+    const MakeMethod* entry = &*chosen;
+    for (const auto& method : found->second)
+        if (method.modulePath < entry->modulePath &&
+            canonicalRecordName(method.owner) == owner &&
+            method.def->clauses[0].params.size() == selected.params.size() &&
+            namedArgumentsFit(method.def->clauses[0], labels, positional))
             entry = &method;
-    }
-    if (entry) return entry;
-    return strict || owner.empty() || declaredByOwner
-        ? nullptr : makeMethodFor(n, "", false);
+    return entry;
 }
 
 // `value.field` the checker decided is a read of a record's field

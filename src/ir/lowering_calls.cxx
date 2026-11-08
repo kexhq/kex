@@ -129,8 +129,9 @@ auto Lowering::lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
             for (const auto& [label, _] : n.namedArgs)
                 if (!declared->second.count(label))
                     return unknownNamedArgument(n.name, label);
-        const auto* selected = namedClause(
-            it->first, n.namedArgs, n.args.size() + bool(n.block));
+        // The clause the checker chose for these labels.
+        const auto* signature = hir->selectedSignatureOf(n);
+        const auto* selected = signature ? signature->clause : nullptr;
         const auto pnames = clauseNames(selected, it->second);
         std::vector<Binding> binds;
         std::vector<std::string> labels;

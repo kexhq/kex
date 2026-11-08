@@ -361,7 +361,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             const MakeMethod* declared =
                 resolved->second.backendModule.empty() &&
                 resolved->second.passesReceiver
-                    ? makeMethodFor(n, receiverOwner(n), true) : nullptr;
+                    ? makeMethodFor(n) : nullptr;
             if (declared) {
                 for (auto& slot : placeMethodArguments(n, *declared, binds))
                     args.push_back(std::move(slot));
@@ -833,8 +833,9 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                         auto pit = fnParamNames.find(qualKey);
                         if (pit == fnParamNames.end())
                             throw LowerError("IR lower: named args to module function with unknown params: " + qualKey);
-                        const auto* selected = namedClause(
-                            qualKey, n.namedArgs, n.args.size() + bool(n.block));
+                        // The clause the checker chose for these labels.
+                        const auto* signature = hir->selectedSignatureOf(n);
+                        const auto* selected = signature ? signature->clause : nullptr;
                         const auto pnames = clauseNames(selected, pit->second);
                         std::vector<std::string> labels;
                         for (const auto& [label, _] : n.namedArgs)
@@ -1157,9 +1158,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
     // block used to compile to a local get/3 that was never defined.
     // A call that labels arguments or leaves defaulted ones out is written
     // shorter than the method it binds, whose arity is the one that counts.
-    const auto owner = receiverOwner(n);
-    const MakeMethod* declared =
-        owner.empty() ? nullptr : makeMethodFor(n, owner, true);
+    const MakeMethod* declared = makeMethodFor(n);
     const int ufcsArity = declared
         ? static_cast<int>(declared->def->clauses[0].params.size()) + 1
         : static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
@@ -1234,7 +1233,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         std::vector<ExprPtr> args;
         args.push_back(rv());
         if (const auto* placed =
-                declared ? declared : makeMethodFor(n, owner, false)) {
+                declared) {
             for (auto& slot : placeMethodArguments(n, *placed, binds))
                 args.push_back(std::move(slot));
         } else {

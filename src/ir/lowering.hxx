@@ -487,19 +487,6 @@ struct Lowering {
 
     auto lowerCurry(const ast::CurryExpr& n) -> ExprPtr;
 
-    template <typename NamedArgs>
-    auto namedClause(const std::string& name, const NamedArgs& named,
-                     std::size_t positionalCount) -> const ast::FunctionClause* {
-        auto found = fnNamedClauses.find(name);
-        if (found == fnNamedClauses.end()) return nullptr;
-        std::vector<std::string> labels;
-        for (const auto& [label, _] : named) labels.push_back(label);
-        if (const auto* clause =
-                selectClause(found->second, labels, positionalCount))
-            return clause;
-        throw LowerError("IR lower: no overload of " + name +
-                         " accepts these named arguments and argument count");
-    }
 
     auto clauseNames(const ast::FunctionClause* clause,
                      const std::vector<std::string>& fallback) -> std::vector<std::string>;
@@ -529,8 +516,7 @@ struct Lowering {
                              const std::string& typeName, int arity) const
         -> std::string;
 
-    auto makeMethodFor(const ast::MethodCall& n, std::string owner,
-                       bool strict) const -> const MakeMethod*;
+    auto makeMethodFor(const ast::MethodCall& n) const -> const MakeMethod*;
 
     auto staticFieldRead(const ast::MethodCall& n) -> ExprPtr;
 

@@ -1,6 +1,10 @@
 #pragma once
 
 #include "types.hxx"
+
+namespace kex::ast {
+struct FunctionClause;
+}
 #include <optional>
 #include <set>
 #include <string>
@@ -41,6 +45,9 @@ struct Signature {
     // table holds every module's functions, so a plain call keeps only the
     // ones its module may see (kexhq/kex#496, #494).
     std::string declaringModule;
+    // The clause it was made from, for a signature of a FunctionDef: its
+    // parameters' defaults fill what a call leaves out (hir::Program::placementOf).
+    const ast::FunctionClause* clause = nullptr;
 };
 
 // Do two signatures take the same parameters? One declaration registered

@@ -45,18 +45,6 @@ inline auto namedArgumentsFit(const ast::FunctionClause& clause,
     return namedArgumentsFit(names, defaulted, labels, positionalCount);
 }
 
-// First clause the labels + positional count fit, or nullptr. The lowerer's
-// clause-selection loops (named-arg dispatch over `fnNamedClauses`) share
-// this; miss policy (throw, flags, diagnostics) stays per call site.
-inline auto selectClause(const std::vector<const ast::FunctionClause*>& clauses,
-                         const std::vector<std::string>& labels,
-                         std::size_t positionalCount)
-    -> const ast::FunctionClause* {
-    for (const auto* clause : clauses)
-        if (namedArgumentsFit(*clause, labels, positionalCount)) return clause;
-    return nullptr;
-}
-
 struct PlacedArguments {
     static constexpr std::size_t npos = static_cast<std::size_t>(-1);
     // Slot each label lands in, in label order; `npos` when no parameter
