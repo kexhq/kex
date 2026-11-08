@@ -754,6 +754,11 @@ auto mentionsUnknown(const TypePtr& type, NullType nullType) -> bool {
 
 namespace kex::semantic {
 
+auto isUndetermined(const TypePtr& type) -> bool {
+    return std::holds_alternative<UnknownType>(type->kind) ||
+           std::holds_alternative<TypeVar>(type->kind);
+}
+
 auto isThisPlaceholder(const TypePtr& type) -> bool {
     const auto* named = type ? std::get_if<NamedType>(&type->kind) : nullptr;
     return named && named->name == names::kThisType && named->typeArgs.empty();

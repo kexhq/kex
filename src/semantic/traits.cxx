@@ -140,22 +140,23 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
     if (it != m_implementations.end() && it->second.count(traitName) > 0)
         return true;
 
-    // Compound types: check the base type name for conformances registered
-    // under "List", "Map", "Optional" (from `make [X], implement: Trait`).
-    if (std::holds_alternative<ListType>(type->kind)) {
-        auto li = m_implementations.find("List");
-        if (li != m_implementations.end() && li->second.count(traitName) > 0)
-            return true;
-    } else if (std::holds_alternative<MapType>(type->kind)) {
-        auto mi = m_implementations.find("Map");
-        if (mi != m_implementations.end() && mi->second.count(traitName) > 0)
-            return true;
-    } else if (std::holds_alternative<OptionalType>(type->kind)) {
-        auto oi = m_implementations.find("Optional");
-        if (oi != m_implementations.end() && oi->second.count(traitName) > 0)
-            return true;
-    }
-    return false;
+    // The family it belongs to claims it too: a list, map or optional what
+    // `make [X], implement: Trait` claims, a sized number what `make Float`
+    // or `make Integer` does (`1.5.present?`, a Float64, is Blankable).
+    const auto family = familyKey(type);
+    if (family.empty()) return false;
+    const auto claims = m_implementations.find(family);
+    return claims != m_implementations.end() && claims->second.count(traitName) > 0;
+}
+
+// The name a type's family registers conformances under, or "".
+auto TraitRegistry::familyKey(const TypePtr& type) -> std::string {
+    if (std::holds_alternative<ListType>(type->kind)) return "List";
+    if (std::holds_alternative<MapType>(type->kind)) return "Map";
+    if (std::holds_alternative<OptionalType>(type->kind)) return "Optional";
+    if (isNumericType(type))
+        return std::holds_alternative<SizedFloatType>(type->kind) ? "Float" : "Integer";
+    return "";
 }
 
 auto TraitRegistry::implementsInHome(const std::string& type,

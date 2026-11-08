@@ -3246,8 +3246,7 @@ auto TypeChecker::bindDestructuredPattern(
     bool mismatchReported = false;
     if (auto* cp = std::get_if<ast::ConstructorPattern>(&pat.kind)) {
         auto resolved = resolve(valueType);
-        if (std::holds_alternative<UnknownType>(resolved->kind) ||
-            std::holds_alternative<TypeVar>(resolved->kind))
+        if (isUndetermined(resolved))
             ; // permissive — can't determine the type at compile time
         else if (cp->name == "Just" && !std::holds_alternative<OptionalType>(resolved->kind)) {
             error(pat.location, "cannot match `Just` — expected Optional, got " + typeToString(resolved));
@@ -4610,10 +4609,19 @@ auto TypeChecker::constantType(const std::string& name) const -> TypePtr {
             found != m_userSignatures.end())
             for (const auto& signature : found->second)
                 if (signature.params.empty()) return signature.result;
-        if (scope.empty()) return nullptr;
+        if (scope.empty()) break;
         const auto dot = scope.rfind('.');
         scope.resize(dot == std::string::npos ? 0 : dot);
     }
+    // One a `using` imports from a unit compiled apart (`STATUSES`).
+    if (m_importedInterfaces)
+        for (const auto& [_, module] : m_importedInterfaces->modules)
+            if (const auto exports = module.exports.find(name); exports != module.exports.end())
+                for (const auto& function : exports->second)
+                    if (!function.isConstructor && function.signature.params.empty() &&
+                        importedFunctionVisible(function))
+                        return function.signature.result;
+    return nullptr;
 }
 
 } // namespace kex::semantic
@@ -4704,8 +4712,7 @@ auto TypeChecker::bareMethodCall(const ast::Expr& expr, const ast::FunctionCall&
         const auto receiver = resolve(argTypes.front());
         if (const auto own = ownTypeAnswers(argTypes, name))
             m_decidedCalls[&expr] = own->decision();
-        else if (std::holds_alternative<UnknownType>(receiver->kind) ||
-                 std::holds_alternative<TypeVar>(receiver->kind))
+        else if (isUndetermined(receiver))
             decideDispatch(&expr, name);
     }
     return result;
@@ -4777,8 +4784,7 @@ auto TypeChecker::decideDispatch(const ast::Expr* callExpr, const std::string& n
                 typed.push_back({typeToString(receiver), module, candidate->backendFunction});
             // A dispatcher for any receiver, or for several types at once
             // (`make TypeRef | PatternRef`): the value's owner chooses it.
-            else if (std::holds_alternative<UnknownType>(receiver->kind) ||
-                     std::holds_alternative<TypeVar>(receiver->kind) ||
+            else if (isUndetermined(receiver) ||
                      std::holds_alternative<UnionType>(receiver->kind))
                 generic = true;
             else

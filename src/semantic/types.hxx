@@ -236,6 +236,9 @@ auto structuredTypeOf(const TypePtr& type) -> std::optional<StructuredType>;
 auto isPrimitiveTypeName(const std::string& name) -> bool;
 // An Integer or a Float of any width: the numeric tower, where `0` is `0.0`.
 auto isNumericType(const TypePtr& type) -> bool;
+// Not known yet: Unknown, or an inference variable nothing has bound.
+auto isUndetermined(const TypePtr& type) -> bool;
+
 // A trait's `This` left as written (`NamedType("This")`), which only a
 // receiver's type substitutes.
 auto isThisPlaceholder(const TypePtr& type) -> bool;

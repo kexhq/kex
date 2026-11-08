@@ -634,8 +634,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (named->name == "Optional" || named->name == "Result")
                     return named->typeArgs[0];
             }
-            if (std::holds_alternative<UnknownType>(operand->kind) ||
-                std::holds_alternative<TypeVar>(operand->kind))
+            if (isUndetermined(operand))
                 return Type::unknown();
             error(expr.location, "`.try` expects Result or Optional, got " +
                   typeToString(operand));
@@ -662,12 +661,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             auto merge = [&](TypePtr candidate) {
                 candidate = resolve(candidate);
                 bool resultPermissive =
-                    std::holds_alternative<UnknownType>(result->kind) ||
-                    std::holds_alternative<TypeVar>(result->kind) ||
+                    isUndetermined(result) ||
                     std::holds_alternative<VoidType>(result->kind);
                 bool candidatePermissive =
-                    std::holds_alternative<UnknownType>(candidate->kind) ||
-                    std::holds_alternative<TypeVar>(candidate->kind) ||
+                    isUndetermined(candidate) ||
                     std::holds_alternative<VoidType>(candidate->kind);
                 if (resultPermissive && !candidatePermissive) {
                     result = candidate;
@@ -962,8 +959,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                 "==", {leftType, rightType}, expr.location,
                                 /*isMethodCall=*/true));
                             const bool undecided =
-                                std::holds_alternative<UnknownType>(equal->kind) ||
-                                std::holds_alternative<TypeVar>(equal->kind);
+                                isUndetermined(equal);
                             if (!undecided && !typesEqual(equal, Type::boolean()))
                                 error(expr.location,
                                           "`!=` is not defined here: `" +
@@ -1549,7 +1545,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind)) {
                 const auto& written = std::get<ast::UpperIdentifier>(node.receiver->kind).name;
                 // A constant or a nullary constructor is a value, whatever its
-                // spelling: `LIMIT.abs`, `Monday.name`.
+                // spelling: `LIMIT.abs`, `Monday.name`, `STATUSES.map`.
                 if (!namesModule(written) && !namesType(written) &&
                     (constantType(written) || nullaryConstructorType(written)))
                     isNamespaceCall = false;
@@ -1824,9 +1820,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 !m_selectedCallSignatures.contains(&expr) &&
                 !m_resolvedCalls.contains(&node)) {
                 const auto receiver = resolve(argTypes.front());
-                if (std::holds_alternative<UnknownType>(receiver->kind) ||
-                    std::holds_alternative<TypeVar>(receiver->kind) ||
-                    isThisPlaceholder(receiver))
+                // On a trait's `This` the type claiming it answers, in the copy
+                // of the default lowered for that type: never an import.
+                if (isThisPlaceholder(receiver))
+                    m_decidedCalls[&expr] = {CallKind::Dispatch, node.method};
+                else if (isUndetermined(receiver))
                     decideDispatch(&expr, node.method);
             }
             return result;
@@ -1849,10 +1847,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             for (const auto& elem : node.elements) {
                 if (elem) {
                     auto t = inferExpr(*elem);
-                    bool elemPermissive = std::holds_alternative<UnknownType>(elemType->kind) ||
-                                         std::holds_alternative<TypeVar>(elemType->kind);
-                    bool tPermissive = std::holds_alternative<UnknownType>(t->kind) ||
-                                       std::holds_alternative<TypeVar>(t->kind) ||
+                    bool elemPermissive = isUndetermined(elemType);
+                    bool tPermissive = isUndetermined(t) ||
                                        std::holds_alternative<FuncType>(t->kind);
                     bool elemFuncPermissive = elemPermissive ||
                                               std::holds_alternative<FuncType>(elemType->kind);
@@ -1889,8 +1885,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // `[x | rest]`: the tail is a list of the same elements.
             if (node.rest && *node.rest) {
                 const auto open = [](const TypePtr& type) {
-                    return std::holds_alternative<UnknownType>(type->kind) ||
-                           std::holds_alternative<TypeVar>(type->kind);
+                    return isUndetermined(type);
                 };
                 const auto rest = resolve(inferExpr(**node.rest));
                 if (const auto* list = std::get_if<ListType>(&rest->kind)) {
@@ -1947,8 +1942,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             auto startElement = elementType(startType);
             auto endElement = elementType(endType);
             const auto unresolved = [](const TypePtr& bound) {
-                return std::holds_alternative<UnknownType>(bound->kind) ||
-                       std::holds_alternative<TypeVar>(bound->kind);
+                return isUndetermined(bound);
             };
             if ((!startElement && !unresolved(startType)) ||
                 (!endElement && !unresolved(endType)))
@@ -2070,8 +2064,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 } else if (clause.body) {
                     auto t = resolve(inferExpr(*clause.body));
                     auto rt = resolve(resultType);
-                    if (std::holds_alternative<UnknownType>(rt->kind) ||
-                        std::holds_alternative<TypeVar>(rt->kind)) {
+                    if (isUndetermined(rt)) {
                         resultType = t;  // adopt first concrete arm type
                     } else {
                         // Check subsequent arms match the first concrete arm.
@@ -3267,7 +3260,7 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     if (const auto block = asBlock(paramType)) return argMatchesParam(argType, block);
     if (const auto block = asBlock(argType)) return argMatchesParam(block, paramType);
     auto isPermissive = [](const TypePtr& t) {
-        return std::holds_alternative<UnknownType>(t->kind) || std::holds_alternative<TypeVar>(t->kind);
+        return isUndetermined(t);
     };
     if (isPermissive(argType) || isPermissive(paramType)) return true;
     // A distinct type goes where its backing type is expected — a `UserId`
@@ -4088,8 +4081,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             // not make an unrelated function its owner: keep the read
             // gradual and let runtime record dispatch select the slot.
             if (mayReadField()) return Type::unknown();
-        } else if ((std::holds_alternative<UnknownType>(receiver->kind) ||
-                    std::holds_alternative<TypeVar>(receiver->kind)) &&
+        } else if ((isUndetermined(receiver)) &&
                    mayReadField()) {
             return Type::unknown();
         } else if (auto* optional = std::get_if<OptionalType>(&receiver->kind)) {
@@ -4837,8 +4829,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // overloads DO match with the receiver dropped, treat it as a plain
     // function call through a namespace — drop argTypes[0] and re-check.
     if (!argTypes.empty() &&
-        (std::holds_alternative<UnknownType>(argTypes[0]->kind) ||
-         std::holds_alternative<TypeVar>(argTypes[0]->kind))) {
+        (isUndetermined(argTypes[0]))) {
         bool anyFullMatch = false;
         bool anyDroppedMatch = false;
         for (const auto& sig : *sigs) {
@@ -5385,8 +5376,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             const bool receiverUnknown = [&] {
                 if (!isReceiver || argTypes.empty()) return false;
                 const auto receiver = resolve(argTypes[0]);
-                return std::holds_alternative<UnknownType>(receiver->kind) ||
-                       std::holds_alternative<TypeVar>(receiver->kind);
+                return isUndetermined(receiver);
             }();
             if (resolved && receiverUnknown)
                 for (const auto* candidate : importedFunctions) {
@@ -5836,8 +5826,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // OptionParser's `value/2` the moment OptionParser joined the prelude.
         if (isMethodCall && !argTypes.empty()) {
             auto receiver = resolve(argTypes.front());
-            if (std::holds_alternative<UnknownType>(receiver->kind) ||
-                std::holds_alternative<TypeVar>(receiver->kind))
+            if (isUndetermined(receiver))
                 return Type::unknown();
         }
         error(loc, "`" + sourceName(name) + "` expects " + std::to_string((*sigs)[0].params.size()) +
@@ -6022,6 +6011,30 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         message += "\n\n" + rendered;
     }
     error(loc, message);
+    // Lowered all the same only where the check does not gate the build
+    // (`--no-check`), and there the value decides, as it does for a
+    // receiver of unknown type: when the receiver is one the method takes
+    // and only an argument is off (a truthy block for `filter`). Where every
+    // candidate is a record's method and the receiver no such record
+    // (`"a b".whiteSpaces`, Parsing's Input's), no value reaches one: the
+    // call fails as an undefined method, where it is written.
+    const bool receiverTaken = std::any_of(
+        arityMatches.begin(), arityMatches.end(), [&](const Signature* candidate) {
+            return !candidate->params.empty() && !argTypes.empty() &&
+                   argMatchesParam(argTypes.front(), candidate->params.front());
+        });
+    const bool recordsOnly = std::all_of(
+        arityMatches.begin(), arityMatches.end(), [&](const Signature* candidate) {
+            if (candidate->params.empty()) return false;
+            const auto* owner = std::get_if<NamedType>(&resolve(candidate->params.front())->kind);
+            return owner && m_recordFields.contains(owner->name);
+        });
+    if (isMethodCall && callExpr && !m_decidedCalls.contains(callExpr)) {
+        if (receiverTaken)
+            decideDispatch(callExpr, name);
+        else if (recordsOnly && !argTypes.empty() && !isUndetermined(resolve(argTypes.front())))
+            m_decidedCalls[callExpr] = {CallKind::Hidden, ""};
+    }
     return arityMatches[0]->result;
 }
 
@@ -6036,8 +6049,7 @@ auto TypeChecker::ownerOfCall(const std::vector<TypePtr>& argTypes,
     if (argTypes.empty()) return {};
     const auto receiver = resolve(argTypes.front());
     const auto* named = std::get_if<NamedType>(&receiver->kind);
-    const bool erased = std::holds_alternative<UnknownType>(receiver->kind) ||
-                        std::holds_alternative<TypeVar>(receiver->kind) ||
+    const bool erased = isUndetermined(receiver) ||
                         (named && named->name == "Any");
     if (erased)
         return {winnerModule != names::kPreludeModule && competing

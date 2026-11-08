@@ -122,6 +122,9 @@ public:
     }
 
     auto implementorKey(const TypePtr& type) const -> std::string;
+    // The name a type's family registers conformances under (`List`, `Float`
+    // for a sized float, ...), or "".
+    static auto familyKey(const TypePtr& type) -> std::string;
     auto hasConformances(const std::string& key) const -> bool {
         return m_implementations.count(key) > 0;
     }
