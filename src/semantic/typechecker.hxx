@@ -103,6 +103,10 @@ public:
         -> const std::unordered_map<const ast::Expr*, Signature>& {
         return m_selectedCallSignatures;
     }
+    // Arguments of a distinct type given for a `Showable` parameter, by call:
+    // each one's parameter position and the type, whose own `showValue`
+    // shows it (at run time the value is its erased backing value).
+    auto shownThroughDistinct() const -> const ShownThrough& { return m_shownThroughDistinct; }
     // What a call-shaped expression turned out to be, when that is neither a
     // call with a selected signature nor an imported method (the two tables
     // above). Stage 2 of the pass restructure records every such decision
@@ -581,6 +585,7 @@ private:
     std::unordered_map<const ast::MakeDef*, std::vector<std::string>>
         m_resolvedTraits;
     std::unordered_map<const ast::Expr*, Signature> m_selectedCallSignatures;
+    ShownThrough m_shownThroughDistinct;
     std::unordered_map<const ast::Expr*, DecidedCall> m_decidedCalls;
     std::unordered_map<const ast::MethodCall*, StaticTypeAnswer> m_staticTypeOfCalls;
     std::unordered_set<std::string> m_referencedModules;

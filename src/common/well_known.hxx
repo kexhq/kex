@@ -45,4 +45,7 @@ inline const std::string kDefaultArgument = "$kex_default";
 inline const std::string kRecordDefaultFunction = "__kex_record_default";
 inline const std::string kNoRecordDefault = "kex_no_default";
 
+// The trait whose `showValue` makes a value text (interpolation, printing).
+inline const std::string kShowableTrait = "Showable";
+
 } // namespace kex::names

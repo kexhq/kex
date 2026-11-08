@@ -84,8 +84,14 @@ auto save(const Program& program, const std::vector<const ast::Expr*>& order)
         const auto* call = methodCallOf(expr);
         const auto* answer = call ? program.typeOfAnswer(*call) : nullptr;
         const auto* selected = program.selectedSignatureOf(expr);
-        if (target.kind == TargetKind::Undecided && !type && !answer && !selected)
+        const auto* shown = program.shownThroughOf(expr);
+        if (target.kind == TargetKind::Undecided && !type && !answer && !selected && !shown)
             continue;
+        std::vector<TermPtr> shownTerms;
+        if (shown)
+            for (const auto& [position, typeName] : *shown)
+                shownTerms.push_back(Term::tuple({Term::integer(static_cast<int64_t>(position)),
+                                                  Term::binary(typeName)}));
         entries.push_back(Term::tuple({
             Term::integer(static_cast<int64_t>(i)),
             target.kind == TargetKind::Undecided ? none() : targetToTerm(target),
@@ -94,6 +100,7 @@ auto save(const Program& program, const std::vector<const ast::Expr*>& order)
                                   Term::boolean(answer->evaluateArgument)})
                    : none(),
             selected ? beam::encodeSignature(*selected) : none(),
+            Term::list(std::move(shownTerms)),
         }));
     }
     return beam::encodeEtf(Term::tuple({
@@ -115,7 +122,7 @@ auto load(const ast::Program& ast, const std::vector<const ast::Expr*>& order,
         auto answers = std::make_unique<Answers>();
         const auto count = sax.beginList();
         for (size_t entry = 0; entry < count; ++entry) {
-            sax.beginTuple();
+            const auto fields = sax.beginTuple();
             const auto index = static_cast<std::size_t>(sax.readInt());
             if (index >= order.size()) return nullptr;
             const auto* expr = order[index];
@@ -134,6 +141,17 @@ auto load(const ast::Program& ast, const std::vector<const ast::Expr*>& order,
             }
             if (sax.nextIsAtom()) sax.readAtom();
             else answers->selected.emplace(expr, beam::decodeSignature(sax));
+            // Distinct arguments shown through their own type: an entry
+            // written before this field existed has five elements.
+            if (fields > 5) {
+                const auto shown = sax.beginList();
+                for (size_t i = 0; i < shown; ++i) {
+                    sax.beginTuple();
+                    const auto position = static_cast<std::size_t>(sax.readInt());
+                    answers->shownThroughDistinct[expr].emplace_back(position, sax.readBinary());
+                }
+                sax.endList();
+            }
         }
         sax.endList();
         return std::make_unique<Program>(ast, targets, std::move(answers));

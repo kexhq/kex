@@ -484,10 +484,6 @@ public:
 
 private:
     hir::ProgramSet m_programs;
-    // The checker's static type for `expr`, or null.
-    auto staticTypeOf(const ast::Expr* expr) const -> semantic::TypePtr {
-        return expr ? m_programs.typeOf(*expr) : nullptr;
-    }
     // The function `type`'s own `method` is bound to, or "": the checker
     // names a module's type qualified (`Accounts.AccountId`), a `make` block
     // inside the module binds it as written there (`AccountId::successor`).

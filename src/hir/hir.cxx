@@ -47,7 +47,8 @@ const Target kUndecided{};
 Program::Program(const ast::Program& ast, const semantic::Analyzer& analysis)
     : m_ast(&ast), m_analysis(&analysis), m_types(&analysis.typeMap()),
       m_typeOfAnswers(&analysis.staticTypeOfCalls()),
-      m_selected(&analysis.selectedCallSignatures()) {
+      m_selected(&analysis.selectedCallSignatures()),
+      m_shownThrough(&analysis.shownThroughDistinct()) {
     // An imported target names the function; what else the checker decided
     // fills in the rest. Keyed by node and by expression alike.
     const auto record = [&](const ast::Expr& expr, Target target) {
@@ -83,6 +84,7 @@ Program::Program(const ast::Program& ast,
     m_types = &m_owned->types;
     m_typeOfAnswers = &m_owned->typeOfAnswers;
     m_selected = &m_owned->selected;
+    m_shownThrough = &m_owned->shownThroughDistinct;
     for (const auto& [expr, target] : targets) {
         if (const auto* node = callNodeOf(*expr)) m_targets.emplace(node, target);
         m_targets.emplace(expr, target);
@@ -173,6 +175,21 @@ auto Program::selectedSignatureOf(const ast::Expr& call) const
     return found == m_selected->end() ? nullptr : &found->second;
 }
 
+auto Program::shownThroughOf(const ast::Expr& call) const
+    -> const std::vector<std::pair<std::size_t, std::string>>* {
+    const auto found = m_shownThrough->find(&call);
+    return found == m_shownThrough->end() ? nullptr : &found->second;
+}
+
+auto Program::shownThroughOf(const ast::Expr& call, std::size_t index) const
+    -> const std::string* {
+    const auto* shown = shownThroughOf(call);
+    if (!shown) return nullptr;
+    for (const auto& [position, type] : *shown)
+        if (position == index) return &type;
+    return nullptr;
+}
+
 auto Program::selectedSignatureOf(const ast::FunctionCall& call) const
     -> const semantic::Signature* {
     const auto found = m_selectedByNode.find(&call);
@@ -247,6 +264,14 @@ auto ProgramSet::selectedSignatureOf(const ast::Expr& call) const
     return newestAnswer<const semantic::Signature*>(
         m_programs, m_base, nullptr,
         [&](const Program& p) { return p.selectedSignatureOf(call); },
+        [](const auto* s) { return s != nullptr; });
+}
+
+auto ProgramSet::shownThroughOf(const ast::Expr& call, std::size_t index) const
+    -> const std::string* {
+    return newestAnswer<const std::string*>(
+        m_programs, m_base, nullptr,
+        [&](const Program& p) { return p.shownThroughOf(call, index); },
         [](const auto* s) { return s != nullptr; });
 }
 
