@@ -2233,6 +2233,7 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         // pass — not checkFunctionDef — registered.
         for (std::size_t i = explicitReceiver ? 1 : 0; i < clause.params.size(); ++i)
             signature.paramNames.push_back(*clause.params[i].name);
+        signature.clause = &clause;
         // Trailing defaults are optional from the start, not only once the
         // body has been checked: a top-level function calling
         // `t.string(:name, nullable: true)` is checked before the make block.
@@ -2412,6 +2413,7 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
                     while (required > 0 && clause.params[required - 1].defaultValue)
                         --required;
                     signature.requiredParams = required;
+                    signature.clause = &clause;
                 }
         };
         if (auto scoped = m_scopedDeclaredSignatures.find(
@@ -2441,8 +2443,9 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
                         : freshTypeVar());
                 std::size_t required = clause.params.size();
                 while (required > 0 && clause.params[required - 1].defaultValue) required--;
-                m_userSignatures[qualified].push_back(Signature{
-                    def.name, std::move(paramTypes), freshTypeVar(), false, required});
+                Signature signature{def.name, std::move(paramTypes), freshTypeVar(), false, required};
+                signature.clause = &clause;
+                m_userSignatures[qualified].push_back(std::move(signature));
             }
         }
         return;
@@ -2487,6 +2490,7 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
             : freshTypeVar();
         Signature signature{def.name, std::move(paramTypes), std::move(result), false, required};
         signature.declaringModule = m_currentModulePath;
+        signature.clause = &clause;
         return signature;
     };
     // An arity already present is skipped: clauses of one definition share
@@ -3845,6 +3849,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         // annotation does not spell them.
         for (const auto& param : clause.params)
             checkedSignature.paramNames.push_back(param.name ? *param.name : "");
+        checkedSignature.clause = &clause;
         // The pre-pass's result variable for this clause gets the body's
         // answer, before generalizing renames the clause's own variables.
         if (auto pending = m_pendingResults.find(&clause);

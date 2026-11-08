@@ -1028,6 +1028,12 @@ Then (same day):
     2026-11-07.
   - SemanticDB is now a document store, a module loader and the symbol
     queries' front end over the checker's index.
+- Steps 5–6, HIR nodes (started 2026-11-08, by the user's choice to do the
+  rewrite): a signature made from a FunctionDef keeps its clause
+  (`Signature::clause`), the HIR answers the selected signature by call
+  node, and lowering places a labelled call's arguments into the clause the
+  checker chose rather than choosing one by labels itself (`namedClause`
+  and `selectClause` are deleted).
 
 Search runs over `make test-all`: 351 → 47, none of them unchecked. What
 is left: the owner choice for `Kex.AST`'s `to` (4), `any?`/`all?` decided

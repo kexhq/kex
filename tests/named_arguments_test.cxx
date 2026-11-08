@@ -11,39 +11,7 @@ static auto assertSlots(const std::vector<size_t>& actual,
         assertEqual(actual[i], expected[i]);
 }
 
-static auto clauseWith(std::vector<std::string> names,
-                       std::vector<bool> defaulted) -> ast::FunctionClause {
-    ast::FunctionClause clause;
-    for (size_t i = 0; i < names.size(); ++i) {
-        ast::Param param;
-        param.name = names[i];
-        if (i < defaulted.size() && defaulted[i])
-            param.defaultValue = std::make_unique<ast::Expr>();
-        clause.params.push_back(std::move(param));
-    }
-    return clause;
-}
-
 int main() {
-    describe("selectClause", []() {
-        it("returns the first clause the arguments fit", []() {
-            auto narrow = clauseWith({"a"}, {false});
-            auto wide = clauseWith({"a", "b"}, {false, true});
-            const std::vector<const ast::FunctionClause*> clauses{&narrow,
-                                                                  &wide};
-            assertTrue(selectClause(clauses, {}, 1) == &narrow);
-            assertTrue(selectClause(clauses, {"b"}, 1) == &wide);
-        });
-        it("returns nullptr when no clause fits", []() {
-            auto only = clauseWith({"a"}, {false});
-            const std::vector<const ast::FunctionClause*> clauses{&only};
-            assertTrue(selectClause(clauses, {"zzz"}, 0) == nullptr);
-            assertTrue(selectClause(clauses, {}, 5) == nullptr);
-            const std::vector<const ast::FunctionClause*> empty;
-            assertTrue(selectClause(empty, {}, 0) == nullptr);
-        });
-    });
-
     describe("placeArguments", []() {
         it("places labels by name and positionals in the slots left", []() {
             const auto placed = placeArguments({"a", "b", "c"}, {"c"}, 1);
