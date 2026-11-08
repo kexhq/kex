@@ -156,7 +156,7 @@ describe("FS.File.open — typed Result (mocked)") do
     let f = FS.File.open("lines.txt", FS.Read).try
     let line = f.getLine
     f.close()
-    assert(line.try.or("") == "first")
+    assert(line.or("") == "first")
   end
 
   it("returns OpenFailed when the path does not exist") do
@@ -242,8 +242,8 @@ describe("Directory — real filesystem") do
     assert(FS.File.readLines(path) == Ok(["l1", "l2"]))
     assert(FS.File.feed(path).map { |lines| lines.take(5) } == Ok(["l1", "l2"]))
     let handle = FS.File.open(path, Read).try
-    assert(handle.getLine == Ok(Just("l1")))
-    assert(handle.getLine == Ok(Just("l2")))
+    assert(handle.readLine == Ok(Just("l1")))
+    assert(handle.getLine == Just("l2"))
     assert(handle.eof?)
     handle.close
     assert(handle.eof?)

@@ -351,7 +351,7 @@ module Mock do
     # Queues the lines +IO.getLine+ will return, in order.
     #
     # Takes a list, or up to four lines as separate arguments. Once they run
-    # out, +IO.getLine+ answers +Ok(None)+: end of input, exactly as a closed
+    # out, +IO.readLine+ answers +Ok(None)+: end of input, exactly as a closed
     # stdin would.
     #
     # @param lines [[String]] the lines to serve, in order

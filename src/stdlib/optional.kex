@@ -278,22 +278,8 @@ make Result<X, E>, implement: Resultable do
   #
   # @example Parsing with a fallback
   #   Integer.parse(input).or(8080)
-  #
-  # A result that holds an optional, given a plain fallback, sees through both
-  # layers: the value inside +Ok(Just(...))+, or +default+ for +Ok(None)+ and
-  # for an +Error+. That is what a read wants in the simple case, where end of
-  # input and a failed read both mean "use the default"; +match+ on the result
-  # when they need telling apart.
-  #
-  # @example Reading a line with a default
-  #   let name = IO.getLine.or("world")
-  #   Ok(Just("ada")).or("world")   # => "ada"
-  #   Ok(None).or("world")          # => "world"
   or :> X -> X
-  let or(@Ok(x), default) do
-    # Type.of names Optional "Option" on both backends.
-    return Type.of(x).name == "Option" then Result.insideOr(x, default) else x
-  end
+  let or(@Ok(x), _) = x
   let or(@Error(_), default) = default
 
   # Applies +f+ to the +Ok+ value. An +Error+ passes through untouched, so a
@@ -370,18 +356,6 @@ make Result<X, E>, implement: Resultable do
   error :> E?
   let error(@Ok(_)) = None
   let error(@Error(e)) = Just(e)
-end
-
-module Result do
-  # What +Result.or+ answers for a result that holds an optional: the value
-  # inside +Just+, or +default+ for +None+. Typed +Any+ so it does not tie the
-  # type of +or+ itself to a particular caller.
-  let insideOr(value: Any, default: Any) -> Any do
-    match value do
-      Just(inner) => return inner
-      _ => return default
-    end
-  end
 end
 
 # Converts +value+ to the type +t+, or +None+ if it cannot be represented.

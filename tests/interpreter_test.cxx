@@ -1370,13 +1370,12 @@ int main() {
             assertEqual(output, std::string("ab\n"));
         });
 
-        // `Result<String?, ReadError>`, like every Readable, so the line arrives
-        // as `Ok(Just("hello"))`. It once came back bare, which made the declared
-        // type a lie and `match ... Just(x)` match nothing (kexhq/kex#197).
-        it("IO.getLine reads a line from stdin", []() {
+        // `IO.readLine` answers `Result<String?, ReadError>`, like every Readable,
+        // so the line arrives as `Ok(Just("hello"))` (kexhq/kex#197).
+        it("IO.readLine reads a line from stdin", []() {
             std::istringstream input("hello\n");
             auto* prevCin = std::cin.rdbuf(input.rdbuf());
-            auto result = run("main do\n  IO.getLine()\nend\n");
+            auto result = run("main do\n  IO.readLine()\nend\n");
             std::cin.rdbuf(prevCin);
             const auto& ok = std::get<VariantValue>(result->data);
             assertEqual(ok.tag, std::string("Ok"));
@@ -1386,37 +1385,33 @@ int main() {
                         std::string("hello"));
         });
 
-        it("IO.getLine returns Ok(None) at EOF", []() {
+        it("IO.readLine returns Ok(None) at EOF", []() {
             std::istringstream input("");
             auto* prevCin = std::cin.rdbuf(input.rdbuf());
-            auto result = run("main do\n  IO.getLine()\nend\n");
+            auto result = run("main do\n  IO.readLine()\nend\n");
             std::cin.rdbuf(prevCin);
             const auto& ok = std::get<VariantValue>(result->data);
             assertEqual(ok.tag, std::string("Ok"));
             assertTrue(ok.args.at(0)->isNone());
         });
 
-        it("IO.get reads a single character from stdin", []() {
+        it("IO.getChar reads a single character from stdin", []() {
             std::istringstream input("ab");
             auto* prevCin = std::cin.rdbuf(input.rdbuf());
-            auto result = run("main do\n  IO.get()\nend\n");
+            auto result = run("main do\n  IO.getChar()\nend\n");
             std::cin.rdbuf(prevCin);
-            const auto& ok = std::get<VariantValue>(result->data);
-            assertEqual(ok.tag, std::string("Ok"));
-            const auto& character = std::get<VariantValue>(ok.args.at(0)->data);
+            const auto& character = std::get<VariantValue>(result->data);
             assertEqual(character.tag, std::string("Just"));
             assertEqual(std::get<StringValue>(character.args.at(0)->data).value,
                         std::string("a"));
         });
 
-        it("IO.get returns Ok(None) at EOF", []() {
+        it("IO.getChar returns None at EOF", []() {
             std::istringstream input("");
             auto* prevCin = std::cin.rdbuf(input.rdbuf());
-            auto result = run("main do\n  IO.get()\nend\n");
+            auto result = run("main do\n  IO.getChar()\nend\n");
             std::cin.rdbuf(prevCin);
-            const auto& ok = std::get<VariantValue>(result->data);
-            assertEqual(ok.tag, std::string("Ok"));
-            assertTrue(ok.args.at(0)->isNone());
+            assertTrue(result->isNone());
         });
     });
 
@@ -1555,7 +1550,7 @@ int main() {
                 "  Mock.FS.File(\"wrapped.txt\", \"hello\\n\")\n"
                 "  let Ok(content) = FS.File.read(\"wrapped.txt\")\n"
                 "  let handle = FS.File.open(\"wrapped.txt\", FS.Read).try\n"
-                "  let Ok(Just(line)) = handle.getLine\n"
+                "  let Ok(Just(line)) = handle.readLine\n"
                 "  content + line\n"
                 "end\n");
             assertEqual(std::get<StringValue>(result->data).value,
@@ -1588,15 +1583,15 @@ int main() {
                         std::string("world"));
         });
 
-        it("seek and reset share the cursor getLine advances", []() {
+        it("seek and reset share the cursor readLine advances", []() {
             auto result = runFSMocking(
                 "main do\n"
                 "  Mock.FS.File(\"lines.txt\", \"one\\ntwo\\nthree\")\n"
                 "  let handle = FS.File.open(\"lines.txt\", FS.Read).try\n"
-                "  let Ok(Just(a)) = handle.getLine\n"
-                "  let Ok(Just(b)) = handle.getLine\n"
+                "  let Ok(Just(a)) = handle.readLine\n"
+                "  let Ok(Just(b)) = handle.readLine\n"
                 "  handle.reset.try\n"
-                "  let Ok(Just(c)) = handle.getLine\n"
+                "  let Ok(Just(c)) = handle.readLine\n"
                 "  a + \"/\" + b + \"/\" + c\n"
                 "end\n");
             assertEqual(std::get<StringValue>(result->data).value,

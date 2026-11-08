@@ -1480,7 +1480,7 @@ private do
     let binding = bindings.first.try
     IO.print("Approve plugin `${binding.approvalKey}` with resources ${Tey.Commands.resourcesText(binding)}? [y/N] ")
     let answer = match IO.getLine do
-      Ok(Just(line)) => line.trim.lowerCase
+      Just(line) => line.trim.lowerCase
       _ => do
         IO.printLine("")
         let wanted = bindings.map do |pending|

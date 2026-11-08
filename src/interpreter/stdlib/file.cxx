@@ -201,7 +201,7 @@ auto Evaluator::registerFileBuiltins() -> void {
         return Value::ok(handle);
     });
 
-    // --- Text I/O (mirrors IO.getLine / IO.get / IO.printLine / IO.print) ---
+    // --- Text I/O (mirrors IO.readLine / IO.getChar / IO.printLine / IO.print) ---
 
     auto mockCursor = [this](const std::string& path) -> size_t {
         std::string cursorKey = "__mock_pos__" + path;
@@ -246,7 +246,7 @@ auto Evaluator::registerFileBuiltins() -> void {
         return optionalTextReadResult(chompCarriageReturn(std::move(line)));
     });
 
-    // handle.get -> String? (single character)
+    // handle.getChar -> Result<String?, ReadError> (single character)
     reg("FileHandle::get", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         if (auto forwarded = standardRead(args, "IO::get"))
@@ -369,25 +369,6 @@ auto Evaluator::registerFileBuiltins() -> void {
         return textReadResult(buf.str());
     });
 
-    // handle.write(data) -> Void
-    reg("FileHandle::write", [this, standardWrite](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::unit();
-        if (auto forwarded = standardWrite(args, "IO::print", "IO::printErrorRaw")) return *forwarded;
-        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        if (!h) return Value::unit();
-        std::string content = args[1]->toString();
-
-        auto mockIt = m_mockFiles.find(h->path);
-        if (mockIt != m_mockFiles.end()) {
-            mockIt->second += content;
-            return Value::unit();
-        }
-
-        if (!h->stream || !h->stream->is_open()) return Value::unit();
-        *h->stream << content;
-        return Value::unit();
-    });
-
     reg("FileHandle::readBytes", [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return readError("ReadFailed");
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
@@ -410,23 +391,79 @@ auto Evaluator::registerFileBuiltins() -> void {
                                 : Value::ok(Value::binary(std::move(bytes)));
     });
 
-    reg("FileHandle::writeBytes", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::unit();
+    // handle.put(bytes) -> Result<Void, WriteError>. The bytes verbatim; a
+    // String is its UTF-8 bytes. The write that reports failure: a closed
+    // handle, a device error, or standard input.
+    reg("FileHandle::put", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        auto failed = [] { return Value::error(Value::variant("WriteFailed", "WriteError")); };
+        if (args.size() < 2) return failed();
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        auto* value = std::get_if<BinaryValue>(&args[1]->data);
-        if (!h || !value) return Value::unit();
-        const std::string bytes(value->bytes.begin(), value->bytes.end());
+        if (!h) return failed();
+        std::string bytes;
+        if (auto* value = std::get_if<BinaryValue>(&args[1]->data))
+            bytes.assign(value->bytes.begin(), value->bytes.end());
+        else if (auto* text = std::get_if<StringValue>(&args[1]->data))
+            bytes = text->value;
+        else
+            return failed();
         if (h->path == kStdoutPath || h->path == kStderrPath) {
             if (m_mockIO) m_mockIOOutput += bytes;
             else if (h->path == kStdoutPath) std::cout.write(bytes.data(), bytes.size());
             else std::cerr.write(bytes.data(), bytes.size());
-            return Value::unit();
+            return Value::ok(Value::unit());
         }
+        if (h->path == kStdinPath) return failed();
         if (auto it = m_mockFiles.find(h->path); it != m_mockFiles.end()) {
-            it->second.append(bytes); return Value::unit();
+            it->second.append(bytes);
+            return Value::ok(Value::unit());
         }
-        if (h->stream && h->stream->is_open()) h->stream->write(bytes.data(), bytes.size());
-        return Value::unit();
+        if (!h->stream || !h->stream->is_open()) return failed();
+        h->stream->write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        if (h->stream->bad()) return failed();
+        return Value::ok(Value::unit());
+    });
+
+    // handle.getChunk(limit) -> Result<Binary?, ReadError>: up to +limit+
+    // bytes, None at the end. Standard input answers a line at a time,
+    // newline included, so an interactive read never waits for a full buffer.
+    reg("FileHandle::getChunk", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return readError("ReadFailed");
+        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
+        auto* limitValue = std::get_if<IntValue>(&args[1]->data);
+        if (!h || !limitValue || limitValue->value <= 0) return readError("ReadFailed");
+        const auto limit = static_cast<size_t>(limitValue->value);
+        auto chunk = [](std::string_view bytes) {
+            return Value::ok(Value::just(Value::binary({bytes.begin(), bytes.end()})));
+        };
+        if (h->path == kStdinPath) {
+            auto line = standardRead(args, "IO::getLine");
+            if (!line || (*line)->isNone()) return Value::ok(Value::none());
+            auto* variant = std::get_if<VariantValue>(&(*line)->data);
+            if (!variant || variant->args.empty()) return readError("ReadFailed");
+            auto* text = std::get_if<StringValue>(&variant->args[0]->data);
+            if (!text) return readError("ReadFailed");
+            return chunk(text->value + "\n");
+        }
+        if (isStandardHandle(h->path)) return readError("ReadFailed");
+        if (auto it = m_mockFiles.find(h->path); it != m_mockFiles.end()) {
+            const auto pos = std::min(mockCursor(h->path), it->second.size());
+            if (pos >= it->second.size()) return Value::ok(Value::none());
+            const auto take = std::min(limit, it->second.size() - pos);
+            setMockCursor(h->path, pos + take);
+            return chunk(std::string_view(it->second).substr(pos, take));
+        }
+        if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
+        std::string buffer(limit, '\0');
+        h->stream->read(buffer.data(), static_cast<std::streamsize>(limit));
+        const auto got = static_cast<size_t>(h->stream->gcount());
+        if (h->stream->bad()) return readError("ReadFailed");
+        if (got == 0) {
+            h->stream->clear(h->stream->rdstate() & ~std::ios::failbit);
+            return Value::ok(Value::none());
+        }
+        if (h->stream->eof()) h->stream->clear(std::ios::eofbit);
+        buffer.resize(got);
+        return chunk(buffer);
     });
 
     // --- Lifecycle ---
@@ -508,9 +545,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     // primitive ABI independent from the older internal IO-style names.
     for (const auto& [publicName, primitiveName] :
          std::initializer_list<std::pair<const char*, const char*>>{
-             {"readLine", "getLine"}, {"writeLine", "printLine"},
-             {"read", "read"}, {"write", "write"},
-             {"eof?", "atEnd?"}, {"close", "close"}}) {
+             {"readLine", "getLine"}, {"getChar", "get"}, {"eof?", "atEnd?"}}) {
         if (auto value = m_intrinsicEnv->get("FileHandle::" + std::string(primitiveName)))
             defineIntrinsic("FileHandle::" + std::string(publicName), value);
     }

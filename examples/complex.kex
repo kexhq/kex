@@ -5,8 +5,8 @@
 using Complex
 
 main do
-  let z = Complex.of(3, 4)
-  let w = Complex.of(1, -2)
+  let z = Complex.from(3, 4)
+  let w = Complex.from(1, -2)
   IO.printLine("z = ${z}")
   IO.printLine("w = ${w}")
   IO.printLine("z + w = ${z + w}")

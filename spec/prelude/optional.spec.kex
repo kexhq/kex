@@ -143,14 +143,8 @@ describe("Result.mapError, Result.error and Optional.filter") do
   end
 end
 
-describe("Result.or over an optional") do
-  it("sees through both layers to a plain default") do
-    assert(Ok(Just("ada")).or("world") == "ada")
-    assert(Ok(None).or("world") == "world")
-    assert(Error("bad").or("world") == "world")
-  end
-
-  it("leaves a plain Ok value alone") do
+describe("Result.or") do
+  it("answers the Ok value or the default") do
     assert(Ok(42).or(0) == 42)
     assert(Error("x").or(0) == 0)
   end

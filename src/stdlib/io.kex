@@ -88,22 +88,34 @@ capability IO do
 
   # Reads one line from stdin, without its line ending.
   #
-  # The same read as +IO.in.getLine+, and the same shape as every other
-  # +Readable+: +Ok(None)+ at end of input, which is what makes it usable as a
-  # loop condition, and an +Error+ only when the input cannot be read as text.
+  # The same read as +IO.in.getLine+: +None+ both at the end of the input and
+  # on a failed read, which is what interactive code wants. Use
+  # +IO.readLine+ when the two need telling apart.
+  #
+  # @return [String?] the line, or +None+ at end of input or on failure
+  #
+  # @example Reading an answer with a default
+  #   let answer = IO.getLine.or("")
+  getLine : String?
+  foul getLine do
+    match Kex.Intrinsic.FileHandle.readLine(Kex.Intrinsic.IO.stdin) do
+      Ok(value) => return value
+      Error(_) => return None
+    end
+  end
+
+  # Reads one line from stdin, without its line ending, reporting a failure.
+  #
+  # The same read as +IO.in.readLine+: +Ok(None)+ at end of input, which is
+  # what makes it usable as a loop condition, and an +Error+ only when the
+  # input cannot be read as text.
   #
   # @return [Result<String?, ReadError>] the line, +Ok(None)+ at end of input,
   #   or why it could not be read
   #
-  # +or+ with a plain default sees through both layers, so the simple case
-  # stays simple: the line, or the default at end of input or on a read error.
-  #
-  # @example Reading an answer with a default
-  #   let answer = IO.getLine.or("")
-  #
   # @example Draining stdin line by line
   #   foul echoAll -> Void do
-  #     match IO.getLine do
+  #     match IO.readLine do
   #       Ok(Just(line)) => do
   #         IO.printLine(line)
   #         echoAll
@@ -112,22 +124,25 @@ capability IO do
   #       Error(e) => IO.printError("cannot read stdin: ${e}")
   #     end
   #   end
-  getLine : Result<String?, ReadError>
-  foul getLine = Kex.Intrinsic.FileHandle.getLine(Kex.Intrinsic.IO.stdin)
+  readLine : Result<String?, ReadError>
+  foul readLine = Kex.Intrinsic.FileHandle.readLine(Kex.Intrinsic.IO.stdin)
 
-  # Reads a single character from stdin, as +IO.in.get+ does.
+  # Reads a single character from stdin, as +IO.in.getChar+ does.
   #
-  # +Ok(None)+ at end of input. Note that the character is a one-character
-  # +String+, not a +Char+.
+  # Note that the character is a one-character +String+, not a +Char+.
   #
-  # @return [Result<String?, ReadError>] the character, +Ok(None)+ at end of
-  #   input, or why it could not be read
+  # @return [String?] the character, or +None+ at end of input or on failure
   #
   # @example
-  #   let key = IO.get.or("")
+  #   let key = IO.getChar.or("")
   #   IO.printLine("you pressed ${key}")
-  get : Result<String?, ReadError>
-  foul get = Kex.Intrinsic.FileHandle.get(Kex.Intrinsic.IO.stdin)
+  getChar : String?
+  foul getChar do
+    match Kex.Intrinsic.FileHandle.getChar(Kex.Intrinsic.IO.stdin) do
+      Ok(value) => return value
+      Error(_) => return None
+    end
+  end
 
   # Writes +msg+ to stderr followed by a newline.
   #
@@ -183,7 +198,7 @@ capability IO do
   error : FileHandle<CannotRead, CanWrite>
   let error = Kex.Intrinsic.IO.stderr
 
-  # Standard input, as a handle. The source +IO.getLine+ and +IO.get+ read
+  # Standard input, as a handle. The source +IO.getLine+, +IO.readLine+ and +IO.getChar+ read
   # from, reachable as a value.
   #
   # @return [FileHandle<CanRead, CannotWrite>] standard input, as a +Readable+

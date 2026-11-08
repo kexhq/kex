@@ -2008,8 +2008,9 @@ All functions take `Number` (Integer or Float) and return `Float` unless noted.
 | `printLine` | Blank line |
 | `print(x)` | Write `x` (no newline) |
 | `inspect(x)` | Pretty-print to stderr, return `x` |
-| `getLine` | Read a line from stdin → `Result<String?, ReadError>` (`Ok(None)` at end of input) |
-| `get` | Read one char from stdin → `Result<String?, ReadError>` |
+| `getLine` | Read a line from stdin → `String?` (`None` at end of input or on failure) |
+| `readLine` | Read a line from stdin → `Result<String?, ReadError>` (`Ok(None)` at end of input) |
+| `getChar` | Read one character from stdin → `String?` |
 | `printError(x)` | Write to stderr |
 
 ### 23.9 Range
@@ -2107,7 +2108,7 @@ information:
 ```kex
 trying do
   let file = FS.File.open("notes.txt", Read).try
-  let first = file.getLine.try
+  let first = file.readLine.try
   file.close
   first
 rescue
@@ -2130,8 +2131,9 @@ do not currently track whether a handle has been closed.
 
 **FileHandle** functions:
 
-- Read-capable: `getLine`, `get`, `read`, `readBytes`, `eof?`, `feed`.
-- Write-capable: `printLine`, `print`, `writeBytes`.
+- Read-capable (`Readable`): `get` (the next chunk of bytes), `readLine`, `getLine`, `read`, `readBytes`, `eof?`; also `getChar` and `feed`.
+- Write-capable (`Writable`): `put` (raw bytes), `write`, `writeLine`, `print`, `printLine`.
+- The `read`/`write` functions answer a `Result`; `getLine`/`getChar` answer an Optional, and `print`/`printLine` answer `Void`.
 - All handles: `close`.
 
 ### 23.14 HTTP (`foul`)

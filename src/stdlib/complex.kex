@@ -11,14 +11,14 @@ module Complex
 #
 #   using Complex
 #
-#   let z = Complex.of(3, 4)
+#   let z = Complex.from(3, 4)
 #   z.abs            # => 5.0
 #   z.polar          # => (5.0, 0.9272952180016122)
 #   Complex.fromPolar(2, Math.PI / 2).im   # approximately 2.0
 
 # A complex number, stored by its real part +re+ and imaginary part +im+.
 #
-# Write one literally as +Complex { re: 3, im: 4 }+, or with +Complex.of+ and
+# Write one literally as +Complex { re: 3, im: 4 }+, or with +Complex.from+ and
 # +Complex.fromPolar+.
 record Complex do
   # The real part.
@@ -44,8 +44,21 @@ let NEG_I = Complex { re: 0, im: -1 }
 # @return [Complex] +re + im·i+
 #
 # @example
-#   Complex.of(3, 4).showValue   # => "3+4i"
-let of(re: Number, im: Number) -> Complex = Complex { re: re, im: im }
+#   Complex.from(3, 4).showValue   # => "3+4i"
+let from(re: Number, im: Number) -> Complex = Complex { re: re, im: im }
+
+# Builds a complex number from a +(re, im)+ pair, the shape +rectangular+
+# answers, so +Complex.from(z.rectangular)+ is +z+.
+#
+# @param parts [(Number, Number)] the real and the imaginary part
+# @return [Complex] +re + im·i+
+#
+# @example
+#   Complex.from((3, 4)).im   # => 4
+let from(parts: (Number, Number)) -> Complex do
+  let (re, im) = parts
+  return Complex { re: re, im: im }
+end
 
 # Builds a complex number from its polar parts: a distance from the origin and
 # an angle in radians.
@@ -56,15 +69,25 @@ let of(re: Number, im: Number) -> Complex = Complex { re: re, im: im }
 #
 # @example A quarter turn
 #   Complex.fromPolar(2, Math.PI / 2).im   # approximately 2.0
-#
-# @example A polar round trip
-#   let (r, t) = z.polar
-#   Complex.fromPolar(r, t)   # z, up to rounding
 let fromPolar(radius: Number, theta: Number) -> Complex do
   return Complex {
     re: radius * Math.cos(theta),
     im: radius * Math.sin(theta)
   }
+end
+
+# Builds a complex number from a +(radius, theta)+ pair, the shape +polar+
+# answers, so +Complex.fromPolar(z.polar)+ is +z+, up to rounding.
+#
+# @param parts [(Number, Number)] the distance from the origin and the angle
+#   in radians
+# @return [Complex] the same number, held by its rectangular parts
+#
+# @example
+#   Complex.fromPolar((2, 0)).re   # => 2.0
+let fromPolar(parts: (Number, Number)) -> Complex do
+  let (radius, theta) = parts
+  return Complex.fromPolar(radius, theta)
 end
 
 make Complex, implement: Showable do
@@ -73,7 +96,7 @@ make Complex, implement: Showable do
   # @return [String] the real and signed imaginary components
   #
   # @example
-  #   Complex.of(3, -4).showValue   # => "3-4i"
+  #   Complex.from(3, -4).showValue   # => "3-4i"
   let showValue -> String do
     return @im < 0 then "${@re}${@im}i" else "${@re}+${@im}i"
   end
@@ -83,7 +106,7 @@ make Complex, implement: Showable do
   # @return [(Number, Number)] +(re, im)+
   #
   # @example
-  #   Complex.of(3, 4).rectangular   # => (3, 4)
+  #   Complex.from(3, 4).rectangular   # => (3, 4)
   let rectangular -> (Number, Number) = (@re, @im)
 
   # The polar view: the distance from the origin and the angle in radians.
@@ -91,7 +114,7 @@ make Complex, implement: Showable do
   # @return [(Float, Float)] +(abs, arg)+
   #
   # @example
-  #   Complex.of(3, 4).polar   # => (5.0, 0.9272952180016122)
+  #   Complex.from(3, 4).polar   # => (5.0, 0.9272952180016122)
   let polar -> (Float, Float) = (this.abs, this.arg)
 
   # The magnitude: the distance from the origin, the polar radius.
@@ -99,7 +122,7 @@ make Complex, implement: Showable do
   # @return [Float] the distance from the origin
   #
   # @example
-  #   Complex.of(3, 4).abs   # => 5.0
+  #   Complex.from(3, 4).abs   # => 5.0
   let abs -> Float = Math.hypot(@re, @im)
 
   # The square of the magnitude, which needs no square root and so stays an
@@ -108,7 +131,7 @@ make Complex, implement: Showable do
   # @return [Number] +re² + im²+
   #
   # @example
-  #   Complex.of(3, 4).absSquared   # => 25
+  #   Complex.from(3, 4).absSquared   # => 25
   let absSquared -> Number = @re * @re + @im * @im
 
   # The argument: the angle from the positive real axis, the polar angle, in
@@ -123,7 +146,7 @@ make Complex, implement: Showable do
   # Adds two complex numbers component by component.
   #
   # @example
-  #   (Complex.of(1, 2) + Complex.I).im   # => 3
+  #   (Complex.from(1, 2) + Complex.I).im   # => 3
   let +(other: Complex) -> Complex do
     return New {
       re: @re + other.re,
@@ -134,7 +157,7 @@ make Complex, implement: Showable do
   # Subtracts +other+ from this complex number.
   #
   # @example
-  #   (Complex.of(1, 2) - Complex.I).im   # => 1
+  #   (Complex.from(1, 2) - Complex.I).im   # => 1
   let -(other: Complex) -> Complex do
     return New {
       re: @re - other.re,
@@ -204,7 +227,7 @@ make Complex, implement: Showable do
   # right half-plane.
   #
   # @example
-  #   Complex.of(-1, 0).sqrt.im   # approximately 1.0
+  #   Complex.from(-1, 0).sqrt.im   # approximately 1.0
   let sqrt -> Complex = Complex.fromPolar(Math.sqrt(this.abs), this.arg / 2.0)
 
   # Returns e raised to this complex number.
@@ -262,6 +285,6 @@ make Complex, implement: Showable do
   # Zero has no complex power through this formula.
   #
   # @example
-  #   (Complex.I ^ Complex.of(2, 0)).re   # approximately -1.0
+  #   (Complex.I ^ Complex.from(2, 0)).re   # approximately -1.0
   let ^(exponent: Complex) -> Complex = (exponent * this.log).exp
 end

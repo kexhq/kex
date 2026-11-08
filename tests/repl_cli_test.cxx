@@ -843,8 +843,8 @@ int main() {
                 "Mock.FS.File(\"optional.txt\", \"contents\")\n"
                 "FS.File.read(\"optional.txt\")\n"
                 "let reader = FS.File.open(\"optional.txt\", FS.Read).try\n"
-                "reader.getLine\n"
-                "reader.getLine\n");
+                "reader.readLine\n"
+                "reader.readLine\n");
             // `String?` is the source-level spelling the checker renders;
             // the value-derived fallback said `Optional<String>`.
             assertTrue(out.find("Ok(\"contents\") : Result<String, FS.FileError>") !=
@@ -1153,8 +1153,8 @@ int main() {
                 "Mock.FS.File(\"optional.txt\", \"contents\")\n"
                 "FS.File.read(\"optional.txt\")\n"
                 "let reader = FS.File.open(\"optional.txt\", FS.Read).try\n"
-                "reader.getLine\n"
-                "reader.getLine\n");
+                "reader.readLine\n"
+                "reader.readLine\n");
             // `String?` is the source-level spelling the checker renders;
             // the value-derived fallback said `Optional<String>`.
             assertTrue(out.find("Ok(\"contents\") : Result<String, FS.FileError>") !=

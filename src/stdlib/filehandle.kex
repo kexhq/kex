@@ -7,10 +7,21 @@
 # +readBytes+ instead of a text read when you need the original bytes.
 type ReadError = ReadFailed | InvalidUtf8(Integer)
 
-# +Readable+: a source that yields text.
+# Why a write failed: the sink refused it. A closed handle, a full device, or
+# standard input all answer +WriteFailed+.
+type WriteError = | WriteFailed
+
+# +Readable+: a source of bytes and text.
 #
 # +IO.in+ and file handles opened for reading are +Readable+. Accept this
 # trait when your function should work with either source.
+#
+# Two families read text. The +read+ family (+readLine+, +read+,
+# +readBytes+) answers a +Result+, so a failed read can be told apart from
+# the end of the input. The +get+ family is the short form: +getLine+ answers
+# an +Optional+, +None+ both at the end and on a failed read, which is what
+# most interactive code wants. +get+ itself is the primitive the rest stand
+# on: the next chunk of raw bytes.
 #
 #   foul firstLine(source: Readable) -> String do
 #     source.getLine.or("(empty)")
@@ -19,19 +30,24 @@ type ReadError = ReadFailed | InvalidUtf8(Integer)
 #   firstLine(IO.in)
 #   firstLine(FS.File.open("notes.txt", Read).try)
 trait Readable do
+  # Reads the next chunk of bytes: whatever the source has ready, up to its
+  # buffer size. Standard input answers one line at a time, newline included.
+  #
+  # @return [Result<Binary?, ReadError>] the next chunk, +Ok(None)+ at end of
+  #   input, or the failure
+  get :> Result<Binary?, ReadError>
+
   # Reads the next line, without its newline.
   #
   # @return [Result<String?, ReadError>] the next line, +Ok(None)+ at end of
   #   input, or the failure
-  getLine :> Result<String?, ReadError>
+  readLine :> Result<String?, ReadError>
 
-  # Reads a single character, as a one-character +String+.
+  # Reads the next line, without its newline: +readLine+ for when the end of
+  # the input and a failed read mean the same thing.
   #
-  # Reads one complete Unicode scalar, not one byte.
-  #
-  # @return [Result<String?, ReadError>] the next character, +Ok(None)+ at end
-  #   of input, or the failure
-  get :> Result<String?, ReadError>
+  # @return [String?] the next line, or +None+ at end of input or on failure
+  getLine :> String?
 
   # Reads everything remaining, as one +String+.
   #
@@ -43,9 +59,9 @@ trait Readable do
   # Reads everything remaining as raw bytes, without decoding it as text.
   #
   # The byte counterpart of +read+: it returns the remaining bytes without
-  # validating UTF-8. Bytes consumed by a failed
-  # text read are not returned by a subsequent +readBytes+ call.
-  # Draining an exhausted source answers +Ok(Binary.fromBytes([]))+.
+  # validating UTF-8. Bytes consumed by a failed text read are not returned
+  # by a subsequent +readBytes+ call. Draining an exhausted source answers
+  # +Ok(Binary.fromBytes([]))+.
   #
   # @return [Result<Binary, ReadError>] the remaining bytes, or the failure
   readBytes :> Result<Binary, ReadError>
@@ -56,10 +72,16 @@ trait Readable do
   eof? :> Bool
 end
 
-# +Writable+: a sink that accepts text.
+# +Writable+: a sink for bytes and text.
 #
 # Accept a +Writable+ parameter to let callers choose standard output,
 # standard error, or a file as the destination.
+#
+# Two families write text. The +write+ family (+put+, +write+, +writeLine+)
+# answers a +Result+, for when a failed write matters. The +print+ family
+# (+print+, +printLine+) answers +Void+, for output where there is nothing
+# useful to do about a failure. +put+ is the primitive the rest stand on: raw
+# bytes, verbatim.
 #
 #   foul report(out: Writable, lines: [String]) -> Void do
 #     lines.each { |line| out.printLine(line) }
@@ -68,30 +90,41 @@ end
 #   report(IO.out, results)
 #   report(IO.error, warnings)
 #   report(FS.File.open("report.txt", Write).try, results)
-#
-# Write functions accept any +Showable+ value and return +Void+.
 trait Writable do
+  # Writes +content+ verbatim, with no trailing newline.
+  #
+  # It never renders the value, so a +Binary+ reaches the sink as its bytes
+  # rather than as the +#Binary<N bytes>+ that +Showable+ would print.
+  #
+  # @param content [Binary] the bytes to write
+  # @return [Result<Void, WriteError>] +Ok+, or why the write failed
+  put :> Binary -> Result<Void, WriteError>
+
+  # Writes +content+ with no trailing newline.
+  #
+  # @param content [Showable] the value to write
+  # @return [Result<Void, WriteError>] +Ok+, or why the write failed
+  write :> Showable -> Result<Void, WriteError>
+
   # Writes +content+ followed by a newline.
   #
   # @param content [Showable] the value to write
-  # @return [Void]
-  printLine :> Showable -> Void
+  # @return [Result<Void, WriteError>] +Ok+, or why the write failed
+  writeLine :> Showable -> Result<Void, WriteError>
 
-  # Writes +content+ with no trailing newline.
+  # Writes +content+ with no trailing newline, ignoring a failure. Use
+  # +write+ when a failure matters.
   #
   # @param content [Showable] the value to write
   # @return [Void]
   print :> Showable -> Void
 
-  # Writes +content+ as raw bytes, with no trailing newline.
+  # Writes +content+ followed by a newline, ignoring a failure. Use
+  # +writeLine+ when a failure matters.
   #
-  # The byte counterpart of +print+: the payload goes to the sink exactly as
-  # given. It never renders the value, so a +Binary+ reaches the sink as its
-  # bytes rather than as the +#Binary<N bytes>+ that +Showable+ would print.
-  #
-  # @param content [Binary] the bytes to write
+  # @param content [Showable] the value to write
   # @return [Void]
-  writeBytes :> Binary -> Void
+  printLine :> Showable -> Void
 end
 
 # +Closeable+: anything that holds a releasable resource.
@@ -144,16 +177,32 @@ end
 type FileHandle<R, W>
 
 make FileHandle<CanRead, W>, implement: Readable do
+  # Reads the next chunk of bytes from the handle, up to 64 KiB.
+  #
+  # @return [Result<Binary?, ReadError>] the next chunk, or +None+ at end of
+  #   file
+  #
+  # @example Copying a file a chunk at a time
+  #   foul copy(source: FileHandle<CanRead, W>, target: FileHandle<R, CanWrite>) -> Void do
+  #     match source.get do
+  #       Ok(Just(chunk)) => do
+  #         target.put(chunk)
+  #         copy(source, target)
+  #       end
+  #       _ => ()
+  #     end
+  #   end
+  get :> Result<Binary?, ReadError>
+  foul get = Kex.Intrinsic.FileHandle.getChunk(this, 65536)
+
   # Reads the next line from the handle, without its newline.
   #
-  # Answers +None+ at end of file, which is what makes it usable as a loop
-  # condition, and the name +IO.getLine+ uses.
-  #
-  # @return [Result<String?, ReadError>] the next line, or +None+ at end of file
+  # @return [Result<String?, ReadError>] the next line, +Ok(None)+ at end of
+  #   file, or the failure
   #
   # @example Walking a file line by line
   #   foul echo(handle: FileHandle<CanRead, W>) -> Void do
-  #     match handle.getLine do
+  #     match handle.readLine do
   #       Ok(Just(line)) => do
   #         IO.printLine(line)
   #         echo(handle)
@@ -162,23 +211,42 @@ make FileHandle<CanRead, W>, implement: Readable do
   #       Error(e) => IO.printError("read failed: ${e}")
   #     end
   #   end
-  getLine :> Result<String?, ReadError>
-  foul getLine = Kex.Intrinsic.FileHandle.getLine(this)
+  readLine :> Result<String?, ReadError>
+  foul readLine = Kex.Intrinsic.FileHandle.readLine(this)
 
-  # Reads a single character from the handle, as a one-character +String+.
+  # Reads the next line from the handle, without its newline.
   #
-  # Answers +None+ at end of file.
-  #
-  # @return [Result<String?, ReadError>] the next character, or +None+ at end of file
+  # @return [String?] the next line, or +None+ at end of file or on failure
   #
   # @example
-  #   let firstChar = handle.get.or("")
-  get :> Result<String?, ReadError>
-  foul get = Kex.Intrinsic.FileHandle.get(this)
+  #   let header = handle.getLine.or("")
+  getLine :> String?
+  foul getLine do
+    match Kex.Intrinsic.FileHandle.readLine(this) do
+      Ok(value) => return value
+      Error(_) => return None
+    end
+  end
+
+  # Reads a single character from the handle, as a one-character +String+:
+  # one complete Unicode scalar, not one byte.
+  #
+  # @return [String?] the next character, or +None+ at end of file or on
+  #   failure
+  #
+  # @example
+  #   let firstChar = handle.getChar.or("")
+  getChar :> String?
+  foul getChar do
+    match Kex.Intrinsic.FileHandle.getChar(this) do
+      Ok(value) => return value
+      Error(_) => return None
+    end
+  end
 
   # Reads everything remaining in the file and returns it as one +String+.
   #
-  # Reads from the current position, so calling it after a +getLine+ gives
+  # Reads from the current position, so calling it after a +readLine+ gives
   # the rest of the file rather than the whole of it.
   #
   # @return [Result<String, ReadError>] the remaining contents
@@ -217,7 +285,7 @@ make FileHandle<CanRead, W>, implement: Readable do
   #
   # Lines are read on demand off the handle's own position, so this is how to
   # look at the start of a very large file, or process one without holding it
-  # all in memory. The feed shares the handle's cursor: interleaving +getLine+
+  # all in memory. The feed shares the handle's cursor: interleaving +readLine+
   # with it advances one position through one open file.
   #
   # The feed ends at the last line, so taking more lines than the file has
@@ -247,14 +315,34 @@ make FileHandle<R, CanWrite>, implement: Writable do
   # Writes +content+ verbatim, without text encoding or a trailing newline.
   #
   # @param content [Binary] the bytes to write
-  # @return [Void]
+  # @return [Result<Void, WriteError>] +Ok+, or why the write failed
   #
   # @example Copying an opaque payload
-  #   destination.writeBytes(source.readBytes.try)
-  writeBytes :> Binary -> Void
-  foul writeBytes(content) = Kex.Intrinsic.FileHandle.writeBytes(this, content)
+  #   destination.put(source.readBytes.try)
+  put :> Binary -> Result<Void, WriteError>
+  foul put(content) = Kex.Intrinsic.FileHandle.put(this, content)
+
+  # Writes +content+ with no trailing newline.
+  #
+  # @param content [Showable] the value to write
+  # @return [Result<Void, WriteError>] +Ok+, or why the write failed
+  #
+  # @example
+  #   handle.write("total: ${total}").try
+  write :> Showable -> Result<Void, WriteError>
+  foul write(content) = Kex.Intrinsic.FileHandle.put(this, content.showValue)
 
   # Writes +content+ followed by a newline.
+  #
+  # @param content [Showable] the value to write
+  # @return [Result<Void, WriteError>] +Ok+, or why the write failed
+  #
+  # @example Stopping at the first failed write
+  #   rows.each { |row| handle.writeLine(row).try }
+  writeLine :> Showable -> Result<Void, WriteError>
+  foul writeLine(content) = Kex.Intrinsic.FileHandle.put(this, "${content.showValue}\n")
+
+  # Writes +content+ followed by a newline, ignoring a failure.
   #
   # @param content [Showable] the value to write
   # @return [Void]
@@ -264,7 +352,7 @@ make FileHandle<R, CanWrite>, implement: Writable do
   printLine :> Showable -> Void
   foul printLine(content) = Kex.Intrinsic.FileHandle.printLine(this, content.showValue)
 
-  # Writes +content+ with no trailing newline.
+  # Writes +content+ with no trailing newline, ignoring a failure.
   #
   # @param content [Showable] the value to write
   # @return [Void]
@@ -275,7 +363,6 @@ make FileHandle<R, CanWrite>, implement: Writable do
   #   handle.printLine("")
   print :> Showable -> Void
   foul print(content) = Kex.Intrinsic.FileHandle.print(this, content.showValue)
-
 end
 
 make FileHandle<R, W> do

@@ -13,7 +13,7 @@
          'file?'/1, 'directory?'/1, copy/2, rename/2,
          handle_getLine/1, handle_get/1,
          handle_printLine/2, handle_print/2,
-         handle_read/1, handle_read_bytes/1, handle_write/2, handle_write_bytes/2,
+         handle_read/1, handle_read_bytes/1, handle_put/2, handle_get_chunk/2,
          'handle_atEnd?'/1, handle_close/1, handle_seek/2, handle_reset/1,
          dir_current/0, dir_home/0, dir_temporary/0, dir_create/1,
          dir_delete/1, dir_delete_all/1,
@@ -395,25 +395,50 @@ read_rest(Dev, Acc) ->
     end.
 
 %% write(data) → Void (raw write).
-handle_write({'FileHandle', stdout, _}, Content) -> kex_io:print(Content);
-handle_write({'FileHandle', stderr, _}, Content) -> kex_io:print_error_raw(Content);
-handle_write({'FileHandle', stdin, _}, _) -> 'Kex.Unit';
-handle_write({'FileHandle', Dev, _}, Content) when Dev =/= mock ->
-    file:write(Dev, kex_io:to_string_bin(Content)),
-    'Kex.Unit';
-handle_write({'FileHandle', mock, Path}, Content) ->
-    mock_append(Path, kex_io:to_string_bin(Content)),
-    'Kex.Unit';
-handle_write(_, _) -> 'Kex.Unit'.
+%% put(Content) → Result<Void, WriteError>: the bytes, verbatim; a String is
+%% its UTF-8 bytes. The write that reports failure: a closed handle, a device
+%% error, or standard input.
+handle_put(H, Content) when is_binary(Content) -> handle_put(H, {'Binary', Content});
+handle_put({'FileHandle', stdout, _}, {'Binary', Bin}) ->
+    kex_io:print_binary(Bin), {'Ok', 'Kex.Unit'};
+handle_put({'FileHandle', stderr, _}, {'Binary', Bin}) ->
+    kex_io:print_error_binary(Bin), {'Ok', 'Kex.Unit'};
+handle_put({'FileHandle', mock, Path}, {'Binary', Bin}) ->
+    mock_append(Path, Bin), {'Ok', 'Kex.Unit'};
+handle_put({'FileHandle', Dev, _}, {'Binary', Bin}) when Dev =/= stdin ->
+    case file:write(Dev, Bin) of
+        ok -> {'Ok', 'Kex.Unit'};
+        _ -> {'Error', 'WriteFailed'}
+    end;
+handle_put(_, _) -> {'Error', 'WriteFailed'}.
 
-handle_write_bytes({'FileHandle', stdout, _}, {'Binary', Bin}) -> kex_io:print_binary(Bin);
-handle_write_bytes({'FileHandle', stderr, _}, {'Binary', Bin}) -> kex_io:print_error_binary(Bin);
-handle_write_bytes({'FileHandle', stdin, _}, _) -> 'Kex.Unit';
-handle_write_bytes({'FileHandle', Dev, _}, {'Binary', Bin}) when Dev =/= mock ->
-    file:write(Dev, Bin), 'Kex.Unit';
-handle_write_bytes({'FileHandle', mock, Path}, {'Binary', Bin}) ->
-    mock_append(Path, Bin), 'Kex.Unit';
-handle_write_bytes(_, _) -> 'Kex.Unit'.
+%% getChunk(Limit) → Result<Binary?, ReadError>: up to Limit bytes, None at
+%% the end. Standard input answers a line at a time, newline included, so an
+%% interactive read never waits for a full buffer.
+handle_get_chunk({'FileHandle', stdin, _}, _) ->
+    case kex_io:read_line() of
+        'None' -> {'Ok', 'None'};
+        {'Just', Line} -> {'Ok', {'Just', {'Binary', <<Line/binary, "\n">>}}}
+    end;
+handle_get_chunk({'FileHandle', Std, _}, _) when Std =:= stdout; Std =:= stderr ->
+    {'Error', 'ReadFailed'};
+handle_get_chunk({'FileHandle', mock, Path}, Limit) when is_integer(Limit), Limit > 0 ->
+    Content = mock_content(Path),
+    Pos = mock_pos(Path),
+    case byte_size(Content) - Pos of
+        Left when Left =< 0 -> {'Ok', 'None'};
+        Left ->
+            Take = min(Left, Limit),
+            set_mock_pos(Path, Pos + Take),
+            {'Ok', {'Just', {'Binary', binary:part(Content, Pos, Take)}}}
+    end;
+handle_get_chunk({'FileHandle', Dev, _}, Limit) when is_integer(Limit), Limit > 0 ->
+    case file:read(Dev, Limit) of
+        {ok, Data} -> {'Ok', {'Just', {'Binary', iolist_to_binary(Data)}}};
+        eof -> {'Ok', 'None'};
+        _ -> {'Error', 'ReadFailed'}
+    end;
+handle_get_chunk(_, _) -> {'Error', 'ReadFailed'}.
 
 mock_append(Path, Content) ->
     P = pth(Path),

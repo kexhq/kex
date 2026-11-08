@@ -205,15 +205,17 @@ describe("Time") do
     assert(Duration.utcOffset(-5, 30).wholeSeconds == -19800)
   end
 
-  it("reads the same clock for dates, times and instants") do
+  it("answers `now` for every type") do
     let moment = DateTime.now()
-    let date = Date.today()
+    let date = Date.now()
     let clock = Time.now()
     # All three read the same clock, so the date and time components of the
     # instant agree with the standalone readings (barring a midnight tick).
     assert(date.compareTo(moment.date) == Equal)
     assert(clock.hour == moment.time.hour)
-    assert(Date.utcToday().compareTo(DateTime.utcNow().date) == Equal)
+    assert(Date.today().compareTo(Date.now()) == Equal)
+    assert(Date.utcNow().compareTo(DateTime.utcNow().date) == Equal)
+    assert(Date.utcToday().compareTo(Date.utcNow()) == Equal)
     assert(Time.utcNow().hour == DateTime.utcNow().time.hour)
   end
 

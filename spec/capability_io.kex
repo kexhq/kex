@@ -2,14 +2,14 @@
 # (kexhq/kex#143).
 #
 # This is the one that matters most for testing, and it was the last to
-# convert. `IO` has ten `foul` members and one PURE one — `inspect`, which is
+# convert. `IO` has nine `foul` members and one PURE one — `inspect`, which is
 # deliberately exempt from purity checking so it can be dropped into a pure
 # pipeline. Requiring a stand-in to implement it would have meant either making
 # it `foul`, destroying the reason it exists, or leaving `IO` a plain module.
 #
 # The rule: a capability's INTERFACE is its `foul` members. A pure member
 # performs no effect, so there is nothing to substitute. `Canned` below
-# implements the eight and not `inspect`, and that is a complete implementation.
+# implements the nine and not `inspect`, and that is a complete implementation.
 
 record Canned do
   stdin : String
@@ -23,8 +23,9 @@ make Canned, implement: IO do
   foul print = @stdin
   foul printError(msg) = @stdin
   foul printError = @stdin
-  foul getLine = Ok(Just(@stdin))
-  foul get = Ok(Just("c"))
+  foul getLine = Just(@stdin)
+  foul readLine = Ok(Just(@stdin))
+  foul getChar = Just("c")
 end
 
 # Declares no dependency and threads nothing: written exactly as in production.
@@ -53,11 +54,11 @@ main do
   IO.printLine(line)
 
   let ch = with IO = Canned { stdin: "x" } do
-    IO.get.or("(none)")
+    IO.getChar.or("(none)")
   end
   IO.printLine(ch)
 
-  # `Canned` implements the ten foul members and NOT `inspect`, and the
+  # `Canned` implements the nine foul members and NOT `inspect`, and the
   # conformance check accepts it — that omission is the assertion, and this
   # program failing to compile is how a regression would show up.
 

@@ -781,6 +781,21 @@ module Date do
     return Date.of(year, month, day)
   end
 
+  # Today's date, in this machine's zone. The same as +Date.today()+.
+  #
+  # +Date.today()+ reads better in most code; +now+ exists so every type in
+  # this file answers the same question the same way: +Date.now()+,
+  # +Time.now()+ and +DateTime.now()+.
+  #
+  # @return [Date] today's date
+  #
+  # @example
+  #   Date.now().iso   # => "2026-07-30"
+  foul now() -> Date do
+    let moment = DateTime.now()
+    return moment.date
+  end
+
   # Today's date, in this machine's zone.
   #
   # Pinned by replacing +Time.Clock+ in a test, like everything else that
@@ -820,6 +835,18 @@ module Date do
   foul yesterday() -> Date do
     let moment = DateTime.now()
     return moment.date.addDays(0 - 1)
+  end
+
+  # Today's date in UTC, whatever this machine's zone is. The same as
+  # +Date.utcToday()+, under the name every type in this file shares.
+  #
+  # @return [Date] today's UTC date
+  #
+  # @example
+  #   Date.utcNow().iso   # => "2026-07-30"
+  foul utcNow() -> Date do
+    let moment = DateTime.utcNow()
+    return moment.date
   end
 
   # Today's date in UTC, whatever this machine's zone is.

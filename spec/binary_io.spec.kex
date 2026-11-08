@@ -13,7 +13,7 @@ describe("binary I/O") do
     Mock.FS.File("handle.bin", "")
     let payload = Binary.fromBytes([0, 1, 2, 255])
     let writer = FS.File.open("handle.bin", FS.Write).try
-    writer.writeBytes(payload)
+    writer.put(payload).try
     writer.close
     let reader = FS.File.open("handle.bin", FS.Read).try
     assert(reader.readBytes == Ok(payload))
@@ -23,7 +23,7 @@ describe("binary I/O") do
 
   it("uses raw standard-stream writes without showing the value") do
     Mock.IO.start()
-    IO.out.writeBytes(Binary.fromBytes([0, 65]))
+    IO.out.put(Binary.fromBytes([0, 65])).try
     assert(Mock.IO.output().bytes == [0, 65])
     Mock.IO.stop()
   end
@@ -40,9 +40,9 @@ describe("binary I/O") do
   it("reads one complete Unicode scalar and reports malformed UTF-8") do
     Mock.FS.File("unicode.txt", "éx")
     let reader = FS.File.open("unicode.txt", FS.Read).try
-    assert(reader.get == Ok(Just("é")), "complete scalar")
-    assert(reader.get == Ok(Just("x")), "second scalar")
-    assert(reader.get == Ok(None), "character EOF")
+    assert(reader.getChar == Just("é"), "complete scalar")
+    assert(reader.getChar == Just("x"), "second scalar")
+    assert(reader.getChar == None, "character EOF")
     reader.close
 
     Mock.FS.File("bad.txt", "")
@@ -55,5 +55,50 @@ describe("binary I/O") do
     end
     assert(bad.readBytes == Ok(Binary.fromBytes([])), "failed read consumed input")
     bad.close
+  end
+end
+
+describe("Readable and Writable families") do
+  it("reads chunks with get until the end of the file") do
+    let path = FS.Path.join(FS.Directory.temporary, "kex_chunk_scratch.txt")
+    FS.File.write(path, "abc\ndef")
+    let reader = FS.File.open(path, FS.Read).try
+    assert(reader.get == Ok(Just(Binary.fromBytes("abc\ndef".bytes))))
+    assert(reader.get == Ok(None))
+    reader.close
+    FS.File.delete(path)
+  end
+
+  it("reads mocked chunks with get") do
+    Mock.FS.File("chunk.txt", "hello")
+    let reader = FS.File.open("chunk.txt", FS.Read).try
+    assert(reader.get == Ok(Just(Binary.fromBytes("hello".bytes))))
+    assert(reader.get == Ok(None))
+    reader.close
+  end
+
+  it("answers results from write, writeLine and put") do
+    let path = FS.Path.join(FS.Directory.temporary, "kex_write_scratch.txt")
+    FS.File.delete(path)
+    let writer = FS.File.open(path, FS.Write).try
+    assert(writer.write("a").ok?)
+    assert(writer.writeLine(1).ok?)
+    assert(writer.put(Binary.fromBytes([98])).ok?)
+    writer.print("c")
+    writer.printLine("d")
+    writer.close
+    assert(writer.write("late").error?)
+    assert(FS.File.read(path) == Ok("a1\nbcd\n"))
+    FS.File.delete(path)
+  end
+
+  it("splits a line read into readLine and getLine") do
+    Mock.FS.File("lines.txt", "one\ntwo")
+    let reader = FS.File.open("lines.txt", FS.Read).try
+    assert(reader.readLine == Ok(Just("one")))
+    assert(reader.getLine == Just("two"))
+    assert(reader.readLine == Ok(None))
+    assert(reader.getLine == None)
+    reader.close
   end
 end

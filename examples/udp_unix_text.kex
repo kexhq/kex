@@ -16,7 +16,7 @@ main do
   let heard = Unix.bind(sockPath) do |listener|
     let server = Task.start do
       let peer = listener.accept.try
-      let line = peer.getLine.try.or("")
+      let line = peer.getLine.or("")
       peer.close
       line
     end
