@@ -30,13 +30,6 @@ struct ImportOrigin {
 };
 using ImportScope = std::unordered_map<std::string, ImportOrigin>;
 
-// Resolve a `using` module path against collected source modules: as
-// written, then `SemanticDB::ensureModule` discovery, then the
-// enclosing-module-relative walk. Unknown paths come back unchanged;
-// the caller decides whether that is an error or a warning.
-auto resolveSourceModulePath(SemanticDB* db,
-                             const std::string& currentModule,
-                             const std::string& requested) -> std::string;
 // The scope rule under it: `requested` as written when `exists` says so,
 // else relative to the innermost enclosing module that has it, else
 // unchanged.

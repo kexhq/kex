@@ -113,10 +113,10 @@ auto Analyzer::bindPatternVars(const ast::Pattern& pat, SourceLocation loc,
 auto Analyzer::analyze(const ast::Program& program) -> bool {
     // Names first: an undefined name is reported as such, not as the type
     // errors it causes.
-    if (!m_nameCheckFiles.empty())
-        for (auto& diagnostic :
-             resolveProgramNames(program, m_nameCheckFiles, m_importedInterfaces))
-            m_diagnostics.push_back(std::move(diagnostic));
+    if (!m_nameCheckFiles.empty()) {
+        m_nameIndex = resolveProgramNames(program, m_nameCheckFiles, m_importedInterfaces);
+        for (const auto& diagnostic : m_nameIndex.diagnostics) m_diagnostics.push_back(diagnostic);
+    }
     // Phase 0: two definitions of one method for one receiver type. Reported
     // before anything else so the message is not buried under the type errors
     // an ambiguous method tends to cause downstream.

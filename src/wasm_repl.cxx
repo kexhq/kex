@@ -17,6 +17,7 @@
 #include "common/version.hxx"
 #include "lexer/lexer.hxx"
 #include "parser/parser.hxx"
+#include "compiled/expand.hxx"
 #include "interpreter/evaluator.hxx"
 // db.hxx only forward-declares Diagnostic; SemanticDB's FileState member
 // needs the complete type to be destructible, so this include is load-
@@ -53,16 +54,14 @@ std::vector<std::unique_ptr<kex::ast::Program>> g_programs;
 struct KexReplSession {
     kex::interpreter::Evaluator evaluator;
     std::string lastResult;
-    // Mirrors main.cxx's real REPL `replDb`/`replAccumSource` pair exactly
-    // (see its "SemanticDB for REPL: prelude loaded once, updated on each
-    // input" comment) so tab completion in the browser sees the same
-    // prelude- and user-defined names the native REPL's <TAB> does.
-    kex::semantic::SemanticDB replDb;
+    // As main.cxx's REPL: the prelude's names, read once, and the session's
+    // definitions, spliced into what completion checks, so tab completion in
+    // the browser sees the names the native REPL's <TAB> does.
+    std::vector<kex::semantic::SymbolInfo> preludeSymbols;
     std::string replAccumSource;
     // Local bindings entered so far, replayed ahead of the line being
     // completed so `x.` is typed by analysis (see kex_repl_complete).
     std::string replBindings;
-    kex::semantic::SemanticDB analysisDb;
     std::string lastCompletions;
 };
 
@@ -102,7 +101,8 @@ KexReplSession* kex_repl_create() {
     session->evaluator.setModuleRoots(kex::standardLibraryModuleRoots());
     // The unified stdlib is embedded into MEMFS at /stdlib. Its prelude.kex
     // manifest selects the files indexed automatically.
-    kex::loadPrelude(session->replDb, "/stdlib");
+    session->preludeSymbols = kex::semantic::symbolsOfFiles(
+        kex::preludeFilesFromRoot("/stdlib"), kex::standardLibraryModuleRoots());
     return session;
 }
 
@@ -242,14 +242,10 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
         auto value = session->evaluator.execute(*program);
         result = session->evaluator.output().substr(outputBefore);
 
-        // Matches main.cxx's real REPL exactly (see its "Accumulate and
-        // re-index so all prior definitions stay visible for tab
-        // completion" comment) — only definitions get indexed, since a bare
-        // expression like `1 + 2` isn't a name anything else can reference.
-        if (isDef) {
-            session->replAccumSource += source + "\n";
-            session->replDb.updateFile("<repl>", session->replAccumSource);
-        }
+        // As main.cxx's REPL: only definitions accumulate for completion,
+        // since a bare expression like `1 + 2` isn't a name anything else
+        // can reference.
+        if (isDef) session->replAccumSource += source + "\n";
         else if (source.rfind("let ", 0) == 0 || source.rfind("var ", 0) == 0)
             session->replBindings += source + "\n";
 
@@ -324,8 +320,27 @@ const char* kex_repl_complete(KexReplSession* session, const char* lineIn,
     std::string text(textIn ? textIn : "");
     const auto wordStart = std::min(static_cast<size_t>(std::max(start, 0)),
                                     line.size());
+    // Checked as the wasm REPL runs an input: parsed, expanded and analyzed,
+    // against no prebuilt interfaces.
+    const semantic::CompletionChecker check =
+        [](const std::string& path, const std::string& source)
+        -> std::optional<semantic::CheckedSource> {
+        auto program = std::make_shared<ast::Program>();
+        Lexer lexer(source, path);
+        Parser parser(lexer.tokenizeAll(), path);
+        *program = parser.parseProgram();
+        std::vector<semantic::Diagnostic> diagnostics;
+        compiled::ExpandOptions options;
+        options.sourcePath = path;
+        options.moduleRoots = standardLibraryModuleRoots();
+        compiled::expand(*program, diagnostics, options);
+        auto analyzer = std::make_shared<semantic::Analyzer>();
+        analyzer->setNameCheckFiles({path});
+        analyzer->analyze(*program);
+        return semantic::CheckedSource{program, analyzer, nullptr};
+    };
     auto completion = semantic::completeReplInput(
-        session->replDb, session->analysisDb, session->replAccumSource,
+        session->preludeSymbols, check, session->replAccumSource,
         session->replBindings, line, line, wordStart + text.size(), false,
         nullptr);
     const auto replaceFrom = std::max(completion.replaceFrom, wordStart);

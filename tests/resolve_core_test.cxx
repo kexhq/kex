@@ -154,28 +154,6 @@ int main() {
         });
     });
 
-    describe("resolve_core::resolveSourceModulePath", []() {
-        it("resolves as written, relatively, and leaves misses alone", []() {
-            SemanticDB db;
-            db.updateFile("<test>", "module Outer do\n"
-                                    "  module Inner do\n"
-                                    "    let helper(x) = x\n"
-                                    "  end\n"
-                                    "end\n"
-                                    "module Top do\n"
-                                    "  let top(x) = x\n"
-                                    "end\n");
-            assertEqual(resolveSourceModulePath(&db, "", "Outer.Inner"),
-                        std::string("Outer.Inner"));
-            assertEqual(resolveSourceModulePath(&db, "Outer", "Inner"),
-                        std::string("Outer.Inner"));
-            assertEqual(resolveSourceModulePath(&db, "", "Nope"),
-                        std::string("Nope"));
-            assertEqual(resolveSourceModulePath(nullptr, "", "Outer"),
-                        std::string("Outer"));
-        });
-    });
-
     describe("resolve_core::resolveInScopes", []() {
         it("walks innermost first and strips one segment at a time", []() {
             std::vector<std::string> probed;

@@ -1,5 +1,12 @@
 #include "completion_at.hxx"
 #include "../common/well_known.hxx"
+#include "symbol_queries.hxx"
+#include "collect_pass.hxx"
+#include "../compiled/expand.hxx"
+#include "../lexer/lexer.hxx"
+#include "../parser/parser.hxx"
+#include <fstream>
+#include <iterator>
 
 
 #include <algorithm>
@@ -124,7 +131,7 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
     return {.start = i, .dot = dot, .callOpen = callOpen, .valid = true};
 }
 
-auto recoveredReceiverQualifier(SemanticDB& analysisDb,
+auto recoveredReceiverQualifier(const CompletionChecker& check,
                                 const std::string& source,
                                 const std::string& path,
                                 const DotReceiver& receiver, size_t cursor,
@@ -135,16 +142,14 @@ auto recoveredReceiverQualifier(SemanticDB& analysisDb,
     // `makeBox(3).g` parse again.
     auto recovered = source;
     recovered.erase(receiver.dot, cursor - receiver.dot);
-    // Through a SemanticDB with the file's own module roots, not a bare
-    // parse: `using Web` is resolved by loading that module's source, and
-    // without it every type from an opt-in module came back `unknown` — so a
-    // builder chain on `Web.Server` completed to nothing while the same shape
-    // on a local record worked.
-    analysisDb.updateFile(path, recovered);
-    auto* state = analysisDb.fileState(path);
-    if (!state) return {};
-    Analyzer analyzer(interfaces);
-    analyzer.analyze(state->ast);
+    // Checked as a build checks it, not a bare parse: `using Web` is resolved
+    // by loading that module's source, and without it every type from an
+    // opt-in module came back `unknown` — so a builder chain on `Web.Server`
+    // completed to nothing while the same shape on a local record worked.
+    (void)interfaces;
+    const auto checked = check(path, recovered);
+    if (!checked) return {};
+    const auto& analyzer = *checked->analyzer;
 
     // Everything before the deletion keeps its position, so the receiver's
     // line/column are the ones it had in the original buffer. A CALL is
@@ -222,10 +227,25 @@ auto completionClosers(const std::string& text) -> std::string {
     return closers;
 }
 
-auto completeAt(const SemanticDB& db, SemanticDB& analysisDb,
+auto completeAt(const std::vector<SymbolInfo>& base, const CompletionChecker& check,
                 const std::string& path, const std::string& source,
                 size_t cursor, const ImportedInterfaces* interfaces)
     -> CompletionAt {
+    // The names completion reads: `base`'s, and those a checked program
+    // declares with the names in scope at each point of it.
+    auto baseSymbols = base;
+    const auto namesIn = [&](const std::optional<CheckedSource>& checked) {
+        IndexedFiles files{{"<base>", &baseSymbols}};
+        if (checked)
+            files.push_back({path, const_cast<std::vector<SymbolInfo>*>(
+                                        &checked->analyzer->nameIndex().symbols),
+                             &checked->analyzer->nameIndex().completionScopes});
+        return files;
+    };
+    const auto globalCompletions = [&](const std::string& prefix,
+                                       const std::optional<CheckedSource>& checked) {
+        return completionsFor(namesIn(checked), prefix, interfaces);
+    };
     const auto isWord = [](unsigned char c) {
         return std::isalnum(c) || c == '_' || c == '?' || c == '!';
     };
@@ -241,10 +261,10 @@ auto completeAt(const SemanticDB& db, SemanticDB& analysisDb,
     // A member of an expression the analyzer can type.
     if (const auto receiver = scanDotReceiver(source, cursor); receiver.valid) {
         result.qualifier = recoveredReceiverQualifier(
-            analysisDb, source, path, receiver, cursor, interfaces);
+            check, source, path, receiver, cursor, interfaces);
         if (!result.qualifier.empty()) {
             const auto qualified = result.qualifier + ".";
-            for (auto& match : db.completionsFor(qualified + word))
+            for (auto& match : globalCompletions(qualified + word, check(path, source)))
                 if (match.rfind(qualified, 0) == 0)
                     result.matches.push_back(match.substr(qualified.size()));
             return result;
@@ -260,7 +280,7 @@ auto completeAt(const SemanticDB& db, SemanticDB& analysisDb,
         --pathStart;
     if (pathStart < wordStart) {
         const auto qualified = source.substr(pathStart, wordStart - pathStart);
-        for (auto& match : db.completionsFor(qualified + word))
+        for (auto& match : globalCompletions(qualified + word, check(path, source)))
             if (match.rfind(qualified, 0) == 0)
                 result.matches.push_back(match.substr(qualified.size()));
         return result;
@@ -268,16 +288,14 @@ auto completeAt(const SemanticDB& db, SemanticDB& analysisDb,
 
     // A bare name: the index's global names plus the bindings in scope at the
     // cursor, which only an analysis of the surrounding program knows.
-    result.matches = db.completionsFor(word);
-    analysisDb.updateFile(path, source);
+    const auto checked = check(path, source);
     int line = 1;
     size_t lineStart = 0;
     for (size_t i = 0; i < wordStart; ++i)
         if (source[i] == '\n') { ++line; lineStart = i + 1; }
-    for (auto& name : analysisDb.completionsAt(
-             path, static_cast<uint32_t>(line),
-             static_cast<uint32_t>(wordStart - lineStart + 1), word))
-        result.matches.push_back(std::move(name));
+    result.matches = completionsAt(namesIn(checked), path, static_cast<uint32_t>(line),
+                                   static_cast<uint32_t>(wordStart - lineStart + 1), word,
+                                   interfaces);
     std::sort(result.matches.begin(), result.matches.end());
     result.matches.erase(
         std::unique(result.matches.begin(), result.matches.end()),
@@ -285,7 +303,7 @@ auto completeAt(const SemanticDB& db, SemanticDB& analysisDb,
     return result;
 }
 
-auto completeReplInput(const SemanticDB& db, SemanticDB& analysisDb,
+auto completeReplInput(const std::vector<SymbolInfo>& base, const CompletionChecker& check,
                        const std::string& definitions,
                        const std::string& bindings,
                        const std::string& input, const std::string& line,
@@ -296,11 +314,42 @@ auto completeReplInput(const SemanticDB& db, SemanticDB& analysisDb,
     const auto program = prefix + input + completionClosers(input) +
                          (declaration ? "\n" : "\nend\n");
     const size_t lineStart = prefix.size() + (input.size() - line.size());
-    auto completion = completeAt(db, analysisDb, "<repl-completion>", program,
+    auto completion = completeAt(base, check, "<repl-completion>", program,
                                  lineStart + std::min(point, line.size()),
                                  interfaces);
     completion.replaceFrom -= lineStart;
     return completion;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto symbolsOfSource(const std::string& path, std::string source,
+                     const std::vector<std::string>& roots) -> std::vector<SymbolInfo> {
+    Lexer lexer(std::move(source), path);
+    Parser parser(lexer.tokenizeAll(), path);
+    auto program = parser.parseProgram();
+    std::vector<Diagnostic> diagnostics;
+    compiled::ExpandOptions options;
+    options.sourcePath = path;
+    options.moduleRoots = roots;
+    compiled::expand(program, diagnostics, options);
+    return collectSymbols(program, path);
+}
+
+auto symbolsOfFiles(const std::vector<std::string>& paths,
+                    const std::vector<std::string>& roots) -> std::vector<SymbolInfo> {
+    std::vector<SymbolInfo> symbols;
+    for (const auto& path : paths) {
+        std::ifstream input(path, std::ios::binary);
+        if (!input) continue;
+        std::string source((std::istreambuf_iterator<char>(input)),
+                           std::istreambuf_iterator<char>());
+        for (auto& symbol : symbolsOfSource(path, std::move(source), roots))
+            symbols.push_back(std::move(symbol));
+    }
+    return symbols;
 }
 
 } // namespace kex::semantic

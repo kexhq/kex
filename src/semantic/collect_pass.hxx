@@ -11,8 +11,7 @@ namespace kex::semantic {
 // recursive calls are always resolvable by pass 2.
 class CollectPass {
 public:
-    auto run(SemanticDB& db, const std::string& file) -> void;
-    // The symbols `program` declares, as `run` records them for a file.
+    // The symbols `program` declares (collectSymbols).
     auto collect(const ast::Program& program, const std::string& path)
         -> std::vector<SymbolInfo>;
 

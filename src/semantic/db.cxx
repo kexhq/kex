@@ -2,11 +2,13 @@
 #include "analyzer.hxx"
 #include "collect_pass.hxx"
 #include "resolve_pass.hxx"
+#include "symbol_queries.hxx"
 #include "../compiled/expand.hxx"
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
 #include <algorithm>
 #include <fstream>
+#include <map>
 #include <iterator>
 #include "../parser/parser.hxx"
 #include <stdexcept>
@@ -15,39 +17,10 @@ namespace kex::semantic {
 
 const std::vector<Diagnostic> SemanticDB::s_emptyDiagnostics;
 const std::vector<SymbolInfo> SemanticDB::s_emptySymbols;
-const std::vector<std::string> SemanticDB::s_emptyPaths;
 
 auto SemanticDB::updateFile(const std::string& path, std::string source,
-                            const std::vector<std::string>& companionDeclFiles,
-                            bool resolveNames)
+                            const std::vector<std::string>& companionDeclFiles)
     -> void {
-    // Re-entrancy: ResolvePass walks `m_files[path].ast.items` by reference,
-    // and resolving a `using` can reach back here for the very file being
-    // walked. Re-parsing would assign a fresh Program over that vector and
-    // leave the loop holding freed AST nodes — a segfault reading the next
-    // item's name, not a diagnostic. The file is already parsed and its
-    // symbols are already collected, so there is nothing to redo.
-    //
-    // Reachable from ordinary code: a module whose own `using` names a module
-    // that leads back to it. `m_resolvingFiles` was already maintained around
-    // the resolve pass below for `isModuleLoading`; this consults it.
-    if (m_resolvingFiles.count(path)) return;
-
-    // Module export entries point directly into FileState::symbols. An editor
-    // updates the same file repeatedly, so discard those pointers while the
-    // old vector is still alive, before clear()/reallocation can invalidate
-    // them. Batch compiler use rarely exercised this lifecycle; LSP use does
-    // on every keystroke.
-    if (m_files.contains(path)) {
-        for (auto& [_, exports] : m_moduleExports) {
-            exports.erase(
-                std::remove_if(exports.begin(), exports.end(),
-                               [&](const SymbolInfo* symbol) {
-                                   return symbol->definition.file == path;
-                               }),
-                exports.end());
-        }
-    }
     FileState& state = m_files[path];
     state.path = path;
     state.source = source;
@@ -127,37 +100,51 @@ auto SemanticDB::updateFile(const std::string& path, std::string source,
         state.ast.items = std::move(merged);
     }
 
-    // Pass 1: collect all top-level names
-    CollectPass collect;
-    collect.run(*this, path);
+    // Every name it declares, top-level and in its modules.
+    state.symbols = collectSymbols(state.ast, state.path);
+}
 
-    // Update cross-file module export index
-    rebuildModuleExports(path);
+auto SemanticDB::setResolved(const std::string& path, std::vector<SymbolInfo> symbols,
+                             std::vector<FileState::ScopeSnapshot> scopes) -> void {
+    auto found = m_files.find(path);
+    if (found == m_files.end()) return;
+    found->second.symbols = std::move(symbols);
+    found->second.completionScopes = std::move(scopes);
+}
 
-    // A module loaded for another file's `using` stops here: its exports are
-    // indexed, and its own undefined names are its own file's business. Running
-    // the resolve pass anyway re-checked every dependency — recursively, since
-    // resolving a `using` loads the next module — and those diagnostics were
-    // never read: 0.6 s of a 2.3 s warm build of Tey (kexhq/kex#323).
-    if (!resolveNames) return;
-
-    // Pass 2: resolve name references, report undefined names
-    m_resolvingFiles.insert(path);
-    ResolvePass resolve(m_imports);
-    resolve.run(*this, path);
-    m_resolvingFiles.erase(path);
+auto SemanticDB::resolveTogether(const std::vector<std::string>& paths) -> void {
+    std::vector<SymbolInfo> all;
+    std::vector<std::string> owners;  // the file each symbol is indexed under
+    for (const auto& [path, state] : m_files)
+        for (const auto& symbol : state.symbols) {
+            all.push_back(symbol);
+            owners.push_back(path);
+        }
+    ProgramModules shared(std::move(all));
+    std::map<std::string, std::vector<FileState::ScopeSnapshot>> scopes;
+    for (const auto& path : paths)
+        if (auto* state = fileState(path))
+            for (auto& diagnostic :
+                 ResolvePass(m_imports).run(state->ast, path, shared,
+                                            {.scopes = &scopes[path],
+                                             .checksModuleRules = true,
+                                             .fileLocalTopLevel = true}))
+                state->diagnostics.push_back(std::move(diagnostic));
+    // Each file's symbols back to it, with the references now on them.
+    std::map<std::string, std::vector<SymbolInfo>> byFile;
+    auto& resolved = shared.symbols();
+    for (size_t i = 0; i < resolved.size(); ++i)
+        byFile[owners[i]].push_back(std::move(resolved[i]));
+    for (const auto& path : paths) byFile.try_emplace(path);
+    for (auto& [path, symbols] : byFile) {
+        auto fileScopes = scopes.contains(path) ? std::move(scopes[path])
+                                                : m_files[path].completionScopes;
+        setResolved(path, std::move(symbols), std::move(fileScopes));
+    }
 }
 
 auto SemanticDB::removeFile(const std::string& path) -> void {
     m_files.erase(path);
-    // Remove any module exports that pointed into this file
-    for (auto& [mod, ptrs] : m_moduleExports) {
-        ptrs.erase(
-            std::remove_if(ptrs.begin(), ptrs.end(), [&](const SymbolInfo* s) {
-                return s->definition.file == path;
-            }),
-            ptrs.end());
-    }
 }
 
 auto SemanticDB::setModuleRoots(std::vector<std::string> roots) -> void {
@@ -169,7 +156,6 @@ auto SemanticDB::ensureModule(const std::string& moduleName,
     module::Resolver resolver(m_moduleRoots);
     auto resolution = resolver.resolve(moduleName, currentModule);
     if (!resolution) return std::nullopt;
-    m_shadowedModulePaths[resolution->moduleName] = resolution->shadowedPaths;
     if (hasModule(resolution->moduleName)) return resolution->moduleName;
     if (!m_loadingModules.insert(resolution->moduleName).second)
         return resolution->moduleName;
@@ -177,7 +163,7 @@ auto SemanticDB::ensureModule(const std::string& moduleName,
     std::ifstream input(resolution->path);
     std::string source((std::istreambuf_iterator<char>(input)),
                        std::istreambuf_iterator<char>());
-    updateFile(resolution->path, std::move(source), {}, /*resolveNames=*/false);
+    updateFile(resolution->path, std::move(source));
     m_loadingModules.erase(resolution->moduleName);
     if (hasModule(resolution->moduleName)) return resolution->moduleName;
 
@@ -195,14 +181,12 @@ auto SemanticDB::ensureModule(const std::string& moduleName,
     if (resolution->moduleName != moduleName) {
         module::Resolver absolute(m_moduleRoots);
         if (auto plain = absolute.resolve(moduleName, "")) {
-            m_shadowedModulePaths[plain->moduleName] = plain->shadowedPaths;
             if (hasModule(plain->moduleName)) return plain->moduleName;
             if (m_loadingModules.insert(plain->moduleName).second) {
                 std::ifstream plainInput(plain->path);
                 std::string plainSource((std::istreambuf_iterator<char>(plainInput)),
                                         std::istreambuf_iterator<char>());
-                updateFile(plain->path, std::move(plainSource), {},
-                           /*resolveNames=*/false);
+                updateFile(plain->path, std::move(plainSource), {});
                 m_loadingModules.erase(plain->moduleName);
             }
             if (hasModule(plain->moduleName)) return plain->moduleName;
@@ -221,11 +205,6 @@ auto SemanticDB::symbolsFor(const std::string& file) const -> const std::vector<
     return it != m_files.end() ? it->second.symbols : s_emptySymbols;
 }
 
-auto SemanticDB::exportsFor(const std::string& moduleName) const -> std::vector<SymbolInfo*> {
-    auto it = m_moduleExports.find(moduleName);
-    return it != m_moduleExports.end() ? it->second : std::vector<SymbolInfo*>{};
-}
-
 auto SemanticDB::hasModule(const std::string& moduleName) const -> bool {
     for (const auto& [_, state] : m_files)
         for (const auto& symbol : state.symbols)
@@ -239,273 +218,52 @@ auto SemanticDB::hasModule(const std::string& moduleName) const -> bool {
     return false;
 }
 
+auto SemanticDB::indexed() const -> IndexedFiles {
+    IndexedFiles files;
+    files.reserve(m_files.size());
+    // The queries hand back symbols the resolve pass records references on.
+    for (auto& [path, state] : const_cast<std::unordered_map<std::string, FileState>&>(m_files))
+        files.push_back({path, &state.symbols, &state.completionScopes});
+    return files;
+}
+
 auto SemanticDB::symbolInModule(const std::string& moduleName,
                                 const std::string& name) -> SymbolInfo* {
-    for (auto& [_, state] : m_files)
-        for (auto& symbol : state.symbols)
-            if (symbol.module == moduleName && symbol.name == name) return &symbol;
-    return nullptr;
+    return semantic::symbolInModule(indexed(), moduleName, name);
 }
 
 auto SemanticDB::receiverSymbol(const std::string& receiver,
-                                const std::string& name) const
+                                const std::string& name) const -> const SymbolInfo* {
+    return semantic::receiverSymbol(indexed(), receiver, name);
+}
+
+auto SemanticDB::findSymbol(const std::string& name,
+                            const std::string& preferFile) -> SymbolInfo* {
+    return semantic::findSymbol(indexed(), name, preferFile);
+}
+
+auto SemanticDB::findSymbol(const std::string& name,
+                            const std::string& preferFile) const -> const SymbolInfo* {
+    return semantic::findSymbol(indexed(), name, preferFile);
+}
+
+auto SemanticDB::symbolAt(const std::string& file, uint32_t line, uint32_t col) const
     -> const SymbolInfo* {
-    const SymbolInfo* best = nullptr;
-    for (const auto& [_, state] : m_files)
-        for (const auto& symbol : state.symbols)
-            if (symbol.name == name && symbol.makeTarget == receiver) {
-                if (!best || (best->detail.empty() && !symbol.detail.empty()) ||
-                    (best->definition.line <= 0 && symbol.definition.line > 0))
-                    best = &symbol;
-            }
-    return best;
-}
-
-auto SemanticDB::shadowedModulePaths(const std::string& moduleName) const
-    -> const std::vector<std::string>& {
-    const auto found = m_shadowedModulePaths.find(moduleName);
-    return found == m_shadowedModulePaths.end() ? s_emptyPaths : found->second;
-}
-
-auto SemanticDB::findSymbol(const std::string& name,
-                             const std::string& preferFile) -> SymbolInfo* {
-    // Search preferred file first
-    if (!preferFile.empty()) {
-        auto it = m_files.find(preferFile);
-        if (it != m_files.end()) {
-            for (auto& sym : it->second.symbols) {
-                if (sym.name == name) return &sym;
-            }
-        }
-    }
-    for (auto& [path, state] : m_files) {
-        if (path == preferFile) continue;
-        for (auto& sym : state.symbols) {
-            if (sym.name == name) return &sym;
-        }
-    }
-    return nullptr;
-}
-
-auto SemanticDB::findSymbol(const std::string& name,
-                             const std::string& preferFile) const -> const SymbolInfo* {
-    if (!preferFile.empty()) {
-        auto it = m_files.find(preferFile);
-        if (it != m_files.end()) {
-            for (const auto& sym : it->second.symbols) {
-                if (sym.name == name) return &sym;
-            }
-        }
-    }
-    for (const auto& [path, state] : m_files) {
-        if (path == preferFile) continue;
-        for (const auto& sym : state.symbols) {
-            if (sym.name == name) return &sym;
-        }
-    }
-    return nullptr;
-}
-
-auto SemanticDB::symbolAt(const std::string& file,
-                           uint32_t line, uint32_t col) const -> const SymbolInfo* {
-    auto contains = [line, col](const SourceLocation& location,
-                                std::string_view name) {
-        return location.line == static_cast<int>(line) &&
-               col >= static_cast<uint32_t>(location.column) &&
-               col < static_cast<uint32_t>(location.column) + name.size();
-    };
-    for (const auto& [path, state] : m_files) {
-        for (const auto& sym : state.symbols) {
-            // Check definition site
-            if (sym.definition.file == file && contains(sym.definition, sym.name)) {
-                return &sym;
-            }
-            // Check reference sites
-            for (const auto& ref : sym.references) {
-                if (ref.file == file && contains(ref, sym.name)) {
-                    return &sym;
-                }
-            }
-        }
-    }
-    return nullptr;
+    return semantic::symbolAt(indexed(), file, line, col);
 }
 
 auto SemanticDB::completionsFor(const std::string& prefix) const -> std::vector<std::string> {
-    std::vector<std::string> results;
-
-    auto dotPos = prefix.rfind('.');
-    if (dotPos != std::string::npos) {
-        // "Module.mem" or "Type.mem" — complete members by module name or make target
-        std::string qualifier = prefix.substr(0, dotPos);
-        std::string memberPrefix = prefix.substr(dotPos + 1);
-        // A typed server exposes the declared slots of its STATE in addition
-        // to Server's own lifecycle methods. Slot identity is indexed
-        // explicitly so ordinary `make Counter` helpers never leak into the
-        // remote protocol completion list.
-        std::string servingState;
-        if (qualifier.rfind("Server<", 0) == 0 && qualifier.ends_with('>'))
-            servingState = qualifier.substr(7, qualifier.size() - 8);
-        for (const auto& [path, state] : m_files) {
-            for (const auto& sym : state.symbols) {
-                // A record's fields and a make block's methods carry the
-                // module they were DECLARED in as well as the type they belong
-                // to. They are members of the type, not of the module, so
-                // `Kex.` must not offer `major`/`number`/`tuple` —
-                // those complete under `Version.`, which is what makeTarget
-                // matches below.
-                bool matchesMod = sym.module == qualifier && sym.makeTarget.empty();
-                // A make target declared inside a module is written bare
-                // there (`make Circle` in `module Shapes`), while a receiver
-                // reached from ANOTHER file is typed by its qualified
-                // identity (`Shapes.Circle`) — so `circle.` offered nothing
-                // across a file boundary while working within one file.
-                bool matchesMake = !sym.makeTarget.empty() &&
-                    (sym.makeTarget == qualifier ||
-                     (!sym.module.empty() &&
-                      sym.module + "." + sym.makeTarget == qualifier));
-                if ((matchesMod || matchesMake) && sym.isExported
-                    && sym.name.rfind(memberPrefix, 0) == 0) {
-                    results.push_back(qualifier + "." + sym.name);
-                }
-                if (!servingState.empty() && sym.isServingSlot &&
-                    sym.makeTarget == servingState && sym.isExported &&
-                    sym.name.rfind(memberPrefix, 0) == 0)
-                    results.push_back(qualifier + "." + sym.name);
-            }
-        }
-        if (m_imports) {
-            // Installed/compiled standard-library modules are represented by
-            // ImportedInterfaces rather than FileState entries.  Include both
-            // their exports (`FS.File.read`) and immediate nested modules
-            // (`FS.` -> `FS.File`, `FS.Directory`) in editor completion.
-            if (auto imported = m_imports->modules.find(qualifier);
-                imported != m_imports->modules.end()) {
-                for (const auto& [name, overloads] : imported->second.exports)
-                    if (!overloads.empty() && name.rfind(memberPrefix, 0) == 0)
-                        results.push_back(qualifier + "." + name);
-            }
-            // Instance methods of a type that came from a COMPILED interface.
-            // The branch above offers a module's exports, which covers static
-            // members (`Web.Server.new`), but a `make Server do` block inside
-            // `module Web` lands in the name-indexed receiver table instead —
-            // so `Web.Server.` offered nothing for `get`/`post`/`start`, and a
-            // builder chain on such a type completed to nothing at all.
-            for (const auto& [name, overloads] : m_imports->receiverFunctions) {
-                if (name.rfind(memberPrefix, 0) != 0) continue;
-                for (const auto& overload : overloads) {
-                    if (overload.signature.params.empty()) continue;
-                    const auto receiver =
-                        typeToString(overload.signature.params.front());
-                    // A value of this type reports it QUALIFIED
-                    // (`Web.Server`), while the interface records the receiver
-                    // as written inside its own module (`Server`). The owning
-                    // module cannot be joined back on to compare them: every
-                    // standard-library export carries sourceModule "Prelude",
-                    // not "Web". So the last segment is what there is to match
-                    // on. Two modules each declaring a `Server` would offer
-                    // each other's methods here — acceptable for a completion
-                    // list, and the alternative today is offering nothing at
-                    // all for any module-qualified type.
-                    const auto tail = qualifier.rfind('.') == std::string::npos
-                        ? qualifier : qualifier.substr(qualifier.rfind('.') + 1);
-                    const auto generic = tail.find('<');
-                    const auto base = generic == std::string::npos
-                        ? tail : tail.substr(0, generic);
-                    const auto receiverGeneric = receiver.find('<');
-                    const auto receiverBase = receiverGeneric == std::string::npos
-                        ? receiver : receiver.substr(0, receiverGeneric);
-                    const bool matches = receiver == qualifier || receiver == tail ||
-                        (generic != std::string::npos &&
-                         receiverGeneric != std::string::npos &&
-                         receiverBase == base);
-                    if (!matches) continue;
-                    results.push_back(qualifier + "." + name);
-                    break;
-                }
-            }
-            const auto nestedPrefix = qualifier + ".";
-            for (const auto& [moduleName, interface] : m_imports->modules) {
-                if (moduleName.rfind(nestedPrefix, 0) != 0) continue;
-                const auto remainder = moduleName.substr(nestedPrefix.size());
-                const auto separator = remainder.find('.');
-                const auto child = remainder.substr(0, separator);
-                if (child.rfind(memberPrefix, 0) == 0)
-                    results.push_back(nestedPrefix + child);
-            }
-        }
-    } else {
-        // Top-level names only — module-scoped and make-scoped symbols
-        // require a dot qualifier (e.g. Math.sin, List.map)
-        for (const auto& [path, state] : m_files) {
-            for (const auto& sym : state.symbols) {
-                if (!sym.module.empty() || !sym.makeTarget.empty()) continue;
-                if (sym.name.rfind(prefix, 0) == 0) {
-                    results.push_back(sym.name);
-                }
-            }
-        }
-    }
-
-    std::sort(results.begin(), results.end());
-    results.erase(std::unique(results.begin(), results.end()), results.end());
-    return results;
+    return semantic::completionsFor(indexed(), prefix, m_imports);
 }
 
-auto SemanticDB::completionsAt(const std::string& file, uint32_t line,
-                               uint32_t col, const std::string& prefix) const
-    -> std::vector<std::string> {
-    auto results = completionsFor(prefix);
-    // Qualified lookup is handled by module/make-target exports above. Scope
-    // snapshots contain bare lexical names and must not be offered after '.'.
-    if (prefix.find('.') != std::string::npos) return results;
-
-    const auto state = m_files.find(file);
-    if (state == m_files.end()) return results;
-    const FileState::ScopeSnapshot* nearest = nullptr;
-    for (const auto& snapshot : state->second.completionScopes) {
-        const bool before = snapshot.location.line < static_cast<int>(line) ||
-            (snapshot.location.line == static_cast<int>(line) &&
-             snapshot.location.column <= static_cast<int>(col));
-        if (!before) continue;
-        if (!nearest || snapshot.location.line > nearest->location.line ||
-            (snapshot.location.line == nearest->location.line &&
-             snapshot.location.column >= nearest->location.column))
-            nearest = &snapshot;
-    }
-    if (nearest)
-        for (const auto& name : nearest->names)
-            if (name.rfind(prefix, 0) == 0) results.push_back(name);
-
-    std::sort(results.begin(), results.end());
-    results.erase(std::unique(results.begin(), results.end()), results.end());
-    return results;
+auto SemanticDB::completionsAt(const std::string& file, uint32_t line, uint32_t col,
+                               const std::string& prefix) const -> std::vector<std::string> {
+    return semantic::completionsAt(indexed(), file, line, col, prefix, m_imports);
 }
 
 auto SemanticDB::fileState(const std::string& path) -> FileState* {
     auto it = m_files.find(path);
     return it != m_files.end() ? &it->second : nullptr;
-}
-
-auto SemanticDB::rebuildModuleExports(const std::string& path) -> void {
-    auto it = m_files.find(path);
-    if (it == m_files.end()) return;
-
-    // Remove stale pointers from this file
-    for (auto& [mod, ptrs] : m_moduleExports) {
-        ptrs.erase(
-            std::remove_if(ptrs.begin(), ptrs.end(), [&](const SymbolInfo* s) {
-                return s->definition.file == path;
-            }),
-            ptrs.end());
-    }
-
-    // Re-insert exported symbols from this file
-    for (auto& sym : it->second.symbols) {
-        if (!sym.module.empty() && sym.isExported) {
-            m_moduleExports[sym.module].push_back(&sym);
-        }
-    }
 }
 
 } // namespace kex::semantic

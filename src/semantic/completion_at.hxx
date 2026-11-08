@@ -36,16 +36,38 @@ struct DotReceiver {
 
 auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver;
 
-// The type of an arbitrary receiver expression, by re-parsing `source` with
-// the half-typed member removed and asking the analyzer. `analysisDb` parses
-// the recovered buffer (and resolves its `using` modules); keep it between
-// calls so module sources are parsed once rather than per keystroke.
-auto recoveredReceiverQualifier(SemanticDB& analysisDb,
+// A buffer checked as a build checks it: parsed and expanded, its `using`
+// modules loaded, and analyzed with its names checked (so the analyzer's
+// name index holds its symbols and the names in scope at each point). Both
+// are kept, since the analysis refers into the program.
+struct CheckedSource {
+    std::shared_ptr<ast::Program> program;
+    std::shared_ptr<Analyzer> analyzer;
+    // Whatever else the program refers into (merged dependencies' sources).
+    std::shared_ptr<void> keepAlive;
+};
+// How a caller checks a buffer under a path, with its own module roots and
+// interfaces: what completion asks of the REPLs and the language server.
+using CompletionChecker =
+    std::function<std::optional<CheckedSource>(const std::string& path, const std::string& source)>;
+
+// The type of an arbitrary receiver expression, by re-checking `source` with
+// the half-typed member removed and asking the analyzer.
+auto recoveredReceiverQualifier(const CompletionChecker& check,
                                 const std::string& source,
                                 const std::string& path,
                                 const DotReceiver& receiver, size_t cursor,
                                 const ImportedInterfaces* interfaces)
     -> std::string;
+
+// What the files at `paths` declare, each parsed and expanded (with `roots`
+// for the modules an expansion reads): the base of the names completion
+// offers, such as the prelude's sources, or a module loaded for its members.
+auto symbolsOfFiles(const std::vector<std::string>& paths,
+                    const std::vector<std::string>& roots) -> std::vector<SymbolInfo>;
+// What `source`, read as the file `path`, declares.
+auto symbolsOfSource(const std::string& path, std::string source,
+                     const std::vector<std::string>& roots) -> std::vector<SymbolInfo>;
 
 // The delimiters and `do` blocks still open at the end of `text`, closed in
 // order: what a half-typed line needs appended so that it parses.
@@ -61,10 +83,10 @@ struct CompletionAt {
     std::vector<std::string> matches;
 };
 
-// Completions at byte offset `cursor` in `source`. Members are looked up in
-// `db` (the index holding the prelude and the user's definitions); `source`
-// itself is analyzed through `analysisDb` under `path`.
-auto completeAt(const SemanticDB& db, SemanticDB& analysisDb,
+// Completions at byte offset `cursor` in `source`, checked under `path`.
+// Names are those the checked program declares (the user's definitions, its
+// `using` modules) and `base`'s (the prelude's, modules loaded besides).
+auto completeAt(const std::vector<SymbolInfo>& base, const CompletionChecker& check,
                 const std::string& path, const std::string& source,
                 size_t cursor, const ImportedInterfaces* interfaces)
     -> CompletionAt;
@@ -79,7 +101,7 @@ auto completeAt(const SemanticDB& db, SemanticDB& analysisDb,
 // analyzer types the receiver exactly as it is being typed. `declaration`
 // selects the definition splice (no `main do`/`end` wrapper). The result's
 // `replaceFrom` is an offset within `line`.
-auto completeReplInput(const SemanticDB& db, SemanticDB& analysisDb,
+auto completeReplInput(const std::vector<SymbolInfo>& base, const CompletionChecker& check,
                        const std::string& definitions,
                        const std::string& bindings,
                        const std::string& input, const std::string& line,

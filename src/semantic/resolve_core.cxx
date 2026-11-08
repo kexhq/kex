@@ -7,21 +7,6 @@
 
 namespace kex::semantic::resolve_core {
 
-auto resolveSourceModulePath(SemanticDB* db,
-                             const std::string& currentModule,
-                             const std::string& requested) -> std::string {
-    if (!db) return requested;
-    std::string written = requested;
-    if (!db->hasModule(written))
-        if (auto discovered = db->ensureModule(requested, currentModule))
-            written = *discovered;
-    if (db->hasModule(written)) return written;
-    const auto relative = resolveModulePathIn(
-        currentModule, requested,
-        [&](const std::string& module) { return db->hasModule(module); });
-    return relative == requested ? written : relative;
-}
-
 auto resolveModulePathIn(const std::string& currentModule,
                          const std::string& requested,
                          const std::function<bool(const std::string&)>& exists)

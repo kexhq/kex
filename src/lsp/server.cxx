@@ -1977,8 +1977,8 @@ auto documentImports(const std::string& source)
     return modules;
 }
 
-// The shared recovery analysis, through a SemanticDB kept between calls so
-// the module sources are parsed once rather than per keystroke.
+// The shared recovery analysis, checking through a SemanticDB kept between
+// calls so the module sources are parsed once rather than per keystroke.
 auto recoveredReceiverQualifier(
     const std::string& source, const std::string& path,
     const DotReceiver& receiver, size_t cursor,
@@ -1987,8 +1987,20 @@ auto recoveredReceiverQualifier(
     static semantic::SemanticDB recoveryDb;
     recoveryDb.setImportedInterfaces(interfaces);
     recoveryDb.setModuleRoots(moduleRoots);
-    return semantic::recoveredReceiverQualifier(recoveryDb, source, path,
-                                                receiver, cursor, interfaces);
+    const semantic::CompletionChecker check =
+        [&](const std::string& file, const std::string& text)
+        -> std::optional<semantic::CheckedSource> {
+        recoveryDb.updateFile(file, text);
+        auto* state = recoveryDb.fileState(file);
+        if (!state) return std::nullopt;
+        auto analyzer = std::make_shared<semantic::Analyzer>(interfaces);
+        analyzer->analyze(state->ast);
+        // The program is the index's, which outlives the call.
+        return semantic::CheckedSource{
+            std::shared_ptr<ast::Program>(std::shared_ptr<void>{}, &state->ast), analyzer, nullptr};
+    };
+    return semantic::recoveredReceiverQualifier(check, source, path, receiver, cursor,
+                                                interfaces);
 }
 
 // The receiver's type, cheaply where possible. `recoveredReceiverQualifier`
@@ -2335,6 +2347,8 @@ private:
                         });
                 }), sources.end());
         }
+        // Indexed, then resolved together by the checker's name pass once the
+        // modules they name are loaded too (resolveTogether, below).
         for (auto& [path, source] : sources) {
             m_referenceDb.updateFile(path, std::move(source));
             m_referenceIndexedPaths.push_back(path);
@@ -2344,6 +2358,8 @@ private:
             if (!state) continue;
             semantic::Analyzer analyzer(&m_interfaces);
             analyzer.analyze(state->ast);
+            for (const auto& module : analyzer.referencedModules())
+                m_referenceDb.ensureModule(module);
             for (const auto& [call, target] : analyzer.resolvedCalls()) {
                 if (!call || target.sourceModule.empty()) continue;
                 for (const auto& [expression, _] :
@@ -2362,6 +2378,7 @@ private:
                 }
             }
         }
+        m_referenceDb.resolveTogether(m_referenceIndexedPaths);
         m_referenceIndexReady = true;
     }
 
@@ -2414,6 +2431,7 @@ private:
         document.localReceiverTypes = std::move(previousReceiverTypes);
         document.documentation = sourceDocumentation(document.text);
         m_db.setModuleRoots(documentModuleRoots(path));
+        // Resolved once, by the checker (publishDiagnostics).
         m_db.updateFile(path, document.text, companions);
         // Once per parse, and only here: `updateFile` is what replaces the
         // file's AST, so this is the one place the merge cannot double up.
@@ -2444,6 +2462,13 @@ private:
                     return resolver.resolve(module, current).has_value();
                 });
             const bool analyzed = analyzer.analyze(state->ast);
+            // Its symbols, the references to them and the names in scope, as
+            // the checker resolved them: what navigation and completion read.
+            m_db.setResolved(document.path, analyzer.nameIndex().symbols,
+                             analyzer.nameIndex().completionScopes);
+            // The modules it names, indexed for navigation into their source
+            // (their own names are not resolved: kexhq/kex#323).
+            for (const auto& module : analyzer.referencedModules()) m_db.ensureModule(module);
             enrichFunctionSymbols(*state, analyzer);
             document.hoverEntries.clear();
             document.selectedCallEntries.clear();

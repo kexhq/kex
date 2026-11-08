@@ -378,9 +378,6 @@ private:
         -> std::optional<std::string>;
     auto receiverArgumentOffset(const std::string& functionName,
                                 const std::vector<ValuePtr>& args) const -> size_t;
-    auto makeMethodInScope(const std::string& qualified) const -> bool;
-    auto moduleInScope(const std::string& module) const -> bool;
-    auto makeDefInScope(const ast::FunctionDef* def) const -> bool;
     auto resolveMethodName(const ValuePtr& receiver, const std::string& method,
                            const std::vector<ValuePtr>* args = nullptr) const
         -> std::string;
@@ -619,16 +616,6 @@ private:
     std::vector<std::shared_ptr<std::string>> m_loadedModulePaths;
     std::vector<std::shared_ptr<ast::Program>> m_loadedModulePrograms;
     std::string m_currentModule;
-    // `Type::method` of every method a module-scoped `make` defines -> that
-    // module. A module-scoped `make` is import-gated like every other module
-    // member, so resolution skips one whose module is not in scope; a
-    // top-level `make` never appears here and stays global.
-    std::unordered_map<std::string, std::string> m_makeMethodModule;
-    // The same gate for one definition, for a method the prelude or a
-    // top-level `make` also defines: `Units.SI`'s `make Measure do let
-    // to(String, in: SIPrefix)` beside the prelude's `to`. The name stays
-    // global there, and only these definitions wait for the `using`.
-    std::unordered_map<const ast::FunctionDef*, std::string> m_gatedMakeDefs;
     // Type names each module declares, for the rule above.
     std::unordered_map<std::string, std::set<std::string>> m_moduleDeclaredTypes;
     std::unordered_map<std::string, std::set<std::string>> m_moduleDeclaredRecords;

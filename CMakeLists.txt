@@ -199,6 +199,7 @@ add_library(kex_lib
     src/semantic/typechecker_expr.cxx
     src/semantic/typechecker_intrinsics.cxx
     src/semantic/db.cxx
+    src/semantic/symbol_queries.cxx
     src/semantic/completion_at.cxx
     src/semantic/collect_pass.cxx
     src/semantic/resolve_pass.cxx

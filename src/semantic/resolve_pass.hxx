@@ -4,6 +4,7 @@
 #include "db.hxx"
 #include "imported_interfaces.hxx"
 #include "module_rules.hxx"
+#include "name_index.hxx"
 #include <memory>
 #include "resolve_core.hxx"
 #include <optional>
@@ -14,6 +15,18 @@
 
 namespace kex::semantic {
 
+// How a ResolvePass run reads the program it resolves.
+struct ResolveOptions {
+    // Gets the names in scope at each point, for completion.
+    std::vector<FileState::ScopeSnapshot>* scopes = nullptr;
+    // Reports the `using` and `export` rules, which a checked program
+    // leaves to its checker.
+    bool checksModuleRules = false;
+    // A file's top-level declarations are its own: `modules` holds a
+    // whole workspace's files, not one program's merged dependencies.
+    bool fileLocalTopLevel = false;
+};
+
 // Pass 2: walk all expression bodies, look up every name reference against
 // the collected symbol index and imported interfaces, emit an error for
 // unknown names. Populates SymbolInfo::references for go-to-definition /
@@ -21,14 +34,12 @@ namespace kex::semantic {
 class ResolvePass {
 public:
     explicit ResolvePass(const ImportedInterfaces* imports = nullptr);
-    // A file SemanticDB indexes: its diagnostics, completion scopes and
-    // symbol references land in its FileState.
-    auto run(SemanticDB& db, const std::string& file) -> void;
-    // A checked program, every dependency merged in (a build): its modules
-    // are its own (`modules`), the prelude's come from the interfaces.
-    auto run(const ast::Program& program, const std::string& path,
-             const ModuleSymbols& modules, const std::vector<SymbolInfo>& symbols)
-        -> std::vector<Diagnostic>;
+    // A program, every dependency merged in (a build) or every indexed file at
+    // once (the language server): its modules are its own (`modules`, whose
+    // symbols get the references it finds), the prelude's come from the
+    // interfaces.
+    auto run(const ast::Program& program, const std::string& path, ProgramModules& modules,
+             ResolveOptions options = {}) -> std::vector<Diagnostic>;
 
 private:
     auto resolveModule(const ast::ModuleDef& module) -> void;
@@ -80,14 +91,13 @@ private:
 
     auto resolveItems(const ast::Program& program) -> void;
 
-    // SemanticDB, when the pass indexes one of its files: module discovery,
-    // shadowed-definition warnings and symbol references are its alone.
-    SemanticDB* m_db = nullptr;
-    std::unique_ptr<ModuleSymbols> m_ownedModules;
+    // The checked program's own modules, when the pass resolves one.
+    ProgramModules* m_program = nullptr;
     // Whether this pass reports the `using` and `export` rules
-    // (module_rules.hxx): an indexed file's yes, a checked program's no, as
-    // its checker does.
-    bool m_checksModuleRules = true;
+    // (module_rules.hxx), and whether top-level declarations are file-local:
+    // see ResolveOptions.
+    bool m_checksModuleRules = false;
+    bool m_fileLocalTopLevel = false;
     const ModuleSymbols* m_modules = nullptr;
     const std::vector<SymbolInfo>* m_symbols = nullptr;
     std::string m_path;
@@ -110,7 +120,6 @@ private:
 // only diagnostics in `files` (the entry file, a spec's base) are kept.
 auto resolveProgramNames(const ast::Program& program,
                          const std::vector<std::string>& files,
-                         const ImportedInterfaces* imports)
-    -> std::vector<Diagnostic>;
+                         const ImportedInterfaces* imports) -> NameIndex;
 
 } // namespace kex::semantic

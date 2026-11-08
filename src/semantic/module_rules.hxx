@@ -36,6 +36,11 @@ class ProgramModules final : public ModuleSymbols {
 public:
     explicit ProgramModules(std::vector<SymbolInfo> symbols);
     auto symbols() const -> const std::vector<SymbolInfo>& { return m_symbols; }
+    auto symbols() -> std::vector<SymbolInfo>& { return m_symbols; }
+    // The symbol a reference to `name` reaches, to record it on: `module`'s
+    // member, or with no module the first of that name, `preferFile`'s first.
+    auto referenced(const std::string& module, const std::string& name,
+                    const std::string& preferFile) -> SymbolInfo*;
     auto hasModule(const std::string& module) const -> bool override;
     auto member(const std::string& module, const std::string& name) const
         -> const SymbolInfo* override;
@@ -46,6 +51,8 @@ private:
     std::vector<SymbolInfo> m_symbols;
     std::unordered_map<std::string, std::unordered_map<std::string, const SymbolInfo*>>
         m_members;
+    // Every symbol by its name, in declaration order.
+    std::unordered_map<std::string, std::vector<SymbolInfo*>> m_byName;
 };
 
 using RuleViolation = std::function<void(const std::string& message)>;
