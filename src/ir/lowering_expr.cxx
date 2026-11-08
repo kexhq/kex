@@ -1531,14 +1531,12 @@ auto Lowering::staticFieldRead(const ast::MethodCall& n) -> ExprPtr {
     // came from a field read the checker had already decided.
     const auto& target = hir->targetOf(n);
     if (target.kind != hir::TargetKind::FieldRead) return nullptr;
-    const auto& recordName = target.owner;
-    // A bare name both this unit and an imported one declare says too
-    // little: a local `ParseError` and the prelude's are both `ParseError`
-    // to the checker, and they keep their field at different positions. The
-    // accessor tells them apart by tuple size. An imported record no local
-    // one shadows is read from its interface's layout.
-    if (externalRecordNames.count(recordName) && localRecordNames.count(recordName))
-        return nullptr;
+    const auto& recordName = canonicalRecordName(target.owner);
+    // A name this unit and an interface lay out differently says too little:
+    // a local `ParseError` and the prelude's are both `ParseError` to the
+    // checker, with the field at different positions. The accessor tells
+    // them apart by tuple size. One layout, seen twice, is one record.
+    if (conflictingRecordLayouts.count(recordName)) return nullptr;
     auto record = records.find(recordName);
     if (record == records.end()) return nullptr;
     const auto& fields = record->second.fields;
@@ -1576,16 +1574,19 @@ auto Lowering::typeOwnsStaticFunction(const std::string& type,
                        });
 }
 
-// The `make` function of the receiver's own type that a call written with
-// `explicitArgs` arguments reaches, or nullptr when the receiver's type
-// is unknown or declares none of that shape.
+// The `make` function a call the checker gave to a type (`OwnMethod`: the
+// receiver's own type, an inherited default included) or a trait
+// (`TraitMethod`: the trait's own `make`) reaches with `explicitArgs`
+// arguments, or nullptr for any other decision or none of that shape.
 auto Lowering::ownedMakeFunction(const ast::MethodCall& n, size_t explicitArgs) const
     -> const MakeMethod* {
     auto methods = makeMethods.find(n.method);
     if (methods == makeMethods.end()) return nullptr;
-    auto qualified = receiverOwner(n);
-    if (auto angle = qualified.find('<'); angle != std::string::npos)
-        qualified.resize(angle);
+    const auto& target = hir->targetOf(n);
+    if (target.kind != hir::TargetKind::OwnMethod &&
+        target.kind != hir::TargetKind::TraitMethod)
+        return nullptr;
+    const auto qualified = ownerNameOf(target.owner);
     if (qualified.empty()) return nullptr;
     const auto dot = qualified.rfind('.');
     const auto bare =

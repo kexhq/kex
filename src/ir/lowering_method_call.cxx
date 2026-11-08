@@ -236,22 +236,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         }
     }
     if (resolvedCalls) {
-        // Local types shadow prelude-resolved calls (a user `record Parser`
-        // must win over the prelude `module Parser`).
-        bool localTypeShadows = false;
-        // A local method only shadows a resolved target when it is
-        // defined FOR THIS receiver — the same requirement the
-        // static-type branch below states. `localMethods` alone let an
-        // unrelated method of the same name capture a call on a name that
-        // is both a module and a record: `DateTime.now` inside a
-        // `capability Clock do foul now()` became `apply 'now'/1`, calling
-        // itself, and hung the moment any `make ..., implement: Clock`
-        // existed to put `now` in `localMethods` (kexhq/kex#143).
-        if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind)) {
-            localTypeShadows =
-                knownTypes.count(uid->name) &&
-                typeOwnsStaticFunction(uid->name, n.method);
-        }
         auto resolved = resolvedCalls->find(&n);
         const bool resolvedServerSlot = resolved != resolvedCalls->end() &&
             !resolved->second.localDispatchTypes.empty() &&
@@ -293,35 +277,6 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         // target, source-import priority must not override that choice.
         // A type's own method, inherited trait defaults included, is the
         // checker's decision too (ownerOfCall): it records no target then.
-        // A bare `x.field` whose name is also an imported receiver method
-        // (`name` is Weekday's and Type's) must go through THIS module's
-        // accessor, which matches the record tags and delegates to the
-        // import for anything else. Calling the import directly skips the
-        // record arms, so an erased receiver — `opaque(p).name`, or any
-        // REPL value — died with "Undefined method: name for Person"
-        // while a statically typed `p.name` read the field fine.
-        // Unless the checker named a function of a unit compiled apart:
-        // `speed.value` is `Units.Dynamic`'s, where only other units'
-        // records (`Net.Port`) have a `value` field.
-        const bool resolvedApart =
-            resolved != resolvedCalls->end() && externalModules &&
-            std::any_of(externalModules->compiledApartModules.begin(),
-                        externalModules->compiledApartModules.end(),
-                        [&](const std::string& module) {
-                            const auto atom = externalModules->nameToAtom.find(module);
-                            return atom != externalModules->nameToAtom.end() &&
-                                   atom->second == resolved->second.backendModule;
-                        });
-        const bool localFieldAccessor =
-            n.args.empty() && n.namedArgs.empty() && !n.block &&
-            !n.mutating && fieldAccessors.count(n.method) && !resolvedApart;
-        // `Outer.Inner.greet(n)` is a call INTO a module, but once any
-        // make block defines a method of the same name the resolver picks
-        // that receiver method and the dotted path is then lowered as a
-        // value — which a module is not, so it died with "Undefined
-        // function: Outer.Inner" while the walker was right (kexhq/kex#182).
-        // A bare receiver never had this problem, so only a dotted path
-        // naming a module of this unit overrides the resolved target.
         // A call into a capability must reach the substitution dispatch,
         // which lives on the module-qualified path below. If the resolver
         // claims it first the call goes straight to the real
@@ -335,22 +290,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                     isCapabilityModule(named) && capabilityInterfaceHas(named, n.method))
                     capabilityTarget = named;
         }
-        bool modulePathOwnsCall = false;
-        if (n.receiver) {
-            std::vector<std::string> segments;
-            if (modulePath(*n.receiver, segments) && segments.size() >= 2) {
-                std::string joined;
-                for (size_t i = 0; i < segments.size(); ++i) {
-                    if (i) joined += ".";
-                    joined += segments[i];
-                }
-                modulePathOwnsCall =
-                    moduleFunctions.count(joined + "." + n.method) > 0;
-            }
-        }
-        if (resolved != resolvedCalls->end() && !localTypeShadows &&
-            !localFieldAccessor &&
-            !modulePathOwnsCall) {
+        if (resolved != resolvedCalls->end()) {
             if (!resolved->second.alternatives.empty())
                 return providerChoice(n, resolved->second);
             std::vector<Binding> binds;

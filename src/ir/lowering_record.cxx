@@ -59,6 +59,13 @@ void Lowering::collectRecord(const ast::RecordDef& rec,
         addFieldAccessor(rec.fields[i].name, name, i + 2,
                          static_cast<int>(rec.fields.size()) + 1, true);
     }
+    // The same name from an interface, laid out differently: a different
+    // record (a local `ParseError` beside the prelude's), which a tag alone
+    // does not tell apart.
+    if (const auto seen = records.find(name);
+        seen != records.end() && externalRecordNames.count(name) &&
+        seen->second.fields != info.fields)
+        conflictingRecordLayouts.insert(name);
     records[name] = std::move(info);
     auto& layout = recordLayouts[name];
     layout.clear();

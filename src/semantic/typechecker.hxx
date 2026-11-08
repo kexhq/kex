@@ -376,6 +376,9 @@ private:
     // the first overload block every sibling one from ever registering.
     auto hasAnnotatedSignatureForReceiver(const std::string& name,
                                           const TypePtr& receiverType) const -> bool;
+    // A receiver type as m_annotatedReceiverKeys files it: `Set<A>` by its
+    // head, since each pass spells its variables apart; `[Integer]` whole.
+    auto annotatedReceiverKey(const TypePtr& receiverType) const -> std::string;
     auto resolveTypeQuery(const ast::TypeQuery& query) -> TypePtr;
     auto namedFunctionSignature(const ast::Expr& expr) -> const Signature*;
     // Why `written.method(...)` names nothing callable, if it does not: an
