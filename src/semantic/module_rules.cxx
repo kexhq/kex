@@ -9,8 +9,10 @@ namespace kex::semantic {
 
 ProgramModules::ProgramModules(std::vector<SymbolInfo> symbols)
     : m_symbols(std::move(symbols)) {
-    for (const auto& symbol : m_symbols)
+    for (auto& symbol : m_symbols) {
         m_members[symbol.module].try_emplace(symbol.name, &symbol);
+        m_byName[symbol.name].push_back(&symbol);
+    }
 }
 
 auto ProgramModules::hasModule(const std::string& module) const -> bool {
@@ -176,6 +178,20 @@ auto findModuleRuleViolations(const ast::Program& program,
                 module(module, *node, "");
         }, item);
     return found;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto ProgramModules::referenced(const std::string& module, const std::string& name,
+                                const std::string& preferFile) -> SymbolInfo* {
+    if (!module.empty()) return const_cast<SymbolInfo*>(member(module, name));
+    const auto named = m_byName.find(name);
+    if (named == m_byName.end()) return nullptr;
+    for (auto* symbol : named->second)
+        if (symbol->definition.file == preferFile) return symbol;
+    return named->second.front();
 }
 
 } // namespace kex::semantic

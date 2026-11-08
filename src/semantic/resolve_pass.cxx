@@ -9,32 +9,6 @@
 
 namespace kex::semantic {
 
-namespace {
-
-// The modules of the files SemanticDB indexes, as the `using` and `export`
-// rules (module_rules.hxx) ask about them.
-class IndexedModules final : public ModuleSymbols {
-public:
-    explicit IndexedModules(SemanticDB& db) : m_db(db) {}
-    auto hasModule(const std::string& module) const -> bool override {
-        return m_db.hasModule(module);
-    }
-    auto member(const std::string& module, const std::string& name) const
-        -> const SymbolInfo* override {
-        return m_db.symbolInModule(module, name);
-    }
-    auto publicMembers(const std::string& module) const
-        -> std::vector<const SymbolInfo*> override {
-        const auto exports = m_db.exportsFor(module);
-        return {exports.begin(), exports.end()};
-    }
-
-private:
-    SemanticDB& m_db;
-};
-
-} // namespace
-
 static auto editDistance(const std::string& a, const std::string& b) -> int {
     const int m = static_cast<int>(a.size());
     const int n = static_cast<int>(b.size());
@@ -118,24 +92,16 @@ auto ResolvePass::declaredLabels(const std::string& name) const
         }
     }
     // A name a `using` brought in from a source module declares its labels in
-    // that module's file, which neither table above covers. Without this an
+    // that module, which neither table above covers. Without this an
     // unrelated prelude export of the same name decided what the call may say.
-    if (m_db)
-        for (const auto& scope : m_importScopes) {
-            auto origin = scope.find(name);
-            if (origin == scope.end()) continue;
-            const auto* symbol = m_db->symbolInModule(origin->second.module, name);
-            if (!symbol) continue;
-            known = true;
-            for (const auto& [label, _] : symbol->params) labels.insert(label);
-            if (const auto* state =
-                    m_db->fileState(std::string(symbol->definition.file))) {
-                LabelMap declared;
-                collectLabelsIn(state->ast.items, declared);
-                if (auto found = declared.find(name); found != declared.end())
-                    labels.insert(found->second.begin(), found->second.end());
-            }
-        }
+    for (const auto& scope : m_importScopes) {
+        auto origin = scope.find(name);
+        if (origin == scope.end()) continue;
+        const auto* symbol = m_modules->member(origin->second.module, name);
+        if (!symbol) continue;
+        known = true;
+        for (const auto& [label, _] : symbol->params) labels.insert(label);
+    }
     if (!known) return std::nullopt;
     return labels;
 }
@@ -173,33 +139,19 @@ auto ResolvePass::checkNamedArguments(
     }
 }
 
-auto ResolvePass::run(SemanticDB& db, const std::string& file) -> void {
-    auto* state = db.fileState(file);
-    if (!state) return;
-    m_db = &db;
-    m_checksModuleRules = true;
-    m_ownedModules = std::make_unique<IndexedModules>(db);
-    m_modules = m_ownedModules.get();
-    m_symbols = &state->symbols;
-    m_path = state->path;
-    m_diagnostics = &state->diagnostics;
-    m_completionScopes = &state->completionScopes;
-    resolveItems(state->ast);
-}
 
 auto ResolvePass::run(const ast::Program& program, const std::string& path,
-                      const ModuleSymbols& modules,
-                      const std::vector<SymbolInfo>& symbols)
+                      ProgramModules& modules, ResolveOptions options)
     -> std::vector<Diagnostic> {
     std::vector<Diagnostic> diagnostics;
-    m_db = nullptr;
-    // The checker reports the `using` and `export` rules of a checked program.
-    m_checksModuleRules = false;
+    m_checksModuleRules = options.checksModuleRules;
+    m_fileLocalTopLevel = options.fileLocalTopLevel;
+    m_program = &modules;
     m_modules = &modules;
-    m_symbols = &symbols;
+    m_symbols = &modules.symbols();
     m_path = path;
     m_diagnostics = &diagnostics;
-    m_completionScopes = nullptr;
+    m_completionScopes = options.scopes;
     resolveItems(program);
     m_diagnostics = nullptr;
     return diagnostics;
@@ -207,18 +159,17 @@ auto ResolvePass::run(const ast::Program& program, const std::string& path,
 
 auto resolveProgramNames(const ast::Program& program,
                          const std::vector<std::string>& files,
-                         const ImportedInterfaces* imports)
-    -> std::vector<Diagnostic> {
-    const ProgramModules modules(
-        collectSymbols(program, files.empty() ? std::string{} : files.front()));
-    auto diagnostics = ResolvePass(imports).run(
-        program, files.empty() ? std::string{} : files.front(), modules,
-        modules.symbols());
-    std::erase_if(diagnostics, [&](const Diagnostic& diagnostic) {
+                         const ImportedInterfaces* imports) -> NameIndex {
+    const auto entry = files.empty() ? std::string{} : files.front();
+    ProgramModules modules(collectSymbols(program, entry));
+    NameIndex index;
+    index.diagnostics = ResolvePass(imports).run(program, entry, modules, {.scopes = &index.completionScopes});
+    std::erase_if(index.diagnostics, [&](const Diagnostic& diagnostic) {
         return std::find(files.begin(), files.end(), diagnostic.location.file) ==
                files.end();
     });
-    return diagnostics;
+    index.symbols = std::move(modules.symbols());
+    return index;
 }
 
 auto ResolvePass::resolveItems(const ast::Program& program) -> void {
@@ -312,9 +263,6 @@ auto ResolvePass::resolveExportDecl(const ast::ExportDecl& decl) -> void {
     // `only:` beside `except:` is the parser's to refuse.
     if (!m_checksModuleRules) return;
     std::string target = decl.module.dotted();
-    if (m_db && target != m_currentModule && !m_modules->hasModule(target))
-        if (auto discovered = m_db->ensureModule(target, m_currentModule))
-            target = *discovered;
     checkExport(*m_modules, m_currentModule, target, decl.onlyNames,
                 decl.exceptNames,
                 [&](const std::string& message) { error(decl.location, message); });
@@ -334,11 +282,9 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
         resolve_core::usingImportsNames(alias, onlyNames);
 
     std::string requested = module.dotted();
-    const std::string resolved = m_db
-        ? resolve_core::resolveSourceModulePath(m_db, m_currentModule, requested)
-        : resolve_core::resolveModulePathIn(
-              m_currentModule, requested,
-              [&](const std::string& name) { return m_modules->hasModule(name); });
+    const std::string resolved = resolve_core::resolveModulePathIn(
+        m_currentModule, requested,
+        [&](const std::string& name) { return m_modules->hasModule(name); });
 
     // Packaged and prelude-derived interfaces may be available without a
     // corresponding source module in the resolver roots. `using` still has
@@ -386,10 +332,6 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
         return;
     }
 
-    if (m_db)
-        for (const auto& path : m_db->shadowedModulePaths(resolved))
-            warning(loc, "shadowed module definition for " + resolved + ": " + path);
-
     // A module that is already being loaded has completed collection, so its
     // signatures are safe for type references and lazy function calls. Kex
     // currently has no eager module value initializers; when those arrive,
@@ -421,8 +363,8 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
         }
         if (!merged.proceed) continue;
         defineLocal(symbol->name);
-        if (m_db)
-            if (auto* indexed = m_db->symbolInModule(resolved, symbol->name))
+        if (m_program)
+            if (auto* indexed = m_program->referenced(resolved, symbol->name, m_path))
                 indexed->references.push_back(loc);
     }
     if (alias) defineLocal(*alias);
@@ -814,13 +756,16 @@ auto ResolvePass::resolvePattern(const ast::Pattern& pat) -> void {
 }
 
 auto ResolvePass::recordRef(const std::string& name, SourceLocation loc) -> void {
-    if (!m_db) return;
+    if (!m_program) return;
+    // The symbol `module`'s `name` is, in the index this pass fills.
+    const auto symbol = [&](const std::string& module) {
+        return m_program->referenced(module, name, m_path);
+    };
     // Check if this name was brought in by a `using` import — if so, record
     // the reference on the original module symbol for go-to-definition.
     for (auto it = m_importScopes.rbegin(); it != m_importScopes.rend(); ++it) {
         if (auto found = it->find(name); found != it->end()) {
-            if (auto* sym = m_db->symbolInModule(found->second.module, name))
-                sym->references.push_back(loc);
+            if (auto* sym = symbol(found->second.module)) sym->references.push_back(loc);
             return;
         }
     }
@@ -828,8 +773,7 @@ auto ResolvePass::recordRef(const std::string& name, SourceLocation loc) -> void
     // (local vars live in m_scopes and have no SymbolInfo entry).
     for (const auto& scope : m_scopes)
         if (scope.count(name)) return;
-    if (auto* sym = m_db->findSymbol(name, m_path))
-        sym->references.push_back(loc);
+    if (auto* sym = symbol({})) sym->references.push_back(loc);
 }
 
 auto ResolvePass::enclosesCurrentModule(const std::string& owner) const -> bool {
@@ -859,7 +803,8 @@ auto ResolvePass::isKnown(const std::string& name) const -> bool {
     // stays invisible is a sibling module's members, which need qualifying.
     if (m_symbols) {
         for (const auto& sym : *m_symbols) {
-            if (sym.name == name && enclosesCurrentModule(sym.module))
+            if (sym.name == name && enclosesCurrentModule(sym.module) &&
+                (!m_fileLocalTopLevel || !sym.module.empty() || sym.definition.file == m_path))
                 return true;
         }
     }

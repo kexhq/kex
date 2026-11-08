@@ -278,17 +278,8 @@ inline auto standardLibraryArtifactSourceFiles()
     return files;
 }
 
-// Indexes the prelude selected by an explicit stdlib root into `db`.
-inline auto loadPrelude(kex::semantic::SemanticDB& db, const std::string& dir) -> void {
-    for (const auto& filePath : preludeFilesFromRoot(dir)) {
-        std::ifstream file(filePath);
-        if (!file.is_open()) continue;
-        std::ostringstream contents;
-        contents << file.rdbuf();
-        db.updateFile(filePath, contents.str());
-    }
-}
-
+// The prelude's sources, indexed into `db` (the language server's, until it
+// reads the checker's name index).
 inline auto loadDiscoveredPrelude(kex::semantic::SemanticDB& db) -> void {
     for (const auto& filePath : preludeSourceFiles()) {
         std::ifstream file(filePath);

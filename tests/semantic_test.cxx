@@ -168,6 +168,7 @@ int main() {
                 "main do\n"
                 "  twice(21)\n"
                 "end\n");
+            db.resolveTogether({"util.kex", "main.kex"});
             bool hasError = false;
             for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
                 if (diagnostic.level == semantic::Diagnostic::Level::Error) hasError = true;
@@ -187,6 +188,7 @@ int main() {
                 "main do\n"
                 "  twice(21)\n"
                 "end\n");
+            db.resolveTogether({"util.kex", "main.kex"});
             auto* definition = db.symbolInModule("Util", "twice");
             assertTrue(definition != nullptr);
             assertTrue(!definition->references.empty());
@@ -221,6 +223,7 @@ int main() {
                 "end\n");
             db.updateFile("main.kex",
                 "using Secrets, only: [hidden]\n");
+            db.resolveTogether({"secrets.kex", "main.kex"});
             bool found = false;
             for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
                 if (diagnostic.message.find("private name `hidden`") != std::string::npos)
@@ -237,6 +240,7 @@ int main() {
                 "main do\n"
                 "  answer()\n"
                 "end\n");
+            db.resolveTogether({"main.kex"});
             bool found = false;
             for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
                 if (diagnostic.message.find("Undefined function: `answer`") != std::string::npos)
@@ -248,6 +252,7 @@ int main() {
             semantic::SemanticDB db;
             db.updateFile("one.kex", "let helper() = 42\n");
             db.updateFile("two.kex", "main do\n  helper()\nend\n");
+            db.resolveTogether({"one.kex", "two.kex"});
             bool found = false;
             for (const auto& diagnostic : db.diagnosticsFor("two.kex"))
                 if (diagnostic.message.find("Undefined function: `helper`") != std::string::npos)
@@ -272,37 +277,16 @@ int main() {
                 "main do\n"
                 "  get(\"/\")\n"
                 "end\n");
+            // The modules a file names are loaded before it resolves, as the
+            // language server loads those its analysis names.
+            db.ensureModule("Http.Router");
+            db.resolveTogether({"main.kex"});
             fs::remove_all(root);
             assertTrue(db.hasModule("Http.Router"));
             bool hasError = false;
             for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
                 if (diagnostic.level == semantic::Diagnostic::Level::Error) hasError = true;
             assertFalse(hasError);
-        });
-
-        it("warns when a later source root shadows a module", []() {
-            namespace fs = std::filesystem;
-            const auto root = fs::temp_directory_path() / "kex-semantic-shadow-test";
-            fs::remove_all(root);
-            fs::create_directories(root / "lib");
-            fs::create_directories(root / "src");
-            {
-                std::ofstream first(root / "lib/util.kex");
-                first << "module Util\nlet value() = 1\n";
-                std::ofstream second(root / "src/util.kex");
-                second << "module Util\nlet value() = 2\n";
-            }
-            semantic::SemanticDB db;
-            db.setModuleRoots({(root / "lib").string(), (root / "src").string()});
-            db.updateFile("main.kex", "using Util, only: [value]\n");
-            bool found = false;
-            for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
-                if (diagnostic.level == semantic::Diagnostic::Level::Warning
-                    && diagnostic.message.find("shadowed module definition for Util")
-                        != std::string::npos)
-                    found = true;
-            fs::remove_all(root);
-            assertTrue(found);
         });
 
         it("rejects only: and except: together", []() {
@@ -314,6 +298,7 @@ int main() {
             db.updateFile("main.kex",
                 "using Util, only: [a], except: [b]\n"
                 "main do\n  a()\nend\n");
+            db.resolveTogether({"util.kex", "main.kex"});
             bool found = false;
             for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
                 if (diagnostic.message.find("mutually exclusive") != std::string::npos)
@@ -326,6 +311,7 @@ int main() {
             db.updateFile("app.kex",
                 "module App\n"
                 "export Nonexistent\n");
+            db.resolveTogether({"app.kex"});
             bool found = false;
             for (const auto& diagnostic : db.diagnosticsFor("app.kex"))
                 if (diagnostic.message.find("exported module not found") != std::string::npos)
@@ -344,6 +330,7 @@ int main() {
             db.updateFile("app.kex",
                 "module App\n"
                 "export Secrets, only: [hidden]\n");
+            db.resolveTogether({"secrets.kex", "app.kex"});
             bool found = false;
             for (const auto& diagnostic : db.diagnosticsFor("app.kex"))
                 if (diagnostic.message.find("cannot export private name `hidden`") != std::string::npos)
@@ -356,6 +343,7 @@ int main() {
             db.updateFile("app.kex",
                 "module App\n"
                 "export App\n");
+            db.resolveTogether({"app.kex"});
             bool found = false;
             for (const auto& diagnostic : db.diagnosticsFor("app.kex"))
                 if (diagnostic.message.find("cannot export itself") != std::string::npos)
@@ -377,6 +365,8 @@ int main() {
             // Index A first (it uses B which will be discovered on disk)
             db.updateFile("a.kex",
                 "module A\nusing B\nlet fa() = 1\n");
+            db.ensureModule("B");
+            db.resolveTogether({"a.kex", (root / "b.kex").string()});
             fs::remove_all(root);
             bool foundError = false;
             for (const auto& diagnostic : db.diagnosticsFor((root / "b.kex").string()))

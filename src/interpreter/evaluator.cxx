@@ -886,8 +886,8 @@ auto Evaluator::execUsingBlock(const ast::UsingBlock& block,
 
     const bool scoped = !block.body.empty();
     if (scoped) pushEnv();
-    // Records the import for make-block visibility (see makeMethodInScope) —
-    // after pushEnv, so a `using M do ... end` ends with its block.
+    // Records the import for the names it brings into scope — after pushEnv,
+    // so a `using M do ... end` ends with its block.
     if (m_usingModules.empty()) m_usingModules.emplace_back();
     m_usingModules.back().insert(moduleName);
     try {
@@ -1645,10 +1645,7 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
         // a clause that fits with args[0] as the receiver goes first.
         std::vector<std::pair<const ast::FunctionDef*, const ast::FunctionClause*>>
             orderedClauses;
-        // A module's definitions of a name the prelude also answers wait for
-        // that module's `using` (m_gatedMakeDefs).
         for (const auto* funcDef : m_functionDefs.at(regName)) {
-            if (!makeDefInScope(funcDef)) continue;
             for (const auto& clause : funcDef->clauses)
                 orderedClauses.emplace_back(funcDef, &clause);
         }
@@ -2088,49 +2085,6 @@ auto Evaluator::execMakeDefFor(const ast::MakeDef& def,
         for (const auto& item : def.body)
             if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
                 noteCast(fn->get());
-    }
-
-    // A module-scoped `make` is import-gated when it patches a FOREIGN type:
-    // remember which module its methods came from, so resolveMethodName can
-    // skip them where that module is not in scope. A `make` for a type the
-    // same module declares is that type's own interface and travels with its
-    // values (`SQL.select(:all).from(:users)`), so it stays reachable — as does
-    // every top-level `make`.
-    const auto ownedPrefix = enclosingModule + ".";
-    const bool ownRecord = typeName.starts_with(ownedPrefix) &&
-        m_moduleDeclaredRecords[enclosingModule].contains(
-            typeName.substr(ownedPrefix.size()));
-    if (!enclosingModule.empty() && !typeName.empty() &&
-        !m_moduleDeclaredTypes[enclosingModule].count(typeName) && !ownRecord) {
-        for (const auto& [method, arity] : ownMethods) {
-            (void)arity;
-            const auto qualified = kex::mangle::qualify(typeName, method);
-            // A name defined before this block — by the prelude, a top-level
-            // `make` or another module — is not this module's to gate: only
-            // its own definitions are (m_gatedMakeDefs below). Gating the
-            // name took the prelude's `90.minute.to(String, in: Hour)` away
-            // from a program that only named `Units.SI.watt`.
-            if (auto defined = m_functionDefs.find(qualified);
-                defined != m_functionDefs.end() && !defined->second.empty()) {
-                if (auto gated = m_makeMethodModule.find(qualified);
-                    gated != m_makeMethodModule.end() &&
-                    gated->second != enclosingModule)
-                    gated->second.clear();
-                continue;
-            }
-            m_makeMethodModule[qualified] = enclosingModule;
-        }
-        auto gate = [&](const ast::FunctionDef* fd) {
-            if (fd) m_gatedMakeDefs[fd] = enclosingModule;
-        };
-        for (const auto& item : def.body) {
-            if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
-                gate(fn->get());
-            else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item))
-                if (*vb) for (const auto& vi : (*vb)->items)
-                    if (auto* vf = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
-                        gate(vf->get());
-        }
     }
 
     // Process the make block's own methods.
@@ -4442,7 +4396,6 @@ auto Evaluator::findNamedClause(const std::string& functionName,
     // types alone, since a trait-typed parameter does not check here.
     for (const bool checkTypes : {true, false})
         for (const auto* definition : definitions->second) {
-            if (!makeDefInScope(definition)) continue;
             for (const auto& clause : definition->clauses) {
                 bool acceptsAll =
                     namedArgsTypeFit(clause, namedArgs, checkTypes);
@@ -4736,11 +4689,8 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
 }
 
 
-// Is the module owning `Type::method` in scope here? A method from a top-level
-// `make` (no owner) always is. Otherwise it takes a `using` — file-level or the
-// lexical block form, both recorded in m_usingModules — or a call from inside
-// the module itself. Before this, a `make` inside a module was the one module
-// member visible everywhere with no import at all.
+// The name `type`'s own `method` is bound under, as written or by its last
+// segment, or "" when it has none.
 auto Evaluator::ownMethodName(const std::string& type,
                               const std::string& method) const -> std::string {
     for (const auto& spelling : {type, type.substr(type.rfind('.') + 1)}) {
@@ -4748,31 +4698,6 @@ auto Evaluator::ownMethodName(const std::string& type,
         if (m_functionValues.count(name) || m_env->get(name)) return name;
     }
     return {};
-}
-
-auto Evaluator::makeMethodInScope(const std::string& qualified) const -> bool {
-    auto owner = m_makeMethodModule.find(qualified);
-    if (owner == m_makeMethodModule.end()) return true;
-    return moduleInScope(owner->second);
-}
-
-auto Evaluator::makeDefInScope(const ast::FunctionDef* def) const -> bool {
-    auto owner = m_gatedMakeDefs.find(def);
-    return owner == m_gatedMakeDefs.end() || moduleInScope(owner->second);
-}
-
-auto Evaluator::moduleInScope(const std::string& module) const -> bool {
-    if (module.empty()) return true;
-    if (m_currentModule == module ||
-        m_currentModule.rfind(module + ".", 0) == 0)
-        return true;
-    for (const auto& scope : m_usingModules)
-        for (const auto& imported : scope)
-            if (imported == module ||
-                imported.rfind(module + ".", 0) == 0 ||
-                module.rfind(imported + ".", 0) == 0)
-                return true;
-    return false;
 }
 
 auto Evaluator::resolveMethodName(const ValuePtr& receiver,
@@ -4915,8 +4840,7 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
             break;
         }
         if ((typedMatches ||
-             (protocolMethod && typedExists && !typedHasSignatures)) &&
-            makeMethodInScope(typed))
+             (protocolMethod && typedExists && !typedHasSignatures)))
             return typed;
         // A module's free function over one of the module's OWN types is
         // that type's receiver function, as on the BEAM (kexhq/kex#230):
@@ -4933,7 +4857,7 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
         if (!imported.empty()) return imported;
     }
 
-    if (m_env->get(typed) && makeMethodInScope(typed) && !rejected.count(typed))
+    if (m_env->get(typed) && !rejected.count(typed))
         return typed;
 
     // `make Number do ... end` covers Integer and Float. Below the concrete
@@ -4941,7 +4865,7 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
     // above the trait fallback, since it is a real implementation.
     for (const auto& super : dispatchSupertypes(receiverType)) {
         auto typedBySuper = kex::mangle::qualify(super, method);
-        if (m_env->get(typedBySuper) && makeMethodInScope(typedBySuper) &&
+        if (m_env->get(typedBySuper) &&
             !rejected.count(typedBySuper))
             return typedBySuper;
     }

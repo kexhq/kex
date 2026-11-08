@@ -72,6 +72,7 @@
 #include "help/api_help.hxx"
 #include "skill/skill.hxx"
 #include "semantic/completion_at.hxx"
+#include "semantic/symbol_queries.hxx"
 #include <functional>
 #include <thread>
 
@@ -108,10 +109,24 @@ struct ReplCompletionContext {
   std::string bindings;
 };
 static std::function<ReplCompletionContext()> g_replCompletionContext;
-// The index members are listed from (prelude + the session's definitions),
-// and the one the spliced program is analyzed through.
-static kex::semantic::SemanticDB *g_replCompletionDb = nullptr;
-static kex::semantic::SemanticDB *g_replAnalysisDb = nullptr;
+// What REPL completion lists names from besides the input it checks (whose
+// own and imported declarations it reads off the check): the prelude's, and
+// those of modules and `/load`ed units read for their members, by file.
+struct ReplCompletionBase {
+  std::vector<kex::semantic::SymbolInfo> prelude;
+  std::map<std::string, std::vector<kex::semantic::SymbolInfo>> loaded;
+  auto symbols() const -> std::vector<kex::semantic::SymbolInfo> {
+    auto all = prelude;
+    for (const auto &[_, symbols] : loaded) all.insert(all.end(), symbols.begin(), symbols.end());
+    return all;
+  }
+};
+static ReplCompletionBase *g_replCompletionBase = nullptr;
+// A REPL buffer checked for completion, as the REPL checks an input it runs.
+auto checkForCompletion(const std::string &path, const std::string &source)
+    -> std::optional<kex::semantic::CheckedSource>;
+// The prelude's names, read once from its sources.
+auto preludeCompletionSymbols() -> const std::vector<kex::semantic::SymbolInfo> &;
 // Earlier lines of a multi-line input still being typed (`make X do` …), so a
 // line inside a block completes with the block around it.
 static std::string g_replPendingInput;
@@ -197,24 +212,20 @@ static auto replRootCompletions(const std::string &qualified,
                                 const std::string &word)
     -> std::vector<std::string> {
   std::vector<std::string> matches;
-  if (!g_replCompletionDb) return matches;
+  if (!g_replCompletionBase) return matches;
   if (!qualified.empty()) {
-    static std::set<std::string> loaded;
     const auto module = qualified.substr(0, qualified.size() - 1);
-    if (loaded.insert(module).second) {
-      kex::module::Resolver resolver(
-          moduleRootsFor((std::filesystem::current_path() / "<repl>").string()));
-      if (const auto resolved = resolver.resolve(module)) {
-        std::ifstream input(resolved->path);
-        std::stringstream text;
-        text << input.rdbuf();
-        // As SemanticDB::ensureModule loads one: for its interface, without
-        // resolving its own names (kexhq/kex#323).
-        g_replCompletionDb->updateFile(resolved->path, text.str(), {},
-                                       /*resolveNames=*/false);
-      }
-    }
-    for (auto &match : g_replCompletionDb->completionsFor(qualified + word))
+    const auto roots =
+        moduleRootsFor((std::filesystem::current_path() / "<repl>").string());
+    kex::module::Resolver resolver(roots);
+    // Its declarations only, as a `using` loads it (kexhq/kex#323).
+    if (const auto resolved = resolver.resolve(module);
+        resolved && !g_replCompletionBase->loaded.contains(resolved->path))
+      g_replCompletionBase->loaded[resolved->path] =
+          kex::semantic::symbolsOfFiles({resolved->path}, roots);
+    auto base = g_replCompletionBase->symbols();
+    for (auto &match : kex::semantic::completionsFor({{"<base>", &base}}, qualified + word,
+                                                     &preludeSemanticInterfaces()))
       if (match.rfind(qualified, 0) == 0)
         matches.push_back(match.substr(qualified.size()));
   }
@@ -230,7 +241,7 @@ static auto replRootCompletions(const std::string &qualified,
 // `line`, the word each match replaces starts.
 static auto replCompleteAt(const std::string &line, size_t point)
     -> kex::semantic::CompletionAt {
-  if (!g_replCompletionDb || !g_replAnalysisDb) return {};
+  if (!g_replCompletionBase) return {};
   const auto context = g_replCompletionContext ? g_replCompletionContext()
                                                : ReplCompletionContext{};
   const auto input = g_replPendingInput.empty()
@@ -238,7 +249,7 @@ static auto replCompleteAt(const std::string &line, size_t point)
                          : g_replPendingInput + "\n" + line;
   const bool declaration = replInputIsDeclaration(input);
   auto completion = kex::semantic::completeReplInput(
-      *g_replCompletionDb, *g_replAnalysisDb, context.definitions,
+      g_replCompletionBase->symbols(), checkForCompletion, context.definitions,
       context.bindings, input, line, point, declaration,
       &preludeSemanticInterfaces());
   // A name that is not an expression's member — `DB.`, `DB.Repositories.Us`,
@@ -2250,8 +2261,42 @@ auto resolveBeamDeps(kex::ast::Program &program,
 
 } // namespace
 
-auto loadPrelude(kex::semantic::SemanticDB &db) -> void {
-  kex::loadDiscoveredPrelude(db);
+auto checkForCompletion(const std::string &path, const std::string &source)
+    -> std::optional<kex::semantic::CheckedSource> {
+  auto program = std::make_shared<kex::ast::Program>();
+  {
+    kex::Lexer lexer(source, path);
+    kex::Parser parser(lexer.tokenizeAll(), path);
+    *program = parser.parseProgram();
+  }
+  const auto roots =
+      moduleRootsFor((std::filesystem::current_path() / "<repl>").string());
+  std::vector<kex::semantic::Diagnostic> expansionDiagnostics;
+  kex::compiled::ExpandOptions options;
+  options.sourcePath = path;
+  options.moduleRoots = roots;
+  kex::compiled::expand(*program, expansionDiagnostics, options);
+  // Its `using` modules merged in, as the REPL merges them to run an input; a
+  // module that cannot be loaded leaves the rest to complete.
+  auto dependencies = std::make_shared<std::vector<LoadedDep>>();
+  const bool throws = g_dependencyFailureThrows;
+  g_dependencyFailureThrows = true;
+  try {
+    *dependencies = resolveBeamDeps(*program, roots, &preludeSemanticInterfaces());
+  } catch (const std::exception &) {
+  }
+  g_dependencyFailureThrows = throws;
+  auto analyzer = std::make_shared<kex::semantic::Analyzer>(&preludeSemanticInterfaces());
+  analyzer->setNameCheckFiles({path});
+  analyzer->analyze(*program);
+  return kex::semantic::CheckedSource{program, analyzer, dependencies};
+}
+
+auto preludeCompletionSymbols() -> const std::vector<kex::semantic::SymbolInfo> & {
+  static const auto symbols = kex::semantic::symbolsOfFiles(
+      kex::preludeSourceFiles(),
+      moduleRootsFor((std::filesystem::current_path() / "<repl>").string()));
+  return symbols;
 }
 
 auto moduleRootsFor(const std::string &filepath) -> std::vector<std::string> {
@@ -3783,8 +3828,7 @@ private:
   // session recompiles into hot-loads instead of cold re-runs.
   BeamVm m_vm;
   // Completion's index (prelude + session) and the one inputs are checked in.
-  kex::semantic::SemanticDB m_beamReplDb;
-  kex::semantic::SemanticDB m_beamAnalysisDb;
+  ReplCompletionBase m_completionBase;
   // Top-level definitions, tracked by name so redefining a function
   // REPLACES its earlier clauses rather than appending duplicates (a
   // stale first clause would otherwise shadow the new one — the
@@ -3896,8 +3940,8 @@ auto BeamReplSession::load(const std::string &filePath) -> ReplStep {
     auto stubs = m_kexiRegistry.generateCompletionStubs(*unit);
     if (!stubs.empty()) {
       try {
-        m_beamReplDb.updateFile("<kexi:" +
-            m_kexiRegistry.lastLoadedEntryAtom() + ">", stubs);
+        const auto name = "<kexi:" + m_kexiRegistry.lastLoadedEntryAtom() + ">";
+        m_completionBase.loaded[name] = kex::semantic::symbolsOfSource(name, stubs, {});
       } catch (...) {}
     }
 
@@ -4034,11 +4078,6 @@ auto BeamReplSession::define(const std::string &source) -> void {
   // `using M` is an import, not a definition — it is kept in m_topDefs
   // so it persists across inputs, but saying "defined M" is wrong.
   const bool isImport = source.rfind("using ", 0) == 0;
-  // Completion reads the session's own definitions from here: without
-  // it the BEAM REPL completed nothing it defined itself — no `make`
-  // methods, no serving slots after `pa.` (the tree-walker REPL
-  // already indexes its `<repl>` source the same way).
-  m_beamReplDb.updateFile("<repl>", topDefsStr());
   std::cout << kex::color::apply(kex::color::gray) << "=> "
             << kex::color::apply(kex::color::reset)
             << (isImport ? "using " : "defined ") << fname << "\n";
@@ -4551,15 +4590,8 @@ auto BeamReplSession::run() -> int {
     if (!preludeDisplay.empty()) vmRequest(m_vm, "exec", preludeDisplay);
   }
 
-  if (!m_skipPrelude) {
-    m_beamReplDb.setImportedInterfaces(&preludeSemanticInterfaces());
-    loadPrelude(m_beamReplDb);
-  }
-  m_beamAnalysisDb.setImportedInterfaces(&preludeSemanticInterfaces());
-  m_beamAnalysisDb.setModuleRoots(
-      moduleRootsFor((std::filesystem::current_path() / "<repl>").string()));
-  g_replCompletionDb = &m_beamReplDb;
-  g_replAnalysisDb = &m_beamAnalysisDb;
+  if (!m_skipPrelude) m_completionBase.prelude = preludeCompletionSymbols();
+  g_replCompletionBase = &m_completionBase;
 #ifdef HAS_READLINE
   rl_attempted_completion_function = kexCompletion;
   rl_completion_display_matches_hook = kexDisplayMatches;
@@ -4614,7 +4646,6 @@ auto BeamReplSession::run() -> int {
       m_mutableBinds.clear();
       m_beamSemanticBinds.clear();
       m_sessionWiths.clear();
-      m_beamReplDb.removeFile("<repl>");
       std::cout << "  (bindings cleared)\n";
       continue;
     }
@@ -4668,7 +4699,7 @@ auto BeamReplSession::run() -> int {
         }
       }
 
-      m_beamReplDb.removeFile("<kexi:" + entryAtom + ">");
+      m_completionBase.loaded.erase("<kexi:" + entryAtom + ">");
       m_kexiRegistry.unloadUnit(entryAtom);
       std::cout << "  unloaded " << modName << "\n";
       continue;
@@ -4750,8 +4781,7 @@ private:
   bool m_skipPrelude;
   // Completion's index (prelude loaded once, updated on each input) and the
   // one inputs are checked in.
-  kex::semantic::SemanticDB m_replDb;
-  kex::semantic::SemanticDB m_analysisDb;
+  ReplCompletionBase m_completionBase;
   // Made in `run`, after the banner: making one loads the prelude.
   std::optional<kex::interpreter::Evaluator> m_evaluator;
   // Accumulated source of all top-level definitions typed in the REPL so
@@ -4907,7 +4937,6 @@ auto WalkerReplSession::load(const std::string &filePath) -> ReplStep {
       m_replLoadedDeps.push_back(std::move(dep));
     }
     m_replAccumSource += readFile(filePath) + "\n";
-    m_replDb.updateFile("<repl>", m_replAccumSource);
     std::cout << "  loaded " << filePath << "\n";
   } catch (const std::exception& e) {
     std::cerr << "  /load: " << filePath << " was not loaded: " << e.what() << "\n";
@@ -4951,10 +4980,9 @@ auto WalkerReplSession::evaluate(
       // A session history that does not re-parse: run on the values.
     }
     execProgram(program, true);
-    // Accumulate and re-index so all prior definitions stay
-    // visible for tab completion, not just the latest one.
+    // Accumulated, so every prior definition reaches tab completion's
+    // check, not just the latest one.
     m_replAccumSource += source + "\n";
-    m_replDb.updateFile("<repl>", m_replAccumSource);
     const bool isImport = source.rfind("using ", 0) == 0;
     std::cout << kex::color::apply(kex::color::gray) << "=> "
               << kex::color::apply(kex::color::reset)
@@ -5124,16 +5152,9 @@ auto WalkerReplSession::run() -> int {
   const std::string historyFile = loadReplHistory();
 #endif
 
-  // SemanticDB for REPL: prelude loaded once, updated on each input.
-  if (!m_skipPrelude) {
-    m_replDb.setImportedInterfaces(&preludeSemanticInterfaces());
-    loadPrelude(m_replDb);
-  }
-  m_analysisDb.setImportedInterfaces(&preludeSemanticInterfaces());
-  m_analysisDb.setModuleRoots(
-      moduleRootsFor((std::filesystem::current_path() / "<repl>").string()));
-  g_replCompletionDb = &m_replDb;
-  g_replAnalysisDb = &m_analysisDb;
+  // Completion's names: the prelude's, read once.
+  if (!m_skipPrelude) m_completionBase.prelude = preludeCompletionSymbols();
+  g_replCompletionBase = &m_completionBase;
 #ifdef HAS_READLINE
   rl_attempted_completion_function = kexCompletion;
   rl_completion_display_matches_hook = kexDisplayMatches;
@@ -5400,16 +5421,14 @@ auto buildPrelude(const std::string &dir, bool verifyHir) -> int {
 // `--complete PREFIX [FILE]`: print the completions for PREFIX, one per line,
 // against the prelude and (when given) FILE.
 auto printCompletions(const std::string &prefix, const char *file) -> int {
-  kex::semantic::SemanticDB db;
-  db.setImportedInterfaces(&preludeSemanticInterfaces());
+  auto symbols = preludeCompletionSymbols();
   if (file)
-    db.setModuleRoots(moduleRootsFor(file));
-  loadPrelude(db);
-  if (file)
-    db.updateFile(file, readFile(file));
+    for (auto &symbol : kex::semantic::symbolsOfFiles({file}, moduleRootsFor(file)))
+      symbols.push_back(std::move(symbol));
   // Simulate readline not splitting: start=0, text=prefix
   auto cq = kex::resolveCompletionQuery(prefix.c_str(), 0, prefix.c_str());
-  auto raw = db.completionsFor(cq.dbQuery);
+  auto raw = kex::semantic::completionsFor({{"<base>", &symbols}}, cq.dbQuery,
+                                           &preludeSemanticInterfaces());
   auto completions =
       kex::rewriteCompletions(std::move(raw), cq.rewriteFrom, cq.rewriteTo);
   for (const auto &c : completions)

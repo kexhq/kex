@@ -4,6 +4,8 @@
 #include "../src/common/completion.hxx"
 #include "../src/common/prelude_interfaces.hxx"
 #include "../src/semantic/completion_at.hxx"
+#include "../src/lexer/lexer.hxx"
+#include "../src/parser/parser.hxx"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -34,15 +36,37 @@ static auto interfaces() -> const kex::semantic::ImportedInterfaces& {
 #endif
 }
 
+// The names every completion offers: the stdlib sources', read once.
+static auto preludeSymbols() -> const std::vector<kex::semantic::SymbolInfo>& {
+    static const auto symbols = [] {
+        std::vector<std::string> paths;
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator("src/stdlib", ec))
+            if (entry.path().extension() == ".kex") paths.push_back(entry.path().string());
+        return kex::semantic::symbolsOfFiles(paths, {});
+    }();
+    return symbols;
+}
+
+// A buffer checked for completion: parsed and analyzed, its names checked.
+static auto checkSource(const std::string& path, const std::string& source)
+    -> std::optional<kex::semantic::CheckedSource> {
+    auto program = std::make_shared<kex::ast::Program>();
+    kex::Lexer lexer(source, path);
+    kex::Parser parser(lexer.tokenizeAll(), path);
+    *program = parser.parseProgram();
+    auto analyzer = std::make_shared<kex::semantic::Analyzer>(&interfaces());
+    analyzer->setNameCheckFiles({path});
+    analyzer->analyze(*program);
+    return kex::semantic::CheckedSource{program, analyzer, nullptr};
+}
+
 // What the editor and the REPL offer at the `<|>` in `marked`.
-static auto completeAt(const SemanticDB& db, const std::string& marked)
-    -> std::vector<std::string> {
+static auto completeAt(const std::string& marked) -> std::vector<std::string> {
     const auto cursor = marked.find("<|>");
     auto source = marked;
     source.erase(cursor, 3);
-    SemanticDB analysisDb;
-    analysisDb.setImportedInterfaces(&interfaces());
-    return kex::semantic::completeAt(db, analysisDb, "<completion>", source,
+    return kex::semantic::completeAt(preludeSymbols(), checkSource, "<completion>", source,
                                      cursor, &interfaces()).matches;
 }
 
@@ -185,55 +209,46 @@ int main() {
     // ── completeAt: receivers typed by analysis ───────────────────────────
     describe("completeAt", []() {
         it("types a variable from its binding", []() {
-            auto db = makePreludeDb();
-            auto r = completeAt(db, "main do\n  let s = \"x\"\n  s.upp<|>\nend\n");
+            auto r = completeAt("main do\n  let s = \"x\"\n  s.upp<|>\nend\n");
             assertTrue(has(r, "upperCase"), "String member missing");
         });
         it("types a call result", []() {
-            auto db = makePreludeDb();
-            db.updateFile("<defs>", "let words() = [\"a\"]\n");
-            auto r = completeAt(db, "let words() = [\"a\"]\nmain do\n  words().ma<|>\nend\n");
+            auto r = completeAt("let words() = [\"a\"]\nmain do\n  words().ma<|>\nend\n");
             assertTrue(has(r, "map"), "List member missing");
         });
         it("types a chain", []() {
-            auto db = makePreludeDb();
-            auto r = completeAt(db, "main do\n  [1, 2].map { |x| x + 1 }.fil<|>\nend\n");
+            auto r = completeAt("main do\n  [1, 2].map { |x| x + 1 }.fil<|>\nend\n");
             assertTrue(has(r, "filter"), "List member missing");
         });
         it("types a lambda parameter", []() {
-            auto db = makePreludeDb();
-            auto r = completeAt(db, "main do\n  [\"a\"].map { |w| w.upp<|> }\nend\n");
+            auto r = completeAt("main do\n  [\"a\"].map { |w| w.upp<|> }\nend\n");
             assertTrue(has(r, "upperCase"), "String member missing");
         });
         it("types a lambda parameter on a half-typed line", []() {
-            auto db = makePreludeDb();
             const std::string line = "  [\"a\"].map { |w| w.";
             auto source = "main do\n" + line + "<|>" +
                           kex::semantic::completionClosers(line) + "\nend\n";
-            auto r = completeAt(db, source);
+            auto r = completeAt(source);
             assertTrue(has(r, "upperCase"), "String member missing");
         });
         it("types a literal", []() {
-            auto db = makePreludeDb();
-            auto r = completeAt(db, "main do\n  [1, 2, 3].<|>\nend\n");
+            auto r = completeAt("main do\n  [1, 2, 3].<|>\nend\n");
             assertTrue(has(r, "map") && has(r, "count"), "List members missing");
         });
         it("types a make-block parameter", []() {
             auto db = makePreludeDb();
-            auto r = completeAt(db,
+            auto r = completeAt(
                 "make String do\n"
                 "  let shout(s: String) -> String = s.upp<|>\n"
                 "end\n");
             assertTrue(has(r, "upperCase"), "String member missing");
         });
         it("falls back to module paths", []() {
-            auto db = makePreludeDb();
-            auto r = completeAt(db, "main do\n  IO.pr<|>\nend\n");
+            auto r = completeAt("main do\n  IO.pr<|>\nend\n");
             assertTrue(has(r, "printLine"), "IO member missing");
         });
         it("offers bindings in scope for a bare name", []() {
-            auto db = makePreludeDb();
-            auto r = completeAt(db, "main do\n  let localValue = 1\n  loc<|>\nend\n");
+            auto r = completeAt("main do\n  let localValue = 1\n  loc<|>\nend\n");
             assertTrue(has(r, "localValue"), "local binding missing");
         });
     });
@@ -410,6 +425,7 @@ int main() {
                 "  let localValue = 1\n"
                 "  localValue\n"
                 "end\n");
+            db.resolveTogether({path});
             auto matches = db.completionsAt(path, 3, 7, "loc");
             assertTrue(has(matches, "localValue"),
                        "position-aware completion lost a local let binding");
@@ -427,6 +443,7 @@ int main() {
                 "    new\n"
                 "  end\n"
                 "end\n");
+            db.resolveTogether({path});
             auto matches = db.completionsAt(path, 7, 7, "ne");
             assertTrue(has(matches, "new"),
                        "make completion omitted the implicit new binding");

@@ -99,10 +99,10 @@ targeted, every expression typed (`--verify-hir`); `--dump-hir` prints it.
 | 1 | Foundations (cache, enums, shared walkers, audit, `main()` split) | Done; the open items are in the order below |
 | 2 | One sema decides every call; HIR | **In progress**: decisions recorded, `hir::Program` answers them, node identities and `hir::persist`; no HIR node types yet |
 | 2b | Intrinsic registry + `Type<T>` signatures | `Type<T>` and `to` moved to step 3; the rest **deferred** |
-| 3 | Lowering only translates; IR passes | **In progress**: lowering re-derives no call (metric 0); still walks the AST |
-| 4 | Walker on the HIR | **In progress**: runs, REPL and prelude read checked decisions; still evaluates the AST |
-| 5 | LSP / SemanticDB on the same sema | **In progress**: runs and builds have no SemanticDB; `kex -C` and the LSP still use it |
-| 6 | Delete old paths, measure | **Started**: `docs/architecture.md`; measurements below |
+| 3 | Lowering only translates; IR passes | **In progress**: lowering is checked-only (it throws without a HIR); the provider search and its run-time choices are the checker's (alternatives), with `dualProviderDispatch` and `importedFreeFunctionDispatch` deleted; the local-path cascade and the AST walk remain |
+| 4 | Walker on the HIR | **In progress**: runs, REPL and prelude read checked decisions; its run-time `using` gates are deleted (the checker's `Hidden` decides); still evaluates the AST |
+| 5 | LSP / SemanticDB on the same sema | **Done** (2026-11-08): one resolver, the checker's name pass; the REPLs and `--complete` hold no SemanticDB; the language server's SemanticDB is a document store and query front end over the checker's index |
+| 6 | Delete old paths, measure | **Started**: `docs/architecture.md`; measurements below. `src/`'s size against `main` is reported, not a gate (2026-11-08) |
 | — | Separate compilation as the default | **Done** (2026-11-06); the merged build path is deleted |
 
 ## Order of work (decided 2026-11-05)
@@ -985,6 +985,49 @@ Then (same day):
   them (`Dsl.get`, a record's bare dispatcher, no module), which lowering
   calls locally, with a foul one's capability context. The 20 spellings of
   a module's BEAM atom (`"Kex." + path`) are one `names::moduleAtom`.
+- Step 6: the walker's run-time `using` gates are deleted
+  (`makeMethodInScope`, `makeDefInScope`, `moduleInScope` and the two maps
+  they read, −86 lines). The check decides what a call out of scope reaches
+  (`Hidden`); with the gates off, the walker spec suites and the REPL and
+  interpreter tests were unchanged.
+- Step 7, first increments (2026-11-08):
+  - The name check keeps what it finds (`NameIndex`, Analyzer::nameIndex):
+    the program's symbols, the references to them and the names in scope
+    at each point, recorded through `ProgramModules::referenced` (by name).
+  - SemanticDB's queries are one implementation over a list of indexed
+    files (`symbol_queries`): `findSymbol`, `symbolInModule`,
+    `receiverSymbol`, `symbolAt`, `completionsFor`/`At`.
+  - Completion reads the checker: `completeAt` takes a check of the buffer
+    (`CompletionChecker`, each caller's own pipeline) and a base of names
+    (the prelude's sources, `symbolsOfFiles`). Both REPLs, the wasm REPL
+    and `kex --complete` hold no SemanticDB; their per-input `<repl>`
+    re-indexing is gone, the session's definitions being in what completion
+    checks.
+  - The language server resolves an open document once, by the checker:
+    SemanticDB indexes it without its own pass and takes the checker's
+    `NameIndex` (`setResolved`), and loads the modules the analysis names
+    (`referencedModules`) for navigation. SemanticDB's export entries are
+    dropped by address, not by file (`updateFile`, `setResolved`,
+    `removeFile`, which read them after freeing the file).
+  - The workspace reference index resolves through the checker's name pass
+    too: its files are indexed without SemanticDB's own, the modules their
+    analyses name are loaded, and `resolveTogether` resolves them against
+    every indexed file's symbols at once, so a reference in one file still
+    lands on a declaration in another. The prelude's and receiver
+    recovery's loads no longer resolve: nothing in the compiler, the REPLs
+    or the language server runs SemanticDB's own resolve mode.
+  - SemanticDB's own resolve mode is deleted: `ResolvePass::run(SemanticDB&)`,
+    `IndexedModules`, `updateFile`'s resolve and its re-entrancy guard,
+    `CollectPass::run`, `resolveSourceModulePath`, and the module-export map
+    and shadowed-path table nothing read once it went (−222 lines). One
+    resolver is left, the checker's name pass (`ResolveOptions`; a
+    workspace's files keep their top-level declarations to themselves,
+    `fileLocalTopLevel`). Its tests resolve through `resolveTogether`. The
+    shadowed-module warning went with it: only that mode reported it, and
+    the language server has published the checker's diagnostics since
+    2026-11-07.
+  - SemanticDB is now a document store, a module loader and the symbol
+    queries' front end over the checker's index.
 
 Search runs over `make test-all`: 351 → 47, none of them unchecked. What
 is left: the owner choice for `Kex.AST`'s `to` (4), `any?`/`all?` decided
@@ -1282,6 +1325,25 @@ The user's decisions of 2026-11-05 (separate compilation as the default; the
 `src/`-below-`main` goal, revised on 2026-11-08 to a reported measurement)
 are under Decisions; node identities, which came next, are
 done (Stage 2).
+
+**Step 10 measurement (2026-11-08), against `main` (3846781).** After the
+provider search and SemanticDB's own resolver went (`tools/bench-slick.sh`,
+`BENCH_KEX="main=… branch=…"`, median of 3 interleaved runs, cold 2, the dev
+`tey`):
+
+| scenario    | main   | branch | change |
+|-------------|--------|--------|--------|
+| cold        | 24.43  | 30.49  | +25%   |
+| no-op       | 9.94   | 7.32   | −26%   |
+| incremental | 10.68  | 7.89   | −26%   |
+| devloop     | 9.69   | 7.19   | −26%   |
+| specs       | 100.93 | 85.97  | −15%   |
+
+Unchanged from the milestone below: the step-5 and step-7 work moved no
+build time. The cold cost is still the separate build's (336 modules
+compiled against `main`'s 188). Every slick spec run passed. `src/`
+(`.cxx`/`.hxx`): 93,651 lines against `main`'s 89,766 (+3,885, +4.3%),
+reported, not a gate (Decisions, 2026-11-08).
 
 **Milestone gate (2026-11-07), against `main` (3846781).** Slick, median of
 3 interleaved runs (cold 2), the dev `tey` (`~/.local/bin/tey`: brew's

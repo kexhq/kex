@@ -31,12 +31,6 @@ auto variantText(const ast::TypeExpr& variant) -> std::string {
 
 } // namespace
 
-auto CollectPass::run(SemanticDB& db, const std::string& file) -> void {
-    auto* state = db.fileState(file);
-    if (!state) return;
-    state->symbols = collectSymbols(state->ast, state->path);
-}
-
 auto CollectPass::collect(const ast::Program& program, const std::string& path)
     -> std::vector<SymbolInfo> {
     std::vector<SymbolInfo> symbols;

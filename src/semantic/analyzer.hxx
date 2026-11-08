@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ast/ast.hxx"
+#include "name_index.hxx"
 #include "symbol.hxx"
 #include "typechecker.hxx"
 #include <functional>
@@ -40,6 +41,10 @@ public:
     auto setNameCheckFiles(std::vector<std::string> files) -> void {
         m_nameCheckFiles = std::move(files);
     }
+    // What the name check found beyond its diagnostics: the program's symbols,
+    // the references to them and the names in scope at each point (empty
+    // when names are not checked).
+    auto nameIndex() const -> const NameIndex& { return m_nameIndex; }
     // Where the build finds a module outside the program and its interfaces
     // (its source roots), for the rule that an exported module must exist.
     auto setModuleLocator(
@@ -207,6 +212,7 @@ private:
     const ImportedInterfaces* m_importedInterfaces = nullptr;
     std::function<bool(const std::string&, const std::string&)> m_moduleLocator;
     std::vector<std::string> m_nameCheckFiles;
+    NameIndex m_nameIndex;
     bool m_inFoulContext = false;
     bool m_inMakeBlock = false;
 

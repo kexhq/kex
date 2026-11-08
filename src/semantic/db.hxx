@@ -13,6 +13,8 @@
 namespace kex::semantic {
 
 struct Diagnostic;
+struct IndexedFile;
+using IndexedFiles = std::vector<IndexedFile>;
 
 struct SymbolInfo {
     std::string name;
@@ -66,30 +68,32 @@ public:
     // run; each node keeps its own source location, so diagnostics still
     // point into the file the code actually came from.
     //
-    // `resolveNames` false indexes the file without resolving its references:
-    // parse, compile-time expansion, collected symbols and module exports, but
-    // no undefined-name pass. That is all another file needs from a module it
-    // `using`s, and a module loaded that way never reports its own diagnostics
-    // (kexhq/kex#323).
+    // It indexes: parse, compile-time expansion, collected symbols and module
+    // exports. Names are resolved by the checker (setResolved, or
+    // resolveTogether for files resolved as one program).
     auto updateFile(const std::string& path, std::string source,
-                    const std::vector<std::string>& companionDeclFiles = {},
-                    bool resolveNames = true)
-        -> void;
+                    const std::vector<std::string>& companionDeclFiles = {}) -> void;
     auto removeFile(const std::string& path) -> void;
+    // `path`'s symbols, with their references and the names in scope at each
+    // point, as the checker resolved them (Analyzer::nameIndex), in place of
+    // the index's own pass: an open document is resolved once.
+    auto setResolved(const std::string& path, std::vector<SymbolInfo> symbols,
+                     std::vector<FileState::ScopeSnapshot> scopes) -> void;
+    // `paths` resolved by the checker's name pass against every indexed file's
+    // symbols at once, as one program's: a reference in one file to a
+    // declaration in another is recorded on it (a workspace's references).
+    auto resolveTogether(const std::vector<std::string>& paths) -> void;
     auto setModuleRoots(std::vector<std::string> roots) -> void;
     auto ensureModule(const std::string& moduleName,
                       const std::string& currentModule = "") -> std::optional<std::string>;
 
     auto diagnosticsFor(const std::string& file) const -> const std::vector<Diagnostic>&;
     auto symbolsFor(const std::string& file) const -> const std::vector<SymbolInfo>&;
-    auto exportsFor(const std::string& moduleName) const -> std::vector<SymbolInfo*>;
     auto hasModule(const std::string& moduleName) const -> bool;
     auto symbolInModule(const std::string& moduleName,
                         const std::string& name) -> SymbolInfo*;
     auto receiverSymbol(const std::string& receiver,
                         const std::string& name) const -> const SymbolInfo*;
-    auto shadowedModulePaths(const std::string& moduleName) const
-        -> const std::vector<std::string>&;
 
     // Finds the SymbolInfo for `name`, preferring symbols from `preferFile`.
     // Returns null if not found in any indexed file.
@@ -114,19 +118,16 @@ public:
     auto fileState(const std::string& path) -> FileState*;
 
 private:
-    auto rebuildModuleExports(const std::string& path) -> void;
+    // Its documents as the symbol queries read them (symbol_queries.hxx).
+    auto indexed() const -> IndexedFiles;
 
     std::unordered_map<std::string, FileState> m_files;
-    std::unordered_map<std::string, std::vector<SymbolInfo*>> m_moduleExports;
     std::vector<std::string> m_moduleRoots{"lib", "src"};
     std::unordered_set<std::string> m_loadingModules;
     const ImportedInterfaces* m_imports = nullptr;
-    std::unordered_set<std::string> m_resolvingFiles;
-    std::unordered_map<std::string, std::vector<std::string>> m_shadowedModulePaths;
 
     static const std::vector<Diagnostic> s_emptyDiagnostics;
     static const std::vector<SymbolInfo> s_emptySymbols;
-    static const std::vector<std::string> s_emptyPaths;
 };
 
 } // namespace kex::semantic
