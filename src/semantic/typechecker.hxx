@@ -385,6 +385,10 @@ private:
     // unknown module, or a local module without that member.
     auto namespaceCallProblem(const std::string& written, const std::string& resolved,
                               const std::string& method) -> std::optional<std::string>;
+    // Whether module `path` shares its name with a type (`DateTime`,
+    // `Map`): its calls then also reach that type's static functions, which
+    // `make` blocks declare, so its own members are not all it answers.
+    auto moduleNamesType(const std::string& path) const -> bool;
     auto typeNameReference(const ast::Expr& expr) -> TypePtr;
     // The type `name` names when written where a value or pattern goes, or
     // null when it is a constructor (`World` is a value of type `Hello`).
@@ -587,6 +591,23 @@ private:
     // aliases, and only/except filtering differ from the checker's).
     std::unordered_map<const ast::MakeDef*, std::vector<std::string>>
         m_resolvedTraits;
+    // Each default a trait's body defines, by clause: the trait's identity
+    // (registerTraits). Its checked signature takes `This`.
+    std::unordered_map<const ast::FunctionClause*, std::string> m_traitDefaultClauses;
+    // Each trait's default definitions, by trait identity: a type implementing
+    // the trait has them as its own methods (registerMakeSignature).
+    std::unordered_map<std::string, std::vector<const ast::FunctionDef*>> m_traitDefaults;
+    // An inherited default's result, per implementing type, left for the
+    // trait's body to answer: that type, and the result's variable.
+    std::unordered_multimap<const ast::FunctionClause*, std::pair<TypePtr, int>>
+        m_inheritedPendingResults;
+    // `type` with each `This` in it the implementing type `receiver`: a trait
+    // default as that type has it.
+    static auto bindThis(const TypePtr& type, const TypePtr& receiver) -> TypePtr;
+    // Whether two registrations are one method: the same parameters, and not
+    // the defaults of two different traits (`Geo.Shape`'s and `Ui.Shape`'s
+    // `describe`, both `This -> String`).
+    auto sameMethod(const Signature& left, const Signature& right) const -> bool;
     std::unordered_map<const ast::Expr*, Signature> m_selectedCallSignatures;
     ShownThrough m_shownThroughDistinct;
     std::unordered_map<const ast::Expr*, DecidedCall> m_decidedCalls;

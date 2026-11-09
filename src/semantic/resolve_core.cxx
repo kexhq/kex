@@ -1,4 +1,5 @@
 #include "resolve_core.hxx"
+#include "../common/well_known.hxx"
 #include <algorithm>
 #include <cstdlib>
 #include <string_view>
@@ -163,9 +164,9 @@ auto receiverCoversHead(const TypePtr& receiver, const std::string& head,
                 return node.name == head ||
                        lastSegment(node.name) == lastSegment(head);
             } else if constexpr (std::is_same_v<T, ListType>) {
-                return head == "List";
+                return head == kex::names::kListType;
             } else if constexpr (std::is_same_v<T, MapType>) {
-                return head == "Map";
+                return head == kex::names::kMapType;
             } else if constexpr (std::is_same_v<T, OptionalType>) {
                 return head == "Optional";
             } else if constexpr (std::is_same_v<T, RecordType>) {

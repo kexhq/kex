@@ -1,4 +1,5 @@
 #include "kexi_registry.hxx"
+#include "../common/well_known.hxx"
 #include "beam_file.hxx"
 #include "../common/artifact_versions.hxx"
 #include <algorithm>
@@ -76,12 +77,12 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
         // types, so normalize or receiver matching never succeeds.
         if (type->name == "Optional" && type->typeArgs.size() == 1)
             return Type::optional(semanticType(type->typeArgs[0], vars));
-        if (type->name == "Map" && type->typeArgs.size() == 2)
+        if (type->name == kex::names::kMapType && type->typeArgs.size() == 2)
             return Type::map(semanticType(type->typeArgs[0], vars),
                              semanticType(type->typeArgs[1], vars));
-        if (type->name == "List" && type->typeArgs.size() == 1)
+        if (type->name == kex::names::kListType && type->typeArgs.size() == 1)
             return Type::list(semanticType(type->typeArgs[0], vars));
-        if (type->name == "List" && type->typeArgs.empty())
+        if (type->name == kex::names::kListType && type->typeArgs.empty())
             return Type::list(Type::unknown());
         // `Block<R>`, or `Block<A, R>` for a block handed an `A`: the result
         // is the last argument, as it is written.

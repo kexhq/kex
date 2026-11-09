@@ -10,14 +10,36 @@ to : Showable -> Type<String> -> String?
 
 to : Type -> Type<String> -> String?
 
+to : Date -> Type<String> -> Culture -> String?
+
+to : Date -> Type<String> -> DateFormat -> String?
+
+to : DateTime -> Type<String> -> Culture -> String?
+
+to : DateTime -> Type<String> -> DateFormat -> String?
+
 to : Measure -> Type<String> -> NumberFormat -> String?
 
 to : Measure -> Type<String> -> TimeUnit -> String?
+
+to : Number -> Type<String> -> Culture -> String?
 
 to : Number -> Type<String> -> Integer -> String?
 
 to : Number -> Type<String> -> NumberFormat -> String?
 
+to : Time -> Type<String> -> Culture -> String?
+
+to : Time -> Type<String> -> DateFormat -> String?
+
 to : Any -> Type<A> -> Integer -> A?
 
+to : Date -> Type<String> -> DateFormat -> Culture -> String?
+
+to : DateTime -> Type<String> -> DateFormat -> Culture -> String?
+
 to : Measure -> Type<String> -> TimeUnit -> NumberFormat -> String?
+
+to : Number -> Type<String> -> NumberFormat -> Culture -> String?
+
+to : Time -> Type<String> -> DateFormat -> Culture -> String?

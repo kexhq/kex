@@ -5404,7 +5404,7 @@ auto Evaluator::registerBuiltins() -> void {
                     return Value::just(val);
                 return Value::none();
             }
-            if (targetName == "List") {
+            if (targetName == kex::names::kListType) {
                 if (auto* range = std::get_if<RangeValue>(&val->data)) {
                     // Same materialization as Range.items (and the BEAM, which
                     // delegates there): chars stay chars, a reversed range is

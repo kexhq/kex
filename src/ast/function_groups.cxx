@@ -1,6 +1,7 @@
 #include "function_groups.hxx"
 #include "type_text.hxx"
 
+#include <algorithm>
 #include <set>
 #include <type_traits>
 #include <unordered_map>
@@ -60,15 +61,18 @@ auto separableOverloadSignatures(
     return true;
 }
 
-auto methodArity(const FunctionClause& clause) -> size_t {
-    const auto& params = clause.params;
-    if (params.empty()) return 1; // implicit-this only, e.g. `let reverse = …`
-    const auto& p0 = params[0];
-    const bool receiverPattern = !p0.name && p0.pattern &&
+auto takesReceiverPattern(const FunctionClause& clause) -> bool {
+    if (clause.params.empty()) return false;
+    const auto& p0 = clause.params[0];
+    return !p0.name && p0.pattern &&
         (std::holds_alternative<ThisPattern>((*p0.pattern)->kind) ||
          std::holds_alternative<RecordPattern>((*p0.pattern)->kind) ||
          std::holds_alternative<RangePattern>((*p0.pattern)->kind));
-    return receiverPattern ? params.size() : params.size() + 1;
+}
+
+auto methodArity(const FunctionClause& clause) -> size_t {
+    // Implicit `this` only (`let reverse = …`), or before the parameters.
+    return takesReceiverPattern(clause) ? clause.params.size() : clause.params.size() + 1;
 }
 
 auto methodArity(const FunctionDef& function) -> size_t {
@@ -87,9 +91,25 @@ auto freeFunctionArity(const FunctionDef& function) -> size_t {
 
 auto signatureClauses(const FunctionDef& function)
     -> std::vector<const FunctionClause*> {
+    const auto declaresTypes = [](const FunctionClause& clause) {
+        return (clause.returnAnnotation && *clause.returnAnnotation) ||
+               std::ranges::any_of(clause.params, [](const Param& param) {
+                   return (param.type && *param.type) || param.signatureType;
+               });
+    };
     std::vector<const FunctionClause*> out;
     std::set<std::string> seen;
     for (const auto& clause : function.clauses) {
+        // A clause that declares no types (`repeat(0)` beside `repeat(n:
+        // Integer) -> This`) is a case of a typed sibling's signature, not a
+        // signature of its own: counted apart, the two read as an overload
+        // no call could choose between.
+        if (!declaresTypes(clause) &&
+            std::ranges::any_of(function.clauses, [&](const FunctionClause& sibling) {
+                return &sibling != &clause && declaresTypes(sibling) &&
+                       sibling.params.size() == clause.params.size();
+            }))
+            continue;
         std::string key;
         for (const auto& param : clause.params) {
             if (param.type && *param.type)

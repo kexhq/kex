@@ -1,5 +1,5 @@
 duplicate-helpers 25
-literal-compares 452
+literal-compares 441
 type-recursions 40
 expr-walkers 18
 long-functions 17

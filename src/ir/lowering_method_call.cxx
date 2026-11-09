@@ -1,5 +1,6 @@
 // Method-call lowering methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../common/well_known.hxx"
 
 namespace kex::ir {
 
@@ -240,38 +241,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         const bool resolvedServerSlot = resolved != resolvedCalls->end() &&
             !resolved->second.localDispatchTypes.empty() &&
             resolved->second.localDispatchTypes.front().rfind("Server<", 0) == 0;
-        if (resolvedServerSlot) {
-            std::vector<Binding> binds;
-            auto server = atomize(n.receiver, binds);
-            std::vector<ExprPtr> protocolArgs;
-            for (const auto& arg : n.args)
-                protocolArgs.push_back(atomize(arg, binds));
-            if (n.block) protocolArgs.push_back(atomize(*n.block, binds));
-            auto argsList = std::make_unique<Expr>();
-            argsList->node = MakeList{std::move(protocolArgs), std::nullopt};
-
-            if (resolved->second.isServingCast) {
-                std::vector<ExprPtr> castArgs;
-                castArgs.push_back(std::move(server));
-                castArgs.push_back(lit(LitKind::Atom, n.method));
-                castArgs.push_back(std::move(argsList));
-                return wrapLets(
-                    binds, callE("kex_intrinsic_process", "server_cast", 3,
-                                 std::move(castArgs)));
-            }
-
-            ExprPtr timeout = lit(LitKind::Atom, "default");
-            for (const auto& [name, value] : n.namedArgs)
-                if (name == "within") timeout = atomize(value, binds);
-            std::vector<ExprPtr> callArgs;
-            callArgs.push_back(std::move(server));
-            callArgs.push_back(lit(LitKind::Atom, n.method));
-            callArgs.push_back(std::move(argsList));
-            callArgs.push_back(std::move(timeout));
-            return wrapLets(
-                binds, callE("kex_intrinsic_process", "server_call", 4,
-                             std::move(callArgs)));
-        }
+        if (resolvedServerSlot) return lowerServerSlotCall(n, resolved->second);
         // Semantic analysis has already applied lexical `using` policy
         // and argument-type specificity. Once it names an imported
         // target, source-import priority must not override that choice.
@@ -290,354 +260,8 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
                     isCapabilityModule(named) && capabilityInterfaceHas(named, n.method))
                     capabilityTarget = named;
         }
-        if (resolved != resolvedCalls->end()) {
-            if (!resolved->second.alternatives.empty())
-                return providerChoice(n, resolved->second);
-            std::vector<Binding> binds;
-            std::vector<ExprPtr> args;
-            if (resolved->second.passesReceiver)
-                args.push_back(atomize(n.receiver, binds));
-            // A make method of this unit: its declaration says where each
-            // label goes and what an omitted parameter defaults to.
-            const MakeMethod* declared =
-                resolved->second.backendModule.empty() &&
-                resolved->second.passesReceiver
-                    ? makeMethodFor(n) : nullptr;
-            if (declared) {
-                for (auto& slot : placeMethodArguments(n, *declared, binds))
-                    args.push_back(std::move(slot));
-            } else if (!n.namedArgs.empty()) {
-                const auto& pnames = resolved->second.paramNames;
-                auto expected = static_cast<size_t>(
-                    resolved->second.backendArity -
-                    (resolved->second.passesReceiver ? 1 : 0) -
-                    resolved->second.traitDictionaries.size());
-                // A foul target's arity can count the capability context
-                // too, which is no parameter of its own.
-                const bool contextCounted = threadsCapabilities() &&
-                    resolved->second.isFoul && pnames.size() + 1 == expected;
-                if (pnames.size() != expected && !contextCounted)
-                    throw LowerError(
-                        "IR lower: named args to imported function with unknown params: " +
-                        resolved->second.backendFunction);
-                std::vector<std::string> labels;
-                for (const auto& [label, _] : n.namedArgs)
-                    labels.push_back(label);
-                const auto placed = placeArguments(
-                    pnames, labels, n.args.size() + bool(n.block));
-                std::vector<ExprPtr> slots(pnames.size());
-                for (size_t i = 0; i < n.namedArgs.size(); ++i) {
-                    if (placed.labelSlots[i] == PlacedArguments::npos)
-                        throw LowerError("IR lower: unknown named arg " +
-                                         n.namedArgs[i].first + " for " +
-                                         resolved->second.backendFunction);
-                    slots[placed.labelSlots[i]] =
-                        atomize(n.namedArgs[i].second, binds);
-                }
-                std::vector<ExprPtr> positional;
-                for (const auto& arg : n.args)
-                    positional.push_back(atomize(arg, binds));
-                if (n.block) positional.push_back(atomize(*n.block, binds));
-                for (size_t k = 0; k < positional.size(); ++k)
-                    if (placed.positionalSlots[k] != PlacedArguments::npos)
-                        slots[placed.positionalSlots[k]] =
-                            std::move(positional[k]);
-                if (!resolved->second.defaultSources.empty())
-                    fillOmittedArguments(resolved->second.defaultSources, slots);
-                for (auto& slot : slots) args.push_back(std::move(slot));
-            } else if (const auto expected = resolved->second.paramNames.size();
-                       !resolved->second.defaultSources.empty() &&
-                       n.args.size() + (n.block ? 1 : 0) < expected) {
-                // Fewer arguments than parameters: the rest are the
-                // callee's defaults, which only its interface knows.
-                std::vector<ExprPtr> slots(expected);
-                size_t next = 0;
-                for (const auto& arg : n.args) slots[next++] = atomize(arg, binds);
-                if (n.block) slots[next++] = atomize(*n.block, binds);
-                fillOmittedArguments(resolved->second.defaultSources, slots);
-                for (auto& slot : slots) args.push_back(std::move(slot));
-            } else {
-                for (const auto& arg : n.args)
-                    args.push_back(atomize(arg, binds));
-                if (n.block) args.push_back(atomize(*n.block, binds));
-            }
-            // A local make-method beats an imported TRAIT DEFAULT of the
-            // same name. `make Comparison do let to(@Less, Integer)` never
-            // ran on BEAM: the call bound to `kex_prelude:to/Showable`
-            // (every Comparison value is Showable), which answers only for
-            // `String` — so `Less.to(Integer)` returned the generic
-            // conversion's `None` instead of `Just(-1)`, silently. This is
-            // the rule already stated above for local TYPES, one level
-            // down: semantic analysis picks the imported target because a
-            // trait default matches any receiver, which makes it the least
-            // specific candidate, not the most.
-            //
-            // Only for a trait DEFAULT — a concrete imported target was
-            // chosen on real type evidence and must stand. The local
-            // definition carries its own fallback to the prelude for
-            // receivers it does not match (see the `to` fallback clause
-            // and `makeDispatcher`'s generic arm), so nothing is lost for
-            // the values the default would have handled.
-            const auto traitDefaultOwner = [&]() -> std::string {
-                auto slash = resolved->second.backendFunction.find('/');
-                if (slash == std::string::npos) return {};
-                auto owner =
-                    resolved->second.backendFunction.substr(slash + 1);
-                return traitMethods.count(owner) ? owner : std::string{};
-            }();
-            // Only at an arity the local name is defined with: a program's
-            // own `to(String, format)` (`to/3`) must leave `3.to(String)`
-            // to the default, not call a `to/2` that does not exist.
-            const bool localBeatsTraitDefault =
-                !traitDefaultOwner.empty() && localMethods.count(n.method) &&
-                knownFns.count(n.method) &&
-                definedFnArities.count(n.method + "/" +
-                                       std::to_string(args.size()));
-            if (localBeatsTraitDefault) {
-                return wrapLets(
-                    binds,
-                    localCallExpr(n.method, std::move(args)));
-            }
-            // Only for an implementation whose parameters are plain names: a
-            // clause that matches on an argument (`to(String)`, a type
-            // selector) is reached through the dispatcher, which normalises
-            // that argument and falls back to the prelude conversion — called
-            // directly it met values it has no clause for (function_clause).
-            //
-            // A make method of this unit whose owner the checker decided:
-            // call that owner's own implementation (`count/List`). The
-            // shared dispatcher answers to the bare NAME, and lowerModules
-            // files a name with whichever module declares it — `count` with
-            // `module Mock` — so `parts.count` in the stdlib went to
-            // Kex.Mock's gated dispatcher. The decided owner is addressed
-            // directly, and the call skips the run-time dispatch too.
-            if (resolved->second.backendModule.empty() &&
-                resolved->second.passesReceiver &&
-                resolved->second.traitDictionaries.empty() &&
-                resolved->second.backendArity ==
-                    static_cast<int>(args.size()))
-                // Built-in structural owners only (List, Map, the primitives):
-                // their prelude implementation is the whole method. A record
-                // type's dispatcher also forwards to `make` extensions from
-                // units compiled apart (Units extends Measure), and a trait's
-                // default answers only when the concrete type has none —
-                // both decided at run time, so both keep the dispatcher.
-                if (const auto owner = receiverOwner(n);
-                    !owner.empty() && ownsMethod(owner, n.method) &&
-                    (owner == "List" || owner == "Map" ||
-                     primGuardBifs().count(owner)) &&
-                    takesPlainParameters(n.method, owner))
-                    if (auto implementation = collidingImplementationName(
-                            n.method, owner, args.size())) {
-                        if (threadsCapabilities() && resolved->second.isFoul)
-                            args.push_back(currentContext());
-                        auto call = std::make_unique<Expr>();
-                        call->node = Call{"", *implementation,
-                                          static_cast<int>(args.size()),
-                                          std::move(args), false};
-                        return wrapLets(binds, std::move(call));
-                    }
-            // Everything appended from here on is a trait dictionary,
-            // not a source argument — the two branches of a capability
-            // dispatch need them separated (see the terminal call below).
-            const size_t sourceArgCount = args.size();
-            for (const auto& [argument, trait] :
-                 resolved->second.traitDictionaries) {
-                const ast::Expr* source = nullptr;
-                if (resolved->second.passesReceiver) {
-                    if (argument == 0) source = n.receiver.get();
-                    else if (argument - 1 < n.args.size())
-                        source = n.args[argument - 1].get();
-                } else if (argument < n.args.size()) {
-                    source = n.args[argument].get();
-                }
-                // Same as above: an omitted defaulted trait parameter
-                // takes its dictionary from the default expression.
-                if (!source) {
-                    const size_t index = resolved->second.passesReceiver
-                        ? (argument > 0 ? argument - 1 : 0) : argument;
-                    if (auto defaults = fnDefaults.find(n.method);
-                        defaults != fnDefaults.end() &&
-                        index < defaults->second.size() &&
-                        defaults->second[index])
-                        source = defaults->second[index]->get();
-                }
-                if (!source)
-                    throw LowerError(
-                        "IR lower: missing source argument for " + trait +
-                        " dictionary");
-                args.push_back(atomize_ir(
-                    makeTraitDictionary(trait, *source), binds));
-            }
-            if (std::getenv("KEX_DEBUG_TO2") && n.method == "to")
-                std::fprintf(stderr,
-                             "[to] mod=%s fn=%s arity=%d args=%zu\n",
-                             resolved->second.backendModule.c_str(),
-                             resolved->second.backendFunction.c_str(),
-                             resolved->second.backendArity, args.size());
-            auto backendFunction = resolved->second.backendFunction;
-            // A trait-default→dispatcher demotion used to rewrite
-            // `backendFunction` here (`showValue/Showable` → `showValue`)
-            // so unpinned-receiver calls reached the dispatcher's
-            // variant arms. The Phase 2 trust audit removed it: with the
-            // rewrite disabled, spec-beam, the 400-case fuzzer, and four
-            // targeted probes (literal/bound/typed/unpinned Optional
-            // interpolation, custom Showable instance) all agree, and
-            // the cited `Just(50)` shape no longer reproduces —
-            // resolution now reaches the dispatcher on its own.
-            if (!resolved->second.localDispatchTypes.empty()) {
-                auto exact = mangleReceiverSignature(
-                    backendFunction,
-                    resolved->second.localDispatchTypes);
-                auto byReceiver = mangleReceiverImplementation(
-                    backendFunction,
-                    resolved->second.localDispatchTypes.front());
-                if (knownFns.count(exact))
-                    backendFunction = std::move(exact);
-                else if (knownFns.count(byReceiver))
-                    backendFunction = std::move(byReceiver);
-                else {
-                    // The checker names a module's types by their
-                    // QUALIFIED identity (`Srv.Server`, `Srv.Options`),
-                    // but a `make Server` written inside `module Srv`
-                    // mangles its per-signature implementations under the
-                    // spelling as WRITTEN, which inside the module is
-                    // bare. So a call from OUTSIDE the module built
-                    // `listen/Srv.Server,String,Integer`, found nothing,
-                    // kept the plain name — and the plain name is exactly
-                    // what an argument-overloaded method is never emitted
-                    // under: erlc rejected the unit with "undefined
-                    // function listen/4". Retry in the declaring module's
-                    // own spelling before giving up.
-                    auto local = resolved->second.localDispatchTypes;
-                    for (auto& type : local)
-                        type = moduleLocalTypeSpelling(type);
-                    if (local != resolved->second.localDispatchTypes) {
-                        auto localExact =
-                            mangleReceiverSignature(backendFunction, local);
-                        auto localByReceiver =
-                            mangleReceiverImplementation(backendFunction,
-                                                         local.front());
-                        if (knownFns.count(localExact))
-                            backendFunction = std::move(localExact);
-                        else if (knownFns.count(localByReceiver))
-                            backendFunction = std::move(localByReceiver);
-                    }
-                }
-            }
-            // A proven `name/Head` for an imported make-block method —
-            // unless the receiver takes a trait dictionary (clause
-            // (10)), which names trait dispatch the mangled spelling
-            // cannot serve. (Set only for imported receiver calls, so
-            // index 0 is the receiver and `localDispatchTypes` — the
-            // same-unit path above — is empty.)
-            if (!resolved->second.importDispatchSpelling.empty()) {
-                bool receiverHasDictionary = false;
-                for (const auto& [argument, _] :
-                     resolved->second.traitDictionaries)
-                    if (argument == 0) receiverHasDictionary = true;
-                if (!receiverHasDictionary) {
-                    backendFunction =
-                        resolved->second.importDispatchSpelling;
-                    // Applied-spelling audit for `make test-devirt`:
-                    // `module name/Head beamArity`, one line per call
-                    // site, appended (O_APPEND keeps parallel spec
-                    // runs from interleaving).
-                    if (const char* audit =
-                            std::getenv("KEX_DEVIRT_AUDIT")) {
-                        if (FILE* out = std::fopen(audit, "a")) {
-                            std::fprintf(
-                                out, "%s %s %d\n",
-                                resolved->second.backendModule.c_str(),
-                                backendFunction.c_str(),
-                                resolved->second.backendArity);
-                            std::fclose(out);
-                        }
-                    }
-                }
-            }
-            // Same as externalCallExpr: the imported-foul append belongs
-            // with dropping the gate, not before it (kexhq/kex#181).
-            if (!capabilityTarget.empty()) {
-                // The two branches take DIFFERENT arguments. The real
-                // implementation is an ordinary function and wants its
-                // trait dictionaries; a stand-in is a `make` block method,
-                // which is unannotated and takes none. Splitting them here
-                // is what lets a capability have a trait-constrained
-                // parameter at all — `IO.printLine(msg: Showable)` is the
-                // first, and without this its dictionary went missing and
-                // every value rendered structurally instead of through the
-                // user's `showValue` (kexhq/kex#143).
-                std::vector<ExprPtr> dictionaries;
-                for (size_t i = sourceArgCount; i < args.size(); ++i)
-                    dictionaries.push_back(std::move(args[i]));
-                args.resize(sourceArgCount);
-                auto module = resolved->second.backendModule;
-                auto function = backendFunction;
-                const int arity = resolved->second.backendArity;
-                return capabilityDispatchLowered(
-                    capabilityTarget, n.method, std::move(args), binds,
-                    [&](std::vector<ExprPtr> direct) {
-                        for (auto& dictionary : dictionaries)
-                            direct.push_back(std::move(dictionary));
-                        return callE(module, function, arity,
-                                     std::move(direct));
-                    });
-            }
-            // A resolved target with no backend module is a call into THIS
-            // unit, and callE only appends the capability context for
-            // EXTERNAL foul targets — so a foul make-block method
-            // resolved this way went out one argument short of its own
-            // definition. `Net.HTTP`'s `make Client do foul statistics`
-            // is defined as statistics/2 (receiver + context) and was
-            // called as `apply 'statistics'/1`, which erlc rejects.
-            // Routing it through localCall puts it back on the one code
-            // path that decides about the context (kexhq/kex#181).
-            if (resolved->second.backendModule.empty() &&
-                resolved->second.backendArity ==
-                    static_cast<int>(args.size())) {
-                // The resolver knows WHICH implementation won, so its
-                // foulness settles the context where the name-and-arity
-                // lookup in callNeedsContext cannot: `get` is PURE at
-                // arity 2 for Net.HTTP's Headers and FOUL at arity 2 for
-                // its Client, and one answer has to serve both.
-                if (threadsCapabilities() && resolved->second.isFoul) {
-                    args.push_back(currentContext());
-                    auto call = std::make_unique<Expr>();
-                    call->node = Call{"", backendFunction,
-                                      static_cast<int>(args.size()),
-                                      std::move(args), false};
-                    return wrapLets(binds, std::move(call));
-                }
-                if (callNeedsContext(backendFunction,
-                                     static_cast<int>(args.size())))
-                    return wrapLets(
-                        binds,
-                        localCallExpr(backendFunction, std::move(args)));
-            }
-            // Source-derived interfaces know a foul target's hidden
-            // capability arity even when the prebuilt external-module
-            // registry does not contain that opt-in module. Honor the
-            // resolved target directly; otherwise callE cannot discover
-            // the context parameter and emits an arity-short call.
-            if (threadsCapabilities() && resolved->second.isFoul &&
-                resolved->second.backendArity ==
-                    static_cast<int>(args.size()) + 1) {
-                args.push_back(currentContext());
-                auto call = std::make_unique<Expr>();
-                call->node = Call{resolved->second.backendModule,
-                                  backendFunction,
-                                  resolved->second.backendArity,
-                                  std::move(args), false};
-                return wrapLets(binds, std::move(call));
-            }
-            return wrapLets(
-                binds,
-                callE(resolved->second.backendModule,
-                      backendFunction,
-                      resolved->second.backendArity,
-                      std::move(args)));
-        }
+        if (resolved != resolvedCalls->end())
+            return lowerResolvedCall(n, resolved->second, capabilityTarget);
     }
     // A call into the `Kex.Intrinsic.<Category>` runtime module, e.g.
     // `Kex.Intrinsic.List.reverse(x)`. Compile to a plain cross-module call
@@ -1009,6 +633,12 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             return wrapLets(binds,
                 runtimeError("Undefined function: " + uid->name + "." + n.method));
     }
+    return lowerValueReceiverCall(n);
+}
+
+// A method call on a value receiver that no earlier case claimed: the
+// receiver atomized once, then the case the checker decided.
+auto Lowering::lowerValueReceiverCall(const ast::MethodCall& n) -> ExprPtr {
     // UFCS method on a value receiver. Atomize the receiver once so
     // methods that use it several times (min/get/count/…) don't
     // re-evaluate it; `ret` wraps the result in that binding.
@@ -1040,44 +670,23 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         return ret(localCallExpr(own.symbol, std::move(args)));
     }
 
-    // A public function brought into scope by `using Module` also
-    // participates in UFCS: `100.meter` is `meter(100)`, and
-    // `distance.per(duration)` is `per(distance, duration)`. The source
-    // import must win over an identically named prelude receiver method:
-    // module compilation merges declarations into one flat IR first, so
-    // imported functions also appear in localMethods at this point.
-    auto importedMethod = moduleImports.find(m);
-    bool importedArityMatches = importedMethod != moduleImports.end();
-    if (importedArityMatches) {
-        const auto actual = n.args.size() + n.namedArgs.size() + 1 +
-            (n.block ? 1 : 0);
-        for (const auto& [qualified, emitted] : moduleFunctions) {
-            if (emitted != importedMethod->second) continue;
-            // Labelled arguments are placed by the checker's resolved target.
-            if (!n.namedArgs.empty()) {
-                importedArityMatches = false;
-                break;
-            }
-            if (auto names = fnParamNames.find(qualified);
-                names != fnParamNames.end())
-                importedArityMatches = names->second.size() == actual;
-            break;
-        }
-    }
-    if (importedArityMatches) {
-        auto imported = importedMethod;
+    // A function of a module of this unit the checker selected for the call
+    // (`10.double` under `using Utils`): `double(10)`, the receiver first.
+    // Only the one `using` brought into scope here: the checker also selects
+    // an unimported module's free function for a receiver whose type it has
+    // not settled (`Bits.or` for `findIndex {..}.or(..)` in the prelude).
+    if (const auto* selected = hir->selectedSignatureOf(n);
+        selected && !selected->declaringModule.empty() && n.namedArgs.empty())
+        if (const auto emitted =
+                moduleFunctions.find(selected->declaringModule + "." + n.method);
+            emitted != moduleFunctions.end() && moduleImports.contains(n.method) &&
+            moduleImports.at(n.method) == emitted->second) {
             std::vector<ExprPtr> args;
-            {
-                args.push_back(rv());
-                for (const auto& value : n.args)
-                    args.push_back(atomize_ir(lower(value), rb));
-                for (const auto& [_, value] : n.namedArgs)
-                    args.push_back(atomize_ir(lower(value), rb));
-                if (n.block)
-                    args.push_back(atomize_ir(lower(*n.block), rb));
-            }
-        return ret(localCallExpr(imported->second, std::move(args)));
-    }
+            args.push_back(rv());
+            for (const auto& value : n.args) args.push_back(atomize_ir(lower(value), rb));
+            if (n.block) args.push_back(atomize_ir(lower(*n.block), rb));
+            return ret(localCallExpr(emitted->second, std::move(args)));
+        }
 
     // A local method only claims the call when it is defined at THIS
     // arity; otherwise the external/prelude receiver function handles it.
@@ -1173,14 +782,13 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             if (n.block) args.push_back(atomize(*n.block, binds));
         }
         auto ex = std::make_unique<Expr>();
-        // The receiver's own make function says whether it takes the capability
-        // context. By name and arity alone a pure `Headers.remove(name)`
+        // The make function the checker selected says whether it takes the
+        // capability context. By name and arity alone a pure `Headers.remove(name)`
         // elsewhere in the program answered for a foul
         // `Repository.remove(id)`, which then went out one argument
         // short and reached the wrong arity's dispatcher: "Undefined
         // method: remove" once Net.HTTP was linked (kexhq/kex#451).
-        if (const auto* owned = declared
-                ? declared : ownedMakeFunction(n, args.size() - 1)) {
+        if (const auto* owned = declared ? declared : selectedMakeMethod(n)) {
             if (threadsCapabilities() && owned->def->isFoul)
                 args.push_back(currentContext());
             const int callArity = static_cast<int>(args.size());
@@ -1192,6 +800,352 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
     }
     // External loaded module methods (UFCS): tree.size → 'Kex.BinaryTree':'Tree.size'(tree)
     return ret(undefinedMethodOrField(n, rv()));
+}
+
+// A `serving` slot called on its running server (`Server<T>`): a cast, or a
+// call waiting for the reply (`within:` its timeout).
+auto Lowering::lowerServerSlotCall(const ast::MethodCall& n,
+                                   const semantic::ResolvedCallTarget& target) -> ExprPtr {
+    std::vector<Binding> binds;
+    auto server = atomize(n.receiver, binds);
+    std::vector<ExprPtr> protocolArgs;
+    for (const auto& arg : n.args)
+        protocolArgs.push_back(atomize(arg, binds));
+    if (n.block) protocolArgs.push_back(atomize(*n.block, binds));
+    auto argsList = std::make_unique<Expr>();
+    argsList->node = MakeList{std::move(protocolArgs), std::nullopt};
+
+    if (target.isServingCast) {
+        std::vector<ExprPtr> castArgs;
+        castArgs.push_back(std::move(server));
+        castArgs.push_back(lit(LitKind::Atom, n.method));
+        castArgs.push_back(std::move(argsList));
+        return wrapLets(
+            binds, callE("kex_intrinsic_process", "server_cast", 3,
+                         std::move(castArgs)));
+    }
+
+    ExprPtr timeout = lit(LitKind::Atom, "default");
+    for (const auto& [name, value] : n.namedArgs)
+        if (name == "within") timeout = atomize(value, binds);
+    std::vector<ExprPtr> callArgs;
+    callArgs.push_back(std::move(server));
+    callArgs.push_back(lit(LitKind::Atom, n.method));
+    callArgs.push_back(std::move(argsList));
+    callArgs.push_back(std::move(timeout));
+    return wrapLets(
+        binds, callE("kex_intrinsic_process", "server_call", 4,
+                     std::move(callArgs)));
+}
+
+// A call the checker resolved to one target: its module and function, the
+// receiver passed or not, arguments placed, trait dictionaries appended.
+auto Lowering::lowerResolvedCall(const ast::MethodCall& n,
+                                 const semantic::ResolvedCallTarget& target,
+                                 const std::string& capabilityTarget) -> ExprPtr {
+    if (!target.alternatives.empty())
+        return providerChoice(n, target);
+    std::vector<Binding> binds;
+    std::vector<ExprPtr> args;
+    if (target.passesReceiver)
+        args.push_back(atomize(n.receiver, binds));
+    // A make method of this unit: its declaration says where each
+    // label goes and what an omitted parameter defaults to.
+    const MakeMethod* declared =
+        target.backendModule.empty() &&
+        target.passesReceiver
+            ? makeMethodFor(n) : nullptr;
+    if (declared) {
+        for (auto& slot : placeMethodArguments(n, *declared, binds))
+            args.push_back(std::move(slot));
+    } else if (!n.namedArgs.empty()) {
+        const auto& pnames = target.paramNames;
+        auto expected = static_cast<size_t>(
+            target.backendArity -
+            (target.passesReceiver ? 1 : 0) -
+            target.traitDictionaries.size());
+        // A foul target's arity can count the capability context
+        // too, which is no parameter of its own.
+        const bool contextCounted = threadsCapabilities() &&
+            target.isFoul && pnames.size() + 1 == expected;
+        if (pnames.size() != expected && !contextCounted)
+            throw LowerError(
+                "IR lower: named args to imported function with unknown params: " +
+                target.backendFunction);
+        std::vector<std::string> labels;
+        for (const auto& [label, _] : n.namedArgs)
+            labels.push_back(label);
+        const auto placed = placeArguments(
+            pnames, labels, n.args.size() + bool(n.block));
+        std::vector<ExprPtr> slots(pnames.size());
+        for (size_t i = 0; i < n.namedArgs.size(); ++i) {
+            if (placed.labelSlots[i] == PlacedArguments::npos)
+                throw LowerError("IR lower: unknown named arg " +
+                                 n.namedArgs[i].first + " for " +
+                                 target.backendFunction);
+            slots[placed.labelSlots[i]] =
+                atomize(n.namedArgs[i].second, binds);
+        }
+        std::vector<ExprPtr> positional;
+        for (const auto& arg : n.args)
+            positional.push_back(atomize(arg, binds));
+        if (n.block) positional.push_back(atomize(*n.block, binds));
+        for (size_t k = 0; k < positional.size(); ++k)
+            if (placed.positionalSlots[k] != PlacedArguments::npos)
+                slots[placed.positionalSlots[k]] =
+                    std::move(positional[k]);
+        if (!target.defaultSources.empty())
+            fillOmittedArguments(target.defaultSources, slots);
+        for (auto& slot : slots) args.push_back(std::move(slot));
+    } else if (const auto expected = target.paramNames.size();
+               !target.defaultSources.empty() &&
+               n.args.size() + (n.block ? 1 : 0) < expected) {
+        // Fewer arguments than parameters: the rest are the
+        // callee's defaults, which only its interface knows.
+        std::vector<ExprPtr> slots(expected);
+        size_t next = 0;
+        for (const auto& arg : n.args) slots[next++] = atomize(arg, binds);
+        if (n.block) slots[next++] = atomize(*n.block, binds);
+        fillOmittedArguments(target.defaultSources, slots);
+        for (auto& slot : slots) args.push_back(std::move(slot));
+    } else {
+        for (const auto& arg : n.args)
+            args.push_back(atomize(arg, binds));
+        if (n.block) args.push_back(atomize(*n.block, binds));
+    }
+    // Only for an implementation whose parameters are plain names: a
+    // clause that matches on an argument (`to(String)`, a type
+    // selector) is reached through the dispatcher, which normalises
+    // that argument and falls back to the prelude conversion — called
+    // directly it met values it has no clause for (function_clause).
+    //
+    // A make method of this unit whose owner the checker decided:
+    // call that owner's own implementation (`count/List`). The
+    // shared dispatcher answers to the bare NAME, and lowerModules
+    // files a name with whichever module declares it — `count` with
+    // `module Mock` — so `parts.count` in the stdlib went to
+    // Kex.Mock's gated dispatcher. The decided owner is addressed
+    // directly, and the call skips the run-time dispatch too.
+    if (target.backendModule.empty() &&
+        target.passesReceiver &&
+        target.traitDictionaries.empty() &&
+        target.backendArity ==
+            static_cast<int>(args.size()))
+        // Built-in structural owners only (List, Map, the primitives):
+        // their prelude implementation is the whole method. A record
+        // type's dispatcher also forwards to `make` extensions from
+        // units compiled apart (Units extends Measure), and a trait's
+        // default answers only when the concrete type has none —
+        // both decided at run time, so both keep the dispatcher.
+        if (const auto owner = receiverOwner(n);
+            !owner.empty() && ownsMethod(owner, n.method) &&
+            (owner == kex::names::kListType || owner == kex::names::kMapType ||
+             primGuardBifs().count(owner)) &&
+            takesPlainParameters(n.method, owner))
+            if (auto implementation = collidingImplementationName(
+                    n.method, owner, args.size())) {
+                if (threadsCapabilities() && target.isFoul)
+                    args.push_back(currentContext());
+                auto call = std::make_unique<Expr>();
+                call->node = Call{"", *implementation,
+                                  static_cast<int>(args.size()),
+                                  std::move(args), false};
+                return wrapLets(binds, std::move(call));
+            }
+    // Everything appended from here on is a trait dictionary,
+    // not a source argument — the two branches of a capability
+    // dispatch need them separated (see the terminal call below).
+    const size_t sourceArgCount = args.size();
+    for (const auto& [argument, trait] :
+         target.traitDictionaries) {
+        const ast::Expr* source = nullptr;
+        if (target.passesReceiver) {
+            if (argument == 0) source = n.receiver.get();
+            else if (argument - 1 < n.args.size())
+                source = n.args[argument - 1].get();
+        } else if (argument < n.args.size()) {
+            source = n.args[argument].get();
+        }
+        // Same as above: an omitted defaulted trait parameter
+        // takes its dictionary from the default expression.
+        if (!source) {
+            const size_t index = target.passesReceiver
+                ? (argument > 0 ? argument - 1 : 0) : argument;
+            if (auto defaults = fnDefaults.find(n.method);
+                defaults != fnDefaults.end() &&
+                index < defaults->second.size() &&
+                defaults->second[index])
+                source = defaults->second[index]->get();
+        }
+        if (!source)
+            throw LowerError(
+                "IR lower: missing source argument for " + trait +
+                " dictionary");
+        args.push_back(atomize_ir(
+            makeTraitDictionary(trait, *source), binds));
+    }
+    auto backendFunction = target.backendFunction;
+    // A trait-default→dispatcher demotion used to rewrite
+    // `backendFunction` here (`showValue/Showable` → `showValue`)
+    // so unpinned-receiver calls reached the dispatcher's
+    // variant arms. The Phase 2 trust audit removed it: with the
+    // rewrite disabled, spec-beam, the 400-case fuzzer, and four
+    // targeted probes (literal/bound/typed/unpinned Optional
+    // interpolation, custom Showable instance) all agree, and
+    // the cited `Just(50)` shape no longer reproduces —
+    // resolution now reaches the dispatcher on its own.
+    if (!target.localDispatchTypes.empty()) {
+        auto exact = mangleReceiverSignature(
+            backendFunction,
+            target.localDispatchTypes);
+        auto byReceiver = mangleReceiverImplementation(
+            backendFunction,
+            target.localDispatchTypes.front());
+        if (knownFns.count(exact))
+            backendFunction = std::move(exact);
+        else if (knownFns.count(byReceiver))
+            backendFunction = std::move(byReceiver);
+        else {
+            // The checker names a module's types by their
+            // QUALIFIED identity (`Srv.Server`, `Srv.Options`),
+            // but a `make Server` written inside `module Srv`
+            // mangles its per-signature implementations under the
+            // spelling as WRITTEN, which inside the module is
+            // bare. So a call from OUTSIDE the module built
+            // `listen/Srv.Server,String,Integer`, found nothing,
+            // kept the plain name — and the plain name is exactly
+            // what an argument-overloaded method is never emitted
+            // under: erlc rejected the unit with "undefined
+            // function listen/4". Retry in the declaring module's
+            // own spelling before giving up.
+            auto local = target.localDispatchTypes;
+            for (auto& type : local)
+                type = moduleLocalTypeSpelling(type);
+            if (local != target.localDispatchTypes) {
+                auto localExact =
+                    mangleReceiverSignature(backendFunction, local);
+                auto localByReceiver =
+                    mangleReceiverImplementation(backendFunction,
+                                                 local.front());
+                if (knownFns.count(localExact))
+                    backendFunction = std::move(localExact);
+                else if (knownFns.count(localByReceiver))
+                    backendFunction = std::move(localByReceiver);
+            }
+        }
+    }
+    // A proven `name/Head` for an imported make-block method —
+    // unless the receiver takes a trait dictionary (clause
+    // (10)), which names trait dispatch the mangled spelling
+    // cannot serve. (Set only for imported receiver calls, so
+    // index 0 is the receiver and `localDispatchTypes` — the
+    // same-unit path above — is empty.)
+    if (!target.importDispatchSpelling.empty()) {
+        bool receiverHasDictionary = false;
+        for (const auto& [argument, _] :
+             target.traitDictionaries)
+            if (argument == 0) receiverHasDictionary = true;
+        if (!receiverHasDictionary) {
+            backendFunction =
+                target.importDispatchSpelling;
+            // Applied-spelling audit for `make test-devirt`:
+            // `module name/Head beamArity`, one line per call
+            // site, appended (O_APPEND keeps parallel spec
+            // runs from interleaving).
+            if (const char* audit =
+                    std::getenv("KEX_DEVIRT_AUDIT")) {
+                if (FILE* out = std::fopen(audit, "a")) {
+                    std::fprintf(
+                        out, "%s %s %d\n",
+                        target.backendModule.c_str(),
+                        backendFunction.c_str(),
+                        target.backendArity);
+                    std::fclose(out);
+                }
+            }
+        }
+    }
+    // Same as externalCallExpr: the imported-foul append belongs
+    // with dropping the gate, not before it (kexhq/kex#181).
+    if (!capabilityTarget.empty()) {
+        // The two branches take DIFFERENT arguments. The real
+        // implementation is an ordinary function and wants its
+        // trait dictionaries; a stand-in is a `make` block method,
+        // which is unannotated and takes none. Splitting them here
+        // is what lets a capability have a trait-constrained
+        // parameter at all — `IO.printLine(msg: Showable)` is the
+        // first, and without this its dictionary went missing and
+        // every value rendered structurally instead of through the
+        // user's `showValue` (kexhq/kex#143).
+        std::vector<ExprPtr> dictionaries;
+        for (size_t i = sourceArgCount; i < args.size(); ++i)
+            dictionaries.push_back(std::move(args[i]));
+        args.resize(sourceArgCount);
+        auto module = target.backendModule;
+        auto function = backendFunction;
+        const int arity = target.backendArity;
+        return capabilityDispatchLowered(
+            capabilityTarget, n.method, std::move(args), binds,
+            [&](std::vector<ExprPtr> direct) {
+                for (auto& dictionary : dictionaries)
+                    direct.push_back(std::move(dictionary));
+                return callE(module, function, arity,
+                             std::move(direct));
+            });
+    }
+    // A resolved target with no backend module is a call into THIS
+    // unit, and callE only appends the capability context for
+    // EXTERNAL foul targets — so a foul make-block method
+    // resolved this way went out one argument short of its own
+    // definition. `Net.HTTP`'s `make Client do foul statistics`
+    // is defined as statistics/2 (receiver + context) and was
+    // called as `apply 'statistics'/1`, which erlc rejects.
+    // Routing it through localCall puts it back on the one code
+    // path that decides about the context (kexhq/kex#181).
+    if (target.backendModule.empty() &&
+        target.backendArity ==
+            static_cast<int>(args.size())) {
+        // The resolver knows WHICH implementation won, so its
+        // foulness settles the context where the name-and-arity
+        // lookup in callNeedsContext cannot: `get` is PURE at
+        // arity 2 for Net.HTTP's Headers and FOUL at arity 2 for
+        // its Client, and one answer has to serve both.
+        if (threadsCapabilities() && target.isFoul) {
+            args.push_back(currentContext());
+            auto call = std::make_unique<Expr>();
+            call->node = Call{"", backendFunction,
+                              static_cast<int>(args.size()),
+                              std::move(args), false};
+            return wrapLets(binds, std::move(call));
+        }
+        if (callNeedsContext(backendFunction,
+                             static_cast<int>(args.size())))
+            return wrapLets(
+                binds,
+                localCallExpr(backendFunction, std::move(args)));
+    }
+    // Source-derived interfaces know a foul target's hidden
+    // capability arity even when the prebuilt external-module
+    // registry does not contain that opt-in module. Honor the
+    // resolved target directly; otherwise callE cannot discover
+    // the context parameter and emits an arity-short call.
+    if (threadsCapabilities() && target.isFoul &&
+        target.backendArity ==
+            static_cast<int>(args.size()) + 1) {
+        args.push_back(currentContext());
+        auto call = std::make_unique<Expr>();
+        call->node = Call{target.backendModule,
+                          backendFunction,
+                          target.backendArity,
+                          std::move(args), false};
+        return wrapLets(binds, std::move(call));
+    }
+    return wrapLets(
+        binds,
+        callE(target.backendModule,
+              backendFunction,
+              target.backendArity,
+              std::move(args)));
 }
 
 // record TypeName { f: v, ... } → {'TypeName', <fields in declared order,

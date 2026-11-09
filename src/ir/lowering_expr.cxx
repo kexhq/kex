@@ -1478,6 +1478,30 @@ auto Lowering::nextExtendingModule(const std::string& method,
     return next;
 }
 
+// The make-block method whose clause the checker selected for a receiver
+// call, or nullptr. A trait default is one clause spliced into every type
+// that inherits it; of those copies, the call's owner (`OwnMethod`) is the
+// one it binds.
+auto Lowering::selectedMakeMethod(const ast::MethodCall& n) const -> const MakeMethod* {
+    const auto* signature = hir->selectedSignatureOf(n);
+    if (!signature || !signature->clause) return nullptr;
+    const auto found = makeMethods.find(n.method);
+    if (found == makeMethods.end()) return nullptr;
+    const auto& target = hir->targetOf(n);
+    const auto owner = target.kind == hir::TargetKind::OwnMethod
+        ? canonicalRecordName(ownerNameOf(target.owner)) : std::string{};
+    const MakeMethod* chosen = nullptr;
+    for (const auto& method : found->second) {
+        if (std::ranges::none_of(method.def->clauses, [&](const auto& clause) {
+                return &clause == signature->clause;
+            }))
+            continue;
+        if (canonicalRecordName(method.owner) == owner) return &method;
+        if (!chosen) chosen = &method;
+    }
+    return chosen;
+}
+
 // The make-block method a receiver call binds when it does not spell out
 // every parameter in order (labels may name any subset, and defaulted
 // parameters may be left out): the one whose clause the checker selected.
@@ -1485,25 +1509,18 @@ auto Lowering::nextExtendingModule(const std::string& method,
 // enters by the first in module-path order that takes its labels, which
 // forwards to the rest (see `nextExtendingModule`).
 auto Lowering::makeMethodFor(const ast::MethodCall& n) const -> const MakeMethod* {
-    const auto* signature = hir->selectedSignatureOf(n);
-    if (!signature || !signature->clause) return nullptr;
-    auto found = makeMethods.find(n.method);
-    if (found == makeMethods.end()) return nullptr;
-    const auto& selected = *signature->clause;
-    const auto chosen = std::ranges::find_if(found->second, [&](const MakeMethod& method) {
-        return std::ranges::any_of(method.def->clauses, [&](const auto& clause) {
-            return &clause == &selected;
-        });
-    });
-    if (chosen == found->second.end()) return nullptr;
+    const auto* chosen = selectedMakeMethod(n);
+    if (!chosen) return nullptr;
+    const auto& selected = *hir->selectedSignatureOf(n)->clause;
     // Every parameter given, in order: nothing to place.
     const auto positional = n.args.size() + (n.block ? 1 : 0);
     if (n.namedArgs.empty() && positional + 1 >= ast::methodArity(selected))
         return nullptr;
+    const auto found = makeMethods.find(n.method);
     std::vector<std::string> labels;
     for (const auto& [label, _] : n.namedArgs) labels.push_back(label);
     const auto owner = canonicalRecordName(chosen->owner);
-    const MakeMethod* entry = &*chosen;
+    const MakeMethod* entry = chosen;
     for (const auto& method : found->second)
         if (method.modulePath < entry->modulePath &&
             canonicalRecordName(method.owner) == owner &&
@@ -1572,37 +1589,6 @@ auto Lowering::typeOwnsStaticFunction(const std::string& type,
                        [&](const std::string& owner) {
                            return canonicalRecordName(owner) == canonical;
                        });
-}
-
-// The `make` function a call the checker gave to a type (`OwnMethod`: the
-// receiver's own type, an inherited default included) or a trait
-// (`TraitMethod`: the trait's own `make`) reaches with `explicitArgs`
-// arguments, or nullptr for any other decision or none of that shape.
-auto Lowering::ownedMakeFunction(const ast::MethodCall& n, size_t explicitArgs) const
-    -> const MakeMethod* {
-    auto methods = makeMethods.find(n.method);
-    if (methods == makeMethods.end()) return nullptr;
-    const auto& target = hir->targetOf(n);
-    if (target.kind != hir::TargetKind::OwnMethod &&
-        target.kind != hir::TargetKind::TraitMethod)
-        return nullptr;
-    const auto qualified = ownerNameOf(target.owner);
-    if (qualified.empty()) return nullptr;
-    const auto dot = qualified.rfind('.');
-    const auto bare =
-        dot == std::string::npos ? qualified : qualified.substr(dot + 1);
-    const MakeMethod* loose = nullptr;
-    for (const auto& method : methods->second) {
-        if (method.owner != bare && method.owner != qualified) continue;
-        if (method.def->clauses.empty() ||
-            method.def->clauses[0].params.size() != explicitArgs)
-            continue;
-        if (method.owner == qualified ||
-            method.modulePath + "." + method.owner == qualified)
-            return &method;
-        if (!loose) loose = &method;
-    }
-    return loose;
 }
 
 // The receiver type the checker settled on for this call, "" when it did
