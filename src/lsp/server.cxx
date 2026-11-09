@@ -200,6 +200,7 @@ auto mergeProjectModules(ast::Program& program,
             compiled::ExpandOptions expandOptions;
             expandOptions.sourcePath = *path;
             expandOptions.moduleRoots = moduleRoots;
+            expandOptions.interfaces = interfaces;
             if (!compiled::expand(*parsed, expansionDiagnostics, expandOptions))
                 continue;
             pending.push_back(parsed.get());

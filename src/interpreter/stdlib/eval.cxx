@@ -1,6 +1,8 @@
 #include "../evaluator.hxx"
 #include "../../lexer/lexer.hxx"
 #include "../../parser/parser.hxx"
+#include "../../common/runtime_dir.hxx"
+#include "../../driver/dependencies.hxx"
 
 namespace kex::interpreter {
 
@@ -53,9 +55,13 @@ static auto sandboxedEval(const std::string& source, bool exprOnly,
         Lexer lexer(toParse, filename);
         Parser parser(lexer.tokenizeAll(), filename);
         auto program = parser.parseProgram();
+        // Checked first, as the walker runs every program.
+        const auto checked = driver::prepareForWalker(
+            program, {}, &defaultPreludeInterfaces(), filename);
 
         Evaluator eval;
         eval.setSandbox(std::move(limits));
+        eval.setProgram(&*checked->program);
         auto result = eval.execute(program);
         return Value::ok(result ? result : Value::none());
     } catch (const std::exception& e) {

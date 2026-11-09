@@ -7,6 +7,7 @@
 #include "../semantic/traits.hxx"
 #include "../hir/hir.hxx"
 #include "../semantic/types.hxx"
+#include "../hir/compile_time.hxx"
 #include <chrono>
 #include <deque>
 #include <memory>
@@ -29,7 +30,6 @@ public:
     explicit ReturnException(ValuePtr value, std::shared_ptr<bool> frame = nullptr)
         : m_value(std::move(value)), m_frame(std::move(frame)) {}
     auto value() const -> ValuePtr { return m_value; }
-    auto frame() const -> const std::shared_ptr<bool>& { return m_frame; }
     // Whether the call at `frame` should take this return.
     auto targets(const std::shared_ptr<bool>& frame) const -> bool {
         return !m_frame || m_frame == frame;
@@ -60,13 +60,7 @@ public:
     RuntimeError(const std::string& msg, SourceLocation loc)
         : std::runtime_error(
             std::string(loc.file) + ":" + std::to_string(loc.line) + ":"
-            + std::to_string(loc.column) + ": runtime error: " + msg),
-          m_location(loc) {}
-
-    auto location() const -> SourceLocation { return m_location; }
-
-private:
-    SourceLocation m_location;
+            + std::to_string(loc.column) + ": runtime error: " + msg) {}
 };
 
 class EvaluationTimeout : public std::runtime_error {
@@ -104,7 +98,13 @@ class Evaluator {
     friend class Scheduler;
 
 public:
+    // Every module loaded at run time (the prelude's own loads included) is
+    // checked as its own unit against `interfaces` before it runs, and its
+    // answers are read like the entry program's (Stage 4). By default the
+    // prelude's, from the prebuilt runtime; null where those interfaces are
+    // themselves being built.
     Evaluator();
+    explicit Evaluator(const semantic::ImportedInterfaces* interfaces);
 
     auto execute(const ast::Program& program) -> ValuePtr;
     // Loads source declarations without executing an explicit main, then
@@ -371,11 +371,6 @@ private:
     auto moduleSupplyingNamedClause(const std::string& functionName,
                                     const NamedArgs& namedArgs) const
         -> std::optional<std::string>;
-    auto findImportedNamedOverload(const std::string& functionName,
-                                   const NamedArgs& namedArgs,
-                                   const ValuePtr& receiver,
-                                   size_t positionalCount) const
-        -> std::optional<std::string>;
     auto receiverArgumentOffset(const std::string& functionName,
                                 const std::vector<ValuePtr>& args) const -> size_t;
     auto resolveMethodName(const ValuePtr& receiver, const std::string& method,
@@ -478,17 +473,29 @@ public:
     // calls an earlier one's definitions.
     auto setProgram(const hir::Program* program) -> void {
         m_programs.clear();
+        for (const auto& checked : m_checkedPrograms)
+            m_programs.push(checked->program ? &*checked->program : nullptr);
         m_programs.push(program);
     }
-    auto addProgram(const hir::Program* program) -> void { m_programs.push(program); }
+    auto addProgram(const hir::Program* program) -> void {
+        m_programs.push(program);
+    }
 
 private:
     hir::ProgramSet m_programs;
+    const semantic::ImportedInterfaces* m_interfaces = nullptr;
+    // Every module this evaluator loaded at run time, checked (kept alive for
+    // their answers).
+    std::vector<std::shared_ptr<hir::CheckedProgram>> m_checkedPrograms;
     // The function `type`'s own `method` is bound to, or "": the checker
     // names a module's type qualified (`Accounts.AccountId`), a `make` block
     // inside the module binds it as written there (`AccountId::successor`).
     auto ownMethodName(const std::string& type, const std::string& method) const
         -> std::string;
+    auto decidedFunction(const ast::Expr& expr, const ast::MethodCall& call) const -> std::string;
+    auto evalConversion(const ast::Expr& receiver, const std::string& target) -> ValuePtr;
+    auto evalIntrinsicCall(const ast::MethodCall& call, const std::string& path,
+                           const SourceLocation& location) -> ValuePtr;
     // A distinct value passed where a `Showable` is expected, shown by its
     // own `showValue`. The value is the bare backing one, and nothing at run
     // time says it is a Tuplex: `IO.printLine(x)` printed `(5, 11)` here
@@ -582,6 +589,13 @@ private:
                     m_capabilityMembers.contains(full))
                     return full;
         return name;
+    }
+    // Whether `module` is a capability with a replacement in scope that
+    // supplies `member`.
+    auto replacedCapability(const std::string& module, const std::string& member) const -> bool {
+        const auto capability = canonicalCapability(module);
+        return m_capabilityMembers.contains(capability) && lookupCapability(capability) &&
+               capabilityMember(capability, member);
     }
     auto lookupCapability(const std::string& name) const -> ValuePtr {
         for (auto it = m_capabilityBindings.rbegin();

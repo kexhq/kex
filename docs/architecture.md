@@ -24,10 +24,16 @@ A build is a list of named passes over one `CompileUnit`
 `KEX_TIMINGS=1` times each pass.
 
 ```
-prelude-interfaces → run-manifest → pre-check → output-dir → spec-base →
-dependencies → runtime-beams → run-cache → expand → check → lower →
-write-core → erlc → store-caches → attach-kexi → finish
+prelude-interfaces → run-manifest → output-dir → spec-base → dependencies →
+runtime-beams → run-cache → check → lower → write-core → erlc →
+store-caches → attach-kexi → finish
 ```
+
+`dependencies` loads every module the program reaches, each expanded on its
+own (`kex::driver`), and checks and lowers the program unit by unit; `check`
+reports those units' diagnostics and `lower` collects their modules. Nothing
+expands the merged program: a `compiled do` block runs once, in its own
+file's expansion.
 
 A pass carries on (`kContinue`) or stops the build with an exit status.
 `--emit-core` stops after `write-core`, and an error stops at the pass that

@@ -219,12 +219,14 @@ auto Program::selectedSignatureOf(const ast::MethodCall& call) const
 
 namespace {
 
-// The first program's answer that `answered` accepts, newest first.
+// The answer of the newest program that answers for `node` (ProgramSet::push
+// indexes them), else the base's, when `answered` accepts it.
 template <typename Answer, typename Ask, typename Answered>
-auto newestAnswer(const std::vector<const Program*>& programs, const Program* base,
-                  Answer none, Ask ask, Answered answered) -> Answer {
-    for (auto program = programs.rbegin(); program != programs.rend(); ++program)
-        if (auto answer = ask(**program); answered(answer)) return answer;
+auto newestAnswer(const std::unordered_map<const void*, const Program*>& owners,
+                  const void* node, const Program* base, Answer none, Ask ask,
+                  Answered answered) -> Answer {
+    if (const auto owner = owners.find(node); owner != owners.end())
+        if (auto answer = ask(*owner->second); answered(answer)) return answer;
     if (base)
         if (auto answer = ask(*base); answered(answer)) return answer;
     return none;
@@ -234,19 +236,19 @@ auto newestAnswer(const std::vector<const Program*>& programs, const Program* ba
 
 auto ProgramSet::targetOf(const ast::MethodCall& call) const -> const Target& {
     return *newestAnswer<const Target*>(
-        m_programs, m_base, &kUndecided, [&](const Program& p) { return &p.targetOf(call); },
+        m_owners, &call, m_base, &kUndecided, [&](const Program& p) { return &p.targetOf(call); },
         [](const Target* t) { return t->kind != TargetKind::Undecided; });
 }
 
 auto ProgramSet::targetOf(const ast::BinaryOp& op) const -> const Target& {
     return *newestAnswer<const Target*>(
-        m_programs, m_base, &kUndecided, [&](const Program& p) { return &p.targetOf(op); },
+        m_owners, &op, m_base, &kUndecided, [&](const Program& p) { return &p.targetOf(op); },
         [](const Target* t) { return t->kind != TargetKind::Undecided; });
 }
 
 auto ProgramSet::typeOf(const ast::Expr& expr) const -> semantic::TypePtr {
     return newestAnswer<semantic::TypePtr>(
-        m_programs, m_base, nullptr, [&](const Program& p) { return p.typeOf(expr); },
+        m_owners, &expr, m_base, nullptr, [&](const Program& p) { return p.typeOf(expr); },
         [](const semantic::TypePtr& t) { return t != nullptr; });
 }
 
@@ -263,21 +265,21 @@ auto ProgramSet::typeValueOf(const ast::Expr& expr) const
 
 auto ProgramSet::receiverTypeOf(const ast::Expr& call) const -> std::string {
     return newestAnswer<std::string>(
-        m_programs, m_base, {}, [&](const Program& p) { return p.receiverTypeOf(call); },
+        m_owners, &call, m_base, {}, [&](const Program& p) { return p.receiverTypeOf(call); },
         [](const std::string& t) { return !t.empty(); });
 }
 
 auto ProgramSet::typeOfAnswer(const ast::MethodCall& call) const
     -> const semantic::StaticTypeAnswer* {
     return newestAnswer<const semantic::StaticTypeAnswer*>(
-        m_programs, m_base, nullptr, [&](const Program& p) { return p.typeOfAnswer(call); },
+        m_owners, &call, m_base, nullptr, [&](const Program& p) { return p.typeOfAnswer(call); },
         [](const auto* a) { return a != nullptr; });
 }
 
 auto ProgramSet::selectedSignatureOf(const ast::Expr& call) const
     -> const semantic::Signature* {
     return newestAnswer<const semantic::Signature*>(
-        m_programs, m_base, nullptr,
+        m_owners, &call, m_base, nullptr,
         [&](const Program& p) { return p.selectedSignatureOf(call); },
         [](const auto* s) { return s != nullptr; });
 }
@@ -285,9 +287,18 @@ auto ProgramSet::selectedSignatureOf(const ast::Expr& call) const
 auto ProgramSet::shownThroughOf(const ast::Expr& call, std::size_t index) const
     -> const std::string* {
     return newestAnswer<const std::string*>(
-        m_programs, m_base, nullptr,
+        m_owners, &call, m_base, nullptr,
         [&](const Program& p) { return p.shownThroughOf(call, index); },
         [](const auto* s) { return s != nullptr; });
+}
+
+auto Program::forEachAnsweredNode(const std::function<void(const void*)>& visit) const -> void {
+    for (const auto& [node, _] : m_targets) visit(node);
+    for (const auto& [node, _] : m_selectedByNode) visit(node);
+    for (const auto& [expr, _] : *m_types) visit(expr);
+    for (const auto& [call, _] : *m_typeOfAnswers) visit(call);
+    for (const auto& [expr, _] : *m_selected) visit(expr);
+    for (const auto& [expr, _] : *m_shownThrough) visit(expr);
 }
 
 auto Program::typeOf(const ast::Expr& expr) const -> semantic::TypePtr {

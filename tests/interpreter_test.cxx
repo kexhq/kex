@@ -2,6 +2,8 @@
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
 #include "../src/interpreter/evaluator.hxx"
+#include "../src/common/runtime_dir.hxx"
+#include "../src/driver/dependencies.hxx"
 #include <cstdlib>
 #include <filesystem>
 #include <sstream>
@@ -10,13 +12,23 @@ using namespace kex;
 using namespace kex::interpreter;
 using namespace test;
 
-auto run(const std::string& source) -> ValuePtr {
+// Runs `source` as the walker runs a program: the modules it uses merged in,
+// expanded and checked first (kex::driver::prepareForWalker), the evaluator
+// reading the checked answers.
+auto runChecked(const std::string& source, Evaluator& evaluator,
+                const std::vector<std::string>& roots = {}) -> ValuePtr {
     Lexer lexer(source);
-    auto tokens = lexer.tokenizeAll();
-    Parser parser(std::move(tokens));
+    Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
-    Evaluator evaluator;
+    const auto checked =
+        driver::prepareForWalker(program, roots, &defaultPreludeInterfaces());
+    evaluator.setProgram(&*checked->program);
     return evaluator.execute(program);
+}
+
+auto run(const std::string& source) -> ValuePtr {
+    Evaluator evaluator;
+    return runChecked(source, evaluator);
 }
 
 auto runFS(const std::string& source) -> ValuePtr {
@@ -27,42 +39,27 @@ auto runFS(const std::string& source) -> ValuePtr {
 // from `run`/`runFS` on purpose: those stay in the default denied state, so
 // the gate itself is under test every time one of them runs mock-free code.
 auto runFSMocking(const std::string& source) -> ValuePtr {
-    Lexer lexer("using FS\n" + source);
-    auto tokens = lexer.tokenizeAll();
-    Parser parser(std::move(tokens));
-    auto program = parser.parseProgram();
     Evaluator evaluator;
     evaluator.setMocksAllowed(true);
-    return evaluator.execute(program);
+    return runChecked("using FS\n" + source, evaluator);
 }
 
 auto runOutput(const std::string& source) -> std::string {
-    Lexer lexer(source);
-    auto tokens = lexer.tokenizeAll();
-    Parser parser(std::move(tokens));
-    auto program = parser.parseProgram();
     Evaluator evaluator;
-    evaluator.execute(program);
+    runChecked(source, evaluator);
     return evaluator.output();
 }
 
 auto runWithArgs(const std::string& source, std::vector<std::string> args) -> ValuePtr {
-    Lexer lexer(source);
-    auto tokens = lexer.tokenizeAll();
-    Parser parser(std::move(tokens));
-    auto program = parser.parseProgram();
     Evaluator evaluator;
     evaluator.setArgs(std::move(args));
-    return evaluator.execute(program);
+    return runChecked(source, evaluator);
 }
 
 auto runWithModuleRoots(const std::string& source, std::vector<std::string> roots) -> ValuePtr {
-    Lexer lexer(source);
-    Parser parser(lexer.tokenizeAll());
-    auto program = parser.parseProgram();
     Evaluator evaluator;
-    evaluator.setModuleRoots(std::move(roots));
-    return evaluator.execute(program);
+    evaluator.setModuleRoots(roots);
+    return runChecked(source, evaluator, roots);
 }
 
 int main() {

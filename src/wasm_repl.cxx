@@ -52,7 +52,7 @@ std::vector<std::unique_ptr<kex::ast::Program>> g_programs;
 } // namespace
 
 struct KexReplSession {
-    kex::interpreter::Evaluator evaluator;
+    kex::interpreter::Evaluator evaluator{&kex::preludeSemanticInterfaces("")};
     std::string lastResult;
     // As main.cxx's REPL: the prelude's names, read once, and the session's
     // definitions, spliced into what completion checks, so tab completion in
@@ -333,6 +333,7 @@ const char* kex_repl_complete(KexReplSession* session, const char* lineIn,
         compiled::ExpandOptions options;
         options.sourcePath = path;
         options.moduleRoots = standardLibraryModuleRoots();
+        options.interfaces = &preludeSemanticInterfaces("");
         compiled::expand(*program, diagnostics, options);
         auto analyzer = std::make_shared<semantic::Analyzer>();
         analyzer->setNameCheckFiles({path});

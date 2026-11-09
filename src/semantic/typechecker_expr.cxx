@@ -606,6 +606,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             popScope();
             return bodyType;
         }
+        else if constexpr (std::is_same_v<T, ast::GeneratedDecl>) {
+            // `let %name(...)` in compile-time code: what runs now is the
+            // name it computes. The template is checked as the declaration it
+            // becomes, after expansion.
+            if (node.name) inferExpr(*node.name);
+            return Type::unit();
+        }
         else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
             ImportSelection selection;
             selection.module += node.module.dotted();

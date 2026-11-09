@@ -8,6 +8,8 @@
 #include "../common/digest.hxx"
 #include "../common/file_io.hxx"
 #include "../cache/cache.hxx"
+#include "../common/runtime_dir.hxx"
+#include "../hir/compile_time.hxx"
 #include "../hir/persist.hxx"
 #include "../common/timings.hxx"
 #include "../common/type_def_utils.hxx"
@@ -31,7 +33,9 @@
 
 namespace kex::interpreter {
 
-Evaluator::Evaluator() {
+Evaluator::Evaluator() : Evaluator(&defaultPreludeInterfaces()) {}
+
+Evaluator::Evaluator(const semantic::ImportedInterfaces* interfaces) : m_interfaces(interfaces) {
     m_globalEnv = std::make_shared<Environment>();
     m_intrinsicEnv = std::make_shared<Environment>();
     m_env = m_globalEnv;
@@ -467,6 +471,9 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
         // The files its expansion read (compiled::DependencyRecorder),
         // repeated to whoever loads it from here instead.
         std::set<std::string> dependencies;
+        // The module checked, once per process (Stage 4, step 2): the walker
+        // reads its answers as it reads the entry program's.
+        std::shared_ptr<hir::CheckedProgram> checked;
     };
     static std::unordered_map<std::string, ExpandedModule> expandedModules;
     std::string cacheKey;
@@ -531,6 +538,7 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
             compiled::ExpandOptions expandOptions;
             expandOptions.sourcePath = *path;
             expandOptions.moduleRoots = m_moduleRoots;
+            expandOptions.interfaces = m_interfaces;
             bool expanded;
             try {
                 expanded = compiled::expand(*program, expandDiagnostics, expandOptions);
@@ -553,6 +561,28 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
         }
     }
 
+    // Checked as its own unit against the prelude's interfaces, so a module
+    // loaded at run time is evaluated on the checker's answers too: once per
+    // process, and read back from the cache by every later process that loads
+    // the same module (its source, and the files its expansion read).
+    if (m_interfaces) {
+        const auto checkOf = [&](const std::set<std::string>& expansionReads) {
+            std::string key = *path + "\n" + kex::sha256Hex(readFile(*path));
+            for (const auto& root : m_moduleRoots) key += "\n" + root;
+            for (const auto& read : expansionReads) key += "\n" + read + "=" + compiled::fileStamp(read);
+            return hir::cachedCheck(*program, m_interfaces, key);
+        };
+        std::shared_ptr<hir::CheckedProgram> checked;
+        if (const auto cached = expandedModules.find(cacheKey);
+            cached != expandedModules.end() && cached->second.program == program) {
+            if (!cached->second.checked) cached->second.checked = checkOf(cached->second.dependencies);
+            checked = cached->second.checked;
+        } else {
+            checked = checkOf({});
+        }
+        m_programs.push(&*checked->program);
+        m_checkedPrograms.push_back(std::move(checked));
+    }
     m_loadedModulePaths.push_back(path);
     auto* ownedProgram = program.get();
     m_loadedModulePrograms.push_back(program);
@@ -2180,6 +2210,69 @@ auto Evaluator::execMainBlock(const ast::MainBlock& block) -> ValuePtr {
     return result;
 }
 
+// `x.as(T)`, as the checker decided it (`Conversion`, `target` the type):
+// distinct conversions are representation-erased, the retag proved valid by
+// the check, so the value is unchanged. String is the one non-erased total
+// conversion, the same universal display representation as `to(String)`.
+// The function the checker decided a method call reaches, as the walker binds
+// it: the receiver type's own method for `OwnMethod`, else the module function
+// whose signature it selected (a label such as `in:` reaching the clause that
+// declares it), unless that module is a capability a `with` replaced here:
+// the replacement answers, on the run-time path, as lowering's
+// capabilityDispatchLowered asks the context first. "" when the value decides.
+auto Evaluator::decidedFunction(const ast::Expr& expr, const ast::MethodCall& call) const
+    -> std::string {
+    if (const auto& decided = m_programs.targetOf(call);
+        decided.kind == hir::TargetKind::OwnMethod)
+        return ownMethodName(decided.owner, call.method);
+    if (const auto* selected = m_programs.selectedSignatureOf(expr);
+        selected && !selected->declaringModule.empty() &&
+        !replacedCapability(selected->declaringModule, call.method))
+        if (auto qualified = kex::mangle::qualify(selected->declaringModule, call.method);
+            m_functionDefs.count(qualified))
+            return qualified;
+    return {};
+}
+
+auto Evaluator::evalConversion(const ast::Expr& receiver, const std::string& target) -> ValuePtr {
+    auto value = eval(receiver);
+    // A value only the running program has stays unknown: the conversion
+    // goes back around it when the result is reified.
+    if (const auto* placeholder = std::get_if<PlaceholderValue>(&value->data)) {
+        auto retagged = std::make_shared<Value>();
+        auto copy = *placeholder;
+        copy.retags.push_back(target);
+        retagged->data = std::move(copy);
+        return retagged;
+    }
+    if (target == "String") return Value::string(value->toString());
+    // `"hello".as(Atom)`: the checker admits only a literal.
+    if (target == "Atom")
+        if (const auto* text = std::get_if<StringValue>(&value->data))
+            return Value::atom(text->value);
+    return value;
+}
+
+// A runtime primitive the checker decided by its path (`Builtin`, `path`
+// `Kex.Intrinsic.List.reverse`): the native builtin of that category. The
+// natives live in m_intrinsicEnv, the prelude's typed wrappers in
+// m_globalEnv; the category-qualified identity is authoritative, so no bare
+// name leaks across categories.
+auto Evaluator::evalIntrinsicCall(const ast::MethodCall& call, const std::string& path,
+                                  const SourceLocation& location) -> ValuePtr {
+    std::vector<ValuePtr> args;
+    for (const auto& arg : call.args) args.push_back(arg ? eval(*arg) : Value::none());
+    if (call.block) args.push_back(eval(**call.block));
+    const auto scope = kex::mangle::pathScopeOf(path);
+    const auto category = scope.substr(scope.rfind('.') + 1);
+    const auto native = m_intrinsicEnv->get(kex::mangle::qualify(category, call.method));
+    if (!native)
+        throw RuntimeError("Undefined intrinsic: " + category + "." + call.method, location);
+    if (auto* function = std::get_if<FunctionValue>(&native->data))
+        return function->native(std::move(args));
+    throw RuntimeError("Intrinsic " + call.method + " is not a function", location);
+}
+
 auto Evaluator::evalBody(const std::vector<ast::ExprPtr>& body) -> ValuePtr {
     ValuePtr last = Value::none();
     for (const auto& expr : body) {
@@ -2535,73 +2628,17 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 return structuredTypeValue(recorded->type);
             }
 
-            // Distinct conversions are representation-erased: checking has
-            // already proved the retag is valid, so the runtime value is
-            // unchanged. String is the one non-erased total conversion and
-            // uses the same universal display representation as to(String).
-            // The checker decided it (`Conversion`, owner the target); only a
-            // program evaluated before any check (`compiled do`) is read by
-            // its spelling.
-            const auto conversionTarget = [&]() -> std::string {
-                if (const auto& decided = m_programs.targetOf(node);
-                    decided.kind == hir::TargetKind::Conversion)
-                    return decided.owner;
-                if (!m_programs.empty() || node.method != "as" || node.args.size() != 1 ||
-                    !node.args[0] || !node.receiver || !node.namedArgs.empty() || node.block)
-                    return {};
-                const auto* written = std::get_if<ast::UpperIdentifier>(&node.args[0]->kind);
-                return written ? written->name : std::string{};
-            }();
-            if (!conversionTarget.empty() && node.receiver) {
-                auto value = eval(*node.receiver);
-                // A value only the running program has stays unknown: the
-                // conversion goes back around it when the result is reified.
-                if (const auto* placeholder = std::get_if<PlaceholderValue>(&value->data)) {
-                    auto retagged = std::make_shared<Value>();
-                    auto copy = *placeholder;
-                    copy.retags.push_back(conversionTarget);
-                    retagged->data = std::move(copy);
-                    return retagged;
-                }
-                if (conversionTarget == "String")
-                    return Value::string(value->toString());
-                // `"hello".as(Atom)` — the checker admits only a literal.
-                if (conversionTarget == "Atom")
-                    if (const auto* text = std::get_if<StringValue>(&value->data))
-                        return Value::atom(text->value);
-                return value;
-            }
-
-            // `Kex.Intrinsic.<Category>.<fn>(args)` — the primitive boundary.
-            // `Kex`, `Intrinsic`, `<Category>` are nested modules; dispatch the
-            // function to its native C++ builtin (the walker's intrinsics stay
-            // in C++). The typed stdlib in the Kex prelude sits on top of these.
-            if (node.receiver) {
-                if (auto* catMc = std::get_if<ast::MethodCall>(&node.receiver->kind))
-                    if (auto* intrMc = std::get_if<ast::MethodCall>(&catMc->receiver->kind))
-                        if (intrMc->method == "Intrinsic")
-                            if (auto* kexId = std::get_if<ast::UpperIdentifier>(&intrMc->receiver->kind))
-                                if (kexId->name == "Kex") {
-                                    std::vector<ValuePtr> args;
-                                    for (const auto& a : node.args)
-                                        args.push_back(a ? eval(*a) : Value::none());
-                                    if (node.block) args.push_back(eval(**node.block));
-                                    // Look up in m_intrinsicEnv, not m_env —
-                                    // the prelude's Kex.Intrinsic.* wrappers
-                                    // live in m_globalEnv; the C++ native
-                                    // implementations live in m_intrinsicEnv.
-                                    // The category-qualified identity is
-                                    // authoritative; ordinary/bare intrinsic
-                                    // fallback would leak across categories.
-                                    auto val = m_intrinsicEnv->get(
-                                        kex::mangle::qualify(catMc->method, node.method));
-                                    if (!val)
-                                        throw RuntimeError("Undefined intrinsic: " + catMc->method
-                                                           + "." + node.method, expr.location);
-                                    if (auto* func = std::get_if<FunctionValue>(&val->data))
-                                        return func->native(std::move(args));
-                                    throw RuntimeError("Intrinsic " + node.method + " is not a function", expr.location);
-                                }
+            // The calls the checker decided by what they name.
+            switch (const auto& target = m_programs.targetOf(node); target.kind) {
+            case hir::TargetKind::Conversion:
+                if (node.receiver) return evalConversion(*node.receiver, target.owner);
+                break;
+            case hir::TargetKind::Builtin:
+                if (names::isIntrinsicPath(target.owner))
+                    return evalIntrinsicCall(node, target.owner, expr.location);
+                break;
+            default:
+                break;
             }
             // Pre-check: if the receiver is a bare UpperIdentifier that isn't
             // in the environment and isn't a known variant, treat it as a
@@ -2611,7 +2648,15 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // This must run before eval(*node.receiver) to avoid the throw.
             std::string namespaceName;
             bool isNamespaceCall = false;
-            if (node.receiver) {
+            // In a checked run, a dotted receiver names a module only where
+            // the checker decided so (`ModuleReference`): `Console.RESET` is a
+            // constant, and probing for a file that defines it reloaded
+            // `console.kex` from source, unchecked, at every use.
+            const auto* dottedReceiver = node.receiver
+                ? std::get_if<ast::MethodCall>(&node.receiver->kind) : nullptr;
+            const bool mayNameModule = m_programs.empty() || !dottedReceiver ||
+                m_programs.targetOf(*dottedReceiver).kind == hir::TargetKind::ModuleReference;
+            if (node.receiver && mayNameModule) {
                 if (auto path = ast::writtenModulePath(*node.receiver);
                     path && path->find('.') != std::string::npos) {
                     if (m_moduleRegistry.contains(*path)) {
@@ -2635,7 +2680,13 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     }
                 }
             }
-            if (!isNamespaceCall && node.receiver) {
+            // In a call the checker decided, a capitalised receiver it typed is
+            // a value (a constructor, a constant): only an untyped one names a
+            // module or a type.
+            const bool receiverIsValue = node.receiver &&
+                m_programs.targetOf(node).kind != hir::TargetKind::Undecided &&
+                m_programs.typeOf(*node.receiver) != nullptr;
+            if (!isNamespaceCall && node.receiver && !receiverIsValue) {
                 if (auto* upperIdent = std::get_if<ast::UpperIdentifier>(&node.receiver->kind)) {
                     bool isKnownVariant = m_variantParent.count(upperIdent->name) > 0;
                     auto existing = m_env->get(upperIdent->name);
@@ -2926,8 +2977,12 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 throw RuntimeError(message, expr.location);
             }
 
+            // A method of the trait a parameter is typed by, as the checker
+            // decided it (`TraitMethod`): through the dictionary its caller
+            // supplied.
             if (const auto* identifier =
-                    std::get_if<ast::Identifier>(&node.receiver->kind)) {
+                    std::get_if<ast::Identifier>(&node.receiver->kind);
+                identifier && m_programs.targetOf(node).kind == hir::TargetKind::TraitMethod) {
                 auto dictionary = m_env->get(
                     "__trait_dictionary__" + kex::mangle::qualify(identifier->name, node.method));
                 if (dictionary) {
@@ -2938,18 +2993,17 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 }
             }
 
-            // UFCS and free-call syntax share imported overloads. Named
-            // overloads need to be considered before the receiver's generic
-            // method so labels such as `in:` select the imported clause.
-            if (auto imported = findImportedNamedOverload(
-                    node.method, namedArgs, receiver, args.size()))
-                return callFunction(*imported, std::move(args),
-                                    std::move(namedArgs), expr.location);
-            auto specificMethod = resolveMethodName(receiver, node.method, &args);
+            // The function the checker decided the call reaches, as the walker
+            // binds it (decidedFunction); otherwise the value decides, by its
+            // run-time type.
+            std::string specificMethod = decidedFunction(expr, node);
+            const bool decidedHere = !specificMethod.empty();
+            if (!decidedHere)
+                specificMethod = resolveMethodName(receiver, node.method, &args);
             // Distinct and opaque values have the backing value's runtime name,
             // but the checker chose their receiver methods by the nominal type
             // (receiverTypeOf): prefer that type's own method.
-            if (const auto owner = m_programs.receiverTypeOf(expr); !owner.empty()) {
+            if (const auto owner = m_programs.receiverTypeOf(expr); !decidedHere && !owner.empty()) {
                 const auto candidate = ownMethodName(owner, node.method);
                 const auto runtimeType = dispatchTypeName(receiver);
                 const auto runtimeDot = runtimeType.rfind('.');
@@ -4448,30 +4502,6 @@ auto Evaluator::moduleSupplyingNamedClause(const std::string& functionName,
         auto scope = kex::mangle::scopeOf(key);
         if (key == functionName || !m_moduleRegistry.contains(scope)) continue;
         if (findNamedClause(key, namedArgs)) return scope;
-    }
-    return std::nullopt;
-}
-
-auto Evaluator::findImportedNamedOverload(const std::string& functionName,
-                                          const NamedArgs& namedArgs,
-                                          const ValuePtr& receiver,
-                                          size_t positionalCount) const
-    -> std::optional<std::string> {
-    if (namedArgs.empty()) return std::nullopt;
-
-    for (auto scope = m_importScopes.rbegin(); scope != m_importScopes.rend(); ++scope) {
-        auto imported = scope->find(functionName);
-        if (imported == scope->end()) continue;
-
-        auto qualified = kex::mangle::qualify(imported->second.module, functionName);
-        if (const auto* clause = findNamedClause(qualified, namedArgs, positionalCount)) {
-            if (!clause->params.empty() && clause->params.front().type &&
-                *clause->params.front().type &&
-                !runtimeTypeMatches(receiver, **clause->params.front().type))
-                return std::nullopt;
-            return qualified;
-        }
-        return std::nullopt;
     }
     return std::nullopt;
 }
