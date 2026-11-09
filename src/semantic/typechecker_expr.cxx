@@ -459,6 +459,7 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
         }
         auto resultType = checkCall(ce->name, paramTypes, blockExpr.location,
                                     /*isMethodCall=*/false);
+        decideCapture(blockExpr, *ce);
         return Type::func(std::move(paramTypes), resolve(resultType));
     }
     // `&.method(args)`: the lambda it means.
@@ -1245,7 +1246,6 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // Never resolve these against same-named public stdlib functions.
             {
                 const ast::Expr* r = node.receiver ? &*node.receiver : nullptr;
-                bool intrinsicSegment = false;
                 // The path's segments, innermost first (`lists` of
                 // `BEAM.lists.reverse`).
                 std::vector<const ast::Expr*> segments;
@@ -1256,7 +1256,6 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         // is a call on its result, not a path member.
                         if (!mc->args.empty() || !mc->namedArgs.empty() || mc->block) break;
                         segments.push_back(r);
-                        intrinsicSegment = intrinsicSegment || mc->method == "Intrinsic";
                         r = mc->receiver ? &*mc->receiver : nullptr;
                     } else break;
                 }
@@ -1278,24 +1277,25 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                   std::string(uid->name == "Elixir"
                                                   ? ", `BEAM.Elixir.Enum.map(xs, f)`"
                                                   : ""));
-                        if (uid->name == "BEAM" || retiredRoot ||
-                            (uid->name == "Kex" && intrinsicSegment)) {
+                        // Decided by its path: an Erlang function, or a runtime
+                        // primitive; each segment names a module.
+                        std::string path = uid->name;
+                        std::vector<std::pair<const ast::Expr*, std::string>> segmentPaths;
+                        for (auto segment = segments.rbegin(); segment != segments.rend(); ++segment) {
+                            path += "." + std::get<ast::MethodCall>((*segment)->kind).method;
+                            segmentPaths.emplace_back(*segment, path);
+                        }
+                        const bool intrinsic = names::isIntrinsicPath(path + "." + node.method);
+                        if (uid->name == names::kForeignRoot || retiredRoot || intrinsic) {
                             for (const auto& a : node.args)
                                 if (a) inferExpr(*a);
                             for (const auto& [_, a] : node.namedArgs)
                                 if (a) inferExpr(*a);
                             if (node.block) inferExpr(**node.block);
-                            // Decided by its path: an Erlang function, or a
-                            // runtime primitive; each segment names a module.
-                            std::string path = uid->name;
-                            for (auto segment = segments.rbegin(); segment != segments.rend();
-                                 ++segment) {
-                                path += "." + std::get<ast::MethodCall>((*segment)->kind).method;
-                                m_decidedCalls[*segment] = {CallKind::ModuleReference, path};
-                            }
-                            m_decidedCalls[&expr] = {
-                                uid->name == "Kex" ? CallKind::Builtin : CallKind::Foreign,
-                                path + "." + node.method};
+                            for (const auto& [segment, segmentPath] : segmentPaths)
+                                m_decidedCalls[segment] = {CallKind::ModuleReference, segmentPath};
+                            m_decidedCalls[&expr] = {intrinsic ? CallKind::Builtin : CallKind::Foreign,
+                                                     path + "." + node.method};
                             return Type::unknown();
                         }
                     }
@@ -2439,6 +2439,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return Type::unknown();
         }
         else if constexpr (std::is_same_v<T, ast::CurryExpr>) {
+            decideCapture(expr, node);
             std::vector<Signature> candidates;
             if (node.isOperator) {
                 Signature signature;
@@ -2460,9 +2461,20 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         signature.result = operand;
                 }
                 candidates.push_back(std::move(signature));
+            } else if (node.module.empty()) {
+                // A bare capture reaches what a call of the name would.
+                std::vector<Signature> visible;
+                std::set<std::string> hidden;
+                if (const auto* reached =
+                        reachableFreeFunctions(node.name, false, visible, hidden))
+                    candidates = *reached;
+                if (candidates.empty())
+                    candidates = importedCandidateSignatures(node.name);
             } else {
-                const auto key = node.module.empty()
-                    ? node.name : kex::mangle::qualify(node.module, node.name);
+                // A qualified one names its module as a call would: through
+                // an alias, an enclosing module, or a module a `using` opened.
+                const auto key = kex::mangle::qualify(
+                    resolveModulePath(node.module, node.name), node.name);
                 if (auto user = m_userSignatures.find(key);
                     user != m_userSignatures.end())
                     candidates = user->second;
@@ -2920,7 +2932,7 @@ auto TypeChecker::namespaceCallProblem(const std::string& written,
             return false;
         };
         const bool rootIsSomething =
-            root == "BEAM" || root == "Kex" || root == names::kThisType ||
+            root == names::kForeignRoot || root == names::kRuntimeRoot || root == names::kThisType ||
             isPrimitiveTypeName(root) ||
             m_recordFields.count(resolveRecordName(root)) ||
             m_adtVariants.count(root) || m_typeAliases.count(root) ||
@@ -3697,6 +3709,90 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
     return result;
 }
 
+// The module whose function a capture names, by the rules a call of the name
+// follows: `~Mod.fn` resolves `Mod` as `Mod.fn(x)` would (an alias, an
+// enclosing module, a module a `using` opened); a bare `~fn` is the
+// program's free function it reaches, else one a `using` imported from a
+// unit compiled apart. "" for a top-level function or the prelude's.
+auto TypeChecker::captureModule(const ast::CurryExpr& capture) const -> std::string {
+    if (!capture.module.empty()) return resolveModulePath(capture.module, capture.name);
+    std::vector<Signature> visible;
+    std::set<std::string> hidden;
+    if (const auto* reached = reachableFreeFunctions(capture.name, false, visible, hidden);
+        reached && !reached->empty())
+        return reached->front().declaringModule;
+    if (const auto imported = usingImportedMethods(capture.name, false); !imported.empty())
+        return imported.front()->sourceModule;
+    return {};
+}
+
+// A capture of a function, decided: the function named, not called
+// (`FunctionReference`, owner its qualified name). A local binding captured
+// is the value it holds, nothing to decide.
+auto TypeChecker::decideCapture(const ast::Expr& expr, const ast::CurryExpr& capture) -> void {
+    if (capture.isOperator || lookupVar(capture.name)) return;
+    m_decidedCalls[&expr] = {CallKind::FunctionReference,
+                             kex::mangle::qualify(captureModule(capture), capture.name)};
+}
+
+// The program's free functions a bare `name` reaches from here, for a call
+// and a capture alike: a declaration the current module owns first (its
+// bare declaration, else its own definition, published only under the
+// qualified name), else the bare-name table, which holds every module's. A
+// plain name reaches only the ones its module may see: a name `using Router,
+// only: [get]` left out (`put`) is not borrowed from Router to fail at run
+// time (#496), and another module's private `table` does not stand in for
+// the `table` this module imported (#494). The modules left out go to
+// `hidden`; `visible` is the storage a filtered answer points into. Null
+// when nothing is reached.
+auto TypeChecker::reachableFreeFunctions(const std::string& name, bool isMethodCall,
+                                         std::vector<Signature>& visible,
+                                         std::set<std::string>& hidden) const
+    -> const std::vector<Signature>* {
+    const std::vector<Signature>* userSignatures = nullptr;
+    if (auto scoped = m_scopedDeclaredSignatures.find(
+            m_currentModulePath + "\n" + name);
+        !m_currentModulePath.empty() &&
+        scoped != m_scopedDeclaredSignatures.end())
+        userSignatures = &scoped->second;
+    // The same preference for a declaration the module owns WITHOUT an
+    // annotation (`let render = Template.html(...)`): it is published only
+    // under its qualified name, so the bare-name lookup below would pick
+    // another module's same-named function instead — `Template.render`,
+    // once the Template source is merged into the build (kexhq/kex#385).
+    else if (auto own = m_userSignatures.find(kex::mangle::qualify(m_currentModulePath, name));
+             !isMethodCall && !m_currentModulePath.empty() &&
+             !kex::mangle::hasScope(name) &&
+             own != m_userSignatures.end() && !own->second.empty())
+        userSignatures = &own->second;
+    else if (auto user = m_userSignatures.find(name);
+             user != m_userSignatures.end())
+        userSignatures = &user->second;
+    if (!userSignatures || isMethodCall || kex::mangle::hasScope(name))
+        return userSignatures;
+    for (const auto& signature : *userSignatures) {
+        if (freeFunctionVisible(signature.declaringModule, name))
+            visible.push_back(signature);
+        else
+            hidden.insert(signature.declaringModule);
+    }
+    // Inside a module, the program's top-level function steps aside for one
+    // the module declares or imports by that name: `main.kex`'s own `table`
+    // took the place of the `table` a module imported with `using
+    // App.Shapes, only: [table]` (#494).
+    const auto topLevel = [](const Signature& signature) {
+        return signature.declaringModule.empty();
+    };
+    if (!m_currentModulePath.empty() &&
+        std::any_of(visible.begin(), visible.end(), topLevel) &&
+        !std::all_of(visible.begin(), visible.end(), topLevel)) {
+        std::erase_if(visible, topLevel);
+        hidden.insert("");
+    }
+    if (hidden.empty()) return userSignatures;
+    return visible.empty() ? nullptr : &visible;
+}
+
 auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>& suppliedArgTypes,
                             SourceLocation loc, bool isMethodCall,
                             const ast::MethodCall* methodCall,
@@ -3946,58 +4042,11 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 return result;
             }
     }
-    const std::vector<Signature>* userSignatures = nullptr;
-    if (auto scoped = m_scopedDeclaredSignatures.find(
-            m_currentModulePath + "\n" + name);
-        !m_currentModulePath.empty() &&
-        scoped != m_scopedDeclaredSignatures.end())
-        userSignatures = &scoped->second;
-    // The same preference for a declaration the module owns WITHOUT an
-    // annotation (`let render = Template.html(...)`): it is published only
-    // under its qualified name, so the bare-name lookup below would pick
-    // another module's same-named function instead — `Template.render`,
-    // once the Template source is merged into the build (kexhq/kex#385).
-    else if (auto own = m_userSignatures.find(kex::mangle::qualify(m_currentModulePath, name));
-             !isMethodCall && !m_currentModulePath.empty() &&
-             !kex::mangle::hasScope(name) &&
-             own != m_userSignatures.end() && !own->second.empty())
-        userSignatures = &own->second;
-    else if (auto user = m_userSignatures.find(name);
-             user != m_userSignatures.end())
-        userSignatures = &user->second;
-    // The bare-name table holds every module's free functions. A plain call
-    // reaches only the ones its module may see: a name `using Router, only:
-    // [get]` left out (`put`) is not borrowed from Router to fail at run
-    // time (#496), and another module's private `table` does not stand in
-    // for the `table` this module imported (#494).
     std::vector<Signature> visibleUserSignatures;
-    if (userSignatures && !isMethodCall &&
-        !kex::mangle::hasScope(name)) {
-        std::set<std::string> hiddenModules;
-        for (const auto& signature : *userSignatures) {
-            if (freeFunctionVisible(signature.declaringModule, name))
-                visibleUserSignatures.push_back(signature);
-            else
-                hiddenModules.insert(signature.declaringModule);
-        }
-        // Inside a module, the program's top-level function steps aside for
-        // one the module declares or imports by that name: `main.kex`'s own
-        // `table` took the place of the `table` a module imported with
-        // `using App.Shapes, only: [table]` (#494).
-        const auto topLevel = [](const Signature& signature) {
-            return signature.declaringModule.empty();
-        };
-        if (!m_currentModulePath.empty() &&
-            std::any_of(visibleUserSignatures.begin(),
-                        visibleUserSignatures.end(), topLevel) &&
-            !std::all_of(visibleUserSignatures.begin(),
-                         visibleUserSignatures.end(), topLevel)) {
-            std::erase_if(visibleUserSignatures, topLevel);
-            hiddenModules.insert("");
-        }
-        if (!hiddenModules.empty())
-            userSignatures = visibleUserSignatures.empty()
-                ? nullptr : &visibleUserSignatures;
+    std::set<std::string> hiddenModules;
+    const auto* userSignatures =
+        reachableFreeFunctions(name, isMethodCall, visibleUserSignatures, hiddenModules);
+    if (!hiddenModules.empty()) {
         // Nothing in scope takes these arguments, but a module's function
         // that is not in scope would: say that, rather than reporting a
         // mismatch against some unrelated prelude function of the same name.
@@ -4493,6 +4542,15 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
 
     std::vector<Signature> merged;
     const std::vector<Signature>* sigs = nullptr;
+    // A module's free function answers a method call (`10.double`) only
+    // where its module is in scope: inside it, or under a `using` naming it.
+    // Otherwise `findIndex {..}.or(..)` in the prelude's `make String` took
+    // `Bits.or`. A prefix or qualified call is scoped by the resolver already.
+    const auto freeFunctionInScope = [&](const Signature& signature) {
+        return !isMethodCall || kex::mangle::hasScope(name) ||
+               signature.declaringModule.empty() ||
+               makeModuleVisible(signature.declaringModule);
+    };
     // Calls made by ordinary user code should see the full local receiver
     // interface. While checking a make block's own implementation bodies,
     // retain the existing permissive behavior unless the receiver refinement
@@ -4571,15 +4629,17 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         }
         merged.insert(merged.end(), importedSigs.begin(), importedSigs.end());
         if (hasUser)
-            merged.insert(
-                merged.end(), userSignatures->begin(), userSignatures->end());
+            for (const auto& signature : *userSignatures)
+                if (freeFunctionInScope(signature)) merged.push_back(signature);
         // Every candidate may have been filtered out as out-of-scope (a
         // module-scoped `make` with no `using`). That is "no such method", not
         // "a method with no signatures" — fall through to the record-field
         // lookup and the undefined-method report below.
         if (!merged.empty()) sigs = &merged;
     } else if (hasUser) {
-        sigs = userSignatures;
+        for (const auto& signature : *userSignatures)
+            if (freeFunctionInScope(signature)) merged.push_back(signature);
+        if (!merged.empty()) sigs = &merged;
     }
     if (!sigs) {
         // Record field access: `user.name` desugars to checkCall("name", [User]).

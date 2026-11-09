@@ -163,6 +163,21 @@ auto Program::receiverTypeOf(const ast::Expr& call) const -> std::string {
         : std::string{};
 }
 
+auto Program::resolvedTargetOf(const ast::MethodCall& call) const
+    -> const semantic::ResolvedCallTarget* {
+    if (!m_analysis) return nullptr;
+    const auto& resolved = m_analysis->resolvedCalls();
+    const auto found = resolved.find(&call);
+    return found == resolved.end() ? nullptr : &found->second;
+}
+
+auto Program::traitsOf(const ast::MakeDef& make) const -> const std::vector<std::string>* {
+    if (!m_analysis) return nullptr;
+    const auto& resolved = m_analysis->resolvedTraits();
+    const auto found = resolved.find(&make);
+    return found == resolved.end() ? nullptr : &found->second;
+}
+
 auto Program::typeOfAnswer(const ast::MethodCall& call) const
     -> const semantic::StaticTypeAnswer* {
     const auto found = m_typeOfAnswers->find(&call);

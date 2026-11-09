@@ -12,8 +12,20 @@ namespace kex::names {
 // receiver method a program does not define itself.
 inline const std::string kPreludeModule = "kex_prelude";
 
-// The BEAM module a Kex module compiles to: `Net.HTTP` is `Kex.Net.HTTP`.
-inline auto moduleAtom(const std::string& path) -> std::string { return "Kex." + path; }
+// The root every Kex module compiles under: `Net.HTTP` is the BEAM module
+// `Kex.Net.HTTP`.
+inline const std::string kRuntimeRoot = "Kex";
+inline auto moduleAtom(const std::string& path) -> std::string { return kRuntimeRoot + "." + path; }
+
+// The interop root: `BEAM.lists.reverse(xs)` calls Erlang's `lists:reverse`.
+inline const std::string kForeignRoot = "BEAM";
+
+// The runtime's own modules: `Kex.Intrinsic.List.reverse(x)` calls
+// `kex_intrinsic_list:reverse`, the primitive the prelude wraps.
+inline const std::string kIntrinsicRoot = kRuntimeRoot + ".Intrinsic";
+inline auto isIntrinsicPath(const std::string& path) -> bool {
+    return path.starts_with(kIntrinsicRoot + ".");
+}
 
 // The reflection record a type is as a value (`String.name`), and the static
 // type of a type named where a value goes: `Type<String>`.

@@ -923,7 +923,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
             ex->node = Return{lower(n.value)};
             return ex;
         } else if constexpr (std::is_same_v<T, ast::CurryExpr>) {
-            return lowerCurry(n);
+            return lowerCurry(*e, n);
         } else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
             // A `do ... end` block as an expression (e.g. a match arm) is
             // just its body sequence, scoped so its bindings don't leak.
@@ -1160,7 +1160,7 @@ auto Lowering::lowerNameAsUfcsFun(const std::string& name,
 // paren group into ordered slots (a `_` placeholder is an open slot); if
 // all slots are bound and enough are present, apply now, else build a fun
 // taking one param per open slot plus trailing params up to the arity.
-auto Lowering::lowerCurry(const ast::CurryExpr& n) -> ExprPtr {
+auto Lowering::lowerCurry(const ast::Expr& e, const ast::CurryExpr& n) -> ExprPtr {
     struct Slot { bool open; ExprPtr val; };
     std::vector<Binding> binds;
     std::vector<Slot> slots;
@@ -1170,71 +1170,16 @@ auto Lowering::lowerCurry(const ast::CurryExpr& n) -> ExprPtr {
                 slots.push_back({true, nullptr});
             else slots.push_back({false, atomize(a, binds)});
         }
-    // Inside a module, a bare `~name` means THAT module's member. Falling
-    // through to the global bare name let an application's function of
-    // the same name answer a library's `values.map(~rendered)` — where
-    // `rendered` was the library's own `private do` helper.
-    std::string owningModule = n.module;
-    if (owningModule.empty() && !n.isOperator && !subst.count(n.name))
-        for (auto scope = currentModulePath; !scope.empty();) {
-            if (moduleFunctions.count(scope + "." + n.name)) {
-                owningModule = scope;
-                break;
-            }
-            const auto dot = scope.rfind('.');
-            if (dot == std::string::npos) break;
-            scope.resize(dot);
-        }
-    // A name a `using` imported is that module's function. Left bare it
-    // had no known arity and became a by-name dispatch on whatever the
-    // first argument turned out to be: `~joined` for an imported
-    // `joined(request, socket)` raised "Undefined method: joined"
-    // (kexhq/kex#476).
-    if (owningModule.empty() && !n.isOperator && !subst.count(n.name)) {
-        if (const auto key = importedKey(n.name); !key.empty())
-            owningModule = key.substr(0, key.rfind('.'));
-        else if (auto ext = externalImports.find(n.name);
-                 ext != externalImports.end() && !moduleImports.count(n.name))
-            if (const auto dot = ext->second.rfind('.');
-                dot != std::string::npos)
-                owningModule = ext->second.substr(0, dot);
-    }
-    // A qualified reference names its module the way a call would: through
-    // an alias (`using App.Controllers.Chat, as: Chat` then `~Chat.show`),
-    // an enclosing module, or a module a `using` opened.
-    if (!n.module.empty() && !n.isOperator) {
-        auto known = [&](const std::string& module) {
-            const auto key = module + "." + n.name;
-            return moduleFunctions.count(key) > 0 ||
-                   (externalModules &&
-                    externalModules->exportToBeamFn.count(key) &&
-                    externalModules->nameToAtom.count(module));
-        };
-        if (!known(owningModule)) {
-            std::vector<std::string> candidates;
-            const auto firstDot = n.module.find('.');
-            const auto head = n.module.substr(0, firstDot);
-            if (auto alias = moduleAliases.find(head);
-                alias != moduleAliases.end())
-                candidates.push_back(
-                    alias->second + (firstDot == std::string::npos
-                                         ? std::string{}
-                                         : n.module.substr(firstDot)));
-            for (auto scope = currentModulePath; !scope.empty();) {
-                candidates.push_back(scope + "." + n.module);
-                const auto dot = scope.rfind('.');
-                if (dot == std::string::npos) break;
-                scope.resize(dot);
-            }
-            for (const auto& imported : usingModules)
-                candidates.push_back(imported + "." + n.module);
-            for (const auto& candidate : candidates)
-                if (known(candidate)) {
-                    owningModule = candidate;
-                    break;
-                }
-        }
-    }
+    // The module whose function the capture names, as the checker decided it
+    // (`FunctionReference`): a bare `~name` inside a module is THAT module's
+    // member, an imported one its module's, and `~Chat.show` names its module
+    // through an alias, an enclosing module or a `using` (captureModule). A
+    // local binding captured is lowering's own: the value it holds.
+    std::string owningModule;
+    if (!n.isOperator && !subst.count(n.name))
+        if (const auto& target = hir->targetOf(e);
+            target.kind == hir::TargetKind::FunctionReference)
+            owningModule = kex::mangle::scopeOf(target.owner);
     const std::string qualKey =
         owningModule.empty() ? n.name : owningModule + "." + n.name;
 
@@ -1540,7 +1485,7 @@ auto Lowering::staticFieldRead(const ast::MethodCall& n) -> ExprPtr {
     if (!n.receiver || n.mutating || n.parenthesized ||
         !n.args.empty() || !n.namedArgs.empty() || n.block)
         return nullptr;
-    if (resolvedCalls->count(&n)) return nullptr;
+    if (hir->resolvedTargetOf(n)) return nullptr;
     if (std::holds_alternative<ast::UpperIdentifier>(n.receiver->kind))
         return nullptr;
     // The record read, as the checker decided it. Lowering used to work it
@@ -1606,9 +1551,9 @@ auto Lowering::ownerNameOf(const std::string& printed) -> std::string {
 }
 
 auto Lowering::receiverOwner(const ast::MethodCall& n) const -> std::string {
-    if (auto resolved = resolvedCalls->find(&n);
-        resolved != resolvedCalls->end() && !resolved->second.localDispatchTypes.empty())
-        return ownerNameOf(resolved->second.localDispatchTypes.front());
+    if (const auto* resolved = hir->resolvedTargetOf(n);
+        resolved && !resolved->localDispatchTypes.empty())
+        return ownerNameOf(resolved->localDispatchTypes.front());
     // A call the checker left to this unit's own `make` blocks
     // (ownerOfCall's ReceiverType): the receiver's type is the owner.
     if (const auto type = staticTypeOf(n.receiver.get()))

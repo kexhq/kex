@@ -321,9 +321,6 @@ struct Lowering {
     // Lowering the prelude itself: its `to` conversions are what other
     // units' fall back to, so they forward among themselves instead.
     bool lowersPrelude = false;
-    // Exact imported call ownership selected by semantic analysis.
-    const std::unordered_map<const ast::MethodCall*,
-        semantic::ResolvedCallTarget>* resolvedCalls = nullptr;
     // The checked program (src/hir/): what each call is, decided once by
     // semantic analysis. Null when lowering an unchecked program.
     const hir::Program* hir = nullptr;
@@ -334,13 +331,6 @@ struct Lowering {
     auto operatorOwner(const ast::BinaryOp& n) const -> std::string;
     // The checker's static type for `expr` (null when it has none).
     auto staticTypeOf(const ast::Expr* expr) const -> semantic::TypePtr;
-    // `implement:` identities per make block, in written order, resolved by
-    // semantic analysis. Absent without analysis (`--no-check`), in which
-    // case `inheritedDefaults` resolves from its pre-pass usings as before.
-    const std::unordered_map<const ast::MakeDef*, std::vector<std::string>>*
-        resolvedTraits = nullptr;
-    const StaticTypeOfCalls* staticTypeOfCalls = nullptr;
-    const ExpressionTypes* expressionTypes = nullptr;
     // Lexical source binding -> trait -> hidden dictionary IR binding.
     std::unordered_map<std::string,
         std::unordered_map<std::string, std::string>> traitDictionaries;
@@ -478,7 +468,7 @@ struct Lowering {
     auto lowerNameAsUfcsFun(const std::string& name,
                             const std::vector<ast::ExprPtr>& args) -> ExprPtr;
 
-    auto lowerCurry(const ast::CurryExpr& n) -> ExprPtr;
+    auto lowerCurry(const ast::Expr& e, const ast::CurryExpr& n) -> ExprPtr;
 
 
     auto clauseNames(const ast::FunctionClause* clause,
@@ -514,6 +504,15 @@ struct Lowering {
     auto lowerServerSlotCall(const ast::MethodCall& n, const semantic::ResolvedCallTarget& target)
         -> ExprPtr;
     auto lowerValueReceiverCall(const ast::MethodCall& n) -> ExprPtr;
+    auto lowerRuntimeCall(const ast::MethodCall& n, const std::string& path) -> ExprPtr;
+    auto lowerConversion(const ast::MethodCall& n, const std::string& target) -> ExprPtr;
+    auto lowerProcessSpawn(const ast::MethodCall& n, const std::string& stateType) -> ExprPtr;
+    auto lowerTypeOf(const ast::MethodCall& n, const semantic::StaticTypeAnswer& answer) -> ExprPtr;
+    auto lowerTraitDictionaryCall(const ast::MethodCall& n) -> ExprPtr;
+    auto thisFieldRead(const ast::MethodCall& n) -> ExprPtr;
+    auto lowerModuleFunctionCall(const ast::MethodCall& n, const std::string& module,
+                                 const std::vector<std::string>& path) -> ExprPtr;
+    auto lowerTypeNamespaceCall(const ast::MethodCall& n, const ast::UpperIdentifier& type) -> ExprPtr;
 
 
 
@@ -565,8 +564,6 @@ struct Lowering {
     auto makeDictionaryWrapper(const FunDef& def) -> std::optional<FunDef>;
 
     static auto modulePath(const ast::Expr& e, std::vector<std::string>& out) -> bool;
-
-    static auto beamModulePath(const ast::Expr& e, std::string& out) -> bool;
 
     auto lowerMethodCall(const ast::MethodCall& n) -> ExprPtr;
 

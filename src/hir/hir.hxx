@@ -7,6 +7,7 @@
 // copying it, so building it is one pass over the checker's tables.
 #include "call_targets.hxx"
 #include "../ast/ast.hxx"
+#include "../semantic/imported_interfaces.hxx"
 #include "../semantic/traits.hxx"
 #include "../semantic/types.hxx"
 
@@ -88,6 +89,15 @@ public:
     // Every such argument of `call`, or null.
     auto shownThroughOf(const ast::Expr& call) const
         -> const std::vector<std::pair<std::size_t, std::string>>*;
+
+    // The imported function the checker resolved `call` to, with its placed
+    // arguments, defaults and trait dictionaries; null for any other call,
+    // and for a loaded program.
+    auto resolvedTargetOf(const ast::MethodCall& call) const
+        -> const semantic::ResolvedCallTarget*;
+    // The traits a `make` block implements, each as the checker resolved its
+    // `implement:` name, in written order; null when it names none.
+    auto traitsOf(const ast::MakeDef& make) const -> const std::vector<std::string>*;
 
     // Every call site, in source order, with its target.
     auto callSites() const -> const std::vector<CallSite>& { return m_sites; }

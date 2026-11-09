@@ -29,219 +29,37 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         call->node = Call{std::string{}, own.symbol, arity, std::move(args), false};
         return call;
     }
-    // BEAM interop: a direct call into any BEAM module, named verbatim.
-    // `BEAM.lists.reverse(xs)` → `call 'lists':'reverse'(xs)`
-    // `BEAM.Elixir.Phoenix.Router.match(c)` → `call 'Elixir.Phoenix.Router':'match'(c)`
-    // A trailing block becomes the last argument.
-    if (std::string mod; n.receiver && beamModulePath(*n.receiver, mod)) {
-        std::vector<Binding> binds;
-        std::vector<ExprPtr> args;
-        for (const auto& a : n.args) args.push_back(atomize(a, binds));
-        if (n.block) args.push_back(atomize(*n.block, binds));
-        int ar = static_cast<int>(args.size());
-        auto ex = std::make_unique<Expr>();
-        ex->node = Call{mod, n.method, ar, std::move(args), false};
-        return wrapLets(binds, std::move(ex));
+    // The calls the checker decided by what they name, each to its handler.
+    switch (const auto& target = hir->targetOf(n); target.kind) {
+    case hir::TargetKind::Foreign:
+        return lowerRuntimeCall(n, target.owner);
+    case hir::TargetKind::Builtin:
+        return names::isIntrinsicPath(target.owner) ? lowerRuntimeCall(n, target.owner)
+                                                    : lowerProcessSpawn(n, target.owner);
+    case hir::TargetKind::Conversion:
+        return lowerConversion(n, target.owner);
+    case hir::TargetKind::Intrinsic:
+        if (const auto* answer = hir->typeOfAnswer(n)) return lowerTypeOf(n, *answer);
+        break;
+    case hir::TargetKind::TraitMethod:
+        if (auto call = lowerTraitDictionaryCall(n)) return call;
+        break;
+    case hir::TargetKind::FieldRead:
+        if (auto field = thisFieldRead(n)) return field;
+        if (auto field = staticFieldRead(n)) return field;
+        break;
+    default:
+        break;
     }
-    // `.as(T)`, as the checker decided it (`Conversion`, owner the target):
-    // distinct/backing conversions erase to the receiver; `.as(String)` is the
-    // universal total display path.
-    if (const auto* conversion = n.receiver ? &hir->targetOf(n) : nullptr;
-        conversion && conversion->kind == hir::TargetKind::Conversion) {
-        if (conversion->owner == "String")
-            return callE("kex_intrinsic_kex", "show", 1,
-                         one(lower(n.receiver)));
-        // `"hello".as(Atom)`: the checker admits only a plain literal, so
-        // the atom is a constant in the emitted code.
-        if (conversion->owner == "Atom")
-            if (const auto* literal =
-                    std::get_if<ast::StringLiteral>(&n.receiver->kind);
-                literal && literal->values.empty()) {
-                // Plain text sits in `parts` (split, with nothing
-                // interpolated between) or, for a literal marked
-                // non-interpolating, in `value`.
-                std::string text = literal->value;
-                if (!literal->parts.empty()) {
-                    text.clear();
-                    for (const auto& part : literal->parts) text += part;
-                }
-                return lit(LitKind::Atom, text);
-            }
-        return lower(n.receiver);
-    }
-    // A method on a trait-typed lexical parameter dispatches through the
-    // hidden dictionary supplied by its caller. The tuple slots follow
-    // the trait declaration's required-method order.
-    std::string dictionaryReceiver;
-    if (const auto* receiver =
-            std::get_if<ast::Identifier>(&n.receiver->kind))
-        dictionaryReceiver = receiver->name;
-    else if (std::holds_alternative<ast::ThisExpr>(n.receiver->kind))
-        dictionaryReceiver = "this";
-    if (!dictionaryReceiver.empty()) {
-        if (auto dictionaries = traitDictionaries.find(dictionaryReceiver);
-            dictionaries != traitDictionaries.end()) {
-            for (const auto& [trait, dictionary] : dictionaries->second) {
-                auto methods = traitMethods.find(trait);
-                if (methods == traitMethods.end()) continue;
-                auto method = std::find_if(
-                    methods->second.begin(), methods->second.end(),
-                    [&](const auto& candidate) {
-                        return candidate.name == n.method;
-                    });
-                if (method == methods->second.end()) continue;
-                std::vector<Binding> binds;
-                std::vector<ExprPtr> args;
-                args.push_back(atomize(n.receiver, binds));
-                for (const auto& arg : n.args)
-                    args.push_back(atomize(arg, binds));
-                if (n.block) args.push_back(atomize(*n.block, binds));
-                auto slot = static_cast<int>(
-                    std::distance(methods->second.begin(), method)) + 1;
-                auto callee = atomize_ir(
-                    callE("erlang", "element", 2,
-                          two(litInt(slot), var(dictionary))), binds);
-                auto indirect = std::make_unique<Expr>();
-                indirect->node = CallIndirect{
-                    std::move(callee), std::move(args), false};
-                return wrapLets(binds, std::move(indirect));
-            }
-        }
-    }
-    const bool thisReceiver =
-        std::holds_alternative<ast::ThisExpr>(n.receiver->kind) ||
-        (std::holds_alternative<ast::Identifier>(n.receiver->kind) &&
-         std::get<ast::Identifier>(n.receiver->kind).name == "this");
-    if (thisReceiver && n.args.empty() && n.namedArgs.empty() &&
-        !n.block && fieldAccessors.count(n.method)) {
-        const auto& candidates = fieldAccessors.at(n.method);
-        auto selected = std::find_if(
-            candidates.begin(), candidates.end(),
-            [&](const auto& candidate) {
-                return candidate.record == currentMakeType;
-            });
-        if (selected != candidates.end())
-            return callE("erlang", "element", 2,
-                two(litInt(selected->position), lower(n.receiver)));
-    }
-    // `Type.of(x)` the checker answered: emit the recorded shape as a
-    // literal record. Ahead of every dispatch path, like the walker's.
-    if (staticTypeOfCalls) {
-        auto recorded = staticTypeOfCalls->find(&n);
-        if (recorded != staticTypeOfCalls->end()) {
-            std::vector<Binding> binds;
-            // A value argument still runs (it may have effects); one that
-            // NAMES a function does not — `Date.parse` alone is a call
-            // missing its argument, which would not even compile.
-            if (recorded->second.evaluateArgument)
-                for (const auto& arg : n.args)
-                    if (arg) binds.push_back({fresh("TypeArg"), lower(arg)});
-            // A type token from another unit contains no call to that
-            // unit. Load its companion before `Type.constructors` (or
-            // record-field reflection) reads the layouts it registers.
-            if (externalModules) {
-                auto owner = recorded->second.type.name;
-                // `Type.of(Kinds.Red)` can record only the bare ADT name
-                // (`Kind`); the written constructor still names its unit.
-                if (!n.args.empty() && n.args.front())
-                    if (const auto* named = std::get_if<ast::MethodCall>(
-                            &n.args.front()->kind)) {
-                        std::vector<std::string> path;
-                        if (named->receiver && modulePath(*named->receiver, path)) {
-                            std::string source = kex::join(path, ".");
-                            if (auto module = externalModules->nameToAtom.find(source);
-                                module != externalModules->nameToAtom.end())
-                                binds.push_back({fresh("TypeLoaded"),
-                                    callE("code", "ensure_loaded", 1,
-                                          one(lit(LitKind::Atom, module->second)))});
-                        }
-                    }
-                for (;;) {
-                    const auto dot = owner.rfind('.');
-                    if (dot == std::string::npos) break;
-                    owner.resize(dot);
-                    if (auto module = externalModules->nameToAtom.find(owner);
-                        module != externalModules->nameToAtom.end()) {
-                        binds.push_back({fresh("TypeLoaded"),
-                            callE("code", "ensure_loaded", 1,
-                                  one(lit(LitKind::Atom, module->second)))});
-                        break;
-                    }
-                }
-            }
-            return wrapLets(binds, structuredTypeLiteral(recorded->second.type));
-        }
-    }
-    if (auto field = staticFieldRead(n)) return field;
-    // Process.spawn(state) must remember the module that owns the serving
-    // slot dispatchers.  The source-level prelude wrapper cannot discover
-    // its caller's compiled module at runtime, so lower this call directly.
-    if (n.method == "spawn" && n.receiver && n.args.size() == 1) {
-        if (auto* owner = std::get_if<ast::UpperIdentifier>(&n.receiver->kind);
-            owner && owner->name == "Process") {
-            std::vector<Binding> binds;
-            auto state = atomize(n.args[0], binds);
-            std::vector<ExprPtr> slotAtoms;
-            // The module holding the slot dispatchers. A serving block at
-            // the top level compiles into the entry module; one inside
-            // `module Store` compiles into `Kex.Store`, and naming the
-            // entry module there sent every call to a module that defines
-            // no slots (rodolfo docs/kex-issues.md #2).
-            std::string servingModule = outputModule;
-            // The state's type, as the checker decided the call.
-            if (const auto* target = &hir->targetOf(n);
-                target && target->kind == hir::TargetKind::Builtin) {
-                    auto stateType = target->owner;
-                    if (auto angle = stateType.find('<');
-                        angle != std::string::npos)
-                        stateType.resize(angle);
-                    // The slot registry is keyed by the make target AS
-                    // WRITTEN, which inside a module is the bare name,
-                    // while the checker types the spawned state by its
-                    // qualified identity — so `Store.Counter` found
-                    // nothing and the server started with an EMPTY slot
-                    // list, answering `{unknown_serving_slot, get}` to
-                    // its first call.
-                    auto key = stateType;
-                    if (!servingSlotsByType.count(key))
-                        if (auto dot = stateType.rfind('.');
-                            dot != std::string::npos)
-                            key = stateType.substr(dot + 1);
-                    if (auto slots = servingSlotsByType.find(key);
-                        slots != servingSlotsByType.end())
-                        for (const auto& slot : slots->second)
-                            slotAtoms.push_back(lit(LitKind::Atom, slot));
-                    if (auto declaring = localTypeModules.find(key);
-                        declaring != localTypeModules.end())
-                        servingModule =
-                            mangleModulePath(names::moduleAtom(declaring->second));
-                    if (slotAtoms.empty() && externalModules) {
-                        auto external = externalModules->servingSlots.find(stateType);
-                        if (external == externalModules->servingSlots.end())
-                            external = externalModules->servingSlots.find(key);
-                        if (external != externalModules->servingSlots.end()) {
-                            servingModule = external->second.first;
-                            for (const auto& slot : external->second.second)
-                                slotAtoms.push_back(lit(LitKind::Atom, slot));
-                        }
-                    }
-            }
-            auto allowedSlots = std::make_unique<Expr>();
-            allowedSlots->node = MakeList{std::move(slotAtoms), std::nullopt};
-            return wrapLets(
-                binds,
-                callE("kex_intrinsic_process", "spawnServing", 3,
-                      three(std::move(state),
-                            lit(LitKind::Atom, servingModule),
-                            std::move(allowedSlots))));
-        }
-    }
-    if (resolvedCalls) {
-        auto resolved = resolvedCalls->find(&n);
-        const bool resolvedServerSlot = resolved != resolvedCalls->end() &&
-            !resolved->second.localDispatchTypes.empty() &&
-            resolved->second.localDispatchTypes.front().rfind("Server<", 0) == 0;
-        if (resolvedServerSlot) return lowerServerSlotCall(n, resolved->second);
+    // The module a call written on a module path names, as the checker
+    // decided it (`Util` of `Util.double(21)`).
+    std::vector<std::string> path;
+    const auto calledModule =
+        modulePath(*n.receiver, path) ? checkedCallModule(n) : std::string{};
+    if (const auto* resolved = hir->resolvedTargetOf(n)) {
+        if (!resolved->localDispatchTypes.empty() &&
+            resolved->localDispatchTypes.front().starts_with("Server<"))
+            return lowerServerSlotCall(n, *resolved);
         // Semantic analysis has already applied lexical `using` policy
         // and argument-type specificity. Once it names an imported
         // target, source-import priority must not override that choice.
@@ -252,387 +70,16 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
         // claims it first the call goes straight to the real
         // implementation and `with` silently does nothing — the fail-open
         // this feature exists to prevent (kexhq/kex#143).
-        std::string capabilityTarget;
-        if (n.receiver) {
-            std::vector<std::string> segments;
-            if (modulePath(*n.receiver, segments) && !segments.empty())
-                if (const auto named = checkedCallModule(n);
-                    isCapabilityModule(named) && capabilityInterfaceHas(named, n.method))
-                    capabilityTarget = named;
-        }
-        if (resolved != resolvedCalls->end())
-            return lowerResolvedCall(n, resolved->second, capabilityTarget);
+        const auto capabilityTarget =
+            isCapabilityModule(calledModule) && capabilityInterfaceHas(calledModule, n.method)
+                ? calledModule
+                : std::string{};
+        return lowerResolvedCall(n, *resolved, capabilityTarget);
     }
-    // A call into the `Kex.Intrinsic.<Category>` runtime module, e.g.
-    // `Kex.Intrinsic.List.reverse(x)`. Compile to a plain cross-module call
-    // `call 'kex_intrinsic_list':'reverse'(x)` — the emitter knows NOTHING
-    // about `reverse`; the runtime module owns it, and the Kex prelude above
-    // owns the typed semantics. Adding a primitive = add a runtime function,
-    // with zero emitter changes.
-    {
-        std::vector<std::string> path;
-        if (modulePath(*n.receiver, path) && path.size() >= 3 &&
-            path[0] == "Kex" && path[1] == "Intrinsic") {
-            std::string mod = "kex_intrinsic";
-            for (size_t i = 2; i < path.size(); i++) {
-                mod += "_";
-                for (char c : path[i]) mod += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            }
-            std::vector<Binding> binds;
-            std::vector<ExprPtr> args;
-            for (const auto& a : n.args) args.push_back(atomize(a, binds));
-            auto ex = std::make_unique<Expr>();
-            int ar = static_cast<int>(args.size());
-            ex->node = Call{mod, n.method, ar, std::move(args), false};
-            return wrapLets(binds, std::move(ex));
-        }
-    }
-    // User module function: `Util.double(21)` / `Util.Math.double(21)`, the
-    // one the checker named.
-    {
-        std::vector<std::string> path;
-        if (!path.empty() || modulePath(*n.receiver, path)) {
-            for (const auto& candidate : {checkedCallModule(n)}) {
-                if (candidate.empty()) continue;
-                auto qualKey = candidate + "." + n.method;
-                auto it = moduleFunctions.find(qualKey);
-                // A call into a capability asks the context first and
-                // falls back to the capability's own body, which is what
-                // runs when nothing replaced it (kexhq/kex#181).
-                const bool importedCapability =
-                    externalModules &&
-                    externalModules->capabilityModules.count(candidate) > 0;
-                if (it != moduleFunctions.end() && threadsCapabilities() &&
-                    (capabilityModules.count(candidate) ||
-                     importedCapability) &&
-                    capabilityInterfaceHas(candidate, n.method) &&
-                    n.namedArgs.empty()) {
-                    std::vector<Binding> binds;
-                    std::vector<std::string> argVars;
-                    for (const auto& a : n.args) {
-                        auto name = fresh("CapArg");
-                        binds.push_back({name, atomize(a, binds)});
-                        argVars.push_back(name);
-                    }
-                    // A trailing block is a source argument like any
-                    // other; leaving it out called the replacement
-                    // short one argument, which is why block-form
-                    // capability calls used to skip substitution
-                    // entirely and silently reach the real
-                    // implementation.
-                    if (n.block) {
-                        auto name = fresh("CapArg");
-                        binds.push_back({name, atomize(*n.block, binds)});
-                        argVars.push_back(name);
-                    }
-                    auto argsFrom = [&](const std::string& lead) {
-                        std::vector<ExprPtr> out;
-                        if (!lead.empty()) out.push_back(var(lead));
-                        for (const auto& v : argVars) out.push_back(var(v));
-                        return out;
-                    };
-                    std::vector<ExprPtr> getArgs;
-                    getArgs.push_back(lit(LitKind::String, candidate));
-                    getArgs.push_back(currentContext());
-                    getArgs.push_back(lit(LitKind::Atom, "undefined"));
-                    auto impl = fresh("Impl");
-                    Match m;
-                    m.subjects.push_back(
-                        callE("maps", "get", 3, std::move(getArgs)));
-                    MatchClause missing;
-                    auto undef = atomPattern("undefined");
-                    missing.patterns.push_back(std::move(undef));
-                    auto direct = std::make_unique<Expr>();
-                    direct->node = localCall(it->second, argsFrom(""));
-                    missing.body = std::move(direct);
-                    m.clauses.push_back(std::move(missing));
-                    MatchClause replaced;
-                    auto bound = std::make_unique<Pattern>();
-                    bound->kind = PatKind::Var;
-                    bound->name = impl;
-                    replaced.patterns.push_back(std::move(bound));
-                    // Runtime dispatch: the implementation replacing the
-                    // capability is typically defined in a different unit
-                    // from this call site, so there is no local symbol to
-                    // name (kexhq/kex#181).
-                    std::vector<ExprPtr> passed;
-                    for (const auto& v : argVars) passed.push_back(var(v));
-                    // A capability's members are foul by construction, so
-                    // the implementation takes the context too — the
-                    // runtime dispatch has to hand it over just as a
-                    // direct call would.
-                    passed.push_back(currentContext());
-                    auto passedList = std::make_unique<Expr>();
-                    passedList->node =
-                        MakeList{std::move(passed), std::nullopt};
-                    std::vector<ExprPtr> dispatchArgs;
-                    dispatchArgs.push_back(var(impl));
-                    dispatchArgs.push_back(lit(LitKind::String, n.method));
-                    dispatchArgs.push_back(std::move(passedList));
-                    auto dispatched =
-                        callE("kex_io", "dispatch_method", 3,
-                              std::move(dispatchArgs));
-                    replaced.body = std::move(dispatched);
-                    m.clauses.push_back(std::move(replaced));
-                    auto chosen = std::make_unique<Expr>();
-                    chosen->node = std::move(m);
-                    return wrapLets(binds, std::move(chosen));
-                }
-                if (it != moduleFunctions.end()) {
-                    std::vector<Binding> binds;
-                    if (!n.namedArgs.empty()) {
-                        auto pit = fnParamNames.find(qualKey);
-                        if (pit == fnParamNames.end())
-                            throw LowerError("IR lower: named args to module function with unknown params: " + qualKey);
-                        // The clause the checker chose for these labels.
-                        const auto* signature = hir->selectedSignatureOf(n);
-                        const auto* selected = signature ? signature->clause : nullptr;
-                        const auto pnames = clauseNames(selected, pit->second);
-                        std::vector<std::string> labels;
-                        for (const auto& [label, _] : n.namedArgs)
-                            labels.push_back(label);
-                        const auto placed = placeArguments(
-                            pnames, labels, n.args.size() + bool(n.block));
-                        std::vector<ExprPtr> slots(pnames.size());
-                        for (size_t i = 0; i < n.namedArgs.size(); ++i)
-                            if (placed.labelSlots[i] != PlacedArguments::npos)
-                                slots[placed.labelSlots[i]] =
-                                    atomize(n.namedArgs[i].second, binds);
-                        std::vector<ExprPtr> positional;
-                        for (const auto& a : n.args) positional.push_back(atomize(a, binds));
-                        if (n.block) positional.push_back(atomize(*n.block, binds));
-                        for (size_t k = 0; k < positional.size(); ++k)
-                            if (placed.positionalSlots[k] != PlacedArguments::npos)
-                                slots[placed.positionalSlots[k]] =
-                                    std::move(positional[k]);
-                        fillDefaultSlots(qualKey, slots, binds, selected);
-                        return wrapLets(binds, localCallExpr(it->second, std::move(slots)));
-                    }
-                    std::vector<ExprPtr> args;
-                    for (const auto& a : n.args) args.push_back(atomize(a, binds));
-                    if (n.block) args.push_back(atomize(*n.block, binds));
-                    if (auto defaults = fnDefaults.find(qualKey);
-                        defaults != fnDefaults.end() && args.size() < defaults->second.size() &&
-                        !(n.block && blockFitsExactOverload(qualKey, args.size()))) {
-                        args.resize(defaults->second.size());
-                        fillDefaultSlots(qualKey, args, binds);
-                    }
-                    // `Module.name` may be a zero-param VALUE binding
-                    // rather than a real function — `let render =
-                    // Template.html(...)` in `module M do ... end`,
-                    // reached here as `M.render(x)` from OUTSIDE it (the
-                    // identical call from WITHIN the same module is
-                    // `lowerFunctionCall`'s own `zeroArgThunk` check —
-                    // see its comment for the full story). Its only
-                    // emitted arity is 0 (the thunk that hands back the
-                    // closure), so calling it directly at this call's own
-                    // arity emitted a call to an arity that was never
-                    // defined and erlc rejected the module outright:
-                    // `undefined function 'M.render'/1`, a dangling
-                    // reference to something that only ever existed as
-                    // `render/0`. Evaluate the thunk first, then apply
-                    // the supplied args to what it returns.
-                    const auto clauses = fnNamedClauses.find(qualKey);
-                    const bool hasMatchingOverload =
-                        clauses != fnNamedClauses.end() &&
-                        std::any_of(clauses->second.begin(), clauses->second.end(),
-                                    [&](const ast::FunctionClause* clause) {
-                                        return clause->params.size() == args.size();
-                                    });
-                    if (!args.empty() && emittedModuleZeroArg.count(it->second) &&
-                        !hasMatchingOverload) {
-                        auto thunk = std::make_unique<Expr>();
-                        thunk->node = localCall(it->second, {});
-                        auto indirect = std::make_unique<Expr>();
-                        indirect->node = CallIndirect{
-                            std::move(thunk), std::move(args), false};
-                        return wrapLets(binds, std::move(indirect));
-                    }
-                    return wrapLets(binds, localCallExpr(it->second, std::move(args)));
-                }
-            }
-            // External loaded modules: BinaryTree.fromList → 'Kex.BinaryTree':fromList
-            // Skip when the receiver names a local type that owns this
-            // method — local types shadow prelude modules with the same name.
-            if (externalModules
-                && !(path.size() == 1
-                     && typeOwnsStaticFunction(path[0], n.method))) {
-                for (const auto& candidate : {checkedCallModule(n)}) {
-                    if (candidate.empty()) continue;
-                    auto qualKey = candidate + "." + n.method;
-                    auto eit = externalModules->exportToBeamFn.find(qualKey);
-                    // This is the route a PRELUDE capability takes —
-                    // `ENV.get(...)` reaches neither the local module path
-                    // nor the receiver path (kexhq/kex#143).
-                    if (eit != externalModules->exportToBeamFn.end() &&
-                        threadsCapabilities() &&
-                        isCapabilityModule(candidate) &&
-                        capabilityInterfaceHas(candidate, n.method) &&
-                        n.namedArgs.empty()) {
-                        auto ait = externalModules->nameToAtom.find(candidate);
-                        if (ait != externalModules->nameToAtom.end()) {
-                            const auto atom = ait->second;
-                            const auto beamFn = eit->second;
-                            const auto key = qualKey;
-                            // A trailing block is a source argument like
-                            // any other: without it the dispatch below
-                            // would call the replacement short one
-                            // argument, which is why block-form
-                            // capability calls used to skip substitution
-                            // entirely and silently reach the real
-                            // implementation.
-                            std::vector<Binding> blockBinds;
-                            std::vector<ExprPtr> loweredArgs;
-                            for (const auto& arg : n.args)
-                                loweredArgs.push_back(
-                                    atomize(arg, blockBinds));
-                            if (n.block)
-                                loweredArgs.push_back(
-                                    atomize(*n.block, blockBinds));
-                            return capabilityDispatchLowered(
-                                candidate, n.method,
-                                std::move(loweredArgs), blockBinds,
-                                [&](std::vector<ExprPtr> callArgs) {
-                                    const int ar =
-                                        static_cast<int>(callArgs.size());
-                                    return externalCallExpr(
-                                        key, atom, beamFn, ar,
-                                        std::move(callArgs));
-                                });
-                        }
-                    }
-                    if (eit != externalModules->exportToBeamFn.end()) {
-                        auto ait = externalModules->nameToAtom.find(candidate);
-                        if (ait != externalModules->nameToAtom.end()) {
-                            std::vector<Binding> binds;
-                            if (!n.namedArgs.empty())
-                                throw LowerError("IR lower: named arguments to `" + qualKey +
-                                                 "` reached lowering unplaced");
-                            std::vector<ExprPtr> args;
-                            for (const auto& a : n.args) args.push_back(atomize(a, binds));
-                            if (n.block) args.push_back(atomize(*n.block, binds));
-                            int ar = static_cast<int>(args.size());
-                            // A zero-argument binding can hold a callable
-                            // value, such as a Template. Apply the value
-                            // returned by `page/0`; there is no `page/1`
-                            // in the other unit to call directly.
-                            if (auto declared = externalModules->exportArity.find(qualKey);
-                                ar > 0 && declared != externalModules->exportArity.end() &&
-                                declared->second == 0) {
-                                auto callee = externalCallExpr(
-                                    qualKey, ait->second, eit->second, 0, {});
-                                auto indirect = std::make_unique<Expr>();
-                                indirect->node = CallIndirect{
-                                    std::move(callee), std::move(args), false};
-                                return wrapLets(binds, std::move(indirect));
-                            }
-                            return wrapLets(binds,
-                                externalCallExpr(qualKey, ait->second, eit->second, ar, std::move(args)));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // Namespace calls on an UpperIdentifier receiver, e.g. IO.printLine.
-    if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind)) {
-        std::vector<Binding> binds;
-        // A type imported from another unit can name one of its `make`
-        // methods without an instance: `Organization.slugged(name)`.
-        // Its companion expects the type atom as the receiver.
-        if (externalModules && !typeOwnsStaticFunction(uid->name, n.method)) {
-            if (auto found = externalModules->receiverFunctions.find(n.method);
-                found != externalModules->receiverFunctions.end()) {
-                for (const auto& provider : found->second) {
-                    const auto dot = provider.receiverType.rfind('.');
-                    if (dot == std::string::npos ||
-                        provider.receiverType.substr(dot + 1) != uid->name ||
-                        !usingModules.contains(provider.receiverType.substr(0, dot)) ||
-                        !provider.compiledApart)
-                        continue;
-                    std::vector<ExprPtr> args;
-                    args.push_back(lit(LitKind::Atom, provider.receiverType));
-                    if (!n.namedArgs.empty()) continue;
-                    for (const auto& value : n.args) args.push_back(atomize(value, binds));
-                    if (n.block) args.push_back(atomize(*n.block, binds));
-                    if (provider.isFoul) args.push_back(currentContext());
-                    if (static_cast<int>(args.size()) != provider.beamArity) continue;
-                    return wrapLets(binds, callE(provider.moduleAtom,
-                                                 provider.beamFunction,
-                                                 provider.beamArity, std::move(args)));
-                }
-            }
-        }
-        std::vector<ExprPtr> args;
-        for (const auto& a : n.args) args.push_back(atomize(a, binds));
-        // Static method dispatch: `Type.method(args)` on a user type whose
-        // `method` is a local function/make-method. If that method has an
-        // implicit `this`, pass a placeholder receiver (the type tag).
-        if (typeOwnsStaticFunction(uid->name, n.method)) {
-            std::string mangled =
-                mangleQualifiedMember(uid->name, n.method);
-            std::string callName = knownFns.count(mangled) ? mangled : n.method;
-            std::vector<ExprPtr> callArgs;
-            if (implicitThisMethods.count(callName))
-                callArgs.push_back(lit(LitKind::Atom, canonicalRecordName(uid->name)));
-            for (auto& a : args) callArgs.push_back(std::move(a));
-            auto ex = std::make_unique<Expr>();
-            ex->node = localCall(callName, std::move(callArgs));
-            return wrapLets(binds, std::move(ex));
-        }
-        // `Mod.Tag` for an ADT declared inside a module (e.g. `Kex.FS`).
-        // The tag is just an atom at runtime, so the qualifier has no
-        // representation here — emit the bare tag.
-        if (n.args.empty() && !n.block && n.namedArgs.empty()) {
-            if (auto tag = qualifiedVariantTag(uid->name + "." + n.method);
-                !tag.empty()) {
-                auto ex = std::make_unique<Expr>();
-                ex->node = Construct{tag, {}};
-                return wrapLets(binds, std::move(ex));
-            }
-        }
-        // A nullary CONSTRUCTOR is a value, not a namespace: `Monday.name`
-        // is the same call as `let m = Monday` then `m.name`, which has
-        // always worked. Fall through to the value-receiver path below
-        // rather than reporting the namespace as undefined.
-        const bool nullaryConstructorReceiver =
-            nullaryVariantTags.count(uid->name) ||
-            // Prelude/imported constructors are not in the local tag set;
-            // the external variant table (seeded for display) knows them.
-            (variantOwner.count(uid->name) &&
-             variantArity.count(uid->name) &&
-             variantArity.at(uid->name) == 0);
-        // ...and so is an upper-case TOP-LEVEL BINDING. `let NUMS = [1,2,3]`
-        // then `NUMS.map { }` is the same call as `let n = NUMS` then
-        // `n.map { }` — which worked, while the direct form did not, purely
-        // because an UpperIdentifier receiver was assumed to name a module.
-        // Every module and variant lookup above has already missed by the
-        // time we get here, so a name that is a known local value can only
-        // be the value.
-        // A MODULE's own constant is the same thing one scope in:
-        // `"${EARLIEST_YEAR}"` inside `module Draft` is a `showValue`
-        // call on the binding, and reading the receiver as a module name
-        // reported `Undefined function: EARLIEST_YEAR.showValue`
-        // (rodolfo docs/kex-issues.md #14, kexhq/kex#282).
-        const bool topLevelBindingReceiver =
-            zeroArgFns.count(uid->name) ||
-            topLevelConstants.count(uid->name) ||
-            !moduleConstantSymbol(uid->name).empty() ||
-            // An IMPORTED zero-arg member is the same thing from another
-            // module: `using Limits` + `"${LIMIT}"` is a showValue on the
-            // constant's value, not a module member lookup
-            // (kexhq/kex#282).
-            [&]() {
-                auto imp = moduleImports.find(uid->name);
-                return imp != moduleImports.end() &&
-                    emittedModuleZeroArg.count(imp->second);
-            }() ||
-            // ...or one from a module compiled apart.
-            externalConstant(uid->name) != nullptr;
-        if (!nullaryConstructorReceiver && !topLevelBindingReceiver)
-            return wrapLets(binds,
-                runtimeError("Undefined function: " + uid->name + "." + n.method));
-    }
+    if (!calledModule.empty())
+        if (auto call = lowerModuleFunctionCall(n, calledModule, path)) return call;
+    if (const auto* type = std::get_if<ast::UpperIdentifier>(&n.receiver->kind))
+        if (auto call = lowerTypeNamespaceCall(n, *type)) return call;
     return lowerValueReceiverCall(n);
 }
 
@@ -672,15 +119,11 @@ auto Lowering::lowerValueReceiverCall(const ast::MethodCall& n) -> ExprPtr {
 
     // A function of a module of this unit the checker selected for the call
     // (`10.double` under `using Utils`): `double(10)`, the receiver first.
-    // Only the one `using` brought into scope here: the checker also selects
-    // an unimported module's free function for a receiver whose type it has
-    // not settled (`Bits.or` for `findIndex {..}.or(..)` in the prelude).
     if (const auto* selected = hir->selectedSignatureOf(n);
         selected && !selected->declaringModule.empty() && n.namedArgs.empty())
         if (const auto emitted =
                 moduleFunctions.find(selected->declaringModule + "." + n.method);
-            emitted != moduleFunctions.end() && moduleImports.contains(n.method) &&
-            moduleImports.at(n.method) == emitted->second) {
+            emitted != moduleFunctions.end()) {
             std::vector<ExprPtr> args;
             args.push_back(rv());
             for (const auto& value : n.args) args.push_back(atomize_ir(lower(value), rb));
@@ -800,6 +243,540 @@ auto Lowering::lowerValueReceiverCall(const ast::MethodCall& n) -> ExprPtr {
     }
     // External loaded module methods (UFCS): tree.size → 'Kex.BinaryTree':'Tree.size'(tree)
     return ret(undefinedMethodOrField(n, rv()));
+}
+
+// `Type.of(x)` the checker answered (`Intrinsic`): the recorded shape as a
+// literal record, ahead of every dispatch path, like the walker's.
+auto Lowering::lowerTypeOf(const ast::MethodCall& n, const semantic::StaticTypeAnswer& answer)
+    -> ExprPtr {
+    std::vector<Binding> binds;
+    // A value argument still runs (it may have effects); one that
+    // NAMES a function does not — `Date.parse` alone is a call
+    // missing its argument, which would not even compile.
+    if (answer.evaluateArgument)
+        for (const auto& arg : n.args)
+            if (arg) binds.push_back({fresh("TypeArg"), lower(arg)});
+    // A type token from another unit contains no call to that
+    // unit. Load its companion before `Type.constructors` (or
+    // record-field reflection) reads the layouts it registers.
+    if (externalModules) {
+        auto owner = answer.type.name;
+        // `Type.of(Kinds.Red)` can record only the bare ADT name
+        // (`Kind`); the written constructor still names its unit.
+        if (!n.args.empty() && n.args.front())
+            if (const auto* named = std::get_if<ast::MethodCall>(
+                    &n.args.front()->kind)) {
+                std::vector<std::string> path;
+                if (named->receiver && modulePath(*named->receiver, path)) {
+                    std::string source = kex::join(path, ".");
+                    if (auto module = externalModules->nameToAtom.find(source);
+                        module != externalModules->nameToAtom.end())
+                        binds.push_back({fresh("TypeLoaded"),
+                            callE("code", "ensure_loaded", 1,
+                                  one(lit(LitKind::Atom, module->second)))});
+                }
+            }
+        for (;;) {
+            const auto dot = owner.rfind('.');
+            if (dot == std::string::npos) break;
+            owner.resize(dot);
+            if (auto module = externalModules->nameToAtom.find(owner);
+                module != externalModules->nameToAtom.end()) {
+                binds.push_back({fresh("TypeLoaded"),
+                    callE("code", "ensure_loaded", 1,
+                          one(lit(LitKind::Atom, module->second)))});
+                break;
+            }
+        }
+    }
+    return wrapLets(binds, structuredTypeLiteral(answer.type));
+}
+
+// A method of the trait a lexical parameter is typed by (`TraitMethod`):
+// called through the hidden dictionary its caller supplied, whose tuple
+// slots follow the trait declaration's required-method order. Null when
+// the receiver has no dictionary holding the method.
+auto Lowering::lowerTraitDictionaryCall(const ast::MethodCall& n) -> ExprPtr {
+    std::string receiverName;
+    if (const auto* receiver = std::get_if<ast::Identifier>(&n.receiver->kind))
+        receiverName = receiver->name;
+    else if (std::holds_alternative<ast::ThisExpr>(n.receiver->kind))
+        receiverName = "this";
+    const auto dictionaries = traitDictionaries.find(receiverName);
+    if (dictionaries == traitDictionaries.end()) return nullptr;
+    for (const auto& [trait, dictionary] : dictionaries->second) {
+        const auto methods = traitMethods.find(trait);
+        if (methods == traitMethods.end()) continue;
+        const auto method = std::find_if(methods->second.begin(), methods->second.end(),
+                                         [&](const auto& candidate) { return candidate.name == n.method; });
+        if (method == methods->second.end()) continue;
+        std::vector<Binding> binds;
+        std::vector<ExprPtr> args;
+        args.push_back(atomize(n.receiver, binds));
+        for (const auto& arg : n.args) args.push_back(atomize(arg, binds));
+        if (n.block) args.push_back(atomize(*n.block, binds));
+        const auto slot = static_cast<int>(std::distance(methods->second.begin(), method)) + 1;
+        auto callee = atomize_ir(callE("erlang", "element", 2, two(litInt(slot), var(dictionary))), binds);
+        auto indirect = std::make_unique<Expr>();
+        indirect->node = CallIndirect{std::move(callee), std::move(args), false};
+        return wrapLets(binds, std::move(indirect));
+    }
+    return nullptr;
+}
+
+// A field of the record a `make` block is lowering, read through `this`
+// (`FieldRead`): its slot in this unit's layout. Null for any other read.
+auto Lowering::thisFieldRead(const ast::MethodCall& n) -> ExprPtr {
+    const bool thisReceiver =
+        std::holds_alternative<ast::ThisExpr>(n.receiver->kind) ||
+        (std::holds_alternative<ast::Identifier>(n.receiver->kind) &&
+         std::get<ast::Identifier>(n.receiver->kind).name == "this");
+    if (!thisReceiver || !n.args.empty() || !n.namedArgs.empty() || n.block) return nullptr;
+    const auto candidates = fieldAccessors.find(n.method);
+    if (candidates == fieldAccessors.end()) return nullptr;
+    const auto selected = std::find_if(candidates->second.begin(), candidates->second.end(),
+                                       [&](const auto& candidate) { return candidate.record == currentMakeType; });
+    if (selected == candidates->second.end()) return nullptr;
+    return callE("erlang", "element", 2, two(litInt(selected->position), lower(n.receiver)));
+}
+
+// A function of the module the checker named for a call written on a module
+// path (`Util.double(21)`, `Util.Math.double(21)`): this unit's, or one
+// compiled apart. Null when neither emits it.
+auto Lowering::lowerModuleFunctionCall(const ast::MethodCall& n, const std::string& module,
+                                       const std::vector<std::string>& path) -> ExprPtr {
+    const auto qualKey = module + "." + n.method;
+    auto it = moduleFunctions.find(qualKey);
+    // A call into a capability asks the context first and
+    // falls back to the capability's own body, which is what
+    // runs when nothing replaced it (kexhq/kex#181).
+    const bool importedCapability =
+        externalModules &&
+        externalModules->capabilityModules.count(module) > 0;
+    if (it != moduleFunctions.end() && threadsCapabilities() &&
+        (capabilityModules.count(module) ||
+         importedCapability) &&
+        capabilityInterfaceHas(module, n.method) &&
+        n.namedArgs.empty()) {
+        std::vector<Binding> binds;
+        std::vector<std::string> argVars;
+        for (const auto& a : n.args) {
+            auto name = fresh("CapArg");
+            binds.push_back({name, atomize(a, binds)});
+            argVars.push_back(name);
+        }
+        // A trailing block is a source argument like any
+        // other; leaving it out called the replacement
+        // short one argument, which is why block-form
+        // capability calls used to skip substitution
+        // entirely and silently reach the real
+        // implementation.
+        if (n.block) {
+            auto name = fresh("CapArg");
+            binds.push_back({name, atomize(*n.block, binds)});
+            argVars.push_back(name);
+        }
+        auto argsFrom = [&](const std::string& lead) {
+            std::vector<ExprPtr> out;
+            if (!lead.empty()) out.push_back(var(lead));
+            for (const auto& v : argVars) out.push_back(var(v));
+            return out;
+        };
+        std::vector<ExprPtr> getArgs;
+        getArgs.push_back(lit(LitKind::String, module));
+        getArgs.push_back(currentContext());
+        getArgs.push_back(lit(LitKind::Atom, "undefined"));
+        auto impl = fresh("Impl");
+        Match m;
+        m.subjects.push_back(
+            callE("maps", "get", 3, std::move(getArgs)));
+        MatchClause missing;
+        auto undef = atomPattern("undefined");
+        missing.patterns.push_back(std::move(undef));
+        auto direct = std::make_unique<Expr>();
+        direct->node = localCall(it->second, argsFrom(""));
+        missing.body = std::move(direct);
+        m.clauses.push_back(std::move(missing));
+        MatchClause replaced;
+        auto bound = std::make_unique<Pattern>();
+        bound->kind = PatKind::Var;
+        bound->name = impl;
+        replaced.patterns.push_back(std::move(bound));
+        // Runtime dispatch: the implementation replacing the
+        // capability is typically defined in a different unit
+        // from this call site, so there is no local symbol to
+        // name (kexhq/kex#181).
+        std::vector<ExprPtr> passed;
+        for (const auto& v : argVars) passed.push_back(var(v));
+        // A capability's members are foul by construction, so
+        // the implementation takes the context too — the
+        // runtime dispatch has to hand it over just as a
+        // direct call would.
+        passed.push_back(currentContext());
+        auto passedList = std::make_unique<Expr>();
+        passedList->node =
+            MakeList{std::move(passed), std::nullopt};
+        std::vector<ExprPtr> dispatchArgs;
+        dispatchArgs.push_back(var(impl));
+        dispatchArgs.push_back(lit(LitKind::String, n.method));
+        dispatchArgs.push_back(std::move(passedList));
+        auto dispatched =
+            callE("kex_io", "dispatch_method", 3,
+                  std::move(dispatchArgs));
+        replaced.body = std::move(dispatched);
+        m.clauses.push_back(std::move(replaced));
+        auto chosen = std::make_unique<Expr>();
+        chosen->node = std::move(m);
+        return wrapLets(binds, std::move(chosen));
+    }
+    if (it != moduleFunctions.end()) {
+        std::vector<Binding> binds;
+        if (!n.namedArgs.empty()) {
+            auto pit = fnParamNames.find(qualKey);
+            if (pit == fnParamNames.end())
+                throw LowerError("IR lower: named args to module function with unknown params: " + qualKey);
+            // The clause the checker chose for these labels.
+            const auto* signature = hir->selectedSignatureOf(n);
+            const auto* selected = signature ? signature->clause : nullptr;
+            const auto pnames = clauseNames(selected, pit->second);
+            std::vector<std::string> labels;
+            for (const auto& [label, _] : n.namedArgs)
+                labels.push_back(label);
+            const auto placed = placeArguments(
+                pnames, labels, n.args.size() + bool(n.block));
+            std::vector<ExprPtr> slots(pnames.size());
+            for (size_t i = 0; i < n.namedArgs.size(); ++i)
+                if (placed.labelSlots[i] != PlacedArguments::npos)
+                    slots[placed.labelSlots[i]] =
+                        atomize(n.namedArgs[i].second, binds);
+            std::vector<ExprPtr> positional;
+            for (const auto& a : n.args) positional.push_back(atomize(a, binds));
+            if (n.block) positional.push_back(atomize(*n.block, binds));
+            for (size_t k = 0; k < positional.size(); ++k)
+                if (placed.positionalSlots[k] != PlacedArguments::npos)
+                    slots[placed.positionalSlots[k]] =
+                        std::move(positional[k]);
+            fillDefaultSlots(qualKey, slots, binds, selected);
+            return wrapLets(binds, localCallExpr(it->second, std::move(slots)));
+        }
+        std::vector<ExprPtr> args;
+        for (const auto& a : n.args) args.push_back(atomize(a, binds));
+        if (n.block) args.push_back(atomize(*n.block, binds));
+        if (auto defaults = fnDefaults.find(qualKey);
+            defaults != fnDefaults.end() && args.size() < defaults->second.size() &&
+            !(n.block && blockFitsExactOverload(qualKey, args.size()))) {
+            args.resize(defaults->second.size());
+            fillDefaultSlots(qualKey, args, binds);
+        }
+        // `Module.name` may be a zero-param VALUE binding
+        // rather than a real function — `let render =
+        // Template.html(...)` in `module M do ... end`,
+        // reached here as `M.render(x)` from OUTSIDE it (the
+        // identical call from WITHIN the same module is
+        // `lowerFunctionCall`'s own `zeroArgThunk` check —
+        // see its comment for the full story). Its only
+        // emitted arity is 0 (the thunk that hands back the
+        // closure), so calling it directly at this call's own
+        // arity emitted a call to an arity that was never
+        // defined and erlc rejected the module outright:
+        // `undefined function 'M.render'/1`, a dangling
+        // reference to something that only ever existed as
+        // `render/0`. Evaluate the thunk first, then apply
+        // the supplied args to what it returns.
+        const auto clauses = fnNamedClauses.find(qualKey);
+        const bool hasMatchingOverload =
+            clauses != fnNamedClauses.end() &&
+            std::any_of(clauses->second.begin(), clauses->second.end(),
+                        [&](const ast::FunctionClause* clause) {
+                            return clause->params.size() == args.size();
+                        });
+        if (!args.empty() && emittedModuleZeroArg.count(it->second) &&
+            !hasMatchingOverload) {
+            auto thunk = std::make_unique<Expr>();
+            thunk->node = localCall(it->second, {});
+            auto indirect = std::make_unique<Expr>();
+            indirect->node = CallIndirect{
+                std::move(thunk), std::move(args), false};
+            return wrapLets(binds, std::move(indirect));
+        }
+        return wrapLets(binds, localCallExpr(it->second, std::move(args)));
+    }
+    // External loaded modules: BinaryTree.fromList → 'Kex.BinaryTree':fromList
+    // Skip when the receiver names a local type that owns this
+    // method — local types shadow prelude modules with the same name.
+    if (!externalModules || (path.size() == 1 && typeOwnsStaticFunction(path[0], n.method)))
+        return nullptr;
+    auto eit = externalModules->exportToBeamFn.find(qualKey);
+    // This is the route a PRELUDE capability takes —
+    // `ENV.get(...)` reaches neither the local module path
+    // nor the receiver path (kexhq/kex#143).
+    if (eit != externalModules->exportToBeamFn.end() &&
+        threadsCapabilities() &&
+        isCapabilityModule(module) &&
+        capabilityInterfaceHas(module, n.method) &&
+        n.namedArgs.empty()) {
+        auto ait = externalModules->nameToAtom.find(module);
+        if (ait != externalModules->nameToAtom.end()) {
+            const auto atom = ait->second;
+            const auto beamFn = eit->second;
+            const auto key = qualKey;
+            // A trailing block is a source argument like
+            // any other: without it the dispatch below
+            // would call the replacement short one
+            // argument, which is why block-form
+            // capability calls used to skip substitution
+            // entirely and silently reach the real
+            // implementation.
+            std::vector<Binding> blockBinds;
+            std::vector<ExprPtr> loweredArgs;
+            for (const auto& arg : n.args)
+                loweredArgs.push_back(
+                    atomize(arg, blockBinds));
+            if (n.block)
+                loweredArgs.push_back(
+                    atomize(*n.block, blockBinds));
+            return capabilityDispatchLowered(
+                module, n.method,
+                std::move(loweredArgs), blockBinds,
+                [&](std::vector<ExprPtr> callArgs) {
+                    const int ar =
+                        static_cast<int>(callArgs.size());
+                    return externalCallExpr(
+                        key, atom, beamFn, ar,
+                        std::move(callArgs));
+                });
+        }
+    }
+    if (eit != externalModules->exportToBeamFn.end()) {
+        auto ait = externalModules->nameToAtom.find(module);
+        if (ait != externalModules->nameToAtom.end()) {
+            std::vector<Binding> binds;
+            if (!n.namedArgs.empty())
+                throw LowerError("IR lower: named arguments to `" + qualKey +
+                                 "` reached lowering unplaced");
+            std::vector<ExprPtr> args;
+            for (const auto& a : n.args) args.push_back(atomize(a, binds));
+            if (n.block) args.push_back(atomize(*n.block, binds));
+            int ar = static_cast<int>(args.size());
+            // A zero-argument binding can hold a callable
+            // value, such as a Template. Apply the value
+            // returned by `page/0`; there is no `page/1`
+            // in the other unit to call directly.
+            if (auto declared = externalModules->exportArity.find(qualKey);
+                ar > 0 && declared != externalModules->exportArity.end() &&
+                declared->second == 0) {
+                auto callee = externalCallExpr(
+                    qualKey, ait->second, eit->second, 0, {});
+                auto indirect = std::make_unique<Expr>();
+                indirect->node = CallIndirect{
+                    std::move(callee), std::move(args), false};
+                return wrapLets(binds, std::move(indirect));
+            }
+            return wrapLets(binds,
+                externalCallExpr(qualKey, ait->second, eit->second, ar, std::move(args)));
+        }
+    }
+    return nullptr;
+}
+
+// A call on a capitalised name no module path claimed (`Organization.slugged`,
+// `Point.origin`, `Kex.FS.NotFound`): a type's static function, a module ADT's
+// tag, or "Undefined function". Null when the name is a value after all (a
+// nullary constructor or an upper-case binding), which the value-receiver
+// path calls.
+auto Lowering::lowerTypeNamespaceCall(const ast::MethodCall& n, const ast::UpperIdentifier& type)
+    -> ExprPtr {
+    std::vector<Binding> binds;
+    // A type imported from another unit can name one of its `make`
+    // methods without an instance: `Organization.slugged(name)`.
+    // Its companion expects the type atom as the receiver.
+    if (externalModules && !typeOwnsStaticFunction(type.name, n.method)) {
+        if (auto found = externalModules->receiverFunctions.find(n.method);
+            found != externalModules->receiverFunctions.end()) {
+            for (const auto& provider : found->second) {
+                const auto dot = provider.receiverType.rfind('.');
+                if (dot == std::string::npos ||
+                    provider.receiverType.substr(dot + 1) != type.name ||
+                    !usingModules.contains(provider.receiverType.substr(0, dot)) ||
+                    !provider.compiledApart)
+                    continue;
+                std::vector<ExprPtr> args;
+                args.push_back(lit(LitKind::Atom, provider.receiverType));
+                if (!n.namedArgs.empty()) continue;
+                for (const auto& value : n.args) args.push_back(atomize(value, binds));
+                if (n.block) args.push_back(atomize(*n.block, binds));
+                if (provider.isFoul) args.push_back(currentContext());
+                if (static_cast<int>(args.size()) != provider.beamArity) continue;
+                return wrapLets(binds, callE(provider.moduleAtom,
+                                             provider.beamFunction,
+                                             provider.beamArity, std::move(args)));
+            }
+        }
+    }
+    std::vector<ExprPtr> args;
+    for (const auto& a : n.args) args.push_back(atomize(a, binds));
+    // Static method dispatch: `Type.method(args)` on a user type whose
+    // `method` is a local function/make-method. If that method has an
+    // implicit `this`, pass a placeholder receiver (the type tag).
+    if (typeOwnsStaticFunction(type.name, n.method)) {
+        std::string mangled =
+            mangleQualifiedMember(type.name, n.method);
+        std::string callName = knownFns.count(mangled) ? mangled : n.method;
+        std::vector<ExprPtr> callArgs;
+        if (implicitThisMethods.count(callName))
+            callArgs.push_back(lit(LitKind::Atom, canonicalRecordName(type.name)));
+        for (auto& a : args) callArgs.push_back(std::move(a));
+        auto ex = std::make_unique<Expr>();
+        ex->node = localCall(callName, std::move(callArgs));
+        return wrapLets(binds, std::move(ex));
+    }
+    // `Mod.Tag` for an ADT declared inside a module (e.g. `Kex.FS`).
+    // The tag is just an atom at runtime, so the qualifier has no
+    // representation here — emit the bare tag.
+    if (n.args.empty() && !n.block && n.namedArgs.empty()) {
+        if (auto tag = qualifiedVariantTag(type.name + "." + n.method);
+            !tag.empty()) {
+            auto ex = std::make_unique<Expr>();
+            ex->node = Construct{tag, {}};
+            return wrapLets(binds, std::move(ex));
+        }
+    }
+    // A nullary CONSTRUCTOR is a value, not a namespace: `Monday.name`
+    // is the same call as `let m = Monday` then `m.name`, which has
+    // always worked. Fall through to the value-receiver path below
+    // rather than reporting the namespace as undefined.
+    const bool nullaryConstructorReceiver =
+        nullaryVariantTags.count(type.name) ||
+        // Prelude/imported constructors are not in the local tag set;
+        // the external variant table (seeded for display) knows them.
+        (variantOwner.count(type.name) &&
+         variantArity.count(type.name) &&
+         variantArity.at(type.name) == 0);
+    // ...and so is an upper-case TOP-LEVEL BINDING. `let NUMS = [1,2,3]`
+    // then `NUMS.map { }` is the same call as `let n = NUMS` then
+    // `n.map { }` — which worked, while the direct form did not, purely
+    // because an UpperIdentifier receiver was assumed to name a module.
+    // Every module and variant lookup above has already missed by the
+    // time we get here, so a name that is a known local value can only
+    // be the value.
+    // A MODULE's own constant is the same thing one scope in:
+    // `"${EARLIEST_YEAR}"` inside `module Draft` is a `showValue`
+    // call on the binding, and reading the receiver as a module name
+    // reported `Undefined function: EARLIEST_YEAR.showValue`
+    // (rodolfo docs/kex-issues.md #14, kexhq/kex#282).
+    const bool topLevelBindingReceiver =
+        zeroArgFns.count(type.name) ||
+        topLevelConstants.count(type.name) ||
+        !moduleConstantSymbol(type.name).empty() ||
+        // An IMPORTED zero-arg member is the same thing from another
+        // module: `using Limits` + `"${LIMIT}"` is a showValue on the
+        // constant's value, not a module member lookup
+        // (kexhq/kex#282).
+        [&]() {
+            auto imp = moduleImports.find(type.name);
+            return imp != moduleImports.end() &&
+                emittedModuleZeroArg.count(imp->second);
+        }() ||
+        // ...or one from a module compiled apart.
+        externalConstant(type.name) != nullptr;
+    if (!nullaryConstructorReceiver && !topLevelBindingReceiver)
+        return wrapLets(binds,
+            runtimeError("Undefined function: " + type.name + "." + n.method));
+    return nullptr;
+}
+
+// A function the checker decided by its path: an Erlang one through `BEAM.`
+// (`BEAM.lists.reverse(xs)` → `call 'lists':'reverse'(xs)`,
+// `BEAM.Elixir.Phoenix.Router.match(c)` → `call 'Elixir.Phoenix.Router':'match'(c)`)
+// or a runtime primitive (`Kex.Intrinsic.List.reverse(x)` →
+// `call 'kex_intrinsic_list':'reverse'(x)`, the runtime module owning it and
+// the prelude its typed semantics). A trailing block is the last argument.
+auto Lowering::lowerRuntimeCall(const ast::MethodCall& n, const std::string& path) -> ExprPtr {
+    const auto scope = kex::mangle::pathScopeOf(path);
+    std::string module;
+    if (names::isIntrinsicPath(path)) {
+        // `Kex.Intrinsic.List` is `kex_intrinsic_list`.
+        module = "kex_intrinsic";
+        for (const char c : scope.substr(names::kIntrinsicRoot.size()))
+            module += c == '.' ? '_' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    } else {
+        // After the root, the module's real name, whatever language
+        // compiled it: `BEAM.beam_lib` is `beam_lib`.
+        module = scope.substr(scope.find('.') + 1);
+    }
+    std::vector<Binding> binds;
+    std::vector<ExprPtr> args;
+    for (const auto& a : n.args) args.push_back(atomize(a, binds));
+    if (n.block) args.push_back(atomize(*n.block, binds));
+    const auto arity = static_cast<int>(args.size());
+    return wrapLets(binds, callE(module, n.method, arity, std::move(args)));
+}
+
+// `.as(T)`, as the checker decided it (`Conversion`, `target` its type):
+// distinct/backing conversions erase to the receiver; `.as(String)` is the
+// universal total display path.
+auto Lowering::lowerConversion(const ast::MethodCall& n, const std::string& target) -> ExprPtr {
+    if (target == "String")
+        return callE("kex_intrinsic_kex", "show", 1, one(lower(n.receiver)));
+    // `"hello".as(Atom)`: the checker admits only a plain literal, so the
+    // atom is a constant in the emitted code.
+    if (target == "Atom")
+        if (const auto* literal = std::get_if<ast::StringLiteral>(&n.receiver->kind);
+            literal && literal->values.empty()) {
+            // Plain text sits in `parts` (split, with nothing interpolated
+            // between) or, for a literal marked non-interpolating, in `value`.
+            std::string text = literal->value;
+            if (!literal->parts.empty()) {
+                text.clear();
+                for (const auto& part : literal->parts) text += part;
+            }
+            return lit(LitKind::Atom, text);
+        }
+    return lower(n.receiver);
+}
+
+// `Process.spawn(state)`, the checker naming the state's type: the server
+// remembers the module that owns its serving slots' dispatchers, which the
+// prelude's wrapper cannot discover at run time.
+auto Lowering::lowerProcessSpawn(const ast::MethodCall& n, const std::string& stateType) -> ExprPtr {
+    std::vector<Binding> binds;
+    auto state = atomize(n.args[0], binds);
+    std::vector<ExprPtr> slotAtoms;
+    // The module holding the slot dispatchers. A serving block at the top
+    // level compiles into the entry module; one inside `module Store`
+    // compiles into `Kex.Store`, and naming the entry module there sent
+    // every call to a module that defines no slots (rodolfo
+    // docs/kex-issues.md #2).
+    std::string servingModule = outputModule;
+    const auto named = stateType.substr(0, stateType.find('<'));
+    // The slot registry is keyed by the make target AS WRITTEN, which inside
+    // a module is the bare name, while the checker types the spawned state
+    // by its qualified identity — so `Store.Counter` found nothing and the
+    // server started with an EMPTY slot list, answering
+    // `{unknown_serving_slot, get}` to its first call.
+    auto key = named;
+    if (!servingSlotsByType.count(key))
+        if (const auto dot = named.rfind('.'); dot != std::string::npos)
+            key = named.substr(dot + 1);
+    if (auto slots = servingSlotsByType.find(key); slots != servingSlotsByType.end())
+        for (const auto& slot : slots->second) slotAtoms.push_back(lit(LitKind::Atom, slot));
+    if (auto declaring = localTypeModules.find(key); declaring != localTypeModules.end())
+        servingModule = mangleModulePath(names::moduleAtom(declaring->second));
+    if (slotAtoms.empty() && externalModules) {
+        auto external = externalModules->servingSlots.find(named);
+        if (external == externalModules->servingSlots.end())
+            external = externalModules->servingSlots.find(key);
+        if (external != externalModules->servingSlots.end()) {
+            servingModule = external->second.first;
+            for (const auto& slot : external->second.second)
+                slotAtoms.push_back(lit(LitKind::Atom, slot));
+        }
+    }
+    auto allowedSlots = std::make_unique<Expr>();
+    allowedSlots->node = MakeList{std::move(slotAtoms), std::nullopt};
+    return wrapLets(binds, callE("kex_intrinsic_process", "spawnServing", 3,
+                                 three(std::move(state), lit(LitKind::Atom, servingModule),
+                                       std::move(allowedSlots))));
 }
 
 // A `serving` slot called on its running server (`Server<T>`): a cast, or a

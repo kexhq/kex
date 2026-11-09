@@ -613,26 +613,6 @@ auto Lowering::modulePath(const ast::Expr& e, std::vector<std::string>& out) -> 
     return false;
 }
 
-// The receiver of a `BEAM.<module>.fn(...)` interop call: root `BEAM`
-// followed by one or more no-argument segments of ANY case, joined
-// verbatim into the BEAM module atom. `BEAM.lists` is 'lists',
-// `BEAM.beam_lib` is 'beam_lib', `BEAM.Elixir.Enum` is 'Elixir.Enum' —
-// what you write is the real module name, whatever language compiled it.
-auto Lowering::beamModulePath(const ast::Expr& e, std::string& out) -> bool {
-    auto* mc = std::get_if<ast::MethodCall>(&e.kind);
-    if (!mc || !mc->receiver || !mc->args.empty() || !mc->namedArgs.empty() ||
-        mc->block || mc->method.empty())
-        return false;
-    if (auto* uid = std::get_if<ast::UpperIdentifier>(&mc->receiver->kind)) {
-        if (uid->name != "BEAM") return false;
-        out = mc->method;
-        return true;
-    }
-    if (!beamModulePath(*mc->receiver, out)) return false;
-    out += "." + mc->method;
-    return true;
-}
-
 auto Lowering::lowerMethodCall(const ast::MethodCall& n) -> ExprPtr {
     // `App.Models.User` as a value is that type's token, the same atom a
     // bare `User` is (kexhq/kex#509): what `select(as: App.Models.User)`
