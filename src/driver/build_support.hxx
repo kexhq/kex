@@ -1,8 +1,8 @@
 #pragma once
 
 // The build services the commands share: the REPLs (repl/session.cxx) use
-// them as `kex -c` and `kex -R` do. Defined in main.cxx until each moves into
-// the driver beside the others.
+// them as `kex -c` and `kex -R` do. Each is defined in the driver file its
+// section names.
 
 #include "dependencies.hxx"
 #include "../ast/ast.hxx"
@@ -137,10 +137,12 @@ extern std::optional<kex::compiled::DependencyRecorder> buildRecorder;
 
 // `--build-prelude DIR` (driver/prelude_build.cxx).
 auto buildPrelude(const std::string &dir, bool verifyHir) -> int;
-// The files a spec's or manifest's base could be (main.cxx).
+// The files a spec's or manifest's base could be (driver/program_support.cxx).
 auto specBaseCandidates(const std::string &filepath) -> std::vector<std::string>;
 
-// The CLI's own state and entry helpers (main.cxx).
+// The CLI's own state and entry helpers (driver/program_support.cxx).
+// `--source-root` directories, searched before the stdlib by moduleRootsFor.
+extern std::vector<std::string> cliSourceRoots;
 extern bool quietBuild;
 auto distributionArgsForShell() -> std::string;
 auto isSpecEntry(const std::string &filepath) -> bool;
@@ -148,3 +150,8 @@ auto isSpecEntry(const std::string &filepath) -> bool;
 // `program`; the file merged, or "". `rawSource` receives its text.
 auto mergeSpecBase(kex::ast::Program &program, const std::string &entry,
                    std::string *rawSource = nullptr) -> std::string;
+// The full check of a program, its diagnostics printed: whether it passed.
+auto runSemanticCheck(const kex::ast::Program &program, const std::string &filepath,
+                      kex::semantic::Analyzer *retainedAnalyzer = nullptr,
+                      const std::string &extraDeclFile = "", int *errorCount = nullptr)
+    -> bool;
