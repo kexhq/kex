@@ -177,11 +177,6 @@ struct Lowering {
     // The corresponding binary-op Intrinsic then dispatches at runtime: a
     // tuple (record) receiver → the user's `'+'/2`, otherwise the builtin.
     std::unordered_set<std::string> overloadedOps;
-    // Make-block methods emitted WITH an implicit `this` receiver. A static
-    // `Type.method(args)` call to one must pass a placeholder receiver so the
-    // arities line up (the method builds its own value from the args and never
-    // touches `this` — see examples/json_parser.kex's `Parser.parse(input)`).
-    std::unordered_set<std::string> implicitThisMethods;
     // `type Handler = Env -> String` names a SHAPE, not a tag: no value ever
     // carries 'Handler', so a dispatch guard has to test what the alias
     // stands for. Alias name -> the rendered dispatch type of its single

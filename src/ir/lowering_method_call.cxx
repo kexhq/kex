@@ -507,46 +507,6 @@ auto Lowering::lowerModuleFunctionCall(const ast::MethodCall& n, const std::stri
     if (!externalModules || (path.size() == 1 && typeOwnsStaticFunction(path[0], n.method)))
         return nullptr;
     auto eit = externalModules->exportToBeamFn.find(qualKey);
-    // This is the route a PRELUDE capability takes —
-    // `ENV.get(...)` reaches neither the local module path
-    // nor the receiver path (kexhq/kex#143).
-    if (eit != externalModules->exportToBeamFn.end() &&
-        threadsCapabilities() &&
-        isCapabilityModule(module) &&
-        capabilityInterfaceHas(module, n.method) &&
-        n.namedArgs.empty()) {
-        auto ait = externalModules->nameToAtom.find(module);
-        if (ait != externalModules->nameToAtom.end()) {
-            const auto atom = ait->second;
-            const auto beamFn = eit->second;
-            const auto key = qualKey;
-            // A trailing block is a source argument like
-            // any other: without it the dispatch below
-            // would call the replacement short one
-            // argument, which is why block-form
-            // capability calls used to skip substitution
-            // entirely and silently reach the real
-            // implementation.
-            std::vector<Binding> blockBinds;
-            std::vector<ExprPtr> loweredArgs;
-            for (const auto& arg : n.args)
-                loweredArgs.push_back(
-                    atomize(arg, blockBinds));
-            if (n.block)
-                loweredArgs.push_back(
-                    atomize(*n.block, blockBinds));
-            return capabilityDispatchLowered(
-                module, n.method,
-                std::move(loweredArgs), blockBinds,
-                [&](std::vector<ExprPtr> callArgs) {
-                    const int ar =
-                        static_cast<int>(callArgs.size());
-                    return externalCallExpr(
-                        key, atom, beamFn, ar,
-                        std::move(callArgs));
-                });
-        }
-    }
     if (eit != externalModules->exportToBeamFn.end()) {
         auto ait = externalModules->nameToAtom.find(module);
         if (ait != externalModules->nameToAtom.end()) {
@@ -613,23 +573,8 @@ auto Lowering::lowerTypeNamespaceCall(const ast::MethodCall& n, const ast::Upper
             }
         }
     }
-    std::vector<ExprPtr> args;
-    for (const auto& a : n.args) args.push_back(atomize(a, binds));
-    // Static method dispatch: `Type.method(args)` on a user type whose
-    // `method` is a local function/make-method. If that method has an
-    // implicit `this`, pass a placeholder receiver (the type tag).
-    if (typeOwnsStaticFunction(type.name, n.method)) {
-        std::string mangled =
-            mangleQualifiedMember(type.name, n.method);
-        std::string callName = knownFns.count(mangled) ? mangled : n.method;
-        std::vector<ExprPtr> callArgs;
-        if (implicitThisMethods.count(callName))
-            callArgs.push_back(lit(LitKind::Atom, canonicalRecordName(type.name)));
-        for (auto& a : args) callArgs.push_back(std::move(a));
-        auto ex = std::make_unique<Expr>();
-        ex->node = localCall(callName, std::move(callArgs));
-        return wrapLets(binds, std::move(ex));
-    }
+    // The arguments run before whatever this call turns out to be.
+    for (const auto& a : n.args) (void)atomize(a, binds);
     // `Mod.Tag` for an ADT declared inside a module (e.g. `Kex.FS`).
     // The tag is just an atom at runtime, so the qualifier has no
     // representation here — emit the bare tag.

@@ -3,6 +3,6 @@ literal-compares 429
 type-recursions 40
 expr-walkers 18
 long-functions 16
-big-files 9
+big-files 8
 lowering-rederives 0
 walker-rederives 0

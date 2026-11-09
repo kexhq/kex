@@ -1510,9 +1510,12 @@ capability (`Clock.now` under `with Clock = …`) is applied on the run-time
 path. As lowering's `capabilityDispatchLowered` asks the context first, a
 decided module function is now called directly unless its module is a
 capability a `with` replaced in scope (`replacedCapability`); then the
-replacement answers. What still goes by the value's run-time type: calls the
-checker left to the value (`Dispatch`), imported prelude receiver functions
-without a module of their own, and code run with no answers.
+A receiver function the checker chose by the receiver's type
+(`receiverTypeOf`: the prelude's `List.map` for a list) goes to that type's
+implementation too, and the after-the-fact `receiverTypeOf` correction of the
+run-time lookup is deleted, unreachable once that rule exists. What still goes
+by the value's run-time type: calls the checker left to the value
+(`Dispatch`) and code run with no answers.
 
 **Stage 4 closed (2026-11-09).** Compile-time evaluation runs with the
 checker's answers (step 2), and "the walker evaluates HIR nodes" (order step 6)
@@ -1698,6 +1701,27 @@ runs (cold 3), every spec run passing:
 | devloop     | 10.60  | 7.61   | −28%   |
 | specs       | 113.79 | 91.72  | −19%   |
 
+**Dead code (2026-11-09).** Linker reachability (`kex` relinked with every
+library object forced in and `-dead_strip`), clang's unused-code warnings and
+a header-caller count found no function in `src/` that nothing uses; ten are
+reached only from tests. Coverage of the whole suite (an instrumented build,
+`make test-all`) found 191 of 3,725 functions and 5,316 of 79,718 lines never
+run; the named functions among them with no caller were deleted
+(`hir::Program::ast`/`analysis`, `Fiber::finished`, `ReturnException::frame`,
+`RuntimeError::location`, `Lender::lentAny`). Three never-run lowering
+branches were traced through a full slick build as well: the capability
+dispatch of a module compiled apart and `Type.method` static dispatch in
+`lowerTypeNamespaceCall` never ran and are deleted (with `implicitThisMethods`,
+which only the latter read, and `receiverPattern`'s copy of
+`ast::takesReceiverPattern`); the `Mod.Tag` branch is live in slick
+(`Grant.Admin`) and untested. Specifying it
+(`spec/module_qualified_nullary_tag.kex`) found that the checker left
+`Roles.Admin` undecided where `Roles` names a module through `using` and a
+record of that module, so the walker failed with "'Admin' is not callable"
+(as at 1625ec2); the checker now resolves the written path through the active
+imports, the walker evaluates a decided constructor, and a namespace call goes
+to the module function the checker selected.
+
 Stage 6 closed (2026-11-09, by the user): the cold cost is accepted as the
 price of checking every program the walker runs, paid once per toolchain or
 cache wipe; every warm scenario is faster than `main`.
@@ -1772,6 +1796,21 @@ Static measures, branch against `main`:
 The benchmark also found a regression before it shipped. Slick's `harmat`
 failed with "exported module not found: Harmat.Query", and the checker's
 module-locator fix (Stage 5) resolves it.
+
+### `main.cxx` split (by decision, 2026-11-09)
+
+`main.cxx` keeps option parsing and command dispatch; the rest moved out in
+gated steps:
+1. `src/repl/`: `input.{hxx,cxx}` (line editing, history, script input) and
+   `session.{hxx,cxx}` (the walker and BEAM REPLs).
+2. `src/driver/`: `separate_build.cxx` (the build unit by unit),
+   `toolchain.cxx` (erl/erlc, the module and run caches) and
+   `prelude_build.cxx` (`--build-prelude`), declared in `build_support.hxx`.
+3. `src/driver/compile.{hxx,cxx}` (the compile pipeline, `compileToBeam`,
+   `runCompiledBeam`, `printCompilePipeline`) and `options.hxx` (`Mode`,
+   `Options`, `ExpandProgram`).
+
+`main.cxx` is now 1,651 lines: 6,596 at `HEAD`, 8,353 on `main`.
 
 ## Gates (every change)
 

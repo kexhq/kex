@@ -1,0 +1,17 @@
+# The roles of spec/module_qualified_nullary_tag.kex: a module of its own file
+# that declares a type and a record named like the module, so the spec names
+# the constructors through the module's last segment (`Roles.Admin`), as
+# slick's `Grant.Admin` does.
+module Grants.Roles
+
+type Role = Admin | Member | ReadOnly
+
+record Roles do
+  holder : String = ""
+end
+
+let describe(role: Role) -> String = match role do
+  Admin => "admin"
+  Member => "member"
+  ReadOnly => "read-only"
+end

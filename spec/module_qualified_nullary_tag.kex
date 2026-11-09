@@ -1,0 +1,11 @@
+# A nullary constructor of a type declared in another unit's module, named
+# through the module's last segment (`Roles.Admin`), which also names a record
+# of that module, as slick names `Grant.Admin`. On BEAM the tag is a bare atom,
+# the qualifier having no run-time form; both backends agree on the value.
+using Grants.Roles
+
+let role = Roles.Admin
+IO.printLine(Roles.describe(role))
+IO.printLine(Roles.describe(Roles.ReadOnly))
+IO.printLine((role == Roles.Admin).to(String))
+IO.printLine((Roles.Member == Roles.Admin).to(String))
