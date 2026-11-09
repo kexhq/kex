@@ -2214,6 +2214,20 @@ auto Evaluator::execMainBlock(const ast::MainBlock& block) -> ValuePtr {
 // distinct conversions are representation-erased, the retag proved valid by
 // the check, so the value is unchanged. String is the one non-erased total
 // conversion, the same universal display representation as `to(String)`.
+// The module function whose signature the checker selected for `call`, as
+// the walker binds it, unless its module is a capability a `with` replaced
+// here (the replacement answers, on the run-time path). "" otherwise.
+auto Evaluator::decidedModuleFunction(const ast::Expr& expr, const ast::MethodCall& call) const
+    -> std::string {
+    if (const auto* selected = m_programs.selectedSignatureOf(expr);
+        selected && !selected->declaringModule.empty() &&
+        !replacedCapability(selected->declaringModule, call.method))
+        if (auto qualified = kex::mangle::qualify(selected->declaringModule, call.method);
+            m_functionDefs.count(qualified))
+            return qualified;
+    return {};
+}
+
 // The function the checker decided a method call reaches, as the walker binds
 // it: the receiver type's own method for `OwnMethod`, else the module function
 // whose signature it selected (a label such as `in:` reaching the clause that
@@ -2225,12 +2239,11 @@ auto Evaluator::decidedFunction(const ast::Expr& expr, const ast::MethodCall& ca
     if (const auto& decided = m_programs.targetOf(call);
         decided.kind == hir::TargetKind::OwnMethod)
         return ownMethodName(decided.owner, call.method);
-    if (const auto* selected = m_programs.selectedSignatureOf(expr);
-        selected && !selected->declaringModule.empty() &&
-        !replacedCapability(selected->declaringModule, call.method))
-        if (auto qualified = kex::mangle::qualify(selected->declaringModule, call.method);
-            m_functionDefs.count(qualified))
-            return qualified;
+    if (auto module = decidedModuleFunction(expr, call); !module.empty()) return module;
+    // A receiver function the checker chose by the receiver's type (the
+    // prelude's `List.map` for a list): that type's implementation.
+    if (const auto owner = m_programs.receiverTypeOf(expr); !owner.empty())
+        return ownMethodName(owner, call.method);
     return {};
 }
 
@@ -2637,6 +2650,14 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 if (names::isIntrinsicPath(target.owner))
                     return evalIntrinsicCall(node, target.owner, expr.location);
                 break;
+            case hir::TargetKind::Constructor:
+                // A nullary constructor written through its module
+                // (`Roles.Admin`): the value its tag is bound to.
+                if (node.args.empty() && node.namedArgs.empty() && !node.block)
+                    if (auto value = m_env->get(node.method);
+                        value && std::holds_alternative<VariantValue>(value->data))
+                        return value;
+                break;
             default:
                 break;
             }
@@ -2681,11 +2702,16 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 }
             }
             // In a call the checker decided, a capitalised receiver it typed is
-            // a value (a constructor, a constant): only an untyped one names a
-            // module or a type.
-            const bool receiverIsValue = node.receiver &&
-                m_programs.targetOf(node).kind != hir::TargetKind::Undecided &&
-                m_programs.typeOf(*node.receiver) != nullptr;
+            // a value (a constructor, a constant): only an untyped one, or a
+            // type named as a value (`Type<Roles>`), names a module or a type.
+            const bool receiverIsValue = [&] {
+                if (!node.receiver ||
+                    m_programs.targetOf(node).kind == hir::TargetKind::Undecided)
+                    return false;
+                const auto type = m_programs.typeOf(*node.receiver);
+                const auto* named = type ? std::get_if<semantic::NamedType>(&type->kind) : nullptr;
+                return type && !(named && named->name == names::kTypeRecord);
+            }();
             if (!isNamespaceCall && node.receiver && !receiverIsValue) {
                 if (auto* upperIdent = std::get_if<ast::UpperIdentifier>(&node.receiver->kind)) {
                     bool isKnownVariant = m_variantParent.count(upperIdent->name) > 0;
@@ -2866,6 +2892,12 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 // so namespaced builtins can't collide with unrelated plain-name
                 // globals. Falls back to the plain name for namespaces that were
                 // registered without a mangled prefix (e.g. Stream.Sequence).
+                // The module function the checker selected, whatever name the
+                // namespace is written by (`Roles.describe` for `Grants.Roles`,
+                // where a record `Roles` also exists).
+                if (const auto decided = decidedModuleFunction(expr, node); !decided.empty())
+                    return callFunction(decided, std::move(args), std::move(namedArgs),
+                                        expr.location);
                 std::string dispatchName = node.method;
                 auto mangled = kex::mangle::qualify(namespaceName, node.method);
                 if (namespaceName.find('.') != std::string::npos && !m_env->get(mangled)) {
@@ -2997,25 +3029,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // binds it (decidedFunction); otherwise the value decides, by its
             // run-time type.
             std::string specificMethod = decidedFunction(expr, node);
-            const bool decidedHere = !specificMethod.empty();
-            if (!decidedHere)
+            if (specificMethod.empty())
                 specificMethod = resolveMethodName(receiver, node.method, &args);
-            // Distinct and opaque values have the backing value's runtime name,
-            // but the checker chose their receiver methods by the nominal type
-            // (receiverTypeOf): prefer that type's own method.
-            if (const auto owner = m_programs.receiverTypeOf(expr); !decidedHere && !owner.empty()) {
-                const auto candidate = ownMethodName(owner, node.method);
-                const auto runtimeType = dispatchTypeName(receiver);
-                const auto runtimeDot = runtimeType.rfind('.');
-                const bool resolvedShortRecordMethod =
-                    runtimeDot != std::string::npos &&
-                    specificMethod == runtimeType.substr(runtimeDot + 1) +
-                        std::string(kex::mangle::kSeparator) + node.method;
-                if ((m_erasedReceiverTypes.contains(owner) ||
-                     owner == runtimeType) &&
-                    !resolvedShortRecordMethod && !candidate.empty())
-                    specificMethod = candidate;
-            }
 
             auto mangledName = std::move(specificMethod);
 

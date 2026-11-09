@@ -24,16 +24,8 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
     // ConstructorPattern *value* argument, and such a method still uses
     // its implicit `this` (spec/type_dispatch.kex's `to(String)` body is
     // `"(${@x}, ${@y})"`).
-    bool receiverPattern = false;
-    if (!first.clauses.empty() && !first.clauses[0].params.empty()) {
-        const auto& p0 = first.clauses[0].params[0];
-        if (!p0.name && p0.pattern)
-            receiverPattern =
-                std::holds_alternative<ast::ThisPattern>((*p0.pattern)->kind) ||
-                std::holds_alternative<ast::RecordPattern>((*p0.pattern)->kind) ||
-                std::holds_alternative<ast::RangePattern>((*p0.pattern)->kind);
-    }
-    if (!receiverPattern) implicitThisMethods.insert(first.name);
+    const bool receiverPattern =
+        !first.clauses.empty() && ast::takesReceiverPattern(first.clauses[0]);
     // A make-String method matching the receiver with LIST patterns
     // (`myCapitalize(@[x | rest])`) — legal, since [Char] IS String —
     // can't match a binary receiver directly. Detect it so the whole

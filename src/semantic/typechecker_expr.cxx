@@ -1245,6 +1245,50 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                 return Type::named(constructor->second.typeName);
                             return Type::named(node.method);
                         }
+                    // A module reached through an alias or its last segment
+                    // (`Roles.Admin` under `using Grants.Roles`, where `Roles`
+                    // also names a record of that module), this unit's or an
+                    // imported one, names its constructor the same way.
+                    const auto resolved = [&]() -> std::string {
+                        if (auto module = resolveModulePath(*path, node.method); module != *path)
+                            return module;
+                        // A `using` names a module by its alias, or by its last
+                        // segments (`Grants.Roles` as `Roles`).
+                        const auto answers = [&](const ImportSelection& import) {
+                            return import.alias ? *import.alias == *path
+                                                : import.module.ends_with("." + *path);
+                        };
+                        for (auto scope = m_importScopeStack.rbegin(); scope != m_importScopeStack.rend(); ++scope)
+                            for (const auto& import : *scope)
+                                if (answers(import)) return import.module;
+                        for (const auto& import : m_declarationImports)
+                            if (answers(import)) return import.module;
+                        return *path;
+                    }();
+                    if (resolved != *path) {
+                        if (auto module = m_moduleConstructors.find(resolved);
+                            module != m_moduleConstructors.end())
+                            if (auto constructor = module->second.find(node.method);
+                                constructor != module->second.end()) {
+                                const auto& typeName = constructor->second.typeName.empty()
+                                    ? node.method : constructor->second.typeName;
+                                m_decidedCalls[&expr] = {CallKind::Constructor, typeName};
+                                return Type::named(typeName);
+                            }
+                        if (m_importedInterfaces)
+                            if (auto module = m_importedInterfaces->modules.find(resolved);
+                                module != m_importedInterfaces->modules.end())
+                                if (auto exported = module->second.exports.find(node.method);
+                                    exported != module->second.exports.end())
+                                    for (const auto& function : exported->second)
+                                        if (function.isConstructor && function.signature.params.empty()) {
+                                            const auto* adt = std::get_if<NamedType>(
+                                                &resolve(function.signature.result)->kind);
+                                            m_decidedCalls[&expr] = {CallKind::Constructor,
+                                                                     adt ? adt->name : node.method};
+                                            return function.signature.result;
+                                        }
+                    }
                 }
             }
 

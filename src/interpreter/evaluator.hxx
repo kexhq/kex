@@ -493,6 +493,8 @@ private:
     auto ownMethodName(const std::string& type, const std::string& method) const
         -> std::string;
     auto decidedFunction(const ast::Expr& expr, const ast::MethodCall& call) const -> std::string;
+    auto decidedModuleFunction(const ast::Expr& expr, const ast::MethodCall& call) const
+        -> std::string;
     auto evalConversion(const ast::Expr& receiver, const std::string& target) -> ValuePtr;
     auto evalIntrinsicCall(const ast::MethodCall& call, const std::string& path,
                            const SourceLocation& location) -> ValuePtr;
