@@ -1,4 +1,5 @@
 #include "value.hxx"
+#include "../common/well_known.hxx"
 #include "../common/color.hxx"
 #include "../common/utf8.hxx"
 #include <algorithm>
@@ -882,9 +883,9 @@ auto matchesTypeName(const std::string& name, const ValuePtr& v) -> bool {
         else if constexpr (std::is_same_v<T, BoolValue>) return name == "Bool";
         else if constexpr (std::is_same_v<T, AtomValue>) return name == "Atom";
         else if constexpr (std::is_same_v<T, CharValue>) return name == "Char";
-        else if constexpr (std::is_same_v<T, ListValue>) return name == "List";
+        else if constexpr (std::is_same_v<T, ListValue>) return name == kex::names::kListType;
         else if constexpr (std::is_same_v<T, TupleValue>) return name == "Tuple";
-        else if constexpr (std::is_same_v<T, MapValue>) return name == "Map";
+        else if constexpr (std::is_same_v<T, MapValue>) return name == kex::names::kMapType;
         else if constexpr (std::is_same_v<T, RangeValue>) return name == "Range";
         else if constexpr (std::is_same_v<T, StreamValue>) return name == "Stream";
         else if constexpr (std::is_same_v<T, FeedValue>) return name == "Feed";

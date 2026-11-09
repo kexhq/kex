@@ -124,7 +124,7 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
             // Bare `List` is the erased form of `[X]`; applied `List<T>` is
             // normalized below. Without this an interface spelling bare
             // `List` read back nominal and matched no `[A]` receiver.
-            if (name == "List") return Type::list(Type::unknown());
+            if (name == kex::names::kListType) return Type::list(Type::unknown());
             return Type::named(name);
         }
         else if constexpr (std::is_same_v<T, ast::GenericType>) {
@@ -134,9 +134,9 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
                 if (a) args.push_back(resolveSourceType(*a, vars, aliases, traits));
             if (name == "Optional" && args.size() == 1)
                 return Type::optional(args[0]);
-            if (name == "Map" && args.size() == 2)
+            if (name == kex::names::kMapType && args.size() == 2)
                 return Type::map(args[0], args[1]);
-            if (name == "List" && args.size() == 1)
+            if (name == kex::names::kListType && args.size() == 1)
                 return Type::list(args[0]);
             if (name == "Result" && args.size() == 2)
                 return Type::named("Result", std::move(args));

@@ -216,8 +216,10 @@ int main() {
             assertEqual(program.items.size(), size_t(1));
             auto& def = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[0]);
             assertEqual(def->clauses.size(), size_t(2));
-            // ...and each typed clause still declares its own signature.
-            assertEqual(ast::signatureClauses(*def).size(), size_t(2));
+            // ...and the typed clause declares the signature: `factorial(0)`,
+            // typing nothing, is a case of it, not an overload of its own.
+            assertEqual(ast::signatureClauses(*def).size(), size_t(1));
+            assertTrue(ast::signatureClauses(*def).front() == &def->clauses[1]);
         });
 
         it("folds adjacent same-name pattern clauses into one FunctionDef", []() {

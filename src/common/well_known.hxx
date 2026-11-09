@@ -19,6 +19,11 @@ inline auto moduleAtom(const std::string& path) -> std::string { return "Kex." +
 // type of a type named where a value goes: `Type<String>`.
 inline const std::string kTypeRecord = "Type";
 
+// The structural collection types' names: `[X]` is `List<X>` and `{K: V}`
+// is `Map<K, V>` wherever a type is named.
+inline const std::string kListType = "List";
+inline const std::string kMapType = "Map";
+
 // The unit type's name: named as a value it is the unit value, not a `Type`.
 inline const std::string kVoidType = "Void";
 

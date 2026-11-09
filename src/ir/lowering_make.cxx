@@ -184,8 +184,8 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
         forwarded = true;
     }
     // The same escape, for any method that shadows an imported TRAIT
-    // DEFAULT. Call sites prefer a local definition over such a default
-    // (see `localBeatsTraitDefault`), which is only sound if the local
+    // DEFAULT. A call the value decides at run time reaches the local
+    // definition with values of any type, which is only sound if the local
     // forwards what it does not match — `to` gets that above by name, and
     // nothing else did. A record with its own `showValue` then crashed the
     // moment string interpolation began routing through Showable:

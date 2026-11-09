@@ -27,6 +27,9 @@ auto TypeChecker::check(const ast::Program& program,
     m_functionSignatures.clear();
     m_resolvedCalls.clear();
     m_selectedCallSignatures.clear();
+    m_traitDefaultClauses.clear();
+    m_traitDefaults.clear();
+    m_inheritedPendingResults.clear();
     m_shownThroughDistinct.clear();
     m_referencedModules.clear();
     m_localModules.clear();
@@ -1609,6 +1612,9 @@ auto TypeChecker::registerTraits(const ast::Program& program) -> void {
                     if (bi) {
                         td.defaultMethods.push_back(bi->name);
                         td.defaultBodies.push_back(bi->name);
+                        for (const auto& clause : bi->clauses)
+                            m_traitDefaultClauses[&clause] = td.name;
+                        m_traitDefaults[td.name].push_back(bi.get());
                     }
                 }
             }, bodyItem);
@@ -2172,7 +2178,8 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
     // Registering the declared shape here makes the method visible to whatever
     // is checked first; the body still refines it later.
     const auto preRegister = [&](const ast::FunctionDef& method,
-                                 const ast::FunctionClause& clause) {
+                                 const ast::FunctionClause& clause,
+                                 bool inherited = false) {
         // Only THIS type's own `:>` contract for `method.name` should defer
         // to it — an unrelated type's same-named annotation (Char's
         // `string :> String` vs. Input's own plain `let string(...)`) must
@@ -2233,7 +2240,10 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
             // Left for the body to decide (m_pendingResults).
             signature.result = freshTypeVar();
             const int id = std::get<TypeVar>(signature.result->kind).id;
-            m_pendingResults[&clause] = id;
+            if (inherited)
+                m_inheritedPendingResults.emplace(&clause, std::pair{receiver, id});
+            else
+                m_pendingResults[&clause] = id;
             m_pendingResultVars.insert(id);
         }
         m_inMakeBlock = wasInMakeBlock;
@@ -2255,7 +2265,7 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         auto& existing = m_methodSignatures[method.name];
         const bool duplicate =
             std::any_of(existing.begin(), existing.end(),
-                        [&](const Signature& other) { return sameParameters(other, signature); });
+                        [&](const Signature& other) { return sameMethod(other, signature); });
         if (!duplicate) existing.push_back(signature);
         if (def.isServing && method.isSlot) {
             bool hasFrom = false;
@@ -2268,10 +2278,16 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
             if (!remoteDuplicate) existing.push_back(std::move(remote));
         }
     };
+    // What the block defines itself, by name and arity: a trait default it
+    // would otherwise inherit stays the trait's (see below).
+    std::set<std::string> overridden;
     for (const auto& item : def.body) {
         // One registration per signature the method declares: clauses folded
         // into one method may each type their parameters differently.
         const auto registerEach = [&](const ast::FunctionDef& function) {
+            if (!function.clauses.empty())
+                overridden.insert(function.name + "/" +
+                                  std::to_string(function.clauses[0].params.size()));
             for (const auto* clause : ast::signatureClauses(function))
                 preRegister(function, *clause);
         };
@@ -2285,6 +2301,23 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
                 if (const auto* function =
                         std::get_if<std::unique_ptr<ast::FunctionDef>>(&visible))
                     if (*function) registerEach(**function);
+        }
+    }
+    // A type implementing a trait has the trait's defaults as its own methods
+    // (`make Coin, implement: Addable` gives Coin `twice`), unless the block
+    // defines that name at that arity itself: registered for this receiver
+    // like the block's own, so a call checked before either body finds it.
+    for (const auto& written : def.implements) {
+        const auto defaults =
+            m_traitDefaults.find(resolveTraitReference(written, modulePath, nullptr));
+        if (defaults == m_traitDefaults.end()) continue;
+        for (const auto* inherited : defaults->second) {
+            if (inherited->clauses.empty() ||
+                overridden.contains(inherited->name + "/" +
+                                    std::to_string(inherited->clauses[0].params.size())))
+                continue;
+            for (const auto* clause : ast::signatureClauses(*inherited))
+                preRegister(*inherited, *clause, true);
         }
     }
 }
@@ -2746,7 +2779,7 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             // List<X> = [X]` declares it. Left nominal, a `to(List)` result
             // matched no `[A]` receiver and every list method on it reported
             // whatever unrelated overload sorted first (`zip` blamed Range).
-            if (last == "List" && node.parts.size() == 1)
+            if (last == kex::names::kListType && node.parts.size() == 1)
                 return Type::list(Type::unknown());
             if (node.parts.size() > 1) {
                 const bool isNominal = m_recordFields.count(qualified) ||
@@ -2774,11 +2807,11 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             }
             if (name == "Optional" && args.size() == 1)
                 return Type::optional(args[0]);
-            if (name == "Map" && args.size() == 2)
+            if (name == kex::names::kMapType && args.size() == 2)
                 return Type::map(args[0], args[1]);
             // `List<T>` is `[T]`, matching what the prelude-interface and
             // KexI readers already build for the same spelling.
-            if (name == "List" && args.size() == 1)
+            if (name == kex::names::kListType && args.size() == 1)
                 return Type::list(args[0]);
             if (auto distinct = resolveDistinctName(name);
                 m_distinctTypes.count(distinct))
@@ -3419,18 +3452,10 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
               "Overloads of `" + def.name +
               "` must all have the same purity");
     }
-    const bool receiverIsFirstParam = [&] {
-        if (!m_inMakeBlock || def.clauses.empty() ||
-            def.clauses[0].params.empty()) return false;
-        const auto& first = def.clauses[0].params[0];
-        if (!first.pattern) return false;
-        const auto& kind = (*first.pattern)->kind;
-        if (std::holds_alternative<ast::ListPattern>(kind) ||
-            std::holds_alternative<ast::TuplePattern>(kind))
-            return false;
-        return !std::holds_alternative<ast::VarPattern>(kind) &&
-               !std::holds_alternative<ast::ConstructorPattern>(kind);
-    }();
+    // The rule lowering's arity follows (ast::takesReceiverPattern): a literal
+    // first parameter (`repeat(0)`) is an argument, not the receiver.
+    const bool receiverIsFirstParam = m_inMakeBlock && !def.clauses.empty() &&
+                                      ast::takesReceiverPattern(def.clauses[0]);
     // A "declared" signature is one from a standalone TypeAnnotation
     // (`fact : Integer -> Integer`) — tracked in m_annotationDeclared.
     // Pre-registered provisional sigs (for forward-reference/recursion) are
@@ -3868,6 +3893,12 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             m_pendingResults.erase(pending);
             answerPending(id, resultType);
         }
+        // And each implementing type's copy of a trait default, `This` its own.
+        for (auto [inherited, end] = m_inheritedPendingResults.equal_range(&clause);
+             inherited != end; ++inherited)
+            answerPending(inherited->second.second,
+                          bindThis(resultType, inherited->second.first));
+        m_inheritedPendingResults.erase(&clause);
         // `let id(x) = x` is polymorphic, and every call site must get its own
         // instance of it rather than all of them sharing one variable.
         generalizeSignature(checkedSignature, typeVarMark);
@@ -3940,17 +3971,43 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             // pre-pass registered for it. Kept beside it, the placeholder
             // (`Files -> A -> B`) and the checked `Files -> A -> String?`
             // were two candidates, and `this.canned(path)` an overload left
-            // to the value.
+            // to the value. A trait default's clause is registered once per
+            // implementing type too: each of those copies is the checked
+            // body with `This` that type.
+            const bool traitDefault =
+                signature.clause && m_traitDefaultClauses.contains(signature.clause);
+            if (traitDefault)
+                for (auto& other : existing) {
+                    if (other.clause != signature.clause || other.params.empty()) continue;
+                    const auto inheritor = resolve(other.params.front());
+                    if (isThisPlaceholder(inheritor)) continue;
+                    auto bound = withReceiver;
+                    for (auto& param : bound.params) param = bindThis(param, inheritor);
+                    bound.result = bindThis(bound.result, inheritor);
+                    bound.makeModule = other.makeModule;
+                    other = std::move(bound);
+                }
+            // Clauses of one default are one method: rebound, `repeat(0)` and
+            // `repeat(n: Integer)` both take `(Word, Integer)`, which kept
+            // apart read as an ambiguous overload. The first stays, as the
+            // first registration does for a `make` method's own clauses.
+            if (traitDefault)
+                for (auto later = existing.begin(); later != existing.end();)
+                    later = std::any_of(existing.begin(), later,
+                                        [&](const Signature& earlier) {
+                                            return sameMethod(earlier, *later);
+                                        })
+                        ? existing.erase(later) : std::next(later);
             const auto placeholder = std::find_if(
                 existing.begin(), existing.end(),
                 [&](const Signature& other) { return other.clause == signature.clause; });
-            if (signature.clause && placeholder != existing.end()) {
+            if (signature.clause && !traitDefault && placeholder != existing.end()) {
                 *placeholder = std::move(withReceiver);
                 continue;
             }
             const bool duplicate =
                 std::any_of(existing.begin(), existing.end(),
-                        [&](const Signature& other) { return sameParameters(other, withReceiver); });
+                        [&](const Signature& other) { return sameMethod(other, withReceiver); });
             if (!duplicate) existing.push_back(std::move(withReceiver));
         }
     }

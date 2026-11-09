@@ -32,6 +32,11 @@ auto methodDispatchTypes(const FunctionDef& function,
 auto separableOverloadSignatures(
     const std::map<std::string, std::vector<std::string>>& signatures) -> bool;
 
+// Whether a make-block method's first parameter is its receiver, matched by
+// pattern (`@[x | _]`, `Point { x, y }`, `x.._`), rather than an argument
+// after an implicit `this`: `repeat(0)`'s `0` is an argument.
+auto takesReceiverPattern(const FunctionClause& clause) -> bool;
+
 // A make-block method's BEAM arity: its receiver occupies position 0, either
 // implicitly as `this` or explicitly as a receiver pattern.
 auto methodArity(const FunctionClause& clause) -> size_t;
@@ -42,7 +47,9 @@ auto freeFunctionArity(const FunctionDef& function) -> size_t;
 
 // The clauses of a function that each declare a signature of their own: the
 // first, and every later one whose written parameter and result types differ
-// from all before it. An untyped multi-clause function has one; typed
+// from all before it. A clause declaring no types beside a typed sibling of
+// its arity adds none (`repeat(0)` is a case of `repeat(n: Integer)`). An
+// untyped multi-clause function has one; typed
 // overloads folded into one function (`close(connection: TCPConnection)`,
 // `close(listener: TCPListener)`) have one each. Whatever describes a
 // function's contract — an interface, an export, a published signature —

@@ -508,8 +508,12 @@ struct Lowering {
     auto typeOwnsStaticFunction(const std::string& type,
                               const std::string& method) const -> bool;
 
-    auto ownedMakeFunction(const ast::MethodCall& n, size_t explicitArgs) const
-        -> const MakeMethod*;
+    auto selectedMakeMethod(const ast::MethodCall& n) const -> const MakeMethod*;
+    auto lowerResolvedCall(const ast::MethodCall& n, const semantic::ResolvedCallTarget& target,
+                           const std::string& capabilityTarget) -> ExprPtr;
+    auto lowerServerSlotCall(const ast::MethodCall& n, const semantic::ResolvedCallTarget& target)
+        -> ExprPtr;
+    auto lowerValueReceiverCall(const ast::MethodCall& n) -> ExprPtr;
 
 
 

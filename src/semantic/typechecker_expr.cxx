@@ -1519,7 +1519,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // one still here failed to expand, and says why itself.
                 const bool compileTimeForm =
                     *importedPath == "Kex" && node.method == "embed";
+                // A module named like a type (`Map`, beside `type Map<K, V>`)
+                // also answers that type's static functions (`Map.get(m, k)`),
+                // which its interface does not list.
                 if (module.sourceModule == *importedPath && !compileTimeForm &&
+                    !moduleNamesType(*importedPath) &&
                     !module.exports.count(node.method)) {
                     std::vector<std::string> exported;
                     for (const auto& [name, _] : module.exports) exported.push_back(name);
@@ -1566,20 +1570,32 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     throughTypeName = true;
                 }
             }
-            bool structuralAlias = false;
-            if (isImportedNamespace || isLocalNamespace) {
+            // A structural alias is no namespace of its own: `List.first(xs)`
+            // (`type List<X> = [X]`) is `xs.first`, as both backends run it.
+            // So is a member a same-named module does not have: `Map.get(m,
+            // k)` beside `module Map do let from ... end`.
+            const bool structuralAlias = isNamespaceCall &&
+                std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind) && [&] {
+                    const auto& written =
+                        std::get<ast::UpperIdentifier>(node.receiver->kind).name;
+                    const auto imported = isImportedNamespace
+                        ? &m_importedInterfaces->modules.at(*importedPath) : nullptr;
+                    return !isLocalNamespace &&
+                           !(imported && imported->exports.count(node.method)) &&
+                           !(!imported && namesModule(written)) &&
+                           !m_userSignatures.count(kex::mangle::qualify(written, node.method)) &&
+                           (m_typeAliases.count(written) ||
+                            (m_importedInterfaces &&
+                             m_importedInterfaces->typeAliases.count(written)));
+                }();
+            if (structuralAlias) {
+                callName = node.method;
+            } else if (isImportedNamespace || isLocalNamespace) {
                 callName = kex::mangle::qualify(*importedPath, node.method);
             } else if (isNamespaceCall &&
                 std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind)) {
-                const auto& written = std::get<ast::UpperIdentifier>(node.receiver->kind).name;
-                // A structural alias names no namespace of its own: `List.first(xs)`
-                // (`type List<X> = [X]`) is `xs.first`, as both backends run it.
-                structuralAlias = !namesModule(written) &&
-                    !m_userSignatures.count(kex::mangle::qualify(written, node.method)) &&
-                    (m_typeAliases.count(written) ||
-                     (m_importedInterfaces && m_importedInterfaces->typeAliases.count(written)));
-                callName = structuralAlias ? node.method
-                                           : kex::mangle::qualify(written, node.method);
+                callName = kex::mangle::qualify(
+                    std::get<ast::UpperIdentifier>(node.receiver->kind).name, node.method);
             }
             // A compile-time intrinsic (intrinsics.hxx): its entry types the
             // call when the arguments are no ordinary values, and folds it
@@ -2965,14 +2981,7 @@ auto TypeChecker::namespaceCallProblem(const std::string& written,
         return std::nullopt;
     if (m_importedInterfaces && m_importedInterfaces->modules.count(path))
         return std::nullopt;
-    // A module that shares its name with a type (`DateTime`) also answers
-    // for that type's static functions, which `make` blocks declare.
-    const auto lastDot = path.rfind('.');
-    const auto last = lastDot == std::string::npos ? path : path.substr(lastDot + 1);
-    if (isPrimitiveTypeName(last) || m_recordFields.count(resolveRecordName(last)) ||
-        m_recordFields.count(path) || m_adtVariants.count(last) ||
-        m_typeAliases.count(last))
-        return std::nullopt;
+    if (moduleNamesType(path)) return std::nullopt;
     if (m_userSignatures.count(kex::mangle::qualify(path, method)) ||
         m_scopedDeclaredSignatures.count(path + "\n" + method) ||
         m_localModules.contains(path + "." + method))
@@ -2990,6 +2999,13 @@ auto TypeChecker::namespaceCallProblem(const std::string& written,
     if (auto hint = closestName(method, members); !hint.empty())
         message += " — did you mean `" + hint + "`?";
     return message;
+}
+
+auto TypeChecker::moduleNamesType(const std::string& path) const -> bool {
+    const auto last = kex::mangle::memberOf(kex::mangle::manglePath(path));
+    return isPrimitiveTypeName(last) || m_recordFields.count(resolveRecordName(last)) ||
+           m_recordFields.count(path) || m_adtVariants.count(last) ||
+           m_typeAliases.count(last);
 }
 
 // The single signature of the function an expression NAMES, or null when the
@@ -3603,6 +3619,22 @@ auto TypeChecker::annotatedReceiverKey(const TypePtr& receiverType) const -> std
             return std::holds_alternative<TypeVar>(resolve(arg)->kind);
         });
     return typeToString(generic ? headShapeOf(receiver) : receiver);
+}
+
+auto TypeChecker::bindThis(const TypePtr& type, const TypePtr& receiver) -> TypePtr {
+    if (!type) return type;
+    if (isThisPlaceholder(type)) return receiver;
+    return mapTypeChildren(type, [&](const TypePtr& child) { return bindThis(child, receiver); });
+}
+
+auto TypeChecker::sameMethod(const Signature& left, const Signature& right) const -> bool {
+    if (!sameParameters(left, right)) return false;
+    const auto traitOf = [&](const Signature& signature) -> std::string {
+        const auto found = signature.clause
+            ? m_traitDefaultClauses.find(signature.clause) : m_traitDefaultClauses.end();
+        return found == m_traitDefaultClauses.end() ? std::string{} : found->second;
+    };
+    return traitOf(left) == traitOf(right);
 }
 
 auto TypeChecker::displaySignature(const std::string& name, const Signature& sig) const -> std::string {
@@ -4521,11 +4553,20 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 return dot == std::string::npos ? std::string{}
                                                 : named->name.substr(0, dot);
             }();
-            for (const auto& method : methodIt->second)
+            for (const auto& method : methodIt->second) {
+                // A trait default as the trait declares it (`This -> ...`)
+                // answers only in the trait's own bodies: a type implementing
+                // the trait has its own copy (registerMakeSignature).
+                if (!method.params.empty() && isThisPlaceholder(resolve(method.params.front()))) {
+                    if (!argTypes.empty() && isThisPlaceholder(resolve(argTypes.front())))
+                        merged.push_back(method);
+                    continue;
+                }
                 if (makeModuleVisible(method.makeModule) ||
                     (!method.makeModule.empty() &&
                      method.makeModule == receiverModule))
                     merged.push_back(method);
+            }
             localSigCount = merged.size();
         }
         merged.insert(merged.end(), importedSigs.begin(), importedSigs.end());
@@ -5338,17 +5379,6 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
 
     if (fullMatches.size() >= 1) {
         const auto& matched = *fullMatches[0];
-        if (std::getenv("KEX_DEBUG_SIG") && name == "to") {
-            std::fprintf(stderr, "[to] params=");
-            for (const auto& p : matched.params)
-                std::fprintf(stderr, "%s ", typeToString(resolve(p)).c_str());
-            std::fprintf(stderr, "=> %s | matches=%zu args=",
-                         typeToString(resolve(matched.result)).c_str(),
-                         fullMatches.size());
-            for (const auto& a : argTypes)
-                std::fprintf(stderr, "%s ", typeToString(resolve(a)).c_str());
-            std::fprintf(stderr, "\n");
-        }
         // Set when this call's receiver type is unknown AND more than one
         // provider could answer it, so nothing here may be treated as
         // evidence about the receiver — not the backend target, and not the
@@ -6116,11 +6146,17 @@ auto TypeChecker::ownTypeAnswers(const std::vector<TypePtr>& argTypes,
         m_traits.implementsInHome(m_traits.implementorKey(argTypes.front()), method);
     if (!home->empty())
         return inherits ? std::optional<OwnAnswer>({owner, *home, {}}) : std::nullopt;
+    // Only a `make` the call's candidates include: in scope here, or of the
+    // type's own module. One of a module not imported (`Patcher`'s `make
+    // Measure`) is no answer of the type's.
     std::size_t declared = 0;
     if (auto local = m_methodSignatures.find(method);
         local != m_methodSignatures.end())
         for (const auto& signature : local->second) {
-            if (signature.params.empty()) continue;
+            if (signature.params.empty() ||
+                !(makeModuleVisible(signature.makeModule) ||
+                  signature.makeModule == kex::mangle::pathScopeOf(owner)))
+                continue;
             const auto* receiver =
                 std::get_if<NamedType>(&resolve(signature.params.front())->kind);
             if (receiver && ownTypeIdentity(receiver->name) == owner &&

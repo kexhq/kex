@@ -99,7 +99,7 @@ targeted, every expression typed (`--verify-hir`); `--dump-hir` prints it.
 | 1 | Foundations (cache, enums, shared walkers, audit, `main()` split) | Done; the open items are in the order below |
 | 2 | One sema decides every call; HIR | **In progress**: decisions recorded, `hir::Program` answers them, node identities and `hir::persist`; no HIR node types yet |
 | 2b | Intrinsic registry + `Type<T>` signatures | `Type<T>` and `to` moved to step 3; the rest **deferred** |
-| 3 | Lowering only translates; IR passes | **In progress**: lowering is checked-only (it throws without a HIR); the provider search and its run-time choices are the checker's (alternatives), with `dualProviderDispatch` and `importedFreeFunctionDispatch` deleted; the local-path cascade and the AST walk remain |
+| 3 | Lowering only translates; IR passes | **In progress**: lowering is checked-only (it throws without a HIR); the provider search and its run-time choices are the checker's (alternatives), with `dualProviderDispatch` and `importedFreeFunctionDispatch` deleted; no override of a checker target is left (`localBeatsTraitDefault`, `ownedMakeFunction`, the module-path search deleted); every call reaching the local fallback is a decided kind (dispatch, trait method, field read on a structural or conflicting record, a free function called UFCS). Left: `lowerMethodCallImpl` (~1150 lines) as a switch on the target kind, the IR passes in `src/ir/passes/`, the AST walk |
 | 4 | Walker on the HIR | **In progress**: runs, REPL and prelude read checked decisions; its run-time `using` gates are deleted (the checker's `Hidden` decides); still evaluates the AST |
 | 5 | LSP / SemanticDB on the same sema | **Done** (2026-11-08): one resolver, the checker's name pass; the REPLs and `--complete` hold no SemanticDB; the language server's SemanticDB is a document store and query front end over the checker's index |
 | 6 | Delete old paths, measure | **Started**: `docs/architecture.md`; measurements below. `src/`'s size against `main` is reported, not a gate (2026-11-08) |
@@ -411,6 +411,64 @@ undecided or typed Unknown.
   `OwnMethod`/`TraitMethod` target instead of from the receiver's static
   type; no `Dispatch` call reached it any more. An error's candidate list
   shows the answered result (`+ : Vec -> Vec -> Vec`, was `-> A`).
+- **A type's own answer counts only `make`s in scope.** `ownTypeAnswers`
+  counted every `make` of the receiver's type, `Patcher`'s unimported one
+  included; the duplicate placeholder above made that two (overloaded, no
+  answer) and hid it. It now counts what the call's candidates include: a
+  `make` in scope, or of the type's own module.
+- **Rebased on `main` (643e509).** Two conflicts: `digest.cxx` (main's
+  directory guard now sits in the shared `readFileBytes`, for every reader)
+  and `mock.kex` (main's `Result` API, its `FS` errors qualified). Two
+  semantic ones:
+  - main's `module Map do let from ... end` made `Map.get(m, k)` "`Map` has
+    no function `get`" (main's own fuzz target 0 fails the same way). A
+    member a same-named module does not export is the structural-alias form
+    (`m.get(k)`), as `List.first(xs)` is; `moduleNamesType` is the one test
+    both member checks share.
+  - `spec/error_to_named_argument_type` lists main's new `Culture` and
+    `DateFormat` overloads of `to`.
+  `names::kListType`/`kMapType` replace the 13 `== "List"`/`"Map"` compares
+  (four were main's).
+- **A type implementing a trait has its defaults as its own methods.**
+  `make Coin, implement: Addable` registers Addable's defaults (`twice`)
+  for Coin, through the same pre-pass as the block's own `let`s, unless the
+  block defines that name at that arity (lowering's override rule). The
+  trait body is still checked once with `This`; its checked signature then
+  replaces each implementing type's copy with `This` bound to that type
+  (`bindThis`), pending results answered likewise. The trait's own `This`
+  signature is a candidate only in its own bodies, so an untyped value
+  never inherits (`Assert.some`'s `value.present?` had become `This`), and
+  two traits' same-shaped defaults stay apart (`sameMethod`). Inherited
+  calls now carry the checker's selected clause; lowering's
+  `selectedMakeMethod` takes the copy the call's owner names.
+- **`ownedMakeFunction` and `localBeatsTraitDefault` are deleted.** The
+  last own-method call lowering found by name and arity was `Word.repeat`,
+  a two-clause default: `ast::signatureClauses` now adds no signature for a
+  clause declaring no types beside a typed sibling of its arity
+  (`repeat(0)` is a case of `repeat(n: Integer)`), and the checker's
+  `receiverIsFirstParam` reads `ast::takesReceiverPattern`, the rule
+  `methodArity` already used (it took `repeat(0)`'s `0` for the receiver).
+  A `TraitMethod` is the value's to answer through the trait's dispatcher,
+  as lowering emitted it anyway. With every own-method call carrying the
+  checker's selected clause, the fallback's capability check reads that
+  method. The override that put a local method in place of a trait default
+  the checker chose fired only for prelude receivers (`"x".showValue`,
+  `3.to(String)`) where the checker's answer was right; switched off,
+  nothing changed.
+- **`lowerMethodCallImpl` splits by case** (~1150 lines → ~630):
+  `lowerServerSlotCall`, `lowerResolvedCall` (the checker's one target) and
+  `lowerValueReceiverCall` (the value-receiver tail) are their own
+  functions, moved as they were. In the tail, the branch that found a
+  `using`-imported function by name and arity (`10.double`) reads the
+  checker's selected signature instead: its `declaringModule` names the
+  module function, taken only when `using` brought it into scope here.
+  **Open checker gap:** for a receiver whose type is not settled, the
+  checker selects any module's free function of the name, imported or not
+  (`Bits.or` for `findIndex {..}.or(..)` inside the prelude's `make String`);
+  a free function is a method-call candidate only where its module is
+  imported. The undocumented `KEX_DEBUG_TO2`/`KEX_DEBUG_SIG` stderr
+  hooks are deleted. Still undecided at the tail: a capture's expansion
+  (`~even?`, `~String.upperCase`), which lowering builds after checking.
 - **Top-level values are declarations in the check order.** Functions were
   checked first and top-level statements after, so a function reading a
   top-level value (`let frame = Template.html(...)`, `let greeting = ...`)

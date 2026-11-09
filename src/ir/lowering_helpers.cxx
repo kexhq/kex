@@ -114,9 +114,6 @@ auto Lowering::callE(std::string mod, std::string fn, int arity, std::vector<Exp
         args.push_back(currentContext());
         ++arity;
     }
-    if (std::getenv("KEX_DEBUG_TO2") && fn == "to" && mod.rfind("Kex.", 0) == 0)
-        std::fprintf(stderr, "[callE] mod=%s fn=%s arity=%d\n",
-                     mod.c_str(), fn.c_str(), arity);
     auto e = std::make_unique<Expr>();
     e->node = Call{std::move(mod), std::move(fn), arity, std::move(args), false};
     return e;
