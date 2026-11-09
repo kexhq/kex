@@ -81,18 +81,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // Lowering translates what the checker decided: there is nothing to
     // lower without the checked program.
     if (!context.hir) throw LowerError("IR lower: " + fileStem + " was not checked");
-    // The checker's answers, all read from the checked program.
-    const auto& analysis = context.hir->analysis();
-    const auto* staticTypeOfCalls = &analysis.staticTypeOfCalls();
+    // The checker's answers, all read from the checked program (`L.hir`).
     Lowering L;
     L.sourceFile = sourcePath;
     L.externalModules = externals;
     L.hir = context.hir;
-    L.resolvedCalls = &analysis.resolvedCalls();
-    L.resolvedTraits = &analysis.resolvedTraits();
-    L.expressionTypes = &analysis.typeMap();
     L.lowersPrelude = lowersPrelude;
-    L.staticTypeOfCalls = staticTypeOfCalls;
     if (externals) L.traitMethods = externals->traitMethods;
     if (externals)
         for (const auto& [name, candidates] : externals->receiverFunctions) {
@@ -160,9 +154,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         std::set<MethodKey> added;
         // Each `implement:` name as the checker settled it, with its import
         // order, aliases and only/except rules.
-        const auto resolved = L.resolvedTraits->find(&mk);
-        if (resolved == L.resolvedTraits->end()) return out;
-        for (const auto& identity : resolved->second) {
+        const auto* resolved = L.hir->traitsOf(mk);
+        if (!resolved) return out;
+        for (const auto& identity : *resolved) {
             auto it = traitDefs.find(identity);
             if (it == traitDefs.end()) continue;
             // Kex writes a multi-clause function as separate `let`
@@ -224,7 +218,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         }
     // Display info only — deliberately NOT added to variantTagSet, which
     // drives codegen decisions for tags this module declares itself.
-    L.staticTypeOfCalls = staticTypeOfCalls;
     if (externalVariants)
         for (const auto& variant : *externalVariants) {
             L.variantArity[variant.tag] = variant.arity;

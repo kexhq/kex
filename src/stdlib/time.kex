@@ -2284,6 +2284,9 @@ record DateFormat do
 end
 
 module DateFormat do
+  using Culture, only: [Culture]
+  using Time, only: [number]
+
   # One piece of a pattern: a field letter written +width+ times, or text
   # written as it stands.
   type Piece = PatternField(Char, Integer) | PatternText(String)

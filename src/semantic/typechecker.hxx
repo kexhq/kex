@@ -200,6 +200,15 @@ private:
     // `using` of it whose `only:` / `except:` admit the name.
     auto freeFunctionVisible(const std::string& module,
                              const std::string& name) const -> bool;
+    // The free functions a bare `name` reaches from here (a call's or a
+    // capture's); see the definition.
+    // What a `~name` capture names (see the definitions).
+    auto captureModule(const ast::CurryExpr& capture) const -> std::string;
+    auto decideCapture(const ast::Expr& expr, const ast::CurryExpr& capture) -> void;
+    auto reachableFreeFunctions(const std::string& name, bool isMethodCall,
+                                std::vector<Signature>& visible,
+                                std::set<std::string>& hidden) const
+        -> const std::vector<Signature>*;
     // "module\nname" for each free function declared in a `private do`.
     std::unordered_set<std::string> m_privateFreeFunctions;
     auto reportUnknownMethods() -> void;

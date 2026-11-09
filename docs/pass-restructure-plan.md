@@ -28,6 +28,13 @@ re-derives them, and the three disagree.
 ## Decisions
 
 - **Middle end:** a typed HIR. Sema decides everything; lowering only translates.
+- **The HIR is the AST plus the checker's answers** (2026-11-09, by the
+  user). No separate HIR node types: `hir::Program` answers, per AST node,
+  every decision (call target, selected signature, type, `Type.of` answer,
+  resolved import, traits), and lowering and the walker walk the AST reading
+  only those answers. "Lowering from HIR nodes" / "the walker evaluates HIR
+  nodes" mean exactly that: no consumer re-derives a decision or reads a
+  checker table except through `hir::Program`.
 - **Walker:** runs on the same HIR, so walker and BEAM share every decision.
 - **Delivery: in place, gated.** The plan first said a strangler behind
   `KEX_PIPELINE=hir`; no such flag was ever built. Each decision moves into
@@ -97,9 +104,9 @@ targeted, every expression typed (`--verify-hir`); `--dump-hir` prints it.
 |---|---|---|
 | 0 | Benchmark on slick | Done |
 | 1 | Foundations (cache, enums, shared walkers, audit, `main()` split) | Done; the open items are in the order below |
-| 2 | One sema decides every call; HIR | **In progress**: decisions recorded, `hir::Program` answers them, node identities and `hir::persist`; no HIR node types yet |
+| 2 | One sema decides every call; HIR | **In progress**: decisions recorded, `hir::Program` answers them, node identities and `hir::persist`; the HIR is the AST plus these answers (decided 2026-11-09, no separate node types) |
 | 2b | Intrinsic registry + `Type<T>` signatures | `Type<T>` and `to` moved to step 3; the rest **deferred** |
-| 3 | Lowering only translates; IR passes | **In progress**: lowering is checked-only (it throws without a HIR); the provider search and its run-time choices are the checker's (alternatives), with `dualProviderDispatch` and `importedFreeFunctionDispatch` deleted; no override of a checker target is left (`localBeatsTraitDefault`, `ownedMakeFunction`, the module-path search deleted); every call reaching the local fallback is a decided kind (dispatch, trait method, field read on a structural or conflicting record, a free function called UFCS). Left: `lowerMethodCallImpl` (~1150 lines) as a switch on the target kind, the IR passes in `src/ir/passes/`, the AST walk |
+| 3 | Lowering only translates; IR passes | **Done** (2026-11-09): lowering is checked-only (it throws without a HIR); the provider search and its run-time choices are the checker's (alternatives), with `dualProviderDispatch` and `importedFreeFunctionDispatch` deleted; no override of a checker target is left (`localBeatsTraitDefault`, `ownedMakeFunction`, the module-path search deleted); every call reaching the local fallback is a decided kind (dispatch, trait method, field read on a structural or conflicting record, a free function called UFCS). `lowerMethodCallImpl` is a switch on the target kind and a dispatch to handlers (80 lines, from ~1150); the IR passes are in `src/ir/passes/`. Lowering reads the checker only through `hir::Program`, and captures are decided too. |
 | 4 | Walker on the HIR | **In progress**: runs, REPL and prelude read checked decisions; its run-time `using` gates are deleted (the checker's `Hidden` decides); still evaluates the AST |
 | 5 | LSP / SemanticDB on the same sema | **Done** (2026-11-08): one resolver, the checker's name pass; the REPLs and `--complete` hold no SemanticDB; the language server's SemanticDB is a document store and query front end over the checker's index |
 | 6 | Delete old paths, measure | **Started**: `docs/architecture.md`; measurements below. `src/`'s size against `main` is reported, not a gate (2026-11-08) |
@@ -461,14 +468,56 @@ undecided or typed Unknown.
   functions, moved as they were. In the tail, the branch that found a
   `using`-imported function by name and arity (`10.double`) reads the
   checker's selected signature instead: its `declaringModule` names the
-  module function, taken only when `using` brought it into scope here.
-  **Open checker gap:** for a receiver whose type is not settled, the
-  checker selects any module's free function of the name, imported or not
-  (`Bits.or` for `findIndex {..}.or(..)` inside the prelude's `make String`);
-  a free function is a method-call candidate only where its module is
-  imported. The undocumented `KEX_DEBUG_TO2`/`KEX_DEBUG_SIG` stderr
+  module function. That exposed a checker gap, now closed: for a receiver
+  whose type is not settled it selected any module's free function of the
+  name, imported or not (`Bits.or` for `findIndex {..}.or(..)` inside the
+  prelude's `make String`, `badarith` on BEAM). A module's free function is
+  a method-call candidate only where its module is in scope
+  (`makeModuleVisible`: inside it, or under a `using` naming it). The undocumented `KEX_DEBUG_TO2`/`KEX_DEBUG_SIG` stderr
   hooks are deleted. Still undecided at the tail: a capture's expansion
   (`~even?`, `~String.upperCase`), which lowering builds after checking.
+- **Calls decided by what they name lower from the target.** The head of
+  `lowerMethodCallImpl` is a switch on the target kind: `Foreign`
+  (`BEAM.lists.reverse`) and a `Builtin` runtime primitive
+  (`Kex.Intrinsic.List.reverse`) are one plain call into the BEAM module
+  the decided path names (`lowerRuntimeCall`); the other `Builtin`,
+  `Process.spawn`, is `lowerProcessSpawn` on the decided state type (now
+  decided even while that type is unknown); `Conversion` is
+  `lowerConversion`. `beamModulePath` and the receiver-path matching are
+  deleted; the roots are `names::kForeignRoot`/`kIntrinsicRoot`, and the
+  checker's test is the same `isIntrinsicPath` (it took any `Intrinsic`
+  segment under `Kex`). `verify-hir-stdlib` had been failing unnoticed
+  since the rebase (the gate script now prints failing make targets): main's
+  `DateFormat` read `culture.time` and `weekday.number` without importing
+  either. `Culture` named no record there, and `Time`'s `make Weekday` was
+  hidden, so both were undecided and ran by dispatch. It now imports them
+  (`using Culture, only: [Culture]`, `using Time, only: [number]`).
+  The switch also takes `Intrinsic` (`Type.of`, from `hir->typeOfAnswer`;
+  lowering's own `staticTypeOfCalls` copy of the table is deleted),
+  `TraitMethod` (the hidden-dictionary call) and `FieldRead` (through `this`
+  in a `make` block, else `staticFieldRead`). These three branches had run
+  for any call that matched their shape, whatever the checker had decided.
+  The rest of the cascade is two handlers: `lowerModuleFunctionCall` (the
+  module the checker named for a call on a module path, this unit's or one
+  compiled apart; the one-element candidate loops are gone) and
+  `lowerTypeNamespaceCall` (a type's static function, a module ADT's tag,
+  "Undefined function"), then `lowerValueReceiverCall`.
+  `lowerMethodCallImpl` is 80 lines (from ~1150 at the start of Stage 3);
+  `long-functions` 17 → 16.
+- **Lowering reads the checker only through the HIR.** `hir::Program`
+  gained `resolvedTargetOf(call)` (the imported target with its placed
+  arguments and dictionaries) and `traitsOf(make)`. Lowering's
+  `resolvedCalls`, `resolvedTraits` and (unread) `expressionTypes` members
+  are deleted, and `lower.cxx` no longer touches the analysis.
+- **Captures are decided.** `~name` / `~Mod.fn` is a `FunctionReference`
+  (owner `Module::name`), decided by `captureModule` with the rules a call
+  of the name follows: a bare name reaches what `checkCall` would
+  (`reachableFreeFunctions`, extracted from it and shared), else a function
+  a `using` imported from a unit compiled apart; a qualified one resolves its
+  module with `resolveModulePath`. Lowering's own resolution in
+  `lowerCurry` (enclosing-module walk, `using` imports, aliases, opened
+  modules; ~70 lines) is deleted after a trace over spec, examples and the
+  prelude found the decision equal to it at every capture.
 - **Top-level values are declarations in the check order.** Functions were
   checked first and top-level statements after, so a function reading a
   top-level value (`let frame = Template.html(...)`, `let greeting = ...`)

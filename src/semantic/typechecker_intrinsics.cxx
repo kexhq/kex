@@ -174,16 +174,16 @@ namespace kex::semantic {
 
 // `Process.spawn(state)`: the server's slots live with the `serving` block
 // of the state's type, so lowering needs that type to start it. Recorded as
-// the call's decision; lowering used to read it back off the argument.
+// the call's decision, the owner empty while the state's type is not known
+// (a server with no slots).
 auto TypeChecker::foldProcessSpawn(const ast::Expr& expr,
                                    const ast::MethodCall& call,
                                    const std::vector<TypePtr>& argTypes) -> void {
     (void)call;
     if (argTypes.size() != 1) return;
     const auto state = resolve(argTypes.front());
-    if (isUndetermined(state))
-        return;
-    m_decidedCalls[&expr] = {CallKind::Builtin, typeToString(state)};
+    m_decidedCalls[&expr] = {CallKind::Builtin,
+                             isUndetermined(state) ? std::string{} : typeToString(state)};
 }
 
 } // namespace kex::semantic
