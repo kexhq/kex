@@ -1809,8 +1809,12 @@ gated steps:
 3. `src/driver/compile.{hxx,cxx}` (the compile pipeline, `compileToBeam`,
    `runCompiledBeam`, `printCompilePipeline`) and `options.hxx` (`Mode`,
    `Options`, `ExpandProgram`).
+4. `src/driver/program_support.cxx`: what every command does with a program
+   before building or running it (a spec's base merged in, `moduleRootsFor`,
+   `runSemanticCheck` and the check helpers, `printAst`).
 
-`main.cxx` is now 1,651 lines: 6,596 at `HEAD`, 8,353 on `main`.
+`main.cxx` is now 1,292 lines, under the ~1,500 target: 6,596 at `HEAD`,
+8,353 on `main`.
 
 ## Gates (every change)
 
