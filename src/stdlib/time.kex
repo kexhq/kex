@@ -2284,7 +2284,6 @@ record DateFormat do
 end
 
 module DateFormat do
-  using Culture, only: [Culture]
   using Time, only: [number]
 
   # One piece of a pattern: a field letter written +width+ times, or text
@@ -2339,7 +2338,7 @@ module DateFormat do
   # @param offset [Duration?] the offset from UTC, when the value has one
   # @param culture [Culture] where month, weekday and day-period names come from
   # @return [String?] the text, or +None+
-  renderParts : DateFormat -> Date? -> Time? -> Duration? -> Culture -> String?
+  renderParts : DateFormat -> Date? -> Time? -> Duration? -> Culture.Culture -> String?
   let renderParts(format, date, time, offset, culture) do
     match DateFormat.pieces(format.pattern) do
       Error(_) => return None
@@ -2359,7 +2358,7 @@ module DateFormat do
   #
   # @example
   #   DateFormat.dateLayout(Culture.of("DE_DE").or(Culture.DEFAULT))   # => "dd.MM.yyyy"
-  dateLayout : Culture -> String
+  dateLayout : Culture.Culture -> String
   let dateLayout(culture) do
     match culture.time do
       None => return "yyyy-MM-dd"
@@ -2379,7 +2378,7 @@ module DateFormat do
   #
   # @example
   #   DateFormat.timeLayout(Culture.of("EN_US").or(Culture.DEFAULT))   # => "h:mm:ss a"
-  timeLayout : Culture -> String
+  timeLayout : Culture.Culture -> String
   let timeLayout(culture) do
     match culture.time do
       None => return "HH:mm:ss"

@@ -164,7 +164,9 @@ add_custom_command(
     VERBATIM)
 
 add_library(kex_lib
+    src/driver/dependencies.cxx
     src/hir/call_targets.cxx
+    src/hir/compile_time.cxx
     src/hir/hir.cxx
     src/hir/repl_input.cxx
     src/hir/persist.cxx
@@ -256,6 +258,7 @@ add_library(kex_lib
     src/cache/cache.cxx
     src/cache/separate_unit.cxx
     src/common/digest.cxx
+    src/common/runtime_dir.cxx
     src/common/process.cxx
     src/common/diagnostics.cxx
 )

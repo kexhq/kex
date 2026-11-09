@@ -11,6 +11,7 @@
 #include "../semantic/traits.hxx"
 #include "../semantic/types.hxx"
 
+#include <functional>
 #include <memory>
 
 #include <string>
@@ -57,9 +58,6 @@ public:
             const std::unordered_map<const ast::Expr*, Target>& targets,
             std::unique_ptr<Answers> answers);
 
-    auto ast() const -> const ast::Program& { return *m_ast; }
-    // The analysis it was built from; a loaded program has none.
-    auto analysis() const -> const semantic::Analyzer& { return *m_analysis; }
 
     // What `call` is; a Target of kind Undecided when nothing decided it.
     auto targetOf(const ast::Expr& call) const -> const Target&;
@@ -99,6 +97,9 @@ public:
     // `implement:` name, in written order; null when it names none.
     auto traitsOf(const ast::MakeDef& make) const -> const std::vector<std::string>*;
 
+    // Every node it has an answer for, each key of its tables once or more.
+    auto forEachAnsweredNode(const std::function<void(const void*)>& visit) const -> void;
+
     // Every call site, in source order, with its target.
     auto callSites() const -> const std::vector<CallSite>& { return m_sites; }
 
@@ -125,10 +126,15 @@ private:
 // inputs, each checked on its own, whose definitions later inputs call.
 class ProgramSet {
 public:
-    auto clear() -> void { m_programs.clear(); }
+    auto clear() -> void {
+        m_programs.clear();
+        m_owners.clear();
+    }
     // `program` answers first from now on.
     auto push(const Program* program) -> void {
-        if (program) m_programs.push_back(program);
+        if (!program) return;
+        m_programs.push_back(program);
+        program->forEachAnsweredNode([&](const void* node) { m_owners[node] = program; });
     }
     auto empty() const -> bool { return m_programs.empty(); }
     // Read after every pushed one: the prelude's, which outlives them all.
@@ -147,6 +153,9 @@ public:
 private:
     std::vector<const Program*> m_programs;
     const Program* m_base = nullptr;
+    // Which pushed program answers for each node, the newest when several do:
+    // a lookup asks that one, then the base, instead of every program in turn.
+    std::unordered_map<const void*, const Program*> m_owners;
 };
 
 // What is not yet decided: one line per undecided call site (`--verify-hir`).

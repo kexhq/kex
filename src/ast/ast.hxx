@@ -831,6 +831,14 @@ using TopLevelItem = std::variant<
     std::unique_ptr<TypeAnnotation>
 >;
 
+// The node a top-level or module item holds; null once it has been moved out.
+// What lends an item to another program finds it by (hir::checkReplInput,
+// hir::checkCompileTime).
+template <typename Item>
+auto heldNode(const Item& item) -> const void* {
+    return std::visit([](const auto& node) -> const void* { return node.get(); }, item);
+}
+
 struct Program {
     std::vector<TopLevelItem> items;
 };

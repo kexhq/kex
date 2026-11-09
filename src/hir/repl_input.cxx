@@ -13,11 +13,6 @@ auto mainOf(ast::Program& program) -> ast::MainBlock* {
     return found;
 }
 
-// The node a top-level item holds.
-auto heldNode(const ast::TopLevelItem& item) -> const void* {
-    return std::visit([](const auto& node) -> const void* { return node.get(); }, item);
-}
-
 } // namespace
 
 auto checkReplInput(std::unique_ptr<ast::Program> session, ast::Program& input,
@@ -41,19 +36,19 @@ auto checkReplInput(std::unique_ptr<ast::Program> session, ast::Program& input,
             ~GiveBackItems() {
                 for (const auto& [slot, node] : lent)
                     for (auto& item : session.items)
-                        if (heldNode(item) == node) {
+                        if (ast::heldNode(item) == node) {
                             input.items[slot] = std::move(item);
                             break;
                         }
                 std::erase_if(session.items, [](const ast::TopLevelItem& item) {
-                    return heldNode(item) == nullptr;
+                    return ast::heldNode(item) == nullptr;
                 });
             }
         } giveBackItems{*checked.session, input, {}};
         for (std::size_t i = 0; i < input.items.size(); ++i)
             if (!std::holds_alternative<std::unique_ptr<ast::MainBlock>>(
                     input.items[i])) {
-                giveBackItems.lent.emplace_back(i, heldNode(input.items[i]));
+                giveBackItems.lent.emplace_back(i, ast::heldNode(input.items[i]));
                 checked.session->items.push_back(std::move(input.items[i]));
             }
         struct GiveBack {

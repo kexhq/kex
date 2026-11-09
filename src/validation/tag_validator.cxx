@@ -1,6 +1,7 @@
 #include "tag_validator.hxx"
 
 #include "../common/mangle.hxx"
+#include "../hir/compile_time.hxx"
 #include "../interpreter/evaluator.hxx"
 #include "../lexer/lexer.hxx"
 #include "../ast/walk.hxx"
@@ -539,6 +540,10 @@ auto validateTaggedLiterals(
     // for every tagged literal it validates: loading a build's program again
     // for each of them was nearly all validation cost. One whose validator
     // timed out or crashed is dropped, and the next literal gets a fresh one.
+    // What a companion runs on: the program's own analysis, or its module
+    // checked as a unit. Declared first, so they outlive the sandboxes.
+    std::optional<hir::Program> programAnswers;
+    std::unordered_map<const ast::Program*, std::unique_ptr<hir::CheckedProgram>> moduleAnswers;
     std::unordered_map<const ast::Program*, std::unique_ptr<interpreter::Evaluator>> sandboxes;
 
     std::vector<semantic::Diagnostic> diagnostics;
@@ -622,8 +627,18 @@ auto validateTaggedLiterals(
                 result = sandbox->evaluateLoadedFunction(
                     validator, {interpreter::Value::string(subject)}, timeout);
             } else {
-                sandbox = std::make_unique<interpreter::Evaluator>();
+                sandbox = std::make_unique<interpreter::Evaluator>(analyzer.importedInterfaces());
                 sandbox->loadPrelude();
+                if (!matchedModule) {
+                    if (!programAnswers) programAnswers.emplace(program, analyzer);
+                    sandbox->setProgram(&*programAnswers);
+                } else if (analyzer.importedInterfaces()) {
+                    auto& answers = moduleAnswers[home];
+                    if (!answers)
+                        answers = hir::checkCompileTime(*matchedModule->program,
+                                                        analyzer.importedInterfaces());
+                    sandbox->setProgram(&*answers->program);
+                }
                 result = sandbox->evaluateFunction(
                     *home, validator, {interpreter::Value::string(subject)}, timeout);
             }

@@ -86,6 +86,10 @@ struct ExpandOptions {
     // too). Empty: scan every time, keeping only this process's own scans.
     std::filesystem::path scanCache;
     std::string toolchainKey;
+    // The prelude's interfaces. Given, compile-time code is checked before
+    // it runs (hir::checkCompileTime), and the sandbox reads the checker's
+    // answers as every other walker run does; left null, it runs unchecked.
+    const semantic::ImportedInterfaces* interfaces = nullptr;
 };
 
 // Expands every `compiled` block in `program` in place, and folds every

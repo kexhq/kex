@@ -70,6 +70,7 @@ auto SemanticDB::updateFile(const std::string& path, std::string source,
         compiled::ExpandOptions expandOptions;
         expandOptions.sourcePath = state.path;
         expandOptions.moduleRoots = m_moduleRoots;
+        expandOptions.interfaces = m_imports;
         compiled::expand(state.ast, expansionDiagnostics, expandOptions);
         state.diagnostics.insert(
             state.diagnostics.end(),

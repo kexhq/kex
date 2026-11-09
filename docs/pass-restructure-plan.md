@@ -35,6 +35,14 @@ re-derives them, and the three disagree.
   only those answers. "Lowering from HIR nodes" / "the walker evaluates HIR
   nodes" mean exactly that: no consumer re-derives a decision or reads a
   checker table except through `hir::Program`.
+- **Every program the walker runs is checked first** (2026-11-09, by the
+  user), in three steps: (1) each module the walker loads at run time is
+  checked as its own unit against its dependencies' interfaces, as the BEAM
+  build checks it; (2) compile-time evaluation: the checker checks
+  `compiled do` blocks, and expansion checks what it is about to run; (3)
+  the walker's method call becomes a switch on the target kind, its by-name
+  lookup kept only for `Dispatch` calls. The extra checking is measured on
+  slick.
 - **Walker:** runs on the same HIR, so walker and BEAM share every decision.
 - **Delivery: in place, gated.** The plan first said a strangler behind
   `KEX_PIPELINE=hir`; no such flag was ever built. Each decision moves into
@@ -104,12 +112,12 @@ targeted, every expression typed (`--verify-hir`); `--dump-hir` prints it.
 |---|---|---|
 | 0 | Benchmark on slick | Done |
 | 1 | Foundations (cache, enums, shared walkers, audit, `main()` split) | Done; the open items are in the order below |
-| 2 | One sema decides every call; HIR | **In progress**: decisions recorded, `hir::Program` answers them, node identities and `hir::persist`; the HIR is the AST plus these answers (decided 2026-11-09, no separate node types) |
+| 2 | One sema decides every call; HIR | **Done** (2026-11-09; `verify-hir-stdlib`: 0 undecided call sites; captures decided too): decisions recorded, `hir::Program` answers them, node identities and `hir::persist`; the HIR is the AST plus these answers (decided 2026-11-09, no separate node types) |
 | 2b | Intrinsic registry + `Type<T>` signatures | `Type<T>` and `to` moved to step 3; the rest **deferred** |
 | 3 | Lowering only translates; IR passes | **Done** (2026-11-09): lowering is checked-only (it throws without a HIR); the provider search and its run-time choices are the checker's (alternatives), with `dualProviderDispatch` and `importedFreeFunctionDispatch` deleted; no override of a checker target is left (`localBeatsTraitDefault`, `ownedMakeFunction`, the module-path search deleted); every call reaching the local fallback is a decided kind (dispatch, trait method, field read on a structural or conflicting record, a free function called UFCS). `lowerMethodCallImpl` is a switch on the target kind and a dispatch to handlers (80 lines, from ~1150); the IR passes are in `src/ir/passes/`. Lowering reads the checker only through `hir::Program`, and captures are decided too. |
-| 4 | Walker on the HIR | **In progress**: runs, REPL and prelude read checked decisions; its run-time `using` gates are deleted (the checker's `Hidden` decides); still evaluates the AST |
+| 4 | Walker on the HIR | **Done** (2026-11-09): every program the walker runs is checked first: the entry (kex::driver, merged with the modules it uses), each module loaded at run time, and compile-time code (`compiled do`, collapse, template scans, tag validators), the checks cached across builds; the method call reads the decided target (conversion, runtime primitive, `Type.of`, trait dictionary, own method, the selected module function unless a `with` replaced its capability, value-or-namespace receivers). What goes by the value at run time is what BEAM leaves to its dispatchers too: `Dispatch` calls and the prelude's receiver functions |
 | 5 | LSP / SemanticDB on the same sema | **Done** (2026-11-08): one resolver, the checker's name pass; the REPLs and `--complete` hold no SemanticDB; the language server's SemanticDB is a document store and query front end over the checker's index |
-| 6 | Delete old paths, measure | **Started**: `docs/architecture.md`; measurements below. `src/`'s size against `main` is reported, not a gate (2026-11-08) |
+| 6 | Delete old paths, measure | **Done** (2026-11-09; the cold cost accepted by the user as the price of checking every program the walker runs; final slick table under Stage 6: every warm scenario 19–31% faster than `main`, cold +41%, the first checks of compile-time code). The merged program's `expand` pass is deleted. `docs/architecture.md`; measurements below. `src/`'s size against `main` is reported, not a gate (2026-11-08) |
 | — | Separate compilation as the default | **Done** (2026-11-06); the merged build path is deleted |
 
 ## Order of work (decided 2026-11-05)
@@ -1419,9 +1427,100 @@ Found on the way, and present before this change: in the walker REPL a
 `distinct type` input is refused as if it were inside `compiled do`, and
 `this.as(Integer)` in a distinct type's `make` block fails every later input.
 
-What is open for Stage 4: compile-time evaluation (`compiled do`) still runs
-without a HIR, so the walker's run-time lookup (`resolveMethodName`) stays as
-its fallback; then the walker evaluates HIR nodes (order step 6).
+**Step 1, module loads in a checked run (2026-11-09).** A trace of every
+module the walker loads at run time over spec, spec/prelude and examples:
+in checked runs the project modules a program uses are merged and checked
+before it runs (`resolveBeamDeps`), and the only loads were the namespace
+pre-check probing source files for a dotted receiver. `Console.RESET` (a
+constant) found `console.kex` and ran it again, from source and unchecked,
+at each use; `Culture.DEFAULT`, `Kex.BACKEND` and
+`Presence.Statuses.STATUSES` likewise. In a checked run the probe now runs
+only for a receiver the checker decided is a module (`ModuleReference`).
+What a checked run still loads: an `export`ed module nothing uses
+(`Tariff`), none of whose code runs. Every other load is in an evaluator
+with no HIR (`compiled do`, collapse, template scans, the stdlib interface
+expansion: `Culture` 803 times over the corpus), which is step 2.
+
+**Step 2, compile-time code checked before it runs (2026-11-09).** The
+checker never saw a `compiled do` block: it skipped them, and expansion
+removes them before the main check. `hir::checkCompileTime`
+(`src/hir/compile_time.{hxx,cxx}`) lends a program's blocks to it as the items
+they read as (a top-level block's declarations as top-level declarations and
+each statement as a top-level statement, a synthetic `main`; a module's
+block's statements as one function body of the module), checks silently, and
+gives them back by node, so the answers hold for the sandbox. A `let %name`
+template is typed by its computed name only; its body is checked as the
+declaration it becomes. Expansion checks before running a block and before
+collapsing (once, when the collapse sandbox starts), given the prelude's
+interfaces (`ExpandOptions::interfaces`, set by every `main.cxx` expansion).
+Over `spec/compiled_generate.kex` with a warm cache, every method call the
+sandbox runs now has the checker's answer. What still runs unchecked: modules
+a sandbox loads from source (`Template` for a template scan, `Culture`,
+`FS`), the stdlib interface build on a cold cache (which has no interfaces
+yet), and the LSP's and completion's expansions, which pass none.
+
+Then the rest of step 2, the same day. An evaluator is built with the
+prelude's interfaces (`Evaluator(interfaces)`; the CLI run, both REPLs,
+every expansion sandbox, the tag validator), and a module it loads at run time
+is checked as its own unit (`checkCompileTime`, cached per process beside its
+expansion) and read like the entry program; its own expansion is given them
+too. Constructing with them matters: the prelude's own load reaches `FS`
+(`mock.kex` names `FS.FilePath`). A tag validator's companion runs on the
+program's analysis, or on its module's check. The LSP, `SemanticDB` and the
+wasm REPL expand with them. Over spec, spec/prelude and examples, every module
+the walker loads is now checked; the one exception is `FS` while the walker
+prelude is first built on a cold cache. `DateFormat` names `Culture.Culture`
+instead of `using Culture`: the walker runs a `using` eagerly, so that line
+loaded `culture.kex` from source on every evaluator's prelude load. The
+shared `ast::heldNode` finds a lent item by node.
+
+**Step 3 begun, and every walker entry through one driver (2026-11-09).**
+The walker's method call starts with a switch on the target kind:
+`Conversion` (`evalConversion`) and a `Builtin` runtime primitive
+(`evalIntrinsicCall`, the category from the decided path) no longer fall
+back to reading `.as(T)` or `Kex.Intrinsic.*` by their spelling. For that to
+hold, every program the walker runs has to be checked, embedders included,
+and checked with the project modules it uses: checked alone,
+`examples/parser_combinators` read its own `Parsing` as the stdlib's. The
+merge `kex -R` did in `main.cxx` (`resolveBeamDeps`) is now
+`src/driver/dependencies.{hxx,cxx}`: `loadDependencies` (each file parsed and
+expanded on its own, the discovery cache, build progress) and
+`mergeDependencies`, with the failure policy, scan caches and unit graph;
+`main.cxx`'s `resolveBeamDeps` composes them around the per-unit BEAM check.
+`driver::prepareForWalker` (merge, expand, check silently) is what a harness
+and `Evaluator.run` use; the evaluator never checks on its own.
+`Evaluator()` takes the process's prelude interfaces
+(`kex::defaultPreludeInterfaces`, `src/common/runtime_dir.{hxx,cxx}`, where
+`prebuiltRuntimeBeamDir` moved from `main.cxx`). Running checked exposed a
+walker bug the BEAM-only specs had hidden: a `Task` value had no dispatch
+type, so `task.await(timeout: …)` found no clause. A decided `OwnMethod` call goes straight to that
+type's implementation (`ownMethodName`), skipping the run-time lookup. The
+hidden trait dictionary is called only for a call the checker decided
+`TraitMethod`, not for any receiver whose name has one in scope. A
+labelled call reaches the module function the checker selected
+(`declaringModule` of its signature); `findImportedNamedOverload`, which
+worked it out again from the walker's own `using` scopes, is deleted. In a
+decided call, a capitalised receiver the checker typed is a value (a
+constructor, a constant); only an untyped one goes through namespace
+detection. One rule, `Evaluator::decidedFunction`, names the function a
+decided call reaches. Routing every unlabelled call to its selected module
+function: its first try failed 15 capability and mock specs, the
+clock-mocking `time` specs and `wc`, because a `with` replacement of a
+capability (`Clock.now` under `with Clock = …`) is applied on the run-time
+path. As lowering's `capabilityDispatchLowered` asks the context first, a
+decided module function is now called directly unless its module is a
+capability a `with` replaced in scope (`replacedCapability`); then the
+replacement answers. What still goes by the value's run-time type: calls the
+checker left to the value (`Dispatch`), imported prelude receiver functions
+without a module of their own, and code run with no answers.
+
+**Stage 4 closed (2026-11-09).** Compile-time evaluation runs with the
+checker's answers (step 2), and "the walker evaluates HIR nodes" (order step 6)
+means, under the decision that the HIR is the AST plus those answers, that it
+reads the decided target wherever one exists (step 3). `resolveMethodName`
+remains for what BEAM also decides at run time: calls the checker left to the
+value (`Dispatch`) and the prelude's receiver functions, whose `Imported`
+target on BEAM is the prelude's dispatcher.
 
 
 ## Stage 5: LSP and SemanticDB on the same sema
@@ -1523,6 +1622,85 @@ The user's decisions of 2026-11-05 (separate compilation as the default; the
 `src/`-below-`main` goal, revised on 2026-11-08 to a reported measurement)
 are under Decisions; node identities, which came next, are
 done (Stage 2).
+
+**Stage 4 measurement (2026-11-09), against `main` (643e509).** Slick, median
+of 5 interleaved runs (cold 3), a `tey` built from this branch (the dev
+`tey-run` of Oct 29 cannot read slick's `package "slick" do` manifest):
+
+| scenario    | main   | branch | change |
+|-------------|--------|--------|--------|
+| cold        | 26.11  | 38.48  | +47%   |
+| no-op       | 10.59  | 9.20   | −13%   |
+| incremental | 11.41  | 12.83  | +12%   |
+| devloop     | 10.57  | 9.57   | −10%   |
+| specs       | 113.93 | 106.64 | −6%    |
+
+Every slick spec run passed. The checks that make the walker run on the
+checker's answers (Stage 4, step 2) cost compile time: against the committed
+1625ec2, one incremental build is 8.6 s → 12.9 s, with dependency expansion
+2.8 → 5.4 s, the 47 compile-time sandboxes' start-up 0.4 → 1.6 s and
+evaluation 1.8 → 3.5 s, and the entry's expansion 1.1 → 2.8 s. The check
+before collapse alone is about 2.3 s of it (six repository and view files).
+None of these checks is cached across processes yet: a module a sandbox
+loads (harmat's) is checked again by every build, and the program checked
+before collapse is checked even though the build checks it again right
+after; the walker's answer lookup also walks every checked module. `src/`
+(`.cxx`/`.hxx`): 94,499 lines against `main`'s 89,951 (+4,548, +5.1%),
+reported, not a gate.
+
+Then, the same day: the checks are cached across processes
+(`hir::cachedCheck`, through `hir::persist`): a module the walker loads is
+keyed by its source and what its expansion read, compile-time code by a digest
+of its tree (`programDigest`, the `--emit-ast` term) before its blocks are
+lent; and `hir::ProgramSet` indexes which program answers for each node, so a
+lookup asks that one and the prelude instead of every checked module. Slick
+again, same setup:
+
+| scenario    | main   | branch | change |
+|-------------|--------|--------|--------|
+| cold        | 26.02  | 40.07  | +54%   |
+| no-op       | 10.28  | 7.96   | −23%   |
+| incremental | 11.03  | 10.23  | −7%    |
+| devloop     | 10.32  | 8.39   | −19%   |
+| specs       | 113.31 | 98.63  | −13%   |
+
+Every warm scenario is faster than `main` again; a cold build pays every check
+once, plus writing it to the cache (+25% before Stage 4's checks). Against
+1625ec2 an incremental build is 8.6 s → 9.5 s: reading a cached
+compile-time check back (digest, node order, answers) is about 30 ms each.
+
+Where a cold build goes (one run each, KEX_TIMINGS): 1625ec2 33.4 s, branch
+40.5 s. Expanding the entry 1.1 → 4.0 s: in a build the entry is expanded with
+every dependency merged in, so the check before its collapse checks all 160
+files' bodies again (each was expanded, and collapsed, on its own already).
+The 88 sandboxes: start-up 0.6 → 2.2 s, evaluation 14.5 → 17.3 s (checking
+compile-time code and loaded modules, all first seen on a cold build).
+
+That expansion of the merged entry turned out to be dead work: the build
+checks and lowers unit by unit inside the `dependencies` pass
+(`checkUnitsSeparately`), every dependency was expanded on its own as it
+loaded, the entry before the pipeline started, and no pass after `expand` read
+the merged program. The `expand` pass is deleted from the compile pipeline
+(`docs/architecture.md`). Slick, one run each: cold 40.5 → 36.5 s (1625ec2:
+33.4 s), incremental 9.5 → 8.6 s (1625ec2: 8.6 s). What cold still pays is
+the sandboxes' first checks (start-up 0.6 → 2.2 s, evaluation 14.5 → 17.3 s):
+a file's compile-time code runs before its unit can be checked, so the unit
+checks cannot stand in for them.
+
+Final slick measurement against `main` (643e509), median of 5 interleaved
+runs (cold 3), every spec run passing:
+
+| scenario    | main   | branch | change |
+|-------------|--------|--------|--------|
+| cold        | 25.85  | 36.41  | +41%   |
+| no-op       | 10.57  | 7.28   | −31%   |
+| incremental | 11.35  | 8.56   | −25%   |
+| devloop     | 10.60  | 7.61   | −28%   |
+| specs       | 113.79 | 91.72  | −19%   |
+
+Stage 6 closed (2026-11-09, by the user): the cold cost is accepted as the
+price of checking every program the walker runs, paid once per toolchain or
+cache wipe; every warm scenario is faster than `main`.
 
 **Step 10 measurement (2026-11-08), against `main` (3846781).** After the
 provider search and SemanticDB's own resolver went (`tools/bench-slick.sh`,

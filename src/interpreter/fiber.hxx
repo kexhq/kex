@@ -36,7 +36,6 @@ public:
     // the fiber has already finished.
     auto resume() -> void;
 
-    auto finished() const -> bool { return m_finished; }
 
     // Called from inside the currently-running fiber to switch back to
     // whichever context called resume() on it.

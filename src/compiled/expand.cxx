@@ -8,6 +8,7 @@
 #include "../common/mangle.hxx"
 #include "../common/prelude_loader.hxx"
 #include "../common/type_def_utils.hxx"
+#include "../hir/compile_time.hxx"
 #include "../interpreter/evaluator.hxx"
 #include "../interpreter/value.hxx"
 #include "../lexer/lexer.hxx"
@@ -1449,7 +1450,7 @@ auto scanTemplateSourceUncached(const std::string& source, std::chrono::millisec
     std::vector<std::string> reasons;
     try {
         SandboxClock clock;
-        interpreter::Evaluator evaluator;
+        interpreter::Evaluator evaluator(activeOptions ? activeOptions->interfaces : nullptr);
         evaluator.loadPrelude();
         clock.started();
         interpreter::Evaluator::ExpressionRequest request{&callExpr, {}};
@@ -3285,6 +3286,8 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
     // entry file, which takes five. What the sandbox ran stays alive for
     // it: a closure it made may point into a chain since replaced.
     std::vector<ast::ExprPtr> replaced;
+    // What the sandbox runs, checked when it starts (it outlives the sandbox).
+    std::unique_ptr<hir::CheckedProgram> checked;
     std::unique_ptr<interpreter::Evaluator> evaluator;
     auto replace = [&](ast::ExprPtr& slot, ast::ExprPtr literal) {
         if (evaluator) replaced.push_back(std::move(slot));
@@ -3412,9 +3415,13 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
         try {
             SandboxClock clock;
             if (!evaluator) {
-                evaluator = std::make_unique<interpreter::Evaluator>();
+                evaluator = std::make_unique<interpreter::Evaluator>(options.interfaces);
                 useModuleRoots(*evaluator, options);
                 evaluator->loadPrelude();
+                if (options.interfaces) {
+                    checked = hir::checkCompileTime(program, options.interfaces);
+                    evaluator->setProgram(&*checked->program);
+                }
                 clock.started();
                 values = evaluator->evaluateExpressions(
                     program, requests, options.timeout,
@@ -3900,15 +3907,19 @@ auto expand(ast::Program& program,
     // which on BEAM is its tuple layout.
     RecordLayouts layouts;
     std::unordered_map<std::string, std::string> typeModules;
+    // Checked first, so the sandbox reads the checker's answers.
+    const auto checked = options.interfaces
+        ? hir::checkCompileTime(program, options.interfaces) : nullptr;
     {
         const SourceLocation blame =
             locations.empty() ? SourceLocation{} : locations.front();
         std::vector<interpreter::ValuePtr> values;
         try {
             SandboxClock clock;
-            interpreter::Evaluator evaluator;
+            interpreter::Evaluator evaluator(options.interfaces);
             useModuleRoots(evaluator, options);
             evaluator.loadPrelude();
+            if (checked) evaluator.setProgram(&*checked->program);
             clock.started();
             values = evaluator.evaluateConstants(program, names, options.timeout);
             if (evaluator.touchedOutside()) noteReachedOutside();
