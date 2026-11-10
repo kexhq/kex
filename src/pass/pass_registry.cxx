@@ -14,7 +14,7 @@ public:
         ParsedPipeline parsed;
         parsed.elements = elements();
         if (m_error.empty() && m_at < m_text.size())
-            fail("unexpected '" + std::string(1, m_text[m_at]) + "'");
+            reportProblem("unexpected '" + std::string(1, m_text[m_at]) + "'");
         parsed.error = m_error;
         return parsed;
     }
@@ -40,7 +40,7 @@ private:
         PipelineElement parsed;
         while (m_at < m_text.size() && isNameChar(m_text[m_at])) parsed.name += m_text[m_at++];
         if (parsed.name.empty()) {
-            fail(m_at < m_text.size() ? "expected a pass name at '" + std::string(1, m_text[m_at]) + "'"
+            reportProblem(m_at < m_text.size() ? "expected a pass name at '" + std::string(1, m_text[m_at]) + "'"
                                       : "expected a pass name at the end");
             return parsed;
         }
@@ -51,11 +51,11 @@ private:
             if (!m_error.empty()) return parsed;
             skipSpace();
             if (m_at >= m_text.size() || m_text[m_at] != ')') {
-                fail("missing ')' after '" + parsed.name + "('");
+                reportProblem("missing ')' after '" + parsed.name + "('");
                 return parsed;
             }
             ++m_at;
-            if (parsed.inner.empty()) fail("'" + parsed.name + "()' is empty");
+            if (parsed.inner.empty()) reportProblem("'" + parsed.name + "()' is empty");
         }
         return parsed;
     }
@@ -66,7 +66,7 @@ private:
     auto skipSpace() -> void {
         while (m_at < m_text.size() && std::isspace(static_cast<unsigned char>(m_text[m_at]))) ++m_at;
     }
-    auto fail(std::string message) -> void {
+    auto reportProblem(std::string message) -> void {
         if (m_error.empty()) m_error = "pass pipeline: " + std::move(message);
     }
 

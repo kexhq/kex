@@ -21,8 +21,6 @@
 #include "../hir/hir.hxx"
 #include "../hir/repl_input.hxx"
 #include "../ir/emit_core.hxx"
-#include "../ir/pass_manager.hxx"
-#include "pipeline.hxx"
 #include "../ir/lower.hxx"
 #include "../lexer/lexer.hxx"
 #include "../compiled/expand.hxx"
@@ -484,4 +482,33 @@ auto printAst(const kex::ast::Program &program) -> void {
         },
         item);
   }
+}
+
+// An emitted module's routed implementations, as recordImplementations asks.
+auto routedIn(const std::set<std::pair<std::string, int>> &routed)
+    -> std::function<bool(const std::string &, int)> {
+  return [&routed](const std::string &function, int arity) {
+    return routed.count({function, arity}) > 0;
+  };
+}
+
+// The modules providing receiver functions in `externals`: what the check
+// counts a call's providers among (Analyzer::setLinkedModules).
+auto providerModules(const kex::ir::ExternalModules &externals) -> std::set<std::string> {
+  std::set<std::string> modules;
+  for (const auto &[_, providers] : externals.receiverFunctions)
+    for (const auto &provider : providers) modules.insert(provider.moduleAtom);
+  return modules;
+}
+
+// The modules `program` uses, loaded and merged in (kex::driver). A build
+// does this through its pass pipeline (build_ir.hxx), unit by unit.
+auto resolveBeamDeps(kex::ast::Program &program, const std::vector<std::string> &roots,
+                     const kex::semantic::ImportedInterfaces *interfaces,
+                     const std::optional<std::unordered_set<std::string>> &qualifiedModules)
+    -> std::vector<LoadedDep> {
+  auto dependencies =
+      kex::driver::loadDependencies(program, roots, interfaces, qualifiedModules);
+  kex::driver::mergeDependencies(program, dependencies, roots, interfaces);
+  return std::move(dependencies.files);
 }

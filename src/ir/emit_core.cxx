@@ -1,5 +1,6 @@
 #include "emit_core.hxx"
-#include "pass_manager.hxx"
+#include "module_passes.hxx"
+#include "../pass/options.hxx"
 #include "walk.hxx"
 #include "../common/utf8.hxx"
 #include <algorithm>
@@ -711,14 +712,15 @@ auto emitCore(const Module& mod) -> EmitResult {
 namespace kex::ir {
 
 auto emitModules(std::vector<Module>& modules) -> std::vector<EmitResult> {
-    auto passes = standardPasses();
+    auto pipeline = buildModulePipeline();
+    ModuleAnalysisManager analyses(&pass::standardCallbacks());
     std::vector<EmitResult> emitted;
     emitted.reserve(modules.size());
     for (auto& module : modules) {
-        passes.run(module);
+        pipeline.run(module, analyses);
+        analyses.clear(module);
         emitted.push_back(emitCore(module));
     }
-    passes.report();
     return emitted;
 }
 

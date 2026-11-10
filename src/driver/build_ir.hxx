@@ -185,6 +185,9 @@ struct IRUnitChildren<build::Program, build::Unit> {
 };
 template <>
 struct IRUnitChildren<build::Unit, ir::Module> {
+    // The unit's analyses are of its source program; its modules are its
+    // output, read by none of them.
+    static constexpr bool kOuterAnalysesReadChildren = false;
     template <typename Visit>
     static auto forEach(build::Unit& unit, Visit&& visit) -> void {
         for (auto& module : unit.modules) visit(module);

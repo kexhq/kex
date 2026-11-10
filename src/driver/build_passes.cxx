@@ -365,6 +365,10 @@ auto writeSeparateCore(const std::vector<ir::EmitResult>& modules) -> void {
 
 auto preservesAll() -> pass::PreservedAnalyses { return pass::PreservedAnalyses::all(); }
 
+// What a pass that changed only the unit's IR modules preserves: every unit
+// analysis, since each is of the unit's source program and none reads them.
+auto changedModulesOnly() -> pass::PreservedAnalyses { return pass::PreservedAnalyses::all(); }
+
 // A forwarding function `name/arity` calling `target` in `module` with its
 // arguments (`module` empty: a local call).
 auto forwardingFunction(const std::string& name, int arity, const std::string& module,
@@ -520,7 +524,7 @@ auto LoadOrderPass::run(Unit& unit, UnitAnalysisManager&) -> pass::PreservedAnal
         module.functions.push_back(std::move(onLoad));
         module.onLoad = "__kex_on_load";
     }
-    return pass::PreservedAnalyses::none();
+    return changedModulesOnly();
 }
 
 // What the unit's interface names in a module's companion and lowering
@@ -583,14 +587,12 @@ auto CompanionForwardsPass::run(Unit& unit, UnitAnalysisManager&) -> pass::Prese
                                   function.name, function.arity);
         }
     }
-    bool changed = false;
     for (const auto& [companion, name, target, arity] : forwards)
         for (auto& module : modules) {
             if (module.name != companion || definesFunction(module, name, arity)) continue;
             module.functions.push_back(forwardingFunction(name, arity, fileModule, target));
-            changed = true;
         }
-    return changed ? pass::PreservedAnalyses::none() : preservesAll();
+    return changedModulesOnly();
 }
 
 // KexI advertises a receiver method at its plain name. A unit can emit only
@@ -622,7 +624,6 @@ auto ReceiverForwardsPass::run(Unit& unit, UnitAnalysisManager&) -> pass::Preser
         if (const auto* definition = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
             definition && *definition)
             noteTypes(**definition);
-    bool changed = false;
     for (auto& module : unit.modules) {
         std::map<std::pair<std::string, int>, std::vector<std::string>> implementations;
         for (const auto& function : module.functions) {
@@ -638,10 +639,9 @@ auto ReceiverForwardsPass::run(Unit& unit, UnitAnalysisManager&) -> pass::Preser
             if (targets.size() != 1 || definesFunction(module, key.first, key.second)) continue;
             module.functions.push_back(
                 forwardingFunction(key.first, key.second, "", targets.front()));
-            changed = true;
         }
     }
-    return changed ? pass::PreservedAnalyses::none() : preservesAll();
+    return changedModulesOnly();
 }
 
 auto EmitCorePass::run(Unit& unit, UnitAnalysisManager&) -> pass::PreservedAnalyses {
@@ -699,8 +699,9 @@ auto DescribePass::run(Unit& unit, UnitAnalysisManager& analyses) -> pass::Prese
                 emitted != emittedByName.end()) {
                 const auto& module = *emitted->second;
                 beam::recordImplementations(chunk, routedIn(module.routedImplementations));
-                const auto exports =
-                    beam::coreExports(module.source.substr(0, module.source.find('\n')));
+                // coreExports reads its source for as long as it is used.
+                const auto header = module.source.substr(0, module.source.find('\n'));
+                const auto exports = beam::coreExports(header);
                 for (auto& method : chunk.typeInterface.methods)
                     if (method.receiverType && method.receiverType->kind == beam::KexiType::Named)
                         if (auto own = beam::emittedImplementationOf(method, exports); !own.empty())

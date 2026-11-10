@@ -183,7 +183,10 @@ add_library(kex_lib
     src/ir/lowering_pattern.cxx
     src/ir/lowering_record.cxx
     src/ir/emit_core.cxx
-    src/ir/pass_manager.cxx
+    src/ir/module_passes.cxx
+    src/pass/options.cxx
+    src/pass/pass_registry.cxx
+    src/pass/standard_instrumentation.cxx
     src/ir/passes/guards.cxx
     src/ir/passes/verify.cxx
     src/ir/passes/upgrade.cxx
@@ -529,7 +532,7 @@ else()
     message(STATUS "Runtime beams: skipped (erlc not found); BEAM modes require prebuilt runtime artifacts")
 endif()
 
-add_executable(kex src/main.cxx src/repl/input.cxx src/repl/session.cxx src/driver/separate_build.cxx src/driver/toolchain.cxx src/driver/prelude_build.cxx src/driver/compile.cxx src/driver/program_support.cxx)
+add_executable(kex src/main.cxx src/repl/input.cxx src/repl/session.cxx src/driver/toolchain.cxx src/driver/prelude_build.cxx src/driver/compile.cxx src/driver/program_support.cxx src/driver/build_passes.cxx)
 target_link_libraries(kex PRIVATE kex_lib)
 target_compile_definitions(kex PRIVATE KEX_RUNTIME_OTP_FLOOR=${KEX_RUNTIME_OTP_FLOOR})
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
@@ -677,6 +680,11 @@ add_executable(beam_test tests/beam_test.cxx)
 target_link_libraries(beam_test PRIVATE kex_lib)
 target_include_directories(beam_test PRIVATE tests)
 add_test(NAME beam_test COMMAND beam_test)
+
+add_executable(pass_test tests/pass_test.cxx)
+target_link_libraries(pass_test PRIVATE kex_lib)
+target_include_directories(pass_test PRIVATE tests)
+add_test(NAME pass_test COMMAND pass_test)
 
 add_executable(mangle_test tests/mangle_test.cxx)
 target_link_libraries(mangle_test PRIVATE kex_lib)

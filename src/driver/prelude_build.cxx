@@ -20,8 +20,8 @@
 #include "../hir/hir.hxx"
 #include "../hir/repl_input.hxx"
 #include "../ir/emit_core.hxx"
-#include "../ir/pass_manager.hxx"
-#include "pipeline.hxx"
+#include "../ir/module_passes.hxx"
+#include "../pass/options.hxx"
 #include "../ir/lower.hxx"
 #include "../lexer/lexer.hxx"
 #include "../compiled/expand.hxx"
@@ -208,11 +208,13 @@ auto compilePreludeCore(const std::string &dir,
     for (size_t i = 1; i < splitModules.size(); i++)
       modules.push_back(std::move(splitModules[i]));
 
-    auto passes = kex::ir::standardPasses();
+    auto pipeline = kex::ir::buildModulePipeline();
+    kex::ir::ModuleAnalysisManager analyses(&kex::pass::standardCallbacks());
     builtModules->clear();
     for (size_t i = 0; i < modules.size(); i++) {
       PreludeBuildModule built;
-      passes.run(modules[i]);
+      pipeline.run(modules[i], analyses);
+      analyses.clear(modules[i]);
       built.emitted = kex::ir::emitCore(modules[i]);
       std::ofstream out(dir + "/" + built.emitted.moduleName + ".core");
       if (!out) return false;
@@ -251,7 +253,6 @@ auto compilePreludeCore(const std::string &dir,
           built.interface, routedIn(built.emitted.routedImplementations));
       builtModules->push_back(std::move(built));
     }
-    passes.report();
     const auto automaticInterfaces =
         kex::sourcePreludeSemanticInterfaces();
     for (size_t i = 1; i < builtModules->size(); i++) {

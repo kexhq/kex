@@ -23,7 +23,7 @@ struct EmitResult {
 
 auto emitCore(const Module& mod) -> EmitResult;
 
-// Runs the standard IR passes over each lowered module (pass_manager.hxx)
+// Runs the module pipeline over each lowered module (module_passes.hxx)
 // and emits its Core Erlang, in order.
 auto emitModules(std::vector<Module>& modules) -> std::vector<EmitResult>;
 

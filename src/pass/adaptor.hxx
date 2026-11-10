@@ -7,6 +7,9 @@
 //   template <> struct pass::IRUnitChildren<Program, Unit> {
 //       template <typename Visit>
 //       static auto forEach(Program& program, Visit&& visit) -> void;
+//       // Optional: no outer analysis reads the children, so changing
+//       // them invalidates none (default: every one, as LLVM assumes).
+//       static constexpr bool kOuterAnalysesReadChildren = false;
 //   };
 //
 // The outer analysis manager reaches the inner one through
@@ -17,12 +20,21 @@
 
 #include <ostream>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace kex::pass {
 
 template <typename Outer, typename Inner>
 struct IRUnitChildren;
+
+namespace detail {
+template <typename Children, typename = void>
+struct OuterAnalysesReadChildren : std::true_type {};
+template <typename Children>
+struct OuterAnalysesReadChildren<Children, std::void_t<decltype(Children::kOuterAnalysesReadChildren)>>
+    : std::bool_constant<Children::kOuterAnalysesReadChildren> {};
+} // namespace detail
 
 // An outer analysis whose result is the inner level's analysis manager.
 template <typename Inner, typename Outer>
@@ -89,7 +101,8 @@ public:
             unchanged = m_pipeline.run(child, inner).allPreserved() && unchanged;
             inner.clear(child);
         });
-        if (unchanged) return PreservedAnalyses::all();
+        if (unchanged || !detail::OuterAnalysesReadChildren<IRUnitChildren<Outer, Inner>>::value)
+            return PreservedAnalyses::all();
         // The inner manager is still the inner manager.
         return PreservedAnalyses::none().template preserve<InnerAnalysisManagerProxy<Inner, Outer>>();
     }
