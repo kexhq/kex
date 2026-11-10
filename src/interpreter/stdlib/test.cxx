@@ -147,12 +147,12 @@ auto Evaluator::testCaseSelected(const std::vector<std::string>& path,
 }
 
 // Minimal RSpec-style framework: `describe`/`it`/`before`/`after`/`assert`.
-// `Mock.*`/`using Test`/the `kex test` CLI subcommand are separate concerns —
-// `using` blocks are currently a no-op (see execTopLevel), so these are
-// always-in-scope globals rather than something you import.
+// Always in scope (stdlib/test.kex declares them), but registered only as the
+// `Test` intrinsics: a bare call reaches one where the checker decided it is
+// the prelude's builtin (names::TestBuiltin), so a program's own `assert`
+// stays its own. `Mock.*` and the `kex test` subcommand are separate concerns.
 auto Evaluator::registerTestBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        definePublic(name, fn);
         defineIntrinsic("Test::" + name, std::move(fn));
     };
 

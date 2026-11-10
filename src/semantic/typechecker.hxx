@@ -468,6 +468,7 @@ private:
     auto ownTypeIdentity(const std::string& name) const -> std::string;
     auto foldTypeOf(const ast::Expr& expr, const ast::MethodCall& call,
                     const std::vector<TypePtr>& argTypes) -> void;
+    auto checkProcessSpawn(const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
     auto foldProcessSpawn(const ast::Expr& expr, const ast::MethodCall& call,
                           const std::vector<TypePtr>& argTypes) -> void;
     // Backing store for the pointer namedFunctionSignature returns when the

@@ -131,6 +131,11 @@ auto Program::targetOf(const ast::MethodCall& call) const -> const Target& {
     return found == m_targets.end() ? kUndecided : found->second;
 }
 
+auto Program::targetOf(const ast::FunctionCall& call) const -> const Target& {
+    const auto found = m_targets.find(&call);
+    return found == m_targets.end() ? kUndecided : found->second;
+}
+
 auto Program::targetOf(const ast::BinaryOp& op) const -> const Target& {
     const auto found = m_targets.find(&op);
     return found == m_targets.end() ? kUndecided : found->second;
@@ -235,6 +240,12 @@ auto newestAnswer(const std::unordered_map<const void*, const Program*>& owners,
 } // namespace
 
 auto ProgramSet::targetOf(const ast::MethodCall& call) const -> const Target& {
+    return *newestAnswer<const Target*>(
+        m_owners, &call, m_base, &kUndecided, [&](const Program& p) { return &p.targetOf(call); },
+        [](const Target* t) { return t->kind != TargetKind::Undecided; });
+}
+
+auto ProgramSet::targetOf(const ast::FunctionCall& call) const -> const Target& {
     return *newestAnswer<const Target*>(
         m_owners, &call, m_base, &kUndecided, [&](const Program& p) { return &p.targetOf(call); },
         [](const Target* t) { return t->kind != TargetKind::Undecided; });

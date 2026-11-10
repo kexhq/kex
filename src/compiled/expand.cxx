@@ -8,6 +8,7 @@
 #include "../common/mangle.hxx"
 #include "../common/prelude_loader.hxx"
 #include "../common/type_def_utils.hxx"
+#include "../common/well_known.hxx"
 #include "../hir/compile_time.hxx"
 #include "../interpreter/evaluator.hxx"
 #include "../interpreter/value.hxx"
@@ -871,7 +872,7 @@ struct EmbedFolder {
 
     static auto isKexReceiver(const ast::Expr& expr) -> bool {
         const auto* upper = std::get_if<ast::UpperIdentifier>(&expr.kind);
-        return upper && upper->name == "Kex";
+        return upper && upper->name == names::kRuntimeRoot;
     }
 
     auto fail(const SourceLocation& location, std::string message) -> bool {
@@ -883,7 +884,7 @@ struct EmbedFolder {
     auto claim(ast::ExprPtr& slot) -> bool {
         if (!slot) return false;
         const auto* call = std::get_if<ast::MethodCall>(&slot->kind);
-        if (!call || call->method != "embed" || !call->receiver ||
+        if (!call || call->method != names::kEmbedFunction || !call->receiver ||
             !isKexReceiver(*call->receiver))
             return false;
         if (call->args.size() != 1 || !call->namedArgs.empty() || call->block)
@@ -984,7 +985,7 @@ auto findDispatchEmbed(ast::FunctionClause& clause,
     walk.onSlot = [&](ast::ExprPtr& slot) {
         if (found || !slot) return found.has_value();
         auto* call = std::get_if<ast::MethodCall>(&slot->kind);
-        if (!call || call->method != "embed" || !call->receiver ||
+        if (!call || call->method != names::kEmbedFunction || !call->receiver ||
             !EmbedFolder::isKexReceiver(*call->receiver) ||
             call->args.size() != 1 || !call->args[0])
             return false;

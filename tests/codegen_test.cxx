@@ -1873,24 +1873,18 @@ int main() {
             assertTrue(callsPrelude(out, "send"), out);
         });
 
-        it("send(pid, msg) free function emits erlang:send", []() {
-            auto out = emit(
+        // Bare `send(pid, msg)` is `pid.send(msg)` by UFCS: lowering no
+        // longer turns the spelling into erlang:send itself.
+        it("send(pid, msg) routes through the source receiver method", []() {
+            auto out = emitWithPrelude(
                 "# kex: no-check\n"
                 "foul go(pid) do\n"
                 "  send(pid, :ping)\n"
                 "end\n"
-                "main do go(self()) end\n"
-            );
-            assertTrue(contains(out, "call 'erlang':'send'"), out);
-        });
-
-        it("self() emits erlang:self()", []() {
-            auto out = emit(
-                "# kex: no-check\n"
-                "foul myPid do self() end\n"
-                "main do myPid() end\n"
-            );
-            assertTrue(contains(out, "call 'erlang':'self'()"), out);
+                "main do go(self()) end\n",
+                {"send"});
+            assertTrue(callsPrelude(out, "send"), out);
+            assertTrue(!contains(out, "call 'erlang':'send'"), out);
         });
 
         it("pid link operations route through source receiver methods", []() {

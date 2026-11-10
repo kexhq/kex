@@ -153,15 +153,24 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
         }
     }
     // A closure captures the walker's mutable bindings by reference, but
-    // BEAM closures only capture values. For finite iteration receiver
-    // functions (`each` and `times`) whose callback reassigns an outer
-    // variable, lower the iteration to lists:foldl and use the accumulator
-    // as explicit mutable state. Once the callback completes, rebind that
-    // state in the enclosing SSA scope.
+    // BEAM closures only capture values. For the prelude's finite iterations
+    // (`each` and `times`, as the checker decided the call: a type's own
+    // `each` is its own) whose callback reassigns an outer variable, lower
+    // the iteration to lists:foldl and use the accumulator as explicit
+    // mutable state. Once the callback completes, rebind that state in the
+    // enclosing SSA scope.
+    const auto preludeIteration = [&](const ast::MethodCall& call) -> const std::string* {
+        const auto& target = hir->targetOf(call);
+        if (target.kind != hir::TargetKind::Imported || target.module != names::kPreludeModule)
+            return nullptr;
+        for (const auto* name : {&names::kEachFunction, &names::kTimesFunction})
+            if (target.function == *name) return name;
+        return nullptr;
+    };
     if (auto* mc = std::get_if<ast::MethodCall>(&e->kind);
-        mc && (mc->method == "each" || mc->method == "times") &&
-        mc->receiver && mc->args.empty()
-        && mc->namedArgs.empty() && mc->block) {
+        mc && mc->receiver && mc->args.empty() && mc->namedArgs.empty() && mc->block &&
+        preludeIteration(*mc)) {
+        const bool times = preludeIteration(*mc) == &names::kTimesFunction;
         auto* lam = std::get_if<ast::Lambda>(&(*mc->block)->kind);
         std::unordered_set<std::string> muts;
         if (lam) for (const auto& stmt : lam->body) collectMutated(stmt, muts);
@@ -169,8 +178,8 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
         for (const auto& v : muts) if (subst.count(v)) mutVars.push_back(v);
         std::sort(mutVars.begin(), mutVars.end());
         bool supportedArity = lam &&
-            ((mc->method == "times" && lam->params.size() == 1) ||
-             (mc->method == "each" &&
+            ((times && lam->params.size() == 1) ||
+             (!times &&
               (lam->params.size() == 1 || lam->params.size() == 2)));
         if (supportedArity && !mutVars.empty()) {
             std::vector<Binding> binds;
@@ -223,7 +232,7 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
             auto foldFn = atomize_ir(std::move(foldExpr), binds);
             auto initial = atomize_ir(stateExpr(mutVars), binds);
             ExprPtr items;
-            if (mc->method == "times") {
+            if (times) {
                 auto last = intrin(Op::Sub,
                     two(std::move(receiver), litInt(1)));
                 items = callE("lists", "seq", 2,
