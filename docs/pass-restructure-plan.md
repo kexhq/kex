@@ -119,6 +119,7 @@ targeted, every expression typed (`--verify-hir`); `--dump-hir` prints it.
 | 5 | LSP / SemanticDB on the same sema | **Done** (2026-11-08): one resolver, the checker's name pass; the REPLs and `--complete` hold no SemanticDB; the language server's SemanticDB is a document store and query front end over the checker's index |
 | 6 | Delete old paths, measure | **Done** (2026-11-09; the cold cost accepted by the user as the price of checking every program the walker runs; final slick table under Stage 6: every warm scenario 19–31% faster than `main`, cold +41%, the first checks of compile-time code). The merged program's `expand` pass is deleted. `docs/architecture.md`; measurements below. `src/`'s size against `main` is reported, not a gate (2026-11-08) |
 | — | Separate compilation as the default | **Done** (2026-11-06); the merged build path is deleted |
+| 7 | LLVM-style pass infrastructure (typed passes, analyses, adaptors, instrumentation, pass builder) | **Done** (2026-11-10): `src/pass/`; three levels (program, unit, module), every build step a typed pass or analysis; `driver::Pipeline`, `ir::PassManager`, `separate_build.cxx` and the `g_separate*` globals deleted |
 
 ## Order of work (decided 2026-11-05)
 
@@ -1851,6 +1852,84 @@ gated steps:
 
 `main.cxx` is now 1,292 lines, under the ~1,500 target: 6,596 at `HEAD`,
 8,353 on `main`.
+
+## Stage 7: an LLVM-style pass infrastructure (decided 2026-11-10, by the user)
+
+The user: the pass API "should have looked similar to LLVM"; "I like when the
+compiler is properly structured and typed itself". What Stages 1-6 left was
+not that:
+
+- `driver::Pipeline<Unit>` is an ordered list of
+  `{name, summary, std::function<optional<int>(CompileUnit&)>}` over one
+  mutable bag of ~20 fields. Half its "passes" are driver housekeeping
+  (`output-dir`, `run-manifest`, `run-cache`, `store-caches`, `finish`).
+- Its `check` and `lower` passes do neither: the `dependencies` pass calls
+  `resolveBeamDeps`, whose `checkUnitsSeparately` (370 lines) reaches,
+  registers, caches, checks, lowers, emits and describes every unit in one
+  loop, handing the results back through globals (`g_separateModules`,
+  `g_separateDiagnostics`, `g_separateChunks`, `g_building`, `g_checkGates`).
+- `ir::PassManager` is a list of `{name, function<void(Module&)>}`.
+- No pass declares what it reads; nothing is an analysis; nothing is
+  invalidated; the checker is one opaque call.
+
+### Design: LLVM's new pass manager, on Kex's IR levels
+
+| LLVM | Kex |
+|---|---|
+| `Module` | `pass::Program`: the build: the entry and the dependency files it loaded |
+| `LazyCallGraph::SCC` (CGSCC) | `pass::Unit`: one strongly connected group of files, compiled apart in build order |
+| `Function` | `ir::Module`: one emitted BEAM module |
+
+- **`src/pass/`**, typed throughout:
+  - `PassManager<IRUnit>` holds pass objects behind a type-erased concept/model,
+    as LLVM does. A pass is a class deriving `PassInfoMixin<P>` with
+    `run(IRUnit&, AnalysisManager<IRUnit>&) -> PreservedAnalyses`. A pass
+    manager is itself a pass, so pipelines nest.
+  - An analysis derives `AnalysisInfoMixin<A>`, has a static `AnalysisKey`, a
+    `Result` type, and `run(IRUnit&, AnalysisManager&) -> Result`.
+    `AnalysisManager<IRUnit>::getResult<A>(unit)` computes it once and caches
+    it; `getCachedResult<A>` never computes; `invalidate(unit, preserved)`
+    drops what a pass did not preserve. No string keys, no casts at use sites.
+  - Adaptors between levels: `ProgramToUnitPassAdaptor` runs a unit pipeline
+    over the unit graph in build order; `UnitToModulePassAdaptor` runs an IR
+    pipeline over each module a unit lowered. `OuterAnalysisManagerProxy`
+    gives an inner pass the outer level's analyses (read-only).
+  - `PassInstrumentation`: before/after callbacks. `shouldRun` skips a unit
+    the unit cache answered (as LLVM's OptNone/OptBisect skip). Time-passes
+    (KEX_TIMINGS / `--time-passes`), `--print-after=<pass>` /
+    `--print-after-all`, `--verify-each`.
+  - `PassBuilder`: a registry of every pass and analysis by name, per level
+    (one `PassRegistry.def`-style table), `parsePassPipeline` for textual
+    pipelines (`kex --passes='unit(check,lower,module(guards,verify),emit-core)'`),
+    the default pipeline, and `--print-pipeline-passes`.
+- **Analyses:** program: the prelude's interfaces, the dependency graph (the
+  loaded files, what uses what, the units). Unit: the files it reaches, the
+  registry of the units below it, the interfaces available to it, its cache
+  key, and `HirAnalysis`, the checker (diagnostics and the `hir::Program`
+  lowering reads).
+- **Passes:** program: `spec-base`, `load-dependencies`. Unit: `unit-cache`,
+  `check` (reports; a gating build stops on an error), `lower` (HIR to
+  `ir::Module`s), the IR adaptor, `emit-core`, `describe` (the KexI the units
+  above read), `store-unit`. IR: `guards`, `upgrade-points`, `verify`.
+- **Not passes:** the output directory, the run manifest and run cache,
+  copying the runtime, writing `.core`, erlc, attaching KexI, running the
+  program. They are the driver around the pipeline, as clang's driver is
+  around LLVM's.
+
+### Steps (each gated)
+
+1. `src/pass/`: the managers, analysis manager, preserved analyses,
+   instrumentation, adaptors; unit tests.
+2. IR level: the three IR passes as pass classes in an `ir` pipeline; every
+   caller (`emit_core`, the prelude build, `--print-passes`) through it;
+   `ir::PassManager` deleted.
+3. Unit level: `checkUnitsSeparately` taken apart into the unit analyses and
+   passes; the `g_separate*` globals deleted.
+4. Program level and the driver: `compile.cxx` is driver code around a
+   `PassBuilder` pipeline; `driver::Pipeline` deleted; `--passes`,
+   `--print-pipeline-passes`, `--print-after`, `--time-passes`.
+5. `docs/architecture.md` describes it.
+
 
 ## Gates (every change)
 

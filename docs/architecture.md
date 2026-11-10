@@ -17,27 +17,55 @@ ratcheted `make dup-audit` metrics watch for regressions:
   where the walker builds a `Showable` dictionary from an argument's static
   type. That is type-directed by definition.
 
-## Driver (`src/main.cxx`, `src/driver/pipeline.hxx`)
+## Passes (`src/pass/`), after LLVM's new pass manager
 
-A build is a list of named passes over one `CompileUnit`
-(`kex::driver::Pipeline`). `kex --print-passes` prints the list, and
-`KEX_TIMINGS=1` times each pass.
+The compiler is a pipeline of typed passes over three IR levels:
+
+| Level | Unit | LLVM |
+|---|---|---|
+| `program` | `build::Program`: the entry and every file it loads | `Module` |
+| `unit` | `build::Unit`: one strongly connected group of files, built apart in build order | CGSCC |
+| `module` | `ir::Module`: one emitted BEAM module | `Function` |
+
+- A **pass** is a class (`PassInfoMixin`) with
+  `run(Unit&, AnalysisManager<Unit>&) -> PreservedAnalyses`. A
+  `PassManager<Unit>` runs a level's passes in order, and is a pass itself.
+- An **analysis** (`AnalysisInfoMixin`) has a `Result` type and is asked for by
+  type: `analyses.result<HirAnalysis>(unit)`. The `AnalysisManager` computes it
+  once and drops it when a pass did not preserve it, or anything it lists in
+  `Dependencies`.
+- **Adaptors** run an inner level's pipeline over each inner unit
+  (`unit(...)`, `module(...)`). Proxies give inner passes the outer level's
+  results.
+- **Instrumentation** wraps every pass: `--time-passes` (or `KEX_TIMINGS`),
+  `--print-after=PASS`, `--print-after-all`. A unit a cache answered runs only
+  its required passes.
+- A **registry** per level names every pass, so a pipeline is text:
+  `kex --print-passes` lists them, `--print-pipeline-passes` prints the one a
+  build runs, and `--passes=...` runs another.
+
+The build (`src/driver/build_ir.hxx`, `build_passes.cxx`):
 
 ```
-prelude-interfaces → run-manifest → output-dir → spec-base → dependencies →
-runtime-beams → run-cache → check → lower → write-core → erlc →
-store-caches → attach-kexi → finish
+spec-base,load-dependencies,run-cache,
+unit(unit-cache,assemble,check,lower,load-order,companion-forwards,
+     receiver-forwards,module(guards,upgrade-points,verify),emit-core,
+     describe,store-unit,return-items),
+merge-dependencies
 ```
 
-`dependencies` loads every module the program reaches, each expanded on its
-own (`kex::driver`), and checks and lowers the program unit by unit; `check`
-reports those units' diagnostics and `lower` collects their modules. Nothing
-expands the merged program: a `compiled do` block runs once, in its own
-file's expansion.
+Unit analyses: `reach` (the files a unit uses), `below` (the units below it, as
+a KexI registry), `available-interfaces`, `link` (what lowering knows of them),
+`unit-cache-key`, and `hir`: the checker, whose answers lowering and
+`describe` read.
 
-A pass carries on (`kContinue`) or stops the build with an exit status.
-`--emit-core` stops after `write-core`, and an error stops at the pass that
-found it.
+## Driver (`src/main.cxx`, `src/driver/compile.cxx`)
+
+Around the pipeline, and not passes: option parsing, the output directory,
+copying the runtime, the run manifest and run cache (which answer through the
+`run-cache` pass), writing `.core`, erlc, attaching KexI, and running the
+program. Nothing expands the merged program: a `compiled do` block runs once,
+in its own file's expansion.
 
 ## Front end
 
@@ -99,7 +127,8 @@ its own.
 
 - **BEAM** (`src/ir/`):
   - Lowering translates the AST into the IR by reading the HIR's decisions.
-  - IR passes run in `ir::PassManager` (`upgrade-points`, `verify`).
+  - The module passes (`guards`, `upgrade-points`, `verify`) rewrite each
+    lowered module (`src/ir/module_passes.hxx`).
   - `emit_core` writes Core Erlang, and `erlc` compiles it.
   - The stdlib prelude is lowered with checker answers, as user code is.
 - **Walker** (`src/interpreter/`): evaluates the same AST with the same

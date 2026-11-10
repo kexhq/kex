@@ -51,6 +51,8 @@ struct Options {
   std::optional<std::string> buildPreludeDir;
   // `--print-passes`: list the compile pipeline and the IR passes, then exit.
   bool printPasses = false;
+  // `--print-pipeline-passes`: the pipeline a build would run, as text.
+  bool printPipelinePasses = false;
   std::string completePrefix;
   std::string outputDir = ".";
   std::string astFilename;

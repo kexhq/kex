@@ -17,8 +17,7 @@
 #include "hir/hir.hxx"
 #include "hir/repl_input.hxx"
 #include "ir/emit_core.hxx"
-#include "ir/pass_manager.hxx"
-#include "driver/pipeline.hxx"
+#include "ir/module_passes.hxx"
 #include "ir/lower.hxx"
 #include "lexer/lexer.hxx"
 #include "compiled/expand.hxx"
@@ -33,6 +32,8 @@
 #include "driver/build_support.hxx"
 #include "repl/session.hxx"
 #include "driver/compile.hxx"
+#include "driver/build_ir.hxx"
+#include "pass/options.hxx"
 #include "driver/options.hxx"
 #include <algorithm>
 #include <cctype>
@@ -194,7 +195,17 @@ auto printUsage(const char *progName) -> void {
       << "      --dump-hir    With -C: list each call site and what the\n"
          "                    checker decided about it\n"
       << "      --verify-hir  With -C: fail when a call site is undecided\n"
-      << "      --print-passes List the compile pipeline and IR passes\n"
+      << "      --print-passes List every pass of every level, and the default\n"
+         "                    build pipeline\n"
+      << "      --passes=PIPELINE\n"
+         "                    Build with this program pipeline instead, e.g.\n"
+         "                    'spec-base,load-dependencies,unit(check,lower,...)'\n"
+      << "      --print-pipeline-passes\n"
+         "                    Print the pipeline a build would run, and exit\n"
+      << "      --print-after=PASS\n"
+         "                    Print each unit after PASS ran (repeatable)\n"
+      << "      --print-after-all Print each unit after every pass\n"
+      << "      --time-passes Report what each pass cost, at exit\n"
       << "      --emit-syntax Emit the lossless syntax tree as ETF\n"
       << "      --expand      Print the AST after `compiled do` expansion\n"
       << "      --collapse-report\n"
@@ -313,6 +324,11 @@ enum Value {
   DumpHir,
   VerifyHir,
   PrintPasses,
+  Passes,
+  PrintAfter,
+  PrintAfterAll,
+  TimePasses,
+  PrintPipelinePasses,
 };
 } // namespace Option
 
@@ -359,6 +375,11 @@ auto parseCommandLine(int argc, char *argv[]) -> Options {
       {"dump-hir", no_argument, nullptr, Option::DumpHir},
       {"verify-hir", no_argument, nullptr, Option::VerifyHir},
       {"print-passes", no_argument, nullptr, Option::PrintPasses},
+      {"passes", required_argument, nullptr, Option::Passes},
+      {"print-after", required_argument, nullptr, Option::PrintAfter},
+      {"print-after-all", no_argument, nullptr, Option::PrintAfterAll},
+      {"time-passes", no_argument, nullptr, Option::TimePasses},
+      {"print-pipeline-passes", no_argument, nullptr, Option::PrintPipelinePasses},
       {"emit-core", no_argument, nullptr, 'E'},
       {"eval", required_argument, nullptr, 'e'},
       {"emit-ast", no_argument, nullptr, Option::EmitAst},
@@ -496,6 +517,22 @@ auto parseCommandLine(int argc, char *argv[]) -> Options {
       break;
     case Option::PrintPasses:
       options.printPasses = true;
+      break;
+    case Option::Passes:
+      kex::pass::passOptions().pipelines.insert_or_assign(
+          std::string(kex::pass::IRUnitLevel<kex::build::Program>::kName), optarg);
+      break;
+    case Option::PrintAfter:
+      kex::pass::passOptions().printAfter.insert(optarg);
+      break;
+    case Option::PrintAfterAll:
+      kex::pass::passOptions().printAfterAll = true;
+      break;
+    case Option::TimePasses:
+      kex::pass::passOptions().timePasses = true;
+      break;
+    case Option::PrintPipelinePasses:
+      options.printPipelinePasses = true;
       break;
     case Option::EmitSyntax:
       options.mode = Mode::EmitSyntax;
@@ -660,9 +697,8 @@ auto checkEntry(const Options &options, const std::string &filepath,
     // source is the point.
     const auto projectRoots =
         kex::withoutStandardLibraryRoots(moduleRootsFor(filepath));
-    UnitGraph units;
     resolveBeamDeps(program, projectRoots, &preludeSemanticInterfaces(),
-                    qualifiedModules, &units);
+                    qualifiedModules);
   }
 
   // One sema, as runSemanticCheck: names (for the entry file and a spec's
@@ -956,12 +992,17 @@ auto runOnWalker(const Options &options, const std::string &filepath,
 int main(int argc, char *argv[]) {
   auto options = parseCommandLine(argc, argv);
   if (options.exitNow) return *options.exitNow;
+  // A pipeline the user wrote is checked before anything runs.
+  if (const auto problem = checkPassPipeline()) {
+    std::cerr << "kex: " << *problem << "\n";
+    return 2;
+  }
+  if (options.printPipelinePasses) {
+    std::cout << buildPipelineText() << "\n";
+    return 0;
+  }
   if (options.printPasses) {
     printCompilePipeline(std::cout);
-    std::cout << "IR passes (every emitted module):\n";
-    const auto irPasses = kex::ir::standardPasses();
-    for (const auto &pass : irPasses.passes())
-      std::cout << "  " << pass.name << "\n";
     return 0;
   }
   auto &mode = options.mode;

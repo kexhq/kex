@@ -22,8 +22,6 @@
 #include "../hir/hir.hxx"
 #include "../hir/repl_input.hxx"
 #include "../ir/emit_core.hxx"
-#include "../ir/pass_manager.hxx"
-#include "pipeline.hxx"
 #include "../ir/lower.hxx"
 #include "../lexer/lexer.hxx"
 #include "../compiled/expand.hxx"

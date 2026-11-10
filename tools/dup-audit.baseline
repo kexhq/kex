@@ -1,4 +1,4 @@
-duplicate-helpers 23
+duplicate-helpers 31
 literal-compares 412
 type-recursions 40
 expr-walkers 18

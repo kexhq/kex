@@ -38,13 +38,12 @@ auto preludeCompletionSymbols() -> const std::vector<kex::semantic::SymbolInfo> 
 
 // Where `filepath`'s modules are found: its source roots, then the stdlib.
 auto moduleRootsFor(const std::string &filepath) -> std::vector<std::string>;
-// The modules `program` uses, loaded and merged in (kex::driver). A build
-// checks and lowers each unit on its own first; `graph` receives the units.
+// The modules `program` uses, loaded and merged in (kex::driver), for a REPL,
+// a walker run or a check. A build does it unit by unit (build_ir.hxx).
 auto resolveBeamDeps(kex::ast::Program &program, const std::vector<std::string> &roots,
                      const kex::semantic::ImportedInterfaces *interfaces,
                      const std::optional<std::unordered_set<std::string>> &qualifiedModules =
-                         std::nullopt,
-                     kex::driver::UnitGraph *graph = nullptr)
+                         std::nullopt)
     -> std::vector<kex::driver::LoadedDep>;
 // The modules a unit's lowering may call as receiver-function providers.
 auto providerModules(const kex::ir::ExternalModules &externals) -> std::set<std::string>;
@@ -81,16 +80,6 @@ auto beamOtpFloorGuard() -> std::string;
 // `--sname` / `--name` / `--cookie`, as erl's own flags, for every VM kex starts.
 extern std::vector<std::string> cliDistributionArgs;
 
-// The build unit by unit (driver/separate_build.cxx). Whether the compile
-// pipeline is building (each unit checked and lowered on its own) and whether
-// its check stops it on a type error; what the units produced.
-extern bool g_building;
-extern bool g_checkGates;
-extern std::string g_separateEntryPath;
-extern std::vector<std::string> g_separateNameCheckFiles;
-extern std::optional<std::vector<kex::ir::EmitResult>> g_separateModules;
-extern std::vector<kex::semantic::Diagnostic> g_separateDiagnostics;
-extern std::map<std::string, kex::beam::KexiChunk> g_separateChunks;
 // An emitted module's routed implementations, as recordImplementations asks.
 auto routedIn(const std::set<std::pair<std::string, int>> &routed)
     -> std::function<bool(const std::string &, int)>;
