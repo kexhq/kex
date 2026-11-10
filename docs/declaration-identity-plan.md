@@ -4,7 +4,15 @@ Status: in progress (2026-11-10). Stages 1–4 done: the checker gives each
 record one identity, records the declaration of every record construction,
 pattern, annotation and `make` target, and lowering reads those answers;
 `canonicalRecordName` and lowering's `using`/alias record resolution are
-deleted (stdlib Core Erlang identical, all gates green). Follows Stage 3 of
+deleted (stdlib Core Erlang identical, all gates green). Stage 5's name
+resolution is done too: the checker records the function a bare call or
+tagged literal names (`calledFunctionOf`) and the constant a bare name names
+(`referencedConstantOf`), so lowering's `using` bindings (`moduleImports`,
+`externalImports`, `applyUsingCore` and its kin) are deleted; and the
+checker records the receiver type a devirtualized call runs
+(`staticReceiverHead`) while lowering spells the BEAM symbol. Still open:
+mangling from declarations rather than written spellings (stage 5's
+symbol scheme) and `tagAtom` as backend metadata (stage 6). Follows Stage 3 of
 `pass-restructure-plan.md`, which left lowering reading no expression types.
 
 ## Goal

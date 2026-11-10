@@ -138,6 +138,16 @@ public:
         -> std::string {
         return m_checker.traitWrittenAs(scope, written);
     }
+    // The module constant a bare name names, or "".
+    auto referencedConstantOf(const ast::Expr& name) const -> std::string {
+        const auto found = m_checker.referencedConstants().find(&name);
+        return found == m_checker.referencedConstants().end() ? std::string{} : found->second;
+    }
+    // The function a bare call names, or "".
+    auto calledFunctionOf(const ast::Expr& call) const -> std::string {
+        const auto found = m_checker.calledFunctions().find(&call);
+        return found == m_checker.calledFunctions().end() ? std::string{} : found->second;
+    }
     // The declaration a `make` method is for, or "".
     auto makeTargetOf(const ast::FunctionDef& method) const -> std::string {
         const auto found = m_checker.makeTargets().find(&method);

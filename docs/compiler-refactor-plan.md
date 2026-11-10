@@ -932,7 +932,9 @@ The prelude emits mangled `name/Type` symbols (`to/Binary`,
 the *plain* `name` (the runtime dispatcher). A first cut that
 pointed the metadata at `name/Type` broke 67 `spec-beam` cases.
 
-**Design (landed):** re-derive `name/Type` at the consumer side —
+**Design (landed; renamed 2026-11-10: the checker records the receiver
+type, `ResolvedCallTarget.staticReceiverHead`, and lowering spells
+`name/Type` with `mangleReceiverImplementation`):** re-derive `name/Type` at the consumer side —
 no interface format change, dispatcher stays the fallback. The
 typechecker records `ResolvedCallTarget.importDispatchSpelling`
 (new field, empty = dispatcher) at the imported-winner site in

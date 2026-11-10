@@ -2,7 +2,6 @@
 #include "lowering.hxx"
 
 #include <algorithm>
-#include "../semantic/resolve_core.hxx"
 
 namespace kex::ir {
 
@@ -765,29 +764,6 @@ auto Lowering::lowerLoopStmt(const std::vector<ast::ExprPtr>& loopBody, const as
         [&]{ return lowerBodyFrom(outer, outerStart + 1); }, counterVar);
 }
 
-// `using M` where M is a separately compiled module — the prelude's
-// `Supervisor`, `Task`, `Process` — imports its exports under their bare
-// names. `moduleImports` only ever sees modules of this unit, so a bare
-// `worker { ... }` after `using Supervisor` used to lower to a local call
-// nothing defines, and died with "Undefined function" at runtime while
-// the tree-walker ran it fine. A module of this unit with the same name
-// keeps its own import.
-auto Lowering::importExternalModule(const std::string& srcMod,
-                          const std::vector<std::string>& only,
-                          const std::vector<std::string>& except) -> void {
-    if (!externalModules) return;
-    const auto prefix = srcMod + ".";
-    for (const auto& [qualKey, _] : externalModules->exportToBeamFn) {
-        if (qualKey.rfind(prefix, 0) != 0) continue;
-        const auto bare = qualKey.substr(prefix.size());
-        if (bare.find('.') != std::string::npos) continue;
-        if (!kex::semantic::resolve_core::usingSelectsName(bare, only, except))
-            continue;
-        if (moduleImports.count(bare)) continue;
-        externalImports[bare] = qualKey;
-    }
-}
-
 // A bare call to a name `using` imported from a separately compiled
 // module, lowered exactly as its qualified spelling `M.name(...)` is.
 auto Lowering::lowerExternalImportCall(const ast::FunctionCall& n,
@@ -836,62 +812,6 @@ auto Lowering::lowerExternalImportCall(const ast::FunctionCall& n,
     const int ar = static_cast<int>(args.size());
     return wrapLets(binds, externalCallExpr(qualKey, atom, beamFn, ar,
                                             std::move(args)));
-}
-
-// Applies one `using Module[, as: Alias][, only:/except: ...]` statement's
-// import/alias bindings, returning the pre-existing state for the caller
-// to restore once the bindings go out of scope. Shared by both spellings
-// this can take: `using M do ... end` (an expression; the caller lowers
-// `n.body` itself while the bindings are live, matching them exactly to
-// that block) and a BARE `using M, as: Alias` statement with no `do` —
-// the parser leaves ITS `body` empty, and its scope is instead the REST
-// of the enclosing block, so `lowerBodyFrom`'s bare-statement case below
-// calls this the same way and treats what follows as that scope.
-auto Lowering::applyUsingBindings(const ast::UsingExpr& n) -> UsingBindingsSaved {
-    UsingBindingsSaved saved{moduleImports, externalImports};
-    std::string srcMod = n.module.dotted();
-    applyUsingCore(srcMod, n.alias, n.onlyNames, n.exceptNames);
-    return saved;
-}
-
-auto Lowering::snapshotUsingBindings() const -> UsingBindingsSaved {
-    return {moduleImports, externalImports};
-}
-
-// The bindings half of a `using Module[, as: Alias][, only:/except: ...]`,
-// shared by the expression form (applyUsingBindings, scoped by its caller),
-// the top-level form, and the module-body form (both persistent when bare,
-// scoped around a `do ... end` body). One core so the three contexts cannot
-// drift apart again (Phase 2 step 2).
-auto Lowering::applyUsingCore(const std::string& srcMod,
-                              const std::optional<std::string>& alias,
-                              const std::vector<std::string>& onlyNames,
-                              const std::vector<std::string>& exceptNames)
-    -> void {
-    if (!onlyNames.empty()) {
-        for (const auto& name : onlyNames) {
-            auto key = srcMod + "." + name;
-            if (auto it = moduleFunctions.find(key); it != moduleFunctions.end())
-                moduleImports[name] = it->second;
-        }
-    } else if (!alias) {
-        // `as:` alone imports nothing; the alias above is all it binds.
-        for (const auto& [key, val] : moduleFunctions)
-            if (key.rfind(srcMod + ".", 0) == 0) {
-                auto bare = key.substr(srcMod.size() + 1);
-                if (bare.find('.') == std::string::npos &&
-                    kex::semantic::resolve_core::usingSelectsName(
-                        bare, onlyNames, exceptNames))
-                    moduleImports[bare] = val;
-            }
-    }
-    if (kex::semantic::resolve_core::usingImportsNames(alias, onlyNames))
-        importExternalModule(srcMod, onlyNames, exceptNames);
-}
-
-auto Lowering::restoreUsingBindings(UsingBindingsSaved saved) -> void {
-    moduleImports = std::move(saved.imports);
-    externalImports = std::move(saved.externalImports);
 }
 
 } // namespace kex::ir

@@ -139,6 +139,12 @@ public:
         -> std::string;
     // The declaration each `make` method is made for, and the record each
     // named record pattern names.
+    auto calledFunctions() const -> const std::unordered_map<const ast::Expr*, std::string>& {
+        return m_calledFunctions;
+    }
+    auto referencedConstants() const -> const std::unordered_map<const ast::Expr*, std::string>& {
+        return m_referencedConstants;
+    }
     auto makeTargets() const
         -> const std::unordered_map<const ast::FunctionDef*, std::string>& {
         return m_makeTargets;
@@ -229,6 +235,7 @@ private:
     // parameters of an enclosing module, innermost first, or of the top
     // level (`let LIMIT = 100`). Null when it names none.
     auto constantType(const std::string& name) const -> TypePtr;
+    auto constantDeclaration(const std::string& name) const -> std::string;
     // The type of the nullary constructor `name` names here, or null.
     auto nullaryConstructorType(const std::string& name) -> TypePtr;
     auto bareMethodCall(const ast::Expr& expr, const ast::FunctionCall& call,
@@ -387,8 +394,10 @@ private:
     auto usingImportedMethods(const std::string& name, bool asMethod = true) const
         -> std::vector<const ImportedFunction*>;
     auto importedFunctionVisible(const ImportedFunction& function) const -> bool;
-    auto moduleMemberImported(const std::string& module,
-                              const std::string& member) const -> bool;
+    // Whether a `using` in scope brings `module`'s `member` in; `bare`, for
+    // a call by the bare name, which `using M, as: A` alone does not.
+    auto moduleMemberImported(const std::string& module, const std::string& member,
+                              bool bare = false) const -> bool;
 
     // Binary operator type resolution
     auto inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr& right,
@@ -669,6 +678,10 @@ private:
     std::unordered_map<const ast::Param*, std::string> m_parameterTraits;
     std::unordered_map<const ast::FunctionDef*, std::string> m_makeTargetTraits;
     std::unordered_map<const ast::FunctionDef*, std::string> m_makeTargets;
+    // The function each bare call names, as resolved in its scope.
+    std::unordered_map<const ast::Expr*, std::string> m_calledFunctions;
+    // The module constant each bare name names, as resolved in its scope.
+    std::unordered_map<const ast::Expr*, std::string> m_referencedConstants;
     std::unordered_map<const ast::RecordPattern*, std::string> m_recordPatterns;
     std::unordered_map<const ast::TypeExpr*, std::string> m_annotatedRecords;
     // The trait each type spelling names in the module it was written in

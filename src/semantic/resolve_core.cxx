@@ -177,7 +177,7 @@ auto receiverCoversHead(const TypePtr& receiver, const std::string& head,
         receiver->kind);
 }
 
-auto importDispatchSpelling(
+auto staticReceiverHead(
     const ImportedFunction& winner, const TypePtr& receiverType,
     const ImportedInterfaces& ifaces, AliasExpander expandAlias)
     -> std::optional<std::string> {
@@ -221,12 +221,8 @@ auto importDispatchSpelling(
     // routes lowering laid out, nothing merged in ahead). That one fact
     // replaces the routing clauses (5), (12), (13b), (DS) and the `''` and
     // module-function vetoes, which re-derived it from the overloads.
-    if (winner.implementation != winner.sourceName + "/" + head)
-        return std::nullopt;
-
-    // `name/Head`, spelled the way `mangleReceiverImplementation`
-    // (lower_internal.hxx) spells it.
-    return winner.sourceName + "/" + head;
+    if (winner.implementationHead != head) return std::nullopt;
+    return head;
 }
 
 } // namespace kex::semantic::resolve_core

@@ -451,10 +451,7 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
     // falls through as an ordinary (no-op) statement in that case.
     if (auto* ue = std::get_if<ast::UsingExpr>(&e->kind);
         ue && ue->body.empty() && !isLast) {
-        auto saved = applyUsingBindings(*ue);
-        auto rest = lowerBodyFrom(body, i + 1);
-        restoreUsingBindings(std::move(saved));
-        return rest;
+        return lowerBodyFrom(body, i + 1);
     }
 
     if (isLast) return lower(e);

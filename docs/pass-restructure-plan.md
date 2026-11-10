@@ -1428,7 +1428,9 @@ Originally planned:
   in KexI; delete `importDispatchSpelling` and its predicate (~510 lines plus
   ~500 lines of tests). `make test-devirt` stays as the check. What happened
   instead is below ("Devirtualization"): the emitter records the routes and
-  the predicate shrank to a few clauses over them.
+  the predicate shrank to a few clauses over them. Since 2026-11-10 it is
+  `staticReceiverHead`: the checker records the receiver type (`Head`), and
+  lowering spells `name/Head` (docs/declaration-identity-plan.md).
 - Delete `lower.cxx`, `lowering_*.cxx`, `lowering.hxx` and the side tables
   once lowering from HIR nodes covers the corpus (no flag: see Decisions).
 

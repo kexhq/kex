@@ -2,7 +2,6 @@
 #include "lowering.hxx"
 #include "../common/named_arguments.hxx"
 #include "../common/signature_params.hxx"
-#include "../common/type_def_utils.hxx"
 #include "../common/utf8.hxx"
 #include "../common/mangle.hxx"
 #include <algorithm>
@@ -55,7 +54,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                     ex->node = prefixCall(n.name, {});
                     return ex;
                 }
-                if (auto symbol = moduleConstantSymbol(n.name);
+                if (auto symbol = constantSymbolOf(*e);
                     !symbol.empty()) {
                     auto ex = std::make_unique<Expr>();
                     ex->node = localCall(symbol, {});
@@ -86,15 +85,15 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 // pre-imports its OWN members too, so `let Monday = Monday`
                 // would otherwise read its own constant and recurse
                 // forever (spec/module_self_alias.kex).
-                if (auto imp = moduleImports.find(n.name);
-                    imp != moduleImports.end() &&
-                    imp->second != currentFunctionSymbol &&
-                    emittedModuleZeroArg.count(imp->second)) {
+                if (const auto constant = moduleFunctions.find(hir->referencedConstantOf(*e));
+                    constant != moduleFunctions.end() &&
+                    constant->second != currentFunctionSymbol &&
+                    emittedModuleZeroArg.count(constant->second)) {
                     auto ex = std::make_unique<Expr>();
-                    ex->node = localCall(imp->second, {});
+                    ex->node = localCall(constant->second, {});
                     return ex;
                 }
-                if (auto constant = externalConstant(n.name)) return constant;
+                if (auto constant = externalConstant(*e, n.name)) return constant;
             }
             // Uppercase bare name not a known constant → nullary ADT
             // constructor (matching the UpperIdentifier path). Without
@@ -133,7 +132,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
             }
             if (knownFns.count(n.name))
                 return var(n.name);
-            if (auto symbol = moduleConstantSymbol(n.name); !symbol.empty()) {
+            if (auto symbol = constantSymbolOf(*e); !symbol.empty()) {
                 auto ex = std::make_unique<Expr>();
                 ex->node = localCall(symbol, {});
                 return ex;
@@ -165,7 +164,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                     ex->node = localCall(n.name, {});
                     return ex;
                 }
-                if (auto symbol = moduleConstantSymbol(n.name);
+                if (auto symbol = constantSymbolOf(*e);
                     !symbol.empty()) {
                     auto ex = std::make_unique<Expr>();
                     ex->node = localCall(symbol, {});
@@ -181,15 +180,15 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 // members, and `let Monday = Monday`'s right-hand side is
                 // the outer variant, never the constant being defined
                 // (spec/module_self_alias.kex).
-                if (auto imp = moduleImports.find(n.name);
-                    imp != moduleImports.end() &&
-                    imp->second != currentFunctionSymbol &&
-                    emittedModuleZeroArg.count(imp->second)) {
+                if (const auto constant = moduleFunctions.find(hir->referencedConstantOf(*e));
+                    constant != moduleFunctions.end() &&
+                    constant->second != currentFunctionSymbol &&
+                    emittedModuleZeroArg.count(constant->second)) {
                     auto ex = std::make_unique<Expr>();
-                    ex->node = localCall(imp->second, {});
+                    ex->node = localCall(constant->second, {});
                     return ex;
                 }
-                if (auto constant = externalConstant(n.name)) return constant;
+                if (auto constant = externalConstant(*e, n.name)) return constant;
             }
             // Bare capitalized name = nullary ADT constructor / None-like
             // tag → the atom 'Name' (e.g. JsonNull, Less).
@@ -851,7 +850,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
         } else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
             return lowerReceive(n);
         } else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
-            return lowerFunctionCall(n);
+            return lowerFunctionCall(*e, n);
         } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
             std::vector<ExprPtr> partItems;
             for (const auto& part : n.parts) {
@@ -872,19 +871,19 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
             args.push_back(atomize_ir(std::move(parts), binds));
             args.push_back(atomize_ir(std::move(values), binds));
             auto call = std::make_unique<Expr>();
+            // The tag function the checker resolved the name to.
+            const auto called = subst.count(n.tag) ? std::string{} : hir->calledFunctionOf(*e);
+            const auto ownModuleFunction = moduleFunctions.find(called);
             if (knownFns.count(n.tag))
                 call->node = Call{"", n.tag, 2, std::move(args), false};
-            else if (auto imp = moduleImports.find(n.tag);
-                     imp != moduleImports.end())
-                call->node =
-                    Call{"", imp->second, 2, std::move(args), false};
-            else if (auto ext = externalImports.find(n.tag);
-                     !subst.count(n.tag) && ext != externalImports.end() &&
+            else if (ownModuleFunction != moduleFunctions.end())
+                call->node = Call{"", ownModuleFunction->second, 2, std::move(args), false};
+            else if (!called.empty() && externalModules &&
                      externalModules->compiledApartModules.contains(
-                         ext->second.substr(0, ext->second.rfind('.')))) {
+                         called.substr(0, called.rfind('.')))) {
                 // A tag imported from a unit compiled apart, as
                 // lowerFunctionCall calls one (`using Regex`, regex`\d`).
-                const auto& key = ext->second;
+                const auto& key = called;
                 call->node = Call{
                     externalModules->nameToAtom.at(key.substr(0, key.rfind('.'))),
                     externalModules->exportToBeamFn.at(key), 2, std::move(args),
@@ -911,10 +910,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
             // so by the time a `UsingExpr` arrives here its body is
             // always the real, explicit scope to lower under the
             // bindings.
-            auto saved = applyUsingBindings(n);
-            auto result = lowerBody(n.body);
-            restoreUsingBindings(std::move(saved));
-            return result;
+            return lowerBody(n.body);
         } else if constexpr (std::is_same_v<T, ast::TryExpr>) {
             // .try desugars to: case operand of Ok(v) -> v; Error(e) -> return Error(e)
             auto subject = lower(n.operand);
@@ -1294,18 +1290,6 @@ auto Lowering::fillDefaultSlots(const std::string& name,
     }
     subst = savedSubst;
     currentModulePath = savedModule;
-}
-
-// The qualified name a bare call reaches through a `using` import, ""
-// when the name is a local or was not imported. The parameter tables file
-// a module's function under this, not under the bare spelling.
-auto Lowering::importedKey(const std::string& name) const -> std::string {
-    if (subst.count(name)) return "";
-    auto imported = moduleImports.find(name);
-    if (imported == moduleImports.end()) return "";
-    for (const auto& [qualified, emitted] : moduleFunctions)
-        if (emitted == imported->second) return qualified;
-    return "";
 }
 
 // Several modules of one unit may extend the same type with a function of

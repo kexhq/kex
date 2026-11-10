@@ -203,7 +203,10 @@ auto importedReceiverFunction(const KexiMethod& receiver,
     kex::semantic::ImportedFunction result;
     result.sourceName = receiver.name;
     result.backendFunction = receiver.beamFunction;
-    result.implementation = receiver.implementation;
+    // `name/Head` is the BEAM spelling of the method's implementation for
+    // `Head`; the interface keeps only which type that is.
+    if (const auto prefix = receiver.name + "/"; receiver.implementation.starts_with(prefix))
+        result.implementationHead = receiver.implementation.substr(prefix.size());
     result.foreignTarget = receiver.foreignTarget;
     result.backendModule = backendModule;
     result.backendArity = receiver.beamArity;
