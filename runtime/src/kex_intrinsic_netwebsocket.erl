@@ -45,7 +45,7 @@ receiveMessage(_) -> error_value('Parse', <<"invalid WebSocket connection">>).
 % handler's next receive never saw it.
 receiveMessageWithin({'Net.HTTP.WebSocket.Connection', Pid}, 'None') ->
     call(Pid, {receive_message, infinity}, infinity);
-receiveMessageWithin({'Net.HTTP.WebSocket.Connection', Pid}, {'Just', {'Duration', Seconds}})
+receiveMessageWithin({'Net.HTTP.WebSocket.Connection', Pid}, {'Just', {'Measure', Seconds, _, _}})
   when is_number(Seconds), Seconds >= 0 ->
     call(Pid, {receive_message, timeout_ms(Seconds)}, infinity);
 receiveMessageWithin(_, _) -> error_value('Parse', <<"invalid WebSocket receive timeout">>).

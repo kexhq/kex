@@ -15,8 +15,8 @@ main do
   Process.self.send(RetryResponse(Ok(Response.text(200, "inventory ready"))))
 
   let schedule = Retry.Schedule {
-    attempts: 5, delay: 200.milliseconds, backoff: 2.0,
-    maximumDelay: 2.seconds, jitter: 0.0
+    attempts: 5, delay: 200.millisecond, backoff: 2.0,
+    maximumDelay: 2.second, jitter: 0.0
   }
   let outcome = Retry.run(
     schedule: schedule,

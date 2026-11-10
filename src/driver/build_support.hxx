@@ -9,15 +9,12 @@
 #include "../ir/lower.hxx"
 #include "../semantic/analyzer.hxx"
 #include "../semantic/imported_interfaces.hxx"
-#include "../semantic/symbol_queries.hxx"
 #include "../semantic/completion_at.hxx"
-#include "../beam/kexi.hxx"
 #include "../ir/emit_core.hxx"
 #include "../compiled/expand.hxx"
 
 #include <filesystem>
 #include <functional>
-#include <map>
 
 #include <optional>
 #include <set>

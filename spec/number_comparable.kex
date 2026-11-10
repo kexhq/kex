@@ -61,7 +61,7 @@ main do
   IO.printLine(add(4, 6.44))
 
   IO.printLine("-- Duration.compareTo delegates to Number.compare --")
-  IO.printLine(Duration.seconds(1).compareTo(Duration.seconds(2)))
-  IO.printLine(Duration.seconds(2).compareTo(Duration.seconds(1)))
-  IO.printLine(Duration.seconds(1).compareTo(Duration.seconds(1)))
+  IO.printLine(1.second.compareTo(2.second))
+  IO.printLine(2.second.compareTo(1.second))
+  IO.printLine(1.second.compareTo(1.second))
 end

@@ -1,7 +1,6 @@
 #include "compile_time.hxx"
 
 #include "persist.hxx"
-#include <gmpxx.h>
 #include "../ast/convert.hxx"
 #include "../beam/etf.hxx"
 #include "../beam/term_builder.hxx"
@@ -10,6 +9,7 @@
 #include "../common/file_io.hxx"
 
 #include <algorithm>
+#include <optional>
 #include <type_traits>
 #include <utility>
 #include <vector>

@@ -1,7 +1,6 @@
 #include "interface_cache.hxx"
 
 #include "etf.hxx"
-#include "kexi.hxx"
 
 #include "../common/timings.hxx"
 #include "../semantic/imported_interfaces.hxx"

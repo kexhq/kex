@@ -1,5 +1,7 @@
 // Function / program methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../common/signature_params.hxx"
+#include <algorithm>
 
 namespace kex::ir {
 
@@ -22,18 +24,11 @@ auto Lowering::lowerParam(const ast::Param& p) -> PatternPtr {
 
 // A parameter written as a type name (`let to(value, String)`) takes that
 // type as a value, which is its `Type` record `{'Type', Name, Args, Pure}`:
-// the pattern matches the record's name. The checker's rule
-// (typeSelectorParameter), over the types lowering knows.
+// the pattern matches the record's name. Which parameters are, the checker
+// decided (typeSelectorParameter).
 auto Lowering::typeNameParameter(const ast::Pattern& p) -> PatternPtr {
-    const auto* written = std::get_if<ast::ConstructorPattern>(&p.kind);
-    if (!written || !written->args.empty() || written->name == kex::names::kTrue ||
-        written->name == kex::names::kFalse || variantTagSet.count(written->name) ||
-        variantOwner.count(written->name))
-        return nullptr;
-    const auto& name = written->name;
-    if (!semantic::isPrimitiveTypeName(name) && !records.count(canonicalRecordName(name)) &&
-        !typeVariantTags.count(name) && !structuralTypeAliases.count(name))
-        return nullptr;
+    if (!hir->isTypeSelector(p)) return nullptr;
+    const auto& name = std::get<ast::ConstructorPattern>(p.kind).name;
     auto record = std::make_unique<Pattern>();
     record->kind = PatKind::Construct;
     record->tag = kex::names::kTypeRecord;
@@ -95,13 +90,7 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
     def.name = nameOverride.empty() ? group[0]->name : nameOverride;
     int explicitArity = group[0]->clauses.empty()
         ? 0 : static_cast<int>(group[0]->clauses[0].params.size());
-    auto traitNameOf = [&](const ast::Param& param) -> std::string {
-        if (!param.type || !*param.type) return "";
-        const auto* name = std::get_if<ast::TypeName>(&(*param.type)->kind);
-        if (!name || name->parts.empty()) return "";
-        std::string written = kex::join(name->parts, ".");
-        return traitIdentityOf(written);
-    };
+    auto traitNameOf = [&](const ast::Param& param) { return hir->parameterTraitOf(param); };
     int dictionaryArity = 0;
     if (!group[0]->clauses.empty())
         for (const auto& param : group[0]->clauses[0].params)
@@ -111,7 +100,7 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
             }
     // `make Shape do` inside `module Geo` targets the trait `Geo.Shape`.
     const auto makeTrait = implicitThisName.empty()
-        ? std::string{} : traitIdentityOf(currentMakeType, currentModulePath, true);
+        ? std::string{} : hir->makeTargetTraitOf(*group[0]);
     const bool implicitThisDictionary = !makeTrait.empty() &&
         std::none_of(
             traitMethods.at(makeTrait).begin(),
@@ -253,15 +242,6 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
                 }
                 fc.params.push_back(lowerParam(p));
             }
-            // Declared parameter types, for the arithmetic routing in
-            // lowerBinary: `let double(n: Integer) = n * 2` must keep the
-            // raw BIF, and the annotation says so even when no type
-            // information from the checker is available (the codegen tests
-            // lower without it).
-            auto savedParamTypes = declaredParamTypes;
-            for (const auto& p : clause.params)
-                if (p.name && p.type && *p.type)
-                    declaredParamTypes[*p.name] = typeText(**p.type, TypeSpelling::Dispatch);
             for (const auto& p : clause.params) {
                 auto trait = traitNameOf(p);
                 if (trait.empty()) continue;
@@ -385,7 +365,6 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
                 body = makeLet(it->first, std::move(it->second), std::move(body));
             fc.body = std::move(body);
             currentContextVar = savedContextVar;
-            declaredParamTypes = std::move(savedParamTypes);
             def.clauses.push_back(std::move(fc));
         }
     }

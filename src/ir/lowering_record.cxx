@@ -1,5 +1,7 @@
 // Records methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../common/mangle.hxx"
+#include <algorithm>
 
 namespace kex::ir {
 

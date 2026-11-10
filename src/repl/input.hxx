@@ -3,7 +3,6 @@
 // What both REPLs share (repl/input.cxx): classifying an input, the text
 // helpers over it, line input, Tab completion, and `/with` replacements.
 
-#include "../semantic/symbol_queries.hxx"
 #include "../parser/parser.hxx"
 
 #include <deque>

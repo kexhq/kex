@@ -1,0 +1,37 @@
+# Measures are extendable: a program adds a dimension of its own (a marker
+# type for `Measure<D>`) and units for it (the `Unit` trait), and gets the
+# same arithmetic, conversion, equality and ordering as the stdlib's
+# dimensions. Its measures stay apart from every other dimension's: mixing
+# them is a type error, as it is for `Quantity`'s.
+module Money do
+  record Currency do
+  end
+end
+
+type CurrencyUnit = Euro | Cent
+
+make CurrencyUnit, implement: Unit do
+  let factor(@Euro) = 1.0
+  let factor(@Cent) = 0.01
+  let kind = :currency
+  let symbol(@Euro) = "EUR"
+  let symbol(@Cent) = "c"
+end
+
+let money(amount: Float, unit: CurrencyUnit) -> Measure<Money.Currency> = Measure {
+  canonical: amount * unit.factor,
+  value: amount,
+  unit: UnitDefinition {
+    conversionFactor: unit.factor,
+    dimension: unit.kind,
+    notation: unit.symbol
+  }
+}
+
+main do
+  let price = money(1.5, Euro)
+  let coins = money(150.0, Cent)
+  IO.printLine("${price == coins} ${money(50.0, Cent) < price} ${[price, money(20.0, Cent)].sort.map { |m| m.showValue }}")
+  IO.printLine((price + money(50.0, Cent)).showValue)
+  IO.printLine(coins.convertTo(Euro).map { |m| m.showValue }.or("?"))
+end

@@ -2,25 +2,7 @@
 // entry's companion files merged in, its source roots found, its check run
 // and reported. Shared by `kex -c`, `kex -R`, the REPLs and `--check`.
 
-#include "../beam/beam_file.hxx"
-#include "../beam/collect_metadata.hxx"
-#include "../beam/etf.hxx"
-#include "../beam/kexi.hxx"
-#include "../beam/kexi_registry.hxx"
-#include "../cache/cache.hxx"
-#include "../cache/separate_unit.hxx"
-#include "../beam/term_builder.hxx"
-#include "../ast/clone.hxx"
-#include "../ast/convert.hxx"
-#include "../ast/syntax.hxx"
-#include "../ast/type_text.hxx"
-#include "../common/artifact_versions.hxx"
-#include "../common/prelude_tiers.hxx"
-#include "../common/color.hxx"
-#include "../interpreter/evaluator.hxx"
 #include "../hir/hir.hxx"
-#include "../hir/repl_input.hxx"
-#include "../ir/emit_core.hxx"
 #include "../ir/lower.hxx"
 #include "../lexer/lexer.hxx"
 #include "../compiled/expand.hxx"
@@ -30,28 +12,19 @@
 #include "../semantic/analyzer.hxx"
 #include "../semantic/db.hxx"
 #include "../validation/tag_validator.hxx"
-#include "../common/runtime_dir.hxx"
 #include "dependencies.hxx"
 #include "build_support.hxx"
-#include "../repl/session.hxx"
-#include "compile.hxx"
-#include "options.hxx"
 #include <algorithm>
 #include <cctype>
-#include <deque>
 #include <filesystem>
 #include <fstream>
-#include <getopt.h>
 #include <iostream>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 #ifndef __EMSCRIPTEN__
 #include <cerrno>
 #include <csignal>
-#include <sys/wait.h>
-#include <unistd.h>
 #endif
 
 // Pure string logic, no actual readline API dependency — needed
@@ -63,64 +36,23 @@
 // oversight that only ever surfaced when actually building without
 // readline — every native dev machine so far has had it available via
 // Homebrew.
-#include "../common/completion.hxx"
 #include "../common/diagnostics.hxx"
-#include "../common/digest.hxx"
 #include "../common/file_io.hxx"
 #ifdef KEX_HAS_LSP
-#include "../lsp/server.hxx"
 #endif
-#include "../common/prelude_interfaces.hxx"
 #include "../common/prelude_loader.hxx"
 #include "../common/process.hxx"
-#include "../common/repl_commands.hxx"
-#include "../common/string_utils.hxx"
 #include "../common/timings.hxx"
-#include "../common/well_known.hxx"
 #include "../semantic/completion_at.hxx"
-#include "../semantic/symbol_queries.hxx"
 #include <functional>
-#include <thread>
 
-using kex::prebuiltRuntimeBeamDir;
-using kex::driver::buildProgress;
-using kex::driver::BuildProgress;
-using kex::driver::dependencyFailure;
 using kex::driver::g_dependencyFailureThrows;
-using kex::driver::g_memoizeDependencyExpansion;
-using kex::driver::isAutomaticImport;
 using kex::driver::LoadedDep;
-using kex::driver::moduleCount;
 using kex::driver::prependItems;
-using kex::driver::reportModuleFileError;
-using kex::driver::setDefaultScanCache;
 using kex::driver::setScanCache;
-using kex::driver::sourceModulesNamedBy;
-using kex::driver::UnitGraph;
-using kex::driver::unitsOf;
-using kex::process::BeamVm;
-using kex::process::beamTestGate;
-using kex::process::exitStatusOf;
-using kex::process::runShellCommand;
-using kex::process::runShellCommandsTogether;
 using kex::process::shellSingleQuote;
 using kex::readFile;
-using kex::diagnostics::colorizeMessage;
-using kex::diagnostics::errorCountPhrase;
-using kex::diagnostics::extractHint;
-using kex::diagnostics::jsonEscape;
-using kex::diagnostics::printCollapseReport;
 using kex::diagnostics::printSemanticDiagnostic;
-using kex::ast::typeText;
-using kex::module::collectUsingModules;
-using kex::module::declaredModuleNames;
-using kex::module::fileDeclaringModule;
-using kex::module::moduleHeaderOf;
-using kex::module::moduleNameForPath;
-using kex::module::shownPath;
-using kex::module::skippedByModuleWalk;
-using kex::module::standardModuleRoots;
-using kex::snakeCased;
 
 // Additional project roots supplied by repeatable `--source-root` options.
 // Keeping this at the CLI boundary lets every existing consumer of

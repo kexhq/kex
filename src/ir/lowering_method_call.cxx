@@ -1,5 +1,8 @@
 // Method-call lowering methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../common/named_arguments.hxx"
+#include "../common/mangle.hxx"
+#include <algorithm>
 #include "../common/well_known.hxx"
 
 namespace kex::ir {

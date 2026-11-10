@@ -13,7 +13,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
-#include <functional>
+#include <optional>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>

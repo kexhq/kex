@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <functional>
+#include <memory>
 #include <set>
 
 namespace kex::semantic {

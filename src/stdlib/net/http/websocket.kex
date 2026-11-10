@@ -157,7 +157,7 @@ make Connection do
   #   +Timeout+ if none arrived in time
   #
   # @example Prompting an otherwise-quiet client every 30 seconds
-  #   match connection.receiveMessage(timeout: Just(30.seconds)).try do
+  #   match connection.receiveMessage(timeout: Just(30.second)).try do
   #     Text(text) => handleEvent(text)
   #     _          => sendPing(connection)
   #   end

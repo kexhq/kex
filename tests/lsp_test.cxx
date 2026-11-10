@@ -133,7 +133,7 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-dns.kex","languageId":"kex","version":1,"text":"using Net.DNS\nusing Net.IP, only: [Address]\nmain do\n  let server = Nameserver { address: Address.parse(\"127.0.0.1\").try, port: Net.Port.from(53).try }\n  let resolver: Resolver = Resolver.custom(ResolverOptions { nameservers: [server], timeout: 100.milliseconds }).try\n  resolver.close\nend\n"}}})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-dns.kex","languageId":"kex","version":1,"text":"using Net.DNS\nusing Net.IP, only: [Address]\nmain do\n  let server = Nameserver { address: Address.parse(\"127.0.0.1\").try, port: Net.Port.from(53).try }\n  let resolver: Resolver = Resolver.custom(ResolverOptions { nameservers: [server], timeout: 100.millisecond }).try\n  resolver.close\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-dns.kex"},"position":{"line":5,"character":5}}})");
             messages += frame(

@@ -626,6 +626,31 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
         }
     }
 
+    // A measure is its quantity (units.kex): two compare by dimension and
+    // canonical value, whatever unit each displays in, wherever they are
+    // (a list of durations, a record holding one), as numbers compare across
+    // the numeric tower.
+    {
+        const auto quantity = [](const ValuePtr& value)
+            -> std::optional<std::pair<ValuePtr, ValuePtr>> {
+            const auto* record = std::get_if<RecordValue>(&value->data);
+            if (!record || record->typeName != names::kMeasureRecord) return std::nullopt;
+            const auto canonical = record->fields.find(names::kMeasureCanonical);
+            const auto unit = record->fields.find(names::kMeasureUnit);
+            if (canonical == record->fields.end() || unit == record->fields.end())
+                return std::nullopt;
+            const auto* definition = std::get_if<RecordValue>(&unit->second->data);
+            if (!definition) return std::nullopt;
+            const auto dimension = definition->fields.find(names::kUnitDimension);
+            if (dimension == definition->fields.end()) return std::nullopt;
+            return std::pair{canonical->second, dimension->second};
+        };
+        if (const auto left = quantity(a))
+            if (const auto right = quantity(b))
+                return valuesEqual(left->second, right->second) &&
+                       valuesEqual(left->first, right->first);
+    }
+
     // Comparing a placeholder cannot yield `false` — the running program's
     // value might well be equal — so it must not answer at all.
     for (const auto* side : {&a, &b})

@@ -4,7 +4,6 @@
 #include "decided_call.hxx"
 #include "intrinsics.hxx"
 #include "imported_interfaces.hxx"
-#include "symbol.hxx"
 #include "traits.hxx"
 #include "types.hxx"
 #include <algorithm>
@@ -39,6 +38,13 @@ public:
     // the same constructor→owner relation `satisfiesTrait` uses.
     auto displayTypeOf(const ast::Expr* expr) const -> TypePtr;
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
+    // The type whose implementation answers a trait dictionary for `value`,
+    // as printed: the ADT for a constructor's value; "" for a value known
+    // only by a trait or a type variable, which its own type answers when it
+    // runs.
+    auto dictionaryTypeOf(const ast::Expr& value) const -> std::string;
+    // The trait a declared parameter type names, or "".
+    auto declaredTraitOf(const TypePtr& type) const -> std::string;
     // The binding being mutated by an assignment. Assignment expressions
     // themselves are Void, but tooling still needs the receiver type for
     // hover and member completion on `binding.field = value`.
@@ -116,6 +122,25 @@ public:
     auto decidedCalls() const
         -> const std::unordered_map<const ast::Expr*, DecidedCall>& {
         return m_decidedCalls;
+    }
+    // The parameters written as a bare type name, which take that type as a
+    // value (typeSelectorParameter): `let to(String)`.
+    auto typeSelectorPatterns() const -> const std::unordered_set<const ast::Pattern*>& {
+        return m_typeSelectorPatterns;
+    }
+    // The trait each parameter declared as one names, which the parameter
+    // takes a dictionary for.
+    auto parameterTraits() const
+        -> const std::unordered_map<const ast::Param*, std::string>& {
+        return m_parameterTraits;
+    }
+    // The trait a type spelling written in module `scope` names, or "".
+    auto traitWrittenAs(const std::string& scope, const std::string& written) const
+        -> std::string;
+    // The trait each method of a `make` for one is made for.
+    auto makeTargetTraits() const
+        -> const std::unordered_map<const ast::FunctionDef*, std::string>& {
+        return m_makeTargetTraits;
     }
     // `Type.of(x)` call sites whose argument the checker typed concretely.
     // Both backends materialize the recorded shape instead of asking the
@@ -337,6 +362,9 @@ private:
     // `Module::name`, and automatic-import module exports otherwise.
     auto importedCandidateSignatures(const std::string& name) const
         -> std::vector<Signature>;
+    // The same, as the imported functions that carry them.
+    auto importedCandidates(const std::string& name) const
+        -> std::vector<const ImportedFunction*>;
     // The functions named `name` of the modules `using` brings in from units
     // compiled apart; `asMethod`, only those with a first parameter to be
     // the receiver.
@@ -593,7 +621,7 @@ private:
     // name is the unique suffix of, if any. It depends on nothing but the
     // interfaces, which are fixed for the checker's life, and a name that
     // nothing else claims (`String`, a type parameter) asked it on every use.
-    mutable std::unordered_map<std::string, std::optional<std::string>> m_importedRecordSuffixes;
+    mutable std::unordered_map<std::string, std::optional<std::string>> m_recordSuffixes;
     std::unordered_map<const ast::MethodCall*, ResolvedCallTarget> m_resolvedCalls;
     // `implement:` identities per make block, in written order — the
     // lowerer's `inheritedDefaults` consumes these instead of
@@ -621,6 +649,22 @@ private:
     std::unordered_map<const ast::Expr*, Signature> m_selectedCallSignatures;
     ShownThrough m_shownThroughDistinct;
     std::unordered_map<const ast::Expr*, DecidedCall> m_decidedCalls;
+    std::unordered_set<const ast::Pattern*> m_typeSelectorPatterns;
+    std::unordered_map<const ast::Param*, std::string> m_parameterTraits;
+    std::unordered_map<const ast::FunctionDef*, std::string> m_makeTargetTraits;
+    // The trait each type spelling names in the module it was written in
+    // (writtenKey), as resolveTypeExpr resolved it.
+    std::unordered_map<std::string, std::string> m_writtenTraits;
+    static auto writtenKey(const std::string& scope, const std::string& written)
+        -> std::string {
+        return scope + "\n" + written;
+    }
+    // The imported overloads of each binary operator (and of `==` for a
+    // `!=`) its scope could see when it was checked: decideOperators runs
+    // after the scope (its `using`s) is gone.
+    std::unordered_map<const ast::Expr*,
+                       std::unordered_map<std::string, std::vector<const ImportedFunction*>>>
+        m_operatorImports;
     std::unordered_map<const ast::MethodCall*, StaticTypeAnswer> m_staticTypeOfCalls;
     std::unordered_set<std::string> m_referencedModules;
     // Source module identities declared by the current compilation unit.
@@ -782,6 +826,27 @@ private:
     // imported one, or a trait.
     auto declaresOperatorFor(const TypePtr& type, const std::string& op) const
         -> bool;
+    // An overload of an operator: its signature, and the imported function
+    // that implements it (null for one of this unit's own make blocks).
+    struct OperatorOverload {
+        Signature signature;
+        const ImportedFunction* imported = nullptr;
+    };
+    // The overloads of `op` the type of a left operand declares itself: a
+    // make block for it, local or imported, not a generic one.
+    auto operatorOverloadsFor(const TypePtr& left, const std::string& op,
+                              const std::vector<const ImportedFunction*>& imported)
+        -> std::vector<OperatorOverload>;
+    // Decides every binary operator of `program` once its operands are typed
+    // (m_decidedCalls): the left type's own overload (Operator, naming the
+    // implementation and, for an imported one, its backend function), dispatch
+    // on the value at run time (Dispatch, when the left type is not known), or
+    // the built-in operator (Builtin, with what its operands are). The one
+    // place an operator is decided; lowering and the walker read it.
+    auto decideOperators(const ast::Program& program) -> void;
+    // Whether a value of `type` is of one type the check can name, rather than
+    // whichever type it turns out to be when it runs.
+    auto knownWhenChecked(const TypePtr& type) const -> bool;
     // Resolves a bare module segment written at a call site (`Set.from(…)`)
     // against the modules `using` brought into scope, when the literal name
     // is not itself a registered module. See the .cxx for the precedence
@@ -862,6 +927,9 @@ private:
     // The complete receiver type of the current `make X do` block, used for
     // `this`, `This`, and receiver-aware body inference.
     TypePtr m_currentMakeType;
+    // The make target's type variables by name (the `D` of `make Qty<D>`), for the
+    // length of the block: its methods' annotations name the same `D`.
+    std::unordered_map<std::string, TypePtr> m_currentMakeTargetVars;
     // Module owning the `make` block being checked, "" at top level.
     std::string m_currentMakeModule;
     bool m_inCastSlot = false;
@@ -902,6 +970,12 @@ private:
     // already instantiate afresh. See the definition for why this is the
     // whole of the fix.
     auto generalizeSignature(Signature& signature, int varMark) -> void;
+    // The make target's own variables (the `D` of `make Qty<D>`: the free
+    // variables of `receiver`) in a signature, as per-call generics: shared
+    // across the block, the first call bound them for every other. Only
+    // those: a plain `let`'s unannotated parameters and pending result stay
+    // the variables the body answers.
+    auto generalizeTargetVariables(Signature& signature, const TypePtr& receiver) -> void;
 };
 
 } // namespace kex::semantic

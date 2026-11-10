@@ -1,8 +1,6 @@
 #pragma once
 
 #include "../ast/ast.hxx"
-#include "../lexer/lexer.hxx"
-#include <functional>
 #include <string>
 #include <typeinfo>
 #include <variant>

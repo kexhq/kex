@@ -5,8 +5,6 @@
 #include "analyzer.hxx"
 #include "declaration_validator.hxx"
 #include "../common/type_def_utils.hxx"
-#include "../common/named_arguments.hxx"
-#include "../common/source_name.hxx"
 #include "../common/well_known.hxx"
 #include "typechecker_internal.hxx"
 #include "resolve_core.hxx"
@@ -502,6 +500,7 @@ auto TypeChecker::check(const ast::Program& program,
     // what it is.
     for (auto& binding : m_patternBindings)
         binding.type = resolve(binding.type);
+    decideOperators(program);
 
     reportUnknownMethods();
 }
@@ -661,6 +660,8 @@ auto TypeChecker::reportUnknownMethods() -> void {
 // first, and the field types are filled in on the second pass.
 auto TypeChecker::registerRecordFields(const ast::Program& program,
                                        bool namesOnly) -> void {
+    // The unique-suffix guesses (resolveRecordName) depend on the records known.
+    m_recordSuffixes.clear();
     auto registerRecord = [&](const ast::RecordDef& record,
                               const std::string& owner = std::string{}) {
         const auto name = owner.empty()
@@ -861,15 +862,19 @@ auto TypeChecker::resolveRecordName(const std::string& name) const
     // stdlib records live in m_importedInterfaces whether or not they were
     // imported, so `record Request` in a plain script resolved to
     // `Net.HTTP.Request` and reported its fields instead.
-    if (m_recordFields.count(name) || m_adtVariants.count(name)) return name;
-    if (m_importedInterfaces) {
-        auto [cached, fresh] = m_importedRecordSuffixes.try_emplace(name);
+    // So does any other type declared under that name: an alias (`type Name
+    // = String`), a trait, a distinct type.
+    if (m_recordFields.count(name) || m_adtVariants.count(name) ||
+        m_typeAliases.count(name) || m_traits.get(name) || m_distinctTypes.count(name))
+        return name;
+    {
+        auto [cached, fresh] = m_recordSuffixes.try_emplace(name);
         if (fresh) {
-            // Records only. A module ADT is never guessed at: an unimported
-            // `Message` must not become Net.HTTP.WebSocket.Message over a local
-            // `type Message = :hello` that is resolved after this.
-            const auto match = resolve_core::matchSuffix(
-                m_importedInterfaces->recordArities, "." + name);
+            // Records only, this program's and imported ones alike: a module
+            // ADT is never guessed at: an unimported `Message` must not become
+            // Net.HTTP.WebSocket.Message over a local `type Message = :hello`
+            // that is resolved after this.
+            const auto match = resolve_core::matchSuffix(m_recordFields, "." + name);
             // Ambiguous answers the bare name at once, as it always has; no
             // match goes on to the aliases below.
             if (match.kind == resolve_core::SuffixMatchKind::Unique)
@@ -2262,6 +2267,7 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
             required--;
         signature.requiredParams = required + (explicitReceiver ? 0 : 1);
         signature.makeModule = modulePath;
+        generalizeTargetVariables(signature, receiver);
         auto& existing = m_methodSignatures[method.name];
         const bool duplicate =
             std::any_of(existing.begin(), existing.end(),
@@ -2767,8 +2773,14 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             // "any T satisfying Float", same as an explicit constraint.
             if (const auto trait = resolveTraitReference(
                     qualified, m_currentModulePath, nullptr, false);
-                m_traits.get(trait))
+                m_traits.get(trait)) {
+                // What the spelling means here, for code that sees only the
+                // spelling (the run-time dispatchers' guards); the numeric
+                // constraints are the language's own types.
+                if (!isPrimitiveTypeName(trait))
+                    m_writtenTraits[writtenKey(m_currentModulePath, qualified)] = trait;
                 return Type::constrained(trait, trait);
+            }
             if (auto distinct = resolveDistinctName(last);
                 m_distinctTypes.count(distinct))
                 return Type::named(distinct);
@@ -3424,6 +3436,10 @@ auto TypeChecker::checkUsingBlock(const ast::UsingBlock& block) -> void {
 }
 
 auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
+    // A method of a `make` for a trait takes its receiver's dictionary.
+    if (m_currentMakeType)
+        if (auto trait = declaredTraitOf(m_currentMakeType); !trait.empty())
+            m_makeTargetTraits[&def] = std::move(trait);
     auto savedDeclarationImports = m_declarationImports;
     if (auto imports = m_functionImports.find(&def);
         imports != m_functionImports.end())
@@ -3530,7 +3546,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     // present when no separate TypeAnnotation declaration exists.
     TypePtr inlineReturnType;
     if (!def.clauses.empty() && def.clauses[0].returnAnnotation) {
-        std::unordered_map<std::string, TypePtr> gvars;
+        auto gvars = m_currentMakeTargetVars;
         inlineReturnType = resolveTypeExpr(**def.clauses[0].returnAnnotation, gvars);
         if (declared && !containsOpenType(declared->result) &&
             !containsOpenType(inlineReturnType) &&
@@ -3570,7 +3586,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     for (const auto& clause : def.clauses) {
         if (siblingParamContracts.size() < clause.params.size())
             siblingParamContracts.resize(clause.params.size());
-        std::unordered_map<std::string, TypePtr> clauseGenerics;
+        auto clauseGenerics = m_currentMakeTargetVars;
         for (size_t pi = 0; pi < clause.params.size(); ++pi)
             if (!siblingParamContracts[pi] && clause.params[pi].type)
                 siblingParamContracts[pi] = resolveTypeExpr(
@@ -3647,10 +3663,14 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             defineVar("from", Type::named("From", {slotReply->typeArgs.front()}));
         const bool previousCastSlot = m_inCastSlot;
         m_inCastSlot = def.isSlot && !callSlot;
-        std::unordered_map<std::string, TypePtr> genericVars;
+        auto genericVars = m_currentMakeTargetVars;
         std::vector<TypePtr> paramTypes;
         for (size_t pi = 0; pi < clause.params.size(); pi++) {
             const auto& param = clause.params[pi];
+            // A bare type name takes that type as a value, whatever says what
+            // the parameter's type is (`to : A -> Type<T> -> T?` for
+            // `let to(value, String)`).
+            if (typeSelectorParameter(param)) m_typeSelectorPatterns.insert(param.pattern->get());
             // Use declared param type if available and the annotation covers
             // this position; fall back to inline annotation or fresh TypeVar.
             TypePtr paramType;
@@ -3694,6 +3714,11 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             if (param.pattern) {
                 bindPatternVars(**param.pattern, paramType);
             }
+            // A parameter declared as a trait is passed with its dictionary.
+            if (param.type && *param.type &&
+                std::holds_alternative<ast::TypeName>((*param.type)->kind))
+                if (auto trait = declaredTraitOf(paramType); !trait.empty())
+                    m_parameterTraits[&param] = std::move(trait);
             if (param.defaultValue && *param.defaultValue) {
                 auto actual = resolve(inferExpr(**param.defaultValue));
                 if (!std::holds_alternative<UnknownType>(actual->kind) &&
@@ -3967,6 +3992,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 withReceiver.requiredParams =
                     withReceiver.requiredParams.value_or(
                         signature.params.size()) + 1;
+            generalizeTargetVariables(withReceiver, m_currentMakeType);
             // One clause, one signature: the checked body replaces what the
             // pre-pass registered for it. Kept beside it, the placeholder
             // (`Files -> A -> B`) and the checked `Files -> A -> String?`
@@ -4229,10 +4255,9 @@ auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
     // canonical (Bool is PrimitiveType::Bool), retains Map/List structure,
     // and carries generic arguments for ADT/record receiver functions.
     m_currentMakeType.reset();
-    if (def.target) {
-        std::unordered_map<std::string, TypePtr> genericVars;
-        m_currentMakeType = resolveTypeExpr(*def.target, genericVars);
-    }
+    auto prevMakeTargetVars = std::move(m_currentMakeTargetVars);
+    m_currentMakeTargetVars.clear();
+    if (def.target) m_currentMakeType = resolveTypeExpr(*def.target, m_currentMakeTargetVars);
     for (const auto& item : def.body) {
         std::visit([this](const auto& node) {
             using T = std::decay_t<decltype(node)>;
@@ -4253,6 +4278,7 @@ auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
     m_inMakeBlock = wasInMakeBlock;
     m_currentMakeType = prevMakeType;
     m_currentMakeModule = std::move(prevMakeModule);
+    m_currentMakeTargetVars = std::move(prevMakeTargetVars);
     popScope();
 
     checkTraitImplementation(def);
@@ -4387,27 +4413,31 @@ auto TypeChecker::inferBody(const std::vector<ast::ExprPtr>& body) -> TypePtr {
 auto TypeChecker::importedCandidateSignatures(const std::string& name) const
     -> std::vector<Signature> {
     std::vector<Signature> result;
+    for (const auto* function : importedCandidates(name)) result.push_back(function->signature);
+    return result;
+}
+
+auto TypeChecker::importedCandidates(const std::string& name) const
+    -> std::vector<const ImportedFunction*> {
+    std::vector<const ImportedFunction*> result;
     if (!m_importedInterfaces) return result;
     if (kex::mangle::hasScope(name)) {
         auto module = m_importedInterfaces->modules.find(kex::mangle::headOf(name));
         if (module != m_importedInterfaces->modules.end())
             if (auto functions = module->second.exports.find(kex::mangle::tailOf(name));
                 functions != module->second.exports.end())
-                for (const auto& function : functions->second)
-                    result.push_back(function.signature);
+                for (const auto& function : functions->second) result.push_back(&function);
         return result;
     }
     if (auto functions = m_importedInterfaces->receiverFunctions.find(name);
         functions != m_importedInterfaces->receiverFunctions.end())
         for (const auto& function : functions->second)
-            if (importedFunctionVisible(function))
-                result.push_back(function.signature);
+            if (importedFunctionVisible(function)) result.push_back(&function);
     for (const auto& [_, module] : m_importedInterfaces->modules) {
         if (!module.automaticImport) continue;
         if (auto functions = module.exports.find(name);
             functions != module.exports.end())
-            for (const auto& function : functions->second)
-                result.push_back(function.signature);
+            for (const auto& function : functions->second) result.push_back(&function);
     }
     return result;
 }

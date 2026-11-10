@@ -1517,7 +1517,7 @@ end
 
 # The rule is written outside the region, so it reads the real clock: a
 # clock that still runs, three days ahead.
-with Time.Clock = Mock.Clock { onNow: Just({ DateTime.now() + 3.days }) } do
+with Time.Clock = Mock.Clock { onNow: Just({ DateTime.now() + 3.day }) } do
   runTheThing()
 end
 ```

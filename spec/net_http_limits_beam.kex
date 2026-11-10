@@ -22,7 +22,7 @@ foul slow(
   _request: Request<Binary>,
   _context: Context
 ) -> Response<Binary> do
-  Task.sleep(Duration.seconds(2))
+  Task.sleep(2.second)
   return Response.text(200, "late")
 end
 
@@ -39,7 +39,7 @@ main do
     .get("/slow", ~slow)
   let endpoint = TCP.Endpoint.loopback(Net.Port.from(0).try)
   let server = Server.start(endpoint, router, ServerOptions {
-    gracefulShutdown: Duration.milliseconds(100),
+    gracefulShutdown: 100.millisecond,
     maximumBodyBytes: 16
   }).try
   let base = "http://127.0.0.1:${server.localAddress.port.value}"
@@ -52,7 +52,7 @@ main do
   let small = RequestOptions { maximumBodyBytes: 1024 }
   IO.printLine("client body: ${kindOf(client.request("GET", "${base}/large", Headers.empty, Binary.empty, small))}")
   IO.printLine("client default: ${kindOf(client.request("GET", "${base}/large", Headers.empty, Binary.empty))}")
-  let quick = RequestOptions { timeout: Duration.milliseconds(300) }
+  let quick = RequestOptions { timeout: 300.millisecond }
   IO.printLine("client deadline: ${kindOf(client.request("GET", "${base}/slow", Headers.empty, Binary.empty, quick))}")
   client.close.try
 

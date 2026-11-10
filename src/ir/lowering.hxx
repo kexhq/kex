@@ -5,16 +5,8 @@
 #include "../hir/hir.hxx"
 #include "../ast/function_groups.hxx"
 #include "../ast/type_text.hxx"
-#include "../common/mangle.hxx"
-#include "../common/well_known.hxx"
 #include "../semantic/declared_type.hxx"
-#include "../common/utf8.hxx"
-#include "../common/type_def_utils.hxx"
-#include "../common/signature_params.hxx"
-#include "../common/named_arguments.hxx"
-#include "../common/source_name.hxx"
 #include "../lexer/token.hxx"
-#include <algorithm>
 #include <functional>
 #include <map>
 #include <optional>
@@ -103,10 +95,6 @@ struct Lowering {
     auto moduleLocalTypeSpelling(const std::string& written) const
         -> std::string;
 
-    auto traitIdentityOf(const std::string& written, const std::string& scope,
-                         bool lastResort = false,
-                         const std::set<std::string>* imports = nullptr) const
-        -> std::string;
     auto traitIdentityOf(const std::string& written) const -> std::string;
 
     auto canonicalRecordName(const std::string& name) const -> std::string;
@@ -155,6 +143,9 @@ struct Lowering {
     // dispatcher under the bare name selects at runtime on the receiver's tag
     // (element 1). Mirrors the string emitter's collision handling.
     std::unordered_map<std::string, std::vector<std::string>> methodOwners;
+    // The owners above that are a `make` for a trait (the checker's
+    // makeTargetTraitOf), whose dispatcher clause is the trait's fallback.
+    std::unordered_set<std::string> traitOwners;
     std::unordered_set<std::string> collidingMethods;
     // Prefix calls and receiver dispatch have distinct symbols even when
     // their source name and arity coincide.
@@ -292,9 +283,6 @@ struct Lowering {
     // resolving the right-hand side to `Days.Monday/0` makes it read itself
     // forever (spec/module_self_alias.kex).
     std::string currentFunctionSymbol;
-    // Declared types of the parameters in scope, by source name — the
-    // annotation a call site cannot see. Saved and restored per clause.
-    std::unordered_map<std::string, std::string> declaredParamTypes;
     // Receiver type of the make block currently being lowered. Record field
     // names are not globally unique, so `this.field` must select the layout
     // owned by this type rather than the first same-named field in the file.
@@ -319,13 +307,11 @@ struct Lowering {
     // The checked program (src/hir/): what each call is, decided once by
     // semantic analysis. Null when lowering an unchecked program.
     const hir::Program* hir = nullptr;
-    // The type whose overload `n` applies, as the checker decided it; "" for a
-    // built-in operator. Lowering used to read it off the left operand's
-    // recorded type; with that disabled, spec-beam, fuzz and the examples
-    // were unchanged.
-    auto operatorOwner(const ast::BinaryOp& n) const -> std::string;
+    // An operator the checker decided on the left operand's own type
+    // (`decision`, an Operator target): that type's implementation, called
+    // directly.
+    auto lowerDecidedOperator(const ast::BinaryOp& n, const hir::Target& decision) -> ExprPtr;
     // The checker's static type for `expr` (null when it has none).
-    auto staticTypeOf(const ast::Expr* expr) const -> semantic::TypePtr;
     // Lexical source binding -> trait -> hidden dictionary IR binding.
     std::unordered_map<std::string,
         std::unordered_map<std::string, std::string>> traitDictionaries;
@@ -444,12 +430,6 @@ struct Lowering {
     static auto isOrderingOp(Op op) -> bool;
 
     static auto orderingFunction(Op op) -> std::string;
-
-    auto isIntegerOperand(const ast::ExprPtr& e) const -> bool;
-
-    auto comparableKind(const ast::ExprPtr& e) const -> std::string;
-
-    auto exactEqualityType(const ast::ExprPtr& e) const -> std::string;
 
     auto moduleConstantSymbol(const std::string& name) const -> std::string;
 

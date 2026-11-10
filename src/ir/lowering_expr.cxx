@@ -1,5 +1,11 @@
 // Expression lowering methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../common/named_arguments.hxx"
+#include "../common/signature_params.hxx"
+#include "../common/type_def_utils.hxx"
+#include "../common/utf8.hxx"
+#include "../common/mangle.hxx"
+#include <algorithm>
 
 namespace kex::ir {
 
@@ -220,37 +226,18 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
             // builds a value from both sides, so it evaluates the right
             // one. It is taken only for a left value of a type declaring
             // it; any other left value keeps the short-circuit.
+            //
+            // What the operator is, the checker decided (decideOperators):
+            // the left type's own overload, dispatch on a value whose type is
+            // known only when it runs, or the built-in operator.
+            const auto& decision = hir->targetOf(n);
+            if (decision.kind == hir::TargetKind::Operator)
+                return lowerDecidedOperator(n, decision);
+            const bool dispatches = decision.kind == hir::TargetKind::Dispatch;
             if (n.op == TokenType::AmpAmp || n.op == TokenType::PipePipe) {
                 const bool isAnd = n.op == TokenType::AmpAmp;
                 const std::string sym = isAnd ? "&&" : "||";
-                // An external union's value carries a variant tag, not
-                // the union name. Its overloaded operator is known from
-                // the static receiver type, so call that implementation
-                // directly instead of treating the value as a Bool.
-                if (externalModules && n.left) {
-                    if (auto type = operatorOwner(n); !type.empty()) {
-                        type.resize(std::min(type.size(), type.find('<')));
-                        const auto bare = [](const std::string& name) {
-                            return name.substr(name.rfind('.') + 1);
-                        };
-                        if (auto candidates = externalModules->receiverFunctions.find(sym);
-                            candidates != externalModules->receiverFunctions.end())
-                            for (const auto& candidate : candidates->second) {
-                                if (candidate.beamArity != 2 ||
-                                    candidate.receiverType.empty() ||
-                                    (candidate.receiverType != type &&
-                                     bare(candidate.receiverType) != bare(type)))
-                                    continue;
-                                std::vector<Binding> binds;
-                                auto left = atomize(n.left, binds);
-                                auto right = atomize(n.right, binds);
-                                return wrapLets(binds,
-                                    callE(candidate.moduleAtom, candidate.beamFunction,
-                                          2, two(std::move(left), std::move(right))));
-                            }
-                    }
-                }
-                if (!overloadedOps.count(sym))
+                if (!dispatches || !overloadedOps.count(sym))
                     return isAnd
                         ? matchBool(lower(n.left), lower(n.right), litBool(false))
                         : matchBool(lower(n.left), litBool(true), lower(n.right));
@@ -315,46 +302,26 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
             // uses the user's `'op'/2`, anything else the builtin op
             // (spec/operator_overloading.kex).
             std::string sym = opSymbol(n.op);
-            // A distinct type's own operator, picked by the static type:
-            // the runtime guard below tests a record tag that an erased
-            // `Tuplex` pair never carries, so `x + y` fell through to
-            // the prelude's `+` and died with `function_clause`.
-            if (!sym.empty() && n.left) {
-                const std::string type = operatorOwner(n);
-                const auto bare = type.substr(type.rfind('.') + 1);
-                if (!type.empty() &&
-                    (distinctTypes.count(type) || distinctTypes.count(bare)))
-                    for (const auto& owner : {type, bare}) {
-                        const auto owners = methodOwners.find(sym);
-                        if (owners == methodOwners.end() ||
-                            std::find(owners->second.begin(),
-                                      owners->second.end(),
-                                      owner) == owners->second.end())
-                            continue;
-                        auto implementation = collidingMethods.count(sym)
-                            ? mangleReceiverImplementation(sym, owner)
-                            : sym;
-                        auto lRef = snap(l); auto rRef = snap(r);
-                        auto call = std::make_unique<Expr>();
-                        call->node = Call{std::string{}, std::move(implementation),
-                                          2, two(lRef.get(), rRef.get()), false};
-                        return wrapLets(binds, std::move(call));
-                    }
-            }
             // User == / != (outside guards, which only allow BIFs) go
             // through the coercing runtime eq: a [Char] charlist and a
             // String binary holding the same text ARE equal in Kex.
+            // What the checker knows the operands are (decideOperators).
+            // KEX_NO_OP_DEVIRT=1 (before/after measurement, emergency use)
+            // takes the checked runtime operation for every operator.
+            using semantic::BuiltinOperands;
+            const auto operands = std::getenv("KEX_NO_OP_DEVIRT")
+                ? BuiltinOperands::Checked : decision.operands;
+            const bool integers = operands == BuiltinOperands::Integer;
             auto builtinOp = [&](ExprPtr a, ExprPtr b) -> ExprPtr {
                 Op op = opOf(n.op);
                 if (op == Op::Eq || op == Op::Neq) {
-                    // Two provably-identical exact-comparable operands
-                    // (Integer, String or Char): Kex `==` is exact
+                    // Two Integers, Strings or Chars: Kex `==` is exact
                     // identity there (no charlist/string coercion, no
                     // Int/Float widening), so the raw BIF answers it and
                     // the 12-clause kex_intrinsic_number:eq/neq call is
                     // skipped on the hot path.
-                    const auto lhs = exactEqualityType(n.left);
-                    if (!lhs.empty() && lhs == exactEqualityType(n.right)) {
+                    if (integers || operands == BuiltinOperands::String ||
+                        operands == BuiltinOperands::Char) {
                         auto ex = std::make_unique<Expr>();
                         ex->node = Intrinsic{op, two(std::move(a), std::move(b))};
                         return ex;
@@ -370,8 +337,8 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 // so the divergence reaches checked programs.
                 //
                 // Route through the runtime check only when the operands
-                // are not provably the same comparable kind; a numeric or
-                // string comparison (the hot path) keeps the raw BIF.
+                // are not known to be the same comparable kind; a numeric
+                // or string comparison (the hot path) keeps the raw BIF.
                 // `-` and `*` are raw Erlang ops, which answer
                 // `badarith` for a float overflow and for a non-number
                 // operand alike — where the walker says "Float
@@ -382,8 +349,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 // runtime path, which reports what the walker reports.
                 const bool arithmetic = op == Op::Sub || op == Op::Mul ||
                                         op == Op::Div || op == Op::Pow;
-                if (arithmetic &&
-                    !(isIntegerOperand(n.left) && isIntegerOperand(n.right))) {
+                if (arithmetic && !integers) {
                     std::string loc;
                     if (currentLoc)
                         loc = std::string(currentLoc->file) + ":"
@@ -400,8 +366,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                                  3, std::move(args));
                 }
                 if (isOrderingOp(op)) {
-                    const auto kind = comparableKind(n.left);
-                    if (kind.empty() || kind != comparableKind(n.right)) {
+                    if (operands == BuiltinOperands::Checked) {
                         std::string loc;
                         if (currentLoc)
                             loc = std::string(currentLoc->file) + ":"
@@ -417,16 +382,20 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                     }
                 }
                 // `+` is polymorphic (numeric add / string concat) at
-                // runtime; only provably-integer addition keeps the raw
-                // BIF, which is exact there.
-                if (op == Op::Add &&
-                    !(isIntegerOperand(n.left) && isIntegerOperand(n.right)))
+                // runtime; only integer addition keeps the raw BIF, which
+                // is exact there.
+                if (op == Op::Add && !integers)
                     return callE("kex_intrinsic_number", "add", 2,
                                  two(std::move(a), std::move(b)));
                 auto ex = std::make_unique<Expr>();
                 ex->node = Intrinsic{op, two(std::move(a), std::move(b))};
                 return ex;
             };
+            // Not an overload, and not dispatched: the built-in operator.
+            if (!dispatches) return wrapLets(binds, builtinOp(std::move(l), std::move(r)));
+            // Dispatched: the left value's type is known only when it runs,
+            // so what follows tests it, as a method call's Dispatch does.
+            //
             // The test that `left OP right` reaches a local overload of
             // `opSym`: the receiver is a type that declares one AND the
             // argument is what that overload's parameter takes. Null when
@@ -502,14 +471,6 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 return wrapLets(binds, derivedInequality(
                     lRef, rRef, builtinOp(lRef.get(), rRef.get())));
             }
-            // Two numbers, two strings or two chars, known to be so: the
-            // built-in operator, with no dispatch. Comparable's `<`
-            // (comparable.kex) made every `i < n` test `is_tuple(I)` and
-            // then the Char tag before reaching `erlang:'<'`, as `+` had
-            // since a make block first overloaded it.
-            if (const auto kind = comparableKind(n.left);
-                !kind.empty() && kind == comparableKind(n.right))
-                return wrapLets(binds, builtinOp(std::move(l), std::move(r)));
             if (!sym.empty() && overloadedOps.count(sym)) {
                 auto lRef = snap(l); auto rRef = snap(r);
                 auto builtin = builtinOp(lRef.get(), rRef.get());
@@ -521,33 +482,13 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 // (notably the prelude), route it to that provider module.
                 if (!knownFns.count(sym) && externalModules) {
                     if (auto it = externalModules->receiverFunctions.find(sym);
-                        it != externalModules->receiverFunctions.end()) {
-                        // The one for the left operand's static type when
-                        // there is one: units compiled apart each provide
-                        // their own (`Units.Dynamic`'s `/` and
-                        // `Dimensions`'), and the first of them took
-                        // every other type's values too.
-                        const auto bare = [](std::string name) {
-                            name.resize(std::min(name.size(), name.find('<')));
-                            return name.substr(name.rfind('.') + 1);
-                        };
-                        const std::string left = bare(operatorOwner(n));
-                        const ExternalModules::ReceiverFunction* chosen = nullptr;
-                        for (const auto& candidate : it->second) {
-                            if (candidate.beamArity != 2) continue;
-                            if (!chosen) chosen = &candidate;
-                            if (!left.empty() && candidate.compiledApart &&
-                                !candidate.receiverType.empty() &&
-                                bare(candidate.receiverType) == left) {
-                                chosen = &candidate;
+                        it != externalModules->receiverFunctions.end())
+                        for (const auto& candidate : it->second)
+                            if (candidate.beamArity == 2) {
+                                userModule = candidate.moduleAtom;
+                                userFunction = candidate.beamFunction;
                                 break;
                             }
-                        }
-                        if (chosen) {
-                            userModule = chosen->moduleAtom;
-                            userFunction = chosen->beamFunction;
-                        }
-                    }
                 }
                 auto userCall = std::make_unique<Expr>();
                 userCall->node = Call{
@@ -591,41 +532,6 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                     numericUserCall->node = Call{
                         call.module, call.name, 2,
                         two(lRef.get(), rRef.get()), false};
-                }
-                // Nullary ADT values such as `Watt` are atoms rather
-                // than tuples. If their declared type owns this operator,
-                // statically select that overload instead of falling
-                // through to Erlang arithmetic.
-                if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.left->kind)) {
-                    if (auto owner = variantOwner.find(uid->name);
-                        owner != variantOwner.end()) {
-                        if (auto methods = methodOwners.find(sym);
-                            methods != methodOwners.end() &&
-                            std::find(methods->second.begin(), methods->second.end(),
-                                      owner->second) != methods->second.end())
-                            return wrapLets(binds, std::move(userCall));
-                        // A type of a unit compiled apart, whose own
-                        // operator its interface names by receiver.
-                        const auto bare = [](const std::string& type) {
-                            return type.substr(type.rfind('.') + 1);
-                        };
-                        if (externalModules)
-                            if (auto candidates =
-                                    externalModules->receiverFunctions.find(sym);
-                                candidates != externalModules->receiverFunctions.end())
-                                for (const auto& candidate : candidates->second)
-                                    if (candidate.beamArity == 2 &&
-                                        candidate.compiledApart &&
-                                        !candidate.receiverType.empty() &&
-                                        bare(candidate.receiverType) == bare(owner->second)) {
-                                        auto call = std::make_unique<Expr>();
-                                        call->node = Call{candidate.moduleAtom,
-                                                          candidate.beamFunction, 2,
-                                                          two(lRef.get(), rRef.get()),
-                                                          false};
-                                        return wrapLets(binds, std::move(call));
-                                    }
-                    }
                 }
                 // `==`/`!=` have a sensible structural fallback for any
                 // tuple THIS operator's local override does not own —
@@ -1555,9 +1461,9 @@ auto Lowering::receiverOwner(const ast::MethodCall& n) const -> std::string {
         resolved && !resolved->localDispatchTypes.empty())
         return ownerNameOf(resolved->localDispatchTypes.front());
     // A call the checker left to this unit's own `make` blocks
-    // (ownerOfCall's ReceiverType): the receiver's type is the owner.
-    if (const auto type = staticTypeOf(n.receiver.get()))
-        return semantic::typeToString(type);
+    // (ownerOfCall's ReceiverType): the type it decided answers it.
+    if (const auto& target = hir->targetOf(n); target.kind == hir::TargetKind::OwnMethod)
+        return ownerNameOf(target.owner);
     return "";
 }
 
@@ -1593,9 +1499,46 @@ auto Lowering::placeMethodArguments(const ast::MethodCall& n, const MakeMethod& 
 
 namespace kex::ir {
 
-auto Lowering::operatorOwner(const ast::BinaryOp& n) const -> std::string {
-    const auto& target = hir->targetOf(n);
-    return target.kind == hir::TargetKind::Operator ? target.owner : std::string{};
+// The implementation the checker named (decideOperators): an imported one by
+// its backend function, else this unit's own make block's (a distinct type's
+// under its receiver-mangled name, since its erased value carries no tag a
+// dispatcher could test). Negated for a `!=` the checker decided as the
+// owner's `==`. Both operands are evaluated: an
+// overloaded `&&` or `||` builds a value from both.
+auto Lowering::lowerDecidedOperator(const ast::BinaryOp& n, const hir::Target& decision)
+    -> ExprPtr {
+    const auto& implementation = decision.function;
+    std::vector<Binding> binds;
+    std::vector<ExprPtr> args;
+    args.push_back(atomize(n.left, binds));
+    args.push_back(atomize(n.right, binds));
+    auto call = std::make_unique<Expr>();
+    // An imported implementation, as the checker named it; this unit's own
+    // under the name it is emitted by: an erased distinct type's per-type
+    // implementation where several types share the name.
+    if (!decision.module.empty()) {
+        call->node = Call{decision.module, implementation, 2, std::move(args), false};
+    } else {
+        auto owner = decision.owner;
+        owner.resize(std::min(owner.size(), owner.find('<')));
+        const auto bare = owner.substr(owner.rfind('.') + 1);
+        const auto owners = methodOwners.find(implementation);
+        const auto ownedHere = [&](const std::string& type) {
+            return owners != methodOwners.end() &&
+                   std::find(owners->second.begin(), owners->second.end(), type) !=
+                       owners->second.end();
+        };
+        const auto& local = ownedHere(owner) ? owner : bare;
+        const bool erased = ownedHere(local) &&
+                            (distinctTypes.count(owner) || distinctTypes.count(bare));
+        call->node = Call{std::string{},
+                          erased && collidingMethods.count(implementation)
+                              ? mangleReceiverImplementation(implementation, local)
+                              : implementation,
+                          2, std::move(args), false};
+    }
+    if (decision.negated) call = callE("erlang", "not", 1, one(std::move(call)));
+    return wrapLets(binds, std::move(call));
 }
 
 } // namespace kex::ir

@@ -4,10 +4,10 @@
 
 #include <functional>
 #include <string>
+#include <sys/types.h>
 #include <vector>
 
 #ifndef __EMSCRIPTEN__
-#include <sys/types.h> // pid_t
 #endif
 
 namespace kex::process {

@@ -5,7 +5,6 @@
 
 #include <lsp/json/json.h>
 
-#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>

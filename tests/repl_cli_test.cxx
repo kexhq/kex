@@ -1702,7 +1702,7 @@ int main() {
                 "let p = spawn do echo() end\n"
                 "1\n2\n3\n"
                 "p.send(\"one\")\n"
-                "Task.sleep(100.milliseconds)\n"
+                "Task.sleep(100.millisecond)\n"
                 "p.alive?\n");
             assertTrue(out.find("got one") != std::string::npos, out);
             assertTrue(out.find("=> true : Bool") != std::string::npos, out);
@@ -1713,7 +1713,7 @@ int main() {
             // compile's diagnostics and dropped.
             auto out = runBeamRepl(
                 "spawn do IO.printLine(\"from child\") end\n"
-                "Task.sleep(100.milliseconds)\n"
+                "Task.sleep(100.millisecond)\n"
                 "1\n");
             assertTrue(out.find("from child") != std::string::npos, out);
         });

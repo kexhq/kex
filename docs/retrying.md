@@ -33,9 +33,9 @@ Options may be supplied directly to `Retry.run`, or collected in an immutable
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `attempts` | `3` | Total executions, including the first |
-| `delay` | `100.milliseconds` | Base wait before the second attempt |
+| `delay` | `100.millisecond` | Base wait before the second attempt |
 | `backoff` | `2.0` | Multiplier between base waits; `1.0` means fixed delays |
-| `maximumDelay` | `5.seconds` | Cap on each actual wait, including jitter |
+| `maximumDelay` | `5.second` | Cap on each actual wait, including jitter |
 | `jitter` | `0.2` | Symmetric proportional variation; `0.0` disables it |
 | `maximumTotalDelay` | `None` | Optional cap on cumulative actual sleep |
 
@@ -47,9 +47,9 @@ not mutate the schedule.
 ```kex
 let schedule = Retry.Schedule {
   attempts: 5,
-  delay: 200.milliseconds,
+  delay: 200.millisecond,
   backoff: 2.0,
-  maximumDelay: 5.seconds,
+  maximumDelay: 5.second,
   jitter: 0.0
 }
 
@@ -78,9 +78,9 @@ A fixed-delay schedule waits 250 ms between calls:
 ```kex
 let fixed = Retry.Schedule {
   attempts: 4,
-  delay: 250.milliseconds,
+  delay: 250.millisecond,
   backoff: 1.0,
-  maximumDelay: 250.milliseconds,
+  maximumDelay: 250.millisecond,
   jitter: 0.0
 }
 ```
@@ -91,9 +91,9 @@ A capped exponential schedule can wait 500 ms, 1 s, 2 s, 2 s, then 2 s:
 ```kex
 let capped = Retry.Schedule {
   attempts: 6,
-  delay: 500.milliseconds,
+  delay: 500.millisecond,
   backoff: 2.0,
-  maximumDelay: 2.seconds,
+  maximumDelay: 2.second,
   jitter: 0.0
 }
 ```
@@ -111,10 +111,10 @@ are capped by `maximumDelay`, including positive jitter.
 ```kex
 let schedule = Retry.Schedule {
   attempts: 5,
-  delay: 1.seconds,
+  delay: 1.second,
   backoff: 2.0,
   jitter: 0.0,
-  maximumTotalDelay: Just(2.seconds)
+  maximumTotalDelay: Just(2.second)
 }
 ```
 
@@ -240,9 +240,9 @@ from the backend's secure source.
 ```kex
 let result = Retry.run(
   attempts: 2,
-  delay: 4.seconds,
+  delay: 4.second,
   jitter: 0.25,
-  sleeper: { |wait| Assert.equal(wait, 3.seconds) },
+  sleeper: { |wait| Assert.equal(wait, 3.second) },
   random: { 0.0 }
 ) do
   Error("temporary")

@@ -7,6 +7,7 @@
 // copying it, so building it is one pass over the checker's tables.
 #include "call_targets.hxx"
 #include "../ast/ast.hxx"
+#include "../semantic/decided_call.hxx"
 #include "../semantic/imported_interfaces.hxx"
 #include "../semantic/traits.hxx"
 #include "../semantic/types.hxx"
@@ -38,6 +39,10 @@ struct Target {
     std::string owner;
     // A `serving` slot called with no reply to wait for: a cast.
     bool servingCast = false;
+    // A built-in operator's operands (BinaryOp only).
+    semantic::BuiltinOperands operands = semantic::BuiltinOperands::Checked;
+    // An Operator that negates the implementation it names (`!=` as `==`).
+    bool negated = false;
 };
 
 // The checker's answers a Program reads besides its call targets: borrowed
@@ -94,6 +99,24 @@ public:
     // and for a loaded program.
     auto resolvedTargetOf(const ast::MethodCall& call) const
         -> const semantic::ResolvedCallTarget*;
+    // The type whose implementation answers a trait dictionary for `value`
+    // (TypeChecker::dictionaryTypeOf); "" for a loaded program.
+    auto dictionaryTypeOf(const ast::Expr& value) const -> std::string;
+    // The trait a parameter is declared as, which it takes a dictionary for;
+    // "" for any other parameter, and for a loaded program.
+    auto parameterTraitOf(const ast::Param& param) const -> std::string;
+    // The trait a type spelling written in module `scope` names, as the
+    // checker resolved it there; "" for any other spelling, and for a loaded
+    // program.
+    auto traitWrittenAs(const std::string& scope, const std::string& written) const
+        -> std::string;
+    // The trait a method's `make` block is for (`make Shape do`), whose
+    // dictionary the method takes for its receiver; "" for any other method,
+    // and for a loaded program.
+    auto makeTargetTraitOf(const ast::FunctionDef& method) const -> std::string;
+    // Whether `pattern`, a parameter, is a bare type name taking that type as
+    // a value (`let to(String)`); false for a loaded program.
+    auto isTypeSelector(const ast::Pattern& pattern) const -> bool;
     // The traits a `make` block implements, each as the checker resolved its
     // `implement:` name, in written order; null when it names none.
     auto traitsOf(const ast::MakeDef& make) const -> const std::vector<std::string>*;

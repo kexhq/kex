@@ -2144,7 +2144,7 @@ int main() {
             assertTrue(noErrors(
                 "main do\n"
                 "  let measure: Measure = 2.5.second\n"
-                "  let duration: Duration = Duration { seconds: measure.canonical }\n"
+                "  let duration: Duration = (measure.canonical).second\n"
                 "  let converted: Result<Measure, String> = measure.convert(Millisecond)\n"
                 "end\n"
             ));
@@ -3694,7 +3694,7 @@ int main() {
                 "using Net.IP, only: [Address]\n"
                 "main do\n"
                 "  let server = Nameserver { address: Address.parse(\"127.0.0.1\").try, port: Net.Port.from(53).try }\n"
-                "  let resolver: Resolver = Resolver.custom(ResolverOptions { nameservers: [server], timeout: 100.milliseconds }).try\n"
+                "  let resolver: Resolver = Resolver.custom(ResolverOptions { nameservers: [server], timeout: 100.millisecond }).try\n"
                 "  resolver.close\n"
                 "end\n"));
             assertTrue(hasError(

@@ -13,13 +13,13 @@ main do
     nameservers: [nameserver],
     search: [Name.parse("example.test").try],
     retries: 1,
-    timeout: 100.milliseconds
+    timeout: 100.millisecond
   }).try
   assert(resolver.statistics.entries == 0)
   resolver.close
   resolver.close
 
-  let validationTimeout = 100.milliseconds
+  let validationTimeout = 100.millisecond
   match Resolver.custom(ResolverOptions {
     nameservers: [],
     timeout: validationTimeout

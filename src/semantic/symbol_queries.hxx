@@ -5,7 +5,6 @@
 // SemanticDB's documents, or the checker's name index (NameIndex).
 #include "db.hxx"
 #include "imported_interfaces.hxx"
-#include "symbol.hxx"
 
 #include <cstdint>
 #include <string>

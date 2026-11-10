@@ -1,5 +1,7 @@
 // Call lowering methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../common/named_arguments.hxx"
+#include <algorithm>
 
 namespace kex::ir {
 
@@ -362,19 +364,7 @@ auto Lowering::localTypeModule(const std::string& type) const
 
 auto Lowering::makeTraitDictionary(const std::string& trait,
                          const ast::Expr& value) -> ExprPtr {
-    std::string concreteType;
-    if (const auto type = staticTypeOf(&value);
-        type && !std::holds_alternative<semantic::TypeVar>(type->kind) &&
-        !std::holds_alternative<semantic::UnknownType>(type->kind) &&
-        !std::holds_alternative<semantic::ConstrainedType>(type->kind))
-        concreteType = semantic::typeToString(type);
-    // A value known only by a trait (`x: Addable`, or what a trait's
-    // default answers) has no concrete type to pick an implementation by.
-    if (traitMethods.count(concreteType)) concreteType.clear();
-    if (auto owner = variantOwner.find(concreteType);
-        owner != variantOwner.end())
-        concreteType = owner->second;
-    return makeTraitDictionaryFor(trait, concreteType);
+    return makeTraitDictionaryFor(trait, hir->dictionaryTypeOf(value));
 }
 
 // The dictionary itself, for an already-resolved receiver type. An empty

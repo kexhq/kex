@@ -28,7 +28,6 @@
 #include "../hir/hir.hxx"
 #include "../ir/emit_core.hxx"
 #include "../ir/lower.hxx"
-#include "../ir/module_passes.hxx"
 #include "../pass/pass_registry.hxx"
 #include "../semantic/analyzer.hxx"
 #include "../semantic/imported_interfaces.hxx"

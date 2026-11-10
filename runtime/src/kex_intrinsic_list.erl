@@ -120,9 +120,13 @@ partition(L, Fun) ->
 
 %% member/2 — element membership check, backing `.in?` on Integer/Float/Char.
 %% Element is the receiver, container is the arg.
-member(Elem, Container) when is_binary(Container) ->
-    lists:member(Elem, as_list(Container));
-member(Elem, Container) -> lists:member(Elem, as_list(Container)).
+%% Membership is Kex `==` (kex_intrinsic_number:eq): `[1.minute].contains?(60.second)`
+%% and `[1].contains?(1.0)` hold, as they do on the walker. An exact match
+%% answers first.
+member(Elem, Container) ->
+    Items = as_list(Container),
+    lists:member(Elem, Items) orelse
+        lists:any(fun(Item) -> kex_intrinsic_number:eq(Item, Elem) end, Items).
 
 %% first/1, last/1 — the first/last element wrapped in Just, or None for [].
 %% Backing for the prelude's `first`/`last` (pattern-based impls hit the

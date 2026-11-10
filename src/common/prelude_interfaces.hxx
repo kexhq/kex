@@ -1097,8 +1097,6 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                     record && *record) {
                     const auto qualified = moduleName + "." + (*record)->name;
                     ifaces.recordArities[qualified] = (*record)->fields.size();
-                    ifaces.recordArities.try_emplace(
-                        (*record)->name, (*record)->fields.size());
                     auto& fields = ifaces.recordFieldNames[qualified];
                     std::unordered_map<std::string,
                                        kex::semantic::TypePtr> vars;
@@ -1114,10 +1112,6 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                                                 &typeAliases, &traitNames)
                             : kex::semantic::Type::unknown();
                     }
-                    ifaces.recordFieldNames.try_emplace((*record)->name,
-                                                        fields);
-                    ifaces.recordFields.try_emplace((*record)->name,
-                                                    fieldTypes);
                     ifaces.typeNames.insert((*record)->name);
                     ifaces.typeNames.insert(qualified);
                 }

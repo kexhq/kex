@@ -16,9 +16,10 @@
 #                       (wants ast::forEachChild, unless it is a real pass)
 #   long-functions      functions over 400 lines
 #   big-files           source files over 2000 lines
-#   lowering-rederives  places lowering reads the checker's raw type map
-#                       (`expressionTypes->find`) to decide something itself
-#                       instead of reading sema's decision (pass plan, Stage 3)
+#   lowering-rederives  places lowering reads an expression's static type
+#                       (`hir->typeOf`, a `staticTypeOf`, a printed type) to
+#                       decide something itself instead of reading the
+#                       checker's decision (pass plan, Stage 3)
 #   walker-rederives    places the walker reads an expression's static type
 #                       (`staticTypeOf`) to decide something itself (Stage 4)
 #
@@ -105,7 +106,7 @@ grep '^expr ' "$WORK/functions" | cut -d' ' -f2- | sort -rn >"$WORK/expr-walkers
 grep '^long ' "$WORK/functions" | cut -d' ' -f2- | sort -rn >"$WORK/long-functions"
 # shellcheck disable=SC2086
 wc -l $FILES | awk '$2 != "total" && $1 > 2000 { print $1, $2 }' | sort -rn >"$WORK/big-files"
-grep -n "expressionTypes->find(" src/ir/*.cxx >"$WORK/lowering-rederives" || true
+grep -nE "expressionTypes->find\(|hir->typeOf\(|staticTypeOf\(|typeToString\(" src/ir/*.cxx >"$WORK/lowering-rederives" || true
 grep -n "staticTypeOf(" src/interpreter/*.cxx >"$WORK/walker-rederives" || true
 
 # ── report ──────────────────────────────────────────────────────────────────

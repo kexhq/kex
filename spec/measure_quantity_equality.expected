@@ -1,0 +1,6 @@
+Measure equality
+  ✓ compares quantities, not the units they were written in
+Measure ordering
+  ✓ orders by quantity
+
+2 passed, 0 failed

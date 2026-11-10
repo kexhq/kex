@@ -22,8 +22,8 @@ main do
   let listener = Unix.listen(address, Unix.ListenOptions {
     backlog: 8,
     removeStale?: true,
-    acceptTimeout: 0.seconds,
-    receiveTimeout: 0.seconds
+    acceptTimeout: 0.second,
+    receiveTimeout: 0.second
   }).try
   let accepted = listener.accept
   match accepted do
@@ -33,12 +33,12 @@ main do
 
   let server = Task.start do
     let peer = listener.accept.try
-    Task.sleep(100.milliseconds)
+    Task.sleep(100.millisecond)
     peer.close
   end
   let client = Unix.connect(address, Unix.ConnectOptions {
-    connectTimeout: 2.seconds,
-    receiveTimeout: 0.seconds
+    connectTimeout: 2.second,
+    receiveTimeout: 0.second
   }).try
   match client.receiveChunk(1) do
     Error(error) => assert(error.kind == Timeout)

@@ -52,7 +52,7 @@ main do
   let server = Server.start(endpoint, router, ServerOptions {
     maximumHandlers: 2,
     backlog: 16,
-    gracefulShutdown: Duration.seconds(1)
+    gracefulShutdown: 1.second
   }).try
   let port = server.localAddress.port.value
 

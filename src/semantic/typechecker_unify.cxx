@@ -158,3 +158,42 @@ auto TypeChecker::unifyVar(int id, TypePtr concrete) -> void {
 }
 
 } // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::generalizeTargetVariables(Signature& signature, const TypePtr& receiver)
+    -> void {
+    // Below whatever placeholders the signature already uses (`A` is -1).
+    int next = 0;
+    std::function<void(const TypePtr&)> lowest = [&](const TypePtr& type) {
+        if (!type) return;
+        if (const auto* var = std::get_if<TypeVar>(&type->kind)) next = std::min(next, var->id);
+        else if (const auto* bound = std::get_if<ConstrainedType>(&type->kind))
+            next = std::min(next, bound->genericId);
+        forEachTypeChild(type, lowest);
+    };
+    for (const auto& param : signature.params) lowest(param);
+    lowest(signature.result);
+    std::unordered_map<int, TypePtr> generic;
+    std::function<void(const TypePtr&)> collect = [&](const TypePtr& type) {
+        if (!type) return;
+        const auto resolved = resolve(type);
+        if (const auto* var = std::get_if<TypeVar>(&resolved->kind); var && var->id >= 0)
+            generic.try_emplace(var->id, Type::typeVar(--next));
+        forEachTypeChild(resolved, collect);
+    };
+    collect(receiver);
+    if (generic.empty()) return;
+    std::function<TypePtr(const TypePtr&)> substitute = [&](const TypePtr& type) -> TypePtr {
+        if (!type) return type;
+        const auto resolved = resolve(type);
+        if (const auto* var = std::get_if<TypeVar>(&resolved->kind))
+            if (const auto found = generic.find(var->id); found != generic.end())
+                return found->second;
+        return mapTypeChildren(resolved, substitute);
+    };
+    for (auto& param : signature.params) param = substitute(param);
+    signature.result = substitute(signature.result);
+}
+
+} // namespace kex::semantic

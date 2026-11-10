@@ -3,7 +3,6 @@
 #include "reify.hxx"
 #include "../ast/clone.hxx"
 #include "../ast/function_groups.hxx"
-#include "../beam/kexi.hxx"
 #include "../common/digest.hxx"
 #include "../common/mangle.hxx"
 #include "../common/prelude_loader.hxx"
@@ -24,6 +23,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <random>
 #include <regex>

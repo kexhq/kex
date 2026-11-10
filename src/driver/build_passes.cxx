@@ -1,6 +1,7 @@
 // The build's program and unit passes and analyses (build_ir.hxx), and the
 // registries a textual pipeline is built from.
 #include "build_ir.hxx"
+#include "../ir/module_passes.hxx"
 
 #include "build_support.hxx"
 #include "../beam/collect_metadata.hxx"
@@ -21,7 +22,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <sstream>
+#include <map>
 #include <stdexcept>
 #include <tuple>
 

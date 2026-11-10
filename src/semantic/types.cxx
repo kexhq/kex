@@ -2,7 +2,6 @@
 #include "../common/well_known.hxx"
 #include <algorithm>
 #include <functional>
-#include <unordered_set>
 
 namespace kex::semantic {
 

@@ -4,7 +4,6 @@
 
 #include "../ast/ast.hxx"
 #include "../common/prelude_loader.hxx"
-#include "../common/string_utils.hxx"
 
 #include <cctype>
 #include <fstream>

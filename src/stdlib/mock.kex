@@ -92,7 +92,7 @@ module Mock do
   # still runs, which code measuring elapsed time needs: a frozen clock makes
   # every interval zero.
   #
-  #   with Time.Clock = Mock.Clock { onNow: Just({ DateTime.now() + 3.days }) } do
+  #   with Time.Clock = Mock.Clock { onNow: Just({ DateTime.now() + 3.day }) } do
   #     let started = DateTime.epochNanos()
   #     runTheThing()
   #     assert(DateTime.epochNanos() > started)

@@ -109,8 +109,29 @@ ordering(A, B, Loc, _Op) ->
 %% numerically (`0 == 0.0`), matching the promotion `+`, `<` and friends
 %% already do, so `1 =< 1.0` and `1 >= 1.0` cannot both hold while `1 == 1.0`
 %% is false. Erlang's `==` is exactly that coercing comparison.
+%%
+%% Measures are the other: a measure is its quantity (units.kex), so two
+%% compare by dimension and canonical value whatever unit each displays in
+%% (`100.millisecond == 0.1.second`). Both rules hold wherever the values are,
+%% in a list, a tuple or a map, as the walker's valuesEqual applies them:
+%% equal terms answer at once, and only unequal ones are walked.
+eq(A, B) when A =:= B -> true;
 eq(A, B) when is_number(A), is_number(B) -> A == B;
-eq(A, B) -> A =:= B.
+eq({'Measure', CanonicalA, _, {'UnitDefinition', _, DimensionA, _}},
+   {'Measure', CanonicalB, _, {'UnitDefinition', _, DimensionB, _}}) ->
+    DimensionA =:= DimensionB andalso CanonicalA == CanonicalB;
+eq([HeadA | TailA], [HeadB | TailB]) -> eq(HeadA, HeadB) andalso eq(TailA, TailB);
+eq(A, B) when is_tuple(A), is_tuple(B), tuple_size(A) =:= tuple_size(B) ->
+    eq_elements(A, B, tuple_size(A));
+eq(A, B) when is_map(A), is_map(B), map_size(A) =:= map_size(B) ->
+    maps:fold(fun(Key, Value, Equal) ->
+                      Equal andalso maps:is_key(Key, B) andalso eq(Value, maps:get(Key, B))
+              end, true, A);
+eq(_, _) -> false.
+
+eq_elements(_, _, 0) -> true;
+eq_elements(A, B, Index) ->
+    eq(element(Index, A), element(Index, B)) andalso eq_elements(A, B, Index - 1).
 
 neq(A, B) -> not eq(A, B).
 

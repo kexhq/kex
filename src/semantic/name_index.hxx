@@ -4,7 +4,6 @@
 // each point, which tooling answers definitions, references and completions
 // from.
 #include "db.hxx"
-#include "symbol.hxx"
 
 #include <vector>
 

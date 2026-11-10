@@ -902,8 +902,6 @@ auto KexiRegistry::buildSemanticInterfaces() const
                 const auto qualified = record.tagAtom.empty()
                     ? record.name : record.tagAtom;
                 interfaces.recordArities[qualified] = record.fields.size();
-                interfaces.recordArities.try_emplace(record.name,
-                                                     record.fields.size());
                 auto& fieldNames = interfaces.recordFieldNames[qualified];
                 TypeVarMap recordVars;
                 auto& fieldTypes = interfaces.recordFields[qualified];
@@ -912,9 +910,6 @@ auto KexiRegistry::buildSemanticInterfaces() const
                     fieldTypes[field.name] =
                         semanticType(field.type, recordVars);
                 }
-                interfaces.recordFieldNames.try_emplace(
-                    record.name, fieldNames);
-                interfaces.recordFields.try_emplace(record.name, fieldTypes);
                 interfaces.typeNames.insert(record.name);
                 interfaces.typeNames.insert(qualified);
             }

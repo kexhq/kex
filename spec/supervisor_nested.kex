@@ -25,7 +25,7 @@ foul crash(name: Atom) do
     Just(pid) => Process.exit(pid, :crashed)
     None => IO.printLine("nobody is ${name}")
   end
-  Task.sleep(50.milliseconds)
+  Task.sleep(50.millisecond)
 end
 
 main do

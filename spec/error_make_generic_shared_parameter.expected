@@ -1,0 +1,8 @@
+spec/error_make_generic_shared_parameter.kex:22:32: error: `plus` expects argument 2 to be Qty<A>, but got Qty<Length>
+
+plus : Qty<A> -> Qty<A> -> Qty<A>
+spec/error_make_generic_shared_parameter.kex:23:32: error: `<` expects argument 2 to be Qty<A>, but got Qty<Length>
+
+< : Measure<A> -> Measure<A> -> Bool
+
+< : Qty<A> -> Qty<A> -> Bool

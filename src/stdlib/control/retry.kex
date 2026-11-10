@@ -14,8 +14,8 @@
 #
 # @example Fixed delays: three waits of 250 milliseconds
 #   let schedule = Retry.Schedule {
-#     attempts: 4, delay: 250.milliseconds, backoff: 1.0,
-#     maximumDelay: 250.milliseconds, jitter: 0.0
+#     attempts: 4, delay: 250.millisecond, backoff: 1.0,
+#     maximumDelay: 250.millisecond, jitter: 0.0
 #   }
 #   Retry.run(schedule: schedule) do
 #     Error("not ready")
@@ -24,8 +24,8 @@
 #
 # @example Exponential delays: 200, 400, 800, 1600 milliseconds
 #   let schedule = Retry.Schedule {
-#     attempts: 5, delay: 200.milliseconds, backoff: 2.0,
-#     maximumDelay: 5.seconds, jitter: 0.0
+#     attempts: 5, delay: 200.millisecond, backoff: 2.0,
+#     maximumDelay: 5.second, jitter: 0.0
 #   }
 #   Retry.run(schedule: schedule) do
 #     Error("busy")
@@ -34,8 +34,8 @@
 #
 # @example Capped delays: 500 ms, 1 s, 2 s, 2 s, 2 s
 #   Retry.Schedule {
-#     attempts: 6, delay: 500.milliseconds, backoff: 2.0,
-#     maximumDelay: 2.seconds, jitter: 0.0
+#     attempts: 6, delay: 500.millisecond, backoff: 2.0,
+#     maximumDelay: 2.second, jitter: 0.0
 #   }
 #
 # @example Use one schedule for two requests
@@ -50,15 +50,15 @@
 #   # Each request gets up to five attempts, independently.
 #
 # @example Set retry options directly
-#   Retry.run(attempts: 5, delay: 200.milliseconds, jitter: 0.0) do
+#   Retry.run(attempts: 5, delay: 200.millisecond, jitter: 0.0) do
 #     Ok("ready")
 #   end
 #   # => Ok("ready")
 #
 # @example Limit the time spent sleeping
 #   Retry.run(
-#     attempts: 5, delay: 1.seconds, backoff: 2.0,
-#     jitter: 0.0, maximumTotalDelay: Just(2.seconds)
+#     attempts: 5, delay: 1.second, backoff: 2.0,
+#     jitter: 0.0, maximumTotalDelay: Just(2.second)
 #   ) do
 #     Error("busy")
 #   end
@@ -66,8 +66,8 @@
 #
 # @example Test jitter without waiting
 #   Retry.run(
-#     attempts: 2, delay: 4.seconds, jitter: 0.25,
-#     sleeper: { |wait| Assert.equal(wait, 3.seconds) },
+#     attempts: 2, delay: 4.second, jitter: 0.25,
+#     sleeper: { |wait| Assert.equal(wait, 3.second) },
 #     random: { 0.0 }
 #   ) do
 #     Error("temporary")
@@ -138,13 +138,13 @@ module Retry do
     attempts : Integer = 3
     # Base wait before the second attempt. Default: 100 milliseconds.
     # Negative durations are treated as zero; the delay cap applies here too.
-    delay : Duration = Duration.milliseconds(100)
+    delay : Duration = 100.millisecond
     # Base-delay multiplier. Default: 2.0. Values below 1 become 1.
     # Set to 1.0 for fixed delays. Jitter never changes the next base delay.
     backoff : Float = 2.0
     # Maximum actual wait, including jitter. Default: 5 seconds.
     # Negative durations become zero. Hitting this cap does not stop retries.
-    maximumDelay : Duration = Duration.seconds(5)
+    maximumDelay : Duration = 5.second
     # Symmetric proportional variation. Default: 0.2; clamped to 0..1.
     # For a 200 ms base, 0.2 samples 160..240 ms, then applies the cap.
     # Set to 0.0 for exact waits. Samples are independent between runs.
@@ -320,11 +320,11 @@ module Retry do
         nextAttempt: number + 1,
         maximumAttempts: schedule.attempts,
         remainingAttempts: schedule.attempts - number,
-        delay: Duration { seconds: sleepSeconds },
-        totalDelay: Duration { seconds: elapsed },
+        delay: (sleepSeconds).second,
+        totalDelay: (elapsed).second,
         result: result
       })
-      sleeper(Duration { seconds: sleepSeconds })
+      sleeper((sleepSeconds).second)
       let factor = schedule.backoff < 1.0 then 1.0 else schedule.backoff
       let nextBase = boundedDelay(schedule, base * factor)
       attempt(schedule, sleeper, random, onRetry, operation, number + 1, nextBase, nextElapsed)

@@ -8,7 +8,6 @@
 #include "../semantic/analyzer.hxx"
 
 #include <memory>
-#include <optional>
 
 namespace kex::hir {
 

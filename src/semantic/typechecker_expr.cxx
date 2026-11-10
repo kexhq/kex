@@ -5,7 +5,6 @@
 #include "typechecker_internal.hxx"
 #include "../ast/walk.hxx"
 #include "analyzer.hxx"
-#include "../common/type_def_utils.hxx"
 #include "../common/named_arguments.hxx"
 #include "../common/source_name.hxx"
 #include "../common/well_known.hxx"
@@ -887,6 +886,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     default: return "";
                 }
             }();
+            if (!operatorName.empty()) {
+                auto& visible = m_operatorImports[&expr];
+                visible[operatorName] = importedCandidates(operatorName);
+                if (node.op == TokenType::NotEq) visible["=="] = importedCandidates("==");
+            }
             // Operators share make-method signatures with UFCS. Prefer a
             // matching receiver/RHS overload, but leave ordinary operators on
             // the builtin inference path when no local signature applies.
@@ -923,26 +927,12 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // differing types outright.
                 bool ownsOperator = false;
                 if (concreteReceiver) {
-                    // The overloads of `name` the receiver's own type
-                    // declares — a make block for it, not a generic one.
                     auto declaredFor = [&](const std::string& name) {
-                        std::vector<Signature> owned;
-                        auto consider = [&](const Signature& signature) {
-                            if (signature.params.size() != size_t(2)) return;
-                            const auto receiverParam = resolve(signature.params[0]);
-                            if (std::holds_alternative<TypeVar>(receiverParam->kind) ||
-                                std::holds_alternative<UnknownType>(receiverParam->kind))
-                                return;
-                            if (argMatchesParam(leftType, signature.params[0]))
-                                owned.push_back(signature);
-                        };
-                        if (auto local = m_methodSignatures.find(name);
-                            local != m_methodSignatures.end())
-                            for (const auto& signature : local->second)
-                                consider(signature);
-                        for (const auto& signature : importedCandidateSignatures(name))
-                            consider(signature);
-                        return owned;
+                        std::vector<Signature> signatures;
+                        for (auto& overload :
+                             operatorOverloadsFor(leftType, name, importedCandidates(name)))
+                            signatures.push_back(std::move(overload.signature));
+                        return signatures;
                     };
                     auto applies = [&](const Signature& signature) {
                         return argMatchesParam(rightType, signature.params[1]);
@@ -950,8 +940,6 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     auto owned = declaredFor(operatorName);
                     ownsOperator = !owned.empty();
                     if (std::any_of(owned.begin(), owned.end(), applies)) {
-                        m_decidedCalls[&expr] = {
-                            CallKind::Operator, typeToString(resolve(leftType))};
                         return checkCall(operatorName, {leftType, rightType},
                                          expr.location, /*isMethodCall=*/true);
                     }
@@ -3319,6 +3307,22 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     };
     if (const auto block = asBlock(paramType)) return argMatchesParam(argType, block);
     if (const auto block = asBlock(argType)) return argMatchesParam(block, paramType);
+    // An alias is the type it names wherever it is written: an imported
+    // signature keeps `Duration?` as its module wrote it, and the alias
+    // inside the optional met `Measure<Quantity.Time>` unexpanded. Distinct
+    // types and records stay nominal, as expandTypeAliases keeps them.
+    const auto expandedAlias = [&](const TypePtr& type) -> TypePtr {
+        const auto* named = std::get_if<NamedType>(&type->kind);
+        if (!named) return nullptr;
+        const auto last = named->name.substr(named->name.rfind('.') + 1);
+        if (!m_typeAliases.contains(last) || m_distinctTypes.count(resolveDistinctName(last)) ||
+            m_recordFields.count(named->name))
+            return nullptr;
+        auto expanded = expandTypeAliases(type);
+        return typesEqual(expanded, type) ? nullptr : expanded;
+    };
+    if (const auto expanded = expandedAlias(paramType)) return argMatchesParam(argType, expanded);
+    if (const auto expanded = expandedAlias(argType)) return argMatchesParam(expanded, paramType);
     auto isPermissive = [](const TypePtr& t) {
         return isUndetermined(t);
     };
@@ -6023,12 +6027,20 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             // just rejected on the merits, and must report the same
             // argument-type error it always did rather than being waved
             // through by receiver alone (`5.describe(42)` on
-            // `make Int do describe :> String -> String ... end`).
+            // `make Int do describe :> String -> String ... end`). A
+            // generic receiver (`Qty<A>` for `make Qty<D>`) takes the
+            // argument without being equal to it: `q2.plus(q3)` with two
+            // different `D`s was waved through.
             bool receiverAlreadyCandidate = std::any_of(
                 arityMatches.begin(), arityMatches.end(),
                 [&](const Signature* sig) {
-                    return !sig->params.empty() &&
-                           typesEqual(resolve(sig->params.front()), receiverArg);
+                    if (sig->params.empty()) return false;
+                    const auto candidate = resolve(sig->params.front());
+                    if (typesEqual(candidate, receiverArg)) return true;
+                    const auto* own = std::get_if<NamedType>(&candidate->kind);
+                    const auto* given = std::get_if<NamedType>(&receiverArg->kind);
+                    return own && given && own->name == given->name &&
+                           argMatchesParam(receiverArg, candidate);
                 });
             if (!receiverAlreadyCandidate)
                 for (const auto& owner : owners->second)
@@ -6477,6 +6489,211 @@ namespace kex::semantic {
 auto TypeChecker::namesKnownType(const std::string& name) const -> bool {
     return isPrimitiveTypeName(name) || m_recordFields.count(resolveRecordName(name)) ||
            m_adtVariants.count(name) || m_typeAliases.count(name);
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::operatorOverloadsFor(const TypePtr& left, const std::string& op,
+                                       const std::vector<const ImportedFunction*>& imported)
+    -> std::vector<OperatorOverload> {
+    std::vector<OperatorOverload> owned;
+    // The left operand is of the overload's receiver type: a named type for a
+    // named receiver (a variant for its ADT: `Watt` for `make SIUnit`), the
+    // same primitive, or one satisfying the trait the receiver names (`make
+    // Number do let *(m: Measure)`). argMatchesParam alone is gradual, and took
+    // an `Optional<Optional<T>>` with an open `T` for Measure's `==` receiver.
+    const auto resolvedLeft = resolve(left);
+    const auto receiverIs = [&](const TypePtr& receiver) {
+        if (const auto* param = std::get_if<NamedType>(&receiver->kind)) {
+            if (m_traits.lookup(param->name)) return m_traits.satisfies(resolvedLeft, param->name);
+            return std::holds_alternative<NamedType>(resolvedLeft->kind) &&
+                   argMatchesParam(resolvedLeft, receiver);
+        }
+        return typesEqual(resolvedLeft, receiver);
+    };
+    const auto consider = [&](const Signature& signature, const ImportedFunction* imported) {
+        if (signature.params.size() != std::size_t(2)) return;
+        const auto receiverParam = resolve(signature.params[0]);
+        if (std::holds_alternative<TypeVar>(receiverParam->kind) ||
+            std::holds_alternative<UnknownType>(receiverParam->kind))
+            return;
+        if (receiverIs(receiverParam)) owned.push_back({signature, imported});
+    };
+    if (const auto local = m_methodSignatures.find(op); local != m_methodSignatures.end())
+        for (const auto& signature : local->second) consider(signature, nullptr);
+    for (const auto* function : imported) consider(function->signature, function);
+    return owned;
+}
+
+auto TypeChecker::decideOperators(const ast::Program& program) -> void {
+    const auto typeOf = [&](const ast::ExprPtr& operand) -> TypePtr {
+        if (!operand) return Type::unknown();
+        const auto found = m_typeMap.find(operand.get());
+        return found == m_typeMap.end() ? Type::unknown() : resolve(found->second);
+    };
+
+    // The built-in operator, with what its operands are known to be.
+    const auto primitive = [](const TypePtr& type, PrimitiveType::Kind kind) {
+        const auto* p = std::get_if<PrimitiveType>(&type->kind);
+        return p && p->kind == kind;
+    };
+    const auto builtinOperands = [&](const TypePtr& left, const TypePtr& right) {
+        const auto both = [&](PrimitiveType::Kind kind) {
+            return primitive(left, kind) && primitive(right, kind);
+        };
+        if (both(PrimitiveType::Integer)) return BuiltinOperands::Integer;
+        if (m_traits.satisfies(left, "Number") && m_traits.satisfies(right, "Number"))
+            return BuiltinOperands::Number;
+        if (both(PrimitiveType::String)) return BuiltinOperands::String;
+        if (both(PrimitiveType::Char)) return BuiltinOperands::Char;
+        return BuiltinOperands::Checked;
+    };
+    const auto decide = [&](const ast::Expr& expr, const ast::BinaryOp& node) {
+        const std::string op(tokenTypeName(node.op));
+        // What the operator's scope imported, as it was checked.
+        const auto captured = m_operatorImports.find(&expr);
+        const auto importsOf = [&](const std::string& name) {
+            if (captured != m_operatorImports.end())
+                if (const auto found = captured->second.find(name); found != captured->second.end())
+                    return found->second;
+            return importedCandidates(name);
+        };
+        const auto overloadedAnywhere = [&](const std::string& name) {
+            return m_methodSignatures.contains(name) || !importsOf(name).empty();
+        };
+        const auto left = typeOf(node.left);
+        const auto right = typeOf(node.right);
+        const auto builtin = [&] {
+            m_decidedCalls[&expr] = {CallKind::Builtin, {}, op, builtinOperands(left, right)};
+        };
+        // Two numbers: the built-in operator, whatever overloads exist.
+        if (m_traits.satisfies(left, "Number") && m_traits.satisfies(right, "Number"))
+            return builtin();
+        // A left value whose type is not known here: its own type decides
+        // when it runs.
+        if (!knownWhenChecked(left)) {
+            if (overloadedAnywhere(op)) m_decidedCalls[&expr] = {CallKind::Dispatch, {}, op};
+            else builtin();
+            return;
+        }
+        const auto owner = typeToString(left);
+        // The left type's own overload of `name` for an argument it takes,
+        // if any; for `==`, one it does not take leaves the two values to
+        // structural equality.
+        const auto overloadTaking = [&](const std::string& name) -> std::optional<OperatorOverload> {
+            for (auto& overload : operatorOverloadsFor(left, name, importsOf(name)))
+                if (argMatchesParam(right, overload.signature.params[1])) return overload;
+            return std::nullopt;
+        };
+        // The operator as `implementation` (`==` for a `!=` that negates it)
+        // of the left type: the imported function, or this unit's own.
+        const auto decideAs = [&](const std::string& implementation,
+                                  const ImportedFunction* imported) {
+            DecidedCall decided{CallKind::Operator, owner, implementation};
+            decided.negated = implementation != op;
+            if (imported) {
+                decided.backendModule = imported->backendModule;
+                decided.function = imported->backendFunction;
+            }
+            m_decidedCalls[&expr] = std::move(decided);
+        };
+        // Two of the language's own primitives (String, Char, Bool, Atom, and
+        // the numbers above) take the built-in operator: an implementor of
+        // Comparable is given its `<` too, and String's `compare`, built on
+        // `<`, would call itself.
+        if (std::holds_alternative<PrimitiveType>(left->kind) &&
+            std::holds_alternative<PrimitiveType>(right->kind))
+            return builtin();
+        // Then the left type's own overload, for an argument it takes (a
+        // distinct type's over the operator of what it erases to; Binary's
+        // `+`); `!=` with no overload of its own negates the owner's `==`.
+        if (const auto own = overloadTaking(op)) return decideAs(op, own->imported);
+        const bool notEqual = node.op == TokenType::NotEq;
+        const std::string equal(tokenTypeName(TokenType::EqEq));
+        if (const auto own = notEqual ? overloadTaking(equal) : std::nullopt)
+            return decideAs(equal, own->imported);
+        // Any two values are equal or not structurally (kexhq/kex#486): no
+        // trait decides `==`.
+        if (notEqual || node.op == TokenType::EqEq) return builtin();
+        // Then the built-in operator, and only then a trait's.
+        if (!lacksBuiltinOperator(left, op) && !lacksBuiltinOperator(right, op)) return builtin();
+        if (traitDeclaresOperator(left, op)) return decideAs(op, nullptr);
+        // No built-in, and no overload the left type names that the check
+        // could select (`Units.SI`'s `*` on two measures is found when the
+        // call is checked, not by the receiver's declarations): the value
+        // decides when it runs.
+        if (overloadedAnywhere(op)) m_decidedCalls[&expr] = {CallKind::Dispatch, {}, op};
+        else builtin();
+    };
+    const auto visit = [&](const auto& self, const ast::Expr& expr) -> void {
+        if (const auto* node = std::get_if<ast::BinaryOp>(&expr.kind)) decide(expr, *node);
+        ast::forEachChild(expr, [&](const ast::ExprPtr& child) {
+            if (child) self(self, *child);
+        });
+    };
+    ast::forEachBodyExpr(program, [&](const ast::Expr& expr) { visit(visit, expr); });
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// A type variable, a value known only by a trait (`x: Summable`, or a bound
+// one), or `This` in a trait's default body: whichever value it is answers.
+auto TypeChecker::knownWhenChecked(const TypePtr& type) const -> bool {
+    if (std::holds_alternative<TypeVar>(type->kind) ||
+        std::holds_alternative<UnknownType>(type->kind) ||
+        std::holds_alternative<ConstrainedType>(type->kind))
+        return false;
+    const auto* named = std::get_if<NamedType>(&type->kind);
+    return !named || (named->name != names::kThisType && !m_traits.lookup(named->name));
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::dictionaryTypeOf(const ast::Expr& value) const -> std::string {
+    const auto found = m_typeMap.find(&value);
+    if (found == m_typeMap.end() || !found->second) return {};
+    const auto& type = found->second;
+    if (std::holds_alternative<TypeVar>(type->kind) ||
+        std::holds_alternative<UnknownType>(type->kind) ||
+        std::holds_alternative<ConstrainedType>(type->kind))
+        return {};
+    if (const auto* named = std::get_if<NamedType>(&type->kind)) {
+        if (m_traits.get(named->name)) return {};
+        if (const auto* owner = constructorOwner(*named)) return *owner;
+    }
+    return typeToString(type);
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::declaredTraitOf(const TypePtr& type) const -> std::string {
+    const auto resolved = resolve(type);
+    std::string name;
+    if (const auto* constrained = std::get_if<ConstrainedType>(&resolved->kind))
+        name = constrained->traitName;
+    else if (const auto* named = std::get_if<NamedType>(&resolved->kind))
+        name = named->name;
+    // A trait some module declares: the numeric constraints are the
+    // language's own types, with no dictionary.
+    return !isPrimitiveTypeName(name) && m_traits.get(name) ? name : std::string{};
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::traitWrittenAs(const std::string& scope, const std::string& written) const
+    -> std::string {
+    const auto found = m_writtenTraits.find(writtenKey(scope, written));
+    return found == m_writtenTraits.end() ? std::string{} : found->second;
 }
 
 } // namespace kex::semantic

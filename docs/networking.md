@@ -58,12 +58,12 @@ using Net.Socket
 
 let endpoint = TCP.Endpoint.host("example.com", Net.Port.from(80).try)
 let connection = TCP.connect(endpoint, TCP.ConnectOptions {
-  connectTimeout: 10.seconds,
+  connectTimeout: 10.second,
   noDelay?: true,
   keepAlive?: true
 }).try
 connection.sendAll("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n".to(Binary).try).try
-let statusLine = connection.receiveLine(8192, 30.seconds).try.to(String).try
+let statusLine = connection.receiveLine(8192, 30.second).try.to(String).try
 IO.printLine(statusLine)
 connection.close
 ```
@@ -83,7 +83,7 @@ let socket = UDP.bind(
   UDP.BindOptions {
     broadcast?: true,
     multicastTtl: 4,
-    receiveTimeout: 2.seconds
+    receiveTimeout: 2.second
   }
 ).try
 socket.joinMulticast(
@@ -100,8 +100,8 @@ listener successfully created.
 let address = Unix.Address.path("/tmp/my-service.sock").try
 let listener = Unix.listen(address, Unix.ListenOptions {
   removeStale?: true,
-  acceptTimeout: 2.seconds,
-  receiveTimeout: 100.milliseconds
+  acceptTimeout: 2.second,
+  receiveTimeout: 100.millisecond
 }).try
 ```
 
@@ -123,8 +123,8 @@ using Net.DNS
 
 let resolver = Resolver.system(CacheOptions {
   entries: 1024,
-  maximumTtl: 1.hours,
-  negativeTtl: 30.seconds
+  maximumTtl: 1.hour,
+  negativeTtl: 30.second
 }).try
 let name = Name.parse("localhost").try
 let addresses = resolver.addresses(name).try
@@ -151,7 +151,7 @@ let resolver = Resolver.custom(ResolverOptions {
   }],
   search: [Name.parse("internal.example").try],
   retries: 2,
-  timeout: 100.milliseconds
+  timeout: 100.millisecond
 }).try
 
 let result = resolver.addresses(Name.parse("service").try)
@@ -267,7 +267,7 @@ argument: `None` waits exactly as long as the bare form does, and
 `Just(duration)` gives up and answers `Timeout` once `duration` elapses:
 
 ```kex
-match connection.receiveMessage(timeout: Just(30.seconds)).try do
+match connection.receiveMessage(timeout: Just(30.second)).try do
   Text(text) => handleEvent(text)
   _          => sendPing(connection)   # nothing in 30s — check the peer is alive
 end
@@ -328,8 +328,8 @@ using Control.Retry
 using Net.HTTP
 
 let schedule = Retry.Schedule {
-  attempts: 4, delay: 100.milliseconds, backoff: 2.0,
-  maximumDelay: 2.seconds, maximumTotalDelay: Just(5.seconds), jitter: 0.25
+  attempts: 4, delay: 100.millisecond, backoff: 2.0,
+  maximumDelay: 2.second, maximumTotalDelay: Just(5.second), jitter: 0.25
 }
 let result = Retry.run(schedule: schedule) do
   HTTP.get("https://api.example.com/inventory")
