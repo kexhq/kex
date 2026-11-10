@@ -4516,9 +4516,11 @@ auto TypeChecker::importedFunctionVisible(
     return moduleMemberImported(function.sourceModule, function.sourceName);
 }
 
-auto TypeChecker::moduleMemberImported(const std::string& module,
-                                       const std::string& member) const -> bool {
+auto TypeChecker::moduleMemberImported(const std::string& module, const std::string& member,
+                                       bool bare) const -> bool {
     auto selected = [&](const ImportSelection& import) {
+        if (bare && !resolve_core::usingImportsNames(import.alias, import.onlyNames))
+            return false;
         const bool prefixMatch = module == import.module ||
             module.rfind(import.module + ".", 0) == 0;
         if (!prefixMatch) {

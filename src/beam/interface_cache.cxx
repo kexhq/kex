@@ -371,7 +371,7 @@ auto functionToTerm(const kex::semantic::ImportedFunction& fn) -> TermPtr {
                          Term::boolean(fn.isConstructor),
                          Term::boolean(fn.remoteSlot),
                          Term::binary(fn.constructorOwner),
-                         Term::binary(fn.implementation),
+                         Term::binary(fn.implementationHead),
                          Term::boolean(fn.foreignTarget),
                          Term::boolean(fn.aliasReceiver)},
                         schema::kFn, "fn");
@@ -403,7 +403,7 @@ auto functionFromSax(SaxReader& sax) -> kex::semantic::ImportedFunction {
     fn.isConstructor = sax.readBool();
     fn.remoteSlot = sax.readBool();
     fn.constructorOwner = sax.readBinary();
-    fn.implementation = sax.readBinary();
+    fn.implementationHead = sax.readBinary();
     fn.foreignTarget = sax.readBool();
     fn.aliasReceiver = sax.readBool();
     return fn;

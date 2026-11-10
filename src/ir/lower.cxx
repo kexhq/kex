@@ -477,8 +477,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             }
             // A capability's own members stay at their declared arity.
             if (fd->isFoul) L.foulFns.insert(emitted);
-            // Also under the MANGLED name: a `using`-imported call routes
-            // through moduleImports with the qualified designator
+            // Also under the MANGLED name: a `using`-imported call is emitted
+            // under the module function's symbol, the qualified designator
             // ("Rodolfo.get"), and callNeedsContext checks pureFnArities
             // under exactly the name it was given. Only the bare entry used
             // to be recorded, so that qualified call never matched its own
@@ -910,15 +910,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         L.currentModulePath = m.name;
                         std::set<std::string> declaredRecords;
                         kex::collectDeclaredRecordNames(m.body, declaredRecords);
-                        auto savedImports = L.moduleImports;
-                        auto savedExternalImports = L.externalImports;
-                        auto prefix = m.name + ".";
-                        for (const auto& [key, val] : L.moduleFunctions)
-                            if (key.rfind(prefix, 0) == 0) {
-                                auto bare = key.substr(prefix.size());
-                                if (bare.find('.') == std::string::npos)
-                                    L.moduleImports[bare] = val;
-                            }
                         auto emitType = [&](const ast::TypeDef* td) {
                             if (!td || !td->variants) return;
                             if (auto constructors =
@@ -954,27 +945,16 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         for (const auto& bi : m.body) {
                             if (auto* ub = std::get_if<std::unique_ptr<ast::UsingBlock>>(&bi)) {
                                 if (!*ub) continue;
-                                std::string srcMod = (*ub)->module.dotted();
-                                if ((*ub)->body.empty()) {
-                                    L.applyUsingCore(srcMod, (*ub)->alias,
-                                                     (*ub)->onlyNames,
-                                                     (*ub)->exceptNames);
-                                    continue;
-                                }
+                                if ((*ub)->body.empty()) continue;
                                 // `using M do ... end`: scoped bindings, and
                                 // the body runs — first, in file order,
                                 // like the walker's elaboration phase. BEAM
                                 // used to drop it entirely.
-                                auto saved = L.snapshotUsingBindings();
-                                L.applyUsingCore(srcMod, (*ub)->alias,
-                                                 (*ub)->onlyNames,
-                                                 (*ub)->exceptNames);
                                 auto savedSubst = L.subst;
                                 L.subst.clear();
                                 for (const auto& e : (*ub)->body)
                                     usingBodySteps.push_back(L.lower(e));
                                 L.subst = std::move(savedSubst);
-                                L.restoreUsingBindings(std::move(saved));
                                 continue;
                             } else if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
                                 push(mfd->get());
@@ -1005,54 +985,21 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                 }
                             }
                         }
-                        // The names in scope HERE are what this module's
-                        // record defaults were written against; a construction
-                        // in another module lowers them with these restored.
-                        auto noteRecordScope = [&](const ast::RecordDef& rd) {
-                            auto entry = L.records.find(m.name + "." + rd.name);
-                            if (entry == L.records.end()) return;
-                            entry->second.imports = L.moduleImports;
-                        };
-                        for (const auto& bi : m.body) {
-                            if (const auto* rd =
-                                    std::get_if<std::unique_ptr<ast::RecordDef>>(&bi);
-                                rd && *rd)
-                                noteRecordScope(**rd);
-                            else if (const auto* vb = std::get_if<
-                                         std::unique_ptr<ast::VisibilityBlock>>(&bi);
-                                     vb && *vb)
-                                for (const auto& vi : (*vb)->items)
-                                    if (const auto* vrd = std::get_if<
-                                            std::unique_ptr<ast::RecordDef>>(&vi);
-                                        vrd && *vrd)
-                                        noteRecordScope(**vrd);
-                        }
-                        L.moduleImports = std::move(savedImports);
-                        L.externalImports = std::move(savedExternalImports);
                         L.currentModulePath = std::move(savedModulePath);
                     };
                     lowerModuleBody(*node);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
                 if (!node) return;
-                std::string srcMod = node->module.dotted();
-                if (node->body.empty()) {
-                    L.applyUsingCore(srcMod, node->alias, node->onlyNames,
-                                     node->exceptNames);
-                    return;
-                }
+                if (node->body.empty()) return;
                 // `using M do ... end`: scoped bindings, and the body
                 // runs — first, in file order, like the walker's
                 // elaboration phase. BEAM used to drop it entirely.
-                auto saved = L.snapshotUsingBindings();
-                L.applyUsingCore(srcMod, node->alias, node->onlyNames,
-                                 node->exceptNames);
                 auto savedSubst = L.subst;
                 L.subst.clear();
                 for (const auto& e : node->body)
                     usingBodySteps.push_back(L.lower(e));
                 L.subst = std::move(savedSubst);
-                L.restoreUsingBindings(std::move(saved));
             } else {
                 throw LowerError(std::string("IR lower: unimplemented top-level item ")
                                  + typeid(T).name());

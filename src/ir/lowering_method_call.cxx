@@ -589,18 +589,18 @@ auto Lowering::lowerTypeNamespaceCall(const ast::MethodCall& n, const ast::Upper
     const bool topLevelBindingReceiver =
         zeroArgFns.count(type.name) ||
         topLevelConstants.count(type.name) ||
-        !moduleConstantSymbol(type.name).empty() ||
+        !constantSymbolOf(*n.receiver).empty() ||
         // An IMPORTED zero-arg member is the same thing from another
         // module: `using Limits` + `"${LIMIT}"` is a showValue on the
         // constant's value, not a module member lookup
         // (kexhq/kex#282).
         [&]() {
-            auto imp = moduleImports.find(type.name);
-            return imp != moduleImports.end() &&
-                emittedModuleZeroArg.count(imp->second);
+            const auto constant = moduleFunctions.find(hir->referencedConstantOf(*n.receiver));
+            return constant != moduleFunctions.end() &&
+                emittedModuleZeroArg.count(constant->second);
         }() ||
         // ...or one from a module compiled apart.
-        externalConstant(type.name) != nullptr;
+        externalConstant(*n.receiver, type.name) != nullptr;
     if (!nullaryConstructorReceiver && !topLevelBindingReceiver)
         return wrapLets(binds,
             runtimeError("Undefined function: " + type.name + "." + n.method));
@@ -939,14 +939,14 @@ auto Lowering::lowerResolvedCall(const ast::MethodCall& n,
     // cannot serve. (Set only for imported receiver calls, so
     // index 0 is the receiver and `localDispatchTypes` — the
     // same-unit path above — is empty.)
-    if (!target.importDispatchSpelling.empty()) {
+    if (!target.staticReceiverHead.empty()) {
         bool receiverHasDictionary = false;
         for (const auto& [argument, _] :
              target.traitDictionaries)
             if (argument == 0) receiverHasDictionary = true;
         if (!receiverHasDictionary) {
             backendFunction =
-                target.importDispatchSpelling;
+                mangleReceiverImplementation(n.method, target.staticReceiverHead);
             // Applied-spelling audit for `make test-devirt`:
             // `module name/Head beamArity`, one line per call
             // site, appended (O_APPEND keeps parallel spec

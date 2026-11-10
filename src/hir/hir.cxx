@@ -198,6 +198,14 @@ auto Program::makeTargetOf(const ast::FunctionDef& method) const -> std::string 
     return m_analysis ? m_analysis->makeTargetOf(method) : std::string{};
 }
 
+auto Program::calledFunctionOf(const ast::Expr& call) const -> std::string {
+    return m_analysis ? m_analysis->calledFunctionOf(call) : std::string{};
+}
+
+auto Program::referencedConstantOf(const ast::Expr& name) const -> std::string {
+    return m_analysis ? m_analysis->referencedConstantOf(name) : std::string{};
+}
+
 auto Program::recordOf(const ast::Expr& expr) const -> std::string {
     const auto type = typeOf(expr);
     const auto* named = type ? std::get_if<semantic::NamedType>(&type->kind) : nullptr;

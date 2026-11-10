@@ -135,7 +135,7 @@ auto functionsEqual(const ImportedFunction& a, const ImportedFunction& b)
            a.isConstructor == b.isConstructor &&
            a.remoteSlot == b.remoteSlot &&
            a.constructorOwner == b.constructorOwner &&
-           a.implementation == b.implementation &&
+           a.implementationHead == b.implementationHead &&
            a.foreignTarget == b.foreignTarget;
 }
 
@@ -306,7 +306,7 @@ auto buildAgreementFixture() -> ImportedInterfaces {
     fn.isConstructor = false;
     fn.remoteSlot = true;
     fn.constructorOwner = "";
-    fn.implementation = "parse/String";
+    fn.implementationHead = "String";
     fn.foreignTarget = true;
 
     ImportedFunction ctor = fn;

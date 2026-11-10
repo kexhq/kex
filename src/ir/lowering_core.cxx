@@ -4,7 +4,6 @@
 #include "../common/type_def_utils.hxx"
 #include "../common/mangle.hxx"
 #include <algorithm>
-#include "../semantic/resolve_core.hxx"
 #include <cstdlib>
 
 namespace kex::ir {
@@ -276,12 +275,12 @@ auto Lowering::callNeedsContext(const std::string& name, int arity) const -> boo
 // A bare name `using` imported from a separately compiled module that is a
 // constant there (`using Statuses, only: [STATUSES]`): read as the call it
 // is, as the same import from this unit is. Null for anything else.
-auto Lowering::externalConstant(const std::string& name) -> ExprPtr {
-    if (!externalModules || subst.count(name) || moduleImports.count(name))
+auto Lowering::externalConstant(const ast::Expr& reference, const std::string& name) -> ExprPtr {
+    // The constant the checker resolved the name to, when one of a unit
+    // compiled apart.
+    const auto qualKey = hir->referencedConstantOf(reference);
+    if (!externalModules || subst.count(name) || qualKey.empty() || moduleFunctions.count(qualKey))
         return nullptr;
-    const auto imported = externalImports.find(name);
-    if (imported == externalImports.end()) return nullptr;
-    const auto& qualKey = imported->second;
     const auto arity = externalModules->exportArity.find(qualKey);
     const auto function = externalModules->exportToBeamFn.find(qualKey);
     const auto atom = externalModules->nameToAtom.find(
@@ -580,23 +579,6 @@ auto Lowering::orderingFunction(Op op) -> std::string {
     }
 }
 
-// The emitted symbol for a parameterless member of the module being
-// lowered (or of one enclosing it), or "" when the name is not one.
-auto Lowering::moduleConstantSymbol(const std::string& name) const -> std::string {
-    for (auto scope = currentModulePath; !scope.empty();) {
-        const auto qualified = scope + "." + name;
-        if (moduleZeroArgFns.count(qualified))
-            if (auto emitted = moduleFunctions.find(qualified);
-                emitted != moduleFunctions.end())
-                return emitted->second == currentFunctionSymbol
-                    ? std::string{} : emitted->second;
-        const auto dot = scope.rfind('.');
-        if (dot == std::string::npos) break;
-        scope.resize(dot);
-    }
-    return {};
-}
-
 // A field default, lowered in its declaring module rather than in the one
 // doing the constructing.
 auto Lowering::lowerFieldDefault(const RecordInfo& info, const ast::ExprPtr& e)
@@ -604,13 +586,23 @@ auto Lowering::lowerFieldDefault(const RecordInfo& info, const ast::ExprPtr& e)
     if (info.owner.empty() || info.owner == currentModulePath)
         return lower(e);
     auto savedPath = currentModulePath;
-    auto savedImports = moduleImports;
     currentModulePath = info.owner;
-    if (!info.imports.empty()) moduleImports = info.imports;
     auto result = lower(e);
     currentModulePath = std::move(savedPath);
-    moduleImports = std::move(savedImports);
     return result;
+}
+
+} // namespace kex::ir
+
+namespace kex::ir {
+
+auto Lowering::constantSymbolOf(const ast::Expr& reference) const -> std::string {
+    const auto constant = hir->referencedConstantOf(reference);
+    const auto emitted = moduleFunctions.find(constant);
+    if (emitted == moduleFunctions.end() || !moduleZeroArgFns.count(constant) ||
+        emitted->second == currentFunctionSymbol)
+        return {};
+    return emitted->second;
 }
 
 } // namespace kex::ir

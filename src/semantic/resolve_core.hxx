@@ -161,18 +161,19 @@ using AliasExpander = std::function<TypePtr(const TypePtr&)>;
 auto receiverCoversHead(const TypePtr& receiver, const std::string& head,
                         const ImportedInterfaces& ifaces) -> bool;
 
-// The mangled `name/Head` for an imported receiver call, or nullopt to keep
-// the dispatcher. `winner` is the resolved candidate, `receiverType` the
+// The receiver type (`Head`) whose own implementation an imported receiver
+// call is proven to run, or nullopt to keep the dispatcher; the backend names
+// that implementation (`name/Head` on BEAM). `winner` is the resolved candidate, `receiverType` the
 // resolved static receiver. Clauses: (0) a pure make-block winner with a
 // receiver (foul calls take their context through a registry keyed on the
 // bare name); (1) a provable head; (1b) a nominal head is a declared
 // record/ADT/distinct type (aliases and opaques keep the dispatcher); (0b) no
 // gradual receiver; the receiver is of that head; and a value of that type
-// reaches `name/Head` through the dispatcher, as the winner's module
-// recorded when it emitted it (`implementation`: the routes lowering laid
-// out). (10), no trait dictionary for the receiver, is checked by lowering,
+// reaches its own implementation through the dispatcher, as the winner's
+// module recorded when it emitted it (`implementationHead`: the routes
+// lowering laid out). (10), no trait dictionary for the receiver, is checked by lowering,
 // which owns the computed dictionaries.
-auto importDispatchSpelling(
+auto staticReceiverHead(
     const ImportedFunction& winner, const TypePtr& receiverType,
     const ImportedInterfaces& ifaces, AliasExpander expandAlias)
     -> std::optional<std::string>;

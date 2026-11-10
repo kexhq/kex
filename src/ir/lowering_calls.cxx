@@ -5,14 +5,17 @@
 
 namespace kex::ir {
 
-auto Lowering::lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
-    // A `using` import from a separately compiled module. A local binding
-    // or an import from this unit still wins; anything else follows the
-    // rule that a `using` import outranks a same-named function.
-    if (!subst.count(n.name) && !moduleImports.count(n.name))
-        if (auto ext = externalImports.find(n.name);
-            ext != externalImports.end())
-            return lowerExternalImportCall(n, ext->second);
+auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n) -> ExprPtr {
+    // The function the checker resolved the name to (`using` and scope
+    // applied): one of this unit's modules', or one compiled apart. A local
+    // binding of the name still wins.
+    const auto called = subst.count(n.name) ? std::string{} : hir->calledFunctionOf(e);
+    const auto ownModuleFunction = moduleFunctions.find(called);
+    // The module function's key, for its parameter names and defaults.
+    const auto calledKey = ownModuleFunction != moduleFunctions.end() ? called : std::string{};
+    if (!called.empty() && ownModuleFunction == moduleFunctions.end() && externalModules &&
+        externalModules->exportToBeamFn.count(called))
+        return lowerExternalImportCall(n, called);
     // Named args → reorder into the callee's positional slots by param
     // name; then positional args (and a trailing block) fill remaining
     // slots in order, leftovers default to None. Mirrors the string
@@ -69,7 +72,7 @@ auto Lowering::lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
         // The import this scope names, ahead of the scan below, which
         // takes whichever module happens to declare the name first.
         if (it == fnParamNames.end())
-            if (const auto key = importedKey(n.name); !key.empty())
+            if (const auto& key = calledKey; !key.empty())
                 if (auto pit = fnParamNames.find(key);
                     pit != fnParamNames.end()) {
                     it = pit;
@@ -193,7 +196,7 @@ auto Lowering::lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
                 args.push_back(atomize(*defaults->second[i], binds));
     // A `using` import files its defaults under the qualified name, and
     // they are written against the owning module's scope.
-    if (const auto key = importedKey(n.name); !n.block && !key.empty())
+    if (const auto& key = calledKey; !n.block && !key.empty())
         if (auto defaults = fnDefaults.find(key);
             defaults != fnDefaults.end() &&
             args.size() < defaults->second.size()) {
@@ -285,19 +288,20 @@ auto Lowering::lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
     // A lexical binding (a `block` parameter, or any local holding a
     // callable) outranks a `using` import of the same name too, not just
     // the flat knownFns set below: innermost wins, as it does for every
-    // other local. Ahead of `moduleImports` because the reverse order
+    // other local. Ahead of the imported function because the reverse order
     // silently discarded the binding and called the import instead —
     // `let render = Template.html(...)` calling `render(x)` compiled to
     // a call to the `using Template`-imported `Template.render/2`
     // instead of applying the local, and erlc rejected the resulting
     // arity mismatch (kexhq/kex#362). Same fix shape as the knownFns
     // case below (kexhq/kex#289); kept as its own check because
-    // `moduleImports` must still outrank knownFns once no local shadows
-    // it, and `CallIndirect` (not `localCall`) is how a runtime value is
+    // the imported function must still outrank knownFns once no local
+    // shadows it, and `CallIndirect` (not `localCall`) is how a runtime value is
     // applied.
     else if (subst.count(n.name))
         ex->node = CallIndirect{var(currentName(n.name)), std::move(args), false};
-    // A `using` import of this lexical scope outranks the flat knownFns
+    // The module function the checker bound the name to (a `using` import
+    // of this lexical scope, or the module's own) outranks the flat knownFns
     // set. That set spans the whole merged program and carries every
     // module's `make` methods under their bare names, so `post` in main
     // after `using Rodolfo` lowered to a nonexistent local `post/2` (or,
@@ -305,8 +309,8 @@ auto Lowering::lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
     // that function) although the tree-walker honours the import. The
     // receiver path already lets the source import win over identically
     // named prelude methods; see lowerMethodCall.
-    else if (auto imp = moduleImports.find(n.name); imp != moduleImports.end())
-        ex->node = localCall(imp->second, std::move(args));
+    else if (ownModuleFunction != moduleFunctions.end())
+        ex->node = localCall(ownModuleFunction->second, std::move(args));
     // A bare call inside a `make` block naming one of its own methods.
     // The receiver is implicit at the call site exactly as it is in the
     // definition, so `decorate(@name)` means `this.decorate(name)` — which

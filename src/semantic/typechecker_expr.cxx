@@ -527,6 +527,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return Type::atom();
         }
         else if constexpr (std::is_same_v<T, ast::Identifier>) {
+            if (auto constant = constantDeclaration(node.name); !constant.empty())
+                m_referencedConstants[&expr] = std::move(constant);
             if (node.name == "from" && m_inCastSlot) {
                 error(expr.location,
                       "`from` is not available in a cast — no caller is waiting for a reply");
@@ -558,6 +560,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return type;
         }
         else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
+            if (auto constant = constantDeclaration(node.name); !constant.empty())
+                m_referencedConstants[&expr] = std::move(constant);
             if (auto constructed = nullaryConstructorType(node.name)) return constructed;
             auto type = lookupVar(node.name);
             // A built-in type's name reaches lookupVar through the globals that
@@ -1145,6 +1149,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     std::get_if<NamedType>(&resolve(constructed)->kind);
                 m_decidedCalls[&expr] = {CallKind::Constructor,
                                          adt ? adt->name : node.name};
+                // A module's constructor is its function, `FS.ReadFailed`.
+                if (adt)
+                    if (const auto dot = adt->name.rfind('.'); dot != std::string::npos)
+                        m_calledFunctions[&expr] = adt->name.substr(0, dot) + "." + node.name;
                 return constructed;
             }
             // An imported constructor a `using` brings in (`ReadFailed(path)`
@@ -1165,6 +1173,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     auto result = checkCall(kex::mangle::qualify(path, node.name), argTypes,
                                             expr.location, false, nullptr, &expr);
                     const auto* adt = std::get_if<NamedType>(&resolve(result)->kind);
+                    m_calledFunctions[&expr] = path + "." + node.name;
                     m_decidedCalls[&expr] = {CallKind::Constructor,
                                              adt ? adt->name : node.name};
                     return result;
@@ -1179,7 +1188,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return checkCall(
                 node.tag,
                 {Type::list(Type::string()), Type::list(Type::unknown())},
-                expr.location);
+                expr.location, false, nullptr, &expr);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
             // Local module constructors use the same namespace syntax as
@@ -4089,6 +4098,22 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     std::set<std::string> hiddenModules;
     const auto* userSignatures =
         reachableFreeFunctions(name, isMethodCall, visibleUserSignatures, hiddenModules);
+    // The function a bare call's name means here, whichever of its clauses or
+    // overloads runs: the one module every reachable declaration is from.
+    if (userSignatures && !isMethodCall && callExpr && !kex::mangle::hasScope(name) &&
+        (std::holds_alternative<ast::FunctionCall>(callExpr->kind) ||
+         std::holds_alternative<ast::TaggedLiteral>(callExpr->kind))) {
+        std::set<std::string> modules;
+        for (const auto& signature : *userSignatures) modules.insert(signature.declaringModule);
+        // Several modules declare it: the one a `using` here imports.
+        if (modules.size() > 1)
+            std::erase_if(modules, [&](const std::string& module) {
+                return module.empty() || !moduleMemberImported(module, name, true);
+            });
+        if (modules.size() == 1)
+            m_calledFunctions[callExpr] = modules.begin()->empty()
+                ? name : *modules.begin() + "." + name;
+    }
     if (!hiddenModules.empty()) {
         // Nothing in scope takes these arguments, but a module's function
         // that is not in scope would: say that, rather than reporting a
@@ -4383,6 +4408,22 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         return receiver &&
                m_localModules.contains(kex::mangle::pathScopeOf(receiver->name));
     });
+    // A bare call this program declares nothing for names a function a
+    // `using` brought in from a unit compiled apart (`regex(...)` under
+    // `using Regex`): that module's, whichever overload runs.
+    if (!isMethodCall && !userSignatures && callExpr && !kex::mangle::hasScope(name) &&
+        (std::holds_alternative<ast::FunctionCall>(callExpr->kind) ||
+         std::holds_alternative<ast::TaggedLiteral>(callExpr->kind))) {
+        std::set<std::string> modules;
+        for (const auto* function : importedFunctions) {
+            const auto module = m_importedInterfaces->modules.find(function->sourceModule);
+            if (!function->isReceiverMethod && !function->sourceModule.empty() &&
+                module != m_importedInterfaces->modules.end() &&
+                moduleMemberImported(function->sourceModule, name, true))
+                modules.insert(function->sourceModule);
+        }
+        if (modules.size() == 1) m_calledFunctions[callExpr] = *modules.begin() + "." + name;
+    }
     // A receiver method hidden behind `using` can be the only overload whose
     // labelled arguments and types fit. Decide that here, from local methods
     // and imported interfaces, so the backends do not infer ownership.
@@ -5670,17 +5711,15 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                         // covers tautologically, which miscompiled
                         // `None.blank?` to `blank?/Bool` and `None.to`
                         // to `to/Atom`.
-                        auto spelling =
-                            resolve_core::importDispatchSpelling(
+                        auto head =
+                            resolve_core::staticReceiverHead(
                                 *resolved,
                                 resolve(argTypes[0]),
                                 *m_importedInterfaces,
                                 [this](const TypePtr& type) {
                                     return expandTypeAliases(type);
                                 });
-                        if (spelling)
-                            target.importDispatchSpelling =
-                                std::move(*spelling);
+                        if (head) target.staticReceiverHead = std::move(*head);
                 }
                 // Who owns the call (ownerOfCall): lowering used to decide
                 // this again by reading the receiver's type back.
@@ -5725,7 +5764,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                             auto inherited = target;
                             inherited.backendModule = owner.own.home;
                             inherited.backendFunction = name;
-                            inherited.importDispatchSpelling.clear();
+                            inherited.staticReceiverHead.clear();
                             inherited.localDispatchTypes.clear();
                             m_resolvedCalls[methodCall] = std::move(inherited);
                         }
@@ -6701,6 +6740,41 @@ auto TypeChecker::traitWrittenAs(const std::string& scope, const std::string& wr
     -> std::string {
     const auto found = m_writtenTraits.find(writtenKey(scope, written));
     return found == m_writtenTraits.end() ? std::string{} : found->second;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// The module constant (a parameterless member) a bare `name` means here, by
+// its qualified name: one an enclosing module declares, else one a `using`
+// in scope brings in, from this program or a unit compiled apart. "" when
+// the name is none.
+auto TypeChecker::constantDeclaration(const std::string& name) const -> std::string {
+    const auto parameterless = [&](const std::string& key) {
+        const auto found = m_userSignatures.find(key);
+        return found != m_userSignatures.end() &&
+               std::any_of(found->second.begin(), found->second.end(),
+                           [](const Signature& signature) { return signature.params.empty(); });
+    };
+    for (auto scope = m_currentModulePath; !scope.empty();) {
+        if (parameterless(kex::mangle::qualify(scope, name))) return scope + "." + name;
+        const auto dot = scope.rfind('.');
+        scope.resize(dot == std::string::npos ? 0 : dot);
+    }
+    for (const auto& module : m_localModules)
+        if (parameterless(kex::mangle::qualify(module, name)) &&
+            moduleMemberImported(module, name, true))
+            return module + "." + name;
+    if (m_importedInterfaces)
+        for (const auto& [_, module] : m_importedInterfaces->modules)
+            if (const auto exports = module.exports.find(name); exports != module.exports.end())
+                for (const auto& function : exports->second)
+                    if (!function.isConstructor && function.signature.params.empty() &&
+                        !function.sourceModule.empty() &&
+                        moduleMemberImported(function.sourceModule, name, true))
+                        return function.sourceModule + "." + name;
+    return {};
 }
 
 } // namespace kex::semantic

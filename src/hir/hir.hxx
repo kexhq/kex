@@ -113,6 +113,13 @@ public:
     // The declaration a `make` method is for (`Culture.Culture` for a method
     // of `make Culture`), and the record a named record pattern names, as the
     // checker resolved them; "" otherwise, and for a loaded program.
+    // The function a bare call names (`Units.SI.displaySymbol`, `fetch`), as
+    // the checker resolved the name in its scope, whichever clause runs; ""
+    // when it resolved none, and for a loaded program.
+    auto calledFunctionOf(const ast::Expr& call) const -> std::string;
+    // The module constant a bare name (`LIMIT`) names, as resolved in its
+    // scope; "" otherwise, and for a loaded program.
+    auto referencedConstantOf(const ast::Expr& name) const -> std::string;
     auto makeTargetOf(const ast::FunctionDef& method) const -> std::string;
     // The record `expr` builds (a construction), as the checker typed it; "".
     auto recordOf(const ast::Expr& expr) const -> std::string;

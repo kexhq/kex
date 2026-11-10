@@ -20,9 +20,9 @@ inline constexpr std::string_view kFileLevelPreludeModule = "Prelude";
 struct ImportedFunction {
     std::string sourceName;
     std::string backendFunction;
-    // A receiver method's per-type implementation as its module emitted it
-    // (KexiMethod::implementation), or "".
-    std::string implementation;
+    // The receiver type its module emitted a per-type implementation of this
+    // method for (`Date`, read from KexiMethod::implementation), or "".
+    std::string implementationHead;
     std::string backendModule;
     int backendArity = 0;
     // Source parameter names excluding the receiver for receiver functions.
@@ -121,11 +121,11 @@ struct ResolvedCallTarget {
     // entry names the zero-based source argument whose concrete value chooses
     // the implementation and the trait contract the dictionary represents.
     std::vector<std::pair<std::size_t, std::string>> traitDictionaries;
-    // Proven `name/Head` spelling for an imported make-block method
-    // (`resolve_core::importDispatchSpelling`), empty to keep the
-    // dispatcher. Lowering applies it unless the receiver takes a
-    // trait dictionary (clause (10)).
-    std::string importDispatchSpelling;
+    // The receiver type an imported make-block method is proven to run its
+    // own implementation for (`resolve_core::staticReceiverHead`), empty to
+    // keep the dispatcher. The backend names that implementation, unless
+    // the receiver takes a trait dictionary (clause (10)).
+    std::string staticReceiverHead;
     // Providers chosen by the value before this target, which takes every
     // value none of them does: several modules answer the call, and only the
     // receiver at run time says whose it is (`"${value}"` on a Showable).

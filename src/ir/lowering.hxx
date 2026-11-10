@@ -52,11 +52,9 @@ struct Lowering {
     struct RecordInfo {
         std::vector<std::string> fields;
         std::vector<const ast::ExprPtr*> defaults;
-        // The module that DECLARED the record, and the names it had in scope.
-        // A default is written against those, not against whatever is in
-        // scope wherever the record happens to be constructed.
+        // The module that DECLARED the record: a default is lowered there,
+        // not wherever the record happens to be constructed.
         std::string owner;
-        std::unordered_map<std::string, std::string> imports;
         // A record of a unit compiled apart: the BEAM module whose
         // `__kex_record_default` answers its defaults, and which fields have one.
         std::string defaultsModule;
@@ -297,12 +295,6 @@ struct Lowering {
     // names are not globally unique, so `this.field` must select the layout
     // owned by this type rather than the first same-named field in the file.
     std::string currentMakeType;
-    // Bare imported function name → mangled name. Populated by `using M, only:`
-    // inside module bodies so bare calls resolve to the correct cross-module fn.
-    std::unordered_map<std::string, std::string> moduleImports;
-    // Bare name → `Module.name` for what a `using` imported from a separately
-    // compiled module (see importExternalModule). Scoped like moduleImports.
-    std::unordered_map<std::string, std::string> externalImports;
     // Loaded external modules from KexI registry (/load).
     const ExternalModules* externalModules = nullptr;
     // Lowering the prelude itself: its `to` conversions are what other
@@ -348,7 +340,7 @@ struct Lowering {
 
     auto currentContext() -> ExprPtr;
     auto callNeedsContext(const std::string& name, int arity) const -> bool;
-    auto externalConstant(const std::string& name) -> ExprPtr;
+    auto externalConstant(const ast::Expr& reference, const std::string& name) -> ExprPtr;
 
     auto externalCallExpr(const std::string& qualKey, const std::string& atom,
                           const std::string& beamFunction, int arity,
@@ -435,7 +427,10 @@ struct Lowering {
 
     static auto orderingFunction(Op op) -> std::string;
 
-    auto moduleConstantSymbol(const std::string& name) const -> std::string;
+    // The symbol of the module constant the checker resolved `reference` to
+    // (referencedConstantOf), or "" when it names none, or the constant
+    // being defined.
+    auto constantSymbolOf(const ast::Expr& reference) const -> std::string;
 
     auto lowerFieldDefault(const RecordInfo& info, const ast::ExprPtr& e)
         -> ExprPtr;
@@ -464,7 +459,6 @@ struct Lowering {
                           std::vector<Binding>& binds,
                           const ast::FunctionClause* clause = nullptr) -> void;
 
-    auto importedKey(const std::string& name) const -> std::string;
 
     auto nextExtendingModule(const std::string& method,
                              const std::string& typeName, int arity) const
@@ -523,7 +517,7 @@ struct Lowering {
     auto placeMethodArguments(const ast::MethodCall& n, const MakeMethod& method,
                               std::vector<Binding>& binds) -> std::vector<ExprPtr>;
 
-    auto lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr;
+    auto lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n) -> ExprPtr;
 
     // Receiver-call and stdlib compatibility resolution. Unknown forms fail
     // explicitly rather than silently emitting a nonexistent function.
@@ -689,27 +683,9 @@ struct Lowering {
                        const std::vector<ast::ExprPtr>& outer, size_t outerStart,
                        const std::optional<std::string>* counterVar = nullptr) -> ExprPtr;
 
-    // The import/alias state `applyUsingBindings` overwrites, so a caller can
-    // restore it once whatever scope the bindings apply to is done lowering.
-    struct UsingBindingsSaved {
-        std::unordered_map<std::string, std::string> imports;
-        std::unordered_map<std::string, std::string> externalImports;
-    };
-
-    auto importExternalModule(const std::string& srcMod,
-                              const std::vector<std::string>& only,
-                              const std::vector<std::string>& except) -> void;
-
     auto lowerExternalImportCall(const ast::FunctionCall& n,
                                  const std::string& qualKey) -> ExprPtr;
 
-    auto applyUsingBindings(const ast::UsingExpr& n) -> UsingBindingsSaved;
-    auto restoreUsingBindings(UsingBindingsSaved saved) -> void;
-    auto snapshotUsingBindings() const -> UsingBindingsSaved;
-    auto applyUsingCore(const std::string& srcMod,
-                        const std::optional<std::string>& alias,
-                        const std::vector<std::string>& onlyNames,
-                        const std::vector<std::string>& exceptNames) -> void;
 
     // ---- Body lowering ----------------------------------------------------
     auto lowerBody(const std::vector<ast::ExprPtr>& body) -> ExprPtr;

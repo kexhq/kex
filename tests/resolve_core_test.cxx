@@ -317,10 +317,10 @@ int main() {
         });
     });
 
-    describe("resolve_core::importDispatchSpelling", []() {
+    describe("resolve_core::staticReceiverHead", []() {
         // Which head a value reaches through a dispatcher (shadowed owners,
         // wider guards, definitions merged ahead) is the emitter's record now
-        // (`implementation`), tested in codegen_test's "dispatcher routes".
+        // (`implementationHead`), tested in codegen_test's "dispatcher routes".
         it("honors KEX_NO_DEVIRT", []() {
             const auto winner =
                 receiverFn("first", "kex_prelude", 1,
@@ -331,7 +331,7 @@ int main() {
             };
             const ImportedInterfaces ifaces;
             setenv("KEX_NO_DEVIRT", "1", 1);
-            const auto spelling = importDispatchSpelling(
+            const auto spelling = staticReceiverHead(
                 winner, Type::list(Type::integer()),
                 ifaces, {});
             unsetenv("KEX_NO_DEVIRT");
@@ -341,18 +341,19 @@ int main() {
             auto winner =
                 receiverFn("first", "kex_prelude", 1,
                            Type::list(Type::typeVar(-1)));
-            // Its module emitted `first/List` (recordImplementations).
-            winner.implementation = "first/List";
+            // Its module emitted `first/List`, its implementation for List
+            // (recordImplementations).
+            winner.implementationHead = "List";
             const std::vector<ImportedFunction> candidates = {
                 winner,
                 receiverFn("first", "kex_prelude", 1, Type::integer()),
             };
             const ImportedInterfaces ifaces;
-            const auto spelling = importDispatchSpelling(
+            const auto spelling = staticReceiverHead(
                 winner, Type::list(Type::integer()),
                 ifaces, {});
             assertTrue(spelling.has_value());
-            assertEqual(*spelling, std::string("first/List"));
+            assertEqual(*spelling, std::string("List"));
         });
         it("skips an undeclared nominal head (1b)", []() {
             const auto winner = receiverFn("area", "kex_prelude", 1,
@@ -362,7 +363,7 @@ int main() {
                 receiverFn("area", "kex_prelude", 1, Type::integer()),
             };
             const ImportedInterfaces ifaces;
-            assertFalse(importDispatchSpelling(winner,
+            assertFalse(staticReceiverHead(winner,
                                                Type::named("Elm"),
                                                ifaces, {})
                             .has_value());
@@ -371,24 +372,24 @@ int main() {
             auto winner = receiverFn("area", "kex_prelude", 1,
                                            Type::named("M.Point"));
             // Its module emitted `area/M.Point` (recordImplementations).
-            winner.implementation = "area/M.Point";
+            winner.implementationHead = "M.Point";
             const std::vector<ImportedFunction> candidates = {
                 winner,
                 receiverFn("area", "kex_prelude", 1, Type::integer()),
             };
             ImportedInterfaces ifaces;
             ifaces.recordFields["M.Point"]["x"] = Type::integer();
-            const auto spelling = importDispatchSpelling(
+            const auto spelling = staticReceiverHead(
                 winner,
                 Type::record({{"x", Type::integer()}}), ifaces, {});
             assertTrue(spelling.has_value());
-            assertEqual(*spelling, std::string("area/M.Point"));
+            assertEqual(*spelling, std::string("M.Point"));
         });
         it("fires for a bare ADT head", []() {
             auto winner = receiverFn("parse", "kex_prelude", 1,
                                            Type::named("Status"));
             // Its module emitted `parse/Status` (recordImplementations).
-            winner.implementation = "parse/Status";
+            winner.implementationHead = "Status";
             const std::vector<ImportedFunction> candidates = {
                 winner,
                 receiverFn("parse", "kex_prelude", 1, Type::integer()),
@@ -397,11 +398,11 @@ int main() {
             ImportedADT adt;
             adt.name = "Status";
             ifaces.adts.push_back(std::move(adt));
-            const auto spelling = importDispatchSpelling(
+            const auto spelling = staticReceiverHead(
                 winner, Type::named("Status"), ifaces,
                 {});
             assertTrue(spelling.has_value());
-            assertEqual(*spelling, std::string("parse/Status"));
+            assertEqual(*spelling, std::string("Status"));
         });
         it("skips module functions and remote slots (0)", []() {
             auto moduleFn = receiverFn("text", "kex_prelude", 1,
@@ -415,11 +416,11 @@ int main() {
                 receiverFn("text", "kex_prelude", 1, Type::integer()),
             };
             const ImportedInterfaces ifaces;
-            assertFalse(importDispatchSpelling(moduleFn,
+            assertFalse(staticReceiverHead(moduleFn,
                                                Type::string(), ifaces,
                                                {})
                             .has_value());
-            assertFalse(importDispatchSpelling(slot,
+            assertFalse(staticReceiverHead(slot,
                                                Type::named("Handle"),
                                                ifaces, {})
                             .has_value());
@@ -433,7 +434,7 @@ int main() {
                 receiverFn("first", "kex_prelude", 1, Type::integer()),
             };
             const ImportedInterfaces ifaces;
-            assertFalse(importDispatchSpelling(
+            assertFalse(staticReceiverHead(
                 winner, Type::list(Type::unknown()),
                 ifaces, {})
                             .has_value());
@@ -442,7 +443,7 @@ int main() {
             auto winner = receiverFn("trim", "kex_prelude", 1,
                                            Type::string());
             // Its module emitted `trim/String` (recordImplementations).
-            winner.implementation = "trim/String";
+            winner.implementationHead = "String";
             const std::vector<ImportedFunction> candidates = {
                 winner,
                 receiverFn("trim", "kex_prelude", 1, Type::integer()),
@@ -455,11 +456,11 @@ int main() {
                     return Type::string();
                 return type;
             };
-            const auto spelling = importDispatchSpelling(
+            const auto spelling = staticReceiverHead(
                 winner, Type::named("FilePath"), ifaces,
                 expand);
             assertTrue(spelling.has_value());
-            assertEqual(*spelling, std::string("trim/String"));
+            assertEqual(*spelling, std::string("String"));
         });
         it("skips foul winners (context registry misses)", []() {
             auto winner = receiverFn("get", "kex_prelude", 2,
@@ -474,7 +475,7 @@ int main() {
             ImportedInterfaces ifaces;
             ifaces.recordFields["Client"]["base"] = Type::string();
             ifaces.recordFields["Headers"]["list"] = Type::string();
-            assertFalse(importDispatchSpelling(winner,
+            assertFalse(staticReceiverHead(winner,
                                                Type::named("Client"),
                                                ifaces, {})
                             .has_value());
@@ -484,18 +485,18 @@ int main() {
                 receiverFn("first", "kex_prelude", 1,
                            Type::list(Type::typeVar(-1)));
             // Its module emitted `first/List` (recordImplementations).
-            winner.implementation = "first/List";
+            winner.implementationHead = "List";
             const std::vector<ImportedFunction> candidates = {
                 winner,
                 receiverFn("first", "kex_prelude", 2, Type::integer(),
                            {Type::integer()}),
             };
             const ImportedInterfaces ifaces;
-            const auto spelling = importDispatchSpelling(
+            const auto spelling = staticReceiverHead(
                 winner, Type::list(Type::integer()),
                 ifaces, {});
             assertTrue(spelling.has_value());
-            assertEqual(*spelling, std::string("first/List"));
+            assertEqual(*spelling, std::string("List"));
         });
         it("keeps the dispatcher when no name/Head was emitted", []() {
             const auto winner = receiverFn("first", "mod_a", 1,
@@ -505,7 +506,7 @@ int main() {
                 receiverFn("first", "mod_b", 1, Type::integer()),
             };
             const ImportedInterfaces ifaces;
-            assertFalse(importDispatchSpelling(
+            assertFalse(staticReceiverHead(
                 winner, Type::list(Type::integer()),
                 ifaces, {})
                             .has_value());
