@@ -1,7 +1,6 @@
 // Compile-time intrinsics (intrinsics.hxx): the registry, and the checker's
 // handler for each entry.
 #include "typechecker.hxx"
-#include "typechecker_internal.hxx"
 #include "../common/well_known.hxx"
 #include "../ast/walk.hxx"
 #include "../common/mangle.hxx"

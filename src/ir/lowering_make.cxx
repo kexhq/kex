@@ -1,5 +1,7 @@
 // Make blocks methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+
+#include <algorithm>
 #include "../semantic/resolve_core.hxx"
 
 namespace kex::ir {
@@ -84,8 +86,7 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
     else if (auto colliding =
                  collidingImplementationName(first.name, typeName, sourceArity))
         def.name = *colliding;
-    else if (!traitIdentityOf(typeName, currentModulePath, true).empty() &&
-             !typeName.empty())
+    else if (!hir->makeTargetTraitOf(first).empty())
         def.name = mangleReceiverImplementation(first.name, typeName);
     // A lone local `to(String)` still participates in the language-wide
     // conversion protocol. Its guarded record clause handles the local
@@ -829,9 +830,8 @@ auto Lowering::makeDispatcher(const std::string& name, int arity,
     std::unordered_set<std::string> seen;
     for (const auto& ty : owners) {
         if (!seen.insert(ty).second) continue;
-        // Built after the module walk: no scope says where `ty` was
-        // written, so a trait one module declares is found by its name.
-        if (!traitIdentityOf(ty, "", true).empty())
+        // A `make` for a trait, as the checker decided it.
+        if (traitOwners.count(ty))
             traitFallbacks.push_back(ty);
         else if (primGuardBifs().count(ty) || ty == "Char"
             || (typeVariantTags.count(ty) && !typeVariantTags.at(ty).empty()))

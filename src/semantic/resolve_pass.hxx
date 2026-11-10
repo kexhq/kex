@@ -5,7 +5,6 @@
 #include "imported_interfaces.hxx"
 #include "module_rules.hxx"
 #include "name_index.hxx"
-#include <memory>
 #include "resolve_core.hxx"
 #include <optional>
 #include <string>

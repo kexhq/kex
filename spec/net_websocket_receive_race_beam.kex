@@ -18,7 +18,7 @@ using Net.Socket
 
 foul serve(socket: Connection) -> Void do
   loop do
-    match socket.receiveMessage(timeout: Just(1.milliseconds)) do
+    match socket.receiveMessage(timeout: Just(1.millisecond)) do
       Ok(Text(text)) => socket.send(Text(text)).try
       Ok(CloseMessage(_, _)) => break
       Ok(_) => Void
@@ -43,9 +43,9 @@ main do
   loop do
     break if i >= 300
     i = i + 1
-    Task.sleep((i % 3).milliseconds)
+    Task.sleep((i % 3).millisecond)
     socket.send(Text("m${i}")).try
-    match socket.receiveMessage(timeout: Just(2.seconds)) do
+    match socket.receiveMessage(timeout: Just(2.second)) do
       Ok(Text(_)) => got = got + 1
       _ => break
     end

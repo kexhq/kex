@@ -181,9 +181,11 @@ auto Evaluator::registerProcessBuiltins() -> void {
 
     defineIntrinsic("Task::sleep", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
+        // A Duration is a time Measure (units.kex): its canonical value is
+        // the span in seconds.
         auto* duration = std::get_if<RecordValue>(&args[0]->data);
-        if (!duration || duration->typeName != "Duration") return Value::unit();
-        auto found = duration->fields.find("seconds");
+        if (!duration || duration->typeName != names::kMeasureRecord) return Value::unit();
+        auto found = duration->fields.find(names::kMeasureCanonical);
         if (found == duration->fields.end()) return Value::unit();
         double seconds = 0.0;
         if (auto* value = std::get_if<FloatValue>(&found->second->data)) seconds = value->value;

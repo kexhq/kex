@@ -35,7 +35,7 @@ main do
 
   # Records are not tuples either — neither a user record nor a prelude one.
   IO.inspect(One {}.to(List))
-  IO.inspect(Duration.seconds(1).to(List))
+  IO.inspect(1.second.to(List))
 
   # Neither are the runtime-tagged values.
   IO.inspect('a'.to(List))

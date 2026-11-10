@@ -45,7 +45,7 @@ request(MethodText, URL, Headers, Body) ->
 
 %% Today's limits, the defaults `Net.HTTP.RequestOptions` declares.
 default_options() ->
-    {'Net.HTTP.RequestOptions', {'Duration', 10.0}, {'Duration', 30.0}, 16777216, 65536}.
+    {'Net.HTTP.RequestOptions', kex_intrinsic_time:seconds(10.0), kex_intrinsic_time:seconds(30.0), 16777216, 65536}.
 
 request(MethodText, URL, {'Net.HTTP.Headers', RequestHeaders}, {'Binary', RequestBody}, Options)
   when is_binary(MethodText), is_binary(URL) ->

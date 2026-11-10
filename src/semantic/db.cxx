@@ -6,12 +6,10 @@
 #include "../compiled/expand.hxx"
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
-#include <algorithm>
 #include <fstream>
 #include <map>
 #include <iterator>
 #include "../parser/parser.hxx"
-#include <stdexcept>
 
 namespace kex::semantic {
 

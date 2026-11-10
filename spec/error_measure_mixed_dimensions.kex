@@ -1,0 +1,10 @@
+# kex: check-only
+# A measure's dimension is its type (`Measure<Quantity.Time>` for
+# `1.second`), so comparing or ordering measures of different
+# dimensions does not type-check.
+using Units.SI
+
+main do
+  IO.printLine("${1.second < 1.meter}")
+  IO.printLine("${1.second == 1.meter}")
+end

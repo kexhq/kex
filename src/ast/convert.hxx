@@ -2,6 +2,7 @@
 
 #include "ast.hxx"
 #include "../lexer/lexer.hxx"
+#include <gmpxx.h>
 #include <string>
 #include <string_view>
 #include <sstream>

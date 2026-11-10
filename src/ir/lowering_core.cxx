@@ -1,5 +1,9 @@
 // core methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../common/source_name.hxx"
+#include "../common/type_def_utils.hxx"
+#include "../common/mangle.hxx"
+#include <algorithm>
 #include "../semantic/resolve_core.hxx"
 #include <cstdlib>
 
@@ -40,34 +44,13 @@ auto Lowering::moduleLocalTypeSpelling(const std::string& written) const
     return written;
 }
 
-// The trait a name written in `scope` refers to — `Geo.Shape` for a
-// `Shape` written inside `module Geo` — by the checker's own rules
-// (kex::resolveTraitName), or "" when it is no trait. `lastResort` is the
-// checker's too: an `implement:` list may name a trait exactly one module
-// declares without importing it, a type annotation may not.
-// `imports` stands in for the `using`s recorded so far when the caller
-// knows better — the pre-pass runs before any are.
-auto Lowering::traitIdentityOf(const std::string& written, const std::string& scope,
-                     bool lastResort ,
-                     const std::set<std::string>* imports ) const
-    -> std::string {
-    if (written.empty()) return {};
-    const auto& visible = imports ? *imports : usingModules;
-    const std::vector<std::string> imported(visible.begin(), visible.end());
-    const auto known = [this](const std::string& name) {
-        return traitMethods.count(name) > 0;
-    };
-    const auto eachKnown = [&](const auto& visit) {
-        if (!lastResort) return;
-        for (const auto& [name, _] : traitMethods) visit(name);
-    };
-    const auto resolved =
-        kex::resolveTraitName(written, scope, imported, known, eachKnown);
-    return known(resolved) ? resolved : std::string{};
-}
-
+// The trait a type spelling written in the module being lowered names —
+// `Geo.Shape` for a `Shape` written inside `module Geo` — as the checker
+// resolved it there, or "" when it names none this program has a dictionary
+// layout for.
 auto Lowering::traitIdentityOf(const std::string& written) const -> std::string {
-    return traitIdentityOf(written, currentModulePath);
+    auto trait = hir->traitWrittenAs(currentModulePath, written);
+    return traitMethods.count(trait) ? trait : std::string{};
 }
 
 // Resolve a source spelling to the canonical runtime record identity.
@@ -704,69 +687,6 @@ auto Lowering::orderingFunction(Op op) -> std::string {
     }
 }
 
-// Is this expression statically an Integer? Only then may an arithmetic
-// operator stay on the raw BIF — see the `-`/`*` routing in lowerBinary.
-auto Lowering::isIntegerOperand(const ast::ExprPtr& e) const -> bool {
-    // KEX_NO_OP_DEVIRT=1 (before/after measurement, emergency use): plead
-    // ignorance so operators take the checked kex_intrinsic_number path —
-    // the same path unchecked code takes today, so semantics are unchanged.
-    // The KEX_NO_DEVIRT precedent for receiver calls; the other two
-    // operator-devirt predicates below carry the same guard.
-    if (std::getenv("KEX_NO_OP_DEVIRT")) return false;
-    if (!e) return false;
-    if (std::holds_alternative<ast::IntLiteral>(e->kind)) return true;
-    if (auto* id = std::get_if<ast::Identifier>(&e->kind))
-        if (auto declared = declaredParamTypes.find(id->name);
-            declared != declaredParamTypes.end())
-            return declared->second == "Integer";
-    const auto type = staticTypeOf(e.get());
-    return type && semantic::typeToString(type) == "Integer";
-}
-
-// Which of the walker's three comparable families this expression is
-// known to belong to ("num" / "str" / "char"), or "" when lowering cannot
-// tell. Only used to keep a provably well-typed comparison on the BIF.
-auto Lowering::comparableKind(const ast::ExprPtr& e) const -> std::string {
-    if (std::getenv("KEX_NO_OP_DEVIRT")) return {};
-    if (!e) return {};
-    if (std::holds_alternative<ast::IntLiteral>(e->kind) ||
-        std::holds_alternative<ast::FloatLiteral>(e->kind))
-        return "num";
-    if (std::holds_alternative<ast::StringLiteral>(e->kind)) return "str";
-    if (std::holds_alternative<ast::CharLiteral>(e->kind)) return "char";
-    const auto type = staticTypeOf(e.get());
-    if (!type) return {};
-    const auto name = semantic::typeToString(type);
-    if (name == "Integer" || name == "Float" || name == "Number")
-        return "num";
-    if (name == "String") return "str";
-    if (name == "Char") return "char";
-    return {};
-}
-
-// A type for which Kex `==` is exact Erlang identity: Integer, String and
-// Char. Float is deliberately absent — `-0.0` and NaN make `=:=` disagree
-// with Kex's numeric equality. Empty when the type is not pinned down.
-auto Lowering::exactEqualityType(const ast::ExprPtr& e) const -> std::string {
-    if (std::getenv("KEX_NO_OP_DEVIRT")) return {};
-    if (!e) return {};
-    if (std::holds_alternative<ast::IntLiteral>(e->kind)) return "Integer";
-    if (std::holds_alternative<ast::StringLiteral>(e->kind)) return "String";
-    if (std::holds_alternative<ast::CharLiteral>(e->kind)) return "Char";
-    if (auto* id = std::get_if<ast::Identifier>(&e->kind))
-        if (auto declared = declaredParamTypes.find(id->name);
-            declared != declaredParamTypes.end() &&
-            (declared->second == "Integer" || declared->second == "String" ||
-             declared->second == "Char"))
-            return declared->second;
-    const auto type = staticTypeOf(e.get());
-    if (!type) return {};
-    const auto name = semantic::typeToString(type);
-    if (name == "Integer" || name == "String" || name == "Char")
-        return name;
-    return {};
-}
-
 // The emitted symbol for a parameterless member of the module being
 // lowered (or of one enclosing it), or "" when the name is not one.
 auto Lowering::moduleConstantSymbol(const std::string& name) const -> std::string {
@@ -801,18 +721,6 @@ auto Lowering::lowerFieldDefault(const RecordInfo& info, const ast::ExprPtr& e)
     moduleImports = std::move(savedImports);
     moduleAliases = std::move(savedAliases);
     return result;
-}
-
-} // namespace kex::ir
-
-namespace kex::ir {
-
-// The static type the checker gave `expr`: the HIR's per-expression type.
-// What lowering may read of the checker's types — a TYPE for code
-// generation (which comparison, which dictionary). A DECISION about a call
-// (its target, its owner) comes from the decision tables instead.
-auto Lowering::staticTypeOf(const ast::Expr* expr) const -> semantic::TypePtr {
-    return expr ? hir->typeOf(*expr) : nullptr;
 }
 
 } // namespace kex::ir

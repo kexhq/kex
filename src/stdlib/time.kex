@@ -9,23 +9,23 @@
 # Two span types connect them, and which one you want depends on whether the
 # calendar gets a say:
 #
-#   Duration  fixed elapsed time, a count of seconds   (36.hours, 10.days)
-#   Period    a calendar step, resolved by the calendar (1.months, 2.years)
+#   Duration  fixed elapsed time, a count of seconds   (36.hour, 10.day)
+#   Period    a calendar step, resolved by the calendar (1.month, 2.year)
 #
-# `36.hours` is always 129600 seconds; `1.months` is however long that
-# particular month turns out to be. So `date + 1.months` clamps January 31st
-# to the last day of February, while `date + 30.days` counts thirty days.
+# `36.hour` is always 129600 seconds; `1.month` is however long that
+# particular month turns out to be. So `date + 1.month` clamps January 31st
+# to the last day of February, while `date + 30.day` counts thirty days.
 #
 # A time `Measure` such as `5.second` is a third thing and deliberately NOT a
 # Duration: a Measure describes a measurement, a Duration describes elapsed
-# time. The plural `5.seconds` builds the Duration.
+# time. The plural `5.second` builds the Duration.
 #
 # Values are built through their own module and used through functions:
 #
 #   let due = Date.of(2026, 7, 30).try           # Date
 #   due.weekday.name                             # "Thursday"
-#   (due + 10.days).iso                          # "2026-08-09"
-#   (due + 1.months).iso                         # "2026-08-30"
+#   (due + 10.day).iso                          # "2026-08-09"
+#   (due + 1.month).iso                         # "2026-08-30"
 #   Time.now().iso                            # e.g. "14:03:00"
 #
 # Anything that reads the clock is replaceable: `Time.Clock` is a capability,
@@ -54,7 +54,7 @@ type TimeError = InvalidDate(Integer, Integer, Integer)
 #   let due = Date.of(2026, 7, 30).try
 #   due.iso              # => "2026-07-30"
 #   due.weekday.name     # => "Thursday"
-#   (due + 10.days).iso  # => "2026-08-09"
+#   (due + 10.day).iso  # => "2026-08-09"
 #
 # Build one with +Date.of+, which validates, rather than with the record
 # literal, which does not.
@@ -73,7 +73,7 @@ end
 #
 #   let t = Time.of(14, 3, 0).try
 #   t.iso                  # => "14:03:00"
-#   (t + 2.hours).iso      # => "16:03:00"
+#   (t + 2.hour).iso      # => "16:03:00"
 #
 # Arithmetic wraps within the day: there is no date to carry into. Reach for
 # +DateTime+ when the day rolling over matters.
@@ -117,11 +117,11 @@ end
 # count of seconds and nothing else. A Period carries the calendar fields
 # themselves and lets the calendar resolve them:
 #
-#   Date.of(2026, 1, 31).try + 1.months        # 2026-02-28, not 2026-03-03
-#   Date.of(2024, 2, 29).try + 1.years         # 2025-02-28
+#   Date.of(2026, 1, 31).try + 1.month        # 2026-02-28, not 2026-03-03
+#   Date.of(2024, 2, 29).try + 1.year         # 2025-02-28
 #
-# Use a Duration for elapsed time (`36.hours` is always 129600 seconds) and a
-# Period for calendar steps (`1.months` is however long that month is).
+# Use a Duration for elapsed time (`36.hour` is always 129600 seconds) and a
+# Period for calendar steps (`1.month` is however long that month is).
 record Period do
   # The number of whole years in the span.
   years : Integer
@@ -173,7 +173,7 @@ module Time do
   #
   # @example
   #   Time.midnight().iso                   # => "00:00:00"
-  #   (Time.midnight() - 1.seconds).iso     # => "23:59:59"
+  #   (Time.midnight() - 1.second).iso     # => "23:59:59"
   let midnight() -> Time = Time { hour: 0, minute: 0, second: 0, nanosecond: 0 }
 
   # Builds a time of day from a count of seconds since midnight.
@@ -307,7 +307,7 @@ module Time do
   # @return [DateTime] that instant, in the local zone
   foul momentAt(nanos: Integer) -> DateTime do
     let epochSeconds = Time.floorDiv(nanos, 1000000000)
-    let offset = Duration.seconds(Kex.Intrinsic.Time.localOffset(epochSeconds))
+    let offset = (Kex.Intrinsic.Time.localOffset(epochSeconds)).second
     return Time.withNanosecond(DateTime.fromEpochSeconds(epochSeconds, offset), nanos - epochSeconds * 1000000000)
   end
 
@@ -582,7 +582,7 @@ module Time do
   end
 
   # A Duration holds Float seconds, so it is rounded to the nanosecond, the
-  # finest unit it names, before truncating: 7.nanoseconds is 7e-9 seconds,
+  # finest unit it names, before truncating: 7.nanosecond is 7e-9 seconds,
   # and dividing that by 1e-9 directly gives 6.999... and so 6.
   let truncatedBy(seconds: Float, unit: Float) -> Integer do
     let nanos = (seconds * 1000000000.0).round
@@ -988,175 +988,56 @@ module DateTime do
   end
 
 end
-# The plural spellings build a Duration; the singular ones from units.kex
-# build a time Measure. `5.seconds` is an elapsed span, `5.second` a measurement.
-
+# Calendar spans on +Integer+: +1.month+, +2.year+. A +Period+, not a
+# +Duration+: +4.week+ is exactly 28 days, +1.month+ one calendar month,
+# however long that month turns out to be. The time units (+5.second+,
+# +90.minute+, +2.week+) are in units.kex.
 make Integer do
-  let nanoseconds -> Duration = Duration { seconds: this / 1000000000.0 }
-  let microseconds -> Duration = Duration { seconds: this / 1000000.0 }
-
-  # This many milliseconds, as a +Duration+.
-  #
-  # @return [Duration] the elapsed span
-  #
-  # @example
-  #   500.milliseconds.wholeMilliseconds   # => 500
-  let milliseconds -> Duration = Duration { seconds: this / 1000.0 }
-
-  # This many seconds, as a +Duration+.
-  #
-  # Note the plural: +5.seconds+ is an elapsed span, while +5.second+ from
-  # +units.kex+ is a measurement.
-  #
-  # @return [Duration] the elapsed span
-  #
-  # @example
-  #   30.seconds.wholeSeconds   # => 30
-  let seconds -> Duration = Duration { seconds: this * 1.0 }
-
-  # This many minutes, as a +Duration+.
-  #
-  # @return [Duration] the elapsed span
-  #
-  # @example
-  #   90.minutes.wholeHours   # => 1
-  let minutes -> Duration = Duration { seconds: this * 60.0 }
-
-  # This many hours, as a +Duration+.
-  #
-  # @return [Duration] the elapsed span
-  #
-  # @example
-  #   36.hours.wholeDays   # => 1
-  let hours -> Duration = Duration { seconds: this * 3600.0 }
-
-  # This many days, as a +Duration+: a fixed 86400 seconds each.
-  #
-  # Use +Period.days+ when the calendar should get a say.
-  #
-  # @return [Duration] the elapsed span
-  #
-  # @example
-  #   (Date.of(2026, 7, 30).try + 10.days).iso   # => "2026-08-09"
-  let days -> Duration = Duration { seconds: this * 86400.0 }
-
-  # This many weeks, as a +Duration+: a fixed 604800 seconds each.
-  #
-  # @return [Duration] the elapsed span
-  #
-  # @example
-  #   2.weeks.wholeDays   # => 14
-  let weeks -> Duration = Duration { seconds: this * 604800.0 }
-
   # This many calendar months, as a +Period+.
-  #
-  # A calendar span, not a Duration: see the +Period+ record above.
-  # +4.weeks+ and +1.months+ are deliberately different things: the first is
-  # exactly 28 days, the second is one calendar month, however long that turns
-  # out to be.
   #
   # @return [Period] the calendar span
   #
   # @example
-  #   (Date.of(2026, 7, 30).try + 1.months).iso   # => "2026-08-30"
+  #   (Date.of(2026, 7, 30).try + 1.month).iso   # => "2026-08-30"
   #
   # @example The calendar clamps a day that does not exist
-  #   (Date.of(2026, 1, 31).try + 1.months).iso   # => "2026-02-28"
-  let months -> Period = Period { years: 0, months: this, days: 0 }
+  #   (Date.of(2026, 1, 31).try + 1.month).iso   # => "2026-02-28"
+  let month -> Period = Period { years: 0, months: this, days: 0 }
 
   # This many calendar years, as a +Period+.
   #
   # @return [Period] the calendar span
   #
   # @example
-  #   (Date.of(2024, 2, 29).try + 1.years).iso   # => "2025-02-28"
-  let years -> Period = Period { years: this, months: 0, days: 0 }
+  #   (Date.of(2024, 2, 29).try + 1.year).iso   # => "2025-02-28"
+  let year -> Period = Period { years: this, months: 0, days: 0 }
 end
 
-# The same +Duration+ constructors on +Float+, for fractional spans:
-# +1.5.hours+, +0.25.seconds+.
-make Float do
-  let nanoseconds -> Duration = Duration { seconds: this / 1000000000.0 }
-  let microseconds -> Duration = Duration { seconds: this / 1000000.0 }
-
-  # This many milliseconds, as a +Duration+.
-  #
-  # @return [Duration] the elapsed span
-  let milliseconds -> Duration = Duration { seconds: this / 1000.0 }
-
-  # This many seconds, as a +Duration+.
-  #
-  # @return [Duration] the elapsed span
-  #
-  # @example
-  #   0.25.seconds.wholeMilliseconds   # => 250
-  let seconds -> Duration = Duration { seconds: this }
-
-  # This many minutes, as a +Duration+.
-  #
-  # @return [Duration] the elapsed span
-  let minutes -> Duration = Duration { seconds: this * 60.0 }
-
-  # This many hours, as a +Duration+.
-  #
-  # @return [Duration] the elapsed span
-  #
-  # @example
-  #   1.5.hours.wholeMinutes   # => 90
-  let hours -> Duration = Duration { seconds: this * 3600.0 }
-
-  # This many days, as a +Duration+: a fixed 86400 seconds each.
-  #
-  # @return [Duration] the elapsed span
-  let days -> Duration = Duration { seconds: this * 86400.0 }
-
-  # This many weeks, as a +Duration+: a fixed 604800 seconds each.
-  #
-  # @return [Duration] the elapsed span
-  let weeks -> Duration = Duration { seconds: this * 604800.0 }
-end
-
-make Duration do
-  let wholeNanoseconds -> Integer = Time.truncatedBy(this.seconds, 0.000000001)
-  let wholeMicroseconds -> Integer = Time.truncatedBy(this.seconds, 0.000001)
-
-  # Adds two spans.
-  #
-  # @param other [Duration] the span to add
-  # @return [Duration] the total
-  #
-  # @example
-  #   (90.minutes + 30.minutes).wholeHours   # => 2
-  let +(other: Duration) -> Duration = Duration { seconds: this.seconds + other.seconds }
-
-  # Subtracts a span. The result may be negative.
-  #
-  # @param other [Duration] the span to subtract
-  # @return [Duration] the difference
-  #
-  # @example
-  #   (1.hours - 90.minutes).negative?   # => true
-  let -(other: Duration) -> Duration = Duration { seconds: this.seconds - other.seconds }
+# The operations a span of time has beyond every measure's: a +Duration+ is
+# +Measure<Quantity.Time>+, so these are its own.
+make Measure<Quantity.Time> do
+  let wholeNanoseconds -> Integer = Time.truncatedBy(this.canonical, 0.000000001)
+  let wholeMicroseconds -> Integer = Time.truncatedBy(this.canonical, 0.000001)
 
   # The same span with its sign flipped.
   #
   # @return [Duration] the negated span
   #
   # @example
-  #   90.minutes.negated.negative?   # => true
-  let negated -> Duration = Duration { seconds: 0.0 - this.seconds }
+  #   90.minute.negated.negative?   # => true
+  let negated -> Duration = this.inOwnUnit(0.0 - this.canonical)
 
   # Multiplies the span by a plain number.
   #
-  # `3 * 1.days` is not the same call because the receiver has to be the
-  # Duration, so it is spelled `1.days * 3`.
+  # `3 * 1.day` is not the same call because the receiver has to be the
+  # Duration, so it is spelled `1.day * 3`.
   #
   # @param factor [Number] the factor to multiply by
   # @return [Duration] the scaled span
   #
   # @example
-  #   (90.minutes * 2).wholeHours   # => 3
-  let *(factor: Number) -> Duration = Duration { seconds: this.seconds * factor }
+  #   (90.minute * 2).wholeHours   # => 3
+  let *(factor: Number) -> Duration = this.inOwnUnit(this.canonical * Kex.Intrinsic.Fun.convertTo(factor, Float).or(0.0))
 
   # Divides the span by a plain number.
   #
@@ -1164,16 +1045,16 @@ make Duration do
   # @return [Duration] the scaled span
   #
   # @example
-  #   (90.minutes / 2).wholeMinutes   # => 45
-  let /(divisor: Number) -> Duration = Duration { seconds: this.seconds / divisor }
+  #   (90.minute / 2).wholeMinutes   # => 45
+  let /(divisor: Number) -> Duration = this.inOwnUnit(this.canonical / Kex.Intrinsic.Fun.convertTo(divisor, Float).or(1.0))
 
   # The span's magnitude, discarding its direction.
   #
   # @return [Duration] the absolute span
   #
   # @example
-  #   (1.hours - 90.minutes).abs.wholeMinutes   # => 30
-  let abs -> Duration = Duration { seconds: this.seconds < 0.0 then 0.0 - this.seconds else this.seconds }
+  #   (1.hour - 90.minute).abs.wholeMinutes   # => 30
+  let abs -> Duration = this.inOwnUnit(this.canonical < 0.0 then 0.0 - this.canonical else this.canonical)
 
   # Returns +true+ when the span is exactly zero.
   #
@@ -1181,7 +1062,7 @@ make Duration do
   #
   # @example
   #   Duration.zero().zero?   # => true
-  let zero? -> Bool = this.seconds == 0.0
+  let zero? -> Bool = this.canonical == 0.0
 
   # Returns +true+ when the span points backwards.
   #
@@ -1192,15 +1073,15 @@ make Duration do
   #
   # @example
   #   date.until(other).negative?   # => true when `other` is earlier
-  let negative? -> Bool = this.seconds < 0.0
+  let negative? -> Bool = this.canonical < 0.0
 
   # Returns +true+ when the span points forwards.
   #
   # @return [Bool] +true+ for a positive span
   #
   # @example
-  #   90.minutes.positive?   # => true
-  let positive? -> Bool = this.seconds > 0.0
+  #   90.minute.positive?   # => true
+  let positive? -> Bool = this.canonical > 0.0
 
   # Returns +true+ when this span is shorter than +other+.
   #
@@ -1211,13 +1092,13 @@ make Duration do
   # @return [Bool] +true+ when this span is shorter
   #
   # @example
-  #   30.minutes.shorterThan?(1.hours)   # => true
+  #   30.minute.shorterThan?(1.hour)   # => true
   #
   # @example Enforcing a timeout
-  #   if started.until(DateTime.utcNow()).longerThan?(30.seconds)
+  #   if started.until(DateTime.utcNow()).longerThan?(30.second)
   #     IO.printError("timed out")
   #   end
-  let shorterThan?(other: Duration) -> Bool = this.seconds < other.seconds
+  let shorterThan?(other: Duration) -> Bool = this.canonical < other.canonical
 
   # Returns +true+ when this span is longer than +other+.
   #
@@ -1225,33 +1106,43 @@ make Duration do
   # @return [Bool] +true+ when this span is longer
   #
   # @example
-  #   90.minutes.longerThan?(1.hours)   # => true
-  let longerThan?(other: Duration) -> Bool = this.seconds > other.seconds
+  #   90.minute.longerThan?(1.hour)   # => true
+  let longerThan?(other: Duration) -> Bool = this.canonical > other.canonical
+
+  # The span's length in seconds, fraction included. +wholeSeconds+ is the
+  # Integer form.
+  #
+  # @return [Float] the seconds
+  #
+  # @example
+  #   1.5.minute.seconds        # => 90.0
+  #   500.millisecond.seconds   # => 0.5
+  let seconds -> Float = this.canonical
 
   # The whole milliseconds in the span, truncated toward zero.
   #
   # @return [Integer] the milliseconds
   #
   # @example
-  #   500.milliseconds.wholeMilliseconds   # => 500
-  let wholeMilliseconds -> Integer = Time.truncatedBy(this.seconds, 0.001)
+  #   500.millisecond.wholeMilliseconds   # => 500
+  let wholeMilliseconds -> Integer = Time.truncatedBy(this.canonical, 0.001)
 
   # The whole seconds in the span, truncated toward zero.
   #
   # @return [Integer] the seconds
   #
   # @example
-  #   Duration.hours(2).wholeSeconds   # => 7200
-  let wholeSeconds -> Integer = Time.truncatedBy(this.seconds, 1.0)
+  #   2.hour.wholeSeconds   # => 7200
+  let wholeSeconds -> Integer = Time.truncatedBy(this.canonical, 1.0)
 
   # The whole minutes in the span, truncated toward zero.
   #
   # @return [Integer] the minutes
   #
   # @example
-  #   90.minutes.wholeMinutes   # => 90
-  #   1.5.hours.wholeMinutes    # => 90
-  let wholeMinutes -> Integer = Time.truncatedBy(this.seconds, 60.0)
+  #   90.minute.wholeMinutes   # => 90
+  #   1.5.hour.wholeMinutes    # => 90
+  let wholeMinutes -> Integer = Time.truncatedBy(this.canonical, 60.0)
 
   # The whole hours in the span, truncated toward zero. A partial hour does
   # not count.
@@ -1259,28 +1150,28 @@ make Duration do
   # @return [Integer] the hours
   #
   # @example
-  #   90.minutes.wholeHours   # => 1
-  let wholeHours -> Integer = Time.truncatedBy(this.seconds, 3600.0)
+  #   90.minute.wholeHours   # => 1
+  let wholeHours -> Integer = Time.truncatedBy(this.canonical, 3600.0)
 
   # The whole days in the span, truncated toward zero.
   #
-  # This is what +date + span+ uses, which is why +date + 36.hours+ advances
+  # This is what +date + span+ uses, which is why +date + 36.hour+ advances
   # exactly one day.
   #
   # @return [Integer] the days
   #
   # @example
-  #   36.hours.wholeDays   # => 1
-  #   2.weeks.wholeDays    # => 14
-  let wholeDays -> Integer = Time.truncatedBy(this.seconds, 86400.0)
+  #   36.hour.wholeDays   # => 1
+  #   2.week.wholeDays    # => 14
+  let wholeDays -> Integer = Time.truncatedBy(this.canonical, 86400.0)
 
   # The whole weeks in the span, truncated toward zero.
   #
   # @return [Integer] the weeks
   #
   # @example
-  #   14.days.wholeWeeks   # => 2
-  let wholeWeeks -> Integer = Time.truncatedBy(this.seconds, 604800.0)
+  #   14.day.wholeWeeks   # => 2
+  let wholeWeeks -> Integer = Time.truncatedBy(this.canonical, 604800.0)
 
   # Orders this span against another by length.
   #
@@ -1291,11 +1182,11 @@ make Duration do
   # @return [Ordering] +Less+, +Equal+ or +Greater+
   #
   # @example
-  #   90.minutes.compareTo(60.minutes)   # => Greater
+  #   90.minute.compareTo(60.minute)   # => Greater
   #
   # @example Sorting by length
   #   spans.sort { |a, b| a.compareTo(b) == Less }
-  let compareTo(other: Duration) -> Ordering = this.seconds.compare(other.seconds)
+  let compareTo(other: Duration) -> Ordering = this.canonical.compare(other.canonical)
 end
 
 # Building elapsed spans, and UTC offsets.
@@ -1307,64 +1198,7 @@ module Duration do
   # @example
   #   Duration.zero().zero?   # => true
   #   date.at(time, Duration.zero()).iso   # => "...T09:00:00Z"
-  let zero() -> Duration = Duration { seconds: 0.0 }
-
-  let nanoseconds(count: Number) -> Duration = Duration { seconds: count / 1000000000.0 }
-  let microseconds(count: Number) -> Duration = Duration { seconds: count / 1000000.0 }
-
-  # A span of +count+ milliseconds.
-  #
-  # @param count [Number] how many milliseconds
-  # @return [Duration] the elapsed span
-  #
-  # @example
-  #   Duration.milliseconds(1500).wholeSeconds   # => 1
-  let milliseconds(count: Number) -> Duration = Duration { seconds: count / 1000.0 }
-
-  # A span of +count+ seconds.
-  #
-  # @param count [Number] how many seconds
-  # @return [Duration] the elapsed span
-  #
-  # @example
-  #   Duration.seconds(90).wholeMinutes   # => 1
-  let seconds(count: Number) -> Duration = Duration { seconds: count * 1.0 }
-
-  # A span of +count+ minutes.
-  #
-  # @param count [Number] how many minutes
-  # @return [Duration] the elapsed span
-  #
-  # @example
-  #   Duration.minutes(90).wholeHours   # => 1
-  let minutes(count: Number) -> Duration = Duration { seconds: count * 60.0 }
-
-  # A span of +count+ hours.
-  #
-  # @param count [Number] how many hours
-  # @return [Duration] the elapsed span
-  #
-  # @example
-  #   Duration.hours(2).wholeSeconds   # => 7200
-  let hours(count: Number) -> Duration = Duration { seconds: count * 3600.0 }
-
-  # A span of +count+ days, each a fixed 86400 seconds.
-  #
-  # @param count [Number] how many days
-  # @return [Duration] the elapsed span
-  #
-  # @example
-  #   Duration.days(2).wholeHours   # => 48
-  let days(count: Number) -> Duration = Duration { seconds: count * 86400.0 }
-
-  # A span of +count+ weeks, each a fixed 604800 seconds.
-  #
-  # @param count [Number] how many weeks
-  # @return [Duration] the elapsed span
-  #
-  # @example
-  #   Duration.weeks(2).wholeDays   # => 14
-  let weeks(count: Number) -> Duration = Duration { seconds: count * 604800.0 }
+  let zero() -> Duration = 0.second
 
   # A whole-minute UTC offset, the only kind ISO 8601 can spell.
   #
@@ -1384,8 +1218,8 @@ module Duration do
   #   moment.at(Duration.utcOffset(-5, 0)).iso
   let utcOffset(hours: Integer, minutes: Integer) -> Duration do
     let magnitude = hours.abs * 3600 + minutes.abs * 60
-    return Duration { seconds: 0.0 - (magnitude * 1.0) } if hours < 0 || minutes < 0
-    return Duration { seconds: magnitude * 1.0 }
+    return (0 - magnitude).second if hours < 0 || minutes < 0
+    return magnitude.second
   end
 end
 
@@ -1471,7 +1305,7 @@ make Period, implement: Inspectable, Showable do
   # @return [Period] the total
   #
   # @example
-  #   (Period.of(1, 2, 3) + 1.years).iso   # => "P2Y2M3D"
+  #   (Period.of(1, 2, 3) + 1.year).iso   # => "P2Y2M3D"
   let +(other: Period) -> Period = Period { years: this.years + other.years, months: this.months + other.months, days: this.days + other.days }
 
   # Subtracts a calendar span, field by field. Fields may go negative.
@@ -1480,7 +1314,7 @@ make Period, implement: Inspectable, Showable do
   # @return [Period] the difference
   #
   # @example
-  #   (Period.of(1, 2, 3) - 1.years).iso   # => "P2M3D"
+  #   (Period.of(1, 2, 3) - 1.year).iso   # => "P2M3D"
   let -(other: Period) -> Period = Period { years: this.years - other.years, months: this.months - other.months, days: this.days - other.days }
 
   # The same span with every field's sign flipped: a step backwards.
@@ -1529,7 +1363,7 @@ make Period, implement: Inspectable, Showable do
   # @return [Period] the normalised span
   #
   # @example
-  #   14.months.normalized.iso   # => "P1Y2M"
+  #   14.month.normalized.iso   # => "P1Y2M"
   let normalized -> Period do
     let total = this.totalMonths
     return Period { years: (total - total.modulo(12)) / 12, months: total.modulo(12), days: this.days }
@@ -1545,7 +1379,7 @@ make Period, implement: Inspectable, Showable do
   # @example
   #   Period.of(1, 2, 3).iso   # => "P1Y2M3D"
   #   Period.zero().iso        # => "P0D"
-  #   2.months.iso             # => "P2M"
+  #   2.month.iso             # => "P2M"
   let iso -> String do
     return "P0D" if this.zero?
     let years = this.years != 0 then "${this.years}Y" else ""
@@ -1626,15 +1460,15 @@ make Date, implement: Inspectable, Showable do
   # Advances the date by a fixed span, whole days only.
   #
   # A Duration with a sub-day remainder truncates toward zero, so
-  # +date + 36.hours+ advances exactly one day. Use a +Period+ when the
+  # +date + 36.hour+ advances exactly one day. Use a +Period+ when the
   # calendar should get a say.
   #
   # @param span [Duration] the elapsed span to add
   # @return [Date] the later date
   #
   # @example
-  #   (Date.of(2026, 7, 30).try + 10.days).iso   # => "2026-08-09"
-  #   (Date.of(2026, 7, 30).try + 36.hours).iso  # => "2026-07-31"
+  #   (Date.of(2026, 7, 30).try + 10.day).iso   # => "2026-08-09"
+  #   (Date.of(2026, 7, 30).try + 36.hour).iso  # => "2026-07-31"
   let +(span: Duration) -> Date = Date.fromEpochDay(this.epochDay + span.wholeDays)
 
   # Moves the date back by a fixed span, whole days only.
@@ -1643,7 +1477,7 @@ make Date, implement: Inspectable, Showable do
   # @return [Date] the earlier date
   #
   # @example
-  #   (Date.of(2026, 7, 30).try - 10.days).iso   # => "2026-07-20"
+  #   (Date.of(2026, 7, 30).try - 10.day).iso   # => "2026-07-20"
   let -(span: Duration) -> Date = Date.fromEpochDay(this.epochDay - span.wholeDays)
 
   # Advances the date by a calendar span, so the month length decides the
@@ -1652,15 +1486,15 @@ make Date, implement: Inspectable, Showable do
   # January 31st plus one month is the last day of February. Months are
   # applied before days, and years and months together as one count of
   # months: applying years first would clamp twice and make
-  # `2024-02-29 + 1.years + 1.months` land a day off from `+ 13.months`.
+  # `2024-02-29 + 1.year + 1.month` land a day off from `+ 13.month`.
   #
   # @param span [Period] the calendar span to add
   # @return [Date] the later date
   #
   # @example
-  #   (Date.of(2026, 7, 30).try + 1.months).iso   # => "2026-08-30"
-  #   (Date.of(2026, 1, 31).try + 1.months).iso   # => "2026-02-28"
-  #   (Date.of(2024, 2, 29).try + 1.years).iso    # => "2025-02-28"
+  #   (Date.of(2026, 7, 30).try + 1.month).iso   # => "2026-08-30"
+  #   (Date.of(2026, 1, 31).try + 1.month).iso   # => "2026-02-28"
+  #   (Date.of(2024, 2, 29).try + 1.year).iso    # => "2025-02-28"
   let +(span: Period) -> Date = this.addMonths(span.totalMonths).addDays(span.days)
 
   # Moves the date back by a calendar span, with the same clamping as +++.
@@ -1669,7 +1503,7 @@ make Date, implement: Inspectable, Showable do
   # @return [Date] the earlier date
   #
   # @example
-  #   (Date.of(2026, 3, 31).try - 1.months).iso   # => "2026-02-28"
+  #   (Date.of(2026, 3, 31).try - 1.month).iso   # => "2026-02-28"
   let -(span: Period) -> Date = this.addMonths(0 - span.totalMonths).addDays(0 - span.days)
 
   # The date +count+ days later. A negative count moves backwards.
@@ -1797,7 +1631,7 @@ make Date, implement: Inspectable, Showable do
   #
   # @example
   #   Date.of(2026, 7, 30).try.until(Date.of(2026, 8, 9).try).wholeDays   # => 10
-  let until(other: Date) -> Duration = Duration.days(this.daysUntil(other))
+  let until(other: Date) -> Duration = (this.daysUntil(other)).day
 
   # Whole calendar months from this date to +other+, negative when +other+ is
   # earlier.
@@ -1942,7 +1776,7 @@ make Time, implement: Inspectable, Showable do
 
   # Advances the time of day by a span, wrapping within the day.
   #
-  # A Time has no date to carry into, so 23:00 + 2.hours is 01:00. Reach for
+  # A Time has no date to carry into, so 23:00 + 2.hour is 01:00. Reach for
   # +DateTime+ when the day rolling over is something you need to see.
   #
   # Sub-second spans count: the nanoseconds carry into the seconds.
@@ -1951,9 +1785,9 @@ make Time, implement: Inspectable, Showable do
   # @return [Time] the later time of day
   #
   # @example
-  #   (Time.of(14, 3, 0).try + 2.hours).iso            # => "16:03:00"
-  #   (Time.of(23, 0, 0).try + 2.hours).iso            # => "01:00:00"
-  #   (Time.of(14, 3, 0).try + 500.milliseconds).iso   # => "14:03:00.500"
+  #   (Time.of(14, 3, 0).try + 2.hour).iso            # => "16:03:00"
+  #   (Time.of(23, 0, 0).try + 2.hour).iso            # => "01:00:00"
+  #   (Time.of(14, 3, 0).try + 500.millisecond).iso   # => "14:03:00.500"
   let +(span: Duration) -> Time do
     let nanos = this.nanosecond + span.wholeNanoseconds
     let carry = Time.floorDiv(nanos, 1000000000)
@@ -1966,7 +1800,7 @@ make Time, implement: Inspectable, Showable do
   # @return [Time] the earlier time of day
   #
   # @example
-  #   (Time.midnight() - 1.seconds).iso   # => "23:59:59"
+  #   (Time.midnight() - 1.second).iso   # => "23:59:59"
   let -(span: Duration) -> Time = this + span.negated
 
   # The time of day +count+ seconds later, wrapping within the day.
@@ -2008,7 +1842,7 @@ make Time, implement: Inspectable, Showable do
   let until(other: Time) -> Duration do
     let whole = (other.secondsSinceMidnight - this.secondsSinceMidnight) * 1.0
     let fraction = (other.nanosecond - this.nanosecond) / 1000000000.0
-    return Duration { seconds: whole + fraction }
+    return (whole + fraction).second
   end
 
   # The time of day as ISO 8601 text, with fractional seconds only when they
@@ -2114,7 +1948,7 @@ make DateTime, implement: Inspectable, Showable do
   # @return [DateTime] the later instant
   #
   # @example
-  #   (DateTime.parse("2026-07-30T14:03:00Z").try + 90.minutes).iso
+  #   (DateTime.parse("2026-07-30T14:03:00Z").try + 90.minute).iso
   #   # => "2026-07-30T15:33:00Z"
   let +(span: Duration) -> DateTime do
     let nanos = this.time.nanosecond + span.wholeNanoseconds
@@ -2129,7 +1963,7 @@ make DateTime, implement: Inspectable, Showable do
   # @return [DateTime] the earlier instant
   #
   # @example
-  #   (DateTime.utcNow() - 24.hours).iso   # yesterday, same wall clock
+  #   (DateTime.utcNow() - 24.hour).iso   # yesterday, same wall clock
   let -(span: Duration) -> DateTime = this + span.negated
 
   # Advances the instant by a calendar span, moving the DATE and leaving the
@@ -2143,7 +1977,7 @@ make DateTime, implement: Inspectable, Showable do
   # @return [DateTime] the later instant
   #
   # @example
-  #   (DateTime.parse("2026-07-30T14:03:00+02:00").try + 1.months).iso
+  #   (DateTime.parse("2026-07-30T14:03:00+02:00").try + 1.month).iso
   #   # => "2026-08-30T14:03:00+02:00"
   let +(span: Period) -> DateTime = DateTime { date: this.date + span, time: this.time, offset: this.offset }
 
@@ -2153,7 +1987,7 @@ make DateTime, implement: Inspectable, Showable do
   # @return [DateTime] the earlier instant
   #
   # @example
-  #   (DateTime.parse("2026-07-30T14:03:00Z").try - 1.years).iso
+  #   (DateTime.parse("2026-07-30T14:03:00Z").try - 1.year).iso
   #   # => "2025-07-30T14:03:00Z"
   let -(span: Period) -> DateTime = DateTime { date: this.date - span, time: this.time, offset: this.offset }
 
@@ -2208,13 +2042,13 @@ make DateTime, implement: Inspectable, Showable do
   #   started.until(DateTime.utcNow()).wholeSeconds
   #
   # @example Enforcing a deadline
-  #   if started.until(DateTime.utcNow()).longerThan?(30.seconds)
+  #   if started.until(DateTime.utcNow()).longerThan?(30.second)
   #     IO.printError("timed out")
   #   end
   let until(other: DateTime) -> Duration do
     let whole = (other.epochSeconds - this.epochSeconds) * 1.0
     let fraction = (other.time.nanosecond - this.time.nanosecond) / 1000000000.0
-    return Duration { seconds: whole + fraction }
+    return (whole + fraction).second
   end
 
   # Returns +true+ when this instant is earlier than +other+, whatever offsets
@@ -2644,7 +2478,9 @@ make DateTime do
   end
 end
 
-make Duration, implement: Showable do
+# A span's ISO 8601 form. It shows as every measure does, as its value and
+# unit (+"90.0 s"+); +iso+ writes the form a protocol wants.
+make Measure<Quantity.Time> do
   # The span in ISO 8601 form: hours, minutes and seconds, with the
   # fraction of a second written as +iso+ on a +Time+ writes it. A zero span
   # is +PT0S+, and a negative one carries a leading +-+.
@@ -2652,9 +2488,9 @@ make Duration, implement: Showable do
   # @return [String] the ISO 8601 duration
   #
   # @example
-  #   90.minutes.iso          # => "PT1H30M"
-  #   500.milliseconds.iso    # => "PT0.500S"
-  #   (-2).seconds.iso        # => "-PT2S"
+  #   90.minute.iso          # => "PT1H30M"
+  #   500.millisecond.iso    # => "PT0.500S"
+  #   (-2).second.iso        # => "-PT2S"
   #   Duration.zero().iso     # => "PT0S"
   iso :> String
   let iso do
@@ -2672,15 +2508,6 @@ make Duration, implement: Showable do
     return "${sign}PT${body.empty? then "0S" else body}"
   end
 
-  # Shows the span as its ISO 8601 form, as +iso+ writes it, so
-  # interpolating a +Duration+ reads as a span rather than as its record.
-  #
-  # @return [String] the ISO 8601 duration
-  #
-  # @example
-  #   "${90.seconds}"   # => "PT1M30S"
-  showValue :> String
-  let showValue = this.iso
 end
 
 make TimeError, implement: Showable do

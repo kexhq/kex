@@ -1,7 +1,11 @@
 spec/error_operator_overload_argument.kex:17:28: error: `==` expects argument 2 to be String, but got Integer
 
 == : Col -> String -> Cond
+
+== : Measure<A> -> Measure<A> -> Bool
 spec/error_operator_overload_argument.kex:18:27: error: `<` expects argument 2 to be String, but got Col
 
 < : Col -> String -> Cond
+
+< : Measure<A> -> Measure<A> -> Bool
 Aborted: 2 type errors — fix before running (use --no-check to skip).

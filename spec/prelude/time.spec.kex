@@ -64,10 +64,10 @@ describe("Time") do
     let date = Date.of(2026, 7, 30).try
     assert(date.addDays(10).iso == "2026-08-09")
     assert(date.addWeeks(1).iso == "2026-08-06")
-    assert((date + 10.days).iso == "2026-08-09")
-    assert((date - 1.weeks).iso == "2026-07-23")
+    assert((date + 10.day).iso == "2026-08-09")
+    assert((date - 1.week).iso == "2026-07-23")
     # A sub-day span truncates: whole days only.
-    assert((date + 36.hours).iso == "2026-07-31")
+    assert((date + 36.hour).iso == "2026-07-31")
     assert(date.daysUntil(date.addDays(45)) == 45)
     assert(date.dayOfYear == 211)
     assert(Date.of(2026, 1, 1).try.dayOfYear == 1)
@@ -104,19 +104,19 @@ describe("Time") do
     let local = DateTime.parse("2026-07-30T14:03:00+02:00").try
     let utc = DateTime.parse("2026-07-30T12:03:00Z").try
     assert(local.compareTo(utc) == Equal)
-    assert(local.before?(local + 1.hours))
-    assert((local + 1.hours).after?(local))
-    assert(local.compareTo(local + 1.seconds) == Less)
+    assert(local.before?(local + 1.hour))
+    assert((local + 1.hour).after?(local))
+    assert(local.compareTo(local + 1.second) == Less)
   end
 
   it("adds and subtracts durations from instants") do
     let moment = DateTime.parse("2026-07-30T14:03:00+02:00").try
-    assert((moment + 90.minutes).iso == "2026-07-30T15:33:00+02:00")
-    assert((moment - 3.hours).iso == "2026-07-30T11:03:00+02:00")
+    assert((moment + 90.minute).iso == "2026-07-30T15:33:00+02:00")
+    assert((moment - 3.hour).iso == "2026-07-30T11:03:00+02:00")
     # Crossing midnight rolls the date.
-    assert((moment + 12.hours).iso == "2026-07-31T02:03:00+02:00")
-    assert(moment.until(moment + 2.hours).wholeMinutes == 120)
-    assert(moment.until(moment - 1.hours).wholeMinutes == -60)
+    assert((moment + 12.hour).iso == "2026-07-31T02:03:00+02:00")
+    assert(moment.until(moment + 2.hour).wholeMinutes == 120)
+    assert(moment.until(moment - 1.hour).wholeMinutes == -60)
   end
 
   it("parses ISO 8601 text") do
@@ -179,28 +179,28 @@ describe("Time") do
   end
 
   it("builds durations from plural spellings") do
-    assert(1.nanoseconds.wholeNanoseconds == 1)
-    assert(1.microseconds.wholeMicroseconds == 1)
-    assert(1.seconds.seconds == 1.0)
-    assert(2.minutes.wholeSeconds == 120)
-    assert(3.hours.wholeMinutes == 180)
-    assert(2.days.wholeHours == 48)
-    assert(1.weeks.wholeDays == 7)
-    assert(500.milliseconds.seconds == 0.5)
-    assert(1.5.hours.wholeMinutes == 90)
-    assert(Duration.nanoseconds(2).wholeNanoseconds == 2)
-    assert(Duration.microseconds(3).wholeMicroseconds == 3)
+    assert(1.nanosecond.wholeNanoseconds == 1)
+    assert(1.microsecond.wholeMicroseconds == 1)
+    assert(1.second.seconds == 1.0)
+    assert(2.minute.wholeSeconds == 120)
+    assert(3.hour.wholeMinutes == 180)
+    assert(2.day.wholeHours == 48)
+    assert(1.week.wholeDays == 7)
+    assert(500.millisecond.seconds == 0.5)
+    assert(1.5.hour.wholeMinutes == 90)
+    assert(2.nanosecond.wholeNanoseconds == 2)
+    assert(3.microsecond.wholeMicroseconds == 3)
     # Truncation is toward zero, both ways.
-    assert(90.minutes.wholeHours == 1)
-    assert((0 - 90).minutes.wholeHours == -1)
+    assert(90.minute.wholeHours == 1)
+    assert((0 - 90).minute.wholeHours == -1)
   end
 
   it("combines and orders durations") do
-    assert((1.hours + 30.minutes).wholeMinutes == 90)
-    assert((1.hours - 30.minutes).wholeMinutes == 30)
-    assert(1.hours.negated.wholeMinutes == -60)
-    assert(30.minutes.compareTo(1.hours) == Less)
-    assert(1.hours.compareTo(60.minutes) == Equal)
+    assert((1.hour + 30.minute).wholeMinutes == 90)
+    assert((1.hour - 30.minute).wholeMinutes == 30)
+    assert(1.hour.negated.wholeMinutes == -60)
+    assert(30.minute.compareTo(1.hour) == Less)
+    assert(1.hour.compareTo(60.minute) == Equal)
     assert(Duration.zero().wholeSeconds == 0)
     assert(Duration.utcOffset(-5, 30).wholeSeconds == -19800)
   end
@@ -235,26 +235,26 @@ describe("Time") do
   # number of seconds; a Period asks the calendar. They deliberately disagree.
   it("keeps calendar spans and elapsed spans apart") do
     let jan31 = Date.of(2026, 1, 31).try
-    assert((jan31 + 1.months).iso == "2026-02-28")
-    assert((jan31 + 31.days).iso == "2026-03-03")
+    assert((jan31 + 1.month).iso == "2026-02-28")
+    assert((jan31 + 31.day).iso == "2026-03-03")
     # Four weeks is exactly 28 days; one month is however long the month is.
-    assert((jan31 + 4.weeks).iso == "2026-02-28")
-    assert((Date.of(2026, 2, 1).try + 4.weeks).iso == "2026-03-01")
-    assert((Date.of(2026, 2, 1).try + 1.months).iso == "2026-03-01")
-    assert((Date.of(2026, 3, 1).try + 1.months).iso == "2026-04-01")
+    assert((jan31 + 4.week).iso == "2026-02-28")
+    assert((Date.of(2026, 2, 1).try + 4.week).iso == "2026-03-01")
+    assert((Date.of(2026, 2, 1).try + 1.month).iso == "2026-03-01")
+    assert((Date.of(2026, 3, 1).try + 1.month).iso == "2026-04-01")
     # A leap day survives only where the target year has one.
-    assert((Date.of(2024, 2, 29).try + 1.years).iso == "2025-02-28")
-    assert((Date.of(2024, 2, 29).try + 4.years).iso == "2028-02-29")
+    assert((Date.of(2024, 2, 29).try + 1.year).iso == "2025-02-28")
+    assert((Date.of(2024, 2, 29).try + 4.year).iso == "2028-02-29")
   end
 
   it("builds and renders periods") do
     assert(Period.of(1, 2, 3).iso == "P1Y2M3D")
     assert(Period.zero().iso == "P0D")
-    assert(3.months.iso == "P3M")
-    assert(2.years.iso == "P2Y")
+    assert(3.month.iso == "P3M")
+    assert(2.year.iso == "P2Y")
     assert(Period.weeks(2).iso == "P14D")
-    assert((1.years + 2.months).iso == "P1Y2M")
-    assert((1.years - 2.months).iso == "P1Y-2M")
+    assert((1.year + 2.month).iso == "P1Y2M")
+    assert((1.year - 2.month).iso == "P1Y-2M")
     assert(Period.of(0, 14, 3).normalized.iso == "P1Y2M3D")
     assert(Period.of(0, 14, 3).totalMonths == 14)
     assert(Period.of(1, 2, 3).negated.iso == "P-1Y-2M-3D")
@@ -264,7 +264,7 @@ describe("Time") do
 
   it("steps a DateTime by calendar without moving the wall clock") do
     let moment = DateTime.parse("2026-01-31T09:30:00+02:00").try
-    assert((moment + 1.months).iso == "2026-02-28T09:30:00+02:00")
+    assert((moment + 1.month).iso == "2026-02-28T09:30:00+02:00")
     assert(moment.addMonths(1).iso == "2026-02-28T09:30:00+02:00")
     assert(moment.addDays(1).iso == "2026-02-01T09:30:00+02:00")
     assert(moment.addYears(1).iso == "2027-01-31T09:30:00+02:00")
@@ -273,12 +273,12 @@ describe("Time") do
 
   it("wraps wall-clock arithmetic within the day") do
     let late = Time.of(23, 0, 0).try
-    assert((late + 2.hours).iso == "01:00:00")
-    assert((Time.midnight() - 1.seconds).iso == "23:59:59")
+    assert((late + 2.hour).iso == "01:00:00")
+    assert((Time.midnight() - 1.second).iso == "23:59:59")
     assert(late.addHours(25).iso == "00:00:00")
     assert(late.addMinutes(-90).iso == "21:30:00")
     # The nanosecond field rides along untouched.
-    assert((Time.of(23, 0, 0, 250000000).try + 2.hours).iso == "01:00:00.250")
+    assert((Time.of(23, 0, 0, 250000000).try + 2.hour).iso == "01:00:00.250")
     assert(Time.of(1, 0, 0).try.until(Time.of(2, 30, 0).try).wholeMinutes == 90)
   end
 
@@ -296,7 +296,7 @@ describe("Time") do
   end
 
   # monthsUntil is the exact inverse of addMonths, which is what makes the
-  # January 31st case 1 rather than 0: `jan31 + 1.months` IS February 28th.
+  # January 31st case 1 rather than 0: `jan31 + 1.month` IS February 28th.
   it("counts whole months and years between dates") do
     let jan31 = Date.of(2026, 1, 31).try
     assert(jan31.monthsUntil(Date.of(2026, 2, 28).try) == 1)
@@ -311,20 +311,20 @@ describe("Time") do
   end
 
   it("scales and compares durations") do
-    assert((1.days * 3).wholeHours == 72)
-    assert((1.hours / 4).wholeMinutes == 15)
-    assert(90.minutes.wholeHours == 1)
-    assert(90.minutes.wholeSeconds == 5400)
-    assert(1500.milliseconds.wholeMilliseconds == 1500)
-    assert(21.days.wholeWeeks == 3)
-    assert(2.5.hours.wholeMinutes == 150)
-    assert(1.5.weeks.wholeDays == 10)
-    assert((0 - 90).minutes.abs.wholeMinutes == 90)
-    assert((0 - 1).seconds.negative?)
-    assert(1.seconds.positive?)
+    assert((1.day * 3).wholeHours == 72)
+    assert((1.hour / 4).wholeMinutes == 15)
+    assert(90.minute.wholeHours == 1)
+    assert(90.minute.wholeSeconds == 5400)
+    assert(1500.millisecond.wholeMilliseconds == 1500)
+    assert(21.day.wholeWeeks == 3)
+    assert(2.5.hour.wholeMinutes == 150)
+    assert(1.5.week.wholeDays == 10)
+    assert((0 - 90).minute.abs.wholeMinutes == 90)
+    assert((0 - 1).second.negative?)
+    assert(1.second.positive?)
     assert(Duration.zero().zero?)
-    assert(1.hours.longerThan?(59.minutes))
-    assert(59.minutes.shorterThan?(1.hours))
+    assert(1.hour.longerThan?(59.minute))
+    assert(59.minute.shorterThan?(1.hour))
   end
 
   # `Time.Clock` is a capability, so a mocked clock is scoped to its block:
@@ -377,17 +377,17 @@ end
 
 describe("Time and DateTime arithmetic below a second") do
   it("carries sub-second spans into the seconds") do
-    assert((Time.of(14, 3, 0).try + 500.milliseconds).iso == "14:03:00.500")
-    assert((Time.of(14, 3, 0, 900000000).try + 500.milliseconds).iso == "14:03:01.400")
-    assert((Time.of(0, 0, 0).try - 1.milliseconds).iso == "23:59:59.999")
-    assert((DateTime.parse("2026-07-30T00:00:00Z").try - 1.milliseconds).iso == "2026-07-29T23:59:59.999Z")
-    assert((DateTime.parse("1969-12-31T23:59:59.5Z").try + 750.milliseconds).iso == "1970-01-01T00:00:00.250Z")
+    assert((Time.of(14, 3, 0).try + 500.millisecond).iso == "14:03:00.500")
+    assert((Time.of(14, 3, 0, 900000000).try + 500.millisecond).iso == "14:03:01.400")
+    assert((Time.of(0, 0, 0).try - 1.millisecond).iso == "23:59:59.999")
+    assert((DateTime.parse("2026-07-30T00:00:00Z").try - 1.millisecond).iso == "2026-07-29T23:59:59.999Z")
+    assert((DateTime.parse("1969-12-31T23:59:59.5Z").try + 750.millisecond).iso == "1970-01-01T00:00:00.250Z")
   end
 
   it("truncates whole units without float drift") do
-    assert(7.nanoseconds.wholeNanoseconds == 7)
-    assert(1500.milliseconds.wholeSeconds == 1)
-    assert((-1500).milliseconds.wholeSeconds == -1)
+    assert(7.nanosecond.wholeNanoseconds == 7)
+    assert(1500.millisecond.wholeSeconds == 1)
+    assert((-1500).millisecond.wholeSeconds == -1)
   end
 end
 
@@ -476,11 +476,12 @@ describe("TimeError as Showable") do
   end
 
   it("Duration shows as ISO 8601") do
-    assert(90.minutes.iso == "PT1H30M")
-    assert(500.milliseconds.iso == "PT0.500S")
-    assert((-2).seconds.iso == "-PT2S")
+    assert(90.minute.iso == "PT1H30M")
+    assert(500.millisecond.iso == "PT0.500S")
+    assert((-2).second.iso == "-PT2S")
     assert(Duration.zero().iso == "PT0S")
-    assert("${90.seconds}" == "PT1M30S")
+    # It shows as every measure does; +iso+ is the protocol form.
+    assert("${90.second}" == "90.0 s")
   end
 end
 

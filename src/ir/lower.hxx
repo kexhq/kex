@@ -7,8 +7,6 @@
 // than silently generating invalid Core Erlang.
 #include "ir.hxx"
 #include "../ast/ast.hxx"
-#include "../semantic/decided_call.hxx"
-#include "../semantic/imported_interfaces.hxx"
 #include <stdexcept>
 #include <string>
 #include <unordered_map>

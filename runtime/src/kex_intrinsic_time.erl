@@ -8,7 +8,7 @@
 %% Replacing the clock in a test is not done here: `Time.Clock` is a
 %% capability, substituted with `with`, so there is no clock state to keep.
 -module(kex_intrinsic_time).
--export(['nowNanos'/0, 'localOffset'/1]).
+-export(['nowNanos'/0, 'localOffset'/1, seconds/1]).
 
 %% The host clock. `Time.Clock`'s default body reads it, so every reading in
 %% the language (Time.now, Date.today, DateTime.utcNow) comes through here
@@ -38,3 +38,9 @@
 
 epoch_gregorian_seconds() ->
     calendar:datetime_to_gregorian_seconds({{1970, 1, 1}, {0, 0, 0}}).
+
+%% A Duration of `Seconds`: a Kex `Measure<Quantity.Time>` (units.kex), as
+%% `Seconds.second` builds it, for a default the runtime fills in itself.
+seconds(Seconds) when is_number(Seconds) ->
+    Canonical = Seconds * 1.0,
+    {'Measure', Canonical, Canonical, {'UnitDefinition', 1.0, time, <<"s">>}}.

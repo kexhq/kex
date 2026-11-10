@@ -1,5 +1,7 @@
 // Control flow methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+
+#include <algorithm>
 #include "../semantic/resolve_core.hxx"
 
 namespace kex::ir {

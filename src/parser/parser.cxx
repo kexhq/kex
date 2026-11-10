@@ -1,4 +1,5 @@
 #include "parser.hxx"
+#include "../lexer/lexer.hxx"
 #include "../ast/function_groups.hxx"
 #include "../common/signature_params.hxx"
 #include "../common/utf8.hxx"
@@ -7,7 +8,6 @@
 #include <cstdlib>
 #include <cxxabi.h>
 #include <memory>
-#include <stdexcept>
 
 namespace kex {
 

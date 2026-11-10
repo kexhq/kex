@@ -78,6 +78,15 @@ inline const std::string kNoRecordDefault = "kex_no_default";
 // The trait whose `showValue` makes a value text (interpolation, printing).
 inline const std::string kShowableTrait = "Showable";
 
+// A measure (units.kex): `Measure { canonical, value, unit: UnitDefinition {
+// conversionFactor, dimension, notation } }`. "A measure is its quantity": the
+// runtimes' equality compares two by dimension and canonical value, wherever
+// they are, as it compares numbers across the numeric tower.
+inline const std::string kMeasureRecord = "Measure";
+inline const std::string kMeasureCanonical = "canonical";
+inline const std::string kMeasureUnit = "unit";
+inline const std::string kUnitDimension = "dimension";
+
 // The testing DSL (stdlib/test.kex declares them, with no body): runtime
 // builtins the walker and `kex_test` implement. The checker decides that a
 // bare call is one (a Builtin whose owner is `Kex.Intrinsic.Test.<name>`),

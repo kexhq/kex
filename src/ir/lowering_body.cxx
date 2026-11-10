@@ -1,6 +1,8 @@
 // Body lowering methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
 
+#include <algorithm>
+
 namespace kex::ir {
 
 // A statement sequence. `let`/`var`/reassignments introduce SSA-renamed

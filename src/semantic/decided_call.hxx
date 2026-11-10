@@ -8,6 +8,12 @@
 
 namespace kex::semantic {
 
+// What a built-in binary operator is known to apply to, which says how the
+// backend may compute it: two Integers take the machine operator outright,
+// two numbers, Strings or Chars compare without a type test, and anything
+// else takes the checked runtime operation.
+enum class BuiltinOperands { Checked, Integer, Number, String, Char };
+
 enum class CallKind {
     Constructor,
     FieldRead,
@@ -55,6 +61,14 @@ struct DecidedCall {
     // module referenced, the trait dispatched through, the binding called,
     // or the conversion's target type.
     std::string owner;
+    // An Operator's implementation: the operator itself, or `==` for a `!=`
+    // that negates the owner's overloaded `==` (`negated`); for one imported,
+    // its backend function, in `backendModule`.
+    std::string function = {};
+    // A Builtin operator's operands.
+    BuiltinOperands operands = BuiltinOperands::Checked;
+    bool negated = false;
+    std::string backendModule = {};
 };
 
 } // namespace kex::semantic

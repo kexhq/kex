@@ -42,7 +42,7 @@ main do
   let server = Server.start(endpoint, router, ServerOptions {
     maximumHandlers: 2,
     backlog: 16,
-    gracefulShutdown: Duration.milliseconds(100)
+    gracefulShutdown: 100.millisecond
   }).try
   assert(server.running?, "the server should be listening after start")
   let port = server.localAddress.port.value

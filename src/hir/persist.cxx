@@ -40,7 +40,9 @@ auto targetToTerm(const Target& target) -> TermPtr {
     return Term::tuple({Term::integer(static_cast<int64_t>(target.kind)),
                         Term::binary(target.module), Term::binary(target.function),
                         Term::integer(target.arity), Term::binary(target.owner),
-                        Term::boolean(target.servingCast)});
+                        Term::boolean(target.servingCast),
+                        Term::integer(static_cast<int64_t>(target.operands)),
+                        Term::boolean(target.negated)});
 }
 
 auto targetFromSax(SaxReader& sax) -> Target {
@@ -52,6 +54,8 @@ auto targetFromSax(SaxReader& sax) -> Target {
     target.arity = static_cast<int>(sax.readInt());
     target.owner = sax.readBinary();
     target.servingCast = sax.readBool();
+    target.operands = static_cast<semantic::BuiltinOperands>(sax.readInt());
+    target.negated = sax.readBool();
     return target;
 }
 

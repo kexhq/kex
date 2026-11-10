@@ -1,16 +1,10 @@
 #include "lower.hxx"
 #include "lower_internal.hxx"
 #include "lowering.hxx"
-#include "../semantic/analyzer.hxx"
 #include "../ast/function_groups.hxx"
 #include "../semantic/declared_type.hxx"
-#include "../common/utf8.hxx"
 #include "../common/well_known.hxx"
 #include "../common/type_def_utils.hxx"
-#include "../common/signature_params.hxx"
-#include "../common/named_arguments.hxx"
-#include "../common/source_name.hxx"
-#include "../lexer/token.hxx"
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -250,16 +244,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (std::any_of(defaults.begin(), defaults.end(),
                             [](auto* value) { return value != nullptr; }))
                 L.fnDefaults[fd.name] = std::move(defaults);
-            for (std::size_t i = 0; i < fd.clauses[0].params.size(); ++i) {
-                const auto& param = fd.clauses[0].params[i];
-                if (!param.type || !*param.type) continue;
-                const auto* type =
-                    std::get_if<ast::TypeName>(&(*param.type)->kind);
-                if (!type || type->parts.empty()) continue;
-                std::string written = kex::join(type->parts, ".");
-                if (auto trait = L.traitIdentityOf(written, ""); !trait.empty())
+            for (std::size_t i = 0; i < fd.clauses[0].params.size(); ++i)
+                if (auto trait = L.hir->parameterTraitOf(fd.clauses[0].params[i]); !trait.empty())
                     L.fnTraitParams[fd.name].push_back({i, std::move(trait)});
-            }
         }
     };
     auto preType = [&](const ast::TypeDef& td) {
@@ -386,6 +373,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 auto& owners = L.methodOwners[fd->name];
                 if (std::find(owners.begin(), owners.end(), typeName) == owners.end())
                     owners.push_back(typeName);
+                if (!L.hir->makeTargetTraitOf(*fd).empty()) L.traitOwners.insert(typeName);
             }
             if (!fd->clauses.empty()) {
                 L.makeMethods[fd->name].push_back({typeName, makeModulePath, fd});

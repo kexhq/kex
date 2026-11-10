@@ -3,7 +3,6 @@
 #include "color.hxx"
 #include "file_io.hxx"
 
-#include "../ast/ast.hxx"
 #include "../compiled/expand.hxx"
 #include "../semantic/analyzer.hxx"
 

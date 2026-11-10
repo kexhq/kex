@@ -2,7 +2,6 @@
 #include "../walk.hxx"
 
 #include <algorithm>
-#include <functional>
 #include <set>
 #include <string>
 #include <utility>

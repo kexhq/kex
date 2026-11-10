@@ -7,10 +7,10 @@
          localAddress/1, peerAddress/1]).
 
 connect(Endpoint) ->
-    connectWith(Endpoint, {'Net.Socket.TCP.ConnectOptions', {'Duration',10.0},
+    connectWith(Endpoint, {'Net.Socket.TCP.ConnectOptions', kex_intrinsic_time:seconds(10.0),
                            true, true, 0, 0}).
 connectWith({'Net.Socket.TCP.Endpoint', Host, {'Net.Port', Port}},
-            {'Net.Socket.TCP.ConnectOptions', {'Duration',Timeout}, NoDelay,
+            {'Net.Socket.TCP.ConnectOptions', {'Measure', Timeout, _, _}, NoDelay,
              KeepAlive, SendBuffer, ReceiveBuffer})
   when is_number(Timeout), Timeout >= 0, is_boolean(NoDelay),
        is_boolean(KeepAlive), is_integer(SendBuffer), SendBuffer >= 0,
@@ -43,26 +43,26 @@ listenWith({'Net.Socket.TCP.Endpoint', Host, {'Net.Port', Port}},
 listenWith(_, _) -> net_error('Parse','Connect',<<"invalid TCP listen options">>).
 
 accept({'Net.Socket.TCP.TCPListener', Owner}) -> call(Owner, accept).
-acceptWithin({'Net.Socket.TCP.TCPListener',Owner}, {'Duration',Seconds})
+acceptWithin({'Net.Socket.TCP.TCPListener',Owner}, {'Measure', Seconds, _, _})
   when is_number(Seconds), Seconds >= 0 ->
     Timeout=timeout_ms(Seconds), call(Owner,{accept,Timeout},Timeout+1000);
 acceptWithin(_,_) -> net_error('Parse','Connect',<<"invalid TCP accept timeout">>).
 sendAll({'Net.Socket.TCP.TCPConnection', Owner}, {'Binary', Data}) -> call(Owner, {send, Data}).
 receiveChunk({'Net.Socket.TCP.TCPConnection', Owner}, Limit) -> call(Owner, {recv_chunk, Limit}).
-receiveChunkWithin({'Net.Socket.TCP.TCPConnection',Owner},Limit,{'Duration',Seconds})
+receiveChunkWithin({'Net.Socket.TCP.TCPConnection',Owner},Limit,{'Measure', Seconds, _, _})
   when is_number(Seconds), Seconds >= 0 -> Timeout=timeout_ms(Seconds), call(Owner,{recv_chunk,Limit,Timeout},Timeout+1000);
 receiveChunkWithin(_,_,_) -> net_error('Parse','TCP',<<"invalid TCP receive timeout">>).
 receiveExactly({'Net.Socket.TCP.TCPConnection', Owner}, Count) -> call(Owner, {recv_exact, Count}).
-receiveExactlyWithin({'Net.Socket.TCP.TCPConnection',Owner},Count,{'Duration',Seconds})
+receiveExactlyWithin({'Net.Socket.TCP.TCPConnection',Owner},Count,{'Measure', Seconds, _, _})
   when is_number(Seconds), Seconds >= 0 -> Timeout=timeout_ms(Seconds), call(Owner,{recv_exact,Count,Timeout},Timeout+1000);
 receiveExactlyWithin(_,_,_) -> net_error('Parse','TCP',<<"invalid TCP receive timeout">>).
 receiveUntil({'Net.Socket.TCP.TCPConnection', Owner}, {'Binary', Delimiter}, Limit) ->
     call(Owner, {recv_until, Delimiter, Limit}).
-receiveUntilWithin({'Net.Socket.TCP.TCPConnection',Owner},{'Binary',Delimiter},Limit,{'Duration',Seconds})
+receiveUntilWithin({'Net.Socket.TCP.TCPConnection',Owner},{'Binary',Delimiter},Limit,{'Measure', Seconds, _, _})
   when is_number(Seconds), Seconds >= 0 -> Timeout=timeout_ms(Seconds), call(Owner,{recv_until,Delimiter,Limit,Timeout},Timeout+1000);
 receiveUntilWithin(_,_,_,_) -> net_error('Parse','TCP',<<"invalid TCP receive timeout">>).
 receiveLine({'Net.Socket.TCP.TCPConnection', Owner}, Limit) -> call(Owner, {recv_line, Limit}).
-receiveLineWithin({'Net.Socket.TCP.TCPConnection',Owner},Limit,{'Duration',Seconds})
+receiveLineWithin({'Net.Socket.TCP.TCPConnection',Owner},Limit,{'Measure', Seconds, _, _})
   when is_number(Seconds), Seconds >= 0 -> Timeout=timeout_ms(Seconds), call(Owner,{recv_line,Limit,Timeout},Timeout+1000);
 receiveLineWithin(_,_,_) -> net_error('Parse','TCP',<<"invalid TCP receive timeout">>).
 shutdownWrite({'Net.Socket.TCP.TCPConnection', Owner}) -> call(Owner, shutdown_write).

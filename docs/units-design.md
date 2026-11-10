@@ -195,24 +195,24 @@ tests; generating a finite table of popular derived types is insufficient.
 Proposed examples:
 
 ```text
-2.seconds                             # Measure<Dimensions.Time>
-1.minutes + 30.seconds                 # 1.5 min
-100.meters / 10.seconds                # 10.0 m/s
-Task.sleep(500.milliseconds)
+2.second                             # Measure<Dimensions.Time>
+1.minute + 30.second                 # 1.5 min
+100.meters / 10.second                # 10.0 m/s
+Task.sleep(500.millisecond)
 [1, 2, 3].second                       # Just(2), existing list accessor
 ```
 
 Provide one numeric constructor per unit, using its plural name: `.seconds`,
 `.minutes`, `.meters`, and so on. Do not add singular or abbreviated synonyms;
 migrate existing `.second`, `.minute`, and `.meter` calls to those spellings.
-The spelling does not depend on magnitude: `1.seconds` and `0.5.seconds` are
+The spelling does not depend on magnitude: `1.second` and `0.5.second` are
 valid. Unit values retain conventional names such as `Second` and `Meter`,
 and display symbols remain `s` and `m`. Existing list/string accessors such as
 `.second` keep their current meaning. Move time-specific helpers (`wholeSeconds`,
 `wholeMilliseconds`, `shorterThan?`, etc.) onto the time specialization. The
 numeric `.seconds` accessor on time measures returns the canonical second count;
 `.value` is the magnitude in the selected display unit. For example,
-`2.minutes.seconds` is 120.0 while `2.minutes.value` is 2.0.
+`2.minute.seconds` is 120.0 while `2.minute.value` is 2.0.
 
 Keep `Date`, `Time`, and `DateTime` as point types, and `Period` as a calendar
 span. Their elapsed-span operations accept `Measure<Dimensions.Time>` directly.
@@ -224,8 +224,8 @@ cannot be passed to sleep. Display preferences never affect timer behavior.
 
 This is an API and representation migration, not just a renamed declaration.
 Replace every `Duration` annotation with `Measure<Dimensions.Time>` and remove
-the record and module. Replace `Duration.seconds(n)` and raw
-`Duration { seconds: n }` construction with `n.seconds`; use `0.seconds` for
+the record and module. Replace `(n).second` and raw
+`(n).second` construction with `n.seconds`; use `0.second` for
 zero. Move the UTC-offset factory into the time API and migrate its callers.
 Retain numeric accessor
 semantics, and remove duplicate duration arithmetic in favor of shared measure

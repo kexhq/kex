@@ -28,7 +28,9 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
+#include <optional>
 #include <set>
 
 namespace kex::interpreter {
@@ -2288,7 +2290,6 @@ auto Evaluator::evalIntrinsicCall(const ast::MethodCall& call, const std::string
 
 auto Evaluator::testBuiltinCalled(const ast::FunctionCall& call) const
     -> std::optional<names::TestBuiltin> {
-    if (m_programs.empty()) return names::testBuiltinNamed(call.name);
     const auto& target = m_programs.targetOf(call);
     if (target.kind != hir::TargetKind::Builtin) return std::nullopt;
     return names::testBuiltinOf(target.owner);

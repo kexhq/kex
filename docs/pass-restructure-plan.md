@@ -172,7 +172,7 @@ All of these are part of the refactor; none is optional. In order:
    pseudo-functions onto the `Type<T>` foundation from step 3. **Done**
    (2026-11-10; below, under Stage 2b).
    **Still deferred (2026-11-06, kept 2026-11-10, by the user): Duration is a time Measure.**
-   `1.second` gives a `Measure` and `1.seconds` a `Duration` today, the type
+   `1.second` gave a `Measure` and `1.seconds` a `Duration`, the type
    picked by a spelling. Decided: one value, a `Measure` refined to dimension
    `:time`, so unit maths and the typed Time/Date/DateTime APIs both apply.
    It needs a dimensioned (refined) type in the checker.
@@ -840,6 +840,96 @@ Left as intrinsic backing, not a second decision: the walker's native
 the prelude's `make Server<X>` methods. Moving that would change the walker's
 `Server` representation, not who decides the call.
 
+### Binary operators are decided by the checker (2026-11-10)
+
+Found while making measures compare by quantity: lowering still decided every
+binary operator itself, from name tables (`overloadedOps`, `methodOwners`,
+`makeMethods`, units compiled apart) and run-time guards; the checker's
+`Operator` answer was read only for distinct types and `&&`/`||`. So
+`1.minute == 60.second` compared two records structurally on BEAM, though the
+checker had decided `Measure`'s `==`. Now:
+
+- **`TypeChecker::decideOperators`**, run once inference is done, decides
+  every binary operator, in one place: two primitives take the built-in; then
+  the left type's own overload for an argument it takes (`Operator`, naming
+  the implementation, `==` for a `!=` that negates it); `==`/`!=` otherwise
+  compare structurally (kexhq/kex#486); then the built-in; then a trait's
+  operator; a left value whose type is known only when it runs (a type
+  variable, a trait, `This` in a trait default), or a type with no operator
+  the check could name, `Dispatch`. `operatorOverloadsFor` requires the left
+  operand to be of the receiver's kind of type: `argMatchesParam` alone is
+  gradual, and took an `Optional<Optional<T>>` for `Measure`'s receiver.
+- **Lowering switches on it** (`lowerDecidedOperator`): an `Operator` calls
+  the owner's implementation directly (a local make block's, a distinct
+  type's mangled one, or the imported provider for that receiver); a
+  `Dispatch` keeps the run-time dispatch; no decision is the built-in, with
+  no guards. The distinct-type branch, the external `&&`/`||` branch and the
+  equality special case are deleted.
+- `make Qty<D>` methods: a candidate whose receiver is a generic instance of
+  the call's receiver (`Qty<A>` for `Qty<Time>`) counted as missing (the
+  kexhq/kex#292 registration-order fallback compared with `typesEqual`), so
+  `seconds.plus(meters)` was waved through. The shared generic is now
+  enforced, for a plain `let` method too: `checkMakeDef` kept the target's
+  variables only for the receiver, so a method's `other: Qty<D>` resolved `D`
+  as a generic of its own; the block's variables now resolve its methods'
+  annotations, and `generalizeTargetVariables` makes them per call at both
+  registrations (`spec/make_generic_shared_parameter`).
+
+### Measures (step 9, resumed 2026-11-10 by the user)
+
+Decided (2026-11-10, by the user): a phantom dimension parameter,
+`Measure<D>`.
+
+- **A measure is its quantity — done.** `make Measure<D>, implement:
+  Comparable`: `==` and `compare` on the canonical value, and `<`, `>`, `<=`,
+  `>=` over `Measure<D>` (the trait's own operators take any value).
+  `spec/measure_quantity_equality`.
+- **Dimensions are types — done.** `module Quantity` holds marker types
+  (`Quantity.Time`, `Length`, `Mass`, ..., `Data`); every base-unit
+  constructor says its dimension (`1.second : Measure<Quantity.Time>`, the SI
+  units and their prefixes, the data units). Comparing, ordering or adding
+  measures of different dimensions is a type error
+  (`spec/error_measure_mixed_dimensions`), so ordering across dimensions needs
+  no run-time error, which a pure `compare` could not raise anyway. A measure
+  made by unit arithmetic (`1.watt * 1.hour`) is a plain `Measure`: its
+  dimension is known when it runs.
+- **Measures stay extendable** (the user, 2026-11-10): `D` is any type, so a
+  program adds a dimension with its own marker type and units of its own
+  (`Unit`), and gets the same arithmetic, conversion and comparison, kept
+  apart from every other dimension (`spec/measure_user_dimension`).
+- **Duration is a time Measure — done.** `type Duration =
+  Measure<Quantity.Time>` (the user's suggestion: an alias, so `5.second` is
+  a Duration and every API typed `Duration` takes one); `record Duration` is
+  gone. Duration-only operations (`zero?`, `negated`, `abs`, `whole*`, `iso`,
+  `*`/`/` by a number) are in `make Measure<Quantity.Time>`, not `make
+  Duration`: a make on the alias was found by BEAM but not by the walker,
+  which keys it by the alias's name. `+`/`-` on measures return `Measure<D>`
+  rather than a `Result`: the type rules out mixing dimensions. A Duration
+  shows as every measure does (`90.0 s`); `iso` writes the ISO 8601 form. The
+  runtime's `{'Duration', Seconds}` tuples (nine `kex_intrinsic_*.erl`
+  modules) are measures (`kex_intrinsic_time:seconds/1` builds one), and the
+  walker's `Task.sleep` reads one.
+- **A measure is its quantity everywhere.** Equal quantities in other units
+  are equal inside a list, a tuple, a map or a `contains?` too, as numbers are
+  across the numeric tower: both runtimes' structural equality
+  (`valuesEqual`, `kex_intrinsic_number:eq`) compares two measures by
+  dimension and canonical value, and BEAM's now applies its rules to nested
+  values (it compared them exactly, so `[1] == [1.0]` was false on BEAM
+  alone); `List.member` uses it. Found by the retry specs, whose recorded
+  durations (`0.1.second`) and expected ones (`100.millisecond`) differ only
+  in display unit.
+- **Aliases inside a type.** An imported signature keeps `Duration?` as
+  written; `argMatchesParam` expands an alias wherever it is written, not only
+  at the top.
+- **Singular unit names only — done.** The plural spellings are gone
+  (`nanoseconds` … `weeks` on Integer and Float, `Duration.seconds(count)`
+  and its kind, `months`/`years`, now `1.month`/`2.year` for a Period); the
+  stdlib, specs, examples, tests and docs use the singular ones.
+- **`d.seconds` — done** (the user, 2026-11-10: a Float, on time measures
+  only): the span's length in seconds, fraction included (`500.millisecond
+  .seconds` is `0.5`); `wholeSeconds` is the Integer form. A length has no
+  `seconds`.
+
 Originally: about 183 places in checker, lowerer and walker test a callee name against a
 string (`"to"` 11×, `"new"` 9×, `"send"`, `Type::of`, `"as"`, `fromBytes`,
 ...). Each subsystem keeps its own list, so a new pseudo-function gets
@@ -886,9 +976,9 @@ forgotten somewhere — `Type.of` alone had four handlers.
 Method, per decision lowering still makes for itself: have the checker record
 it, prove lowering's own derivation dead over `spec/` + `examples/` (trace the
 fallback in the scratch tree), then delete it and gate. Tracked by the
-`dup-audit` metric `lowering-rederives` (lowering reading the raw type map,
-`expressionTypes->find`): 23 at the start, **0** since 2026-11-05 (below);
-it may not rise.
+`dup-audit` metric `lowering-rederives` (lowering reading an expression's
+static type: the raw type map, `hir->typeOf`, a `staticTypeOf`, or a printed
+type): 23 at the start, **0** since 2026-11-05 (below); it may not rise.
 
 Done:
 - The prelude lowers with the checker's answers (was the blocker).
@@ -965,8 +1055,51 @@ apart — answers it with its own `make` method or an inherited trait default,
 and the winner is not its home module), `Value` (erased receiver and another
 module competes: run-time dispatch), else `Winner`. Lowering's per-shape
 overrides are deleted as this rule covers them; a new shape extends the rule,
-not the lowering. Type reads for code generation go through
-`Lowering::staticTypeOf` (the HIR's per-expression type) and are not counted.
+not the lowering.
+
+**2026-11-10 — lowering reads no types.** The type reads left for "code
+generation" were decisions too, and each is now the checker's answer;
+`Lowering::staticTypeOf` is deleted and the metric counts every spelling of a
+type read in `src/ir`:
+- A built-in binary operator is `CallKind::Builtin` with its
+  `BuiltinOperands` (Integer, Number, String, Char, or Checked), which says
+  whether the raw BIF may answer it. `isIntegerOperand`, `comparableKind`,
+  `exactEqualityType` and lowering's own table of declared parameter types
+  are gone; every binary operator now has a decision.
+- An `Operator` decision names its implementation: the imported function's
+  backend module and function, and whether it negates `==` for a `!=`. The
+  checker sees the overloads each operator's scope imported when it checks
+  it (`m_operatorImports`): `decideOperators` runs after the `using`s are
+  gone, which hid `Units.SI`'s `*` and left lowering to pick a provider by
+  printed type name. That pick, the `Watt * Hour` nullary-variant path and
+  the provider search in `lowerDecidedOperator` are deleted.
+- `receiverOwner` falls back to the `OwnMethod` decision, not the receiver's
+  type; a trait dictionary's implementing type is
+  `TypeChecker::dictionaryTypeOf`.
+- Which parameters are bare type names (`let to(value, String)`), which take
+  a trait dictionary, and which methods belong to a `make` for a trait are
+  recorded where the checker resolves them (`isTypeSelector`,
+  `parameterTraitOf`, `makeTargetTraitOf`), so lowering resolves no
+  parameter annotation itself.
+- The run-time dispatchers' guards ask whether a written type is a trait
+  (which every value passes) of the checker: `traitWrittenAs` is what each
+  spelling resolved to in the module it was written in, and a `make` for a
+  trait is one whose methods the checker marked (`traitOwners`). Lowering
+  resolves no trait name.
+Each step left the standard library's emitted Core Erlang identical (up to
+variable numbering). Still lowering's own: `canonicalRecordName`, the BEAM
+tag a record spelling stands for. Over the standard library and the 598 BEAM
+specs it renames a name 75 times, and there the checker's `resolveRecordName`
+either has no answer (`Complex`, `Data.Set`) or a different one (`Port` for
+`Net.Port`, `Culture` for `Culture.Culture`): the checker's record identities
+have to become the run-time ones before lowering can read them. Keyed by
+spelling it cannot work either: the dispatchers are built after the module
+walk, so lowering asks in scope `""` for a type written inside a module, and
+the checker's answer there (`Culture`) is not the tag (`Culture.Culture`).
+The change: one qualified identity per record in the checker (the run-time
+tag, also what diagnostics print), carried beside the written spelling in
+lowering's owner and guard tables, which keep the spelling only for the
+function names it mangles.
 
 Worklist (historical: measured before the metric reached 0) — measured by disabling lowering's type map entirely
 (`L.expressionTypes = nullptr`): 29 of 573 BEAM specs then differ, in these
@@ -1411,8 +1544,8 @@ the module wrote, `AccountId::successor`. A new `walker-rederives` metric
 target says so (`hir::Target::servingCast`, the checker's `isServingCast`, which
 lowering reads too). The one left shows an erased `Showable` argument by its
 static type, which is type-directed by definition: it builds the dictionary, as
-lowering's `makeTraitDictionary` does through `staticTypeOf`, which that metric
-does not count.
+lowering's `makeTraitDictionary` does (through the checker's `dictionaryTypeOf`
+since 2026-11-10).
 
 `--no-check` is one rule on both backends now: the walker run analyzes silently
 as the BEAM build already did, so the evaluator always reads the decisions. A

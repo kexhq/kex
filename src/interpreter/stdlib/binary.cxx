@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <limits>
 
 namespace kex::interpreter {
 namespace {

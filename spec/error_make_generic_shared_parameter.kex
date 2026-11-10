@@ -1,0 +1,26 @@
+# kex: check-only
+# The errors spec/make_generic_shared_parameter.kex is about: a `Qty<Length>`
+# where a `Qty<Time>` receiver's `Qty<D>` goes, for a plain `let` method.
+record Time do
+end
+record Length do
+end
+
+record Qty<D> do
+  canonical: Float
+end
+
+make Qty<D> do
+  let plus(other: Qty<D>) -> Qty<D> = Qty { canonical: @canonical + other.canonical }
+  let <(other: Qty<D>) -> Bool = @canonical < other.canonical
+end
+
+let seconds(n: Float) -> Qty<Time> = Qty { canonical: n }
+let meters(n: Float) -> Qty<Length> = Qty { canonical: n }
+
+main do
+  let mixed = seconds(1.0).plus(meters(1.0))
+  let ordered = seconds(1.0) < meters(2.0)
+  IO.printLine("${seconds(1.0).plus(seconds(2.0)).canonical} ${seconds(1.0) < seconds(2.0)}")
+  IO.printLine("${meters(5.0).plus(meters(1.0)).canonical} ${meters(5.0) < meters(1.0)}")
+end

@@ -56,7 +56,8 @@ Program::Program(const ast::Program& ast, const semantic::Analyzer& analysis)
         m_targets.emplace(&expr, std::move(target));
     };
     for (const auto& [expr, decided] : analysis.decidedCalls())
-        record(*expr, {kindOf(decided.kind), {}, {}, 0, decided.owner});
+        record(*expr, {kindOf(decided.kind), decided.backendModule, decided.function, 0,
+                       decided.owner, false, decided.operands, decided.negated});
     for (const auto& [expr, signature] : analysis.selectedCallSignatures()) {
         (void)signature;
         if (!m_targets.contains(expr)) record(*expr, {TargetKind::Selected});
@@ -174,6 +175,27 @@ auto Program::resolvedTargetOf(const ast::MethodCall& call) const
     const auto& resolved = m_analysis->resolvedCalls();
     const auto found = resolved.find(&call);
     return found == resolved.end() ? nullptr : &found->second;
+}
+
+auto Program::dictionaryTypeOf(const ast::Expr& value) const -> std::string {
+    return m_analysis ? m_analysis->dictionaryTypeOf(value) : std::string{};
+}
+
+auto Program::parameterTraitOf(const ast::Param& param) const -> std::string {
+    return m_analysis ? m_analysis->parameterTraitOf(param) : std::string{};
+}
+
+auto Program::makeTargetTraitOf(const ast::FunctionDef& method) const -> std::string {
+    return m_analysis ? m_analysis->makeTargetTraitOf(method) : std::string{};
+}
+
+auto Program::traitWrittenAs(const std::string& scope, const std::string& written) const
+    -> std::string {
+    return m_analysis ? m_analysis->traitWrittenAs(scope, written) : std::string{};
+}
+
+auto Program::isTypeSelector(const ast::Pattern& pattern) const -> bool {
+    return m_analysis && m_analysis->isTypeSelector(pattern);
 }
 
 auto Program::traitsOf(const ast::MakeDef& make) const -> const std::vector<std::string>* {

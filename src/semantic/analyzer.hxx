@@ -128,6 +128,28 @@ public:
         const ast::Expr*, TypeChecker::DecidedCall>& {
         return m_checker.decidedCalls();
     }
+    // The trait a parameter is declared as, or "".
+    auto parameterTraitOf(const ast::Param& param) const -> std::string {
+        const auto found = m_checker.parameterTraits().find(&param);
+        return found == m_checker.parameterTraits().end() ? std::string{} : found->second;
+    }
+    // The trait a type spelling written in module `scope` names, or "".
+    auto traitWrittenAs(const std::string& scope, const std::string& written) const
+        -> std::string {
+        return m_checker.traitWrittenAs(scope, written);
+    }
+    // The trait a method's `make` is for, or "".
+    auto makeTargetTraitOf(const ast::FunctionDef& method) const -> std::string {
+        const auto found = m_checker.makeTargetTraits().find(&method);
+        return found == m_checker.makeTargetTraits().end() ? std::string{} : found->second;
+    }
+    // Whether `pattern`, a parameter, is a bare type name taking that type.
+    auto isTypeSelector(const ast::Pattern& pattern) const -> bool {
+        return m_checker.typeSelectorPatterns().contains(&pattern);
+    }
+    auto dictionaryTypeOf(const ast::Expr& value) const -> std::string {
+        return m_checker.dictionaryTypeOf(value);
+    }
     auto patternBindings() const
         -> const std::vector<TypeChecker::PatternBinding>& {
         return m_checker.patternBindings();

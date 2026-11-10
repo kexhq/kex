@@ -26,6 +26,7 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <istream>
 #include <iterator>

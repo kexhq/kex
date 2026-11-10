@@ -1,4 +1,5 @@
 #include "kexi.hxx"
+#include "etf.hxx"
 #include "beam_file.hxx"
 #include "../common/digest.hxx"
 #include <algorithm>

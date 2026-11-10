@@ -1,6 +1,8 @@
 // Patterns methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
 
+#include <algorithm>
+
 namespace kex::ir {
 
 auto Lowering::wildPat() -> PatternPtr {
