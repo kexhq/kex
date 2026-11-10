@@ -16,7 +16,7 @@ auto findCompileTimeIntrinsic(std::string_view name, std::size_t arity)
     static const CompileTimeIntrinsic intrinsics[] = {
         {"Type::returnedBy", 1, &TypeChecker::checkTypeReturnedBy, nullptr},
         {"Type::of", 1, &TypeChecker::checkTypeOf, &TypeChecker::foldTypeOf},
-        {"Process::spawn", 1, nullptr, &TypeChecker::foldProcessSpawn},
+        {"Process::spawn", 1, &TypeChecker::checkProcessSpawn, &TypeChecker::foldProcessSpawn},
         {"as", 1, &TypeChecker::checkAs, nullptr},
     };
     for (const auto& intrinsic : intrinsics)
@@ -171,6 +171,25 @@ auto TypeChecker::foldTypeOf(const ast::Expr& expr, const ast::MethodCall& call,
 } // namespace kex::semantic
 
 namespace kex::semantic {
+
+// `Process.spawn(Entries)`: the record's NAME, not a value of it. A bare type
+// name is typed as the type it names (that is what lets `x.to(Integer)`
+// dispatch), so this checked as a clean `Server<Entries>` and the server then
+// started with the atom `Entries` as its state, dying on the first `@field`.
+// Spawning takes the initial state, so say how to write one; the call is then
+// typed by its signature as any other.
+auto TypeChecker::checkProcessSpawn(const ast::Expr& expr, const ast::MethodCall& call)
+    -> TypePtr {
+    (void)expr;
+    const auto* arg = call.args.front()
+        ? std::get_if<ast::UpperIdentifier>(&call.args.front()->kind) : nullptr;
+    if (arg && !lookupVar(arg->name) && !m_nullaryConstructors.contains(arg->name) &&
+        m_recordFields.count(resolveRecordName(arg->name)))
+        error(call.args.front()->location,
+              "`Process.spawn(" + arg->name + ")` passes the type, not a value; spawn a "
+              "server with its initial state: `Process.spawn(" + arg->name + " {})`");
+    return nullptr;
+}
 
 // `Process.spawn(state)`: the server's slots live with the `serving` block
 // of the state's type, so lowering needs that type to start it. Recorded as

@@ -113,7 +113,7 @@ targeted, every expression typed (`--verify-hir`); `--dump-hir` prints it.
 | 0 | Benchmark on slick | Done |
 | 1 | Foundations (cache, enums, shared walkers, audit, `main()` split) | Done; the open items are in the order below |
 | 2 | One sema decides every call; HIR | **Done** (2026-11-09; `verify-hir-stdlib`: 0 undecided call sites; captures decided too): decisions recorded, `hir::Program` answers them, node identities and `hir::persist`; the HIR is the AST plus these answers (decided 2026-11-09, no separate node types) |
-| 2b | Intrinsic registry + `Type<T>` signatures | `Type<T>` and `to` moved to step 3; the rest **deferred** |
+| 2b | Intrinsic registry + `Type<T>` signatures | **Done** (2026-11-10): `Type<T>` and `to` in step 3; the registry decides `Process.spawn`, the checker decides the testing DSL and the prelude `each`/`times` fold, and the backends read those decisions (a program's own `assert` or `each` is its own). The Duration-as-Measure, singular-unit and quantity-equality items of step 9 stay **deferred** (by the user) |
 | 3 | Lowering only translates; IR passes | **Done** (2026-11-09): lowering is checked-only (it throws without a HIR); the provider search and its run-time choices are the checker's (alternatives), with `dualProviderDispatch` and `importedFreeFunctionDispatch` deleted; no override of a checker target is left (`localBeatsTraitDefault`, `ownedMakeFunction`, the module-path search deleted); every call reaching the local fallback is a decided kind (dispatch, trait method, field read on a structural or conflicting record, a free function called UFCS). `lowerMethodCallImpl` is a switch on the target kind and a dispatch to handlers (80 lines, from ~1150); the IR passes are in `src/ir/passes/`. Lowering reads the checker only through `hir::Program`, and captures are decided too. |
 | 4 | Walker on the HIR | **Done** (2026-11-09): every program the walker runs is checked first: the entry (kex::driver, merged with the modules it uses), each module loaded at run time, and compile-time code (`compiled do`, collapse, template scans, tag validators), the checks cached across builds; the method call reads the decided target (conversion, runtime primitive, `Type.of`, trait dictionary, own method, the selected module function unless a `with` replaced its capability, value-or-namespace receivers). What goes by the value at run time is what BEAM leaves to its dispatchers too: `Dispatch` calls and the prelude's receiver functions |
 | 5 | LSP / SemanticDB on the same sema | **Done** (2026-11-08): one resolver, the checker's name pass; the REPLs and `--complete` hold no SemanticDB; the language server's SemanticDB is a document store and query front end over the checker's index |
@@ -168,8 +168,9 @@ All of these are part of the refactor; none is optional. In order:
 8. **Stage 1 leftovers:** one `TypeExpr` printer — **done** (2026-11-07,
    `ast::typeText`).
 9. **Stage 2b:** finish the intrinsic registry and migrate the remaining
-   pseudo-functions onto the `Type<T>` foundation from step 3.
-   **Deferred with it (2026-11-06, by the user): Duration is a time Measure.**
+   pseudo-functions onto the `Type<T>` foundation from step 3. **Done**
+   (2026-11-10; below, under Stage 2b).
+   **Still deferred (2026-11-06, kept 2026-11-10, by the user): Duration is a time Measure.**
    `1.second` gives a `Measure` and `1.seconds` a `Duration` today, the type
    picked by a spelling. Decided: one value, a `Measure` refined to dimension
    `:time`, so unit maths and the typed Time/Date/DateTime APIs both apply.
@@ -801,9 +802,44 @@ separate walks.
 - **Tests.** `semantic_test` "hir::persist" round-trips a program and
   refuses another program's bytes.
 
-## Stage 2b: declarative pseudo-functions — deferred
+## Stage 2b: declarative pseudo-functions — done (2026-11-10); the Duration items deferred
 
-About 183 places in checker, lowerer and walker test a callee name against a
+Resumed after the HIR, as decided (2026-11-10, by the user: the registry and
+`Type<T>` now, the Duration-as-Measure, singular-unit and quantity-equality
+items of step 9 still deferred). What it finished:
+
+- **The registry decides `Process.spawn` alone.** Its check that the argument
+  is a state, not a record's name, was a `"spawn"`/`"Process"` name test in
+  the method-call path; it is the entry's `check` hook now
+  (`checkProcessSpawn`), beside the `fold` that already recorded the state's
+  type. `spec/error_process_spawn_type_name` pins the diagnostic.
+- **The testing DSL is a checker decision.** `describe`/`it`/`before`/
+  `after`/`assert` were recognised by spelling in lowering (to `kex_test`) and
+  by the walker (public natives, and the `assert` location by name in
+  `eval`), so a program's own `assert` ran the prelude's on both backends. The
+  checker records a bare call answered by the prelude's declaration as a
+  `Builtin` whose owner is `Kex.Intrinsic.Test.<name>` (`names::TestBuiltin`,
+  the one table of the names); lowering and the walker read it, and the
+  walker's natives are only `Test` intrinsics. An unchecked run (`--no-check`)
+  goes by the spelling. `spec/own_assert_shadows_builtin`.
+- **Bare `send`/`sendFrom`/`self` are no longer lowered by name.** Lowering
+  turned them into `erlang:send` / `erlang:self` itself; a bare `send(pid, m)`
+  is the checker's selection of `Pid`'s `send` and lowers as every bare UFCS
+  call does, and a bare `self()` is a checker error, so its branch was dead.
+- **The `each`/`times` fold reads the target.** Lowering folded any method
+  spelled `each` or `times` whose block reassigns an outer variable, so a
+  type's own `each` was folded over the type's value as a list and crashed on
+  BEAM (`case_clause`). Only a call the checker decided is
+  `kex_prelude:each`/`times` is folded now. `spec/own_each_not_lifted`.
+- **`Kex.embed`** is spelled once (`names::kEmbedFunction`, with
+  `names::kRuntimeRoot`) for the checker and both expander sites.
+
+Left as intrinsic backing, not a second decision: the walker's native
+`Server` value answers `within`/`process`/`link`/... in C++, where BEAM runs
+the prelude's `make Server<X>` methods. Moving that would change the walker's
+`Server` representation, not who decides the call.
+
+Originally: about 183 places in checker, lowerer and walker test a callee name against a
 string (`"to"` 11×, `"new"` 9×, `"send"`, `Type::of`, `"as"`, `fromBytes`,
 ...). Each subsystem keeps its own list, so a new pseudo-function gets
 forgotten somewhere — `Type.of` alone had four handlers.

@@ -155,43 +155,30 @@ auto Lowering::lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
         return wrapLets(binds, std::move(ex));
     }
     std::vector<Binding> binds;
-    // describe/it: the testing DSL → kex_test, block as a 0-arg fun.
-    // The call's own source location travels with it as a third argument:
-    // an editor's test tree needs to know which line a case is written on,
-    // and by the time this is a fun in a .beam nothing else remembers
-    // (kexhq/kex#199). Captured before atomize recurses, since lowering the
-    // arguments moves `currentLoc` into them.
-    if ((n.name == "describe" || n.name == "it") && n.block && n.args.size() == 1) {
-        auto where = sourceLocationTuple();
-        auto name = atomize(n.args[0], binds);
-        auto fn = atomize(*n.block, binds);
-        std::vector<ExprPtr> args;
-        args.push_back(std::move(name));
-        args.push_back(std::move(fn));
-        args.push_back(std::move(where));
-        return wrapLets(binds, callE("kex_test", n.name, 3, std::move(args)));
-    }
-    // before/after hooks register a 0-arg block in the current describe;
-    // an optional :each/:all atom selects its scope.
-    if ((n.name == "before" || n.name == "after") && n.block && n.args.size() <= 1) {
+    // The testing DSL, as the checker decided it (names::TestBuiltin): calls
+    // into kex_test, a block as a 0-arg fun. describe/it carry their own
+    // source location as a third argument: an editor's test tree needs to
+    // know which line a case is written on, and by the time this is a fun in
+    // a .beam nothing else remembers (kexhq/kex#199). `assert` lowers to the
+    // located form so a failure can name its line; kex_test:assert/1,2 remain
+    // for callers with no location to give, the BEAM REPL among them. The
+    // location is captured before atomize recurses, since lowering the
+    // arguments moves `currentLoc` into them. before/after take an optional
+    // :each/:all scope ahead of their block.
+    const auto& target = hir->targetOf(n);
+    if (const auto builtin = target.kind == hir::TargetKind::Builtin
+            ? names::testBuiltinOf(target.owner) : std::nullopt) {
+        const bool located = *builtin != names::TestBuiltin::Before &&
+                             *builtin != names::TestBuiltin::After;
+        auto where = located ? sourceLocationTuple() : ExprPtr{};
         std::vector<ExprPtr> args;
         for (const auto& arg : n.args) args.push_back(atomize(arg, binds));
-        auto fn = atomize(*n.block, binds);
-        args.push_back(std::move(fn));
-        auto arity = static_cast<int>(args.size());
-        return wrapLets(binds, callE("kex_test", n.name, arity, std::move(args)));
-    }
-    // assert(cond[, msg]) — a plain global builtin, not a local function.
-    // Lowered to the located form so a failure can name the line it
-    // happened on (kexhq/kex#199); kex_test:assert/1,2 remain for callers
-    // that have no location to give, the BEAM REPL among them.
-    if (n.name == "assert" && !n.args.empty() && !n.block) {
-        auto where = sourceLocationTuple();
-        std::vector<ExprPtr> as;
-        for (const auto& a : n.args) as.push_back(atomize(a, binds));
-        as.push_back(std::move(where));
-        int ar = static_cast<int>(as.size());
-        return wrapLets(binds, callE("kex_test", "assert_at", ar, std::move(as)));
+        if (n.block) args.push_back(atomize(*n.block, binds));
+        if (where) args.push_back(std::move(where));
+        const auto arity = static_cast<int>(args.size());
+        const std::string function = *builtin == names::TestBuiltin::Assert
+            ? "assert_at" : std::string(names::testBuiltinName(*builtin));
+        return wrapLets(binds, callE("kex_test", function, arity, std::move(args)));
     }
     std::vector<ExprPtr> args;
     for (const auto& a : n.args) args.push_back(atomize(a, binds));
@@ -233,22 +220,6 @@ auto Lowering::lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
             args.push_back(
                 atomize_ir(makeTraitDictionary(trait, *source), binds));
         }
-    if (n.name == "self" && args.empty() && !knownFns.count("self"))
-        return callE("erlang", "self", 0, {});
-    if (n.name == "send" && args.size() == 2 && !knownFns.count("send")) {
-        return wrapLets(binds, callE("erlang", "send", 2,
-                                     two(std::move(args[0]),
-                                         std::move(args[1]))));
-    }
-    if (n.name == "sendFrom" && args.size() == 2 &&
-        !knownFns.count("sendFrom")) {
-        auto message = std::make_unique<Expr>();
-        message->node = MakeTuple{two(callE("erlang", "self", 0, {}),
-                                      std::move(args[1]))};
-        return wrapLets(binds, callE("erlang", "send", 2,
-                                     two(std::move(args[0]),
-                                         std::move(message))));
-    }
     auto ex = std::make_unique<Expr>();
     int arity = static_cast<int>(args.size());
     // A 0-arity function/constant holding a fun (e.g. `let inc = ~add(1)`)

@@ -62,6 +62,7 @@ public:
     // What `call` is; a Target of kind Undecided when nothing decided it.
     auto targetOf(const ast::Expr& call) const -> const Target&;
     auto targetOf(const ast::MethodCall& call) const -> const Target&;
+    auto targetOf(const ast::FunctionCall& call) const -> const Target&;
     auto targetOf(const ast::BinaryOp& op) const -> const Target&;
     // The nominal type a method call was decided on, without type arguments:
     // an OwnMethod's owner, else the receiver of the signature the checker
@@ -141,6 +142,7 @@ public:
     auto setBase(const Program* program) -> void { m_base = program; }
 
     auto targetOf(const ast::MethodCall& call) const -> const Target&;
+    auto targetOf(const ast::FunctionCall& call) const -> const Target&;
     auto targetOf(const ast::BinaryOp& op) const -> const Target&;
     auto typeOf(const ast::Expr& expr) const -> semantic::TypePtr;
     auto typeValueOf(const ast::Expr& expr) const -> std::optional<semantic::StructuredType>;

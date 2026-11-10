@@ -4,7 +4,11 @@
 // one of these is a comparison against the language's own vocabulary, not a
 // magic string: renaming the runtime prelude module, say, is one edit here.
 
+#include <array>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 
 namespace kex::names {
 
@@ -16,6 +20,15 @@ inline const std::string kPreludeModule = "kex_prelude";
 // `Kex.Net.HTTP`.
 inline const std::string kRuntimeRoot = "Kex";
 inline auto moduleAtom(const std::string& path) -> std::string { return kRuntimeRoot + "." + path; }
+
+// The prelude's finite iterations, whose callback lowering may turn into a
+// fold when it reassigns an outer variable (ir/lowering_body.cxx).
+inline const std::string kEachFunction = "each";
+inline const std::string kTimesFunction = "times";
+
+// `Kex.embed("file")`: the file's contents, read while compiling
+// (compiled/expand.cxx folds it before checking).
+inline const std::string kEmbedFunction = "embed";
 
 // The interop root: `BEAM.lists.reverse(xs)` calls Erlang's `lists:reverse`.
 inline const std::string kForeignRoot = "BEAM";
@@ -64,5 +77,37 @@ inline const std::string kNoRecordDefault = "kex_no_default";
 
 // The trait whose `showValue` makes a value text (interpolation, printing).
 inline const std::string kShowableTrait = "Showable";
+
+// The testing DSL (stdlib/test.kex declares them, with no body): runtime
+// builtins the walker and `kex_test` implement. The checker decides that a
+// bare call is one (a Builtin whose owner is `Kex.Intrinsic.Test.<name>`),
+// so a program's own `assert` is its own; both backends read that decision.
+enum class TestBuiltin { Describe, It, Before, After, Assert };
+inline constexpr std::array<std::pair<std::string_view, TestBuiltin>, 5> kTestBuiltins{{
+    {"describe", TestBuiltin::Describe},
+    {"it", TestBuiltin::It},
+    {"before", TestBuiltin::Before},
+    {"after", TestBuiltin::After},
+    {"assert", TestBuiltin::Assert},
+}};
+inline const std::string kTestIntrinsics = kIntrinsicRoot + ".Test";
+inline auto testBuiltinNamed(std::string_view name) -> std::optional<TestBuiltin> {
+    for (const auto& [spelling, builtin] : kTestBuiltins)
+        if (spelling == name) return builtin;
+    return std::nullopt;
+}
+inline auto testBuiltinName(TestBuiltin builtin) -> std::string_view {
+    for (const auto& [spelling, entry] : kTestBuiltins)
+        if (entry == builtin) return spelling;
+    return {};
+}
+// The intrinsic a decided call names (`Kex.Intrinsic.Test.assert`), and back.
+inline auto testIntrinsicPath(TestBuiltin builtin) -> std::string {
+    return kTestIntrinsics + "." + std::string(testBuiltinName(builtin));
+}
+inline auto testBuiltinOf(const std::string& owner) -> std::optional<TestBuiltin> {
+    if (!owner.starts_with(kTestIntrinsics + ".")) return std::nullopt;
+    return testBuiltinNamed(std::string_view(owner).substr(kTestIntrinsics.size() + 1));
+}
 
 } // namespace kex::names

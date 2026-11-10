@@ -1,0 +1,33 @@
+# Lowering turns the prelude's `each` and `times` into a fold when their block
+# reassigns an outer variable. It did so for any method SPELLED `each`, so a
+# type's own `each` was folded over the type's value as if it were a list and
+# died with a case_clause on BEAM. Only the calls the checker decided are the
+# prelude's are folded now.
+record Bag do
+  items: [Integer]
+end
+
+make Bag do
+  foul each(f: Integer -> Void) -> Void do
+    IO.printLine("own each")
+    @items.reverse.each { |x| f(x) }
+  end
+end
+
+main do
+  var total = 0
+  [1, 2, 3].each do |x|
+    total = total + x
+  end
+  {"a": 1}.each do |k, v|
+    total = total + v
+  end
+  3.times do |i|
+    total = total + i
+  end
+  var calls = 0
+  Bag { items: [1, 2] }.each do |x|
+    calls = calls + x
+  end
+  IO.printLine("${total}")
+end

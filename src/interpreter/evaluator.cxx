@@ -2286,6 +2286,38 @@ auto Evaluator::evalIntrinsicCall(const ast::MethodCall& call, const std::string
     throw RuntimeError("Intrinsic " + call.method + " is not a function", location);
 }
 
+auto Evaluator::testBuiltinCalled(const ast::FunctionCall& call) const
+    -> std::optional<names::TestBuiltin> {
+    if (m_programs.empty()) return names::testBuiltinNamed(call.name);
+    const auto& target = m_programs.targetOf(call);
+    if (target.kind != hir::TargetKind::Builtin) return std::nullopt;
+    return names::testBuiltinOf(target.owner);
+}
+
+// The natives are handed only their arguments; `it` needs the call site to
+// tell an editor where the case is (kexhq/kex#199). Inside an `it` body the
+// last `assert` is remembered too, so a failure is reported at a line an
+// editor can decorate: the assert, rather than the comparison inside it, and
+// exactly what the BEAM side reports (kex_test:assert_at/2,3). Whether the one
+// that failed belongs to the SPEC FILE is decided when the case ends (the `it`
+// builtin), as kex_test:failure_location/1 decides it on BEAM.
+auto Evaluator::evalTestBuiltin(names::TestBuiltin builtin, const ast::FunctionCall& call,
+                                const SourceLocation& location) -> ValuePtr {
+    if (location.line > 0) {
+        m_lastCallLocation = location;
+        if (builtin == names::TestBuiltin::Assert && m_inTestCase)
+            m_lastTestFileLocation = location;
+    }
+    std::vector<ValuePtr> args;
+    for (const auto& arg : call.args) args.push_back(arg ? eval(*arg) : Value::none());
+    if (call.block) args.push_back(eval(**call.block));
+    const auto name = std::string(names::testBuiltinName(builtin));
+    const auto native = m_intrinsicEnv->get(kex::mangle::qualify("Test", name));
+    auto* function = native ? std::get_if<FunctionValue>(&native->data) : nullptr;
+    if (!function) throw RuntimeError("Undefined intrinsic: Test." + name, location);
+    return function->native(std::move(args));
+}
+
 auto Evaluator::evalBody(const std::vector<ast::ExprPtr>& body) -> ValuePtr {
     ValuePtr last = Value::none();
     for (const auto& expr : body) {
@@ -2299,22 +2331,6 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
     if (m_sandbox && ++m_sandboxSteps > m_sandbox->maxSteps) [[unlikely]]
         throw SandboxViolation("Evaluator sandbox: step limit reached (maxSteps: " +
                                std::to_string(m_sandbox->maxSteps) + ")");
-    // Inside an `it` body, remember where the last `assert` was written, so a
-    // failure can be reported at a line an editor can decorate (kexhq/kex#199).
-    // Costs one comparison outside tests, where m_inTestCase is false.
-    //
-    // Asserts only — not every subexpression, and not every call. The assert is
-    // the place a reader would point at, rather than the comparison inside its
-    // argument; and it is exactly what the BEAM side can report (see
-    // kex_test:assert_at/2,3), so both backends name the same line for the same
-    // failure. Every assert is recorded, wherever it lives; whether the one that
-    // failed belongs to the SPEC FILE is decided when the case ends (see the
-    // `it` builtin), exactly as kex_test:failure_location/1 decides it on BEAM.
-    if (m_inTestCase && expr.location.line > 0) {
-        if (const auto* call = std::get_if<ast::FunctionCall>(&expr.kind);
-            call && call->name == "assert")
-            m_lastTestFileLocation = expr.location;
-    }
     return std::visit([this, &expr](const auto& node) -> ValuePtr {
         using T = std::decay_t<decltype(node)>;
 
@@ -2591,6 +2607,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return evalUnaryOp(node.op, operand, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
+            if (const auto builtin = testBuiltinCalled(node))
+                return evalTestBuiltin(*builtin, node, expr.location);
             std::vector<ValuePtr> args;
             for (const auto& arg : node.args)
                 args.push_back(showErasedArgument(

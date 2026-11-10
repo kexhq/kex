@@ -8,9 +8,11 @@
 #include "../hir/hir.hxx"
 #include "../semantic/types.hxx"
 #include "../hir/compile_time.hxx"
+#include "../common/well_known.hxx"
 #include <chrono>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <set>
 #include <string>
@@ -498,6 +500,12 @@ private:
     auto evalConversion(const ast::Expr& receiver, const std::string& target) -> ValuePtr;
     auto evalIntrinsicCall(const ast::MethodCall& call, const std::string& path,
                            const SourceLocation& location) -> ValuePtr;
+    // The testing DSL builtin a bare call is: as the checker decided, or by
+    // its spelling in a run nothing checked.
+    auto testBuiltinCalled(const ast::FunctionCall& call) const
+        -> std::optional<names::TestBuiltin>;
+    auto evalTestBuiltin(names::TestBuiltin builtin, const ast::FunctionCall& call,
+                         const SourceLocation& location) -> ValuePtr;
     // A distinct value passed where a `Showable` is expected, shown by its
     // own `showValue`. The value is the bare backing one, and nothing at run
     // time says it is a Tuplex: `IO.printLine(x)` printed `(5, 11)` here

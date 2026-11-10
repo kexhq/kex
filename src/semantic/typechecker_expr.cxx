@@ -1352,25 +1352,6 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     }
                 }
             }
-            // `Process.spawn(Entries)` — the record's NAME, not a value of it.
-            // A bare type name is typed as the type it names (that is what
-            // lets `x.to(Integer)` dispatch), so this checked as a clean
-            // `Server<Entries>` and the server then started with the atom
-            // `Entries` as its state, dying on the first `@field`. Spawning
-            // takes the initial state, so say how to write one.
-            if (node.method == "spawn" && node.receiver && node.args.size() == 1 &&
-                node.args.front()) {
-                auto* ns = std::get_if<ast::UpperIdentifier>(&node.receiver->kind);
-                auto* arg = std::get_if<ast::UpperIdentifier>(&node.args.front()->kind);
-                if (ns && ns->name == "Process" && arg &&
-                    !lookupVar(arg->name) &&
-                    !m_nullaryConstructors.contains(arg->name) &&
-                    m_recordFields.count(resolveRecordName(arg->name)))
-                    error(node.args.front()->location,
-                          "`Process.spawn(" + arg->name + ")` passes the type, "
-                          "not a value; spawn a server with its initial state: "
-                          "`Process.spawn(" + arg->name + " {})`");
-            }
             // Namespace call: `Integer.parse(s)` or `Web.Response.text(s)`.
             // A chain made entirely of uppercase segments is a qualified
             // namespace, not a UFCS receiver value, so don't include it as
@@ -1569,7 +1550,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // `Kex.embed` is expanded before checking (compiled/expand.cxx);
                 // one still here failed to expand, and says why itself.
                 const bool compileTimeForm =
-                    *importedPath == "Kex" && node.method == "embed";
+                    *importedPath == names::kRuntimeRoot && node.method == names::kEmbedFunction;
                 // A module named like a type (`Map`, beside `type Map<K, V>`)
                 // also answers that type's static functions (`Map.get(m, k)`),
                 // which its interface does not list.
@@ -5978,6 +5959,13 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 if (argument && distinctBacking(given) != given)
                     m_shownThroughDistinct[callExpr].emplace_back(i, argument->name);
             }
+            // A bare call the prelude's testing DSL answers (its declaration,
+            // not one of the program's own): a runtime builtin.
+            if (!methodCall && !matched.clause && matched.declaringModule.empty() &&
+                matched.makeModule.empty())
+                if (const auto builtin = names::testBuiltinNamed(name))
+                    m_decidedCalls[callExpr] = {CallKind::Builtin,
+                                                names::testIntrinsicPath(*builtin)};
             m_selectedCallSignatures[callExpr] = std::move(selected);
             // A call no imported target took (none, or a `make` method of
             // this program): the receiver's own type may answer it
