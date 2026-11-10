@@ -550,32 +550,6 @@ auto Lowering::lowerModuleFunctionCall(const ast::MethodCall& n, const std::stri
 auto Lowering::lowerTypeNamespaceCall(const ast::MethodCall& n, const ast::UpperIdentifier& type)
     -> ExprPtr {
     std::vector<Binding> binds;
-    // A type imported from another unit can name one of its `make`
-    // methods without an instance: `Organization.slugged(name)`.
-    // Its companion expects the type atom as the receiver.
-    if (externalModules && !typeOwnsStaticFunction(type.name, n.method)) {
-        if (auto found = externalModules->receiverFunctions.find(n.method);
-            found != externalModules->receiverFunctions.end()) {
-            for (const auto& provider : found->second) {
-                const auto dot = provider.receiverType.rfind('.');
-                if (dot == std::string::npos ||
-                    provider.receiverType.substr(dot + 1) != type.name ||
-                    !usingModules.contains(provider.receiverType.substr(0, dot)) ||
-                    !provider.compiledApart)
-                    continue;
-                std::vector<ExprPtr> args;
-                args.push_back(lit(LitKind::Atom, provider.receiverType));
-                if (!n.namedArgs.empty()) continue;
-                for (const auto& value : n.args) args.push_back(atomize(value, binds));
-                if (n.block) args.push_back(atomize(*n.block, binds));
-                if (provider.isFoul) args.push_back(currentContext());
-                if (static_cast<int>(args.size()) != provider.beamArity) continue;
-                return wrapLets(binds, callE(provider.moduleAtom,
-                                             provider.beamFunction,
-                                             provider.beamArity, std::move(args)));
-            }
-        }
-    }
     // The arguments run before whatever this call turns out to be.
     for (const auto& a : n.args) (void)atomize(a, binds);
     // `Mod.Tag` for an ADT declared inside a module (e.g. `Kex.FS`).
@@ -1076,13 +1050,16 @@ auto Lowering::lowerResolvedCall(const ast::MethodCall& n,
 // record TypeName { f: v, ... } → {'TypeName', <fields in declared order,
 // defaults filled for omitted ones>}. Field ORDER and defaults come from
 // the record definition (the accessors read fixed positions).
-auto Lowering::lowerRecordConstruction(const ast::RecordConstruction& n) -> ExprPtr {
+auto Lowering::lowerRecordConstruction(const ast::Expr& e, const ast::RecordConstruction& n)
+    -> ExprPtr {
     std::vector<Binding> binds;
     std::vector<ExprPtr> args;
     const bool fromReceiver = n.typeName == "New";
-    const auto recordName = canonicalRecordName(
-        (n.typeName == "This" || fromReceiver) ? currentMakeType
-                                                : n.typeName);
+    // The record the checker typed the construction as.
+    const auto recordName = recordTypeOf(e);
+    if (recordName.empty())
+        throw LowerError("IR lower: record construction `" + n.typeName +
+                         "` the checker did not type as a known record");
     struct LoweredEntry {
         const ast::RecordEntry* source;
         AtomicRef value;
@@ -1175,6 +1152,15 @@ auto Lowering::lowerParsedInterpolatedString(
     list->node = MakeList{std::move(parts), std::nullopt};
     return callE(
         "unicode", "characters_to_binary", 1, one(std::move(list)));
+}
+
+} // namespace kex::ir
+
+namespace kex::ir {
+
+auto Lowering::recordTypeOf(const ast::Expr& e) const -> std::string {
+    auto record = hir->recordOf(e);
+    return records.count(record) ? record : std::string{};
 }
 
 } // namespace kex::ir

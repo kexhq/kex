@@ -848,15 +848,14 @@ auto Lowering::lowerExternalImportCall(const ast::FunctionCall& n,
 // of the enclosing block, so `lowerBodyFrom`'s bare-statement case below
 // calls this the same way and treats what follows as that scope.
 auto Lowering::applyUsingBindings(const ast::UsingExpr& n) -> UsingBindingsSaved {
-    UsingBindingsSaved saved{moduleImports, moduleAliases, usingModules,
-                             externalImports};
+    UsingBindingsSaved saved{moduleImports, externalImports};
     std::string srcMod = n.module.dotted();
     applyUsingCore(srcMod, n.alias, n.onlyNames, n.exceptNames);
     return saved;
 }
 
 auto Lowering::snapshotUsingBindings() const -> UsingBindingsSaved {
-    return {moduleImports, moduleAliases, usingModules, externalImports};
+    return {moduleImports, externalImports};
 }
 
 // The bindings half of a `using Module[, as: Alias][, only:/except: ...]`,
@@ -869,16 +868,6 @@ auto Lowering::applyUsingCore(const std::string& srcMod,
                               const std::vector<std::string>& onlyNames,
                               const std::vector<std::string>& exceptNames)
     -> void {
-    usingModules.insert(srcMod);
-    if (alias) moduleAliases[*alias] = srcMod;
-    // Import immediate nested modules — and M's own last segment and
-    // sibling modules — under their leaf name too. The semantic resolver
-    // already makes `URL.parse` available after `using URI`; BEAM
-    // lowering must map that leaf back to its owning companion
-    // (`URI.URL`) just as the tree walker does. Explicit aliases still
-    // win: registerModuleAliases only fills a name in when nothing has
-    // claimed it yet.
-    registerModuleAliases(srcMod, onlyNames, exceptNames);
     if (!onlyNames.empty()) {
         for (const auto& name : onlyNames) {
             auto key = srcMod + "." + name;
@@ -902,8 +891,6 @@ auto Lowering::applyUsingCore(const std::string& srcMod,
 
 auto Lowering::restoreUsingBindings(UsingBindingsSaved saved) -> void {
     moduleImports = std::move(saved.imports);
-    moduleAliases = std::move(saved.aliases);
-    usingModules = std::move(saved.using_);
     externalImports = std::move(saved.externalImports);
 }
 

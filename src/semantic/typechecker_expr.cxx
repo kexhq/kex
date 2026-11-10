@@ -1574,17 +1574,24 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     (constantType(written) || nullaryConstructorType(written)))
                     isNamespaceCall = false;
                 const auto canonical = resolveRecordName(written);
+                // A `make` method of that type, this unit's or an imported
+                // unit's (`Boxes.Box`'s `named`, with `using Boxes`).
+                const auto ofThisType = [&](const Signature& method) {
+                    if (method.params.empty()) return false;
+                    const auto* receiver =
+                        std::get_if<NamedType>(&resolve(method.params.front())->kind);
+                    return receiver && resolveRecordName(receiver->name) == canonical;
+                };
                 const auto methods = m_methodSignatures.find(node.method);
+                const auto imported = importedCandidates(node.method);
                 if (!namesModule(written) && namesType(written) &&
                     !m_userSignatures.count(kex::mangle::qualify(written, node.method)) &&
-                    methods != m_methodSignatures.end() &&
-                    std::any_of(methods->second.begin(), methods->second.end(),
-                                [&](const Signature& method) {
-                                    if (method.params.empty()) return false;
-                                    const auto* receiver = std::get_if<NamedType>(
-                                        &resolve(method.params.front())->kind);
-                                    return receiver && resolveRecordName(receiver->name) == canonical;
-                                }))
+                    ((methods != m_methodSignatures.end() &&
+                      std::any_of(methods->second.begin(), methods->second.end(), ofThisType)) ||
+                     std::any_of(imported.begin(), imported.end(),
+                                 [&](const ImportedFunction* function) {
+                                     return ofThisType(function->signature);
+                                 })))
                 {
                     isNamespaceCall = false;
                     throughTypeName = true;

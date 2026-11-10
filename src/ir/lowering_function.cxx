@@ -68,6 +68,7 @@ auto Lowering::discriminatingType(const std::string& written) const -> bool {
         base.resize(angle);
     if (base.size() == 1) return false;  // a type PARAMETER, not a type
     if (primGuardBifs().count(base) || base == "Char") return true;
+    if (records.count(ownerIdentity(base))) return true;
     // An ADT TYPE discriminates through `adtGuard`, which tests each of
     // its variant tags — the nullary ones as bare atoms. Before that
     // existed, typeGuard's tagged fallback asked `element(1, V)`, which no
@@ -78,7 +79,6 @@ auto Lowering::discriminatingType(const std::string& written) const -> bool {
     if (auto tags = typeVariantTags.find(base);
         tags != typeVariantTags.end())
         return !tags->second.empty();
-    if (records.count(canonicalRecordName(base))) return true;
     return localTypeModules.count(base) > 0 ||
            moduleDeclaredTypes.count(base) > 0;
 }
@@ -223,7 +223,7 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
                         fc.params.push_back(std::move(vp));
                         recordPatterns.push_back({rv, rp});
                         if (!rp->typeName.empty())
-                            recordDispatchTargets.push_back({rp->typeName, rv});
+                            recordDispatchTargets.push_back({hir->recordOfPattern(*rp), rv});
                         std::vector<std::string> names;
                         collectRecordBindings(*rp, names);
                         for (const auto& name : names) subst[name] = name;
@@ -305,15 +305,15 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
                     if (!p.name || !declared) continue;
                     // An argument left out arrives as the sentinel, whose
                     // default is this clause's to give.
-                    if (p.defaultValue && discriminatingType(typeText(*declared, TypeSpelling::Dispatch))) {
+                    if (p.defaultValue && discriminatingType(guardTypeOf(*declared))) {
                         auto test = intrin(Op::Or, two(
                             intrin(Op::Eq, two(var(*p.name), defaultArgument())),
-                            typeGuard(typeText(*declared, TypeSpelling::Dispatch), var(*p.name))));
+                            typeGuard(guardTypeOf(*declared), var(*p.name))));
                         guard = guard ? intrin(Op::And, two(std::move(guard), std::move(test)))
                                       : std::move(test);
                         continue;
                     }
-                    addGuardTest(typeText(*declared, TypeSpelling::Dispatch), var(*p.name));
+                    addGuardTest(guardTypeOf(*declared), var(*p.name));
                 }
                 // Named record-pattern params (`JSON { status, body }`)
                 // dispatch on their tag exactly like a plain `reply: JSON`

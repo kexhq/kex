@@ -138,6 +138,21 @@ public:
         -> std::string {
         return m_checker.traitWrittenAs(scope, written);
     }
+    // The declaration a `make` method is for, or "".
+    auto makeTargetOf(const ast::FunctionDef& method) const -> std::string {
+        const auto found = m_checker.makeTargets().find(&method);
+        return found == m_checker.makeTargets().end() ? std::string{} : found->second;
+    }
+    // The record a written type annotation names, or "".
+    auto recordAnnotatedBy(const ast::TypeExpr& type) const -> std::string {
+        const auto found = m_checker.annotatedRecords().find(&type);
+        return found == m_checker.annotatedRecords().end() ? std::string{} : found->second;
+    }
+    // The record a named record pattern names, or "".
+    auto recordOfPattern(const ast::RecordPattern& pattern) const -> std::string {
+        const auto found = m_checker.recordPatterns().find(&pattern);
+        return found == m_checker.recordPatterns().end() ? std::string{} : found->second;
+    }
     // The trait a method's `make` is for, or "".
     auto makeTargetTraitOf(const ast::FunctionDef& method) const -> std::string {
         const auto found = m_checker.makeTargetTraits().find(&method);

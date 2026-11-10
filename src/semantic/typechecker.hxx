@@ -137,6 +137,20 @@ public:
     // The trait a type spelling written in module `scope` names, or "".
     auto traitWrittenAs(const std::string& scope, const std::string& written) const
         -> std::string;
+    // The declaration each `make` method is made for, and the record each
+    // named record pattern names.
+    auto makeTargets() const
+        -> const std::unordered_map<const ast::FunctionDef*, std::string>& {
+        return m_makeTargets;
+    }
+    auto annotatedRecords() const
+        -> const std::unordered_map<const ast::TypeExpr*, std::string>& {
+        return m_annotatedRecords;
+    }
+    auto recordPatterns() const
+        -> const std::unordered_map<const ast::RecordPattern*, std::string>& {
+        return m_recordPatterns;
+    }
     // The trait each method of a `make` for one is made for.
     auto makeTargetTraits() const
         -> const std::unordered_map<const ast::FunctionDef*, std::string>& {
@@ -309,6 +323,8 @@ private:
     // clause, not a fresh one per occurrence.
     auto resolveTypeExpr(const ast::TypeExpr& typeExpr,
                         std::unordered_map<std::string, TypePtr>& genericVars) -> TypePtr;
+    auto resolveTypeExprNode(const ast::TypeExpr& typeExpr,
+                             std::unordered_map<std::string, TypePtr>& genericVars) -> TypePtr;
     auto normalizeIntersection(TypePtr type) const -> TypePtr;
     // Imported record field types arrive from KexI with alias names left as
     // written (`FS.FilePath`); the local path expands them via m_typeAliases.
@@ -652,6 +668,9 @@ private:
     std::unordered_set<const ast::Pattern*> m_typeSelectorPatterns;
     std::unordered_map<const ast::Param*, std::string> m_parameterTraits;
     std::unordered_map<const ast::FunctionDef*, std::string> m_makeTargetTraits;
+    std::unordered_map<const ast::FunctionDef*, std::string> m_makeTargets;
+    std::unordered_map<const ast::RecordPattern*, std::string> m_recordPatterns;
+    std::unordered_map<const ast::TypeExpr*, std::string> m_annotatedRecords;
     // The trait each type spelling names in the module it was written in
     // (writtenKey), as resolveTypeExpr resolved it.
     std::unordered_map<std::string, std::string> m_writtenTraits;

@@ -194,6 +194,24 @@ auto Program::traitWrittenAs(const std::string& scope, const std::string& writte
     return m_analysis ? m_analysis->traitWrittenAs(scope, written) : std::string{};
 }
 
+auto Program::makeTargetOf(const ast::FunctionDef& method) const -> std::string {
+    return m_analysis ? m_analysis->makeTargetOf(method) : std::string{};
+}
+
+auto Program::recordOf(const ast::Expr& expr) const -> std::string {
+    const auto type = typeOf(expr);
+    const auto* named = type ? std::get_if<semantic::NamedType>(&type->kind) : nullptr;
+    return named ? named->name : std::string{};
+}
+
+auto Program::recordAnnotatedBy(const ast::TypeExpr& type) const -> std::string {
+    return m_analysis ? m_analysis->recordAnnotatedBy(type) : std::string{};
+}
+
+auto Program::recordOfPattern(const ast::RecordPattern& pattern) const -> std::string {
+    return m_analysis ? m_analysis->recordOfPattern(pattern) : std::string{};
+}
+
 auto Program::isTypeSelector(const ast::Pattern& pattern) const -> bool {
     return m_analysis && m_analysis->isTypeSelector(pattern);
 }
