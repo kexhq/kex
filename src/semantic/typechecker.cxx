@@ -527,7 +527,7 @@ auto TypeChecker::reportUnknownMethods() -> void {
     }
     // Is this module named by a `using` in force at the call — directly, as a
     // parent of one, or as a child? `using Data.Set` brings its children
-    // within reach too (see `registerModuleAliases`), and being generous here
+    // within reach too, and being generous here
     // only costs a diagnostic, never a false error. But only the call's own
     // imports count, and only what their `only:`/`except:` let through. The
     // whole program's imports used to: a spec file, which pulls in
@@ -2725,6 +2725,20 @@ auto TypeChecker::normalizeIntersection(TypePtr type) const -> TypePtr {
 
 auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
                                    std::unordered_map<std::string, TypePtr>& genericVars) -> TypePtr {
+    auto resolved = resolveTypeExprNode(typeExpr, genericVars);
+    // The record a written type name means here, for code that holds only
+    // the annotation (lowering's run-time guards).
+    if ((std::holds_alternative<ast::TypeName>(typeExpr.kind) ||
+         std::holds_alternative<ast::GenericType>(typeExpr.kind)) && resolved)
+        if (const auto* named = std::get_if<NamedType>(&resolve(resolved)->kind);
+            named && m_recordFields.count(named->name))
+            m_annotatedRecords[&typeExpr] = named->name;
+    return resolved;
+}
+
+auto TypeChecker::resolveTypeExprNode(const ast::TypeExpr& typeExpr,
+                                       std::unordered_map<std::string, TypePtr>& genericVars)
+    -> TypePtr {
     return std::visit([this, &genericVars](const auto& node) -> TypePtr {
         using T = std::decay_t<decltype(node)>;
 
@@ -3244,9 +3258,9 @@ auto TypeChecker::bindPatternVars(
             // the scrutinee was inferred to be. Fall back to `expected` for the
             // anonymous `{ x }` form.
             if (!node.typeName.empty()) {
-                if (auto found = m_recordFields.find(
-                        resolveRecordName(node.typeName));
-                    found != m_recordFields.end())
+                const auto record = resolveRecordName(node.typeName);
+                m_recordPatterns[&node] = record;
+                if (auto found = m_recordFields.find(record); found != m_recordFields.end())
                     fields = &found->second;
             } else if (expected)
                 if (auto* named = std::get_if<NamedType>(&expected->kind))
@@ -3436,6 +3450,12 @@ auto TypeChecker::checkUsingBlock(const ast::UsingBlock& block) -> void {
 }
 
 auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
+    // The declaration a `make` method is made for.
+    if (m_currentMakeType) {
+        const auto target = resolve(m_currentMakeType);
+        const auto* named = std::get_if<NamedType>(&target->kind);
+        m_makeTargets[&def] = named ? named->name : typeToString(target);
+    }
     // A method of a `make` for a trait takes its receiver's dictionary.
     if (m_currentMakeType)
         if (auto trait = declaredTraitOf(m_currentMakeType); !trait.empty())

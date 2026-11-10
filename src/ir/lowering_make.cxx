@@ -58,7 +58,7 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
     // universal `to`/`showValue` for unrelated values) while letting the
     // type-qualified form through.
     const bool guardedRecordReceiver =
-        !receiverPattern && records.count(canonicalRecordName(typeName));
+        !receiverPattern && records.count(makeOwnerOf(first, typeName));
     if (guardedRecordReceiver)
         for (auto& clause : def.clauses)
             clause.guard = callE(
@@ -109,7 +109,7 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
                     if (!params[j].type || !*params[j].type ||
                         j + 1 >= clause.params.size())
                         continue;
-                    const auto written = typeText(**params[j].type, TypeSpelling::Dispatch);
+                    const auto written = guardTypeOf(**params[j].type);
                     const auto& pattern = clause.params[j + 1];
                     if (!discriminatingType(written) || !pattern ||
                         pattern->kind != PatKind::Var)
@@ -476,10 +476,7 @@ auto Lowering::runtimeShapes(const std::string& owner)
     if (distinctTypes.count(owner) || distinctTypes.count(bare)) return std::nullopt;
     // Anything else typeGuard tests as a tuple tagged with its identity: a
     // record by its canonical name, an opaque type by guardTag's.
-    const bool savedMakeOwner = resolvingMakeOwner;
-    resolvingMakeOwner = true;
-    const auto canonical = canonicalRecordName(owner);
-    resolvingMakeOwner = savedMakeOwner;
+    const auto canonical = ownerIdentity(owner);
     if (owner.find_first_of("[{(<-") != std::string::npos) return std::nullopt;
     return std::set<std::string>{"tuple:" + guardTag(canonical)};
 }
@@ -617,10 +614,7 @@ auto Lowering::typeGuard(const std::string& written, ExprPtr v) -> ExprPtr {
     // The guard tests the value's TAG, so it is the record's canonical
     // identity that has to appear here — `make Version` inside
     // Kex guards values tagged 'Kex.Version'.
-    const bool savedMakeOwner = resolvingMakeOwner;
-    resolvingMakeOwner = true;
-    const auto ty = canonicalRecordName(written);
-    resolvingMakeOwner = savedMakeOwner;
+    const auto ty = ownerIdentity(written);
     if (auto record = records.find(ty); record != records.end())
         return callE("erlang", "is_record", 3,
                      three(std::move(v), lit(LitKind::Atom, ty),
@@ -651,77 +645,6 @@ auto Lowering::typeGuard(const std::string& written, ExprPtr v) -> ExprPtr {
                                  two(litInt(1), vRef.get())),
                            lit(LitKind::Atom, tagged))),
         litBool(false));
-}
-
-// Registers `moduleAliases` entries for a `using M`, so a later
-// `Name.method(…)` call site (see the `moduleAliases.find(path.front())`
-// lookup above) can resolve a bare module segment against it. Mirrors
-// `TypeChecker::resolveModulePath` (kexhq/kex#229, kexhq/kex#233):
-//
-//   1. `M`'s own last segment aliases to `M` — `using Data.Set` aliases
-//      bare `Set`, since the nested `module Set do … end` constructor
-//      block that provides `Data.Set` is what the bare receiver means.
-//   2. An immediate child `M.C` aliases to itself under the bare name
-//      `C` — `using Net.HTTP` aliases bare `Status` to `Net.HTTP.Status`.
-//   3. A SIBLING of `M` (same immediate parent, found by scanning every
-//      known module for one) aliases to itself too — `Data.UnorderedSet`
-//      shares a file, and a `module Data` header, with `Data.Set`, but is
-//      its sibling, not its child, so `using Data.Set` alone would
-//      otherwise leave `UnorderedSet.from(…)` unresolved.
-//
-// `moduleFunctions` already holds every module this compilation unit has
-// seen (populated by the pre-pass before any body is lowered), so this
-// scan sees `Data.UnorderedSet` even though only `Data.Set` was named.
-auto Lowering::registerModuleAliases(const std::string& srcMod,
-                           const std::vector<std::string>& onlyNames,
-                           const std::vector<std::string>& exceptNames)
-    -> void {
-    auto allowed = [&](const std::string& name) {
-        return kex::semantic::resolve_core::usingSelectsName(
-            name, onlyNames, exceptNames);
-    };
-    std::unordered_set<std::string> moduleNames;
-    for (const auto& [key, _] : moduleFunctions) {
-        const auto lastDot = key.rfind('.');
-        if (lastDot != std::string::npos)
-            moduleNames.insert(key.substr(0, lastDot));
-    }
-    // A module whose own last segment names a SAME-NAMED nested
-    // constructor block (`Net.HTTP.WebSocket`'s `module WebSocket do
-    // ... end`, giving `Net.HTTP.WebSocket.WebSocket`) has no direct
-    // members of its own in that shape — bare `WebSocket.connect(…)`
-    // means the child, not the header. Prefer that child wherever it
-    // exists, for both `M` itself and any sibling this function aliases.
-    auto resolveTarget = [&](const std::string& candidate) {
-        const auto childDot = candidate.rfind('.');
-        const auto candidateLeaf = childDot == std::string::npos
-            ? candidate : candidate.substr(childDot + 1);
-        const auto sameNamedChild = candidate + "." + candidateLeaf;
-        return moduleNames.count(sameNamedChild) ? sameNamedChild : candidate;
-    };
-    const auto dot = srcMod.rfind('.');
-    const auto leaf = dot == std::string::npos ? srcMod : srcMod.substr(dot + 1);
-    const auto parent = dot == std::string::npos ? std::string() : srcMod.substr(0, dot);
-    if (allowed(leaf)) moduleAliases.try_emplace(leaf, resolveTarget(srcMod));
-    const auto childPrefix = srcMod + ".";
-    for (const auto& modulePath : moduleNames) {
-        if (modulePath.rfind(childPrefix, 0) == 0) {
-            // Immediate child of M only — a grandchild still needs its
-            // own qualification.
-            const auto rest = modulePath.substr(childPrefix.size());
-            if (rest.find('.') == std::string::npos && allowed(rest))
-                moduleAliases.try_emplace(rest, modulePath);
-        } else if (!parent.empty() && modulePath != srcMod) {
-            const auto modDot = modulePath.rfind('.');
-            if (modDot != std::string::npos &&
-                modulePath.compare(0, modDot, parent) == 0 &&
-                modDot == parent.size()) {
-                const auto siblingLeaf = modulePath.substr(modDot + 1);
-                if (allowed(siblingLeaf))
-                    moduleAliases.try_emplace(siblingLeaf, resolveTarget(modulePath));
-            }
-        }
-    }
 }
 
 auto Lowering::makeArgumentDispatcher(
@@ -1170,10 +1093,10 @@ auto Lowering::takesPlainParameters(const std::string& method,
                                     const std::string& owner) const -> bool {
     auto found = makeMethods.find(method);
     if (found == makeMethods.end()) return false;
-    const auto canonical = canonicalRecordName(owner);
+    const auto& canonical = owner;
     bool any = false;
     for (const auto& candidate : found->second) {
-        if (!candidate.def || canonicalRecordName(candidate.owner) != canonical)
+        if (!candidate.def || ownerOf(candidate) != canonical)
             continue;
         any = true;
         for (const auto& clause : candidate.def->clauses)

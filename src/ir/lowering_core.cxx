@@ -9,7 +9,7 @@
 
 namespace kex::ir {
 
-// The inverse of `canonicalRecordName` for MANGLED SYMBOL spellings: given
+// For MANGLED SYMBOL spellings: given
 // a type as the checker names it (qualified — `Srv.Server`), the spelling
 // the declaring module's own `make`/annotation source used, which is what
 // `mangleReceiverSignature` baked into the emitted function names. Returns
@@ -53,132 +53,25 @@ auto Lowering::traitIdentityOf(const std::string& written) const -> std::string 
     return traitMethods.count(trait) ? trait : std::string{};
 }
 
-// Resolve a source spelling to the canonical runtime record identity.
-// Module-owned records are tagged `Module.Record`; top-level records keep
-// their historical bare name. Prefer the innermost lexical module before
-// a same-named top-level record.
-auto Lowering::canonicalRecordName(const std::string& name) const -> std::string {
-    if (auto scoped = kex::semantic::resolve_core::resolveInScopes(
-            currentModulePath, name, [&](const std::string& candidate) {
-                return records.count(candidate) > 0;
-            }))
-        return *scoped;
-    // A qualified name written as a known record's identity is that record,
-    // imported or not: `Kex.AST.ParseError { message }` from a unit compiled
-    // apart matched the prelude's `ParseError` by suffix.
-    if (name.find('.') != std::string::npos && records.count(name)) return name;
-    // A non-record type the module being lowered declares itself — an
-    // opaque `type Connection` — is that type. Carrying on would hand the
-    // name to whichever other module declares a RECORD called
-    // `Connection`, and the guard built from it then matched none of this
-    // module's values: "Undefined method: send for Tuple" (kexhq/kex#476).
-    if (kex::semantic::resolve_core::resolveInScopes(
-            currentModulePath, name, [&](const std::string& candidate) {
-                return declaredTypeIdentities.count(candidate) > 0;
-            }))
-        return name;
-    if (resolvingMakeOwner && currentModulePath.empty())
-        if (auto declaring = localTypeModules.find(name);
-            declaring != localTypeModules.end() &&
-            declaredTypeIdentities.count(declaring->second + "." + name) &&
-            !records.count(declaring->second + "." + name))
-            return name;
-    // A record this unit declares at the top level. One that merely
-    // arrived with the prelude does not outrank what a `using` names:
-    // `using App.Reply, only: [Reply]` means that module's record, and
-    // tagging the construction with the prelude's `Reply` left every
-    // function of the imported one "Undefined method … for Reply"
-    // (kexhq/kex#476).
-    const bool external = externalRecordNames.count(name) > 0;
-    if (records.count(name) && !external) return name;
-    if (external && name.find('.') == std::string::npos) {
-        for (const auto& imported : usingModules)
-            if (records.count(imported + "." + name))
-                return imported + "." + name;
-        // A dispatcher's guard is built outside any module, for the type
-        // a `make` block of this unit targets.
-        if (resolvingMakeOwner)
-            if (auto declaring = localTypeModules.find(name);
-                declaring != localTypeModules.end() &&
-                records.count(declaring->second + "." + name))
-                return declaring->second + "." + name;
-        return name;
-    }
-    // The module whose `make` block named this type. A dispatcher is
-    // generated after the module walk, so `currentModulePath` no longer
-    // says where the name was written, and the suffix match below gives up
-    // when two modules share a last segment — `Mock.Response` and
-    // `Web.Response` do, which left the guard testing a bare `Response`
-    // tag that no value carries (kexhq/kex#143).
-    if (auto declaring = localTypeModules.find(name);
-        declaring != localTypeModules.end()) {
-        const auto candidate = declaring->second + "." + name;
-        if (records.count(candidate)) return candidate;
-    }
-    // A qualified identity the record table does not know under that
-    // spelling (a reified value carries the interpreter's `Boxes.Box`)
-    // still names the record declared as its last segment.
-    if (const auto dot = name.rfind('.'); dot != std::string::npos) {
-        // A PARTIALLY qualified spelling first: `using Net.Socket`
-        // makes `TCP.Endpoint` legal for the record whose identity —
-        // and BEAM tag — is `Net.Socket.TCP.Endpoint`. Without this the
-        // construction was tagged 'TCP.Endpoint', which the runtime's
-        // own pattern never matches: `Net.HTTP.Server.start` answered
-        // "invalid HTTP server configuration" for a perfectly good
-        // endpoint. Same rule as the bare-name case below — a `using`
-        // names the owner outright, and a suffix match settles the rest
-        // only when it is unambiguous.
-        for (const auto& imported : usingModules)
-            if (records.count(imported + "." + name))
-                return imported + "." + name;
-        {
-            const auto match = kex::semantic::resolve_core::matchSuffix(
-                records, "." + name);
-            if (match.kind ==
-                kex::semantic::resolve_core::SuffixMatchKind::Unique)
-                return match.name;
-        }
-        // A leading PORTION of the qualifier is a KNOWN ALIAS: either a
-        // `using Geometry, as: Geo` single-segment alias, or a
-        // multi-segment one an `export Geometry` inside `module App`
-        // registers for its whole re-namespaced prefix (`App.Geometry`,
-        // still meaning `Geometry`). Longest prefix first, so a re-export
-        // nested inside an aliased scope resolves the more specific
-        // mapping. The record's real identity is registered under the
-        // alias's TARGET, not the written qualifier — construction
-        // through either otherwise tagged the tuple with the qualifier
-        // ITSELF ('Geo.Circle', 'App.Geometry.Circle'), which no
-        // is_record/tag guard anywhere recognizes — the record table
-        // only ever holds canonical module names — so a value built
-        // this way looked like a bare, untagged tuple to every
-        // method/pattern that later inspected it (kexhq/kex#alias).
-        for (size_t prefixEnd = dot; prefixEnd != std::string::npos;
-             prefixEnd = prefixEnd == 0
-                 ? std::string::npos
-                 : name.rfind('.', prefixEnd - 1)) {
-            auto alias = moduleAliases.find(name.substr(0, prefixEnd));
-            if (alias == moduleAliases.end()) continue;
-            const auto aliased = alias->second + name.substr(prefixEnd);
-            if (records.count(aliased)) return aliased;
-        }
-        if (const auto bare = name.substr(dot + 1); records.count(bare))
-            return bare;
-        return name;
-    }
-    // A bare name written against an IMPORTED record: `Input` inside JSON
-    // is Parsing's record, and it must be tagged with the same qualified
-    // identity Parsing itself constructs, or the two modules disagree
-    // about the tuple's tag. A `using` names the owner outright; failing
-    // that, a suffix match settles it only when it is unambiguous —
-    // ambiguity is exactly the case that needs qualifying at the source.
-    for (const auto& imported : usingModules)
-        if (records.count(imported + "." + name))
-            return imported + "." + name;
-    const auto match =
-        kex::semantic::resolve_core::matchSuffix(records, "." + name);
-    if (match.kind == kex::semantic::resolve_core::SuffixMatchKind::Unique)
-        return match.name;
-    return name;
+auto Lowering::guardTypeOf(const ast::TypeExpr& type) const -> std::string {
+    if (auto record = hir->recordAnnotatedBy(type); !record.empty()) return record;
+    return typeText(type, TypeSpelling::Dispatch);
+}
+
+auto Lowering::makeOwnerOf(const ast::FunctionDef& method, const std::string& written) const
+    -> std::string {
+    if (auto record = hir->makeTargetOf(method); records.count(record)) return record;
+    return written;
+}
+
+auto Lowering::ownerOf(const MakeMethod& method) const -> std::string {
+    return method.def ? makeOwnerOf(*method.def, method.owner) : method.owner;
+}
+
+auto Lowering::ownerIdentity(const std::string& written) const -> std::string {
+    const auto found = ownerIdentities.find(written);
+    return found != ownerIdentities.end() && records.count(found->second) ? found->second
+                                                                         : written;
 }
 
 auto Lowering::prefixSymbol(const std::string& name) const -> std::string {
@@ -712,14 +605,11 @@ auto Lowering::lowerFieldDefault(const RecordInfo& info, const ast::ExprPtr& e)
         return lower(e);
     auto savedPath = currentModulePath;
     auto savedImports = moduleImports;
-    auto savedAliases = moduleAliases;
     currentModulePath = info.owner;
     if (!info.imports.empty()) moduleImports = info.imports;
-    if (!info.aliases.empty()) moduleAliases = info.aliases;
     auto result = lower(e);
     currentModulePath = std::move(savedPath);
     moduleImports = std::move(savedImports);
-    moduleAliases = std::move(savedAliases);
     return result;
 }
 

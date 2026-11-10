@@ -110,6 +110,16 @@ public:
     // program.
     auto traitWrittenAs(const std::string& scope, const std::string& written) const
         -> std::string;
+    // The declaration a `make` method is for (`Culture.Culture` for a method
+    // of `make Culture`), and the record a named record pattern names, as the
+    // checker resolved them; "" otherwise, and for a loaded program.
+    auto makeTargetOf(const ast::FunctionDef& method) const -> std::string;
+    // The record `expr` builds (a construction), as the checker typed it; "".
+    auto recordOf(const ast::Expr& expr) const -> std::string;
+    auto recordOfPattern(const ast::RecordPattern& pattern) const -> std::string;
+    // The record a written type annotation names, as the checker resolved it
+    // where it was written; "" for any other type, and for a loaded program.
+    auto recordAnnotatedBy(const ast::TypeExpr& type) const -> std::string;
     // The trait a method's `make` block is for (`make Shape do`), whose
     // dictionary the method takes for its receiver; "" for any other method,
     // and for a loaded program.

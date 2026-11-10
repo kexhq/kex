@@ -218,8 +218,20 @@ auto emitWithExternalRecords(
     kex::Lexer lexer(source);
     kex::Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
-    return emitted(
-        lowerChecked(program, stem, {.externalRecords = &records})).source;
+    // The checker sees the same records, as it does when an interface
+    // supplies them: which record a name means is its answer.
+    auto interfaces = testInterfaces();
+    for (const auto& record : records) {
+        interfaces.recordArities[record.name] = record.fields.size();
+        auto& fields = interfaces.recordFields[record.name];
+        for (const auto& field : record.fields) {
+            interfaces.recordFieldNames[record.name].insert(field);
+            fields[field] = kex::semantic::Type::unknown();
+        }
+    }
+    return emitted(lowerCheckedWith(program, stem, {.externalRecords = &records},
+                                    &kex::ir::lowerProgram, &interfaces))
+        .source;
 }
 
 // Compile an IR-pipeline Core Erlang module and return main/0's value. The

@@ -362,6 +362,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 auto dispatchTypes = methodDispatchTypes(*fd, typeName);
                 const auto signature =
                     mangleReceiverSignature(fd->name, dispatchTypes);
+                // The symbol keeps the written spellings; the dispatcher's
+                // guards test the declarations the checker resolved them to.
+                for (std::size_t i = 0; i < fd->clauses[0].params.size(); ++i)
+                    if (const auto& type = fd->clauses[0].params[i].type; type && *type)
+                        dispatchTypes[i + 1] = L.guardTypeOf(**type);
                 signaturesByNameAndArity[
                     fd->name + "/" + std::to_string(beamArity(fd))]
                         .emplace(signature, std::move(dispatchTypes));
@@ -377,6 +382,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             }
             if (!fd->clauses.empty()) {
                 L.makeMethods[fd->name].push_back({typeName, makeModulePath, fd});
+                if (auto declared = L.hir->makeTargetOf(*fd); !declared.empty())
+                    L.ownerIdentities.try_emplace(typeName, std::move(declared));
             }
         };
         for (const auto& bi : md.body) {
@@ -576,20 +583,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     std::string srcMod = (*ed)->module.dotted();
                     auto alias = (*ed)->alias.value_or((*ed)->module.parts.back());
                     auto nsPath = path + "." + alias;
-                    // Records aren't re-namespaced the way functions are
-                    // just below (each one copied to a new `moduleFunctions`
-                    // key) — a record's identity is its BEAM tag, which
-                    // stays whatever the declaring module gave it. Instead,
-                    // teach `canonicalRecordName` the prefix rewrite: a
-                    // value constructed as `nsPath.Circle` (`App.Geometry.
-                    // Circle`, reached through `export Geometry` inside
-                    // `module App`) really means `srcMod.Circle`
-                    // (`Geometry.Circle`), the one records.count actually
-                    // recognizes. `moduleAliases` already serves the exact
-                    // same purpose for a `using M, as: Alias` prefix — the
-                    // multi-segment key here is inert for that lookup (it
-                    // only ever checks a call's single leading segment).
-                    L.moduleAliases[nsPath] = srcMod;
+                    // Records need no rewrite here: which record
+                    // `App.Geometry.Circle` means is the checker's answer.
                     for (const auto& [key, val] : L.moduleFunctions) {
                         if (key.rfind(srcMod + ".", 0) != 0) continue;
                         auto bare = key.substr(srcMod.size() + 1);
@@ -917,8 +912,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         kex::collectDeclaredRecordNames(m.body, declaredRecords);
                         auto savedImports = L.moduleImports;
                         auto savedExternalImports = L.externalImports;
-                        auto savedAliases = L.moduleAliases;
-                        auto savedUsing = L.usingModules;
                         auto prefix = m.name + ".";
                         for (const auto& [key, val] : L.moduleFunctions)
                             if (key.rfind(prefix, 0) == 0) {
@@ -1019,7 +1012,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             auto entry = L.records.find(m.name + "." + rd.name);
                             if (entry == L.records.end()) return;
                             entry->second.imports = L.moduleImports;
-                            entry->second.aliases = L.moduleAliases;
                         };
                         for (const auto& bi : m.body) {
                             if (const auto* rd =
@@ -1037,8 +1029,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         }
                         L.moduleImports = std::move(savedImports);
                         L.externalImports = std::move(savedExternalImports);
-                        L.moduleAliases = std::move(savedAliases);
-                        L.usingModules = std::move(savedUsing);
                         L.currentModulePath = std::move(savedModulePath);
                     };
                     lowerModuleBody(*node);

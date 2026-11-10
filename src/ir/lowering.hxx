@@ -57,7 +57,6 @@ struct Lowering {
         // scope wherever the record happens to be constructed.
         std::string owner;
         std::unordered_map<std::string, std::string> imports;
-        std::unordered_map<std::string, std::string> aliases;
         // A record of a unit compiled apart: the BEAM module whose
         // `__kex_record_default` answers its defaults, and which fields have one.
         std::string defaultsModule;
@@ -75,9 +74,6 @@ struct Lowering {
     // A record or ADT of a unit compiled apart, by name: the module holding
     // its `make` functions (ExternalRecordLayout::methodOwner).
     std::unordered_map<std::string, std::string> externalMethodOwners;
-    // Set while a receiver guard is built for a `make` target, which is
-    // written against the block's own module rather than the use site's.
-    mutable bool resolvingMakeOwner = false;
     // What `Type.fields` and `Type.constructors` answer with at runtime: each
     // record's fields and each sum type's variants as declared, in order,
     // with their declared types. Ordered maps keep the emitted Core
@@ -97,7 +93,17 @@ struct Lowering {
 
     auto traitIdentityOf(const std::string& written) const -> std::string;
 
-    auto canonicalRecordName(const std::string& name) const -> std::string;
+    // Which declaration a type name means is the checker's answer, never
+    // lowering's: these turn the answers into the names the tables below
+    // are keyed by (a record by its identity, anything else as written).
+    // The record a written type annotation names, else the annotation.
+    auto guardTypeOf(const ast::TypeExpr& type) const -> std::string;
+    // The declaration a `make` method belongs to, else its target as written.
+    auto makeOwnerOf(const ast::FunctionDef& method, const std::string& written) const
+        -> std::string;
+    // A `make` target's spelling as the declaration the checker resolved it
+    // to (`ownerIdentities`), else the spelling.
+    auto ownerIdentity(const std::string& written) const -> std::string;
     // field name → the record slots holding it. A field can live in several
     // records at (possibly different) positions; the emitted accessor
     // dispatches on the tag when they differ. Mirrors the string emitter.
@@ -137,6 +143,10 @@ struct Lowering {
         const ast::FunctionDef* def;
     };
     std::unordered_map<std::string, std::vector<MakeMethod>> makeMethods;
+    // Each `make` target spelling a record target was written as, and the
+    // record the checker resolved it to (makeOwnerOf).
+    std::unordered_map<std::string, std::string> ownerIdentities;
+    auto ownerOf(const MakeMethod& method) const -> std::string;
     // Cross-type method-name collisions: a method name → the make-block type
     // names that define it, in order. When more than one type defines the
     // same name, each type's version is emitted mangled (`name/Type`) and a
@@ -287,18 +297,12 @@ struct Lowering {
     // names are not globally unique, so `this.field` must select the layout
     // owned by this type rather than the first same-named field in the file.
     std::string currentMakeType;
-    // Modules a `using` has brought into scope at this point. The block form
-    // saves and restores it around its body, exactly as it does moduleImports.
-    std::set<std::string> usingModules;
     // Bare imported function name → mangled name. Populated by `using M, only:`
     // inside module bodies so bare calls resolve to the correct cross-module fn.
     std::unordered_map<std::string, std::string> moduleImports;
     // Bare name → `Module.name` for what a `using` imported from a separately
     // compiled module (see importExternalModule). Scoped like moduleImports.
     std::unordered_map<std::string, std::string> externalImports;
-    // Lexically visible `using Source, as: Alias` mappings. The receiver's
-    // first path segment is expanded before qualified module lookup.
-    std::unordered_map<std::string, std::string> moduleAliases;
     // Loaded external modules from KexI registry (/load).
     const ExternalModules* externalModules = nullptr;
     // Lowering the prelude itself: its `to` conversions are what other
@@ -544,7 +548,9 @@ struct Lowering {
 
     auto lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr;
 
-    auto lowerRecordConstruction(const ast::RecordConstruction& n) -> ExprPtr;
+    auto lowerRecordConstruction(const ast::Expr& e, const ast::RecordConstruction& n) -> ExprPtr;
+    // The record the checker typed `e` as, or "".
+    auto recordTypeOf(const ast::Expr& e) const -> std::string;
 
     auto lowerParsedInterpolatedString(
         const std::vector<std::string>& stringParts,
@@ -687,8 +693,6 @@ struct Lowering {
     // restore it once whatever scope the bindings apply to is done lowering.
     struct UsingBindingsSaved {
         std::unordered_map<std::string, std::string> imports;
-        std::unordered_map<std::string, std::string> aliases;
-        std::set<std::string> using_;
         std::unordered_map<std::string, std::string> externalImports;
     };
 
@@ -785,10 +789,6 @@ struct Lowering {
 
     auto typeGuard(const std::string& written, ExprPtr v) -> ExprPtr;
 
-    auto registerModuleAliases(const std::string& srcMod,
-                               const std::vector<std::string>& onlyNames,
-                               const std::vector<std::string>& exceptNames)
-        -> void;
 
     auto makeArgumentDispatcher(
         const std::string& name, int arity,

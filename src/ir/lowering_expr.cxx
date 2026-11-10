@@ -206,7 +206,14 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
             // Never ahead of a constructor this unit declares: `Name` in
             // `module People` is its `Detail.Name`, whatever record
             // `Directory.Name` the bare spelling also resolves to.
-            if (auto record = canonicalRecordName(n.name);
+            // The record the checker resolved the name to: a type named as a
+            // value, or as the receiver of its own `make` method
+            // (`Box.named(label)`).
+            const auto value = hir->typeValueOf(*e);
+            // (Only a type this name spells: a constant `ORIGIN : Point` is not.)
+            auto receiverType = hir->recordOf(*e);
+            if (!receiverType.ends_with("." + n.name)) receiverType.clear();
+            if (const auto record = value ? value->name : receiverType;
                 record != n.name && records.count(record) && !variantTagSet.count(n.name)) {
                 ex->node = Construct{record, {}};
                 return ex;
@@ -214,7 +221,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
             ex->node = Construct{n.name, {}};
             return ex;
         } else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
-            return lowerRecordConstruction(n);
+            return lowerRecordConstruction(*e, n);
         } else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
             // && / || MUST short-circuit: the right operand is evaluated
             // lazily, so it cannot be ANF-atomized (that would force it).
@@ -412,7 +419,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                         if (!clause.params.empty())
                             if (const auto* declared =
                                     dispatchParamType(clause.params.back())) {
-                                const auto written = typeText(*declared, TypeSpelling::Dispatch);
+                                const auto written = guardTypeOf(*declared);
                                 if (discriminatingType(written))
                                     test = callE("erlang", "and", 2,
                                         two(std::move(test),
@@ -1313,12 +1320,12 @@ auto Lowering::nextExtendingModule(const std::string& method,
     -> std::string {
     auto found = makeMethods.find(method);
     if (found == makeMethods.end()) return {};
-    const auto owner = canonicalRecordName(typeName);
+    const auto owner = ownerIdentity(typeName);
     std::string next;
     for (const auto& candidate : found->second) {
         if (candidate.modulePath.empty() ||
             candidate.modulePath <= currentModulePath ||
-            canonicalRecordName(candidate.owner) != owner || !candidate.def ||
+            ownerOf(candidate) != owner || !candidate.def ||
             candidate.def->clauses.empty() ||
             static_cast<int>(candidate.def->clauses[0].params.size()) + 1 !=
                 arity)
@@ -1340,14 +1347,14 @@ auto Lowering::selectedMakeMethod(const ast::MethodCall& n) const -> const MakeM
     if (found == makeMethods.end()) return nullptr;
     const auto& target = hir->targetOf(n);
     const auto owner = target.kind == hir::TargetKind::OwnMethod
-        ? canonicalRecordName(ownerNameOf(target.owner)) : std::string{};
+        ? ownerNameOf(target.owner) : std::string{};
     const MakeMethod* chosen = nullptr;
     for (const auto& method : found->second) {
         if (std::ranges::none_of(method.def->clauses, [&](const auto& clause) {
                 return &clause == signature->clause;
             }))
             continue;
-        if (canonicalRecordName(method.owner) == owner) return &method;
+        if (ownerOf(method) == owner) return &method;
         if (!chosen) chosen = &method;
     }
     return chosen;
@@ -1370,11 +1377,11 @@ auto Lowering::makeMethodFor(const ast::MethodCall& n) const -> const MakeMethod
     const auto found = makeMethods.find(n.method);
     std::vector<std::string> labels;
     for (const auto& [label, _] : n.namedArgs) labels.push_back(label);
-    const auto owner = canonicalRecordName(chosen->owner);
+    const auto owner = ownerOf(*chosen);
     const MakeMethod* entry = chosen;
     for (const auto& method : found->second)
         if (method.modulePath < entry->modulePath &&
-            canonicalRecordName(method.owner) == owner &&
+            ownerOf(method) == owner &&
             method.def->clauses[0].params.size() == selected.params.size() &&
             namedArgumentsFit(method.def->clauses[0], labels, positional))
             entry = &method;
@@ -1399,7 +1406,7 @@ auto Lowering::staticFieldRead(const ast::MethodCall& n) -> ExprPtr {
     // came from a field read the checker had already decided.
     const auto& target = hir->targetOf(n);
     if (target.kind != hir::TargetKind::FieldRead) return nullptr;
-    const auto& recordName = canonicalRecordName(target.owner);
+    const auto& recordName = target.owner;
     // A name this unit and an interface lay out differently says too little:
     // a local `ParseError` and the prelude's are both `ParseError` to the
     // checker, with the field at different positions. The accessor tells
@@ -1435,10 +1442,10 @@ auto Lowering::typeOwnsStaticFunction(const std::string& type,
     if (knownFns.count(mangleQualifiedMember(type, method))) return true;
     auto owners = methodOwners.find(method);
     if (owners == methodOwners.end()) return true;
-    const auto canonical = canonicalRecordName(type);
+    const auto canonical = ownerIdentity(type);
     return std::any_of(owners->second.begin(), owners->second.end(),
                        [&](const std::string& owner) {
-                           return canonicalRecordName(owner) == canonical;
+                           return ownerIdentity(owner) == canonical;
                        });
 }
 

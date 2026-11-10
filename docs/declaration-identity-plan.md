@@ -1,6 +1,10 @@
 # Declaration identity: the checker names declarations, backends name symbols
 
-Status: proposed (2026-11-10), not started. Follows Stage 3 of
+Status: in progress (2026-11-10). Stages 1–4 done: the checker gives each
+record one identity, records the declaration of every record construction,
+pattern, annotation and `make` target, and lowering reads those answers;
+`canonicalRecordName` and lowering's `using`/alias record resolution are
+deleted (stdlib Core Erlang identical, all gates green). Follows Stage 3 of
 `pass-restructure-plan.md`, which left lowering reading no expression types.
 
 ## Goal
@@ -91,6 +95,17 @@ stdlib's Core Erlang compared before/after)
    the method declaration; `methodDispatchTypes` and the written-spelling
    inputs go. KexI carries declaration identities;
    `importDispatchSpelling` leaves the checker for the BEAM backend.
+   Measured 2026-11-10 (stdlib, 598 BEAM specs, the separate-build tests):
+   lowering's `moduleImports` binding of a bare call disagrees with the
+   checker in four shapes. The checker records Dispatch, not the function,
+   for a call to a pattern-dispatched or overloaded module function
+   (`displaySymbol(unit)` in `Units.SI`, `retry?(result)`); it selects a
+   clause lowering emits under a per-signature name (`Shapes.area`); and a
+   symbol renamed after registration (`fetch$free`) has to be read from the
+   final symbol table. So the checker first records, per call, the function
+   declaration it resolved the name to (inside `checkCall`, where scope and
+   imports are applied), whatever clause runs; lowering then maps that
+   declaration to its symbol and `moduleImports`/`externalImports` go.
 6. **`tagAtom` is backend metadata.** `kexi_registry` keys records by
    declaration identity.
 

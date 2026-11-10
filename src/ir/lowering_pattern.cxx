@@ -73,7 +73,7 @@ auto Lowering::fieldAccess(const std::string& fname, ExprPtr base) -> ExprPtr {
 auto Lowering::fieldAccessIn(const std::string& typeName, const std::string& fname,
                    ExprPtr base) -> ExprPtr {
     if (!typeName.empty()) {
-        if (auto rec = records.find(canonicalRecordName(typeName));
+        if (auto rec = records.find(typeName);
             rec != records.end()) {
             const auto& fs = rec->second.fields;
             for (size_t i = 0; i < fs.size(); i++)
@@ -89,7 +89,7 @@ auto Lowering::fieldAccessIn(const std::string& typeName, const std::string& fna
 void Lowering::destructureRecordPattern(const std::string& baseVar, const ast::RecordPattern& rp,
                               std::vector<std::pair<std::string, ExprPtr>>& prefix) {
     for (const auto& field : rp.fields) {
-        auto acc = fieldAccessIn(rp.typeName, field.name, var(baseVar));
+        auto acc = fieldAccessIn(hir->recordOfPattern(rp), field.name, var(baseVar));
         if (!field.pattern) {
             prefix.push_back({field.name, std::move(acc)});
         } else if (auto* vp = std::get_if<ast::VarPattern>(&(*field.pattern)->kind)) {
@@ -123,7 +123,7 @@ void Lowering::collectRecordBindings(const ast::RecordPattern& rp, std::vector<s
 auto Lowering::wrapRecordPattern(const std::string& baseVar, const ast::RecordPattern& rp,
                        ExprPtr body) -> ExprPtr {
     for (auto it = rp.fields.rbegin(); it != rp.fields.rend(); ++it) {
-        auto value = fieldAccessIn(rp.typeName, it->name, var(baseVar));
+        auto value = fieldAccessIn(hir->recordOfPattern(rp), it->name, var(baseVar));
         if (!it->pattern) {
             body = makeLet(it->name, std::move(value), std::move(body));
         } else if (auto* vp = std::get_if<ast::VarPattern>(&(*it->pattern)->kind)) {
@@ -375,7 +375,7 @@ auto Lowering::lowerPattern(const ast::PatternPtr& p) -> PatternPtr {
             out->kind = PatKind::Var; out->name = name;
             subst[name] = name;
             pendingTypeGuards.push_back(
-                typeGuard(pn.type ? typeText(*pn.type, TypeSpelling::Dispatch) : "Any",
+                typeGuard(pn.type ? guardTypeOf(*pn.type) : "Any",
                           var(name)));
         } else if constexpr (std::is_same_v<T, ast::LiteralPattern>) {
             out->kind = PatKind::Lit;
@@ -418,7 +418,7 @@ auto Lowering::lowerPattern(const ast::PatternPtr& p) -> PatternPtr {
                     "IR lower: anonymous record pattern `{ ... }` is not "
                     "supported in match/if-let; name the record "
                     "(`Foo { ... }`) so its field layout is known");
-            const auto recordName = canonicalRecordName(pn.typeName);
+            const auto recordName = hir->recordOfPattern(pn);
             auto rec = records.find(recordName);
             if (rec == records.end())
                 throw LowerError("IR lower: unknown record `" + pn.typeName +
