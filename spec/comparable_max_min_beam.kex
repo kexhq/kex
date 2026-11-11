@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # `max`, `min` and `clamp` on BEAM (kexhq/kex#99); see comparable_max_min.kex.
 record Version do
   major : Integer

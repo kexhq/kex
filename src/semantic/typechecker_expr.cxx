@@ -582,6 +582,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                    {named ? named : Type::named(node.name)});
             }
             if (auto constant = constantType(node.name)) return constant;
+            reportConstructorOutOfScope(node.name, expr.location);
             return Type::unknown();
         }
         else if constexpr (std::is_same_v<T, ast::WithExpr>) {
@@ -1223,7 +1224,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         module != m_moduleConstructors.end())
                         if (auto constructor =
                                 module->second.find(node.method);
-                            constructor != module->second.end()) {
+                            constructor != module->second.end() &&
+                            // The program's own modules: an imported one's
+                            // constructor is its module's exported function.
+                            !constructor->second.imported) {
                             if (!constructor->second.isPublic &&
                                 m_currentModulePath != *path)
                                 error(expr.location,
@@ -1238,6 +1242,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                             // retains its defining ADT even when the current file
                             // did not import that ADT's bare name. This matters
                             // for reified constants containing nested records.
+                            // Spelled out, a nullary constructor is its ADT's variant,
+                            // the type its bare name has where it is in scope.
+                            if (constructor->second.arity == 0 && !constructor->second.typeName.empty())
+                                return Type::variantOf(constructor->second.typeName, node.method);
                             if (!moduleMemberImported(*path, node.method) &&
                                 !withinModule(*path) &&
                                 !constructor->second.typeName.empty())
@@ -1272,6 +1280,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                 const auto& typeName = constructor->second.typeName.empty()
                                     ? node.method : constructor->second.typeName;
                                 m_decidedCalls[&expr] = {CallKind::Constructor, typeName};
+                                if (constructor->second.arity == 0 && !constructor->second.typeName.empty())
+                                    return Type::variantOf(typeName, node.method);
                                 return Type::named(typeName);
                             }
                         if (m_importedInterfaces)
@@ -1285,7 +1295,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                                 &resolve(function.signature.result)->kind);
                                             m_decidedCalls[&expr] = {CallKind::Constructor,
                                                                      adt ? adt->name : node.method};
-                                            return function.signature.result;
+                                            return variantType(function.signature.result, node.method);
                                         }
                     }
                 }
@@ -1630,6 +1640,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 callName = node.method;
             } else if (isImportedNamespace || isLocalNamespace) {
                 callName = kex::mangle::qualify(*importedPath, node.method);
+                // A private function is its module's own, through its path
+                // as by its bare name (freeFunctionVisible): the checker
+                // refuses it, and no backend keeps a copy of the rule.
+                if (m_privateFreeFunctions.contains(*importedPath + "\n" + node.method) &&
+                    !withinModule(*importedPath)) {
+                    error(expr.location, "cannot access private name `" + node.method +
+                                             "` from " + *importedPath);
+                    return Type::unknown();
+                }
             } else if (isNamespaceCall &&
                 std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind)) {
                 callName = kex::mangle::qualify(
@@ -1861,6 +1880,16 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
             auto result = checkCall(callName, argTypes, expr.location,
                                     /*isMethodCall=*/true, &node, &expr);
+            // An imported module's nullary constructor, reached as the
+            // module's exported function: its value is that variant of its ADT,
+            // the type its bare name has where it is in scope.
+            if (isNamespaceCall && importedPath && argTypes.empty())
+                if (const auto module = m_moduleConstructors.find(*importedPath);
+                    module != m_moduleConstructors.end())
+                    if (const auto constructor = module->second.find(node.method);
+                        constructor != module->second.end() && constructor->second.imported &&
+                        constructor->second.arity == 0)
+                        result = Type::variantOf(constructor->second.typeName, node.method);
             // Through a structural alias the value is the first argument already:
             // the alias itself is no receiver to pass.
             if (structuralAlias)
@@ -1916,17 +1945,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         if (!common.empty()) {
                             elemType = Type::named(common);
                         } else {
-                            // Sibling nullary constructors share their parent
-                            // ADT as a natural list element type. Preserve
-                            // constructor refinements for overload selection,
-                            // but widen `[Less, Equal, Greater]` to
-                            // `[Comparison]` instead of rejecting it.
-                            auto* lhs = std::get_if<NamedType>(&elemType->kind);
-                            auto* rhs = std::get_if<NamedType>(&t->kind);
-                            const auto* lhsOwner = lhs ? constructorOwner(*lhs) : nullptr;
-                            const auto* rhsOwner = rhs ? constructorOwner(*rhs) : nullptr;
-                            if (lhsOwner && rhsOwner && *lhsOwner == *rhsOwner) {
-                                elemType = Type::named(*lhsOwner);
+                            // Sibling variants share their ADT as a natural
+                            // element type: `[Less, Equal, Greater]` is a
+                            // `[Comparison]`, not a mistake.
+                            if (auto joined = siblingConstructorJoin(elemType, t)) {
+                                elemType = std::move(joined);
                             } else {
                                 error(expr.location,
                                       "List elements must be the same type. Expected " +
@@ -3229,6 +3252,8 @@ auto TypeChecker::displayTypeOf(const ast::Expr* expr) const -> TypePtr {
             // constructor occurrence.  In particular, Process<Message> must
             // not widen through the unrelated prelude constructor `Process`
             // to its owning `Feature` ADT in editor-facing types.
+            // A variant widens to its ADT.
+            if (!named->variant.empty()) return Type::named(named->name);
             if (const auto* owner = constructorOwner(*named);
                 owner && *owner != named->name)
                 return Type::named(*owner);
@@ -3260,6 +3285,8 @@ auto TypeChecker::satisfiesTrait(const TypePtr& type,
     // otherwise `describe(Dog)` rejects a value the trait plainly covers.
     auto* named = std::get_if<NamedType>(&type->kind);
     if (!named) return false;
+    // A variant's conformance is its ADT's.
+    if (!named->variant.empty()) return m_traits.satisfies(Type::named(named->name), traitName);
     auto ownerSatisfies = [&](const std::string& ownerName) {
         return ownerName != named->name &&
                m_traits.satisfies(Type::named(ownerName), traitName);
@@ -3558,6 +3585,11 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     // trait-relaxation treatment (argMatchesParam, not typesEqual).
     if (auto* paramNamed = std::get_if<NamedType>(&paramType->kind)) {
         auto* argNamed = std::get_if<NamedType>(&argType->kind);
+        // A variant of an ADT is a value of that ADT; a parameter written as
+        // one variant (`FileMode.Write`) takes that variant only.
+        if (argNamed && (!argNamed->variant.empty() || !paramNamed->variant.empty()) &&
+            argNamed->name == paramNamed->name)
+            return paramNamed->variant.empty() || argNamed->variant == paramNamed->variant;
         // A bare name suffix-matches a qualified one (`Version` is
         // `Kex.Version`), but a constructor's singleton type is no spelling
         // of a type at all: NetErrorKind's `Backend` is not a `Kex.Backend`.
@@ -6788,6 +6820,13 @@ auto TypeChecker::registerDeclaredAliases(const ast::Program& program) -> void {
     m_structuralAliases.clear();
     m_moduleTypeIdentities.clear();
     m_typeDeclaringModules.clear();
+    m_declaredTypeNames.clear();
+    m_reportedUnknownTypes.clear();
+    m_pendingUnknownTypes.clear();
+    m_declarationsRegistered = false;
+    kex::collectDeclaredTypeNames(program.items, m_declaredTypeNames);
+    kex::collectDeclaredTraitNames(program.items, m_declaredTypeNames);
+    kex::collectMakeTargetNames(program.items, m_declaredTypeNames);
     kex::forEachTypeDef(program.items, [&](const ast::TypeDef& def, const std::string& module) {
         if (!module.empty()) {
             m_moduleTypeIdentities.insert(module + "." + def.name);
@@ -6849,45 +6888,58 @@ auto enclosedBy(const std::string& written, char open, char close) -> bool {
 
 auto TypeChecker::typeTestOf(const std::string& scope, const std::string& written) const
     -> TypeTest {
+    auto test = valueFormOf(scope, written);
+    // The type named as written, aliases not followed.
+    const auto structural = written.empty() || written.find("->") != std::string::npos ||
+                            std::string_view{"[{("}.find(written.front()) != std::string_view::npos;
+    if (!structural) {
+        test.written = written.substr(0, written.find('<'));
+        test.writtenIdentity = typeIdentity(scope, test.written);
+    }
+    return test;
+}
+
+auto TypeChecker::valueFormOf(const std::string& scope, const std::string& written) const
+    -> TypeTest {
     if (written.empty() || written == "Any" || !traitWrittenAs(scope, written).empty()) return {};
     // `type Handler = Env -> String` names a SHAPE: no value carries the
     // alias's name. A structural right-hand side is never a bare name, so
     // this recurses at most once.
     if (const auto alias = m_structuralAliases.find(written);
         alias != m_structuralAliases.end() && alias->second != written)
-        return typeTestOf(scope, alias->second);
+        return valueFormOf(scope, alias->second);
     // A function type first: it is parenthesized too.
     if (written.find("->") != std::string::npos)
-        return {TypeForm::Function, {}, {}, functionTypeArity(written)};
-    if (written.rfind("Block<", 0) == 0 && written.back() == '>') return {TypeForm::Block};
+        return {.form = TypeForm::Function, .arity = functionTypeArity(written)};
+    if (written.rfind("Block<", 0) == 0 && written.back() == '>') return {.form = TypeForm::Block};
     if (enclosedBy(written, '[', ']'))
-        return {written == "[Char]" ? TypeForm::CharList : TypeForm::List};
-    if (enclosedBy(written, '{', '}')) return {TypeForm::Map};
-    if (enclosedBy(written, '(', ')')) return {TypeForm::Tuple};
+        return {.form = TypeForm::List};
+    if (enclosedBy(written, '{', '}')) return {.form = TypeForm::Map};
+    if (enclosedBy(written, '(', ')')) return {.form = TypeForm::Tuple};
     // Type arguments say nothing about the value's own form.
     if (const auto angle = written.find('<');
         angle != std::string::npos && angle > 0 && written.back() == '>')
-        return typeTestOf(scope, written.substr(0, angle));
+        return valueFormOf(scope, written.substr(0, angle));
     if (written.size() == 1) return {};  // a type parameter, not a type
-    // A type a module declares is named by its identity: the nearest
-    // enclosing module that declares it, else the module that does.
-    auto identity = written;
-    if (written.find('.') == std::string::npos && !m_recordFields.count(written)) {
-        auto found = std::string{};
-        for (auto module = scope; !module.empty() && found.empty();) {
-            if (m_moduleTypeIdentities.count(module + "." + written) ||
-                m_recordFields.count(module + "." + written))
-                found = module + "." + written;
-            const auto dot = module.rfind('.');
-            module.resize(dot == std::string::npos ? 0 : dot);
-        }
-        if (found.empty())
-            if (const auto declaring = m_typeDeclaringModules.find(written);
-                declaring != m_typeDeclaringModules.end())
-                found = declaring->second + "." + written;
-        if (!found.empty()) identity = std::move(found);
+    return {.form = TypeForm::Named, .name = written, .identity = typeIdentity(scope, written)};
+}
+
+// A type a module declares is named by its identity: the nearest enclosing
+// module that declares it, else the module that does.
+auto TypeChecker::typeIdentity(const std::string& scope, const std::string& name) const
+    -> std::string {
+    if (name.find('.') != std::string::npos || m_recordFields.count(name)) return name;
+    for (auto module = scope; !module.empty();) {
+        if (m_moduleTypeIdentities.count(module + "." + name) ||
+            m_recordFields.count(module + "." + name))
+            return module + "." + name;
+        const auto dot = module.rfind('.');
+        module.resize(dot == std::string::npos ? 0 : dot);
     }
-    return {TypeForm::Named, written, std::move(identity)};
+    if (const auto declaring = m_typeDeclaringModules.find(name);
+        declaring != m_typeDeclaringModules.end())
+        return declaring->second + "." + name;
+    return name;
 }
 
 } // namespace kex::semantic

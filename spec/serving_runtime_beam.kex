@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — calls Erlang through BEAM.*
 # kex: no-check
 
 record Counter do

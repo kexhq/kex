@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # Inside `make Cursor`, `c.advance` on an untyped `c` used to bind to the
 # prelude's `Parsing.Input.advance` — the only candidate left once the
 # block's own methods were held back for an untyped receiver. The checker

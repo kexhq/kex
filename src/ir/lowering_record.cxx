@@ -236,10 +236,8 @@ auto Lowering::checkedCallModule(const ast::MethodCall& n) const -> std::string 
     case hir::TargetKind::Dispatch:
     case hir::TargetKind::ValueCall:
         return kex::mangle::scopeOf(target.owner);
-    case hir::TargetKind::Constructor: {
-        const auto dot = target.owner.rfind('.');
-        return dot == std::string::npos ? std::string{} : target.owner.substr(0, dot);
-    }
+    case hir::TargetKind::Constructor:
+        return kex::mangle::pathScopeOf(target.owner);
     default:
         return {};
     }

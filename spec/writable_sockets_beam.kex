@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # Text writes on sockets: the Writable five as free functions.
 # (True `implement: Writable` waits on the cross-unit dict bug;
@@ -13,7 +13,7 @@ end
 main do
   let path = "/tmp/kex-writable-spec.txt"
   FS.File.delete(path)
-  let handle = FS.File.open(path, Write).try
+  let handle = FS.File.open(path, FS.Write).try
   report(handle, ["a", "b"])
   handle.close
   assert(FS.File.read(path).or("") == "a\nb\n")

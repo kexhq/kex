@@ -72,3 +72,16 @@ struct DecidedCall {
 };
 
 } // namespace kex::semantic
+
+namespace kex::semantic {
+
+// A trait default a `make` block inherits: the trait, by its identity, and
+// the method's name. Named rather than pointed at, since the trait may be
+// declared in another unit (the prelude's `Foldable` for `Data.Set`); each
+// backend finds the default's body where it keeps the trait's functions.
+struct InheritedDefault {
+    std::string trait;
+    std::string method;
+};
+
+} // namespace kex::semantic

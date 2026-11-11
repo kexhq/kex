@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # kexhq/kex#370: a server-accepted WebSocket connection, stashed away by
 # its route handler and pushed to from a THIRD process while the client

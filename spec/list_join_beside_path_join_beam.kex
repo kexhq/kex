@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # `[String].join` is the prelude's List method even with FS.Path.join/2 in the
 # build — through a typed receiver, an annotated parameter and a match arm.
 # The checker's decision settles it; lowering used to choose the provider

@@ -1,6 +1,6 @@
-duplicate-helpers 31
-literal-compares 402
-type-recursions 40
+duplicate-helpers 30
+literal-compares 399
+type-recursions 39
 expr-walkers 18
 long-functions 16
 big-files 8

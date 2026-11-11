@@ -64,6 +64,6 @@ Use the `STYLE.md` file for concrete rules and examples for Kex code (`.kex` fil
 
 Lexer, parser, AST, semantic analysis, tree-walk interpreter, the Elixir-style process runtime (fibers/scheduler), and BEAM codegen (lowering IR → Core Erlang) are all implemented. Type checker runs by default (`--no-check` to skip). Traits, currying (`~`), arbitrary-precision integers (GMP), and a rich stdlib are implemented.
 
-Compile-time metaprogramming (`compiled do ... end`) is implemented: constants inlined at their use sites, `let %name` / `type %name` / `make %name` declaration generation, and builder-chain collapse that evaluates a fully-determined expression during compilation and reifies the result — carrying free runtime variables through as placeholders. `--collapse-report` says what collapsed and why the rest did not. See `docs/compiled-status.md`.
+Compile-time metaprogramming (`compiled do ... end`) is implemented: constants inlined at their use sites, `let %name` / `type %name` / `make %name` declaration generation, and builder-chain collapse that evaluates a fully-determined expression during compilation and reifies the result — carrying free runtime variables through as placeholders. `--collapse-report` says what collapsed and why the rest did not. See `docs/compiled-eval.md`.
 
 Next: a full module system and packaging. (The `.kexo` binary IR/distribution format is dropped.)

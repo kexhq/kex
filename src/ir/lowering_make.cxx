@@ -27,18 +27,6 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
     // `"(${@x}, ${@y})"`).
     const bool receiverPattern =
         !first.clauses.empty() && ast::takesReceiverPattern(first.clauses[0]);
-    // A make-String method matching the receiver with LIST patterns
-    // (`myCapitalize(@[x | rest])`) — legal, since [Char] IS String —
-    // can't match a binary receiver directly. Detect it so the whole
-    // group gets wrapped in an as_list coercion below.
-    bool listReceiver = false;
-    if (receiverPattern && typeName == "String")
-        for (const auto* fn : group)
-            for (const auto& cl : fn->clauses)
-                if (!cl.params.empty() && !cl.params[0].name && cl.params[0].pattern)
-                    if (auto* tp = std::get_if<ast::ThisPattern>(&(*cl.params[0].pattern)->kind))
-                        if (tp->inner && std::holds_alternative<ast::ListPattern>(tp->inner->kind))
-                            listReceiver = true;
     auto previousMakeType = currentMakeType;
     currentMakeType = typeName;
     auto def = lowerFunctionGroup(group, receiverPattern ? "" : "this");
@@ -69,7 +57,6 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
     // unmatched receiver somewhere else (the prelude's `to`, a shadowed
     // trait default); such a definition must not also end in an error.
     bool forwarded = false;
-    if (listReceiver) def = coerceListReceiver(std::move(def));
     // The overload set was keyed by the SOURCE arity (receiver included).
     // `def.arity` also counts the trait dictionaries and the capability
     // context lowering appends, so a `foul` overload looked up a key that
@@ -349,52 +336,6 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
     return def;
 }
 
-// Rewrap a FunDef whose clauses pattern-match the receiver as a list:
-// one wrapper clause binds raw params, then a multi-subject Match runs
-// the original clause patterns against `as_list(receiver)` (a String
-// binary becomes its [Char] codepoint list; lists pass through).
-auto Lowering::coerceListReceiver(FunDef def) -> FunDef {
-    FunDef out; out.name = def.name; out.arity = def.arity;
-    FunClause fc;
-    Match m;
-    for (int i = 0; i < def.arity; i++) {
-        std::string p = "_cr" + std::to_string(i);
-        auto pat = std::make_unique<Pattern>();
-        pat->kind = PatKind::Var; pat->name = p;
-        fc.params.push_back(std::move(pat));
-        m.subjects.push_back(i == 0
-            ? callE("kex_intrinsic_list", "as_list", 1, one(var(p)))
-            : var(p));
-    }
-    for (auto& cl : def.clauses) {
-        MatchClause mc;
-        mc.patterns = std::move(cl.params);
-        mc.guard = std::move(cl.guard);
-        mc.body = std::move(cl.body);
-        // `@[x | rest]` against a String binds `rest` to the REST OF THE
-        // STRING, not to a [Char] — the two are different types, and the
-        // receiver's own type is the one to keep. The subject was coerced
-        // to a list above, so the tail comes back as a list and has to be
-        // packed back for a binary receiver.
-        if (!mc.patterns.empty() && mc.patterns[0] &&
-            mc.patterns[0]->kind == PatKind::List && mc.patterns[0]->rest &&
-            mc.patterns[0]->rest->kind == PatKind::Var) {
-            const auto& tail = mc.patterns[0]->rest->name;
-            mc.body = makeLet(
-                tail,
-                callE("kex_intrinsic_list", "repack", 2,
-                      two(var("_cr0"), var(tail))),
-                std::move(mc.body));
-        }
-        m.clauses.push_back(std::move(mc));
-    }
-    auto b = std::make_unique<Expr>();
-    b->node = std::move(m);
-    fc.body = std::move(b);
-    out.clauses.push_back(std::move(fc));
-    return out;
-}
-
 auto Lowering::primGuardBifs() -> const std::unordered_map<std::string, const char*>& {
     static const std::unordered_map<std::string, const char*> m = {
         {"Integer","is_integer"}, {"Float","is_float"},
@@ -439,8 +380,7 @@ auto Lowering::runtimeShapes(const std::string& owner)
         return shapes;
     }
     // A distinct value is its erased backing value: no tag says it is one.
-    const auto bare = owner.substr(owner.rfind('.') + 1);
-    if (distinctTypes.count(owner) || distinctTypes.count(bare)) return std::nullopt;
+    if (distinctTypes.count(declaredNameOf(owner))) return std::nullopt;
     // Anything else typeGuard tests as a tuple tagged with its identity.
     const auto test = typeTestOf(owner);
     if (test.form != semantic::TypeForm::Named) return std::nullopt;
@@ -515,14 +455,6 @@ auto Lowering::typeGuard(const std::string& written, ExprPtr v) -> ExprPtr {
         return callE("erlang", "is_function", 2, two(std::move(v), litInt(test.arity)));
     case semantic::TypeForm::Block:
         return callE("erlang", "is_function", 2, two(std::move(v), litInt(0)));
-    // A Kex String IS `[Char]`, and it is a binary at runtime, so that one
-    // type has to admit both shapes.
-    case semantic::TypeForm::CharList: {
-        auto vRef = snap(v);
-        return callE("erlang", "or", 2,
-                     two(callE("erlang", "is_list", 1, one(vRef.get())),
-                         callE("erlang", "is_binary", 1, one(vRef.get()))));
-    }
     // Structural types name a SHAPE, not a tag: `let +(other: [A])` guarded
     // on `element(1, X) =:= '[A]'`, which no value carries, and an operator
     // overloaded on a list argument died `function_clause` on BEAM while the
@@ -854,29 +786,6 @@ auto Lowering::makeDispatcher(const std::string& name, int arity,
             m.clauses.push_back(std::move(mc));
         }
     }
-    // [Char] IS String: a method owned by List but not by String must
-    // still take a String receiver — coerce the binary to its codepoint
-    // list and forward to the List impl. This clause goes FIRST: the
-    // record/variant owner clauses guard with element(1, _) which erlc
-    // does not soft-fail for a binary falling through to them.
-    bool hasString = std::find(owners.begin(), owners.end(), "String") != owners.end();
-    bool hasList = std::find(owners.begin(), owners.end(), "List") != owners.end();
-    if (hasList && !hasString) {
-        MatchClause mc;
-        auto gv = std::make_unique<Pattern>();
-        gv->kind = PatKind::Var; gv->name = "_gv";
-        mc.patterns.push_back(std::move(gv));
-        mc.guard = callE("erlang", "is_binary", 1, one(var("_gv")));
-        std::vector<ExprPtr> args;
-        args.push_back(callE("kex_intrinsic_list", "as_list", 1, one(var("_a0"))));
-        for (int i = 1; i < arity; i++) args.push_back(var("_a" + std::to_string(i)));
-        auto call = std::make_unique<Expr>();
-        call->node = Call{"",
-            mangleReceiverImplementation(name, "List"),
-            arity, std::move(args), false};
-        mc.body = std::move(call);
-        m.clauses.insert(m.clauses.begin(), std::move(mc));
-    }
     appendFieldClauses(name, callArity, m);
     // Tuple last, for the reason its extraction above records: it accepts
     // every record and variant, so it is only ever the right answer once
@@ -941,12 +850,9 @@ auto Lowering::makeDispatcher(const std::string& name, int arity,
     }
     // Where a value of each owner's type lands: its own implementation when
     // no arm before its own can take it, in the order the arms were just
-    // laid out — the String-to-List coercion first, then the owners, the
-    // record field reads, and Tuple last. A trait's arm takes anything.
+    // laid out — the owners, the record field reads, and Tuple last. A trait's arm takes anything.
     {
         std::vector<std::pair<std::string, std::optional<std::set<std::string>>>> arms;
-        if (hasList && !hasString)
-            arms.push_back({{}, std::set<std::string>{"binary"}});
         for (const auto& ty : sortedOwners)
             arms.push_back({ty, std::find(traitFallbacks.begin(), traitFallbacks.end(),
                                           ty) != traitFallbacks.end()

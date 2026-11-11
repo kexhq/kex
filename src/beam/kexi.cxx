@@ -104,6 +104,9 @@ auto typeToTerm(const KexiTypePtr& type) -> TermPtr {
     case KexiType::Named: {
         std::vector<TermPtr> args;
         for (const auto& a : type->typeArgs) args.push_back(typeToTerm(a));
+        if (!type->variant.empty())
+            return Term::tuple({Term::atom("named"), Term::binary(type->name),
+                                Term::list(std::move(args)), Term::binary(type->variant)});
         return Term::tuple({Term::atom("named"), Term::binary(type->name),
                             Term::list(std::move(args))});
     }
@@ -170,7 +173,9 @@ auto termToType(const TermPtr& term) -> KexiTypePtr {
     if (tag == "named" && elems.size() >= 3) {
         std::vector<KexiTypePtr> args;
         for (const auto& a : elems[2]->asList()) args.push_back(termToType(a));
-        return kexiNamed(elems[1]->asBinaryStr(), std::move(args));
+        auto named = kexiNamed(elems[1]->asBinaryStr(), std::move(args));
+        if (elems.size() >= 4) named->variant = elems[3]->asBinaryStr();
+        return named;
     }
     if (tag == "func" && elems.size() >= 3) {
         std::vector<KexiTypePtr> params;
@@ -286,7 +291,8 @@ auto typeExportToTerm(const KexiTypeExport& te) -> TermPtr {
                         Term::list(std::move(cs)),
                         Term::boolean(te.isDistinct),
                         te.backingType ? typeToTerm(te.backingType)
-                                       : typeToTerm(kexiUnknown())});
+                                       : typeToTerm(kexiUnknown()),
+                        Term::binary(te.module)});
 }
 
 auto termToTypeExport(const TermPtr& term) -> KexiTypeExport {
@@ -301,6 +307,7 @@ auto termToTypeExport(const TermPtr& term) -> KexiTypeExport {
         // artifacts store a nil here, which termToType leaves null.
         te.backingType = termToType(t[4]);
     }
+    te.module = t[5]->asBinaryStr();
     return te;
 }
 
@@ -430,7 +437,8 @@ auto adtToTerm(const KexiADT& adt) -> TermPtr {
     for (const auto& c : adt.constructors) cs.push_back(constructorToTerm(c));
     return Term::tuple({Term::binary(adt.name),
                         Term::list(std::move(tps)),
-                        Term::list(std::move(cs))});
+                        Term::list(std::move(cs)),
+                        Term::binary(adt.module)});
 }
 
 auto termToADT(const TermPtr& term) -> KexiADT {
@@ -439,6 +447,7 @@ auto termToADT(const TermPtr& term) -> KexiADT {
     adt.name = t[0]->asBinaryStr();
     for (const auto& tp : t[1]->asList()) adt.typeParams.push_back(tp->asBinaryStr());
     for (const auto& c : t[2]->asList()) adt.constructors.push_back(termToConstructor(c));
+    adt.module = t[3]->asBinaryStr();
     return adt;
 }
 

@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # An operator with no return annotation answers its own type, not the trait
 # the first call site happens to pass it to. Called from `main` above the make
 # block, `IO.printLine(a + b)` had bound `+` to `Showable`, so BEAM printed the

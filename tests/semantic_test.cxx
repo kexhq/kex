@@ -114,7 +114,7 @@ int main() {
             semantic::Analyzer analyzer(&preludeInterfaces());
             assertTrue(analyzer.analyze(first));
             const hir::Program checked(first, analyzer);
-            const auto bytes = hir::save(checked, hir::nodeOrder(first));
+            const auto bytes = hir::save(checked, first, hir::nodeOrder(first));
 
             auto second = parse();
             const auto order = hir::nodeOrder(second);
@@ -151,7 +151,7 @@ int main() {
             semantic::Analyzer analyzer(&preludeInterfaces());
             analyzer.analyze(one);
             const hir::Program checked(one, analyzer);
-            const auto bytes = hir::save(checked, hir::nodeOrder(one));
+            const auto bytes = hir::save(checked, one, hir::nodeOrder(one));
             auto other = parse("main do\n  IO.printLine(1 + 2)\nend\n");
             assertTrue(hir::load(other, hir::nodeOrder(other), bytes) == nullptr);
         });
@@ -2529,11 +2529,11 @@ int main() {
             assertTrue(noErrors(
                 "type HandleState = Open | Closed\n"
                 "type Handle<S>\n"
-                "make Handle<Open> do\n"
+                "make Handle<HandleState.Open> do\n"
                 "  read :> String\n"
                 "  let read = \"ok\"\n"
                 "end\n"
-                "let use(handle: Handle<Open>) = handle.read()\n"
+                "let use(handle: Handle<HandleState.Open>) = handle.read()\n"
             ));
         });
 

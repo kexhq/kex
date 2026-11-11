@@ -1,8 +1,7 @@
 # Compile-Time Expression Evaluation
 
 > 📋 **Design doc — mostly built.** This is the original sketch, kept for its
-> reasoning. What actually exists (and where it deviates) is
-> `docs/compiled-status.md`; what is left is `docs/compiled-todo.md`.
+> reasoning. Where what exists deviates from it is listed below.
 >
 > Built since: `compiled do` blocks, compile-time constants, `let %name` /
 > `type %name` / `make %name` generation, chain collapse including

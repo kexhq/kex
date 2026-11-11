@@ -227,6 +227,26 @@ inline auto collectDeclaredTypeNames(const Items& items,
     }
 }
 
+// Every trait name the program declares, nested modules and visibility
+// blocks included: a trait is a type annotations may name.
+template <typename Items>
+inline auto collectDeclaredTraitNames(const Items& items, std::set<std::string>& out) -> void {
+    for (const auto& item : items) {
+        std::visit([&out](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
+                if (node) out.insert(node->name);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) collectDeclaredTraitNames(node->body, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
+                if (node) collectDeclaredTraitNames(node->items, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                if (node) collectDeclaredTraitNames(node->items, out);
+            }
+        }, item);
+    }
+}
+
 template <typename Items>
 inline auto collectDeclaredRecordNames(const Items& items,
                                        std::set<std::string>& out) -> void {
@@ -312,6 +332,28 @@ inline auto makeTargetNames(const ast::TypeExprPtr& target,
     walk(walk, target);
     return names;
 }
+
+// Every type a `make` block targets, nested modules and visibility blocks
+// included: `make Box do` makes `Box` a type annotations may name.
+template <typename Items>
+inline auto collectMakeTargetNames(const Items& items, std::set<std::string>& out) -> void {
+    for (const auto& item : items) {
+        std::visit([&out](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                if (node)
+                    for (const auto& name : makeTargetNames(node->target)) out.insert(name);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) collectMakeTargetNames(node->body, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
+                if (node) collectMakeTargetNames(node->items, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                if (node) collectMakeTargetNames(node->items, out);
+            }
+        }, item);
+    }
+}
+
 
 inline auto typeConstructors(const ast::TypeDef& def)
     -> std::optional<std::vector<TypeConstructorInfo>> {

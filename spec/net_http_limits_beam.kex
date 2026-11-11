@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # Settable HTTP limits, against a real server on an ephemeral port: the
 # server's request body limit and a route's own (kexhq/kex#488), and the

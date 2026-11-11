@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # Typed `Type.fields`/`Type.constructors` on BEAM (kexhq/kex#107, #108);
 # see type_fields_constructors.kex.
 record Point do

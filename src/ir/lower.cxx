@@ -97,11 +97,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     mod.name = "kex_" + fileStem;
     L.outputModule = mod.name;
 
-    // Traits: a `make Type, implement: T do ... end` block inherits every
-    // default method (a trait `let m = ...` with a body) of each T it doesn't
-    // override itself. We splice those inherited defaults into the type's
-    // method group so they go through the exact same lowering/dispatch as
-    // directly-defined methods (spec/traits.kex: Bot inherits shout/passing?).
+    // Each trait's required methods and their arities, the slots of its
+    // dictionary. The defaults a `make` block inherits are spliced into the
+    // type's method group (inheritedDefaults, the checker's answer) so they go
+    // through the same lowering and dispatch as the block's own methods.
     std::unordered_map<std::string, const ast::TraitDef*> traitDefs;
     kex::forEachTraitDef(prog.items, [&](const ast::TraitDef& td,
                                          const std::string& modulePath) {
@@ -125,54 +124,20 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 methods.push_back({(*annotation)->name, arity});
             }
     });
-    // Keyed by (name, BEAM arity): a type overrides a trait default only when it
-    // defines the same name at the SAME arity (list.kex's count/1 must NOT block
-    // inheriting Enumerable's count/2).
-    using MethodKey = std::pair<std::string, size_t>;
-    auto ownMethodNames = [](const ast::MakeDef& mk) {
-        std::set<MethodKey> s;
-        auto add = [&](const ast::FunctionDef* f){ if (f) s.insert({f->name, beamArity(f)}); };
-        for (const auto& bi : mk.body) {
-            if (auto* f = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) add(f->get());
-            else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi))
-                if (*vb) for (const auto& vi : (*vb)->items)
-                    if (auto* vf = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi)) add(vf->get());
-        }
-        return s;
-    };
+    // The trait defaults a `make` block inherits, as the checker decided them
+    // (those the type does not define itself in any of its blocks), each found
+    // in the trait's body here. One declared in another unit is not spliced:
+    // its own module answers it at run time.
     auto inheritedDefaults = [&](const ast::MakeDef& mk) {
-        std::vector<const ast::FunctionDef*> out;
-        if (mk.implements.empty()) return out;
-        auto own = ownMethodNames(mk);
-        std::set<MethodKey> added;
-        // Each `implement:` name as the checker settled it, with its import
-        // order, aliases and only/except rules.
-        const auto* resolved = L.hir->traitsOf(mk);
-        if (!resolved) return out;
-        for (const auto& identity : *resolved) {
-            auto it = traitDefs.find(identity);
-            if (it == traitDefs.end()) continue;
-            // Kex writes a multi-clause function as separate `let`
-            // declarations, so ONE trait default can be several FunctionDefs
-            // sharing a key (`let repeat(0)` then `let repeat(n: Integer)`).
-            // They must all come through, or the group below lowers with the
-            // first clause alone and every other call raises `function_clause`
-            // (kexhq/kex#261). Dedupe across traits only: `added` gains this
-            // trait's keys after its body, never during it.
-            std::set<MethodKey> fromThisTrait;
-            for (const auto& ti : it->second->body) {
-                auto* f = std::get_if<std::unique_ptr<ast::FunctionDef>>(&ti);
-                if (!f || !*f) continue;
-                MethodKey key{(*f)->name, beamArity(f->get())};
-                if (own.count(key) || added.count(key)) continue;
-                // Only default methods (with a body) are inherited; a bare
-                // signature `describe : () -> String` carries no clause body.
-                if ((*f)->clauses.empty() || (*f)->clauses[0].body.empty()) continue;
-                out.push_back(f->get()); fromThisTrait.insert(key);
-            }
-            added.insert(fromThisTrait.begin(), fromThisTrait.end());
-        }
-        return out;
+        std::vector<const ast::FunctionDef*> bodies;
+        if (const auto* inherited = L.hir->inheritedDefaultsOf(mk))
+            for (const auto& [trait, method] : *inherited)
+                if (const auto found = traitDefs.find(trait); found != traitDefs.end())
+                    for (const auto& member : found->second->body)
+                        if (const auto* function = std::get_if<std::unique_ptr<ast::FunctionDef>>(&member);
+                            function && *function && (*function)->name == method)
+                            bodies.push_back(function->get());
+        return bodies;
     };
 
     // Pre-pass: collect record layouts (needed for construction/field access
@@ -416,6 +381,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         }
         std::set<std::string> declaredTypes;
         kex::collectDeclaredTypeNames(module.body, declaredTypes);
+        const auto ownTypes = ownTypeIdentities(*L.hir, path, declaredTypes);
         std::set<std::string> declaredRecords;
         kex::collectDeclaredRecordNames(module.body, declaredRecords);
         auto preModuleFn = [&](const ast::FunctionDef* fd, bool isPublic = true) {
@@ -435,15 +401,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (!fd->clauses.empty() && !fd->clauses[0].params.empty()) {
                 const auto& receiver = fd->clauses[0].params.front();
                 if (receiver.type && *receiver.type) {
-                    auto written = L.hir->annotationSpelling(**receiver.type);
-                    if (auto angle = written.find('<');
-                        angle != std::string::npos && written.back() == '>')
-                        written.resize(angle);
-                    const auto dot = written.rfind('.');
-                    const auto bare =
-                        dot == std::string::npos ? written
-                                                 : written.substr(dot + 1);
-                    const auto owner = declaredTypes.count(bare) > 0;
+                    const auto owner = ownTypes.count(
+                        L.hir->typeTestOf(path, L.hir->annotationSpelling(**receiver.type))
+                            .writtenIdentity) > 0;
                     if (owner) {
                         moduleReceiverMethods.insert(fd->name);
                         L.moduleReceiverNames.insert(fd->name);
@@ -497,6 +457,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         auto preModuleType = [&](const ast::TypeDef* td) {
             if (!td) return;
             preType(*td);
+            L.declaredNames.try_emplace(L.hir->typeTestOf(path, td->name).writtenIdentity, td->name);
             if (auto constructors = kex::typeConstructors(*td))
                 for (const auto& constructor : *constructors) {
                     const auto emitted =
@@ -522,7 +483,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             for (const auto& typeName : Lowering::makeTargetNameList(md.target, path, declaredRecords))
                 if (!typeName.empty()) {
                     L.localTypeModules[typeName] = path;
-                    L.localTypeModules.try_emplace(L.hir->typeTestOf(path, typeName).identity, path);
+                    const auto identity = L.hir->typeTestOf(path, typeName).writtenIdentity;
+                    if (identity.empty()) continue;
+                    L.localTypeModules.try_emplace(identity, path);
+                    L.declaredNames.try_emplace(identity, typeName);
                 }
         };
         for (const auto& item : module.body) {
@@ -1834,8 +1798,9 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         const auto& path = module.name;
         if (seenModulePaths.insert(path).second)
             modulePaths.push_back(path);
-        std::set<std::string> ownTypes;
-        kex::collectDeclaredTypeNames(module.body, ownTypes);
+        std::set<std::string> declaredTypes;
+        kex::collectDeclaredTypeNames(module.body, declaredTypes);
+        const auto ownTypes = ownTypeIdentities(*context.hir, path, declaredTypes);
         auto add = [&](const ast::FunctionDef* fn, bool exported) {
             if (!fn) return;
             definitions[mangleModuleMember(path, fn->name)] =
@@ -1849,14 +1814,9 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
             if (fn->clauses.empty() || fn->clauses[0].params.empty()) return;
             const auto& receiver = fn->clauses[0].params.front();
             if (!receiver.type || !*receiver.type) return;
-            auto written = context.hir->annotationSpelling(**receiver.type);
-            if (auto angle = written.find('<');
-                angle != std::string::npos && written.back() == '>')
-                written.resize(angle);
-            const auto dot = written.rfind('.');
-            const auto bare =
-                dot == std::string::npos ? written : written.substr(dot + 1);
-            if (!ownTypes.count(bare)) return;
+            if (!ownTypes.count(context.hir->typeTestOf(path, context.hir->annotationSpelling(**receiver.type))
+                                    .writtenIdentity))
+                return;
             const int arity = static_cast<int>(fn->clauses[0].params.size()) +
                               (fn->isFoul ? 1 : 0);
             if (!definitions.count(fn->name))

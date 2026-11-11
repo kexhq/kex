@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # `<`, `>`, `<=` and `>=` on whatever is Comparable come from comparable.kex,
 # where the trait defines them from `compare`; the compiler keeps no list of
 # its own. Numbers and strings still compare natively, and a record that only

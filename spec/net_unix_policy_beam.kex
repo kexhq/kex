@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 # Offline filesystem-domain coverage for explicit stale-path and timeout policy.
 
 using Net.Socket
@@ -11,7 +11,7 @@ main do
     Unix.ListenOptions { removeStale?: true }
   )
   match protected do
-    Error(error) => assert(error.kind == UnsupportedOption)
+    Error(error) => assert(error.kind == Net.UnsupportedOption)
     Ok(_) => assert(false, "removeStale must refuse a regular file")
   end
   assert(FS.File.read(protectedPath).try == "keep me")
@@ -27,7 +27,7 @@ main do
   }).try
   let accepted = listener.accept
   match accepted do
-    Error(error) => assert(error.kind == Timeout)
+    Error(error) => assert(error.kind == Net.Timeout)
     Ok(_) => assert(false, "zero-timeout Unix accept must not block")
   end
 
@@ -41,7 +41,7 @@ main do
     receiveTimeout: 0.second
   }).try
   match client.receiveChunk(1) do
-    Error(error) => assert(error.kind == Timeout)
+    Error(error) => assert(error.kind == Net.Timeout)
     Ok(_) => assert(false, "zero-timeout Unix receive must not block")
   end
   client.close

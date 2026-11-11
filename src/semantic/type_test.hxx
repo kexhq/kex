@@ -17,8 +17,6 @@ enum class TypeForm {
     Function,
     // A parameterless block (`Block<A>`).
     Block,
-    // `[Char]`, which a String is too.
-    CharList,
     List,
     Map,
     Tuple,
@@ -29,11 +27,15 @@ enum class TypeForm {
 
 struct TypeTest {
     TypeForm form = TypeForm::Any;
-    // Named: the type's name as declared, without its module (`Client`).
+    // Named: the type a value is tested against, aliases followed and type
+    // arguments dropped (`Client`), and its identity, its module path
+    // included when a module declares it (`Net.HTTP.Client`).
     std::string name;
-    // Named: the type's identity, its module path included when a module
-    // declares it (`Net.HTTP.Client`); otherwise `name`.
     std::string identity;
+    // The type named as written, aliases NOT followed, type arguments dropped,
+    // and its identity; empty for a structural spelling (`[A]`, `A -> B`).
+    std::string written;
+    std::string writtenIdentity;
     // Function: the number of parameters.
     int64_t arity = 0;
 };

@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # Server-side upgrade (kexhq/kex#345): a route handler decides whether to
 # accept a handshake, and Net.HTTP.Server hands the raw connection to the

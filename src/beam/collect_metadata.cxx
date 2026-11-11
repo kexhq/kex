@@ -231,7 +231,9 @@ auto convertSemanticType(const kex::semantic::TypePtr& type, bool generics = fal
             std::vector<KexiTypePtr> args;
             for (const auto& arg : node.typeArgs)
                 args.push_back(convertSemanticType(arg, generics));
-            return kexiNamed(node.name, std::move(args));
+            auto named = kexiNamed(node.name, std::move(args));
+            named->variant = node.variant;
+            return named;
         } else if constexpr (std::is_same_v<T, kex::semantic::FuncType>) {
             if (node.block) {
                 std::vector<KexiTypePtr> args;
@@ -289,6 +291,22 @@ auto convertSemanticType(const kex::semantic::TypePtr& type, bool generics = fal
         // at the package boundary; compiler-local IDs must not enter hashes.
         return kexiUnknown();
     }, type->kind);
+}
+
+// A standalone contract's type as the checker resolved it (flattened, the
+// shape annotationToSignature gives it), or as written when there is no
+// checked program.
+auto contractType(const kex::ast::TypeAnnotation& contract,
+                  const kex::semantic::Analyzer* analysis) -> KexiTypePtr {
+    if (analysis)
+        if (const auto* signature = analysis->checker().contractSignatureOf(contract)) {
+            if (signature->params.empty()) return convertSemanticType(signature->result, true);
+            std::vector<KexiTypePtr> params;
+            for (const auto& param : signature->params)
+                params.push_back(convertSemanticType(param, true));
+            return kexiFunc(std::move(params), convertSemanticType(signature->result, true));
+        }
+    return convertTypeExpr(contract.type);
 }
 
 auto methodBeamArity(const kex::ast::FunctionDef& fd,
@@ -786,6 +804,9 @@ void collectFromMakeDef(const kex::ast::MakeDef& md,
     }
     // Collect standalone type annotations (`:>` sigs) to patch missing
     // types and to surface pure signatures with no implementation.
+    // As written: a receiver method's contract relates its type letters to
+    // the `make` target's (`map :> (A -> B) -> [B]` on `make [A]`), which the
+    // checker resolves per contract.
     std::unordered_map<std::string, std::vector<KexiTypePtr>> standaloneSigs;
     for (const auto& item : md.body)
         if (auto* ann = std::get_if<std::unique_ptr<kex::ast::TypeAnnotation>>(&item);
@@ -920,6 +941,7 @@ void collectFromTypeDef(const kex::ast::TypeDef& td, KexiTypeInterface& iface,
                         const std::string& owner = std::string{}) {
     KexiTypeExport te;
     te.name = td.name;
+    te.module = owner;
     te.genericParams = td.typeParams;
     te.isDistinct = td.isDistinct;
     // Transparent aliases carry their body too: without it an importing
@@ -974,6 +996,7 @@ void collectFromTypeDef(const kex::ast::TypeDef& td, KexiTypeInterface& iface,
         // constructor elsewhere (NetErrorKind's) could be mistaken for.
         KexiADT adt;
         adt.name = owner.empty() ? td.name : owner + "." + td.name;
+        adt.module = owner;
         adt.typeParams = td.typeParams;
         for (const auto& v : *td.variants) {
             if (!v) continue;
@@ -1027,11 +1050,31 @@ void collectFromTypeDef(const kex::ast::TypeDef& td, KexiTypeInterface& iface,
 // file's top level. It decides the tuple tag: lowering qualifies a record
 // declared inside a `module` block and leaves a top-level one bare, and the
 // metadata has to agree or nothing can match the runtime value.
+// A declaration's type as the checker resolved it, its parameter slots
+// (`A` for -1, `B` for -2, ... as convertSemanticType writes them) renamed to
+// the declaration's own parameter names, so a reader numbering by those
+// names gets each slot back (`record Pair<K, V>`: `V` stays the second).
+auto withParameterNames(const KexiTypePtr& type, const std::vector<std::string>& names)
+    -> KexiTypePtr {
+    if (!type) return type;
+    auto renamed = std::make_shared<KexiType>(*type);
+    if (renamed->kind == KexiType::Named && renamed->typeArgs.empty() &&
+        renamed->name.size() == 1) {
+        const auto slot = static_cast<std::size_t>(renamed->name[0] - 'A');
+        if (slot < names.size()) renamed->name = names[slot];
+    }
+    for (auto& arg : renamed->typeArgs) arg = withParameterNames(arg, names);
+    renamed->result = withParameterNames(renamed->result, names);
+    return renamed;
+}
+
 void collectFromRecordDef(const kex::ast::RecordDef& rd, KexiTypeInterface& iface,
                           KexiStructuralMetadata& meta,
-                          const std::string& owner = std::string{}) {
+                          const std::string& owner = std::string{},
+                          const kex::semantic::Analyzer* analysis = nullptr) {
     KexiTypeExport te;
     te.name = rd.name;
+    te.module = owner;
     te.genericParams = rd.typeParams;
     iface.types.push_back(std::move(te));
 
@@ -1043,7 +1086,11 @@ void collectFromRecordDef(const kex::ast::RecordDef& rd, KexiTypeInterface& ifac
     for (const auto& f : rd.fields) {
         KexiRecordField rf;
         rf.name = f.name;
-        rf.type = convertTypeExpr(f.type);
+        // As the checker resolved it, else as written (no checked program).
+        const auto checked = analysis ? analysis->checker().recordFieldType(rec.identity, f.name)
+                                      : kex::semantic::TypePtr{};
+        rf.type = checked ? withParameterNames(convertSemanticType(checked, true), rd.typeParams)
+                          : convertTypeExpr(f.type);
         rf.defaultSource = defaultSourceOf(f.defaultValue);
         rec.fields.push_back(std::move(rf));
     }
@@ -1063,7 +1110,7 @@ void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
     for (const auto& item : body)
         if (auto* ann = std::get_if<std::unique_ptr<kex::ast::TypeAnnotation>>(&item);
             ann && *ann && (*ann)->type)
-            standaloneSigs[(*ann)->name].push_back(convertTypeExpr((*ann)->type));
+            standaloneSigs[(*ann)->name].push_back(contractType(**ann, analysis));
 
     std::unordered_set<std::string> seenImpls;
     auto addFunction = [&](const kex::ast::FunctionDef& fd, size_t clause) {
@@ -1144,7 +1191,7 @@ void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
                 collectFromTypeDef(*ptr, iface, meta, modulePath);
             } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
-                collectFromRecordDef(*ptr, iface, meta, modulePath);
+                collectFromRecordDef(*ptr, iface, meta, modulePath, analysis);
             }
         }, item);
     }
@@ -1164,7 +1211,7 @@ void collectFromTopLevel(const kex::ast::Program& program,
     for (const auto& item : program.items)
         if (auto* ann = std::get_if<std::unique_ptr<kex::ast::TypeAnnotation>>(&item);
             ann && *ann && (*ann)->type)
-            standaloneSigs[(*ann)->name].push_back(convertTypeExpr((*ann)->type));
+            standaloneSigs[(*ann)->name].push_back(contractType(**ann, analysis));
 
     std::unordered_set<std::string> seenImpls;
     auto addFunction = [&](const kex::ast::FunctionDef& fd, size_t clause) {
@@ -1230,7 +1277,7 @@ void collectFromTopLevel(const kex::ast::Program& program,
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
                 collectFromTypeDef(*ptr, iface, meta);
             } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
-                collectFromRecordDef(*ptr, iface, meta);
+                collectFromRecordDef(*ptr, iface, meta, {}, analysis);
             }
         }, item);
     }
@@ -1262,7 +1309,7 @@ void collectFlattenedModuleBody(
     for (const auto& item : body)
         if (auto* ann = std::get_if<std::unique_ptr<kex::ast::TypeAnnotation>>(&item);
             ann && *ann && (*ann)->type)
-            standaloneSigs[(*ann)->name].push_back(convertTypeExpr((*ann)->type));
+            standaloneSigs[(*ann)->name].push_back(contractType(**ann, analysis));
 
     std::unordered_set<std::string> seenImpls;
     for (const auto& item : body) {
@@ -1293,7 +1340,7 @@ void collectFlattenedModuleBody(
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
                 collectFromTypeDef(*ptr, iface, meta, modulePath);
             } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
-                collectFromRecordDef(*ptr, iface, meta, modulePath);
+                collectFromRecordDef(*ptr, iface, meta, modulePath, analysis);
             } else if constexpr (std::is_same_v<T, kex::ast::ModuleDef>) {
                 collectFlattenedModuleBody(ptr->body, ptr->name, iface, meta,
                                            analysis);

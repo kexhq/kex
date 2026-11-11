@@ -670,24 +670,18 @@ auto Lowering::lowerProcessSpawn(const ast::MethodCall& n, const std::string& st
     // every call to a module that defines no slots (rodolfo
     // docs/kex-issues.md #2).
     std::string servingModule = outputModule;
-    const auto named = stateType.substr(0, stateType.find('<'));
     // The slot registry is keyed by the make target AS WRITTEN, which inside
     // a module is the bare name, while the checker types the spawned state
-    // by its qualified identity — so `Store.Counter` found nothing and the
+    // by its identity: looked up as is, `Store.Counter` found nothing and the
     // server started with an EMPTY slot list, answering
     // `{unknown_serving_slot, get}` to its first call.
-    auto key = named;
-    if (!servingSlotsByType.count(key))
-        if (const auto dot = named.rfind('.'); dot != std::string::npos)
-            key = named.substr(dot + 1);
+    const auto key = declaredNameOf(stateType);
     if (auto slots = servingSlotsByType.find(key); slots != servingSlotsByType.end())
         for (const auto& slot : slots->second) slotAtoms.push_back(lit(LitKind::Atom, slot));
     if (auto declaring = localTypeModules.find(key); declaring != localTypeModules.end())
         servingModule = mangleModulePath(names::moduleAtom(declaring->second));
     if (slotAtoms.empty() && externalModules) {
-        auto external = externalModules->servingSlots.find(named);
-        if (external == externalModules->servingSlots.end())
-            external = externalModules->servingSlots.find(key);
+        const auto external = externalModules->servingSlots.find(key);
         if (external != externalModules->servingSlots.end()) {
             servingModule = external->second.first;
             for (const auto& slot : external->second.second)

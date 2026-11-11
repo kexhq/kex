@@ -1171,10 +1171,10 @@ int main(int argc, char *argv[]) {
     auto program = parser.parseProgram();
 
     // In --run and --compile/-R modes, print parse errors and abort —
-    // SemanticDB is not invoked yet at this point so we're the only
+    // the check has not run yet at this point, so this is the only
     // place that can report them cleanly. Without this, --compile/-R
-    // fell through to runSemanticCheck, which re-parses via SemanticDB
-    // and reports the exact same underlying parse error but mislabeled
+    // fell through to runSemanticCheck, which reported the exact same
+    // underlying parse error but mislabeled
     // as "fix type errors" — confusing for something that's actually a
     // syntax error (see spec/error_if_with_do.kex, a real regression
     // case). In --check mode checkEntry reports them with the check's

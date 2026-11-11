@@ -42,6 +42,10 @@ auto Type::named(const std::string& name, std::vector<TypePtr> args) -> TypePtr 
     return std::make_shared<Type>(Type{NamedType{name, std::move(args)}});
 }
 
+auto Type::variantOf(const std::string& adt, const std::string& variant) -> TypePtr {
+    return std::make_shared<Type>(Type{NamedType{adt, {}, variant}});
+}
+
 auto Type::func(std::vector<TypePtr> params, TypePtr result, bool block) -> TypePtr {
     return std::make_shared<Type>(
         Type{FuncType{std::move(params), std::move(result), block}});
@@ -287,6 +291,7 @@ auto typeToString(const TypePtr& type) -> std::string {
         }
         else if constexpr (std::is_same_v<T, NamedType>) {
             std::string result = t.name;
+            if (!t.variant.empty()) result += "." + t.variant;
             if (!t.typeArgs.empty()) {
                 result += "<";
                 for (size_t i = 0; i < t.typeArgs.size(); i++) {
@@ -522,6 +527,7 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
         }
         else if constexpr (std::is_same_v<AT, NamedType>) {
             if (!namedTypesMatch(at.name, bt->name)) return false;
+            if (at.variant != bt->variant) return false;
             if (at.typeArgs.size() != bt->typeArgs.size()) return false;
             for (size_t i = 0; i < at.typeArgs.size(); i++) {
                 if (!typesEqual(at.typeArgs[i], bt->typeArgs[i])) return false;
@@ -709,7 +715,8 @@ auto mapTypeChildren(const TypePtr& type,
                                      part.block);
         } else if constexpr (std::is_same_v<Part, NamedType>) {
             auto args = mappedAll(part.typeArgs);
-            return same ? type : Type::named(part.name, std::move(args));
+            if (same) return type;
+            return std::make_shared<Type>(Type{NamedType{part.name, std::move(args), part.variant}});
         } else if constexpr (std::is_same_v<Part, IntersectionType>) {
             auto members = mappedAll(part.members);
             return same ? type : Type::intersection(std::move(members));

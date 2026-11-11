@@ -10,6 +10,7 @@
 #include "../semantic/db.hxx"
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <deque>
 #include <filesystem>
 #include <iostream>

@@ -83,56 +83,8 @@ auto Lowering::lowerMatch(const ast::MatchExpr& n) -> ExprPtr {
         letWrap = std::move(subjIr);
         subjIr = var(ssa);
     }
-    // A list pattern over a STRING subject: a String is a binary here, so
-    // `[c | rest]` can never match it structurally — erlc rejects the
-    // clause as unreachable and then crashes lowering it. Coerce the
-    // subject to its [Char] list, exactly as a `@[...]` receiver pattern
-    // does, and pack the tail back so `rest` keeps the subject's type.
-    //
-    // Only when no clause matches a String LITERAL at that position:
-    // `as_list` would turn the subject into a list those clauses could
-    // never match either, trading one broken shape for another.
-    std::string listCoercedSubject;
-    {
-        // Seen through a `@` wrapper, which lowerPattern unwraps too:
-        // `@[a | rest]` is the same list pattern, and left undetected its
-        // string subject was never coerced, so the arm could not match on
-        // BEAM while the walker matched it (kexhq/kex#125).
-        const auto firstPattern =
-            [](const ast::MatchClause& c) -> const ast::Pattern* {
-            if (c.patterns.empty() || !c.patterns[0]) return nullptr;
-            const ast::Pattern* p = c.patterns[0].get();
-            while (const auto* self = std::get_if<ast::ThisPattern>(&p->kind)) {
-                if (!self->inner) return p;
-                p = self->inner.get();
-            }
-            return p;
-        };
-        const bool anyListPattern = std::any_of(
-            n.clauses.begin(), n.clauses.end(), [&](const auto& c) {
-                const auto* p = firstPattern(c);
-                return p && std::holds_alternative<ast::ListPattern>(p->kind);
-            });
-        const bool anyStringPattern = std::any_of(
-            n.clauses.begin(), n.clauses.end(), [&](const auto& c) {
-                const auto* p = firstPattern(c);
-                if (!p) return false;
-                auto* lit = std::get_if<ast::LiteralPattern>(&p->kind);
-                return lit && (lit->literal.type == TokenType::String ||
-                               lit->literal.type == TokenType::RawString);
-            });
-        if (anyListPattern && !anyStringPattern)
-            listCoercedSubject = fresh("LSubj");
-    }
     std::vector<ExprPtr> subjects;
-    ExprPtr listSubjectValue;
-    if (!listCoercedSubject.empty()) {
-        listSubjectValue = std::move(subjIr);
-        subjects.push_back(callE("kex_intrinsic_list", "as_list", 1,
-                                 one(var(listCoercedSubject))));
-    } else {
-        subjects.push_back(std::move(subjIr));
-    }
+    subjects.push_back(std::move(subjIr));
     std::vector<MatchClause> cls;
     for (const auto& cl : n.clauses) {
         auto snap = subst;
@@ -166,25 +118,10 @@ auto Lowering::lowerMatch(const ast::MatchExpr& n) -> ExprPtr {
         // the predicate out of BEAM guard position into a nested match.
         mc.guard = withTypeGuards(cl.guard ? lower(*cl.guard) : nullptr);
         mc.body = lower(cl.body);
-        // The tail of a list pattern keeps the SUBJECT's type: over a
-        // String `[c | rest]` binds `rest` to the rest of the string.
-        if (!listCoercedSubject.empty() && !mc.patterns.empty() &&
-            mc.patterns[0] && mc.patterns[0]->kind == PatKind::List &&
-            mc.patterns[0]->rest &&
-            mc.patterns[0]->rest->kind == PatKind::Var) {
-            const auto& tail = mc.patterns[0]->rest->name;
-            mc.body = makeLet(tail,
-                              callE("kex_intrinsic_list", "repack", 2,
-                                    two(var(listCoercedSubject), var(tail))),
-                              std::move(mc.body));
-        }
         subst = snap;
         cls.push_back(std::move(mc));
     }
     auto e = sourceMatch(std::move(subjects), std::move(cls));
-    if (listSubjectValue)
-        e = makeLet(listCoercedSubject, std::move(listSubjectValue),
-                    std::move(e));
     if (letWrap) {
         auto r = makeLet(currentName(subjVar), std::move(letWrap), std::move(e));
         if (subjPrev) subst[subjVar] = *subjPrev; else subst.erase(subjVar);

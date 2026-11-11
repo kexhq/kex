@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # Closeable: one bound for files, listeners, and connections.
 
@@ -12,7 +12,7 @@ end
 main do
   let path = "/tmp/kex-closeable-spec.txt"
   FS.File.delete(path)
-  let handle = FS.File.open(path, Write).try
+  let handle = FS.File.open(path, FS.Write).try
   handle.printLine("hello")
   let listener = TCP.bind("127.0.0.1:0").try
   let port = listener.localAddress.try.port.string

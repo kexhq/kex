@@ -280,4 +280,63 @@ inline auto writtenModulePath(const Expr& receiver) -> std::optional<std::string
                   : std::nullopt;
 }
 
+
+// Calls `visit(const Pattern&)` on `pattern` and every pattern nested in it,
+// outermost first, in source order.
+template <typename Visit>
+auto forEachSubPattern(const Pattern& pattern, Visit&& visit) -> void {
+    visit(pattern);
+    auto one = [&](const PatternPtr& nested) {
+        if (nested) forEachSubPattern(*nested, visit);
+    };
+    std::visit([&](const auto& node) {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, ThisPattern>) {
+            one(node.inner);
+        } else if constexpr (std::is_same_v<T, ConstructorPattern>) {
+            for (const auto& nested : node.args) one(nested);
+        } else if constexpr (std::is_same_v<T, TuplePattern>) {
+            for (const auto& nested : node.elements) one(nested);
+        } else if constexpr (std::is_same_v<T, RecordPattern>) {
+            for (const auto& field : node.fields)
+                if (field.pattern) one(*field.pattern);
+        } else if constexpr (std::is_same_v<T, ListPattern>) {
+            for (const auto& element : node.elements) one(element);
+            if (node.rest) one(*node.rest);
+        } else if constexpr (std::is_same_v<T, RangePattern>) {
+            one(node.start);
+            one(node.end);
+        }
+    }, pattern.kind);
+}
+
+// Calls `visit(const Pattern&)` on each pattern `expr` itself holds (not
+// those of nested expressions): an `if let`'s, a match's or receive's clause
+// patterns, a `let`'s or `var`'s, and its rescue arms'.
+template <typename Visit>
+auto forEachOwnedPattern(const Expr& expr, Visit&& visit) -> void {
+    auto one = [&](const PatternPtr& pattern) {
+        if (pattern) visit(*pattern);
+    };
+    auto clauses = [&](const std::vector<MatchClause>& list) {
+        for (const auto& clause : list)
+            for (const auto& pattern : clause.patterns) one(pattern);
+    };
+    std::visit([&](const auto& node) {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, IfExpr>) {
+            one(node.letPattern);
+        } else if constexpr (std::is_same_v<T, MatchExpr> ||
+                             std::is_same_v<T, ReceiveExpr>) {
+            clauses(node.clauses);
+        } else if constexpr (std::is_same_v<T, LetExpr> || std::is_same_v<T, VarExpr>) {
+            one(node.pattern);
+        } else if constexpr (std::is_same_v<T, Lambda>) {
+            if (node.rescue) clauses(node.rescue->clauses);
+        } else if constexpr (std::is_same_v<T, TryingExpr>) {
+            clauses(node.rescue.clauses);
+        }
+    }, expr.kind);
+}
+
 } // namespace kex::ast

@@ -309,8 +309,9 @@ auto CollectPass::collectRecord(const ast::RecordDef& def, const std::string& mo
     }
     info.detail += " do";
     for (const auto& field : def.fields)
-        info.detail += "\n  " + field.name + " : " +
-                       (field.type ? ast::typeText(*field.type) : "?");
+        info.fields.emplace_back(field.name,
+                                 field.type ? ast::typeText(*field.type) : "?");
+    for (const auto& [name, type] : info.fields) info.detail += "\n  " + name + " : " + type;
     info.detail += "\nend";
     m_symbols->push_back(std::move(info));
 

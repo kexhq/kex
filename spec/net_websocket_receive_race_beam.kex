@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # A handler polling `receiveMessage(timeout: Just(1ms))` must never lose a
 # message. The caller and the connection process used to time out on two

@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # kexhq/kex#384: a ZERO-argument serving slot whose name collides with an
 # unrelated type or record field elsewhere in the program lost its bare-name
 # BEAM export once anything pulling in the colliding definition (`Net.HTTP`,

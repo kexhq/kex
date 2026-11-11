@@ -3,6 +3,8 @@
 // module, stored as a custom BEAM chunk in ETF format.
 #include "../module/package_metadata.hxx"
 #include <array>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -42,6 +44,7 @@ struct KexiType {
     Kind kind;
     std::string name;
     std::string traitName; // for Constrained
+    std::string variant;   // for Named: one nullary variant of the ADT `name` (`FileMode.Write`)
     std::vector<KexiTypePtr> typeArgs;
     std::vector<std::string> fieldNames; // for Record, parallel to typeArgs
     KexiTypePtr result; // for Func
@@ -88,6 +91,9 @@ struct KexiConstant {
 
 struct KexiTypeExport {
     std::string name;
+    // The module that declares it, "" at top level: its identity is
+    // `module.name`.
+    std::string module;
     std::vector<std::string> genericParams;
     std::vector<std::string> constructors;
     bool isDistinct = false;
@@ -180,6 +186,9 @@ struct KexiConstructor {
 
 struct KexiADT {
     std::string name;
+    // The module that declares it (`FS` for `FS.FileMode`), "" at top level:
+    // where its constructors are in scope by their bare names.
+    std::string module;
     std::vector<std::string> typeParams;
     std::vector<KexiConstructor> constructors;
 };

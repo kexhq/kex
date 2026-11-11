@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A record or sum type's name passed as a value is its `Type` record: a
 # generic `select(as: Type<T>)` binds `T` from it, so the result is typed, and
 # the record describes the type at run time (kexhq/kex#509). This is the shape

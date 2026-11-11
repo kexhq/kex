@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <sstream>
+#include <utility>
 
 namespace kex::ir {
 
@@ -55,6 +56,12 @@ auto erlBinary(const std::string& s) -> std::string {
              + ">(8,1,'integer',['unsigned'|['big']])";
     }
     return out + "}#";
+}
+
+// The codepoint of a Char literal's text.
+auto charCodepoint(const std::string& text) -> unsigned {
+    const auto codepoints = utf8::decode(text);
+    return codepoints.empty() ? 0u : static_cast<unsigned>(codepoints.front());
 }
 
 struct Emitter {
@@ -199,12 +206,8 @@ struct Emitter {
             // A Char is a tagged tuple {'Char', Codepoint} — a bare integer
             // is indistinguishable from Int (display, dispatch, [Char] vs
             // [Int]). Works in both expression and pattern position.
-            case LitKind::Char: {
-                auto codepoints = utf8::decode(l.text);
-                return "{'Char'," +
-                    std::to_string(codepoints.empty()
-                        ? 0u : static_cast<unsigned>(codepoints.front())) + "}";
-            }
+            case LitKind::Char:
+                return "{'Char'," + std::to_string(charCodepoint(l.text)) + "}";
             case LitKind::String: return erlBinary(l.text);
             case LitKind::Bool:   return l.boolValue ? "'true'" : "'false'";
             case LitKind::None:   return "'None'";
@@ -270,7 +273,7 @@ struct Emitter {
     // every path funnels through emitPattern.
     std::vector<std::string> patGuards;
 
-    auto beginPatGuards() -> void { patGuards.clear(); }
+    auto beginPatGuards() -> void { patGuards.clear(); charLets.clear(); }
 
     // Combines the collected conjuncts with a clause's own guard, nesting
     // `erlang:and`. Eager evaluation is safe HERE for one narrow reason: every
@@ -292,6 +295,53 @@ struct Emitter {
         if (acc.empty()) return own.empty() ? "'true'" : own;
         if (own.empty()) return acc;
         return "call 'erlang':'and'(" + acc + ", " + own + ")";
+    }
+
+    // What a String pattern's character segments bound (emitStringPattern):
+    // each variable with the raw codepoint its segment holds. The clause binds
+    // each as a Char around its guard and body (withCharLets), since a Char
+    // is the tagged {'Char', Codepoint} and a segment can only hold the
+    // codepoint.
+    std::vector<std::pair<std::string, std::string>> charLets;
+
+    auto takeCharLets() -> std::vector<std::pair<std::string, std::string>> {
+        return std::exchange(charLets, {});
+    }
+
+    static auto withCharLets(const std::vector<std::pair<std::string, std::string>>& lets,
+                             std::string expr) -> std::string {
+        for (auto let = lets.rbegin(); let != lets.rend(); ++let)
+            expr = "let <" + let->first + "> = {'Char', " + let->second + "} in " + expr;
+        return expr;
+    }
+
+    // `[c | rest]` taking a String apart, as Erlang's <<C/utf8, Rest/binary>>.
+    auto emitStringPattern(const Pattern& p) -> std::string {
+        static const std::string utf8 = "('undefined','undefined','utf8',['unsigned'|['big']])";
+        std::vector<std::string> segments;
+        for (const auto& element : p.args) {
+            std::string value;
+            if (element->kind == PatKind::Lit) {
+                value = std::to_string(charCodepoint(element->litText));
+            } else {
+                value = uniq("_Cp");
+                if (element->kind == PatKind::Var) charLets.push_back({erlVar(element->name), value});
+            }
+            segments.push_back("#<" + value + ">" + utf8);
+        }
+        if (p.rest) {
+            if (p.rest->kind == PatKind::Lit) {
+                const auto bytes = erlBinary(p.rest->litText);
+                // The literal's own byte segments, without its #{ }#.
+                if (bytes.size() > 4) segments.push_back(bytes.substr(2, bytes.size() - 4));
+            } else {
+                const auto tail = p.rest->kind == PatKind::Var ? erlVar(p.rest->name) : freshWild();
+                segments.push_back("#<" + tail + ">('all',8,'binary',['unsigned'|['big']])");
+            }
+        }
+        std::string out = "#{";
+        for (std::size_t i = 0; i < segments.size(); ++i) out += (i ? "," : "") + segments[i];
+        return out + "}#";
     }
 
     auto emitPattern(const Pattern& p) -> std::string {
@@ -323,6 +373,7 @@ struct Emitter {
                 return s + "}";
             }
             case PatKind::List: {
+                if (p.ofString) return emitStringPattern(p);
                 if (p.args.empty() && !p.rest) return "[]";
                 std::string s = "[";
                 for (size_t i = 0; i < p.args.size(); i++) {
@@ -358,8 +409,9 @@ struct Emitter {
                             [&](size_t i)->const PatternPtr&{ return cl.patterns[i]; }) + ">"
                 : emitPattern(*cl.patterns[0]);
             out += "  " + pat;
-            out += " when " + takePatGuards(cl.guard ? emit(*cl.guard) : "");
-            out += " ->\n    " + emit(cl.body) + "\n";
+            const auto lets = takeCharLets();
+            out += " when " + withCharLets(lets, takePatGuards(cl.guard ? emit(*cl.guard) : ""));
+            out += " ->\n    " + withCharLets(lets, emit(cl.body)) + "\n";
         }
         out += "end";
         return out;
@@ -372,6 +424,7 @@ struct Emitter {
         for (const auto& cl : r.clauses) {
             beginPatGuards();
             std::string pat = emitPattern(*cl.pattern);
+            const auto lets = takeCharLets();
             if (r.senderVar)
                 out += "  {" + erlVar(*r.senderVar) + ", " + pat + "}";
             else
@@ -379,7 +432,8 @@ struct Emitter {
             const auto senderGuard = r.senderVar
                 ? "call 'erlang':'is_pid'(" + erlVar(*r.senderVar) + ")"
                 : "";
-            out += " when " + takePatGuards(senderGuard) + " ->\n    " + emit(cl.body) + "\n";
+            out += " when " + takePatGuards(senderGuard) + " ->\n    " +
+                   withCharLets(lets, emit(cl.body)) + "\n";
         }
         if (r.timeout && r.afterBody)
             out += "after " + emit(*r.timeout) + " ->\n    " + emit(*r.afterBody);
@@ -516,9 +570,10 @@ struct Emitter {
                 for (size_t i = 0; i < n.clauses.size(); i++) {
                     beginPatGuards();
                     std::string cpat = emitPattern(*n.clauses[i].patterns[0]);
+                    const auto lets = takeCharLets();
                     catchBody += "      " + cpat;
                     catchBody += " when " + takePatGuards("") + " -> " +
-                                 emit(n.clauses[i].body);
+                                 withCharLets(lets, emit(n.clauses[i].body));
                     if (i + 1 < n.clauses.size()) catchBody += "\n";
                 }
                 // The rescue patterns may not be exhaustive. A non-exhaustive
@@ -621,8 +676,9 @@ struct Emitter {
             }
             pats += ">";
             out << "      " << pats;
-            out << " when " << takePatGuards(cl.guard ? emit(*cl.guard) : "");
-            out << " ->\n        " << emitClauseBody(cl.body) << "\n";
+            const auto lets = takeCharLets();
+            out << " when " << withCharLets(lets, takePatGuards(cl.guard ? emit(*cl.guard) : ""));
+            out << " ->\n        " << withCharLets(lets, emitClauseBody(cl.body)) << "\n";
         }
         // Non-exhaustive fallback: distinct fresh wildcards (a bare `_`
         // repeated in a value-list is a duplicate-variable error). Skip it

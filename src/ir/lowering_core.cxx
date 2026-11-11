@@ -17,6 +17,16 @@ auto Lowering::traitIdentityOf(const std::string& written) const -> std::string 
     return traitMethods.count(trait) ? trait : std::string{};
 }
 
+// The identities the checker gives the types a module declares, by the names
+// they are declared under.
+auto ownTypeIdentities(const hir::Program& hir, const std::string& module,
+                       const std::set<std::string>& declared) -> std::unordered_set<std::string> {
+    std::unordered_set<std::string> identities;
+    for (const auto& name : declared)
+        identities.insert(hir.typeTestOf(module, name).writtenIdentity);
+    return identities;
+}
+
 auto methodSignatureTypes(const hir::Program& hir, const ast::FunctionDef& method,
                           const std::string& receiver) -> std::vector<std::string> {
     std::vector<std::string> types{receiver};

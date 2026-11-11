@@ -1,11 +1,8 @@
-# kex: run-beam
 # `implement:` through a module alias (`using Geo, as: Geo2` then
-# `implement: Geo2.Shape`). The checker resolves the alias; BEAM inherits
-# the trait's defaults from the checker's answer instead of re-resolving
-# from its pre-pass usings (which know no aliases) and dropping them
-# with `Undefined method: describe for Circle`.
-# (The walker does not resolve the alias yet — see the plan's step 5
-# note — so this spec pins BEAM only.)
+# `implement: Geo2.Shape`, kexhq/kex#627). The checker resolves the alias and
+# decides which defaults the type inherits; both backends follow that answer
+# instead of re-resolving the name, which dropped them with
+# `Undefined method: describe for Circle`.
 module Geo do
   trait Shape do
     area :> Float

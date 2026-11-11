@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A make block may overload `&&` and `||` (kexhq/kex#507), so a query builder
 # can write OR. An overload evaluates both sides; every other left value,
 # `Bool` included, keeps the built-in short-circuit.

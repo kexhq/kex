@@ -46,7 +46,7 @@ constexpr size_t kModuleBody = 6;
 constexpr size_t kSignature = 9;
 constexpr size_t kFn = 17;
 constexpr size_t kTrait = 5;
-constexpr size_t kAdt = 8;
+constexpr size_t kAdt = 9;
 constexpr size_t kDistinct = 3;
 } // namespace schema
 
@@ -93,7 +93,7 @@ constexpr TypeShape kTypeShapes[] = {
     {TypeTag::Primitive, "primitive", 3},
     {TypeTag::SizedInt, "sized_int", 3},
     {TypeTag::SizedFloat, "sized_float", 2},
-    {TypeTag::Named, "named", 3},
+    {TypeTag::Named, "named", 4},
     {TypeTag::Func, "func", 4},
     {TypeTag::Tuple, "tuple", 2},
     {TypeTag::List, "list", 2},
@@ -162,8 +162,8 @@ auto typeToTerm(const TypePtr& t) -> TermPtr {
         } else if constexpr (std::is_same_v<K, SizedFloatType>) {
             return typeTuple(TypeTag::SizedFloat, {Term::integer(node.bits)});
         } else if constexpr (std::is_same_v<K, NamedType>) {
-            return typeTuple(TypeTag::Named,
-                             {Term::binary(node.name), listOf(node.typeArgs)});
+            return typeTuple(TypeTag::Named, {Term::binary(node.name), listOf(node.typeArgs),
+                                              Term::binary(node.variant)});
         } else if constexpr (std::is_same_v<K, FuncType>) {
             return typeTuple(TypeTag::Func,
                              {listOf(node.params), typeToTerm(node.result),
@@ -242,6 +242,7 @@ auto typeFromSax(SaxReader& sax) -> TypePtr {
     case TypeTag::Named: {
         NamedType named{sax.readBinary(), {}};
         readTypes(named.typeArgs);
+        named.variant = sax.readBinary();
         return make(std::move(named));
     }
     case TypeTag::Func: {
@@ -469,7 +470,7 @@ auto adtToTerm(const kex::semantic::ImportedADT& adt) -> TermPtr {
     std::vector<TermPtr> paramTypes;
     for (const auto& [ctor, types] : adt.constructorParamTypes)
         paramTypes.push_back(Term::tuple({Term::binary(ctor), listOf(types)}));
-    return checkedTuple({Term::atom("adt"), Term::binary(adt.name),
+    return checkedTuple({Term::atom("adt"), Term::binary(adt.name), Term::binary(adt.module),
                          Term::list(std::move(ctors)), Term::list(std::move(arities)),
                          Term::integer(static_cast<int64_t>(adt.typeParamCount)),
                          Term::list(std::move(slots)), Term::list(std::move(paramNames)),
@@ -483,6 +484,7 @@ auto adtFromSax(SaxReader& sax) -> kex::semantic::ImportedADT {
     if (sax.readAtom() != "adt") throw EtfError("adt: shape");
     kex::semantic::ImportedADT adt;
     adt.name = sax.readBinary();
+    adt.module = sax.readBinary();
     const auto ctorCount = sax.beginList();
     adt.constructors.reserve(ctorCount);
     for (size_t i = 0; i < ctorCount; ++i)

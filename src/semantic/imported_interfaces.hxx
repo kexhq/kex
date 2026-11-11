@@ -152,6 +152,9 @@ struct ImportedADT {
     // the generic-slot/arity information above as a faithful fallback.
     std::vector<std::string> typeParamNames;
     std::unordered_map<std::string, std::vector<TypePtr>> constructorParamTypes;
+    // The module that declares it, "" at top level (KexiADT::module). Last, so
+    // the aggregate initializers above keep their meaning.
+    std::string module;
 };
 
 struct ImportedDistinctType {

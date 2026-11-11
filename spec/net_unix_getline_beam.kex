@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # Unix line reading: FileHandle-style getLine over a stream socket.
 
@@ -14,7 +14,7 @@ main do
     assert(peer.readLine.try == Just(" spaced "))
     assert(peer.readLine.try == Just("raw"))
     match peer.readLine do
-      Error(error) => assert(error.kind == Parse, "invalid UTF-8 must be a Parse error")
+      Error(error) => assert(error.kind == Net.Parse, "invalid UTF-8 must be a Parse error")
       Ok(_) => assert(false, "invalid UTF-8 must not decode")
     end
     peer.sendAll("back\n".to(Binary).try).try

@@ -1,6 +1,6 @@
 #pragma once
 // Analyses and what a pass preserves of them, after LLVM's new pass manager
-// (docs/pass-restructure-plan.md, Stage 7).
+// (docs/architecture.md).
 //
 // An analysis computes a fact about one IR unit (a Program, a Unit, an
 // ir::Module) and is asked for by its TYPE:

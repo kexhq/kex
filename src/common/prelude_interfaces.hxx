@@ -884,6 +884,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             const auto identity = moduleName + "." + td.name;
             kex::semantic::ImportedADT adt;
             adt.name = identity;
+            adt.module = moduleName;
             adt.typeParamCount = td.typeParams.size();
             adt.typeParamNames = td.typeParams;
             // Both spellings are declared type NAMES, the way a record's are;

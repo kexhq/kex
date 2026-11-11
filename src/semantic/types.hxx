@@ -40,6 +40,11 @@ struct SizedFloatType {
 struct NamedType {
     std::string name;
     std::vector<TypePtr> typeArgs;
+    // A refinement to one nullary variant of the ADT `name` (`Write` of
+    // `FS.FileMode`): the type of that constructor's value, and of
+    // `FileMode.Write` written as a type. Empty for the ADT itself; code that
+    // ignores it sees the ADT, which every variant value is.
+    std::string variant;
 };
 
 struct FuncType {
@@ -130,13 +135,15 @@ struct Type {
 
     static auto integer() -> TypePtr;  // arbitrary precision
     static auto charT() -> TypePtr;
-    static auto string() -> TypePtr;   // alias for list(charT())
+    static auto string() -> TypePtr;
     static auto boolean() -> TypePtr;
     static auto atom(std::string atomName = "") -> TypePtr;
     static auto unit() -> TypePtr;
     static auto unknown() -> TypePtr;
     static auto voidType(std::string reason = {}) -> TypePtr;
     static auto named(const std::string& name, std::vector<TypePtr> args = {}) -> TypePtr;
+    // The type of the nullary variant `variant` of the ADT `adt` (NamedType::variant).
+    static auto variantOf(const std::string& adt, const std::string& variant) -> TypePtr;
     static auto func(std::vector<TypePtr> params, TypePtr result,
                      bool block = false) -> TypePtr;
     static auto list(TypePtr element) -> TypePtr;

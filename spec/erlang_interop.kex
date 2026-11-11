@@ -1,5 +1,5 @@
 # Erlang interop: calling Erlang stdlib directly via the BEAM.* namespace
-# kex: run-beam
+# kex: run-beam — calls Erlang through BEAM.*
 
 main do
   # lists:reverse/1

@@ -1014,7 +1014,7 @@ private:
   // Made in `run`, after the banner: making one loads the prelude.
   std::optional<kex::interpreter::Evaluator> m_evaluator;
   // Accumulated source of all top-level definitions typed in the REPL so
-  // far, used to keep the SemanticDB index complete across multiple inputs.
+  // far, so a later input is checked and completed against all of them.
   std::string m_replAccumSource;
   // Local bindings are evaluated one input at a time, but their source is
   // retained here so semantic analysis can infer the type of later inputs.

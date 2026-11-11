@@ -1,8 +1,7 @@
 #pragma once
 
 // The modules a program uses, found, loaded and merged into it: what every
-// build and every walker run does before checking (docs/pass-restructure-plan.md,
-// Stage 4). One implementation, for `kex -c`, `kex -R`, the REPLs and anything
+// build and every walker run does before checking. One implementation, for `kex -c`, `kex -R`, the REPLs and anything
 // embedding the walker.
 
 #include "../ast/ast.hxx"

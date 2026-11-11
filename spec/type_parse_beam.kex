@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # `Type.parse` and `Type.Field.parse` read text as a value of a declared type,
 # the step between a database row or a form and `Type.construct`. There is no
 # null: an absent column is left out of the map, and `construct` fills `None`.

@@ -48,7 +48,9 @@ Program::Program(const ast::Program& ast, const semantic::Analyzer& analysis)
     : m_ast(&ast), m_analysis(&analysis), m_types(&analysis.typeMap()),
       m_typeOfAnswers(&analysis.staticTypeOfCalls()),
       m_selected(&analysis.selectedCallSignatures()),
-      m_shownThrough(&analysis.shownThroughDistinct()) {
+      m_shownThrough(&analysis.shownThroughDistinct()),
+      m_inheritedDefaults(&analysis.checker().inheritedDefaults()),
+      m_stringPatterns(&analysis.checker().stringPatterns()) {
     // An imported target names the function; what else the checker decided
     // fills in the rest. Keyed by node and by expression alike.
     const auto record = [&](const ast::Expr& expr, Target target) {
@@ -86,6 +88,8 @@ Program::Program(const ast::Program& ast,
     m_typeOfAnswers = &m_owned->typeOfAnswers;
     m_selected = &m_owned->selected;
     m_shownThrough = &m_owned->shownThroughDistinct;
+    m_inheritedDefaults = &m_owned->inheritedDefaults;
+    m_stringPatterns = &m_owned->stringPatterns;
     for (const auto& [expr, target] : targets) {
         if (const auto* node = callNodeOf(*expr)) m_targets.emplace(node, target);
         m_targets.emplace(expr, target);
@@ -248,6 +252,16 @@ auto Program::traitsOf(const ast::MakeDef& make) const -> const std::vector<std:
     return found == resolved.end() ? nullptr : &found->second;
 }
 
+auto Program::inheritedDefaultsOf(const ast::MakeDef& make) const
+    -> const std::vector<semantic::InheritedDefault>* {
+    const auto found = m_inheritedDefaults->find(&make);
+    return found == m_inheritedDefaults->end() ? nullptr : &found->second;
+}
+
+auto Program::destructuresString(const ast::Pattern& pattern) const -> bool {
+    return m_stringPatterns->contains(&pattern);
+}
+
 auto Program::typeOfAnswer(const ast::MethodCall& call) const
     -> const semantic::StaticTypeAnswer* {
     const auto found = m_typeOfAnswers->find(&call);
@@ -375,6 +389,7 @@ auto Program::forEachAnsweredNode(const std::function<void(const void*)>& visit)
     for (const auto& [call, _] : *m_typeOfAnswers) visit(call);
     for (const auto& [expr, _] : *m_selected) visit(expr);
     for (const auto& [expr, _] : *m_shownThrough) visit(expr);
+    for (const auto* pattern : *m_stringPatterns) visit(pattern);
 }
 
 auto Program::typeOf(const ast::Expr& expr) const -> semantic::TypePtr {
@@ -431,6 +446,24 @@ auto verify(const Program& program) -> std::vector<std::string> {
         problems.push_back(std::move(problem));
     }
     return problems;
+}
+
+} // namespace kex::hir
+
+namespace kex::hir {
+
+// The newest program that checked the block answers; the base last.
+auto ProgramSet::inheritedDefaultsOf(const ast::MakeDef& make) const
+    -> const std::vector<semantic::InheritedDefault>* {
+    for (auto program = m_programs.rbegin(); program != m_programs.rend(); ++program)
+        if (const auto* inherited = (*program)->inheritedDefaultsOf(make)) return inherited;
+    return m_base ? m_base->inheritedDefaultsOf(make) : nullptr;
+}
+
+auto ProgramSet::destructuresString(const ast::Pattern& pattern) const -> bool {
+    for (auto program = m_programs.rbegin(); program != m_programs.rend(); ++program)
+        if ((*program)->destructuresString(pattern)) return true;
+    return m_base && m_base->destructuresString(pattern);
 }
 
 } // namespace kex::hir

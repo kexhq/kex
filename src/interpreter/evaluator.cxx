@@ -388,14 +388,6 @@ auto Evaluator::resolvePendingExports() -> void {
                 throw RuntimeError("Unknown module exported by " + pending.owner + ": " + targetName,
                                    pending.decl->location);
 
-            for (const auto& requested : pending.decl->onlyNames)
-                if (target->second.privateNames.contains(requested))
-                    throw RuntimeError("cannot export private name `" + requested + "` from " + targetName,
-                                       pending.decl->location);
-            for (const auto& requested : pending.decl->exceptNames)
-                if (target->second.privateNames.contains(requested))
-                    throw RuntimeError("cannot reference private name `" + requested + "` from " + targetName,
-                                       pending.decl->location);
 
             const auto alias = pending.decl->alias.value_or(pending.decl->module.parts.back());
             const auto viewName = pending.owner + "." + alias;
@@ -811,7 +803,7 @@ auto cachedPreludeCheck(ast::Program& prelude, const std::vector<std::string>& f
             if (auto loaded = hir::load(prelude, order, *bytes)) return loaded.release();
     const auto* checked = checkPrelude(prelude, files);
     if (checked && path) {
-        const auto bytes = hir::save(*checked, order);
+        const auto bytes = hir::save(*checked, prelude, order);
         kex::cache::atomicWrite(
             *path, std::string_view(reinterpret_cast<const char*>(bytes.data()),
                                     bytes.size()));
@@ -923,14 +915,6 @@ auto Evaluator::execUsingBlock(const ast::UsingBlock& block,
     if (m_usingModules.empty()) m_usingModules.emplace_back();
     m_usingModules.back().insert(moduleName);
     try {
-        for (const auto& requested : block.onlyNames)
-            if (imported->second.privateNames.contains(requested))
-                throw RuntimeError("cannot import private name `" + requested
-                                   + "` from " + moduleName, block.location);
-        for (const auto& requested : block.exceptNames)
-            if (imported->second.privateNames.contains(requested))
-                throw RuntimeError("cannot reference private name `" + requested
-                                   + "` from " + moduleName, block.location);
         for (const auto& [name, value] : imported->second.exports) {
             // `as:` alone imports nothing.
             if (block.alias && block.onlyNames.empty()) break;
@@ -986,9 +970,8 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
         }
     }
     std::unordered_set<std::string> publicNames;
-    std::unordered_set<std::string> privateNames;
     for (const auto& item : mod.body) {
-        std::visit([&publicNames, &privateNames, &moduleName](const auto& node) {
+        std::visit([&publicNames, &moduleName](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
                 publicNames.insert(node->name);
@@ -1007,21 +990,22 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
                     shortName = shortName.substr(prefixLen);
                 publicNames.insert(shortName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                // A private block's names are the module's own: not exported.
+                // Who may name them is the checker's to decide.
+                if (!node->isPublic) return;
                 for (const auto& visible : node->items) {
                     if (const auto* function =
                             std::get_if<std::unique_ptr<ast::FunctionDef>>(&visible))
-                        (node->isPublic ? publicNames : privateNames).insert((*function)->name);
+                        publicNames.insert((*function)->name);
                     else if (const auto* record =
                             std::get_if<std::unique_ptr<ast::RecordDef>>(&visible))
-                        (node->isPublic ? publicNames : privateNames).insert((*record)->name);
+                        publicNames.insert((*record)->name);
                     else if (const auto* typeDef =
                             std::get_if<std::unique_ptr<ast::TypeDef>>(&visible)) {
-                        (node->isPublic ? publicNames : privateNames).insert((*typeDef)->name);
-                        if (auto constructors =
-                                kex::typeConstructors(**typeDef))
+                        publicNames.insert((*typeDef)->name);
+                        if (auto constructors = kex::typeConstructors(**typeDef))
                             for (const auto& constructor : *constructors)
-                                (node->isPublic ? publicNames : privateNames)
-                                    .insert(constructor.name);
+                                publicNames.insert(constructor.name);
                     }
                 }
             }
@@ -1076,7 +1060,6 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
     }
 
     ModuleEntry entry;
-    entry.privateNames = std::move(privateNames);
     entry.submodules = std::move(m_moduleRegistry[moduleName].submodules);
     const auto prefix = moduleName + std::string(kex::mangle::kSeparator);
     for (const auto& name : publicNames) {
@@ -2133,7 +2116,25 @@ auto Evaluator::execMakeDefFor(const ast::MakeDef& def,
         }, item);
     }
 
-    // Inherit default methods from implemented traits.
+    // Inherit default methods from implemented traits: those the checker
+    // decided this block inherits (a type's own method in any of its blocks
+    // beats a default), the same ones lowering splices in.
+    if (const auto* inherited = m_programs.inheritedDefaultsOf(def)) {
+        // Each default's clauses, where the trait registered them (the
+        // prelude's traits included), collected before any is defined:
+        // defining inserts into m_functionDefs.
+        std::vector<const ast::FunctionDef*> bodies;
+        for (const auto& [trait, method] : *inherited)
+            if (const auto found = m_functionDefs.find(trait + std::string(kex::mangle::kSeparator) + method);
+                found != m_functionDefs.end())
+                for (const auto* function : found->second)
+                    if (function && !function->clauses.empty() && !function->clauses[0].body.empty())
+                        bodies.push_back(function);
+        for (const auto* function : bodies) execFunctionDef(*function, typeName, true);
+        return;
+    }
+    // Unchecked (`--no-check`): no checker answers, so the block's own
+    // methods alone decide.
     for (const auto& written : def.implements) {
         const auto traitName = traitIdentityOf(written, enclosingModule, true);
         if (traitName.empty()) continue;
@@ -2672,10 +2673,18 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             case hir::TargetKind::Constructor:
                 // A nullary constructor written through its module
                 // (`Roles.Admin`): the value its tag is bound to.
-                if (node.args.empty() && node.namedArgs.empty() && !node.block)
-                    if (auto value = m_env->get(node.method);
-                        value && std::holds_alternative<VariantValue>(value->data))
-                        return value;
+                // A module's constructor is bound under its module, the module
+                // of the ADT the checker named (`Units.Data` for
+                // `Units.Data.DataUnit`), a top-level one by its bare name.
+                if (node.args.empty() && node.namedArgs.empty() && !node.block) {
+                    const auto module = kex::mangle::pathScopeOf(target.owner);
+                    for (const auto& binding :
+                         {module.empty() ? node.method : kex::mangle::qualify(module, node.method),
+                          node.method})
+                        if (auto value = m_env->get(binding);
+                            value && std::holds_alternative<VariantValue>(value->data))
+                            return value;
+                }
                 break;
             default:
                 break;
@@ -2899,13 +2908,6 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 }
                 if (node.block) {
                     args.push_back(eval(**node.block));
-                }
-                if (auto registered = m_moduleRegistry.find(namespaceName);
-                    registered != m_moduleRegistry.end()
-                    && registered->second.privateNames.contains(node.method)
-                    && m_currentModule != namespaceName) {
-                    throw RuntimeError("cannot access private name `" + node.method
-                                       + "` from " + namespaceName, expr.location);
                 }
                 // Prefer the mangled "Namespace::method" name (e.g. "IO::putLine")
                 // so namespaced builtins can't collide with unrelated plain-name
@@ -3593,13 +3595,6 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     if (resolver.resolve(ns, m_currentModule))
                         ns = ensureModuleLoaded(ns, expr.location, m_currentModule);
                 }
-                if (auto registered = m_moduleRegistry.find(ns);
-                    registered != m_moduleRegistry.end()
-                    && registered->second.privateNames.contains(node.name)
-                    && m_currentModule != ns) {
-                    throw RuntimeError("cannot access private name `" + node.name
-                                       + "` from " + ns, expr.location);
-                }
                 const auto mangled = kex::mangle::qualify(ns, node.name);
                 if (!m_env->get(mangled))
                     throw RuntimeError("`" + node.module + "." + node.name
@@ -3847,14 +3842,6 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             const bool scoped = !node.body.empty();
             if (scoped) pushEnv();
             try {
-                for (const auto& requested : node.onlyNames)
-                    if (it->second.privateNames.contains(requested))
-                        throw RuntimeError("cannot import private name `" + requested
-                                           + "` from " + moduleName, expr.location);
-                for (const auto& requested : node.exceptNames)
-                    if (it->second.privateNames.contains(requested))
-                        throw RuntimeError("cannot reference private name `" + requested
-                                           + "` from " + moduleName, expr.location);
                 for (const auto& [name, value] : it->second.exports) {
                     if (node.alias && node.onlyNames.empty()) break;
                     if (!node.onlyNames.empty() &&
@@ -4626,10 +4613,9 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
         return dot != std::string::npos &&
             actual.compare(dot + 1, std::string::npos, expected) == 0;
     };
-    // A type named as a value (`"42".to(Integer)`) is still the type's
-    // module value here, so a `Type` / `Type<T>` parameter takes one. It
-    // becomes a `Type` record with stage T2 of docs/pass-restructure-plan.md,
-    // and this goes.
+    // Without a checked program (`--no-check`, `compiled do`) a type named
+    // as a value (`"42".to(Integer)`) is still the type's module value, so a
+    // `Type` / `Type<T>` parameter takes one.
     auto namedTypeValue = [&](const std::string& expected) {
         return expected == kex::names::kTypeRecord && value &&
                std::holds_alternative<ModuleValue>(value->data);
@@ -4993,7 +4979,7 @@ auto Evaluator::autoCallZeroArgConstant(const std::string& name, const ValuePtr&
 
 auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value,
                                bool isMutable) -> bool {
-    return std::visit([this, &value, isMutable](const auto& pat) -> bool {
+    return std::visit([this, &pattern, &value, isMutable](const auto& pat) -> bool {
         using T = std::decay_t<decltype(pat)>;
 
         if constexpr (std::is_same_v<T, ast::WildcardPattern>) {
@@ -5088,47 +5074,37 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value,
             return true;
         }
         else if constexpr (std::is_same_v<T, ast::ListPattern>) {
-            // Strings are stored as StringValue but are semantically [Char],
-            // so a list pattern against a String treats it as a char sequence.
-            std::vector<ValuePtr> chars;
-            const std::vector<ValuePtr>* elements = nullptr;
-            if (auto* sv = std::get_if<StringValue>(&value->data)) {
-                for (auto cp : utf8::decode(sv->value))
-                    chars.push_back(Value::character(cp));
-                elements = &chars;
-            } else if (auto* lv = std::get_if<ListValue>(&value->data)) {
-                elements = &lv->elements;
-            } else {
-                return false;
+            // A list pattern matches a list, or takes a String apart into its
+            // characters where the checker decided it does
+            // (destructuresString): the elements bind Chars, the tail the
+            // rest of the String. A String is no list either way.
+            const auto fits = [&](std::size_t size) {
+                return pat.rest ? size >= pat.elements.size()
+                                : size == pat.elements.size();
+            };
+            if (m_programs.destructuresString(pattern)) {
+                const auto* text = std::get_if<StringValue>(&value->data);
+                if (!text) return false;
+                const auto codepoints = utf8::decode(text->value);
+                if (!fits(codepoints.size())) return false;
+                for (size_t i = 0; i < pat.elements.size(); i++)
+                    if (!matchPattern(*pat.elements[i], Value::character(codepoints[i]),
+                                      isMutable))
+                        return false;
+                if (!pat.rest) return true;
+                std::string tail;
+                for (size_t i = pat.elements.size(); i < codepoints.size(); i++)
+                    tail += utf8::encode(codepoints[i]);
+                return matchPattern(**pat.rest, Value::string(std::move(tail)), isMutable);
             }
-            if (pat.elements.empty() && !pat.rest) {
-                return elements->empty();
-            }
-            if (pat.rest) {
-                // [x | xs] — at least as many elements as the fixed part
-                if (elements->size() < pat.elements.size()) return false;
-            } else {
-                // [x] or [x, y] — exact length match (no rest captures surplus)
-                if (elements->size() != pat.elements.size()) return false;
-            }
-            for (size_t i = 0; i < pat.elements.size(); i++) {
-                if (!matchPattern(*pat.elements[i], (*elements)[i], isMutable)) return false;
-            }
-            if (pat.rest) {
-                // Reconstruct tail: if original was a String, tail is also a String
-                if (std::get_if<StringValue>(&value->data)) {
-                    std::string tail;
-                    for (size_t i = pat.elements.size(); i < elements->size(); i++) {
-                        if (auto* cv = std::get_if<CharValue>(&(*elements)[i]->data))
-                            tail += utf8::encode(cv->value);
-                    }
-                    if (!matchPattern(**pat.rest, Value::string(tail), isMutable)) return false;
-                } else {
-                    std::vector<ValuePtr> rest(elements->begin() + pat.elements.size(), elements->end());
-                    if (!matchPattern(**pat.rest, Value::list(std::move(rest)), isMutable)) return false;
-                }
-            }
-            return true;
+            const auto* list = std::get_if<ListValue>(&value->data);
+            if (!list || !fits(list->elements.size())) return false;
+            const auto& elements = list->elements;
+            for (size_t i = 0; i < pat.elements.size(); i++)
+                if (!matchPattern(*pat.elements[i], elements[i], isMutable)) return false;
+            if (!pat.rest) return true;
+            std::vector<ValuePtr> rest(elements.begin() + pat.elements.size(), elements.end());
+            return matchPattern(**pat.rest, Value::list(std::move(rest)), isMutable);
         }
         else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
             // Match None

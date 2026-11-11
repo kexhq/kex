@@ -402,8 +402,25 @@ auto Lowering::lowerPattern(const ast::PatternPtr& p) -> PatternPtr {
             for (const auto& a : pn.elements) out->args.push_back(lowerPattern(a));
         } else if constexpr (std::is_same_v<T, ast::ListPattern>) {
             out->kind = PatKind::List;
+            out->ofString = hir->destructuresString(*p);
             for (const auto& a : pn.elements) out->args.push_back(lowerPattern(a));
             if (pn.rest) out->rest = lowerPattern(*pn.rest);
+            // A binary segment holds a codepoint, and the tail the rest of the
+            // binary: a character is bound or a Char literal, the tail bound
+            // or a String literal.
+            if (out->ofString) {
+                const auto isA = [](const PatternPtr& q, LitKind literal) {
+                    return q->kind == PatKind::Var || q->kind == PatKind::Wild ||
+                           (q->kind == PatKind::Lit && q->litKind == literal);
+                };
+                for (const auto& element : out->args)
+                    if (!isA(element, LitKind::Char))
+                        throw LowerError("IR lower: a String's character can only "
+                                         "be bound or matched against a Char literal");
+                if (out->rest && !isA(out->rest, LitKind::String))
+                    throw LowerError("IR lower: the rest of a String can only be "
+                                     "bound or matched against a String literal");
+            }
         } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
             return pn.inner ? lowerPattern(pn.inner)
                             : [&]{ auto w = std::make_unique<Pattern>(); w->kind = PatKind::Wild; return w; }();

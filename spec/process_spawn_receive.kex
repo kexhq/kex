@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # spawn + receive round-trip using |sender| binding.
 
 type Msg = Ping | Pong

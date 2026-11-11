@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A module's free function over one of its own types is that type's receiver
 # function: `conn.close` reaches `TCP.close(connection: Conn)`. Beside a
 # `make Client do let close` in another module, both share the bare name

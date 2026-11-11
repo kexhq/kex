@@ -12,7 +12,7 @@
          map/2, filter/2, each/2, find/2, flatMap/2, reject/2,
          'all?'/2, 'any?'/2, count/2,
          minBy/2, maxBy/2,
-         get/2, get/3, repack/2]).
+         get/2, get/3]).
 
 %% as_list/1 — a String receiver (UTF-8 binary) as its [Char] list of tagged
 %% {'Char', N} tuples; everything else unchanged. The list HOF lowerings wrap

@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 main do
   let slow = Task.start do
     Task.sleep(2.second)

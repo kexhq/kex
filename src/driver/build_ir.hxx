@@ -1,6 +1,6 @@
 #pragma once
 // The build as IR levels of the pass infrastructure
-// (docs/pass-restructure-plan.md, Stage 7):
+// (docs/architecture.md):
 //
 //   build::Program   the whole build: the entry and every file it loads
 //                    (LLVM's Module)

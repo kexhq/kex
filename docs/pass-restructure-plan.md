@@ -4,7 +4,233 @@ The plan for the `refactor/kex-bloat` branch: a smaller, DRY compiler with one
 semantic analysis whose decisions every backend follows, built as real passes.
 This file is the plan of record and its status; update it as stages land.
 
-Last updated: 2026-11-06.
+Last updated: 2026-11-11.
+
+## Review findings (2026-11-11, by the user) — the work is NOT done
+
+The status table below claimed every stage Done. A review against the code
+found otherwise. Work these in this order: each one hides or blocks the next.
+
+**The intent is not met.** The point of this refactor was to separate
+language decisions from the backends, so the interpreter is correct by
+default: the checker decides what every name, call and type means, and the
+walker and lowering only follow it. Finding 2's differences show both
+backends still decide language questions themselves. Example: a bare
+constructor (`FS.File.open(path, Write)` with no `using FS`) is accepted by
+the checker (its constructor lookup is global), works on BEAM only because a
+nullary constructor is the bare atom `'Write'`, and fails on the walker,
+whose environment holds `FS.Write` (`Undefined identifier: Write`). Three
+components, three rules. The fix for every such case: the checker records
+the declaration the name means (or rejects it) and both backends read that
+answer; a difference between the backends is then a bug in one reading, not
+a second language. Each item of finding 2 is fixed that way, not by
+patching the walker's own lookup.
+Decided 2026-11-11 (user): a constructor is named the way it was declared.
+`Write` is declared inside `module FS` (`src/stdlib/fs.kex`), so it is
+`FS.Write`. The build system pulls the module in (the stdlib's `FS` is
+always there), so `FS.Write` needs no `using` (it already runs on both
+backends); `using` only says whether to pull a module's NAMES into scope,
+which ones and under what alias (`only:`, `except:`, `as:`). So the bare
+`Write` reaches it only inside `FS` or under a `using FS` that brings it in,
+and is a checker error anywhere else. A constructor declared at top level stays bare.
+The same holds for a module from an outside (tey) package once tey pulls
+the package in as a dependency: its qualified names resolve without
+`using`, and `using` brings names in bare. That already worked before and
+must keep working (a spec covers it before the checker rule changes).
+The specs that use a module's constructor bare (`closeable_traits_beam`,
+`writable_sockets_beam`, ...) change.
+Found implementing it: a constructor used as a type (a singleton, which is
+what `FS.File.open`'s overloads take: `String -> Write -> ...`) is keyed by
+its BARE name, so it only means something where the bare name is in scope.
+Spelled out without `using FS`, the checker therefore types `FS.Write` as the
+whole `FS.FileModes` (its own comment says why), which matches no overload:
+with the rule above there is no spelling of the mode that works. Fix: give
+constructor singletons qualified identities (`FS.Write`, owned by
+`FS.FileModes`), the same rule records and ADTs follow; the checker's
+constructor tables and the KexI signatures change (one cache bump), lowering
+does not. Also found: `--run-walker` checks a program merged with the
+stdlib's SOURCE (`FS` as a local module) while `--run` checks it against the
+stdlib's KexI interfaces, so the same program can pass one and fail the
+other (it does here); both must check against the same interfaces.
+
+1. **CI is red on every commit of the branch** (PR kexhq/kex#616: Linux
+   `native-build` and `alpine` fail to compile; only macOS passes). Cause:
+   the unused-include cleanup was verified with clang/libc++ on macOS only,
+   and libc++ includes headers transitively that libstdc++ does not.
+   `src/beam/kexi.hxx` lacked `<cstdint>` and `<memory>` (every run's
+   error), `src/repl/input.cxx` lacked `<cstring>`; both fixed in the
+   working tree. Rule from now on: an include change is checked with
+   GCC/libstdc++ (`g++-14 -fsyntax-only` with the SDK sysroot works on this
+   Mac) or in the `docker/` image, never with clang alone. Done when CI is
+   green on Linux and Alpine.
+2. **Walker/BEAM disagreements are buried, not gone.** `make spec` runs
+   every spec tagged `# kex: run-beam` (89) through BEAM, so for those the
+   "walker vs BEAM" comparison compares BEAM with BEAM. Run on the walker,
+   34 of them differ from their goldens:
+   - real walker bugs: `Write` / `Parse` / `UnsupportedOption` constructors
+     undefined (`closeable_traits_beam`, `writable_sockets_beam`,
+     `net_socket_text_beam`, `net_udp_text_beam`, `net_unix_text_beam`,
+     `net_unix_policy_beam`); `trait_alias_implement` (kexhq/kex#627);
+     `task_await_timeout` (walker says `finished`, BEAM `timed out`);
+     `net_http_chunk_limits_beam` prints nothing (the walker crashes:
+     a segfault was seen in the run);
+   - BEAM-only by nature (interop through `BEAM.*`, `Kex.load`, sockets the
+     walker does not implement, backend predicates): these need a tag that
+     says so (`beam-only`) instead of `run-beam` silently skipping the
+     walker, and each claim of "BEAM-only" must be checked.
+   Also: `# kex: skip-beam` on `compiled_template_static` was stale (done:
+   removed, both backends match; kexhq/kex#312 is closed); `spec-prelude`
+   and `spec-prelude-beam` ran with `--no-check`, so the prelude specs never
+   ran on the checked program (done: they run checked, 597 and 591 passing);
+   and
+   the `spec-beam` comment says the remaining differences "live outside this
+   suite" (pid rendering, Range printing) — they are known divergences with
+   no test. Done when every spec runs on both backends or carries a checked
+   reason not to, and every divergence is a failing test or an issue.
+
+   Progress (2026-11-11), the constructor case: a nullary constructor's
+   type is now a structured refinement of its ADT (`NamedType::variant`,
+   printed `FS.FileMode.Write`), inferred from the declaration the name
+   resolves to; `FileMode.Write` written as a type resolves its prefix as a
+   type and takes that ADT's variant. An imported module's ADT registers its
+   constructors per module (`ImportedADT::module`, carried in KexI), like
+   the program's own module ADTs, so a bare constructor out of scope is a
+   checker error on both backends. The stdlib follows: `FS.FileMode` (was
+   `FileModes`), `open : FilePath -> FileMode.Read -> ...`, and the handle
+   permissions are plain types (`type CanRead`, ...) beside `FileHandle`.
+   Done (2026-11-11): the 53 `run-beam` specs the walker passes lost the tag
+   (they run on both backends now; `skip-wasm` keeps the wasm suite as it
+   was, unverified here); the other 34 keep it with their reason on the tag
+   line (`# kex: run-beam — the walker has no sockets ...`), the real walker
+   bugs marked `WALKER BUG`. Of the four found: `task_await_timeout` is fixed
+   (the walker's `Task.sleep` blocked the OS thread, so no other process ran;
+   it yields to the scheduler now, as BEAM's does, and the spec runs on both
+   backends); `net_http_chunk_limits_beam` crashed on `"x".repeat(1000)`,
+   because the walker and lowering each decided per `make` block which trait
+   defaults a type inherits, so `make String, implement: Monoid` (algebra.kex)
+   gave the walker Monoid's recursive `repeat` over string.kex's own (now
+   the checker decides it once, a type's own method in ANY of its blocks
+   beating a default; `inheritedDefaultsOf` names each default by trait and
+   method, so it works for a trait of another unit, is persisted with the
+   HIR, and both backends read it); `String.repeat` is gone, the trait's
+   `repeat` (logarithmic depth, identity for a count below 1) serves it; `net_unix_policy_beam` was the sockets category after all. And
+   `trait_alias_implement` (kexhq/kex#627) passes on the walker now too, by
+   the same answer: it runs on both backends (the issue is closed at step 6).
+
+   String is not `[Char]` (a long-standing rule, `types.hxx`). The guard
+   rework briefly carried the old "a String IS `[Char]`" rule into the
+   checker's `TypeForm`; removed. List patterns on a String (kexhq/kex#125)
+   stay (decided by the user 2026-11-11): pattern sugar over its characters,
+   which does not make a String a list. DONE 2026-11-11: the checker records
+   each list pattern it binds against a String (`TypeChecker::stringPatterns`,
+   `hir::Program::destructuresString`, persisted with the HIR); its elements
+   bind Chars, its tail a String. The walker takes the String apart only for
+   those patterns; BEAM matches them as UTF-8 binaries (`<<C/utf8,
+   Rest/binary>>`, `emit_core.cxx`'s `emitStringPattern`, the Chars rebound
+   around the clause's guard and body). Lowering's `as_list` subject and
+   receiver coercions, the `repack` of the tail and the dispatcher's
+   String-to-List method forwarding are deleted
+   (`spec/string_list_pattern_cases`). The comment saying BEAM's `==` takes a
+   charlist and a String with the same text as equal was stale (`eq` does no
+   such thing) and is corrected. Left for the stdlib cleanup: the List
+   intrinsics on both backends still take a String receiver as its
+   characters (`kex_intrinsic_list:as_list`/`repack`, the walker's
+   `list.cxx` `getElements`/`repackChars`), and `kex_intrinsic_number:add`
+   joins a String and a charlist. Also found: `Time.monotonic` checks clean
+   and is undefined at run time on both backends.
+   Re-measured after it (2026-11-11): still 34 of the 89 differ on the walker,
+   but the six `Write`/`Parse`/`UnsupportedOption` failures are gone: those
+   specs now stop only where the walker has no sockets (`UnsupportedBackend`).
+   Still real: `trait_alias_implement` (kexhq/kex#627), `task_await_timeout`,
+   `net_http_chunk_limits_beam` (walker crash), `net_unix_policy_beam` (a
+   different error kind).
+   Open: a module's constructor in a PATTERN has no qualified spelling
+   (`Shades.Light =>` does not parse) and is not under the scope rule;
+   patterns are still matched by the matched value's ADT.
+
+   Resolvers found while doing it (all deciding names apart from the
+   checker, which is finding 3 below):
+   - `DeclarationValidator` decided "Unknown type" from spellings (and
+     accepted constructor names as types). Its type check is gone: the
+     checker reports an annotation its resolution finds nothing for
+     (`reportUnknownType`).
+   - `prelude_interfaces.hxx`'s `resolveSourceType` derived the opt-in
+     stdlib's interfaces from source and merged them over the checked KexI.
+     Now every stdlib module's interface is its KexI (checked); the source
+     path remains only without a built runtime.
+   - `collect_metadata.cxx` converts AST spellings to KexI types
+     (`convertTypeExpr`) and qualifies them by string afterwards
+     (`qualifyType`, `qualifyModuleTypeNames`). Standalone contracts now come
+     from the checker (`contractSignatureOf`); record fields, `make` targets,
+     type exports and the fallback paths still read spellings.
+   - `ResolvePass` still reports undefined names on its own.
+   - The language server runs on its own `SemanticDB` and `ResolvePass`, so
+     what it reports (and completes, and navigates to) can diverge from what
+     the compiler and the walker do with the same program. It has to read
+     the checker's answers (`hir::Program`) like every other consumer, the
+     same rules by construction rather than by keeping two copies in step.
+3. **The plans' "done" claims are wrong; correct them before anything else
+   is marked done.** Verified against the code:
+   - Stage 2 promised one resolver ("`ResolvePass` and the checker's scope
+     tracking merged"): `ResolvePass` still exists beside the checker's own
+     resolution (`resolveRecordName`, import stacks).
+   - Stage 3's IR rewrites (corrected 2026-11-11: this finding was wrong).
+     Guard and rescue-guard expansion ARE the `guards` pass: lowering only
+     marks a match (`GuardExpansion::Source`/`Rescue`, `expandRescueGuards`
+     wraps guarded rescue arms in one such match). Operator
+     devirtualization is the checker's decision (`BuiltinOperands`), which
+     lowering translates; no rewrite is left to move. The stage's section
+     heading still says "in progress" and is stale.
+   - Stage 4: the walker's own run-time copies of the visibility rules
+     (DONE 2026-11-11: removed, all five). Removing them showed where they
+     were the only enforcement: the checker said nothing about a private
+     module function called through its path (`Vault.secret(1)`, which BEAM
+     then ran) nor about a `using` written inside a body; it reports both now
+     (`spec/error_private_module_function`, `module_rules`' body walk). (Corrected 2026-11-11: an earlier version of this finding
+     said the native REPL never runs on a checked program. It does, each
+     input checked and added (`keepChecked`, `addProgram`), as the wasm REPL
+     and `compiled do` do; `docs/architecture.md` said otherwise and is
+     fixed.)
+   - Stage 5 / order step 7 said "SemanticDB is deleted": it exists (the
+     language server's store), and comments in `main.cxx`, `repl/session.cxx`
+     and `evaluator.cxx` still describe it as the resolver. (DONE
+     2026-11-11, one piece: the language server read a record field's type
+     out of the record symbol's display text; a record symbol now carries its
+     fields (`SymbolInfo::fields`), typed by the checker once the file is
+     checked (`enrichRecordSymbols`, `TypeChecker::recordFieldType`), and the
+     server's own function walker gave way to `ast::forEachFunction`.)
+   - `docs/declaration-identity-plan.md` stage 5 (symbols from declarations)
+     is partial; `compiler-refactor-plan.md` says "All phases landed" over
+     an unreviewed design gate, deferred 3d, trait-dictionary hoisting not
+     started, the deferred `::` → `.` mangling flip, and a stale state
+     snapshot.
+   - Missing files cited as current: `src/driver/pipeline.hxx` (here),
+     `docs/compiled-status.md` (`docs/architecture.md`, `CLAUDE.md`). (DONE
+     2026-11-11: neither compiled-status nor compiled-todo was ever in the
+     repository; the references point at `docs/compiled-eval.md`, and this
+     plan's pipeline entries at `build_passes.cxx` and `module_passes`.)
+4. **Finish the refactor's own work:** symbols spelled from declarations
+   (declaration-identity stage 5, with the `::` → `.` flip and the runtime's
+   serving lookup), the walker's visibility copies gone, one resolver, the IR
+   rewrites as passes.
+5. **Clean up last** (only once 1–4 are done; the benchmarks stay until
+   then): `make bench`, `test-bench`, `bench-slick` (needs `../slick`,
+   which nobody else has), `dup-audit` and their `tools/` scripts; the
+   `KEX_NO_DEVIRT` / `KEX_NO_OP_DEVIRT` measurement switches; plan and
+   stage references in code comments; then these plan documents, keeping
+   the lasting rules in `docs/architecture.md`.
+**Later, after this refactor: clean up the standard library** (the user,
+2026-11-11), its traits especially. Types still carry their own copies of
+what a trait provides: `String` had its own `repeat` beside `Monoid`'s (now
+removed, the trait's serves it), and `Char` and `String` each define
+`alpha?`, `upperCase` and the like, meaning slightly different things for
+each. One definition per operation, in the trait or type it belongs to.
+
+6. **At the very end, revisit the GitHub issues.** Go through the open
+   kexhq/kex issues and check which this refactor fixed indirectly, by
+   removing the backend hacks that caused them (each one rechecked on both
+   backends, with a spec where it is fixed); close those with a note, and
+   list the rest in the PR.
 
 ## Why
 
@@ -112,12 +338,12 @@ targeted, every expression typed (`--verify-hir`); `--dump-hir` prints it.
 |---|---|---|
 | 0 | Benchmark on slick | Done |
 | 1 | Foundations (cache, enums, shared walkers, audit, `main()` split) | Done; the open items are in the order below |
-| 2 | One sema decides every call; HIR | **Done** (2026-11-09; `verify-hir-stdlib`: 0 undecided call sites; captures decided too): decisions recorded, `hir::Program` answers them, node identities and `hir::persist`; the HIR is the AST plus these answers (decided 2026-11-09, no separate node types) |
+| 2 | One sema decides every call; HIR | **Not done** (finding 3: `ResolvePass` still beside the checker's resolution). Earlier claim: **Done** (2026-11-09; `verify-hir-stdlib`: 0 undecided call sites; captures decided too): decisions recorded, `hir::Program` answers them, node identities and `hir::persist`; the HIR is the AST plus these answers (decided 2026-11-09, no separate node types) |
 | 2b | Intrinsic registry + `Type<T>` signatures | **Done** (2026-11-10): `Type<T>` and `to` in step 3; the registry decides `Process.spawn`, the checker decides the testing DSL and the prelude `each`/`times` fold, and the backends read those decisions (a program's own `assert` or `each` is its own). The Duration-as-Measure, singular-unit and quantity-equality items of step 9 stay **deferred** (by the user) |
-| 3 | Lowering only translates; IR passes | **Done** (2026-11-09): lowering is checked-only (it throws without a HIR); the provider search and its run-time choices are the checker's (alternatives), with `dualProviderDispatch` and `importedFreeFunctionDispatch` deleted; no override of a checker target is left (`localBeatsTraitDefault`, `ownedMakeFunction`, the module-path search deleted); every call reaching the local fallback is a decided kind (dispatch, trait method, field read on a structural or conflicting record, a free function called UFCS). `lowerMethodCallImpl` is a switch on the target kind and a dispatch to handlers (80 lines, from ~1150); the IR passes are in `src/ir/passes/`. Lowering reads the checker only through `hir::Program`, and captures are decided too. |
-| 4 | Walker on the HIR | **Done** (2026-11-09): every program the walker runs is checked first: the entry (kex::driver, merged with the modules it uses), each module loaded at run time, and compile-time code (`compiled do`, collapse, template scans, tag validators), the checks cached across builds; the method call reads the decided target (conversion, runtime primitive, `Type.of`, trait dictionary, own method, the selected module function unless a `with` replaced its capability, value-or-namespace receivers). What goes by the value at run time is what BEAM leaves to its dispatchers too: `Dispatch` calls and the prelude's receiver functions |
-| 5 | LSP / SemanticDB on the same sema | **Done** (2026-11-08): one resolver, the checker's name pass; the REPLs and `--complete` hold no SemanticDB; the language server's SemanticDB is a document store and query front end over the checker's index |
-| 6 | Delete old paths, measure | **Done** (2026-11-09; the cold cost accepted by the user as the price of checking every program the walker runs; final slick table under Stage 6: every warm scenario 19–31% faster than `main`, cold +41%, the first checks of compile-time code). The merged program's `expand` pass is deleted. `docs/architecture.md`; measurements below. `src/`'s size against `main` is reported, not a gate (2026-11-08) |
+| 3 | Lowering only translates; IR passes | **Not done** (finding 3: guard, rescue-guard and operator-devirt rewrites still in lowering; finding 4: symbols). Earlier claim: **Done** (2026-11-09): lowering is checked-only (it throws without a HIR); the provider search and its run-time choices are the checker's (alternatives), with `dualProviderDispatch` and `importedFreeFunctionDispatch` deleted; no override of a checker target is left (`localBeatsTraitDefault`, `ownedMakeFunction`, the module-path search deleted); every call reaching the local fallback is a decided kind (dispatch, trait method, field read on a structural or conflicting record, a free function called UFCS). `lowerMethodCallImpl` is a switch on the target kind and a dispatch to handlers (80 lines, from ~1150); the IR passes are in `src/ir/passes/`. Lowering reads the checker only through `hir::Program`, and captures are decided too. |
+| 4 | Walker on the HIR | **Not done** (finding 3: the walker's run-time visibility copies; finding 2's walker bugs, hidden by `run-beam`, are fixed). Earlier claim: **Done** (2026-11-09): every program the walker runs is checked first: the entry (kex::driver, merged with the modules it uses), each module loaded at run time, and compile-time code (`compiled do`, collapse, template scans, tag validators), the checks cached across builds; the method call reads the decided target (conversion, runtime primitive, `Type.of`, trait dictionary, own method, the selected module function unless a `with` replaced its capability, value-or-namespace receivers). What goes by the value at run time is what BEAM leaves to its dispatchers too: `Dispatch` calls and the prelude's receiver functions |
+| 5 | LSP / SemanticDB on the same sema | **Partial** (finding 3: SemanticDB kept as the LSP store, not deleted as step 7 said). Earlier claim: **Done** (2026-11-08): one resolver, the checker's name pass; the REPLs and `--complete` hold no SemanticDB; the language server's SemanticDB is a document store and query front end over the checker's index |
+| 6 | Delete old paths, measure | **Not done** (findings 1 and 5). Earlier claim: **Done** (2026-11-09; the cold cost accepted by the user as the price of checking every program the walker runs; final slick table under Stage 6: every warm scenario 19–31% faster than `main`, cold +41%, the first checks of compile-time code). The merged program's `expand` pass is deleted. `docs/architecture.md`; measurements below. `src/`'s size against `main` is reported, not a gate (2026-11-08) |
 | — | Separate compilation as the default | **Done** (2026-11-06); the merged build path is deleted |
 | 7 | LLVM-style pass infrastructure (typed passes, analyses, adaptors, instrumentation, pass builder) | **Done** (2026-11-10): `src/pass/`; three levels (program, unit, module), every build step a typed pass or analysis; `driver::Pipeline`, `ir::PassManager`, `separate_build.cxx` and the `g_separate*` globals deleted |
 
@@ -718,7 +944,7 @@ Done:
 
 Not done here, and where it went:
 - `src/driver/` and a pass pipeline: done later, in Stage 3 (`src/driver/
-  pipeline.hxx`, `ir::PassManager`). Commands stay functions in `main.cxx`.
+  build_passes.cxx`, `src/ir/module_passes`). Commands stay functions in `main.cxx`.
 - `Session::analyze` replacing the ~16 one-line `Analyzer` constructions —
   skipped; the single sema of Stage 2 removes them instead.
 - One `TypeExpr` printer — done 2026-11-07: `ast::typeText(type, spelling)`
@@ -987,10 +1213,10 @@ Done:
   checker's unique-record path).
 - Built-in-owner make methods call their implementation directly
   (`count/List`): no name-based routing, no run-time dispatch.
-- `ir::PassManager` (`src/ir/pass_manager.{hxx,cxx}`): named, timed IR passes;
-  `standardPasses()` is the one list every emitted module (programs, REPL,
+- The IR passes (`src/ir/module_passes.{hxx,cxx}`, on `src/pass/`'s pass
+  manager): named, timed IR passes; the default module pipeline is the one list every emitted module (programs, REPL,
   prelude) goes through. `KEX_TIMINGS` prints one line per pass.
-- **The compile pipeline is passes** (`src/driver/pipeline.hxx`): `kex -c` /
+- **The compile pipeline is passes** (`src/driver/build_passes.cxx`): `kex -c` /
   `--emit-core` run 16 named passes over a `CompileUnit` — prelude-interfaces,
   run-manifest, pre-check, output-dir, spec-base, dependencies, runtime-beams,
   run-cache, expand, check, lower, write-core, erlc, store-caches,

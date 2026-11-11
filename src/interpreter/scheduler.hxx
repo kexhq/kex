@@ -126,6 +126,9 @@ public:
     auto blockingReceive(const ast::ReceiveExpr& expr) -> ValuePtr;
 
     auto currentProcessId() const -> ProcessId { return m_current; }
+    // Whether the running code is one of this scheduler's processes (a
+    // spawned process or task), which can yield to the others.
+    auto inProcess() const -> bool { return m_processes.contains(m_current); }
     auto isAlive(ProcessId id) const -> bool;
 
     // `Process.register` / `Process.whereIs`: a name stays with its process

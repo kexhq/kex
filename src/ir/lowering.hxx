@@ -20,11 +20,12 @@ namespace kex::ir {
 // checker resolved it (`Any` where none is written).
 auto methodSignatureTypes(const hir::Program& hir, const ast::FunctionDef& method,
                           const std::string& receiver) -> std::vector<std::string>;
+// The identities the checker gives the types a module declares.
+auto ownTypeIdentities(const hir::Program& hir, const std::string& module,
+                       const std::set<std::string>& declared) -> std::unordered_set<std::string>;
 
 using namespace kex::ir::detail;
 
-using ast::typeText;
-using ast::TypeSpelling;
 using ast::separableOverloadSignatures;
 
 struct Lowering {
@@ -261,6 +262,10 @@ struct Lowering {
     // companion module in this same unit, by the target as written and by
     // the identity the checker gives it.
     std::unordered_map<std::string, std::string> localTypeModules;
+    // The name this unit files each module type under (as declared, or as its
+    // `make` target is written), by the identity the checker gives it
+    // (`Units.SI.SIPrefix` -> `SIPrefix`); see declaredNameOf.
+    std::unordered_map<std::string, std::string> declaredNames;
     // Bare names of module-scoped free functions acting as receiver methods
     // for a type their own module declares (see preModuleFn).
     std::unordered_set<std::string> moduleReceiverNames;
@@ -480,7 +485,7 @@ struct Lowering {
         std::string symbol;
     };
     auto ownImplementationOf(const ast::MethodCall& n) const -> OwnImplementation;
-    static auto ownerNameOf(const std::string& printed) -> std::string;
+    auto declaredNameOf(const std::string& type) const -> std::string;
     // The symbol a `make` method of `typeName` is emitted under, from its
     // declaration; definitions and the calls the checker bound to it alike.
     auto makeMethodSymbol(const ast::FunctionDef& method, const std::string& typeName,
@@ -728,7 +733,6 @@ struct Lowering {
     auto lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
                         const std::string& typeName) -> FunDef;
 
-    auto coerceListReceiver(FunDef def) -> FunDef;
 
     static auto primGuardBifs() -> const std::unordered_map<std::string, const char*>&;
     // The runtime shapes a value of `owner` can have, as `typeGuard` tells

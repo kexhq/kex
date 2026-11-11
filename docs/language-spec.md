@@ -2108,7 +2108,7 @@ information:
 
 ```kex
 trying do
-  let file = FS.File.open("notes.txt", Read).try
+  let file = FS.File.open("notes.txt", FS.Read).try
   let first = file.readLine.try
   file.close
   first

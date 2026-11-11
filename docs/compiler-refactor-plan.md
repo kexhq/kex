@@ -1,5 +1,8 @@
 # Kex Compiler Refactor Plan
 
+> **Not done.** "All phases landed" below is wrong: see the ordered review
+> findings at the top of `docs/pass-restructure-plan.md` (2026-11-11).
+
 Worktree: `refactor/kex-bloat` (off `main`). Goal: reduce bloat, cut bug surface,
 and speed up both kex compile times and the runtime performance of emitted
 programs. Work is committed incrementally; nothing is pushed.

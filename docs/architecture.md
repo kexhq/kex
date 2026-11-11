@@ -1,21 +1,20 @@
 # Compiler architecture
 
-How a Kex program moves from source to a running program, pass by pass. The
-restructure that produced this layout, and what is still unfinished, is
-recorded in `docs/pass-restructure-plan.md`.
+How a Kex program moves from source to a running program, pass by pass.
 
 ## The rule
 
 Semantic analysis decides, and every later pass follows. Lowering and the
 tree-walking interpreter both read one checked program (`hir::Program`), so
-they do not each re-derive a decision the type checker already made. Two
-ratcheted `make dup-audit` metrics watch for regressions:
-
-- `lowering-rederives`: places lowering reads the raw type map to decide
-  something itself. It is 0.
-- `walker-rederives`: places the walker reads a static type itself. It is 1,
-  where the walker builds a `Showable` dictionary from an argument's static
-  type. That is type-directed by definition.
+they do not each re-derive a decision the type checker already made. The
+checker answers in Kex terms only: which declaration a name, call or
+annotation means, named by its identity (module path plus declared name,
+`Net.HTTP.Client`), and what form a written type says a value has
+(`semantic/type_test.hxx`). Each backend turns those into its own
+representation (BEAM: tagged tuples, guards) and its own symbols (mangled
+function names); nothing about a backend's representation moves into the
+checker. Lowering reads the checker only through `hir/hir.hxx`; it resolves
+no name and reads no annotation itself.
 
 ## Passes (`src/pass/`), after LLVM's new pass manager
 
@@ -76,7 +75,7 @@ in its own file's expansion.
   qualified name is parsed and merged into the one program, as is a spec's
   base file.
 - **Compile-time expansion** (`src/compiled/`): `compiled do ... end` blocks
-  become ordinary AST (see `docs/compiled-status.md`).
+  become ordinary AST (see `docs/compiled-eval.md`).
 
 ## Semantic analysis (`src/semantic/`)
 
@@ -135,9 +134,9 @@ its own.
   `hir::Program` (`Evaluator::setProgram`). That covers operators and own
   methods of distinct types, slot casts, and `Type.of` answers. Under
   `--no-check` the analysis still runs, silently, on both backends.
-- **Not yet on the HIR:** the walker REPL, the wasm REPL and compile-time
-  evaluation. They keep the walker's run-time method lookup as their
-  fallback.
+- Every walker entry point runs on a checked program: a file run, each REPL
+  input (`keepChecked`, the wasm REPL too) and compile-time evaluation
+  (`compiled do`). Only `--no-check` runs without one.
 
 ## Checking it
 

@@ -1,4 +1,4 @@
-# A measure is its quantity (docs/pass-restructure-plan.md, step 9): equality
+# A measure is its quantity: equality
 # and ordering compare the canonical value within one dimension, whatever unit
 # each was written in. Mixing dimensions is a type error
 # (error_measure_mixed_dimensions.kex).

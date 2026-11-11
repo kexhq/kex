@@ -64,6 +64,12 @@ public:
     auto patternBindings() const -> const std::vector<PatternBinding>& {
         return m_patternBindings;
     }
+    // The list patterns that take a String apart into its characters
+    // (`[c | rest]` against a String): the elements bind Chars, the tail the
+    // rest of the String. Pattern sugar, decided here; a String is no list.
+    auto stringPatterns() const -> const std::unordered_set<const ast::Pattern*>& {
+        return m_stringPatterns;
+    }
     auto isTrait(const std::string& name) const -> bool {
         return m_traits.get(name) != nullptr;
     }
@@ -146,9 +152,33 @@ public:
     // An annotation as the run-time dispatchers test it: the record it was
     // resolved to, else as written.
     auto annotationSpelling(const ast::TypeExpr& type) const -> std::string;
+    // A standalone contract as the checker resolved it, or nullptr.
+    auto quantifiedContract(const Signature& contract) const -> Signature;
+    // A record field's type as resolved when the record was registered, its
+    // parameters as slots (-1 for the first); null when there is none.
+    auto recordFieldType(const std::string& record, const std::string& field) const -> TypePtr {
+        const auto found = m_recordFields.find(record);
+        if (found == m_recordFields.end()) return nullptr;
+        const auto type = found->second.find(field);
+        return type == found->second.end() ? nullptr : type->second;
+    }
+    // The same with the record's parameters by their declared names
+    // (`value : V`), as an editor shows it.
+    auto recordFieldType(const std::string& record, const std::string& field,
+                         const std::vector<std::string>& typeParams) const -> TypePtr;
+    auto inheritedDefaults() const
+        -> const std::unordered_map<const ast::MakeDef*, std::vector<InheritedDefault>>& {
+        return m_inheritedDefaults;
+    }
+    auto contractSignatureOf(const ast::TypeAnnotation& contract) const -> const Signature* {
+        const auto found = m_contractSignatures.find(&contract);
+        return found == m_contractSignatures.end() ? nullptr : &found->second;
+    }
     // What a type spelled `written` in module `scope` says about a value's
     // form (type_test.hxx).
     auto typeTestOf(const std::string& scope, const std::string& written) const -> TypeTest;
+    auto typeIdentity(const std::string& scope, const std::string& name) const -> std::string;
+    auto valueFormOf(const std::string& scope, const std::string& written) const -> TypeTest;
     auto registerDeclaredAliases(const ast::Program& program) -> void;
     // The declaration each `make` method is made for, and the record each
     // named record pattern names.
@@ -225,8 +255,9 @@ private:
         std::unordered_map<std::string, TypePtr>* genericVars = nullptr)
         -> std::optional<Signature>;
     auto registerMakeSignatures(const ast::Program& program) -> void;
-    auto registerMakeSignaturesInModule(const ast::ModuleDef& mod,
-                                       const std::string& parentPath) -> void;
+    auto noteOwnMethods(const ast::MakeDef& def, const std::string& modulePath) -> void;
+    auto makeTargetKey(const TypePtr& receiver) const -> std::string;
+    static auto ownMethodKey(const ast::FunctionDef& method) -> std::string;
     // Collects every `export M[, as: Alias]` in the program into
     // m_moduleReexports, keyed by the re-namespaced path it creates
     // ("App.Geometry" for `module App do export Geometry end`) mapping to
@@ -251,6 +282,12 @@ private:
     auto constantDeclaration(const std::string& name) const -> std::string;
     // The type of the nullary constructor `name` names here, or null.
     auto nullaryConstructorType(const std::string& name) -> TypePtr;
+    auto reportConstructorOutOfScope(const std::string& name, const SourceLocation& at) -> void;
+    auto namesDeclaredType(const std::string& qualified, const std::string& last) const -> bool;
+    auto reportUnknownType(const ast::TypeName& name, const SourceLocation& at) -> void;
+    auto reportPendingUnknownTypes() -> void;
+    auto spellingHasSeveralArities(const std::string& name) const -> bool;
+    auto variantType(const TypePtr& result, const std::string& name) const -> TypePtr;
     auto bareMethodCall(const ast::Expr& expr, const ast::FunctionCall& call,
                         const std::vector<TypePtr>& argTypes) -> TypePtr;
     auto withinModule(const std::string& module) const -> bool;
@@ -697,6 +734,14 @@ private:
     std::unordered_map<const ast::Expr*, std::string> m_referencedConstants;
     std::unordered_map<const ast::RecordPattern*, std::string> m_recordPatterns;
     std::unordered_map<const ast::TypeExpr*, std::string> m_annotatedRecords;
+    // Each standalone contract (`open : FilePath -> FileMode.Read -> ...`) as
+    // annotationToSignature resolved it.
+    std::unordered_map<const ast::TypeAnnotation*, Signature> m_contractSignatures;
+    // Each `make` target's own methods, across all its blocks (ownMethodKey),
+    // and the trait defaults each block inherits for its target: the type's
+    // own method of a name and arity beats a default, whichever block it is in.
+    std::unordered_map<std::string, std::set<std::string>> m_ownMethodsByTarget;
+    std::unordered_map<const ast::MakeDef*, std::vector<InheritedDefault>> m_inheritedDefaults;
     // Every transparent alias the program declares, by name, and what each
     // one a run-time dispatcher tests stands for, as written.
     DeclaredAliases m_declaredAliases;
@@ -704,6 +749,15 @@ private:
     // The types modules declare: each by its identity, and the module that
     // declares each name first.
     std::unordered_set<std::string> m_moduleTypeIdentities;
+    // Every type name the program declares (kex::collectDeclaredTypeNames).
+    std::set<std::string> m_declaredTypeNames;
+    // Whether resolving an annotation reports a name it cannot resolve (off
+    // while probing a prefix, `FileMode` of `FileMode.Write`), and the
+    // written names already reported.
+    bool m_reportUnknownTypes = true;
+    std::unordered_set<const ast::TypeName*> m_reportedUnknownTypes;
+    bool m_declarationsRegistered = false;
+    std::vector<std::pair<const ast::TypeName*, SourceLocation>> m_pendingUnknownTypes;
     std::unordered_map<std::string, std::string> m_typeDeclaringModules;
     // The trait each type spelling names in the module it was written in
     // (writtenKey), as resolveTypeExpr resolved it.
@@ -727,6 +781,8 @@ private:
         std::string typeName;
         size_t arity = 0;
         bool isPublic = true;
+        // From an imported interface: it is that module's exported function.
+        bool imported = false;
     };
     std::unordered_map<std::string,
         std::unordered_map<std::string, ModuleConstructor>>
@@ -742,6 +798,8 @@ private:
         std::string adt;
         size_t arity = 0;
         bool generic = false;
+        // The module declaring `adt`, "" at top level.
+        std::string module;
     };
     std::unordered_map<std::string, std::vector<ConstructorOwner>> m_constructorOwners;
     // What applying a constructor produces. `slots[i]` is the index of the
@@ -773,6 +831,7 @@ private:
     // reject a pattern that destructures the wrong number of values.
     std::unordered_map<std::string, size_t> m_constructorArity;
     std::vector<PatternBinding> m_patternBindings;
+    std::unordered_set<const ast::Pattern*> m_stringPatterns;
     // Make-block methods that carry a `:>` declaration. That declaration is
     // authoritative, so the inferred signature of its `let` must not be
     // registered alongside it as a second, permissive overload.
@@ -836,6 +895,13 @@ private:
     auto checkPatternConstructorOwner(const ast::Pattern& pattern,
                                       const TypePtr& expected) -> void;
     std::unordered_set<std::string> m_nullaryConstructors;
+    // Each ADT's nullary variants, by the ADT's identity: what a variant type
+    // (`FileMode.Write`, NamedType::variant) may name.
+    std::unordered_map<std::string, std::unordered_set<std::string>> m_nullaryVariants;
+    auto isNullaryVariant(const std::string& adt, const std::string& name) const -> bool {
+        const auto variants = m_nullaryVariants.find(adt);
+        return variants != m_nullaryVariants.end() && variants->second.contains(name);
+    }
 
     // Record field types: typeName -> { fieldName -> TypePtr }.
     // Populated by a pre-pass over all RecordDefs so field access in method

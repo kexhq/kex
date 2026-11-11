@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # kexhq/kex#381: `receiveMessage` gave up after a hardcoded 31s even though
 # the peer was still connected and simply hadn't sent anything — a WebSocket
