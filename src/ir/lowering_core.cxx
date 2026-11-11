@@ -8,41 +8,6 @@
 
 namespace kex::ir {
 
-// For MANGLED SYMBOL spellings: given
-// a type as the checker names it (qualified — `Srv.Server`), the spelling
-// the declaring module's own `make`/annotation source used, which is what
-// `mangleReceiverSignature` baked into the emitted function names. Returns
-// the input unchanged unless the qualifier is demonstrably the module that
-// declares that type here, so an unrelated `A.Server` is never confused
-// with a local `Server`.
-auto Lowering::moduleLocalTypeSpelling(const std::string& written) const
-    -> std::string {
-    std::string base = written;
-    std::string applied;
-    if (auto angle = base.find('<'); angle != std::string::npos) {
-        applied = base.substr(angle);
-        base.resize(angle);
-    }
-    const auto dot = base.rfind('.');
-    if (dot == std::string::npos) return written;
-    if (localTypeModules.count(base)) return written;
-    const auto qualifier = base.substr(0, dot);
-    const auto bare = base.substr(dot + 1);
-    auto declaring = localTypeModules.find(bare);
-    if (declaring != localTypeModules.end() &&
-        declaring->second == qualifier)
-        return bare + applied;
-    auto declared = moduleDeclaredTypes.find(bare);
-    if (declared != moduleDeclaredTypes.end() &&
-        declared->second == qualifier)
-        return bare + applied;
-    // A record of a module compiled in this unit. Only when nothing local
-    // already answers to the bare name — two modules may declare the same
-    // record, and stripping then names the wrong one.
-    if (records.count(base) && !records.count(bare)) return bare + applied;
-    return written;
-}
-
 // The trait a type spelling written in the module being lowered names —
 // `Geo.Shape` for a `Shape` written inside `module Geo` — as the checker
 // resolved it there, or "" when it names none this program has a dictionary
@@ -52,9 +17,22 @@ auto Lowering::traitIdentityOf(const std::string& written) const -> std::string 
     return traitMethods.count(trait) ? trait : std::string{};
 }
 
-auto Lowering::guardTypeOf(const ast::TypeExpr& type) const -> std::string {
-    if (auto record = hir->recordAnnotatedBy(type); !record.empty()) return record;
+auto annotatedTypeName(const hir::Program& hir, const ast::TypeExpr& type) -> std::string {
+    if (auto record = hir.recordAnnotatedBy(type); !record.empty()) return record;
     return typeText(type, TypeSpelling::Dispatch);
+}
+
+auto methodSignatureTypes(const hir::Program& hir, const ast::FunctionDef& method,
+                          const std::string& receiver) -> std::vector<std::string> {
+    std::vector<std::string> types{receiver};
+    if (method.clauses.empty()) return types;
+    for (const auto& param : method.clauses.front().params)
+        types.push_back(param.type && *param.type ? annotatedTypeName(hir, **param.type) : "Any");
+    return types;
+}
+
+auto Lowering::guardTypeOf(const ast::TypeExpr& type) const -> std::string {
+    return annotatedTypeName(*hir, type);
 }
 
 auto Lowering::makeOwnerOf(const ast::FunctionDef& method, const std::string& written) const

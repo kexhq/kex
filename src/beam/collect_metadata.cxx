@@ -1037,7 +1037,9 @@ void collectFromRecordDef(const kex::ast::RecordDef& rd, KexiTypeInterface& ifac
 
     KexiRecord rec;
     rec.name = rd.name;
-    rec.tagAtom = owner.empty() ? rd.name : owner + "." + rd.name;
+    rec.identity = owner.empty() ? rd.name : owner + "." + rd.name;
+    // On BEAM a record's tuples are tagged with its identity.
+    rec.tagAtom = rec.identity;
     for (const auto& f : rd.fields) {
         KexiRecordField rf;
         rf.name = f.name;

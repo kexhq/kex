@@ -625,6 +625,7 @@ int main() {
             chunk.metadata.moduleAtom = "kex_test";
             KexiRecord rec;
             rec.name = "Point";
+            rec.identity = "Geo.Point";
             rec.fields.push_back({"x", kexiPrimitive("Integer")});
             rec.fields.push_back({"y", kexiPrimitive("Integer")});
             chunk.metadata.records.push_back(std::move(rec));
@@ -636,6 +637,7 @@ int main() {
             test::assertEqual(decoded.metadata.records.size(), size_t(1));
             auto& r = decoded.metadata.records[0];
             test::assertEqual(r.name, std::string("Point"));
+            test::assertEqual(r.identity, std::string("Geo.Point"));
             test::assertEqual(r.fields.size(), size_t(2));
             test::assertEqual(r.fields[0].name, std::string("x"));
             test::assertEqual(r.fields[0].type->name, std::string("Integer"));

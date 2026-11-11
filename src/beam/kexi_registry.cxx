@@ -902,8 +902,8 @@ auto KexiRegistry::buildSemanticInterfaces() const
     for (const auto& [_, unit] : m_units)
         for (const auto& module : unit.modules)
             for (const auto& record : module.chunk.metadata.records) {
-                const auto qualified = record.tagAtom.empty()
-                    ? record.name : record.tagAtom;
+                const auto qualified = record.identity.empty()
+                    ? record.name : record.identity;
                 interfaces.recordArities[qualified] = record.fields.size();
                 auto& fieldNames = interfaces.recordFieldNames[qualified];
                 TypeVarMap recordVars;

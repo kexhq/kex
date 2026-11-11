@@ -10,9 +10,19 @@ tagged literal names (`calledFunctionOf`) and the constant a bare name names
 (`referencedConstantOf`), so lowering's `using` bindings (`moduleImports`,
 `externalImports`, `applyUsingCore` and its kin) are deleted; and the
 checker records the receiver type a devirtualized call runs
-(`staticReceiverHead`) while lowering spells the BEAM symbol. Still open:
-mangling from declarations rather than written spellings (stage 5's
-symbol scheme) and `tagAtom` as backend metadata (stage 6). Follows Stage 3 of
+(`staticReceiverHead`) while lowering spells the BEAM symbol. A call to an
+argument-overloaded `make` method is named from the declaration the checker
+selected (`makeMethodSymbol`, the one rule its definition is named by too),
+so lowering's reverse resolution of qualified names into written spellings
+(`moduleLocalTypeSpelling`) is deleted. Stage 6: KexI records a record's
+Kex identity (`KexiRecord::identity`) beside its BEAM tag, and the
+interfaces the checker reads key records by the identity; `tagAtom` is the
+BEAM backend's alone (layouts, display registration). BEAM symbols for
+`make` methods are spelled from the declarations the checker resolved
+(`methodSignatureTypes`: each parameter's annotation as its record
+`Culture.Culture`, its alias's target), not from the written spellings, at
+the one place each is named (definitions, the overload dispatchers, the
+calls the checker bound). All stages are done. Follows Stage 3 of
 `pass-restructure-plan.md`, which left lowering reading no expression types.
 
 ## Goal
@@ -130,3 +140,26 @@ stdlib's Core Erlang compared before/after)
   are invalid (one cache version bump relative to `main`).
 - Every stage keeps both BEAM and the walker green; the walker reads the same
   declaration answers.
+
+## Open: written annotations lowering still reads (2026-11-11)
+
+What lowering still takes from an annotation's own text, rather than from
+the checker's answer for it:
+
+- the run-time reflection layouts `Type.fields` / `Type.constructors`
+  answer with (`structuredTypeOfDeclared` + `expandDeclaredAliases`);
+- the run-time dispatchers' alias bodies (`structuralTypeAliases`), the
+  same-signature test between a function's clauses (`overloadedByParamType`),
+  and whether a module function's first parameter is one of the module's own
+  types (the receiver-method rule in `lowerModules`).
+
+Measured against the checker's resolved type for each annotation
+(`structuredTypeOf` of what `resolveTypeExpr` returned), over the stdlib
+and the 598 BEAM specs: 490 differ. The checker names a module's types by
+their identity (`Net.SupportValue` for `SupportValue`), follows aliases
+(`Duration` is `Measure<Quantity.Time>`), spells some primitives its own way
+(`Int`), and has no answer for primitive and type-variable annotations or
+for constructor payloads. Since the layouts are what a program sees from
+`Type.fields`, switching them to the checker's answer changes program
+output: what a reflected field's type is printed as has to be decided
+first (identity or written name; alias or what it stands for).

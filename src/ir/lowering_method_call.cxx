@@ -904,33 +904,18 @@ auto Lowering::lowerResolvedCall(const ast::MethodCall& n,
             backendFunction = std::move(exact);
         else if (knownFns.count(byReceiver))
             backendFunction = std::move(byReceiver);
-        else {
-            // The checker names a module's types by their
-            // QUALIFIED identity (`Srv.Server`, `Srv.Options`),
-            // but a `make Server` written inside `module Srv`
-            // mangles its per-signature implementations under the
-            // spelling as WRITTEN, which inside the module is
-            // bare. So a call from OUTSIDE the module built
-            // `listen/Srv.Server,String,Integer`, found nothing,
-            // kept the plain name — and the plain name is exactly
-            // what an argument-overloaded method is never emitted
-            // under: erlc rejected the unit with "undefined
-            // function listen/4". Retry in the declaring module's
-            // own spelling before giving up.
-            auto local = target.localDispatchTypes;
-            for (auto& type : local)
-                type = moduleLocalTypeSpelling(type);
-            if (local != target.localDispatchTypes) {
-                auto localExact =
-                    mangleReceiverSignature(backendFunction, local);
-                auto localByReceiver =
-                    mangleReceiverImplementation(backendFunction,
-                                                 local.front());
-                if (knownFns.count(localExact))
-                    backendFunction = std::move(localExact);
-                else if (knownFns.count(localByReceiver))
-                    backendFunction = std::move(localByReceiver);
-            }
+        else if (const auto* method = selectedMakeMethod(n)) {
+            // An argument-overloaded method the checker selected one
+            // declaration of: that declaration's own function, by the
+            // name its definition is emitted under (`listen/Srv.Server,
+            // Integer,Options` from outside `module Srv`). Any other
+            // method keeps the dispatcher, which reaches extensions.
+            const auto arity = ast::methodArity(*method->def);
+            if (argumentOverloadedMethods.count(
+                    localOverloadKey(method->def->name, method->owner, arity)))
+                if (auto symbol = makeMethodSymbol(*method->def, method->owner, arity);
+                    knownFns.count(symbol))
+                    backendFunction = std::move(symbol);
         }
     }
     // A proven `name/Head` for an imported make-block method —

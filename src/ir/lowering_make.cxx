@@ -79,15 +79,8 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
     // and erlc reported an undefined function.
     const auto sourceArity = static_cast<size_t>(def.arity) -
         def.dictionaryTraits.size() - (def.hasCapabilityContext ? 1u : 0u);
-    if (argumentOverloadedMethods.count(
-            localOverloadKey(first.name, typeName, sourceArity)))
-        def.name = mangleReceiverSignature(
-            first.name, methodDispatchTypes(first, typeName));
-    else if (auto colliding =
-                 collidingImplementationName(first.name, typeName, sourceArity))
-        def.name = *colliding;
-    else if (!hir->makeTargetTraitOf(first).empty())
-        def.name = mangleReceiverImplementation(first.name, typeName);
+    if (auto symbol = makeMethodSymbol(first, typeName, sourceArity); symbol != first.name)
+        def.name = std::move(symbol);
     // A lone local `to(String)` still participates in the language-wide
     // conversion protocol. Its guarded record clause handles the local
     // type; unmatched values must continue to the prelude conversion
@@ -1104,6 +1097,25 @@ auto Lowering::takesPlainParameters(const std::string& method,
                 if (param.pattern || !param.name) return false;
     }
     return any;
+}
+
+} // namespace kex::ir
+
+namespace kex::ir {
+
+// The symbol a `make` method is emitted under, from its declaration: its
+// argument-overload signature, its own type's implementation where several
+// types share the name, a trait's implementation, else its name. The one
+// rule both its definition and a call the checker bound to it use.
+auto Lowering::makeMethodSymbol(const ast::FunctionDef& method, const std::string& typeName,
+                                size_t sourceArity) const -> std::string {
+    if (argumentOverloadedMethods.count(localOverloadKey(method.name, typeName, sourceArity)))
+        return mangleReceiverSignature(method.name, methodSignatureTypes(*hir, method, typeName));
+    if (auto colliding = collidingImplementationName(method.name, typeName, sourceArity))
+        return *colliding;
+    if (!hir->makeTargetTraitOf(method).empty())
+        return mangleReceiverImplementation(method.name, typeName);
+    return method.name;
 }
 
 } // namespace kex::ir

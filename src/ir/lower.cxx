@@ -359,14 +359,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // a local `to/2` that does not exist.
                 L.localMethodArities.insert(
                     fd->name + "/" + std::to_string(beamArity(fd)));
-                auto dispatchTypes = methodDispatchTypes(*fd, typeName);
+                auto dispatchTypes = methodSignatureTypes(*L.hir, *fd, typeName);
                 const auto signature =
                     mangleReceiverSignature(fd->name, dispatchTypes);
-                // The symbol keeps the written spellings; the dispatcher's
-                // guards test the declarations the checker resolved them to.
-                for (std::size_t i = 0; i < fd->clauses[0].params.size(); ++i)
-                    if (const auto& type = fd->clauses[0].params[i].type; type && *type)
-                        dispatchTypes[i + 1] = L.guardTypeOf(**type);
                 signaturesByNameAndArity[
                     fd->name + "/" + std::to_string(beamArity(fd))]
                         .emplace(signature, std::move(dispatchTypes));
@@ -1918,7 +1913,7 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                             fd->name, typeName), true};
                 if (!typeName.empty()) {
                     auto exact = mangleReceiverSignature(
-                        fd->name, methodDispatchTypes(*fd, typeName));
+                        fd->name, methodSignatureTypes(*context.hir, *fd, typeName));
                     definitions[exact] = {path, exact, true};
                 }
                 if (mk->isServing && fd->isSlot)
