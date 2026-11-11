@@ -18,9 +18,35 @@ namespace kex::semantic {
 
 using namespace kex::semantic::detail;
 
+namespace {
+
+// The types a `make` target covers, one per member of a union target (`make
+// Float | Integer`): each as written (`String`, `List`, `Optional`, `Number`),
+// a declared type by its identity instead (`Units.SI.SIPrefix`).
+auto makeOwnerNames(const ast::TypeExprPtr& written, const TypePtr& target)
+    -> std::vector<std::string> {
+    auto names = kex::makeTargetNames(written);
+    std::vector<TypePtr> members;
+    const auto flatten = [&](const auto& self, const TypePtr& type) -> void {
+        if (const auto* un = type ? std::get_if<UnionType>(&type->kind) : nullptr)
+            for (const auto& member : un->members) self(self, member);
+        else
+            members.push_back(type);
+    };
+    flatten(flatten, target);
+    if (members.size() == names.size())
+        for (std::size_t i = 0; i < names.size(); ++i)
+            if (const auto* named = members[i] ? std::get_if<NamedType>(&members[i]->kind) : nullptr)
+                names[i] = named->name;
+    return names;
+}
+
+} // namespace
+
 auto TypeChecker::check(const ast::Program& program,
                         std::vector<Diagnostic>& diagnostics) -> void {
     m_diagnostics = &diagnostics;
+    m_makeTargetIdentities.clear();
     m_patternBindings.clear();
     m_stringPatterns.clear();
     m_functionSignatures.clear();
@@ -3580,12 +3606,6 @@ auto TypeChecker::checkUsingBlock(const ast::UsingBlock& block) -> void {
 }
 
 auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
-    // The declaration a `make` method is made for.
-    if (m_currentMakeType) {
-        const auto target = resolve(m_currentMakeType);
-        const auto* named = std::get_if<NamedType>(&target->kind);
-        m_makeTargets[&def] = named ? named->name : typeToString(target);
-    }
     // A method of a `make` for a trait takes its receiver's dictionary.
     if (m_currentMakeType)
         if (auto trait = declaredTraitOf(m_currentMakeType); !trait.empty())
@@ -4407,7 +4427,10 @@ auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
     m_currentMakeType.reset();
     auto prevMakeTargetVars = std::move(m_currentMakeTargetVars);
     m_currentMakeTargetVars.clear();
-    if (def.target) m_currentMakeType = resolveTypeExpr(*def.target, m_currentMakeTargetVars);
+    if (def.target) {
+        m_currentMakeType = resolveTypeExpr(*def.target, m_currentMakeTargetVars);
+        m_makeTargetIdentities[&def] = makeOwnerNames(def.target, resolve(m_currentMakeType));
+    }
     for (const auto& item : def.body) {
         std::visit([this](const auto& node) {
             using T = std::decay_t<decltype(node)>;

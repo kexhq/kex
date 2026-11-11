@@ -95,15 +95,9 @@ struct Lowering {
 
     // Which declaration a type name means is the checker's answer, never
     // lowering's: these turn the answers into the names the tables below
-    // are keyed by (a record by its identity, anything else as written).
+    // are keyed by (each type by its identity).
     // The record a written type annotation names, else the annotation.
     auto guardTypeOf(const ast::TypeExpr& type) const -> std::string;
-    // The declaration a `make` method belongs to, else its target as written.
-    auto makeOwnerOf(const ast::FunctionDef& method, const std::string& written) const
-        -> std::string;
-    // A `make` target's spelling as the declaration the checker resolved it
-    // to (`ownerIdentities`), else the spelling.
-    auto ownerIdentity(const std::string& written) const -> std::string;
     // field name → the record slots holding it. A field can live in several
     // records at (possibly different) positions; the emitted accessor
     // dispatches on the tag when they differ. Mirrors the string emitter.
@@ -137,16 +131,13 @@ struct Lowering {
     // Every make-block method by name, with the type its block targets and the
     // module that block is written in. A receiver call that labels arguments
     // or leaves defaulted ones out places them against the method it binds.
+    // A `make` method, by the identity of the type it is for (`owner`).
     struct MakeMethod {
         std::string owner;
         std::string modulePath;
         const ast::FunctionDef* def;
     };
     std::unordered_map<std::string, std::vector<MakeMethod>> makeMethods;
-    // Each `make` target spelling a record target was written as, and the
-    // record the checker resolved it to (makeOwnerOf).
-    std::unordered_map<std::string, std::string> ownerIdentities;
-    auto ownerOf(const MakeMethod& method) const -> std::string;
     // Cross-type method-name collisions: a method name → the make-block type
     // names that define it, in order. When more than one type defines the
     // same name, each type's version is emitted mangled (`name/Type`) and a
@@ -259,13 +250,9 @@ struct Lowering {
     // this preserves qualification without a cross-module call.
     std::unordered_map<std::string, std::string> moduleFunctions;
     // Receiver type -> source module path for make blocks compiled into a
-    // companion module in this same unit, by the target as written and by
-    // the identity the checker gives it.
+    // companion module in this same unit, by the identity the checker gives
+    // it.
     std::unordered_map<std::string, std::string> localTypeModules;
-    // The name this unit files each module type under (as declared, or as its
-    // `make` target is written), by the identity the checker gives it
-    // (`Units.SI.SIPrefix` -> `SIPrefix`); see declaredNameOf.
-    std::unordered_map<std::string, std::string> declaredNames;
     // Bare names of module-scoped free functions acting as receiver methods
     // for a type their own module declares (see preModuleFn).
     std::unordered_set<std::string> moduleReceiverNames;
@@ -351,9 +338,10 @@ struct Lowering {
 
     static auto opSymbol(TokenType t) -> std::string;
 
-    static auto makeTargetNameList(const ast::TypeExprPtr& t,
-                                   const std::string& module = "",
-                                   const std::set<std::string>& records = {})
+    // Every type a `make` block is for, each by its identity as the checker
+    // resolved the target (`Units.SI.SIPrefix`; one per member of a union
+    // target). Never empty: an unnameable target yields "".
+    static auto makeTargetNameList(const hir::Program& hir, const ast::MakeDef& make)
         -> std::vector<std::string>;
     // SSA renaming: Kex source name → its current IR variable name. A `let`/
     // `var`/reassignment introduces a fresh name and updates this; Identifier
@@ -485,7 +473,7 @@ struct Lowering {
         std::string symbol;
     };
     auto ownImplementationOf(const ast::MethodCall& n) const -> OwnImplementation;
-    auto declaredNameOf(const std::string& type) const -> std::string;
+    auto ownerNameOf(const std::string& type) const -> std::string;
     // The symbol a `make` method of `typeName` is emitted under, from its
     // declaration; definitions and the calls the checker bound to it alike.
     auto makeMethodSymbol(const ast::FunctionDef& method, const std::string& typeName,
@@ -696,6 +684,9 @@ struct Lowering {
     // What a type spelled `written` in the module being lowered says about a
     // value's form, as the checker reads it.
     auto typeTestOf(const std::string& written) const -> semantic::TypeTest;
+    // The identity of the type `name` declared in module `scope` (`""` at top
+    // level): what every table of types here is keyed by.
+    auto identityOf(const std::string& scope, const std::string& name) const -> std::string;
     auto discriminatingType(const std::string& written) const -> bool;
 
     auto lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& group,

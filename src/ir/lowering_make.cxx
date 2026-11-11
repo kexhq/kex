@@ -45,7 +45,7 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
     // universal `to`/`showValue` for unrelated values) while letting the
     // type-qualified form through.
     const bool guardedRecordReceiver =
-        !receiverPattern && records.count(makeOwnerOf(first, typeName));
+        !receiverPattern && records.count(typeName);
     if (guardedRecordReceiver)
         for (auto& clause : def.clauses)
             clause.guard = callE(
@@ -380,12 +380,11 @@ auto Lowering::runtimeShapes(const std::string& owner)
         return shapes;
     }
     // A distinct value is its erased backing value: no tag says it is one.
-    if (distinctTypes.count(declaredNameOf(owner))) return std::nullopt;
+    if (distinctTypes.count(ownerNameOf(owner))) return std::nullopt;
     // Anything else typeGuard tests as a tuple tagged with its identity.
     const auto test = typeTestOf(owner);
     if (test.form != semantic::TypeForm::Named) return std::nullopt;
-    const auto record = ownerIdentity(test.name);
-    return std::set<std::string>{"tuple:" + (records.count(record) ? record : test.identity)};
+    return std::set<std::string>{"tuple:" + test.identity};
 }
 
 auto Lowering::shapesMeet(const std::optional<std::set<std::string>>& a,
@@ -483,7 +482,7 @@ auto Lowering::typeGuard(const std::string& written, ExprPtr v) -> ExprPtr {
         }
     if (auto it = primGuardBifs().find(name); it != primGuardBifs().end())
         return callE("erlang", it->second, 1, one(std::move(v)));
-    if (auto tags = typeVariantTags.find(name);
+    if (auto tags = typeVariantTags.find(test.identity);
         tags != typeVariantTags.end() && !tags->second.empty())
         return adtGuard(tags->second, std::move(v));
     // Tagged record. Core Erlang exposes the guard-safe is_record/3 BIF
@@ -491,7 +490,7 @@ auto Lowering::typeGuard(const std::string& written, ExprPtr v) -> ExprPtr {
     // The guard tests the value's TAG, so it is the record's canonical
     // identity that has to appear here — `make Version` inside
     // Kex guards values tagged 'Kex.Version'.
-    const auto ty = ownerIdentity(name);
+    const auto ty = ownerNameOf(name);
     if (auto record = records.find(ty); record != records.end())
         return callE("erlang", "is_record", 3,
                      three(std::move(v), lit(LitKind::Atom, ty),
@@ -943,7 +942,7 @@ auto Lowering::takesPlainParameters(const std::string& method,
     const auto& canonical = owner;
     bool any = false;
     for (const auto& candidate : found->second) {
-        if (!candidate.def || ownerOf(candidate) != canonical)
+        if (!candidate.def || candidate.owner != canonical)
             continue;
         any = true;
         for (const auto& clause : candidate.def->clauses)

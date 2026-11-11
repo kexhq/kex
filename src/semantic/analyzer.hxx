@@ -151,11 +151,6 @@ public:
         const auto found = m_checker.calledFunctions().find(&call);
         return found == m_checker.calledFunctions().end() ? std::string{} : found->second;
     }
-    // The declaration a `make` method is for, or "".
-    auto makeTargetOf(const ast::FunctionDef& method) const -> std::string {
-        const auto found = m_checker.makeTargets().find(&method);
-        return found == m_checker.makeTargets().end() ? std::string{} : found->second;
-    }
     // The record a written type annotation names, or "".
     auto recordAnnotatedBy(const ast::TypeExpr& type) const -> std::string {
         const auto found = m_checker.annotatedRecords().find(&type);

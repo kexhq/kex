@@ -50,7 +50,7 @@ auto Lowering::discriminatingType(const std::string& written) const -> bool {
     if (test.form == semantic::TypeForm::Any) return false;
     if (test.form != semantic::TypeForm::Named) return true;
     if (primGuardBifs().count(test.name) || test.name == "Char") return true;
-    if (records.count(ownerIdentity(test.name))) return true;
+    if (records.count(test.identity)) return true;
     // An ADT TYPE discriminates through `adtGuard`, which tests each of
     // its variant tags — the nullary ones as bare atoms. Before that
     // existed, typeGuard's tagged fallback asked `element(1, V)`, which no
@@ -58,7 +58,7 @@ auto Lowering::discriminatingType(const std::string& written) const -> bool {
     // clause had to be left unguarded. That is how a free function
     // overloaded on two ADTs answered from its first clause on BEAM while
     // the walker dispatched it (docs/issue-free-function-overloads.md).
-    if (auto tags = typeVariantTags.find(test.name); tags != typeVariantTags.end())
+    if (auto tags = typeVariantTags.find(test.identity); tags != typeVariantTags.end())
         return !tags->second.empty();
     // A type a module declares is tagged with its identity.
     return localTypeModules.count(test.name) > 0 || test.identity != test.name;

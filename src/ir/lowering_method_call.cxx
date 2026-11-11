@@ -675,7 +675,7 @@ auto Lowering::lowerProcessSpawn(const ast::MethodCall& n, const std::string& st
     // by its identity: looked up as is, `Store.Counter` found nothing and the
     // server started with an EMPTY slot list, answering
     // `{unknown_serving_slot, get}` to its first call.
-    const auto key = declaredNameOf(stateType);
+    const auto key = ownerNameOf(stateType);
     if (auto slots = servingSlotsByType.find(key); slots != servingSlotsByType.end())
         for (const auto& slot : slots->second) slotAtoms.push_back(lit(LitKind::Atom, slot));
     if (auto declaring = localTypeModules.find(key); declaring != localTypeModules.end())

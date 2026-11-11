@@ -188,9 +188,10 @@ public:
     auto referencedConstants() const -> const std::unordered_map<const ast::Expr*, std::string>& {
         return m_referencedConstants;
     }
-    auto makeTargets() const
-        -> const std::unordered_map<const ast::FunctionDef*, std::string>& {
-        return m_makeTargets;
+    // The types each `make` block is for, by identity (makeOwnerNames).
+    auto makeTargetIdentities() const
+        -> const std::unordered_map<const ast::MakeDef*, std::vector<std::string>>& {
+        return m_makeTargetIdentities;
     }
     auto annotatedRecords() const
         -> const std::unordered_map<const ast::TypeExpr*, std::string>& {
@@ -727,7 +728,7 @@ private:
     std::unordered_set<const ast::Pattern*> m_typeSelectorPatterns;
     std::unordered_map<const ast::Param*, std::string> m_parameterTraits;
     std::unordered_map<const ast::FunctionDef*, std::string> m_makeTargetTraits;
-    std::unordered_map<const ast::FunctionDef*, std::string> m_makeTargets;
+    std::unordered_map<const ast::MakeDef*, std::vector<std::string>> m_makeTargetIdentities;
     // The function each bare call names, as resolved in its scope.
     std::unordered_map<const ast::Expr*, std::string> m_calledFunctions;
     // The module constant each bare name names, as resolved in its scope.
