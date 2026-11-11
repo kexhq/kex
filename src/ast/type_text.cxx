@@ -64,3 +64,21 @@ auto typeText(const TypeExpr& type, TypeSpelling spelling) -> std::string {
 }
 
 } // namespace kex::ast
+
+namespace kex::ast {
+
+auto dispatchNameOf(const TypeExprPtr& type) -> std::string {
+    if (!type) return "";
+    if (auto* name = std::get_if<TypeName>(&type->kind))
+        if (!name->parts.empty()) return name->parts.back();
+    if (auto* generic = std::get_if<GenericType>(&type->kind))
+        if (!generic->name.parts.empty()) return generic->name.parts.back();
+    // List/Map types get canonical names so list-vs-map methods (the
+    // polymorphic HOFs) collide and dispatch by runtime type (is_list/
+    // is_map) instead of falling into separate un-mangled `map/2`s.
+    if (std::holds_alternative<ListType>(type->kind)) return "List";
+    if (std::holds_alternative<MapType>(type->kind)) return "Map";
+    return "";
+}
+
+} // namespace kex::ast

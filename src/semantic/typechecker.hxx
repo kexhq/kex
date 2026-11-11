@@ -2,6 +2,7 @@
 
 #include "../ast/ast.hxx"
 #include "decided_call.hxx"
+#include "declared_type.hxx"
 #include "intrinsics.hxx"
 #include "imported_interfaces.hxx"
 #include "traits.hxx"
@@ -137,6 +138,18 @@ public:
     // The trait a type spelling written in module `scope` names, or "".
     auto traitWrittenAs(const std::string& scope, const std::string& written) const
         -> std::string;
+    // An annotation's declared type, for run-time reflection (`Type.fields`):
+    // as written, with the program's transparent aliases followed.
+    auto declaredTypeOf(const ast::TypeExpr& type) const -> StructuredType;
+    auto expandDeclared(StructuredType type) const -> StructuredType;
+    // An annotation as the run-time dispatchers test it: the record it was
+    // resolved to, else as written.
+    auto annotationSpelling(const ast::TypeExpr& type) const -> std::string;
+    // What each alias a dispatcher tests stands for, as written.
+    auto structuralAliases() const -> const std::unordered_map<std::string, std::string>& {
+        return m_structuralAliases;
+    }
+    auto registerDeclaredAliases(const ast::Program& program) -> void;
     // The declaration each `make` method is made for, and the record each
     // named record pattern names.
     auto calledFunctions() const -> const std::unordered_map<const ast::Expr*, std::string>& {
@@ -684,6 +697,10 @@ private:
     std::unordered_map<const ast::Expr*, std::string> m_referencedConstants;
     std::unordered_map<const ast::RecordPattern*, std::string> m_recordPatterns;
     std::unordered_map<const ast::TypeExpr*, std::string> m_annotatedRecords;
+    // Every transparent alias the program declares, by name, and what each
+    // one a run-time dispatcher tests stands for, as written.
+    DeclaredAliases m_declaredAliases;
+    std::unordered_map<std::string, std::string> m_structuralAliases;
     // The trait each type spelling names in the module it was written in
     // (writtenKey), as resolveTypeExpr resolved it.
     std::unordered_map<std::string, std::string> m_writtenTraits;

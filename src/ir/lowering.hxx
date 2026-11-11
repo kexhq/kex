@@ -5,7 +5,6 @@
 #include "../hir/hir.hxx"
 #include "../ast/function_groups.hxx"
 #include "../ast/type_text.hxx"
-#include "../semantic/declared_type.hxx"
 #include "../lexer/token.hxx"
 #include <functional>
 #include <map>
@@ -16,9 +15,6 @@
 
 namespace kex::ir {
 
-// A written type annotation as lowering names it: the record the checker
-// resolved it to, by its identity; any other type as written.
-auto annotatedTypeName(const hir::Program& hir, const ast::TypeExpr& type) -> std::string;
 // The types a `make` method's symbol and its dispatcher guards are spelled
 // from: its receiver as given, then each parameter's annotation as the
 // checker resolved it (`Any` where none is written).
@@ -193,8 +189,6 @@ struct Lowering {
     // one is called by its static type instead.
     std::unordered_set<std::string> distinctTypes;
     // What each transparent alias stands for, for the field and constructor
-    // layouts `Type.fields` and `Type.constructors` answer (kexhq/kex#530).
-    semantic::DeclaredAliases declaredAliases;
     // Record/make type names (so a namespace call can be recognized as a
     // static method dispatch, not an unknown module).
     std::unordered_set<std::string> knownTypes;
@@ -369,7 +363,6 @@ struct Lowering {
 
     static auto opSymbol(TokenType t) -> std::string;
 
-    static auto simpleTypeName(const ast::TypeExprPtr& t) -> std::string;
     static auto makeTargetNameList(const ast::TypeExprPtr& t,
                                    const std::string& module = "",
                                    const std::set<std::string>& records = {})

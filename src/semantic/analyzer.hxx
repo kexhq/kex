@@ -163,6 +163,18 @@ public:
         const auto found = m_checker.recordPatterns().find(&pattern);
         return found == m_checker.recordPatterns().end() ? std::string{} : found->second;
     }
+    auto declaredTypeOf(const ast::TypeExpr& type) const -> StructuredType {
+        return m_checker.declaredTypeOf(type);
+    }
+    auto expandDeclared(StructuredType type) const -> StructuredType {
+        return m_checker.expandDeclared(std::move(type));
+    }
+    auto annotationSpelling(const ast::TypeExpr& type) const -> std::string {
+        return m_checker.annotationSpelling(type);
+    }
+    auto structuralAliasBodies() const -> const std::unordered_map<std::string, std::string>& {
+        return m_checker.structuralAliases();
+    }
     // The trait a method's `make` is for, or "".
     auto makeTargetTraitOf(const ast::FunctionDef& method) const -> std::string {
         const auto found = m_checker.makeTargetTraits().find(&method);

@@ -176,7 +176,7 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
                     // function_clause.
                     const auto* declared = dispatchParamType(p);
                     if (!p.name || !declared) return false;
-                    current.push_back(typeText(*declared, TypeSpelling::Dispatch));
+                    current.push_back(hir->annotationSpelling(*declared));
                 }
                 if (signature.empty()) signature = current;
                 else if (signature != current) differs = true;

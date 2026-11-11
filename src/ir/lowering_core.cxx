@@ -17,22 +17,17 @@ auto Lowering::traitIdentityOf(const std::string& written) const -> std::string 
     return traitMethods.count(trait) ? trait : std::string{};
 }
 
-auto annotatedTypeName(const hir::Program& hir, const ast::TypeExpr& type) -> std::string {
-    if (auto record = hir.recordAnnotatedBy(type); !record.empty()) return record;
-    return typeText(type, TypeSpelling::Dispatch);
-}
-
 auto methodSignatureTypes(const hir::Program& hir, const ast::FunctionDef& method,
                           const std::string& receiver) -> std::vector<std::string> {
     std::vector<std::string> types{receiver};
     if (method.clauses.empty()) return types;
     for (const auto& param : method.clauses.front().params)
-        types.push_back(param.type && *param.type ? annotatedTypeName(hir, **param.type) : "Any");
+        types.push_back(param.type && *param.type ? hir.annotationSpelling(**param.type) : "Any");
     return types;
 }
 
 auto Lowering::guardTypeOf(const ast::TypeExpr& type) const -> std::string {
-    return annotatedTypeName(*hir, type);
+    return hir->annotationSpelling(type);
 }
 
 auto Lowering::makeOwnerOf(const ast::FunctionDef& method, const std::string& written) const
@@ -436,24 +431,10 @@ auto Lowering::opSymbol(TokenType t) -> std::string {
     }
 }
 
-auto Lowering::simpleTypeName(const ast::TypeExprPtr& t) -> std::string {
-    if (!t) return "";
-    if (auto* tn = std::get_if<ast::TypeName>(&t->kind))
-        if (!tn->parts.empty()) return tn->parts.back();
-    if (auto* g = std::get_if<ast::GenericType>(&t->kind))
-        if (!g->name.parts.empty()) return g->name.parts.back();
-    // List/Map types get canonical names so list-vs-map methods (the
-    // polymorphic HOFs) collide and dispatch by runtime type (is_list/
-    // is_map) instead of falling into separate un-mangled `map/2`s.
-    if (std::holds_alternative<ast::ListType>(t->kind)) return "List";
-    if (std::holds_alternative<ast::MapType>(t->kind)) return "Map";
-    return "";
-}
-
 // Every dispatch name a `make` target covers — one entry normally, one per
 // member for a union target (`make Float | Integer`). Always non-empty so
 // callers can loop unconditionally; an unnameable target yields "", which
-// is what simpleTypeName returned for it before.
+// is what ast::dispatchNameOf returns for it.
 auto Lowering::makeTargetNameList(const ast::TypeExprPtr& t,
                                const std::string& module ,
                                const std::set<std::string>& records )

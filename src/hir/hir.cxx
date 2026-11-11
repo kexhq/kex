@@ -212,6 +212,23 @@ auto Program::recordOf(const ast::Expr& expr) const -> std::string {
     return named ? named->name : std::string{};
 }
 
+auto Program::declaredTypeOf(const ast::TypeExpr& type) const -> semantic::StructuredType {
+    return m_analysis ? m_analysis->declaredTypeOf(type) : semantic::StructuredType{"Any", {}};
+}
+
+auto Program::expandDeclared(semantic::StructuredType type) const -> semantic::StructuredType {
+    return m_analysis ? m_analysis->expandDeclared(std::move(type)) : type;
+}
+
+auto Program::annotationSpelling(const ast::TypeExpr& type) const -> std::string {
+    return m_analysis ? m_analysis->annotationSpelling(type) : std::string{};
+}
+
+auto Program::structuralAliasBodies() const -> const std::unordered_map<std::string, std::string>& {
+    static const std::unordered_map<std::string, std::string> none;
+    return m_analysis ? m_analysis->structuralAliasBodies() : none;
+}
+
 auto Program::recordAnnotatedBy(const ast::TypeExpr& type) const -> std::string {
     return m_analysis ? m_analysis->recordAnnotatedBy(type) : std::string{};
 }

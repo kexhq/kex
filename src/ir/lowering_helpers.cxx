@@ -253,7 +253,7 @@ auto Lowering::withDisplayInfo(ExprPtr body, const std::string& moduleName )
                 const auto& field = fields[i];
                 std::vector<ExprPtr> parts;
                 parts.push_back(binaryLit(field.name));
-                const auto type = semantic::expandDeclaredAliases(field.type, declaredAliases);
+                const auto& type = field.type;
                 parts.push_back(structuredTypeLiteral(type));
                 parts.push_back(litBool(type.name == "Option"));
                 parts.push_back(litBool(field.hasDefault));
@@ -280,8 +280,7 @@ auto Lowering::withDisplayInfo(ExprPtr body, const std::string& moduleName )
             for (const auto& [tag, argTypes] : variants) {
                 std::vector<ExprPtr> types;
                 for (const auto& type : argTypes)
-                    types.push_back(structuredTypeLiteral(
-                        semantic::expandDeclaredAliases(type, declaredAliases)));
+                    types.push_back(structuredTypeLiteral(type));
                 described.push_back(tupleOf(two(binaryLit(tag), listOf(std::move(types)))));
             }
             adtEntries.push_back(tupleOf(two(atomLit(owner), listOf(std::move(described)))));
@@ -300,7 +299,7 @@ auto Lowering::withDisplayInfo(ExprPtr body, const std::string& moduleName )
         for (const auto& name : distinctTypes) {
             semantic::StructuredType named;
             named.name = name;
-            const auto backing = semantic::expandDeclaredAliases(named, declaredAliases);
+            const auto backing = hir->expandDeclared(named);
             if (backing.name == name) continue;
             auto pair = std::make_unique<Expr>();
             pair->node = MakeTuple{two(atomLit(name), structuredTypeLiteral(backing))};

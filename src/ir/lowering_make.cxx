@@ -2,7 +2,6 @@
 #include "lowering.hxx"
 
 #include <algorithm>
-#include "../semantic/resolve_core.hxx"
 
 namespace kex::ir {
 

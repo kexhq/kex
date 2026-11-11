@@ -2,7 +2,6 @@
 #include "lower_internal.hxx"
 #include "lowering.hxx"
 #include "../ast/function_groups.hxx"
-#include "../semantic/declared_type.hxx"
 #include "../common/well_known.hxx"
 #include "../common/type_def_utils.hxx"
 #include <algorithm>
@@ -80,6 +79,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     L.sourceFile = sourcePath;
     L.externalModules = externals;
     L.hir = context.hir;
+    // What each alias a dispatcher tests stands for, as the checker read it.
+    L.structuralTypeAliases = L.hir->structuralAliasBodies();
     L.lowersPrelude = lowersPrelude;
     if (externals) L.traitMethods = externals->traitMethods;
     if (externals)
@@ -252,30 +253,18 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     auto preType = [&](const ast::TypeDef& td) {
         if (!td.variants) return;
         if (td.isDistinct) L.distinctTypes.insert(td.name);
-        // What an alias STANDS FOR, for the dispatch guards: a structural
-        // right-hand side (`type Handler = Env -> String`), or the plain name
-        // a transparent alias renames (`type Slug = String`). Either way no
-        // value carries the alias's own name as a tag.
-        if (!td.isDistinct && !td.leadingPipe && td.variants->size() == 1 &&
-            (*td.variants)[0] &&
-            (kex::isTransparentTypeAlias(td) ||
-             Lowering::simpleTypeName((*td.variants)[0]).empty()))
-            L.structuralTypeAliases[td.name] =
-                typeText(*(*td.variants)[0], TypeSpelling::Dispatch);
-        if (const auto* target = kex::aliasTarget(td))
-            L.declaredAliases[td.name] = target;
         // A distinct type is erased to its backing type: it has no
         // constructors of its own to lay out.
         if (td.isDistinct || kex::isTransparentTypeAlias(td)) return;
         auto& layout = L.adtLayouts[td.name];
         layout.clear();
         for (const auto& v : *td.variants) {
-            auto t = Lowering::simpleTypeName(v);
+            auto t = ast::dispatchNameOf(v);
             if (t.empty()) continue;
             std::vector<semantic::StructuredType> argTypes;
             if (auto* g = std::get_if<ast::GenericType>(&v->kind))
                 for (const auto& arg : g->args)
-                    argTypes.push_back(arg ? semantic::structuredTypeOfDeclared(*arg)
+                    argTypes.push_back(arg ? L.hir->declaredTypeOf(*arg)
                                            : semantic::StructuredType{"Any", {}});
             layout.emplace_back(t, std::move(argTypes));
             L.variantTagSet.insert(t);
@@ -448,7 +437,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (!fd->clauses.empty() && !fd->clauses[0].params.empty()) {
                 const auto& receiver = fd->clauses[0].params.front();
                 if (receiver.type && *receiver.type) {
-                    auto written = typeText(**receiver.type, TypeSpelling::Dispatch);
+                    auto written = L.hir->annotationSpelling(**receiver.type);
                     if (auto angle = written.find('<');
                         angle != std::string::npos && written.back() == '>')
                         written.resize(angle);
@@ -923,7 +912,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             for (const auto& variant :
                                  *td->variants) {
                                 auto tag =
-                                    Lowering::simpleTypeName(
+                                    ast::dispatchNameOf(
                                         variant);
                                 if (tag.empty()) continue;
                                 tags.push_back(tag);
@@ -1867,7 +1856,7 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
             if (fn->clauses.empty() || fn->clauses[0].params.empty()) return;
             const auto& receiver = fn->clauses[0].params.front();
             if (!receiver.type || !*receiver.type) return;
-            auto written = typeText(**receiver.type, TypeSpelling::Dispatch);
+            auto written = context.hir->annotationSpelling(**receiver.type);
             if (auto angle = written.find('<');
                 angle != std::string::npos && written.back() == '>')
                 written.resize(angle);
