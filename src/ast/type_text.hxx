@@ -21,6 +21,9 @@ enum class TypeSpelling {
 auto typeText(const TypeExpr& type, TypeSpelling spelling = TypeSpelling::Source)
     -> std::string;
 
+// The name a type is dispatched by: a named type's last segment, `List` or
+// `Map` for those shapes, "" for anything else (a function type, a tuple).
+auto dispatchNameOf(const TypeExprPtr& type) -> std::string;
 
 // Main's printer, kept beside typeText until its callers move over (the
 // rebase onto #653; see the end of the rebase).

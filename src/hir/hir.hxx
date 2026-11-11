@@ -127,6 +127,15 @@ public:
     // The record a written type annotation names, as the checker resolved it
     // where it was written; "" for any other type, and for a loaded program.
     auto recordAnnotatedBy(const ast::TypeExpr& type) const -> std::string;
+    // The checker's answers about written annotations, for what a backend
+    // builds from them (run-time reflection and dispatch guards): a type as
+    // declared with the program's aliases followed, the same for a type
+    // value, an annotation as a dispatcher tests it, and what each alias a
+    // dispatcher tests stands for. Empty for a loaded program.
+    auto declaredTypeOf(const ast::TypeExpr& type) const -> semantic::StructuredType;
+    auto expandDeclared(semantic::StructuredType type) const -> semantic::StructuredType;
+    auto annotationSpelling(const ast::TypeExpr& type) const -> std::string;
+    auto structuralAliasBodies() const -> const std::unordered_map<std::string, std::string>&;
     // The trait a method's `make` block is for (`make Shape do`), whose
     // dictionary the method takes for its receiver; "" for any other method,
     // and for a loaded program.

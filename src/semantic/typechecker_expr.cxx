@@ -1,4 +1,6 @@
 #include "../ast/function_groups.hxx"
+#include "../ast/type_text.hxx"
+#include "../common/type_def_utils.hxx"
 #include "../common/mangle.hxx"
 #include "resolve_core.hxx"
 #include "typechecker.hxx"
@@ -6775,6 +6777,42 @@ auto TypeChecker::constantDeclaration(const std::string& name) const -> std::str
                         moduleMemberImported(function.sourceModule, name, true))
                         return function.sourceModule + "." + name;
     return {};
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::registerDeclaredAliases(const ast::Program& program) -> void {
+    m_declaredAliases.clear();
+    m_structuralAliases.clear();
+    kex::forEachTypeDef(program.items, [&](const ast::TypeDef& def, const std::string&) {
+        if (!def.variants) return;
+        // A structural right-hand side (`type Handler = Env -> String`), or
+        // the plain name a transparent alias renames (`type Slug = String`):
+        // either way no value carries the alias's own name as a tag.
+        if (!def.isDistinct && !def.leadingPipe && def.variants->size() == 1 &&
+            (*def.variants)[0] &&
+            (kex::isTransparentTypeAlias(def) ||
+             ast::dispatchNameOf((*def.variants)[0]).empty()))
+            m_structuralAliases[def.name] =
+                ast::typeText(*(*def.variants)[0], ast::TypeSpelling::Dispatch);
+        if (const auto* target = kex::aliasTarget(def)) m_declaredAliases[def.name] = target;
+    });
+}
+
+auto TypeChecker::declaredTypeOf(const ast::TypeExpr& type) const -> StructuredType {
+    return expandDeclaredAliases(structuredTypeOfDeclared(type), m_declaredAliases);
+}
+
+auto TypeChecker::expandDeclared(StructuredType type) const -> StructuredType {
+    return expandDeclaredAliases(std::move(type), m_declaredAliases);
+}
+
+auto TypeChecker::annotationSpelling(const ast::TypeExpr& type) const -> std::string {
+    if (const auto record = m_annotatedRecords.find(&type); record != m_annotatedRecords.end())
+        return record->second;
+    return ast::typeText(type, ast::TypeSpelling::Dispatch);
 }
 
 } // namespace kex::semantic

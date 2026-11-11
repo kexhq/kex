@@ -22,6 +22,12 @@
 #                       checker's decision (pass plan, Stage 3)
 #   walker-rederives    places the walker reads an expression's static type
 #                       (`staticTypeOf`) to decide something itself (Stage 4)
+#   lowering-resolves   places lowering resolves a name, reads a written
+#                       type annotation, or reaches the checker's own
+#                       machinery (a `src/semantic` include, type equality,
+#                       trait satisfaction, a semantic type) instead of
+#                       reading the checked program's answers through
+#                       `hir/hir.hxx` (docs/declaration-identity-plan.md)
 #
 #   tools/dup-audit.sh            report counts, then the details
 #   tools/dup-audit.sh --check    also fail when a count exceeds the recorded
@@ -108,9 +114,10 @@ grep '^long ' "$WORK/functions" | cut -d' ' -f2- | sort -rn >"$WORK/long-functio
 wc -l $FILES | awk '$2 != "total" && $1 > 2000 { print $1, $2 }' | sort -rn >"$WORK/big-files"
 grep -nE "expressionTypes->find\(|hir->typeOf\(|staticTypeOf\(|typeToString\(" src/ir/*.cxx >"$WORK/lowering-rederives" || true
 grep -n "staticTypeOf(" src/interpreter/*.cxx >"$WORK/walker-rederives" || true
+grep -nE 'typeText\(|structuredTypeOfDeclared|expandDeclaredAliases|resolve_core::|resolveTraitName|resolveInScopes|matchSuffix|#include "\.\./semantic/|TraitRegistry|typesEqual|argMatchesParam|\.satisfies\(|semantic::TypePtr|semantic::Type::' src/ir/*.cxx src/ir/*.hxx >"$WORK/lowering-resolves" || true
 
 # ── report ──────────────────────────────────────────────────────────────────
-METRICS="duplicate-helpers literal-compares type-recursions expr-walkers long-functions big-files lowering-rederives walker-rederives"
+METRICS="duplicate-helpers literal-compares type-recursions expr-walkers long-functions big-files lowering-rederives walker-rederives lowering-resolves"
 count_of() { # <metric>
   if [ "$1" = literal-compares ]; then
     awk '{ s += $1 } END { print s + 0 }' "$WORK/$1"

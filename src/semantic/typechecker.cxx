@@ -256,6 +256,8 @@ auto TypeChecker::check(const ast::Program& program,
         }, item);
     }
 
+    registerDeclaredAliases(program);
+
     for (const auto& item : program.items)
         if (const auto* function =
                 std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);

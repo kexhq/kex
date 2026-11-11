@@ -6,6 +6,8 @@
 #include <set>
 #include <unordered_map>
 #include <string>
+#include <type_traits>
+#include <variant>
 #include <vector>
 
 namespace kex {
@@ -166,6 +168,29 @@ auto forEachTraitDef(const Items& items, const Visit& visit,
                                 ? name : modulePath + "." + name);
         }
     }
+}
+
+// Every `type` a program declares, at the top level, inside any module, or
+// in a visibility block, with the path of the module declaring it.
+template <typename Items, typename Visit>
+auto forEachTypeDef(const Items& items, const Visit& visit,
+                    const std::string& modulePath = "") -> void {
+    for (const auto& item : items)
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
+                if (node) visit(*node, modulePath);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                if (node) forEachTypeDef(node->items, visit, modulePath);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (!node) return;
+                const auto& name = node->name;
+                const bool qualified =
+                    !modulePath.empty() && name.rfind(modulePath + ".", 0) == 0;
+                forEachTypeDef(node->body, visit,
+                               modulePath.empty() || qualified ? name : modulePath + "." + name);
+            }
+        }, item);
 }
 
 // The dispatch names a `make` target covers. Normally one, but a union target

@@ -4,7 +4,7 @@
 
 #include <functional>
 #include <string>
-#include <sys/types.h>
+#include <sys/types.h>  // IWYU pragma: keep (POSIX declares pid_t here)
 #include <vector>
 
 #ifndef __EMSCRIPTEN__

@@ -33,7 +33,7 @@
 
 #include <algorithm>
 #include <memory>
-#include <new>
+#include <new>  // IWYU pragma: keep (the standard declares placement new here)
 #include <sstream>
 #include <string>
 #include <vector>

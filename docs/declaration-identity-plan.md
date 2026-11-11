@@ -141,9 +141,23 @@ stdlib's Core Erlang compared before/after)
 - Every stage keeps both BEAM and the walker green; the walker reads the same
   declaration answers.
 
-## Open: written annotations lowering still reads (2026-11-11)
+## Done: written annotations (2026-11-11)
 
-What lowering still takes from an annotation's own text, rather than from
+Lowering no longer reads an annotation's text. The checker answers what it
+built from them: `declaredTypeOf` (a type as declared, the program's aliases
+followed, for the reflection layouts), `expandDeclared` (a distinct type's
+backing), `annotationSpelling` (an annotation as a dispatcher tests it: its
+resolved record, else as written) and `structuralAliasBodies`. They keep what
+programs see unchanged: option (b) below is the implemented behaviour, and
+`Type.fields` keeps answering with a type as declared, aliases followed.
+Answering with the checker's resolved types instead (option (a)) would be a
+language change, made inside the checker alone if it is ever wanted. The `lowering-resolves` audit metric is 0 and may not rise: no name
+resolution or annotation reading in `src/ir`, and no route to the checker's
+machinery (no `src/semantic` include, type equality, trait satisfaction or
+semantic type), so the checked program's answers through `hir/hir.hxx` are
+all lowering can know about types and names.
+
+What lowering used to take from an annotation's own text, rather than from
 the checker's answer for it:
 
 - the run-time reflection layouts `Type.fields` / `Type.constructors`
@@ -160,6 +174,6 @@ their identity (`Net.SupportValue` for `SupportValue`), follows aliases
 (`Duration` is `Measure<Quantity.Time>`), spells some primitives its own way
 (`Int`), and has no answer for primitive and type-variable annotations or
 for constructor payloads. Since the layouts are what a program sees from
-`Type.fields`, switching them to the checker's answer changes program
-output: what a reflected field's type is printed as has to be decided
-first (identity or written name; alias or what it stands for).
+`Type.fields`, the checker answers them as declared, aliases followed
+(option (b), the behaviour programs already had); option (a), the
+checker's resolved types, would change program output and is not planned.

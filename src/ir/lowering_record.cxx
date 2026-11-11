@@ -73,7 +73,7 @@ void Lowering::collectRecord(const ast::RecordDef& rec,
     layout.clear();
     for (const auto& field : rec.fields)
         layout.push_back({field.name,
-                          field.type ? semantic::structuredTypeOfDeclared(*field.type)
+                          field.type ? hir->declaredTypeOf(*field.type)
                                      : semantic::StructuredType{"Any", {}},
                           field.defaultValue.has_value()});
 }

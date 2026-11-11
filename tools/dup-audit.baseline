@@ -6,3 +6,4 @@ long-functions 16
 big-files 8
 lowering-rederives 0
 walker-rederives 0
+lowering-resolves 0
