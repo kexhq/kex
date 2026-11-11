@@ -16,9 +16,17 @@
 
 namespace kex::ir {
 
+// A written type annotation as lowering names it: the record the checker
+// resolved it to, by its identity; any other type as written.
+auto annotatedTypeName(const hir::Program& hir, const ast::TypeExpr& type) -> std::string;
+// The types a `make` method's symbol and its dispatcher guards are spelled
+// from: its receiver as given, then each parameter's annotation as the
+// checker resolved it (`Any` where none is written).
+auto methodSignatureTypes(const hir::Program& hir, const ast::FunctionDef& method,
+                          const std::string& receiver) -> std::vector<std::string>;
+
 using namespace kex::ir::detail;
 
-using ast::methodDispatchTypes;
 using ast::typeText;
 using ast::TypeSpelling;
 using ast::separableOverloadSignatures;
@@ -85,9 +93,6 @@ struct Lowering {
     std::map<std::string,
              std::vector<std::pair<std::string, std::vector<semantic::StructuredType>>>>
         adtLayouts;
-
-    auto moduleLocalTypeSpelling(const std::string& written) const
-        -> std::string;
 
     auto traitIdentityOf(const std::string& written) const -> std::string;
 
@@ -500,6 +505,10 @@ struct Lowering {
     };
     auto ownImplementationOf(const ast::MethodCall& n) const -> OwnImplementation;
     static auto ownerNameOf(const std::string& printed) -> std::string;
+    // The symbol a `make` method of `typeName` is emitted under, from its
+    // declaration; definitions and the calls the checker bound to it alike.
+    auto makeMethodSymbol(const ast::FunctionDef& method, const std::string& typeName,
+                          size_t sourceArity) const -> std::string;
     // The name `owner`'s implementation of `method` is emitted under when
     // several types define it (`count/List`), or nullopt when it keeps the
     // bare name or an argument-overloaded one. Definitions and direct calls

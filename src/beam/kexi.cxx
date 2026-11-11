@@ -376,7 +376,9 @@ auto recordToTerm(const KexiRecord& r) -> TermPtr {
                            Term::binary(f.defaultSource)}));
     return Term::tuple({Term::binary(r.name),
                         Term::binary(r.tagAtom.empty() ? r.name : r.tagAtom),
-                        Term::list(std::move(fields))});
+                        Term::list(std::move(fields)),
+                        Term::binary(!r.identity.empty() ? r.identity
+                                     : r.tagAtom.empty() ? r.name : r.tagAtom)});
 }
 
 auto termToRecord(const TermPtr& term) -> KexiRecord {
@@ -392,6 +394,8 @@ auto termToRecord(const TermPtr& term) -> KexiRecord {
         r.fields.push_back({fe[0]->asBinaryStr(), termToType(fe[1]),
                             fe.size() > 2 ? fe[2]->asBinaryStr() : std::string{}});
     }
+    // Written before the identity was recorded: on BEAM it was the tag.
+    r.identity = t.size() >= 4 ? t[3]->asBinaryStr() : r.tagAtom;
     return r;
 }
 

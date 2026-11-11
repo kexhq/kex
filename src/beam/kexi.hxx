@@ -151,7 +151,11 @@ struct KexiRecordField {
 
 struct KexiRecord {
     std::string name;
-    // The atom this record's tuples are actually tagged with. A record
+    // Which record this is, in Kex terms: its module path and name
+    // (`Parsing.Input`, a top-level one's bare name). What a checker and an
+    // importer know the record as, whatever a backend tags it with.
+    std::string identity;
+    // The BEAM backend's tag: the atom this record's tuples are tagged with. A record
     // declared inside a `module` block carries its module-qualified identity
     // (`Parsing.Input`) so same-named records in sibling modules stay
     // distinct; one declared at a file's top level keeps its bare name even
