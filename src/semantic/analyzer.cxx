@@ -118,14 +118,6 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
         m_nameIndex = resolveProgramNames(program, m_nameCheckFiles, m_importedInterfaces);
         for (const auto& diagnostic : m_nameIndex.diagnostics) m_diagnostics.push_back(diagnostic);
     }
-    // Phase 0: two definitions of one method for one receiver type. Reported
-    // before anything else so the message is not buried under the type errors
-    // an ambiguous method tends to cause downstream.
-    for (auto& conflict : findReceiverConflicts(program))
-        m_diagnostics.push_back(std::move(conflict));
-    // Same-named opaque/variant types still use short dispatch identities.
-    for (auto& conflict : findSameNamedTypeMethodCollisions(program))
-        m_diagnostics.push_back(std::move(conflict));
     // Which names one module may take from another (`using`, `export`).
     for (auto& violation : findModuleRuleViolations(
              program, m_importedInterfaces,
@@ -150,7 +142,15 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
     computeTransitiveEffects(program);
 
     // Phase 2: type checking
+    const auto checkedFrom = m_diagnostics.size();
     m_checker.check(program, m_diagnostics);
+    // Two definitions of one method for one receiver type, the receivers as
+    // the checker resolved them. Reported ahead of the type errors so the
+    // message is not buried under those an ambiguous method tends to cause.
+    auto conflicts = findReceiverConflicts(program, m_checker);
+    m_diagnostics.insert(m_diagnostics.begin() + static_cast<std::ptrdiff_t>(checkedFrom),
+                         std::make_move_iterator(conflicts.begin()),
+                         std::make_move_iterator(conflicts.end()));
 
     // Phase 2.5: enrich transitive effects with resolved-call foulness
     // from imported interfaces (KexI isFoul on receiver functions).

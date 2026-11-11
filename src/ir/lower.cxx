@@ -213,9 +213,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     L.fnTraitParams[fd.name].push_back({i, std::move(trait)});
         }
     };
-    auto preType = [&](const ast::TypeDef& td) {
+    auto preType = [&](const ast::TypeDef& td, const std::string& scope) {
         if (!td.variants) return;
-        if (td.isDistinct) L.distinctTypes.insert(td.name);
+        if (td.isDistinct) L.distinctTypes.insert(L.identityOf(scope, td.name));
         // A distinct type is erased to its backing type: it has no
         // constructors of its own to lay out.
         if (td.isDistinct || kex::isTransparentTypeAlias(td)) return;
@@ -265,10 +265,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         };
     // The module the make block being collected is written in.
     std::string makeModulePath;
-    std::set<std::string> makeRecordNames;
     auto preMake = [&](const ast::MakeDef& md) {
-        for (const auto& typeName : Lowering::makeTargetNameList(
-                 md.target, makeModulePath, makeRecordNames)) {
+        for (const auto& typeName : Lowering::makeTargetNameList(*L.hir, md)) {
         std::unordered_map<std::string,
             std::map<std::string, std::vector<std::string>>>
             signaturesByNameAndArity;
@@ -329,8 +327,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             }
             if (!fd->clauses.empty()) {
                 L.makeMethods[fd->name].push_back({typeName, makeModulePath, fd});
-                if (auto declared = L.hir->makeTargetOf(*fd); !declared.empty())
-                    L.ownerIdentities.try_emplace(typeName, std::move(declared));
             }
         };
         for (const auto& bi : md.body) {
@@ -456,8 +452,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         };
         auto preModuleType = [&](const ast::TypeDef* td) {
             if (!td) return;
-            preType(*td);
-            L.declaredNames.try_emplace(L.hir->typeTestOf(path, td->name).writtenIdentity, td->name);
+            preType(*td, path);
             if (auto constructors = kex::typeConstructors(*td))
                 for (const auto& constructor : *constructors) {
                     const auto emitted =
@@ -472,22 +467,13 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 }
         };
         // A make block in this module: its methods, and the module each
-        // target's methods live in, by the target as written and by the
-        // identity the checker gives that type here.
+        // target's methods live in, by the identity the checker gives it.
         auto preModuleMake = [&](const ast::MakeDef& md) {
             makeModulePath = path;
-            makeRecordNames = declaredRecords;
             preMake(md);
             makeModulePath.clear();
-            makeRecordNames.clear();
-            for (const auto& typeName : Lowering::makeTargetNameList(md.target, path, declaredRecords))
-                if (!typeName.empty()) {
-                    L.localTypeModules[typeName] = path;
-                    const auto identity = L.hir->typeTestOf(path, typeName).writtenIdentity;
-                    if (identity.empty()) continue;
-                    L.localTypeModules.try_emplace(identity, path);
-                    L.declaredNames.try_emplace(identity, typeName);
-                }
+            for (const auto& typeName : Lowering::makeTargetNameList(*L.hir, md))
+                if (!typeName.empty()) L.localTypeModules[typeName] = path;
         };
         for (const auto& item : module.body) {
             if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
@@ -599,7 +585,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         } else if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
             if (*fd) preFn(**fd);
         } else if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
-            if (*td) preType(**td);
+            if (*td) preType(**td, "");
         } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
             if (*md) {
                 preMake(**md);
@@ -708,7 +694,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // A union target applies the block to every member, so the
                 // whole emission repeats once per name.
                 for (const auto& typeName :
-                     Lowering::makeTargetNameList(node->target)) {
+                     Lowering::makeTargetNameList(*L.hir, *node)) {
                 auto pushFn = [&](const ast::FunctionDef* fd) {
                     if (fd) mod.functions.push_back(L.lowerMakeGroup({fd}, typeName));
                 };
@@ -809,7 +795,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             }
                         }
                         if (!tags.empty())
-                            L.typeVariantTags[node->name] = std::move(tags);
+                            L.typeVariantTags[L.identityOf("", node->name)] = std::move(tags);
                     }
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
@@ -827,7 +813,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                         const std::set<std::string>& declaredRecords) {
                         if (!mk) return;
                         for (const auto& typeName :
-                             Lowering::makeTargetNameList(mk->target, L.currentModulePath, declaredRecords)) {
+                             Lowering::makeTargetNameList(*L.hir, *mk)) {
                         auto pushMethod = [&](const ast::FunctionDef* fd) {
                             if (!fd) return;
                             auto def = L.lowerMakeGroup({fd}, typeName);
@@ -880,7 +866,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                         tag);
                             }
                             if (!tags.empty())
-                                L.typeVariantTags[td->name] =
+                                L.typeVariantTags[L.identityOf(m.name, td->name)] =
                                     std::move(tags);
                         };
                         for (const auto& bi : m.body) {
@@ -1863,7 +1849,7 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                         {path, typeName, fd->name});
             };
             for (const auto& typeName :
-                 Lowering::makeTargetNameList(mk->target, path, declaredRecords)) {
+                 Lowering::makeTargetNameList(*context.hir, *mk)) {
                 for (const auto& mi : mk->body) {
                     if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&mi))
                         collectMethod(fd->get(), typeName);

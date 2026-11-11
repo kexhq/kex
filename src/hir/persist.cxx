@@ -177,6 +177,16 @@ auto save(const Program& program, const ast::Program& ast,
         inherited.push_back(Term::tuple({Term::integer(static_cast<int64_t>(i)),
                                          Term::list(std::move(names))}));
     }
+    // The types each `make` block is for, by its position.
+    std::vector<TermPtr> targets;
+    for (std::size_t i = 0; i < makes.size(); ++i) {
+        const auto* owners = program.makeTargetsOf(*makes[i]);
+        if (!owners) continue;
+        std::vector<TermPtr> names;
+        for (const auto& owner : *owners) names.push_back(Term::binary(owner));
+        targets.push_back(Term::tuple({Term::integer(static_cast<int64_t>(i)),
+                                       Term::list(std::move(names))}));
+    }
     // The list patterns that take a String apart, by their positions.
     const auto patterns = patternsOf(ast, order);
     std::vector<TermPtr> stringPatterns;
@@ -189,6 +199,7 @@ auto save(const Program& program, const ast::Program& ast,
         Term::list(std::move(entries)),
         Term::list(std::move(inherited)),
         Term::list(std::move(stringPatterns)),
+        Term::list(std::move(targets)),
     }));
 }
 
@@ -196,7 +207,7 @@ auto load(const ast::Program& ast, const std::vector<const ast::Expr*>& order,
           const std::vector<uint8_t>& bytes) -> std::unique_ptr<Program> {
     try {
         SaxReader sax(bytes.data(), bytes.size());
-        if (sax.beginTuple() != 7 || sax.readAtom() != "hir" ||
+        if (sax.beginTuple() != 8 || sax.readAtom() != "hir" ||
             sax.readInt() != kMagic || sax.readInt() != kVersion ||
             sax.readInt() != static_cast<int64_t>(order.size()))
             return nullptr;
@@ -258,6 +269,17 @@ auto load(const ast::Program& ast, const std::vector<const ast::Expr*>& order,
             const auto index = static_cast<std::size_t>(sax.readInt());
             if (index >= patterns.size()) return nullptr;
             answers->stringPatterns.insert(patterns[index]);
+        }
+        sax.endList();
+        const auto targetBlocks = sax.beginList();
+        for (size_t block = 0; block < targetBlocks; ++block) {
+            sax.beginTuple();
+            const auto index = static_cast<std::size_t>(sax.readInt());
+            if (index >= makes.size()) return nullptr;
+            auto& owners = answers->makeTargets[makes[index]];
+            const auto count = sax.beginList();
+            for (size_t i = 0; i < count; ++i) owners.push_back(sax.readBinary());
+            sax.endList();
         }
         sax.endList();
         return std::make_unique<Program>(ast, targets, std::move(answers));

@@ -55,6 +55,8 @@ struct Answers {
     semantic::ShownThrough shownThroughDistinct;
     // The trait defaults each `make` block inherits (inheritedDefaultsOf).
     std::unordered_map<const ast::MakeDef*, std::vector<semantic::InheritedDefault>> inheritedDefaults;
+    // The types each `make` block is for, by identity (makeTargetsOf).
+    std::unordered_map<const ast::MakeDef*, std::vector<std::string>> makeTargets;
     // The list patterns that take a String apart (destructuresString).
     std::unordered_set<const ast::Pattern*> stringPatterns;
 };
@@ -125,7 +127,6 @@ public:
     // The module constant a bare name (`LIMIT`) names, as resolved in its
     // scope; "" otherwise, and for a loaded program.
     auto referencedConstantOf(const ast::Expr& name) const -> std::string;
-    auto makeTargetOf(const ast::FunctionDef& method) const -> std::string;
     // The record `expr` builds (a construction), as the checker typed it; "".
     auto recordOf(const ast::Expr& expr) const -> std::string;
     auto recordOfPattern(const ast::RecordPattern& pattern) const -> std::string;
@@ -158,6 +159,10 @@ public:
     // loaded program.
     auto inheritedDefaultsOf(const ast::MakeDef& make) const
         -> const std::vector<semantic::InheritedDefault>*;
+    // The types a `make` block is for, each by its identity as the checker
+    // resolved the target (`Units.SI.SIPrefix`; one per union member); null
+    // when it has none.
+    auto makeTargetsOf(const ast::MakeDef& make) const -> const std::vector<std::string>*;
     // Whether `pattern`, a list pattern, takes a String apart into its
     // characters (TypeChecker::stringPatterns).
     auto destructuresString(const ast::Pattern& pattern) const -> bool;
@@ -179,6 +184,7 @@ private:
     const decltype(Answers::selected)* m_selected = nullptr;
     const decltype(Answers::inheritedDefaults)* m_inheritedDefaults = nullptr;
     const decltype(Answers::stringPatterns)* m_stringPatterns = nullptr;
+    const decltype(Answers::makeTargets)* m_makeTargets = nullptr;
     const decltype(Answers::shownThroughDistinct)* m_shownThrough = nullptr;
     std::unique_ptr<Answers> m_owned;
     std::vector<CallSite> m_sites;

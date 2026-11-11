@@ -1303,12 +1303,12 @@ auto Lowering::nextExtendingModule(const std::string& method,
     -> std::string {
     auto found = makeMethods.find(method);
     if (found == makeMethods.end()) return {};
-    const auto owner = ownerIdentity(typeName);
+    const auto owner = ownerNameOf(typeName);
     std::string next;
     for (const auto& candidate : found->second) {
         if (candidate.modulePath.empty() ||
             candidate.modulePath <= currentModulePath ||
-            ownerOf(candidate) != owner || !candidate.def ||
+            candidate.owner != owner || !candidate.def ||
             candidate.def->clauses.empty() ||
             static_cast<int>(candidate.def->clauses[0].params.size()) + 1 !=
                 arity)
@@ -1330,14 +1330,14 @@ auto Lowering::selectedMakeMethod(const ast::MethodCall& n) const -> const MakeM
     if (found == makeMethods.end()) return nullptr;
     const auto& target = hir->targetOf(n);
     const auto owner = target.kind == hir::TargetKind::OwnMethod
-        ? declaredNameOf(target.owner) : std::string{};
+        ? ownerNameOf(target.owner) : std::string{};
     const MakeMethod* chosen = nullptr;
     for (const auto& method : found->second) {
         if (std::ranges::none_of(method.def->clauses, [&](const auto& clause) {
                 return &clause == signature->clause;
             }))
             continue;
-        if (ownerOf(method) == owner) return &method;
+        if (method.owner == owner) return &method;
         if (!chosen) chosen = &method;
     }
     return chosen;
@@ -1360,11 +1360,11 @@ auto Lowering::makeMethodFor(const ast::MethodCall& n) const -> const MakeMethod
     const auto found = makeMethods.find(n.method);
     std::vector<std::string> labels;
     for (const auto& [label, _] : n.namedArgs) labels.push_back(label);
-    const auto owner = ownerOf(*chosen);
+    const auto owner = chosen->owner;
     const MakeMethod* entry = chosen;
     for (const auto& method : found->second)
         if (method.modulePath < entry->modulePath &&
-            ownerOf(method) == owner &&
+            method.owner == owner &&
             method.def->clauses[0].params.size() == selected.params.size() &&
             namedArgumentsFit(method.def->clauses[0], labels, positional))
             entry = &method;
@@ -1425,25 +1425,21 @@ auto Lowering::typeOwnsStaticFunction(const std::string& type,
     if (knownFns.count(mangleQualifiedMember(type, method))) return true;
     auto owners = methodOwners.find(method);
     if (owners == methodOwners.end()) return true;
-    const auto canonical = ownerIdentity(type);
+    const auto canonical = ownerNameOf(type);
     return std::any_of(owners->second.begin(), owners->second.end(),
                        [&](const std::string& owner) {
-                           return ownerIdentity(owner) == canonical;
+                           return owner == canonical;
                        });
 }
 
-// The name this unit files a type's `make` methods and declarations under (as
-// declared, or as its `make` target is written), for a type as the checker
-// names it: `[String]` is List's, `{K: V}` Map's, `Box<Integer>` Box's, and
-// `Units.SI.SIPrefix` the `SIPrefix` that module declares. The checker's
+// The owner a type's `make` methods are filed under, for a type as the
+// checker names it: its identity (`Units.SI.SIPrefix`, `Box` for
+// `Box<Integer>`), List's for `[String]`, Map's for `{K: V}`. The checker's
 // type used to be compared to owner names as is, so `[String]` matched no
 // owner and a resolved `parts.count` fell back to the bare dispatcher name.
-auto Lowering::declaredNameOf(const std::string& type) const -> std::string {
+auto Lowering::ownerNameOf(const std::string& type) const -> std::string {
     const auto test = typeTestOf(type);
-    if (!test.written.empty()) {
-        const auto declared = declaredNames.find(test.writtenIdentity);
-        return declared != declaredNames.end() ? declared->second : test.written;
-    }
+    if (!test.writtenIdentity.empty()) return test.writtenIdentity;
     switch (test.form) {
     case semantic::TypeForm::List:
         return "List";
@@ -1459,11 +1455,11 @@ auto Lowering::declaredNameOf(const std::string& type) const -> std::string {
 auto Lowering::receiverOwner(const ast::MethodCall& n) const -> std::string {
     if (const auto* resolved = hir->resolvedTargetOf(n);
         resolved && !resolved->localDispatchTypes.empty())
-        return declaredNameOf(resolved->localDispatchTypes.front());
+        return ownerNameOf(resolved->localDispatchTypes.front());
     // A call the checker left to this unit's own `make` blocks
     // (ownerOfCall's ReceiverType): the type it decided answers it.
     if (const auto& target = hir->targetOf(n); target.kind == hir::TargetKind::OwnMethod)
-        return declaredNameOf(target.owner);
+        return ownerNameOf(target.owner);
     return "";
 }
 
@@ -1519,7 +1515,7 @@ auto Lowering::lowerDecidedOperator(const ast::BinaryOp& n, const hir::Target& d
     if (!decision.module.empty()) {
         call->node = Call{decision.module, implementation, 2, std::move(args), false};
     } else {
-        const auto local = declaredNameOf(decision.owner);
+        const auto local = ownerNameOf(decision.owner);
         const auto owners = methodOwners.find(implementation);
         const bool erased = owners != methodOwners.end() &&
                             std::ranges::find(owners->second, local) != owners->second.end() &&
@@ -1558,7 +1554,7 @@ auto Lowering::ownImplementationOf(const ast::MethodCall& n) const
     // Only an erased distinct value needs its implementation by name, and
     // only a name several types implement is emitted per type.
     const auto& m = n.method;
-    const auto owner = declaredNameOf(target.owner);
+    const auto owner = ownerNameOf(target.owner);
     const auto owners = methodOwners.find(m);
     if (!collidingMethods.count(m) || owners == methodOwners.end() ||
         !distinctTypes.count(owner) || std::ranges::find(owners->second, owner) == owners->second.end())

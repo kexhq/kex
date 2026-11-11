@@ -26,16 +26,14 @@ namespace kex::semantic {
 // `let combine(@Less, …)` in a single `make` block are one definition, and so
 // are arity overloads, which dispatch resolves on argument count.
 //
+// Receivers are the checker's: each `make` block's target identities, and a
+// free function's first parameter as it resolved it, so two records of one
+// name in different modules are two receivers.
+//
 // Only definitions in the SAME FILE are compared. Dependency modules are merged
 // into the program on the `-c`/`-R` paths and absent on `-C`/run, so widening
 // this would make the two disagree about which programs compile.
-auto findReceiverConflicts(const ast::Program& program)
-    -> std::vector<Diagnostic>;
-
-// Opaque/variant types still dispatch on their short names. Reject two such
-// types that share a make function; record owners use qualified identities
-// and do not collide (kexhq/kex#476).
-auto findSameNamedTypeMethodCollisions(const ast::Program& program)
+auto findReceiverConflicts(const ast::Program& program, const TypeChecker& checker)
     -> std::vector<Diagnostic>;
 
 } // namespace kex::semantic

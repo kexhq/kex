@@ -40,24 +40,14 @@ auto Lowering::typeTestOf(const std::string& written) const -> semantic::TypeTes
     return hir->typeTestOf(currentModulePath, written);
 }
 
+auto Lowering::identityOf(const std::string& scope, const std::string& name) const
+    -> std::string {
+    auto identity = hir->typeTestOf(scope, name).writtenIdentity;
+    return identity.empty() ? name : identity;
+}
+
 auto Lowering::guardTypeOf(const ast::TypeExpr& type) const -> std::string {
     return hir->annotationSpelling(type);
-}
-
-auto Lowering::makeOwnerOf(const ast::FunctionDef& method, const std::string& written) const
-    -> std::string {
-    if (auto record = hir->makeTargetOf(method); records.count(record)) return record;
-    return written;
-}
-
-auto Lowering::ownerOf(const MakeMethod& method) const -> std::string {
-    return method.def ? makeOwnerOf(*method.def, method.owner) : method.owner;
-}
-
-auto Lowering::ownerIdentity(const std::string& written) const -> std::string {
-    const auto found = ownerIdentities.find(written);
-    return found != ownerIdentities.end() && records.count(found->second) ? found->second
-                                                                         : written;
 }
 
 auto Lowering::prefixSymbol(const std::string& name) const -> std::string {
@@ -445,17 +435,10 @@ auto Lowering::opSymbol(TokenType t) -> std::string {
     }
 }
 
-// Every dispatch name a `make` target covers — one entry normally, one per
-// member for a union target (`make Float | Integer`). Always non-empty so
-// callers can loop unconditionally; an unnameable target yields "", which
-// is what ast::dispatchNameOf returns for it.
-auto Lowering::makeTargetNameList(const ast::TypeExprPtr& t,
-                               const std::string& module ,
-                               const std::set<std::string>& records )
+auto Lowering::makeTargetNameList(const hir::Program& hir, const ast::MakeDef& make)
     -> std::vector<std::string> {
-    auto names = kex::makeTargetNames(t, module, records);
-    if (names.empty()) names.emplace_back("");
-    return names;
+    if (const auto* owners = hir.makeTargetsOf(make); owners && !owners->empty()) return *owners;
+    return {""};
 }
 
 auto Lowering::fresh(const std::string& hint ) -> std::string {
