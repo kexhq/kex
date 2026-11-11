@@ -6786,7 +6786,13 @@ namespace kex::semantic {
 auto TypeChecker::registerDeclaredAliases(const ast::Program& program) -> void {
     m_declaredAliases.clear();
     m_structuralAliases.clear();
-    kex::forEachTypeDef(program.items, [&](const ast::TypeDef& def, const std::string&) {
+    m_moduleTypeIdentities.clear();
+    m_typeDeclaringModules.clear();
+    kex::forEachTypeDef(program.items, [&](const ast::TypeDef& def, const std::string& module) {
+        if (!module.empty()) {
+            m_moduleTypeIdentities.insert(module + "." + def.name);
+            m_typeDeclaringModules.emplace(def.name, module);
+        }
         if (!def.variants) return;
         // A structural right-hand side (`type Handler = Env -> String`), or
         // the plain name a transparent alias renames (`type Slug = String`):
@@ -6813,6 +6819,75 @@ auto TypeChecker::annotationSpelling(const ast::TypeExpr& type) const -> std::st
     if (const auto record = m_annotatedRecords.find(&type); record != m_annotatedRecords.end())
         return record->second;
     return ast::typeText(type, ast::TypeSpelling::Dispatch);
+}
+
+namespace {
+
+// How many parameters a function type's spelling takes: its TOP-LEVEL
+// arrows, so `(Env) -> String` is 1 and `(A) -> (B) -> C` is 2.
+auto functionTypeArity(const std::string& written) -> int64_t {
+    int depth = 0;
+    int64_t arrows = 0;
+    for (size_t i = 0; i < written.size(); ++i) {
+        const char c = written[i];
+        if (c == '(' || c == '[' || c == '{' || c == '<') ++depth;
+        else if (c == ')' || c == ']' || c == '}') --depth;
+        else if (c == '>' && !(i && written[i - 1] == '-')) --depth;
+        else if (depth == 0 && c == '-' && i + 1 < written.size() && written[i + 1] == '>') {
+            ++arrows;
+            ++i;
+        }
+    }
+    return arrows;
+}
+
+auto enclosedBy(const std::string& written, char open, char close) -> bool {
+    return written.size() >= 2 && written.front() == open && written.back() == close;
+}
+
+} // namespace
+
+auto TypeChecker::typeTestOf(const std::string& scope, const std::string& written) const
+    -> TypeTest {
+    if (written.empty() || written == "Any" || !traitWrittenAs(scope, written).empty()) return {};
+    // `type Handler = Env -> String` names a SHAPE: no value carries the
+    // alias's name. A structural right-hand side is never a bare name, so
+    // this recurses at most once.
+    if (const auto alias = m_structuralAliases.find(written);
+        alias != m_structuralAliases.end() && alias->second != written)
+        return typeTestOf(scope, alias->second);
+    // A function type first: it is parenthesized too.
+    if (written.find("->") != std::string::npos)
+        return {TypeForm::Function, {}, {}, functionTypeArity(written)};
+    if (written.rfind("Block<", 0) == 0 && written.back() == '>') return {TypeForm::Block};
+    if (enclosedBy(written, '[', ']'))
+        return {written == "[Char]" ? TypeForm::CharList : TypeForm::List};
+    if (enclosedBy(written, '{', '}')) return {TypeForm::Map};
+    if (enclosedBy(written, '(', ')')) return {TypeForm::Tuple};
+    // Type arguments say nothing about the value's own form.
+    if (const auto angle = written.find('<');
+        angle != std::string::npos && angle > 0 && written.back() == '>')
+        return typeTestOf(scope, written.substr(0, angle));
+    if (written.size() == 1) return {};  // a type parameter, not a type
+    // A type a module declares is named by its identity: the nearest
+    // enclosing module that declares it, else the module that does.
+    auto identity = written;
+    if (written.find('.') == std::string::npos && !m_recordFields.count(written)) {
+        auto found = std::string{};
+        for (auto module = scope; !module.empty() && found.empty();) {
+            if (m_moduleTypeIdentities.count(module + "." + written) ||
+                m_recordFields.count(module + "." + written))
+                found = module + "." + written;
+            const auto dot = module.rfind('.');
+            module.resize(dot == std::string::npos ? 0 : dot);
+        }
+        if (found.empty())
+            if (const auto declaring = m_typeDeclaringModules.find(written);
+                declaring != m_typeDeclaringModules.end())
+                found = declaring->second + "." + written;
+        if (!found.empty()) identity = std::move(found);
+    }
+    return {TypeForm::Named, written, std::move(identity)};
 }
 
 } // namespace kex::semantic

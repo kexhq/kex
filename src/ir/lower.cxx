@@ -79,8 +79,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     L.sourceFile = sourcePath;
     L.externalModules = externals;
     L.hir = context.hir;
-    // What each alias a dispatcher tests stands for, as the checker read it.
-    L.structuralTypeAliases = L.hir->structuralAliasBodies();
     L.lowersPrelude = lowersPrelude;
     if (externals) L.traitMethods = externals->traitMethods;
     if (externals)
@@ -499,8 +497,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         auto preModuleType = [&](const ast::TypeDef* td) {
             if (!td) return;
             preType(*td);
-            L.moduleDeclaredTypes.emplace(td->name, path);
-            L.declaredTypeIdentities.insert(path + "." + td->name);
             if (auto constructors = kex::typeConstructors(*td))
                 for (const auto& constructor : *constructors) {
                     const auto emitted =
@@ -514,23 +510,28 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             constructor.arity);
                 }
         };
+        // A make block in this module: its methods, and the module each
+        // target's methods live in, by the target as written and by the
+        // identity the checker gives that type here.
+        auto preModuleMake = [&](const ast::MakeDef& md) {
+            makeModulePath = path;
+            makeRecordNames = declaredRecords;
+            preMake(md);
+            makeModulePath.clear();
+            makeRecordNames.clear();
+            for (const auto& typeName : Lowering::makeTargetNameList(md.target, path, declaredRecords))
+                if (!typeName.empty()) {
+                    L.localTypeModules[typeName] = path;
+                    L.localTypeModules.try_emplace(L.hir->typeTestOf(path, typeName).identity, path);
+                }
+        };
         for (const auto& item : module.body) {
             if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
                 preModuleFn(fd->get());
             else if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
                 if (*rd) preRecord(**rd, path);
             } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
-                if (*md) {
-                    makeModulePath = path;
-                    makeRecordNames = declaredRecords;
-                    preMake(**md);
-                    makeModulePath.clear();
-                    makeRecordNames.clear();
-                    for (const auto& typeName :
-                         Lowering::makeTargetNameList((*md)->target, path, declaredRecords))
-                        if (!typeName.empty())
-                            L.localTypeModules[typeName] = path;
-                }
+                if (*md) preModuleMake(**md);
             } else if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
                 preModuleType(td->get());
             }
@@ -551,15 +552,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     } else if (auto* vmd =
                                    std::get_if<std::unique_ptr<ast::MakeDef>>(&vi);
                                vmd && *vmd) {
-                        makeModulePath = path;
-                        makeRecordNames = declaredRecords;
-                        preMake(**vmd);
-                        makeModulePath.clear();
-                        makeRecordNames.clear();
-                        for (const auto& typeName :
-                             Lowering::makeTargetNameList((*vmd)->target, path, declaredRecords))
-                            if (!typeName.empty())
-                                L.localTypeModules[typeName] = path;
+                        preModuleMake(**vmd);
                     }
                 }
             } else if (auto* ed = std::get_if<std::unique_ptr<ast::ExportDecl>>(&item)) {

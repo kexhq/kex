@@ -224,9 +224,9 @@ auto Program::annotationSpelling(const ast::TypeExpr& type) const -> std::string
     return m_analysis ? m_analysis->annotationSpelling(type) : std::string{};
 }
 
-auto Program::structuralAliasBodies() const -> const std::unordered_map<std::string, std::string>& {
-    static const std::unordered_map<std::string, std::string> none;
-    return m_analysis ? m_analysis->structuralAliasBodies() : none;
+auto Program::typeTestOf(const std::string& scope, const std::string& written) const
+    -> semantic::TypeTest {
+    return m_analysis ? m_analysis->typeTestOf(scope, written) : semantic::TypeTest{};
 }
 
 auto Program::recordAnnotatedBy(const ast::TypeExpr& type) const -> std::string {

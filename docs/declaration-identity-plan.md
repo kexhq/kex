@@ -177,3 +177,24 @@ for constructor payloads. Since the layouts are what a program sees from
 `Type.fields`, the checker answers them as declared, aliases followed
 (option (b), the behaviour programs already had); option (a), the
 checker's resolved types, would change program output and is not planned.
+
+## Done: guards by the checker's reading (2026-11-11)
+
+Stage 4's remaining half. Lowering no longer reads a type's form from its
+spelling: the checker answers `typeTestOf(scope, written)`
+(`semantic/type_test.hxx`), what a type written in a module says about a
+value in Kex terms: any value (`Any`, a trait, a type variable), a function
+of some arity, a block, a list (`[Char]` apart), a map, a tuple, or a named
+type with its identity (`Net.HTTP.Client` for `Client` written in
+`Net.HTTP`). Aliases are followed and type arguments dropped there. The BEAM
+backend's `typeGuard`, `discriminatingType` and `runtimeShapes` map that
+answer to run-time tests; `guardTag`'s scope walk, the alias table and
+`functionTypeArity` left `src/ir`, and the make-target table holds each
+target by the checker's identity too, so the suffix matching that bridged
+the two spellings is gone. Stdlib Core Erlang identical.
+
+Still keyed by a type's bare name, because the BEAM runtime and symbols are
+(`state_type` in `kex_intrinsic_process.erl`, `upgrade/Type`,
+`mangleReceiverImplementation`): `methodOwners`, `distinctTypes` and the
+serving tables, which lowering reaches from a checker identity by its last
+segment. Re-keying them by identity is a change of the BEAM symbol scheme.

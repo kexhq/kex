@@ -41,34 +41,16 @@ auto Lowering::typeNameParameter(const ast::Pattern& p) -> PatternPtr {
     return record;
 }
 
-// Lower a group of same-name FunctionDefs (Kex writes multi-clause
-// functions as separate `let` declarations) into one multi-clause FunDef.
-// implicitThisName: when non-empty, a receiver param of that name is
-// prepended to every clause (make-block methods: `this`).
 // Can `typeGuard` actually tell this written type apart at runtime? A
-// record tag, an ADT, a primitive with a guard BIF, or a structural
-// spelling can; a type variable or an unconstrained name cannot, and
+// record tag, an ADT, a primitive with a guard BIF, or a structural form
+// can; a type variable, a trait or an unconstrained name cannot, and
 // guarding on one would emit a tag comparison nothing satisfies.
 auto Lowering::discriminatingType(const std::string& written) const -> bool {
-    if (written.empty() || written == "Any") return false;
-    if (!traitIdentityOf(written).empty()) return false;
-    if (auto alias = structuralTypeAliases.find(written);
-        alias != structuralTypeAliases.end() && alias->second != written)
-        return discriminatingType(alias->second);
-    if (written.find("->") != std::string::npos) return true;
-    if (written.rfind("Block<", 0) == 0 && written.back() == '>')
-        return true;
-    const char first = written.front(), last = written.back();
-    if ((first == '[' && last == ']') || (first == '{' && last == '}') ||
-        (first == '(' && last == ')'))
-        return true;
-    auto base = written;
-    if (auto angle = base.find('<');
-        angle != std::string::npos && base.back() == '>')
-        base.resize(angle);
-    if (base.size() == 1) return false;  // a type PARAMETER, not a type
-    if (primGuardBifs().count(base) || base == "Char") return true;
-    if (records.count(ownerIdentity(base))) return true;
+    const auto test = typeTestOf(written);
+    if (test.form == semantic::TypeForm::Any) return false;
+    if (test.form != semantic::TypeForm::Named) return true;
+    if (primGuardBifs().count(test.name) || test.name == "Char") return true;
+    if (records.count(ownerIdentity(test.name))) return true;
     // An ADT TYPE discriminates through `adtGuard`, which tests each of
     // its variant tags — the nullary ones as bare atoms. Before that
     // existed, typeGuard's tagged fallback asked `element(1, V)`, which no
@@ -76,13 +58,16 @@ auto Lowering::discriminatingType(const std::string& written) const -> bool {
     // clause had to be left unguarded. That is how a free function
     // overloaded on two ADTs answered from its first clause on BEAM while
     // the walker dispatched it (docs/issue-free-function-overloads.md).
-    if (auto tags = typeVariantTags.find(base);
-        tags != typeVariantTags.end())
+    if (auto tags = typeVariantTags.find(test.name); tags != typeVariantTags.end())
         return !tags->second.empty();
-    return localTypeModules.count(base) > 0 ||
-           moduleDeclaredTypes.count(base) > 0;
+    // A type a module declares is tagged with its identity.
+    return localTypeModules.count(test.name) > 0 || test.identity != test.name;
 }
 
+// Lower a group of same-name FunctionDefs (Kex writes multi-clause
+// functions as separate `let` declarations) into one multi-clause FunDef.
+// implicitThisName: when non-empty, a receiver param of that name is
+// prepended to every clause (make-block methods: `this`).
 auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& group,
                         const std::string& implicitThisName ,
                         const std::string& nameOverride ) -> FunDef {

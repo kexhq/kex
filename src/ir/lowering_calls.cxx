@@ -348,24 +348,6 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
     return wrapLets(binds, std::move(ex));
 }
 
-// The module of this unit whose `make` covers `type`. The checker names a
-// module's type qualified (`Units.SI.SIPrefix`) while `make SIPrefix`
-// registers it bare, so a qualified name is also tried by its last part
-// when that part was registered by the qualifying module. Without it
-// `5000.meter.convertTo(Kilo(Meter))` built its Unit dictionary from the
-// prelude's `factor`, which has never heard of SIPrefix.
-auto Lowering::localTypeModule(const std::string& type) const
-    -> std::unordered_map<std::string, std::string>::const_iterator {
-    auto found = localTypeModules.find(type);
-    if (found != localTypeModules.end()) return found;
-    const auto dot = type.rfind('.');
-    if (dot == std::string::npos) return found;
-    auto bare = localTypeModules.find(type.substr(dot + 1));
-    return bare != localTypeModules.end() &&
-            bare->second == type.substr(0, dot)
-        ? bare : localTypeModules.end();
-}
-
 auto Lowering::makeTraitDictionary(const std::string& trait,
                          const ast::Expr& value) -> ExprPtr {
     return makeTraitDictionaryFor(trait, hir->dictionaryTypeOf(value));
@@ -405,7 +387,7 @@ auto Lowering::makeTraitDictionaryFor(const std::string& trait,
                 !concreteType.empty())
                 function = mangleReceiverImplementation(
                     method.name, concreteType);
-        } else if (auto ownerModule = localTypeModule(concreteType);
+        } else if (auto ownerModule = localTypeModules.find(concreteType);
                    ownerModule != localTypeModules.end()) {
             // A source module compiled in this same unit is not in the
             // external KexI registry yet, so target its companion's

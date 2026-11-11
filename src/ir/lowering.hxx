@@ -177,13 +177,6 @@ struct Lowering {
     // The corresponding binary-op Intrinsic then dispatches at runtime: a
     // tuple (record) receiver → the user's `'+'/2`, otherwise the builtin.
     std::unordered_set<std::string> overloadedOps;
-    // `type Handler = Env -> String` names a SHAPE, not a tag: no value ever
-    // carries 'Handler', so a dispatch guard has to test what the alias
-    // stands for. Alias name -> the rendered dispatch type of its single
-    // right-hand side. Only structural right-hand sides are recorded — a
-    // single NAMED variant is an ADT tag (or the existing transparent alias),
-    // which `variantTagSet` and `records` already speak for.
-    std::unordered_map<std::string, std::string> structuralTypeAliases;
     // `distinct type Tuplex = (Number, Number)`: erased at run time, so no
     // dispatch guard can tell a Tuplex from any other pair. An operator on
     // one is called by its static type instead.
@@ -265,19 +258,9 @@ struct Lowering {
     // this preserves qualification without a cross-module call.
     std::unordered_map<std::string, std::string> moduleFunctions;
     // Receiver type -> source module path for make blocks compiled into a
-    // companion module in this same unit.
+    // companion module in this same unit, by the target as written and by
+    // the identity the checker gives it.
     std::unordered_map<std::string, std::string> localTypeModules;
-    // Type name -> the module that DECLARES it, for every type written inside
-    // a module, `make` target or not. An opaque `type TCPListener` declared in
-    // Net.Socket.TCP carries its QUALIFIED name as its runtime tag, the same
-    // rule records follow, so a guard built from the written `TCPListener`
-    // matched nothing. Separate from `localTypeModules`, which is keyed by
-    // make target and drives call routing rather than tag identity.
-    std::unordered_map<std::string, std::string> moduleDeclaredTypes;
-    // The same declarations by their qualified identity. The map above keeps
-    // one module per bare name, which cannot say whether THIS module declares
-    // a `Connection` once two of them do.
-    std::unordered_set<std::string> declaredTypeIdentities;
     // Bare names of module-scoped free functions acting as receiver methods
     // for a type their own module declares (see preModuleFn).
     std::unordered_set<std::string> moduleReceiverNames;
@@ -527,9 +510,6 @@ struct Lowering {
     // handled by the enclosing statement — see lowerBodyFrom/loop handling).
     bool m_lowerMutatingAsValue = false;
 
-    auto localTypeModule(const std::string& type) const
-        -> std::unordered_map<std::string, std::string>::const_iterator;
-
     auto makeTraitDictionary(const std::string& trait,
                              const ast::Expr& value) -> ExprPtr;
 
@@ -708,6 +688,9 @@ struct Lowering {
     auto lowerParam(const ast::Param& p) -> PatternPtr;
     auto typeNameParameter(const ast::Pattern& p) -> PatternPtr;
 
+    // What a type spelled `written` in the module being lowered says about a
+    // value's form, as the checker reads it.
+    auto typeTestOf(const std::string& written) const -> semantic::TypeTest;
     auto discriminatingType(const std::string& written) const -> bool;
 
     auto lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& group,
@@ -754,9 +737,6 @@ struct Lowering {
     // both be routed by guard order alone.
     auto runtimeShapes(const std::string& owner)
         -> std::optional<std::set<std::string>>;
-    // The tag typeGuard tests a non-record tagged type by: an opaque type
-    // declared in a module carries its qualified name.
-    auto guardTag(const std::string& canonical) const -> std::string;
     static auto shapesMeet(const std::optional<std::set<std::string>>& a,
                            const std::optional<std::set<std::string>>& b) -> bool;
 

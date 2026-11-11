@@ -6,6 +6,7 @@
 #include "intrinsics.hxx"
 #include "imported_interfaces.hxx"
 #include "traits.hxx"
+#include "type_test.hxx"
 #include "types.hxx"
 #include <algorithm>
 #include <functional>
@@ -145,10 +146,9 @@ public:
     // An annotation as the run-time dispatchers test it: the record it was
     // resolved to, else as written.
     auto annotationSpelling(const ast::TypeExpr& type) const -> std::string;
-    // What each alias a dispatcher tests stands for, as written.
-    auto structuralAliases() const -> const std::unordered_map<std::string, std::string>& {
-        return m_structuralAliases;
-    }
+    // What a type spelled `written` in module `scope` says about a value's
+    // form (type_test.hxx).
+    auto typeTestOf(const std::string& scope, const std::string& written) const -> TypeTest;
     auto registerDeclaredAliases(const ast::Program& program) -> void;
     // The declaration each `make` method is made for, and the record each
     // named record pattern names.
@@ -701,6 +701,10 @@ private:
     // one a run-time dispatcher tests stands for, as written.
     DeclaredAliases m_declaredAliases;
     std::unordered_map<std::string, std::string> m_structuralAliases;
+    // The types modules declare: each by its identity, and the module that
+    // declares each name first.
+    std::unordered_set<std::string> m_moduleTypeIdentities;
+    std::unordered_map<std::string, std::string> m_typeDeclaringModules;
     // The trait each type spelling names in the module it was written in
     // (writtenKey), as resolveTypeExpr resolved it.
     std::unordered_map<std::string, std::string> m_writtenTraits;

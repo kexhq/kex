@@ -172,8 +172,8 @@ public:
     auto annotationSpelling(const ast::TypeExpr& type) const -> std::string {
         return m_checker.annotationSpelling(type);
     }
-    auto structuralAliasBodies() const -> const std::unordered_map<std::string, std::string>& {
-        return m_checker.structuralAliases();
+    auto typeTestOf(const std::string& scope, const std::string& written) const -> TypeTest {
+        return m_checker.typeTestOf(scope, written);
     }
     // The trait a method's `make` is for, or "".
     auto makeTargetTraitOf(const ast::FunctionDef& method) const -> std::string {
