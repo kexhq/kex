@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # `collect` on BEAM (kexhq/kex#100); see enumerable_collect.kex.
 main do
   # Filter and map in one pass: the block answers an optional, and only the

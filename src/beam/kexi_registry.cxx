@@ -66,6 +66,7 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
             return builtin;
         return Type::named(type->name);
     case KexiType::Named:
+        if (!type->variant.empty()) return Type::variantOf(type->name, type->variant);
         if (type->typeArgs.empty() && type->name.size() == 1 &&
             type->name[0] >= 'A' && type->name[0] <= 'Z') {
             auto [it, _] = vars.try_emplace(
@@ -821,6 +822,7 @@ auto KexiRegistry::buildSemanticInterfaces() const
                 interfaces.typeNames.insert(adt.name);
                 kex::semantic::ImportedADT imported{adt.name, std::move(ctors),
                                                     std::move(arities)};
+                imported.module = adt.module;
                 // What a generic constructor builds: `Just(1)` is an
                 // `Integer?` only if `Just` is known to fill `X`.
                 imported.typeParamCount = adt.typeParams.size();
@@ -871,9 +873,7 @@ auto KexiRegistry::buildSemanticInterfaces() const
                 // Signatures spell a module's own type by its qualified name
                 // (`Metro.WebRequest.Plug`), so it is known by that name too.
                 std::vector<std::string> names = {te.name};
-                if (const auto& owner = module.chunk.metadata.sourceModule;
-                    !owner.empty() && te.name.find('.') == std::string::npos)
-                    names.push_back(owner + "." + te.name);
+                if (!te.module.empty()) names.push_back(te.module + "." + te.name);
                 for (const auto& name : names) {
                     interfaces.typeNames.insert(name);
                     if (te.isDistinct && te.backingType) {
@@ -906,7 +906,15 @@ auto KexiRegistry::buildSemanticInterfaces() const
                     ? record.name : record.identity;
                 interfaces.recordArities[qualified] = record.fields.size();
                 auto& fieldNames = interfaces.recordFieldNames[qualified];
+                // The record's parameters are its slots in declared order (-1
+                // for the first), whatever order its fields name them in.
                 TypeVarMap recordVars;
+                for (const auto& type : module.chunk.typeInterface.types)
+                    if ((type.module.empty() ? type.name : type.module + "." + type.name) == qualified) {
+                        for (std::size_t i = 0; i < type.genericParams.size(); ++i)
+                            recordVars.emplace(type.genericParams[i], -static_cast<int>(i + 1));
+                        break;
+                    }
                 auto& fieldTypes = interfaces.recordFields[qualified];
                 for (const auto& field : record.fields) {
                     fieldNames.insert(field.name);

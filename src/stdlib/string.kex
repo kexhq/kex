@@ -832,17 +832,6 @@ make String, implement: Enumerable, Foldable do
   removeSuffix :> String -> String
   let removeSuffix(suffix) = this.endsWith?(suffix) then this.take(this.count - suffix.count) else this
 
-  # Returns the string repeated +n+ times; +""+ when +n+ is 0 or less. Ruby
-  # spells this +*+.
-  #
-  # @param n [Integer] how many copies
-  # @return [String] the copies, joined
-  #
-  # @example
-  #   "ab".repeat(3)    # => "ababab"
-  #   "-".repeat(10)    # => "----------"
-  repeat :> Integer -> String
-  let repeat(n) = n <= 0 then "" else (1..n).items.map { |_| this }.join
   # Pads the string on the left with spaces until it is +width+ characters
   # long. A string already that long is returned unchanged. Ruby calls this
   # +rjust+.

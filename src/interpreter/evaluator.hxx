@@ -537,7 +537,6 @@ private:
 
     struct ModuleEntry {
         std::unordered_map<std::string, ValuePtr> exports;
-        std::unordered_set<std::string> privateNames;
         std::unordered_map<std::string, std::string> submodules;
     };
     struct PendingExport { std::string owner; const ast::ExportDecl* decl; };

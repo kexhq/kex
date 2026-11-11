@@ -17,9 +17,10 @@ namespace kex::hir {
 // Every expression of `program`'s bodies, in a fixed pre-order.
 auto nodeOrder(const ast::Program& program) -> std::vector<const ast::Expr*>;
 
-// `program`'s answers for the nodes in `order`.
-auto save(const Program& program, const std::vector<const ast::Expr*>& order)
-    -> std::vector<uint8_t>;
+// `program`'s answers for `ast`, the tree `order` was taken from (`load`
+// reads them back against the same tree).
+auto save(const Program& program, const ast::Program& ast,
+          const std::vector<const ast::Expr*>& order) -> std::vector<uint8_t>;
 
 // The program `bytes` describe, answering for `ast`'s nodes in `order`; null
 // when the bytes are malformed, of another format, or of another program

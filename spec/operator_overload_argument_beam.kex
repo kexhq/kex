@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # An operator a make block overloads is reached only for an argument its
 # parameter takes (kexhq/kex#486). `Col`'s `==` builds a condition from a
 # String; two Cols still compare structurally, as they did before `==` was

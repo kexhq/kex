@@ -5,15 +5,12 @@
 namespace kex::semantic {
 
 struct Diagnostic;
-struct ImportedInterfaces;
 class TraitRegistry;
 
-// Validates type spellings in declaration ASTs after compiled expansion and
-// before inference. Kept separate because name existence is a declaration
-// invariant; resolveTypeExpr deliberately remains gradual for expressions.
-auto validateDeclarations(const ast::Program& program,
-                          const ImportedInterfaces* imported,
-                          const TraitRegistry& traits,
+// Checks declarations for mistakes no type resolves: a `make` contract
+// nothing defines, and a function named `new`. Whether a written type name
+// exists is the checker's to answer, where it resolves the name.
+auto validateDeclarations(const ast::Program& program, const TraitRegistry& traits,
                           std::vector<Diagnostic>& diagnostics) -> void;
 
 } // namespace kex::semantic

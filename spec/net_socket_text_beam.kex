@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # Text-oriented TCP helpers: string addresses and filehandle-style lines.
 
@@ -12,11 +12,11 @@ main do
   assert(v6.host == "::1")
   assert(v6.port.string == "8080")
   match TCP.Endpoint.parse("noport") do
-    Error(error) => assert(error.kind == Parse)
+    Error(error) => assert(error.kind == Net.Parse)
     Ok(_) => assert(false, "address without a port must fail")
   end
   match TCP.Endpoint.parse("127.0.0.1:http") do
-    Error(error) => assert(error.kind == Parse)
+    Error(error) => assert(error.kind == Net.Parse)
     Ok(_) => assert(false, "non-numeric port must fail")
   end
   assert(TCP.Endpoint.parse("127.0.0.1:99999").error?, "out-of-range port must fail")
@@ -30,7 +30,7 @@ main do
     assert(peer.readLine.try == Just(" spaced "))
     assert(peer.readLine.try == Just("raw"))
     match peer.readLine do
-      Error(error) => assert(error.kind == Parse, "invalid UTF-8 must be a Parse error")
+      Error(error) => assert(error.kind == Net.Parse, "invalid UTF-8 must be a Parse error")
       Ok(_) => assert(false, "invalid UTF-8 must not decode")
     end
     peer.printLine("back")

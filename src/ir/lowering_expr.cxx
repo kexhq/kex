@@ -309,8 +309,8 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
             // (spec/operator_overloading.kex).
             std::string sym = opSymbol(n.op);
             // User == / != (outside guards, which only allow BIFs) go
-            // through the coercing runtime eq: a [Char] charlist and a
-            // String binary holding the same text ARE equal in Kex.
+            // through the runtime eq, which promotes numbers and compares
+            // quantities (kex_intrinsic_number:eq).
             // What the checker knows the operands are (decideOperators).
             // KEX_NO_OP_DEVIRT=1 (before/after measurement, emergency use)
             // takes the checked runtime operation for every operator.
@@ -322,10 +322,9 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 Op op = opOf(n.op);
                 if (op == Op::Eq || op == Op::Neq) {
                     // Two Integers, Strings or Chars: Kex `==` is exact
-                    // identity there (no charlist/string coercion, no
-                    // Int/Float widening), so the raw BIF answers it and
-                    // the 12-clause kex_intrinsic_number:eq/neq call is
-                    // skipped on the hot path.
+                    // identity there (no Int/Float widening), so the raw
+                    // BIF answers it and the kex_intrinsic_number:eq/neq
+                    // call is skipped on the hot path.
                     if (integers || operands == BuiltinOperands::String ||
                         operands == BuiltinOperands::Char) {
                         auto ex = std::make_unique<Expr>();
@@ -1331,7 +1330,7 @@ auto Lowering::selectedMakeMethod(const ast::MethodCall& n) const -> const MakeM
     if (found == makeMethods.end()) return nullptr;
     const auto& target = hir->targetOf(n);
     const auto owner = target.kind == hir::TargetKind::OwnMethod
-        ? ownerNameOf(target.owner) : std::string{};
+        ? declaredNameOf(target.owner) : std::string{};
     const MakeMethod* chosen = nullptr;
     for (const auto& method : found->second) {
         if (std::ranges::none_of(method.def->clauses, [&](const auto& clause) {
@@ -1433,28 +1432,38 @@ auto Lowering::typeOwnsStaticFunction(const std::string& type,
                        });
 }
 
-// The receiver type the checker settled on for this call, "" when it did
-// not: the resolved target's own first, then the receiver's static type.
-// The name a `make` block's owner is filed under (`makeTargetNames`), for a
-// receiver type as the checker prints it: `[String]` is List's, `{K: V}`
-// Map's, `Box<Integer>` Box's. The checker's printed type used to be compared
-// to owner names as is, so `[String]` matched no owner and a resolved
-// `parts.count` fell back to the bare dispatcher name.
-auto Lowering::ownerNameOf(const std::string& printed) -> std::string {
-    if (printed.empty()) return printed;
-    if (printed.front() == '[') return "List";
-    if (printed.front() == '{') return "Map";
-    return printed.substr(0, printed.find('<'));
+// The name this unit files a type's `make` methods and declarations under (as
+// declared, or as its `make` target is written), for a type as the checker
+// names it: `[String]` is List's, `{K: V}` Map's, `Box<Integer>` Box's, and
+// `Units.SI.SIPrefix` the `SIPrefix` that module declares. The checker's
+// type used to be compared to owner names as is, so `[String]` matched no
+// owner and a resolved `parts.count` fell back to the bare dispatcher name.
+auto Lowering::declaredNameOf(const std::string& type) const -> std::string {
+    const auto test = typeTestOf(type);
+    if (!test.written.empty()) {
+        const auto declared = declaredNames.find(test.writtenIdentity);
+        return declared != declaredNames.end() ? declared->second : test.written;
+    }
+    switch (test.form) {
+    case semantic::TypeForm::List:
+        return "List";
+    case semantic::TypeForm::Map:
+        return "Map";
+    default:
+        return type;
+    }
 }
 
+// The receiver type the checker settled on for this call, "" when it did
+// not: the resolved target's own first, then the receiver's static type.
 auto Lowering::receiverOwner(const ast::MethodCall& n) const -> std::string {
     if (const auto* resolved = hir->resolvedTargetOf(n);
         resolved && !resolved->localDispatchTypes.empty())
-        return ownerNameOf(resolved->localDispatchTypes.front());
+        return declaredNameOf(resolved->localDispatchTypes.front());
     // A call the checker left to this unit's own `make` blocks
     // (ownerOfCall's ReceiverType): the type it decided answers it.
     if (const auto& target = hir->targetOf(n); target.kind == hir::TargetKind::OwnMethod)
-        return ownerNameOf(target.owner);
+        return declaredNameOf(target.owner);
     return "";
 }
 
@@ -1510,18 +1519,11 @@ auto Lowering::lowerDecidedOperator(const ast::BinaryOp& n, const hir::Target& d
     if (!decision.module.empty()) {
         call->node = Call{decision.module, implementation, 2, std::move(args), false};
     } else {
-        auto owner = decision.owner;
-        owner.resize(std::min(owner.size(), owner.find('<')));
-        const auto bare = owner.substr(owner.rfind('.') + 1);
+        const auto local = declaredNameOf(decision.owner);
         const auto owners = methodOwners.find(implementation);
-        const auto ownedHere = [&](const std::string& type) {
-            return owners != methodOwners.end() &&
-                   std::find(owners->second.begin(), owners->second.end(), type) !=
-                       owners->second.end();
-        };
-        const auto& local = ownedHere(owner) ? owner : bare;
-        const bool erased = ownedHere(local) &&
-                            (distinctTypes.count(owner) || distinctTypes.count(bare));
+        const bool erased = owners != methodOwners.end() &&
+                            std::ranges::find(owners->second, local) != owners->second.end() &&
+                            distinctTypes.count(local);
         call->node = Call{std::string{},
                           erased && collidingMethods.count(implementation)
                               ? mangleReceiverImplementation(implementation, local)
@@ -1556,18 +1558,12 @@ auto Lowering::ownImplementationOf(const ast::MethodCall& n) const
     // Only an erased distinct value needs its implementation by name, and
     // only a name several types implement is emitted per type.
     const auto& m = n.method;
-    const auto& type = target.owner;
-    const auto bare = type.substr(type.rfind('.') + 1);
+    const auto owner = declaredNameOf(target.owner);
     const auto owners = methodOwners.find(m);
     if (!collidingMethods.count(m) || owners == methodOwners.end() ||
-        !(distinctTypes.count(type) || distinctTypes.count(bare)))
+        !distinctTypes.count(owner) || std::ranges::find(owners->second, owner) == owners->second.end())
         return {};
-    for (const auto& owner : {type, bare})
-        if (std::find(owners->second.begin(), owners->second.end(), owner) !=
-            owners->second.end())
-            return {OwnImplementation::Reason::DistinctType,
-                    mangleReceiverImplementation(m, owner)};
-    return {};
+    return {OwnImplementation::Reason::DistinctType, mangleReceiverImplementation(m, owner)};
 }
 
 } // namespace kex::ir

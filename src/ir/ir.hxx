@@ -113,6 +113,10 @@ struct Pattern {
     std::vector<PatternPtr> args;
     // List: the `| rest` tail pattern, if any (else a proper list).
     PatternPtr rest;
+    // List: takes a String (a UTF-8 binary) apart into its characters, as
+    // the checker decided (hir::Program::destructuresString). The elements
+    // bind Chars, the tail the rest of the String.
+    bool ofString = false;
 };
 
 struct MatchClause {

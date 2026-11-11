@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A record declared in `private do` is a record like any other: its values
 # carry its tag and fields, and a `make` for it (private too) applies. On the
 # BEAM it was a bare tuple, so `room.viewer` failed with "Undefined method:

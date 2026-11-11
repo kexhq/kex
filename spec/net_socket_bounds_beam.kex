@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # Offline loopback coverage for bounded stream reads and datagram limits.
 
@@ -32,7 +32,7 @@ main do
 
   let idleListener = TCP.listen(TCP.Endpoint.loopback(Net.Port.from(0).try)).try
   match idleListener.accept(0.second) do
-    Error(error) => assert(error.kind == Timeout)
+    Error(error) => assert(error.kind == Net.Timeout)
     Ok(_) => assert(false, "zero-timeout accept must not block")
   end
   let idlePort = idleListener.localAddress.try.port
@@ -43,7 +43,7 @@ main do
   end
   let idleClient = TCP.connect(TCP.Endpoint.loopback(idlePort)).try
   match idleClient.receiveChunk(1, 0.second) do
-    Error(error) => assert(error.kind == Timeout)
+    Error(error) => assert(error.kind == Net.Timeout)
     Ok(_) => assert(false, "zero-timeout receive must not block")
   end
   idleClient.close
@@ -69,7 +69,7 @@ main do
   ).try
   let timedOut = configured.receiveFrom(1)
   match timedOut do
-    Error(error) => assert(error.kind == Timeout, "receive timeout must retain its typed kind")
+    Error(error) => assert(error.kind == Net.Timeout, "receive timeout must retain its typed kind")
     Ok(_) => assert(false, "configured zero receive timeout must not block")
   end
   let group = Address.parse("239.255.0.1").try
@@ -78,7 +78,7 @@ main do
   configured.leaveMulticast(group, multicastInterface).try
   let unicast = configured.joinMulticast(Address.parse("127.0.0.1").try, multicastInterface)
   match unicast do
-    Error(error) => assert(error.kind == UnsupportedOption)
+    Error(error) => assert(error.kind == Net.UnsupportedOption)
     Ok(_) => assert(false, "joining a unicast address must fail")
   end
   configured.close

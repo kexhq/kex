@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # `Depot.Store.Store`, the record `Store` in spec/lib/depot/store.kex, is found
 # through its module's file. That file's name matching the type's is not a
 # misplaced module: Slick's `DB.Store.Store` stopped its build that way.

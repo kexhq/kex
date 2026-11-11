@@ -1,5 +1,8 @@
 # Declaration identity: the checker names declarations, backends name symbols
 
+> **Not done**: stage 5 is partial. Ordered open work: the review findings
+> at the top of `docs/pass-restructure-plan.md` (2026-11-11).
+
 Status: in progress (2026-11-10). Stages 1–4 done: the checker gives each
 record one identity, records the declaration of every record construction,
 pattern, annotation and `make` target, and lowering reads those answers;
@@ -22,7 +25,13 @@ BEAM backend's alone (layouts, display registration). BEAM symbols for
 (`methodSignatureTypes`: each parameter's annotation as its record
 `Culture.Culture`, its alias's target), not from the written spellings, at
 the one place each is named (definitions, the overload dispatchers, the
-calls the checker bound). All stages are done. Follows Stage 3 of
+calls the checker bound). Stage 5 is NOT done: receiver implementations
+(`mangleReceiverImplementation(name, owner)`), `upgrade/Type`, the serving
+slot and distinct-type registrations are still spelled from the `make`
+target as written (`SIPrefix`, not `Units.SI.SIPrefix`), and the runtime
+expects that (`state_type` in `kex_intrinsic_process.erl` strips the
+module). Lowering maps the checker's identities back to those names
+(`declaredNames`, `declaredNameOf`). Follows Stage 3 of
 `pass-restructure-plan.md`, which left lowering reading no expression types.
 
 ## Goal
@@ -193,8 +202,10 @@ answer to run-time tests; `guardTag`'s scope walk, the alias table and
 target by the checker's identity too, so the suffix matching that bridged
 the two spellings is gone. Stdlib Core Erlang identical.
 
-Still keyed by a type's bare name, because the BEAM runtime and symbols are
-(`state_type` in `kex_intrinsic_process.erl`, `upgrade/Type`,
+Still keyed by a type's name as written, because the BEAM symbols and
+runtime are (`state_type` in `kex_intrinsic_process.erl`, `upgrade/Type`,
 `mangleReceiverImplementation`): `methodOwners`, `distinctTypes` and the
-serving tables, which lowering reaches from a checker identity by its last
-segment. Re-keying them by identity is a change of the BEAM symbol scheme.
+serving tables. Lowering reaches them from a checker identity through
+`declaredNames` (filled from the checker's identities), not by cutting the
+module off. Spelling those symbols from the identity is the rest of
+Stage 5.

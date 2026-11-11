@@ -89,10 +89,10 @@ let capabilities(granted: [Capability]) -> Void do
 end
 
 # `FS.Read.package`: reading the plugin's own package.
-let package(mode: FS.FileModes) -> PluginCapability = PluginCapability { kind: "FS.Read.package" }
+let package(mode: FS.FileMode) -> PluginCapability = PluginCapability { kind: "FS.Read.package" }
 
 # `FS.Write.workspace`: writing inside the package the plugin runs in.
-let workspace(mode: FS.FileModes) -> PluginCapability = PluginCapability { kind: "FS.Write.workspace" }
+let workspace(mode: FS.FileMode) -> PluginCapability = PluginCapability { kind: "FS.Write.workspace" }
 
 # A plugin command that writes files, run as `tey generate NAMESPACE:NAME`.
 # Its block declares its options with +option+.

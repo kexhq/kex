@@ -36,6 +36,9 @@ public:
         : m_checker(importedInterfaces), m_importedInterfaces(importedInterfaces) {}
     // The interfaces it checks against (the prelude's, usually), or null.
     auto importedInterfaces() const -> const ImportedInterfaces* { return m_importedInterfaces; }
+    // The checker whose answers the analysis holds, read directly rather than
+    // through a forward per answer.
+    auto checker() const -> const TypeChecker& { return m_checker; }
 
     // The files whose names the analysis checks (undefined names, labels:
     // resolveProgramNames), its first phase. A build sets its entry file (and

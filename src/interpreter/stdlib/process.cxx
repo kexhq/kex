@@ -13,6 +13,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <chrono>
 #include <random>
 #include <unordered_map>
@@ -179,7 +180,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::binary(std::move(bytes));
     });
 
-    defineIntrinsic("Task::sleep", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Task::sleep", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         // A Duration is a time Measure (units.kex): its canonical value is
         // the span in seconds.
@@ -190,8 +191,23 @@ auto Evaluator::registerProcessBuiltins() -> void {
         double seconds = 0.0;
         if (auto* value = std::get_if<FloatValue>(&found->second->data)) seconds = value->value;
         else if (auto* value = std::get_if<IntValue>(&found->second->data)) seconds = value->value;
-        if (seconds > 0.0)
-            std::this_thread::sleep_for(std::chrono::duration<double>(seconds));
+        if (seconds <= 0.0) return Value::unit();
+        // Inside a process the sleep yields to the scheduler, as a BEAM
+        // process's does: blocking the thread stopped every other process,
+        // so a task sleeping 2s held up the one awaiting it with a 10ms
+        // timeout until the task had finished (spec/task_await_timeout).
+        const auto deadline = std::chrono::steady_clock::now() +
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(seconds));
+        if (m_scheduler && m_scheduler->inProcess()) {
+            // A message arriving wakes the sleeper early: sleep on.
+            for (auto now = std::chrono::steady_clock::now(); now < deadline;
+                 now = std::chrono::steady_clock::now())
+                m_scheduler->sleepFor(std::max<int64_t>(
+                    1, std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count()));
+            return Value::unit();
+        }
+        std::this_thread::sleep_until(deadline);
         return Value::unit();
     });
 

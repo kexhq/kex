@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # Task.start and await return Ok(value) on success.
 foul double(n: Int) -> Int do
   n * 2

@@ -4,6 +4,7 @@
 #include "../common/prelude_interfaces.hxx"
 #include "../common/prelude_loader.hxx"
 #include "../common/version.hxx"
+#include "../ast/walk.hxx"
 #include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
 #include "../semantic/analyzer.hxx"
@@ -1602,37 +1603,6 @@ auto standardLibraryParameterNames()
     return result;
 }
 
-template <typename Node, typename Callback>
-void walkFunctions(const Node& node, Callback& callback);
-
-template <typename Variant, typename Callback>
-void walkFunctionVariant(const Variant& item, Callback& callback) {
-    std::visit([&](const auto& pointer) {
-        if (pointer) walkFunctions(*pointer, callback);
-    }, item);
-}
-
-template <typename Node, typename Callback>
-void walkFunctions(const Node& node, Callback& callback) {
-    using T = std::decay_t<Node>;
-    if constexpr (std::is_same_v<T, ast::FunctionDef>) {
-        callback(node);
-    } else if constexpr (std::is_same_v<T, ast::Program> ||
-                         std::is_same_v<T, ast::ModuleDef> ||
-                         std::is_same_v<T, ast::VisibilityBlock> ||
-                         std::is_same_v<T, ast::MakeDef> ||
-                         std::is_same_v<T, ast::TraitDef> ||
-                         std::is_same_v<T, ast::CompiledBlock>) {
-        const auto& items = [&]() -> const auto& {
-            if constexpr (std::is_same_v<T, ast::Program>) return node.items;
-            else if constexpr (std::is_same_v<T, ast::VisibilityBlock>) return node.items;
-            else if constexpr (std::is_same_v<T, ast::CompiledBlock>) return node.items;
-            else return node.body;
-        }();
-        for (const auto& item : items) walkFunctionVariant(item, callback);
-    }
-}
-
 auto functionDetail(const ast::FunctionDef& function,
                     const std::vector<semantic::Signature>& signatures,
                     const semantic::Analyzer& analyzer)
@@ -1778,74 +1748,15 @@ auto importedConstructorDetail(const semantic::ImportedADT& adt,
     return result + importedAdtType(adt, typeParameters);
 }
 
-// The declared type of one field, read out of a record symbol's Kex-shaped
-// declaration text (`record Box do\n  size : Integer\n  ...`). Hovering a
-// field used to answer with whatever global function shared its name — `b.size`
-// reported `foul size : String -> Integer?` — because a field is not a symbol
-// in its own right and the name-based lookup was all there was.
-auto recordFieldType(const std::string& recordDetail, const std::string& field)
+// The declared type of one field of a record symbol (SymbolInfo::fields), or
+// "". Hovering a field used to answer with whatever global function shared its
+// name — `b.size` reported `foul size : String -> Integer?` — because a field
+// is not a symbol in its own right and the name-based lookup was all there was.
+auto fieldTypeOf(const semantic::SymbolInfo& record, const std::string& field)
     -> std::string {
-    size_t lineStart = 0;
-    while (lineStart <= recordDetail.size()) {
-        const auto newline = recordDetail.find('\n', lineStart);
-        const auto end =
-            newline == std::string::npos ? recordDetail.size() : newline;
-        size_t i = lineStart;
-        while (i < end && std::isspace(static_cast<unsigned char>(recordDetail[i])))
-            ++i;
-        if (recordDetail.compare(i, field.size(), field) == 0) {
-            size_t after = i + field.size();
-            while (after < end &&
-                   std::isspace(static_cast<unsigned char>(recordDetail[after])))
-                ++after;
-            if (after < end && recordDetail[after] == ':') {
-                ++after;
-                while (after < end &&
-                       std::isspace(static_cast<unsigned char>(recordDetail[after])))
-                    ++after;
-                // Stop before a default value: `count : Integer = 0`.
-                auto stop = recordDetail.find('=', after);
-                if (stop == std::string::npos || stop > end) stop = end;
-                auto text = recordDetail.substr(after, stop - after);
-                while (!text.empty() &&
-                       std::isspace(static_cast<unsigned char>(text.back())))
-                    text.pop_back();
-                if (!text.empty()) return text;
-            }
-        }
-        if (newline == std::string::npos) break;
-        lineStart = newline + 1;
-    }
+    for (const auto& [name, type] : record.fields)
+        if (name == field) return type;
     return {};
-}
-
-auto recordFields(const std::string& recordDetail)
-    -> std::vector<std::pair<std::string, std::string>> {
-    std::vector<std::pair<std::string, std::string>> fields;
-    size_t lineStart = 0;
-    while (lineStart <= recordDetail.size()) {
-        const auto newline = recordDetail.find('\n', lineStart);
-        const auto end = newline == std::string::npos
-            ? recordDetail.size() : newline;
-        size_t name = lineStart;
-        while (name < end && std::isspace(
-                   static_cast<unsigned char>(recordDetail[name]))) ++name;
-        size_t nameEnd = name;
-        while (nameEnd < end && (std::isalnum(static_cast<unsigned char>(
-                   recordDetail[nameEnd])) || recordDetail[nameEnd] == '_'))
-            ++nameEnd;
-        size_t colon = nameEnd;
-        while (colon < end && std::isspace(
-                   static_cast<unsigned char>(recordDetail[colon]))) ++colon;
-        if (nameEnd > name && colon < end && recordDetail[colon] == ':') {
-            const auto field = recordDetail.substr(name, nameEnd - name);
-            if (auto type = recordFieldType(recordDetail, field); !type.empty())
-                fields.emplace_back(field, std::move(type));
-        }
-        if (newline == std::string::npos) break;
-        lineStart = newline + 1;
-    }
-    return fields;
 }
 
 // Whether the word at this position is a KEY in a map literal (`{ name: "Ada" }`)
@@ -2129,7 +2040,29 @@ void enrichFunctionSymbols(semantic::FileState& state,
             break;
         }
     };
-    walkFunctions(state.ast, enrich);
+    ast::forEachFunction(state.ast, enrich);
+}
+
+// A checked file's record fields as the checker resolved them, in place of
+// the types the declarations wrote.
+void enrichRecordSymbols(semantic::FileState& state,
+                         const semantic::Analyzer& analyzer) {
+    ast::forEachDeclared<ast::RecordDef>(state.ast, [&](const ast::RecordDef& record) {
+        for (auto& symbol : state.symbols) {
+            if (symbol.kind != semantic::SymbolKind::Record || symbol.name != record.name ||
+                symbol.definition.line != record.location.line ||
+                symbol.definition.column != record.location.column)
+                continue;
+            const auto key = symbol.module.empty() ? symbol.name
+                                                   : symbol.module + "." + symbol.name;
+            for (auto& [field, type] : symbol.fields)
+                if (const auto checked =
+                        analyzer.checker().recordFieldType(key, field, record.typeParams);
+                    checked && !std::holds_alternative<semantic::UnknownType>(checked->kind))
+                    type = semantic::typeToString(checked);
+            break;
+        }
+    });
 }
 
 class Server {
@@ -2472,6 +2405,7 @@ private:
             // (their own names are not resolved: kexhq/kex#323).
             for (const auto& module : analyzer.referencedModules()) m_db.ensureModule(module);
             enrichFunctionSymbols(*state, analyzer);
+            enrichRecordSymbols(*state, analyzer);
             document.hoverEntries.clear();
             document.selectedCallEntries.clear();
             if (analyzed) {
@@ -2973,7 +2907,7 @@ private:
                     const auto typed = text.substr(atName, cursor - atName);
                     ::lsp::Array<::lsp::CompletionItem> fields;
                     for (const auto& [name, type] :
-                         recordFields(declaration->detail)) {
+                         declaration->fields) {
                         if (name.rfind(typed, 0) != 0) continue;
                         fields.push_back({
                             .label = name,
@@ -3105,7 +3039,7 @@ private:
                             semantic::SymbolKind::Record) {
                         ::lsp::Array<::lsp::CompletionItem> fields;
                         for (const auto& [name, type] :
-                             recordFields(declaration->detail)) {
+                             declaration->fields) {
                             if (written.find(name + ":") != std::string::npos)
                                 continue;
                             fields.push_back({
@@ -3246,7 +3180,7 @@ private:
                 if (const auto* record = m_db.findSymbol(
                         query.rewriteFrom, found->second.path);
                     record && record->kind == semantic::SymbolKind::Record)
-                    completionFieldType = recordFieldType(record->detail, leaf);
+                    completionFieldType = fieldTypeOf(*record, leaf);
             // A slot's local protocol declaration is authoritative. A global
             // or imported function sharing its short name must not supply the
             // completion signature (`counter.get` used to show String.get).
@@ -3634,7 +3568,7 @@ private:
                     if (const auto* record =
                             m_db.findSymbol(qualifier, document.path);
                         record && record->kind == semantic::SymbolKind::Record)
-                        if (auto type = recordFieldType(record->detail, lookupName);
+                        if (auto type = fieldTypeOf(*record, lookupName);
                             !type.empty())
                             fieldDetail = word.text + " : " + type;
             // The receiver's own hover entry knows its type even where the
@@ -3664,7 +3598,7 @@ private:
                         record = m_db.findSymbol(
                             typeName.substr(typeName.rfind('.') + 1), document.path);
                     if (record && record->kind == semantic::SymbolKind::Record)
-                        if (auto type = recordFieldType(record->detail, lookupName);
+                        if (auto type = fieldTypeOf(*record, lookupName);
                             !type.empty())
                             fieldDetail = word.text + " : " + type;
                     break;
@@ -3693,7 +3627,7 @@ private:
                         m_db.findSymbol(record, document.path);
                     declaration &&
                     declaration->kind == semantic::SymbolKind::Record)
-                    if (auto type = recordFieldType(declaration->detail,
+                    if (auto type = fieldTypeOf(*declaration,
                                                     word.text);
                         !type.empty())
                         detail = word.text + " : " + type;

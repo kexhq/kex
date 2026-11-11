@@ -1,7 +1,6 @@
 #pragma once
 
-// Compile-time code, checked before it runs (docs/pass-restructure-plan.md,
-// Stage 4): the sandbox that evaluates a `compiled do` block reads the
+// Compile-time code, checked before it runs: the sandbox that evaluates a `compiled do` block reads the
 // checker's answers as every other walker run does.
 
 #include "hir.hxx"

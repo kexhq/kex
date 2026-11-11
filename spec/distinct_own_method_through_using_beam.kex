@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A distinct type's own method, called where the type is imported by name:
 # the receiver is typed `ThingId` there and the method's receiver
 # `ThingIds.ThingId`, two spellings of one type. The checker decides the

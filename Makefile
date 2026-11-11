@@ -261,7 +261,7 @@ spec-prelude: build
 	@echo "Running prelude spec suite..."
 	@failed=0; passed=0; \
 	for f in spec/prelude/*.kex; do \
-		output=$$($(KEX) --run-walker --no-check --no-colors "$$f" 2>&1); \
+		output=$$($(KEX) --run-walker --no-colors "$$f" 2>&1); \
 		rc=$$?; \
 		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
 		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
@@ -289,7 +289,7 @@ spec-prelude-beam: build
 	@failed=0; passed=0; \
 	for f in spec/prelude/*.kex; do \
 		if grep -q "# kex: interpreter-only" "$$f" 2>/dev/null; then continue; fi; \
-		output=$$($(TIMEOUT_SUITE) $(KEX) --run --no-check --no-colors "$$f" 2>&1); \
+		output=$$($(TIMEOUT_SUITE) $(KEX) --run --no-colors "$$f" 2>&1); \
 		rc=$$?; \
 		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
 		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \

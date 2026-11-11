@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A block passed as a named argument takes its parameter types from that
 # parameter, as a positional or trailing block does. On the BEAM its
 # parameter was left untyped, so `t.text(:c)` went to run-time dispatch,

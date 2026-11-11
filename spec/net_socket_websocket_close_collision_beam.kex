@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 # kexhq/kex#360: importing both `Net.Socket` and `Net.HTTP.WebSocket` crashed
 # `erlc` outright — before running any code, even with no call to `close` or
 # `closed?` at all — because `Net.Socket.TCP`'s own `close`/`closed?` and the

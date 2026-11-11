@@ -53,6 +53,10 @@ struct Answers {
     std::unordered_map<const ast::MethodCall*, semantic::StaticTypeAnswer> typeOfAnswers;
     std::unordered_map<const ast::Expr*, semantic::Signature> selected;
     semantic::ShownThrough shownThroughDistinct;
+    // The trait defaults each `make` block inherits (inheritedDefaultsOf).
+    std::unordered_map<const ast::MakeDef*, std::vector<semantic::InheritedDefault>> inheritedDefaults;
+    // The list patterns that take a String apart (destructuresString).
+    std::unordered_set<const ast::Pattern*> stringPatterns;
 };
 
 class Program {
@@ -149,6 +153,14 @@ public:
     // The traits a `make` block implements, each as the checker resolved its
     // `implement:` name, in written order; null when it names none.
     auto traitsOf(const ast::MakeDef& make) const -> const std::vector<std::string>*;
+    // The trait defaults a `make` block inherits for its target: those of its
+    // traits the type does not define itself in any of its blocks. Null for a
+    // loaded program.
+    auto inheritedDefaultsOf(const ast::MakeDef& make) const
+        -> const std::vector<semantic::InheritedDefault>*;
+    // Whether `pattern`, a list pattern, takes a String apart into its
+    // characters (TypeChecker::stringPatterns).
+    auto destructuresString(const ast::Pattern& pattern) const -> bool;
 
     // Every node it has an answer for, each key of its tables once or more.
     auto forEachAnsweredNode(const std::function<void(const void*)>& visit) const -> void;
@@ -165,6 +177,8 @@ private:
     const decltype(Answers::types)* m_types = nullptr;
     const decltype(Answers::typeOfAnswers)* m_typeOfAnswers = nullptr;
     const decltype(Answers::selected)* m_selected = nullptr;
+    const decltype(Answers::inheritedDefaults)* m_inheritedDefaults = nullptr;
+    const decltype(Answers::stringPatterns)* m_stringPatterns = nullptr;
     const decltype(Answers::shownThroughDistinct)* m_shownThrough = nullptr;
     std::unique_ptr<Answers> m_owned;
     std::vector<CallSite> m_sites;
@@ -203,6 +217,9 @@ public:
         -> const semantic::StaticTypeAnswer*;
     auto selectedSignatureOf(const ast::Expr& call) const -> const semantic::Signature*;
     auto shownThroughOf(const ast::Expr& call, std::size_t index) const -> const std::string*;
+    auto inheritedDefaultsOf(const ast::MakeDef& make) const
+        -> const std::vector<semantic::InheritedDefault>*;
+    auto destructuresString(const ast::Pattern& pattern) const -> bool;
 
 private:
     std::vector<const Program*> m_programs;

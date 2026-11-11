@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A `then … else` branch may start on the line after `then` or `else`:
 # nothing else can follow either keyword, so the line break does not end
 # the expression there (kexhq/kex#462).

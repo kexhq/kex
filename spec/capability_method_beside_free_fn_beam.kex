@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A module may implement a capability on one of its records and also have a
 # free function of the same name. The free function is emitted under a
 # separate `$free` symbol, and its callers used to lose track of it being

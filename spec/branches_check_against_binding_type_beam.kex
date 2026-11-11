@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A typed binding is what its conditional's branches are checked against.
 # Arms of different types used to be compared with each other — the first
 # arm's type — so `let answer : Any = match …` failed with "Match arm type

@@ -1,6 +1,6 @@
 #pragma once
 // Passes and pass managers, after LLVM's new pass manager
-// (docs/pass-restructure-plan.md, Stage 7).
+// (docs/architecture.md).
 //
 // A pass is a class over one IR level:
 //

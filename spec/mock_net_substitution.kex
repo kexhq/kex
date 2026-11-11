@@ -6,17 +6,17 @@ main do
     assert(TCP.Endpoint.parse("127.0.0.1:9").try.host == "127.0.0.1")
     match TCP.connectTo("127.0.0.1:9") do
       Error(e) => do
-        assert(e.kind == MockEmpty)
+        assert(e.kind == Net.MockEmpty)
         assert(e.message == "TCP refused to connect")
       end
       Ok(_) => assert(false, "mock must refuse")
     end
     match TCP.connectTo("127.0.0.1:9") { |conn| assert(false, "must not run") } do
-      Error(e) => assert(e.kind == MockEmpty)
+      Error(e) => assert(e.kind == Net.MockEmpty)
       Ok(_) => assert(false, "mock must refuse")
     end
   end
-  let injected = NetError { kind: MockEmpty, operation: DNS, message: "injected" }
+  let injected = NetError { kind: Net.MockEmpty, operation: DNS, message: "injected" }
   with Net.Socket.TCP = Mock.TCP { failure: Just(injected) } do
     match TCP.connectTo("127.0.0.1:9") do
       Error(e) => assert(e.message == "injected")

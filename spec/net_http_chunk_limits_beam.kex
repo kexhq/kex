@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 # A short chunk-size line can share a socket read with a body larger than
 # maximumHeaderBytes. Only the line counts against the header limit.
 
@@ -35,12 +35,12 @@ main do
   assert(response.body.to(String).try == "x".repeat(4096))
   let longLine = chunked("1;${"x".repeat(128)}\r\nx\r\n0\r\n\r\n")
   match longLine do
-    Error(error) => assert(error.kind == Limit)
+    Error(error) => assert(error.kind == Net.Limit)
     Ok(_) => assert(false, "an oversized chunk-size line must fail")
   end
   let longTrailer = chunked("0\r\nX-Trailer: ${"x".repeat(128)}\r\n\r\n")
   match longTrailer do
-    Error(error) => assert(error.kind == Limit)
+    Error(error) => assert(error.kind == Net.Limit)
     Ok(_) => assert(false, "oversized trailers must fail")
   end
   IO.printLine("ok")

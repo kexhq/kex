@@ -28,7 +28,7 @@ type WriteError = | WriteFailed
 #   end
 #
 #   firstLine(IO.in)
-#   firstLine(FS.File.open("notes.txt", Read).try)
+#   firstLine(FS.File.open("notes.txt", FS.Read).try)
 trait Readable do
   # Reads the next chunk of bytes: whatever the source has ready, up to its
   # buffer size. Standard input answers one line at a time, newline included.
@@ -89,7 +89,7 @@ end
 #
 #   report(IO.out, results)
 #   report(IO.error, warnings)
-#   report(FS.File.open("report.txt", Write).try, results)
+#   report(FS.File.open("report.txt", FS.Write).try, results)
 trait Writable do
   # Writes +content+ verbatim, with no trailing newline.
   #
@@ -156,7 +156,7 @@ end
 #   using FS
 #
 #   main do
-#     match FS.File.open("notes.txt", Read) do
+#     match FS.File.open("notes.txt", FS.Read) do
 #       Ok(handle) => do
 #         IO.printLine(handle.read.or(""))
 #         handle.close
@@ -175,6 +175,15 @@ end
 # matter where the handle came from. Injection makes a thing substitutable,
 # not pure.
 type FileHandle<R, W>
+
+# What a +FileHandle+ allows, as its type arguments: +FileHandle<CanRead,
+# CannotWrite>+ reads and cannot write. They are types and nothing else (no
+# value is ever one), so reading from a write-only handle is a compile error
+# rather than a runtime check.
+type CanRead
+type CannotRead
+type CanWrite
+type CannotWrite
 
 make FileHandle<CanRead, W>, implement: Readable do
   # Reads the next chunk of bytes from the handle, up to 64 KiB.
@@ -407,7 +416,7 @@ make FileHandle<R, W>, implement: Closeable do
   # @return [Void]
   #
   # @example
-  #   match FS.File.open("out.txt", Write) do
+  #   match FS.File.open("out.txt", FS.Write) do
   #     Ok(handle) => do
   #       handle.printLine("hello")
   #       handle.close

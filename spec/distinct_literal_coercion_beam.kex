@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # The BEAM twin of distinct_literal_coercion.kex.
 
 distinct type BookId = Integer

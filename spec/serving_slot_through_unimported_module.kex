@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A `serving` process's slot, called through a `Server<T>` value whose
 # owning module `T` is never `using`-imported by the caller — reached only
 # through full qualification (`Catalog.Shelf.Stock`) or, as here, a record

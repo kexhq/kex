@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 # Offline coverage for typed custom DNS resolver configuration.
 
 using Net.DNS
@@ -24,7 +24,7 @@ main do
     nameservers: [],
     timeout: validationTimeout
   }) do
-    Error(error) => assert(error.kind == Parse)
+    Error(error) => assert(error.kind == Net.Parse)
     Ok(_) => assert(false, "a custom resolver requires a nameserver")
   end
 

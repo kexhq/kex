@@ -28,6 +28,9 @@ struct SymbolInfo {
     bool isServingSlot = false;
     bool isExported = true;
     std::vector<std::pair<std::string, TypePtr>> params;
+    // A record's fields in declaration order, each with its type: as written
+    // until the file is checked, then as the checker resolved it.
+    std::vector<std::pair<std::string, std::string>> fields;
     int clauseCount = 1;
     std::string makeTarget; // set for functions inside a `make TypeName do` block
     // Kex source-shaped declaration text used by editor hover. This is

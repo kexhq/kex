@@ -31,6 +31,19 @@ auto run(const std::string& source) -> ValuePtr {
     return runChecked(source, evaluator);
 }
 
+// Whether checking `source` reports `text`: the checker decides who may name
+// what; the walker keeps no run-time copy of those rules.
+auto checkerReports(const std::string& source, const std::string& text) -> bool {
+    Lexer lexer(source);
+    Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    const auto checked = driver::prepareForWalker(program, {}, &defaultPreludeInterfaces());
+    const auto& diagnostics = checked->analyzer->diagnostics();
+    return std::any_of(diagnostics.begin(), diagnostics.end(), [&](const auto& diagnostic) {
+        return diagnostic.message.find(text) != std::string::npos;
+    });
+}
+
 auto runFS(const std::string& source) -> ValuePtr {
     return run("using FS\n" + source);
 }
@@ -175,22 +188,14 @@ int main() {
                     publicConstructor->data).tag,
                 std::string("Read"));
 
-            bool rejectedPrivate = false;
-            try {
-                run(
-                    "module Secrets do\n"
-                    "  private do\n"
-                    "    type SecretMode = Hidden | Other\n"
-                    "  end\n"
-                    "end\n"
-                    "main do Secrets.Hidden end\n");
-            } catch (const RuntimeError& error) {
-                rejectedPrivate =
-                    std::string(error.what()).find(
-                        "cannot access private name `Hidden`") !=
-                    std::string::npos;
-            }
-            assertTrue(rejectedPrivate);
+            assertTrue(checkerReports(
+                "module Secrets do\n"
+                "  private do\n"
+                "    type SecretMode = Hidden | Other\n"
+                "  end\n"
+                "end\n"
+                "main do Secrets.Hidden end\n",
+                "cannot access private name `Hidden`"));
         });
 
         it("does not export an alias target as a constructor", []() {
@@ -320,39 +325,29 @@ int main() {
                 "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
 
-            bool rejected = false;
-            try {
-                run(
-                    "module Secrets do\n"
-                    "  private do\n"
-                    "    let hidden() = 42\n"
-                    "  end\n"
-                    "end\n"
-                    "main do\n"
-                    "  Secrets.hidden()\n"
-                    "end\n");
-            } catch (const RuntimeError& error) {
-                rejected = std::string(error.what()).find("private name `hidden`") != std::string::npos;
-            }
-            assertTrue(rejected);
+            assertTrue(checkerReports(
+                "module Secrets do\n"
+                "  private do\n"
+                "    let hidden() = 42\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  Secrets.hidden()\n"
+                "end\n",
+                "private name `hidden`"));
         });
 
         it("rejects importing a private name explicitly", []() {
-            bool rejected = false;
-            try {
-                run(
-                    "module Secrets do\n"
-                    "  private do\n"
-                    "    let hidden() = 42\n"
-                    "  end\n"
-                    "end\n"
-                    "main do\n"
-                    "  using Secrets, only: [hidden]\n"
-                    "end\n");
-            } catch (const RuntimeError& error) {
-                rejected = std::string(error.what()).find("private name `hidden`") != std::string::npos;
-            }
-            assertTrue(rejected);
+            assertTrue(checkerReports(
+                "module Secrets do\n"
+                "  private do\n"
+                "    let hidden() = 42\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  using Secrets, only: [hidden]\n"
+                "end\n",
+                "private name `hidden`"));
         });
 
         it("resolves a filtered forward re-export as a nested namespace", []() {
@@ -371,22 +366,16 @@ int main() {
         });
 
         it("rejects exporting a module's private name", []() {
-            bool rejected = false;
-            try {
-                run(
-                    "module App do\n"
-                    "  export Secrets, only: [hidden]\n"
-                    "end\n"
-                    "module Secrets do\n"
-                    "  private do\n"
-                    "    let hidden() = 42\n"
-                    "  end\n"
-                    "end\n");
-            } catch (const RuntimeError& error) {
-                rejected = std::string(error.what()).find("cannot export private name `hidden`")
-                    != std::string::npos;
-            }
-            assertTrue(rejected);
+            assertTrue(checkerReports(
+                "module App do\n"
+                "  export Secrets, only: [hidden]\n"
+                "end\n"
+                "module Secrets do\n"
+                "  private do\n"
+                "    let hidden() = 42\n"
+                "  end\n"
+                "end\n",
+                "cannot export private name `hidden`"));
         });
 
         it("rejects a module exporting itself", []() {

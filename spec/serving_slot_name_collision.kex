@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A serving slot whose name is also exported by an imported module.
 #
 # A serving process dispatches slots BY NAME at runtime: it holds `['add']`

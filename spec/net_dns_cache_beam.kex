@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 # Uses the operating system's deterministic localhost entry rather than the
 # public DNS, while still exercising the real resolver owner and TTL cache.
 

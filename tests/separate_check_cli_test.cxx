@@ -519,7 +519,7 @@ let skipped() -> String = define do |t| t.text(:id, doc: 1) end
 foul timed(server: Server<Counter>) = server.reset(within: 10)
 )KEX");
             const auto text = package.check();
-            for (const std::string expected : {"`wrong` declared to return String but body returns Dot",
+            for (const std::string expected : {"`wrong` declared to return String but body returns Shapes.Shape.Dot",
                                                "`text` expects argument 5 to be String, but got Integer",
                                                "`within:` is not valid on an asynchronous cast slot"}) {
                 assertTrue(text.find(expected) != std::string::npos,

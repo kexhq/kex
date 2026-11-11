@@ -22,6 +22,7 @@ auto TypeChecker::check(const ast::Program& program,
                         std::vector<Diagnostic>& diagnostics) -> void {
     m_diagnostics = &diagnostics;
     m_patternBindings.clear();
+    m_stringPatterns.clear();
     m_functionSignatures.clear();
     m_resolvedCalls.clear();
     m_selectedCallSignatures.clear();
@@ -35,6 +36,7 @@ auto TypeChecker::check(const ast::Program& program,
     m_adtVariants.clear();
     m_adtOfConstructor.clear();
     m_nullaryConstructors.clear();
+    m_nullaryVariants.clear();
     m_methodSignatures.clear();
     m_slotMethodNames.clear();
     m_makeMethodNames.clear();
@@ -210,11 +212,30 @@ auto TypeChecker::check(const ast::Program& program,
             m_adtVariants[adt.name] = adt.constructors;
             for (const auto& ctor : adt.constructors) {
                 const auto declared = adt.constructorArities.find(ctor);
+                if (declared == adt.constructorArities.end() || declared->second == 0)
+                    m_nullaryVariants[adt.name].insert(ctor);
+                const auto declaredArity = declared == adt.constructorArities.end()
+                    ? 0 : static_cast<size_t>(declared->second);
                 m_constructorOwners[ctor].push_back(
-                    {adt.name,
-                     declared == adt.constructorArities.end()
-                         ? 0 : static_cast<size_t>(declared->second),
-                     adt.typeParamCount > 0});
+                    {adt.name, declaredArity, adt.typeParamCount > 0, adt.module});
+                // A module's constructors are in scope by their bare names
+                // only inside it or under a `using`, the way this program's
+                // own module ADTs are (registerAdtsInModule): registered per
+                // module, never in the bare-name tables below.
+                if (!adt.module.empty()) {
+                    m_moduleConstructors[adt.module].try_emplace(ctor, ModuleConstructor{adt.name, declaredArity, true, true});
+                    if (adt.typeParamCount || adt.constructorTypeParamSlots.contains(ctor)) {
+                        ConstructorResult result;
+                        result.adtName = adt.name;
+                        result.typeParamCount = adt.typeParamCount;
+                        if (auto slots = adt.constructorTypeParamSlots.find(ctor);
+                            slots != adt.constructorTypeParamSlots.end())
+                            result.slots = slots->second;
+                        result.modulePath = adt.module;
+                        m_constructorResult[kex::mangle::qualify(adt.module, ctor)] = std::move(result);
+                    }
+                    continue;
+                }
                 auto [owner, fresh] = m_adtOfConstructor.try_emplace(ctor, adt.name);
                 if (!fresh && owner->second != adt.name) {
                     ambiguous.insert(ctor);
@@ -245,6 +266,10 @@ auto TypeChecker::check(const ast::Program& program,
         }
     }
 
+    // The type names the program declares, before anything resolves an
+    // annotation (ADT payloads below already do).
+    registerDeclaredAliases(program);
+
     for (const auto& item : program.items) {
         std::visit([&](const auto& node) {
             using T = std::decay_t<decltype(node)>;
@@ -255,8 +280,6 @@ auto TypeChecker::check(const ast::Program& program,
             }
         }, item);
     }
-
-    registerDeclaredAliases(program);
 
     for (const auto& item : program.items)
         if (const auto* function =
@@ -327,7 +350,8 @@ auto TypeChecker::check(const ast::Program& program,
     for (const auto& [name, query] : m_computedAliases)
         m_typeAliases[name] = resolveTypeQuery(*query);
     m_computedAliases.clear();
-    validateDeclarations(program, m_importedInterfaces, m_traits, diagnostics);
+    validateDeclarations(program, m_traits, diagnostics);
+    reportPendingUnknownTypes();
     m_topLevelValueNames.clear();
     for (const auto& item : program.items)
         if (const auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(&item);
@@ -1074,10 +1098,12 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def,
     if (def.isDistinct || kex::isTransparentTypeAlias(def)) return;
 
     std::vector<std::string> names;
+    std::unordered_set<std::string> nullary;
     for (const auto& variant : *def.variants) {
         auto name = extractConstructorName(variant);
         if (!name) return;  // not constructor-shaped — a type alias, skip entirely
         names.push_back(*name);
+        if (std::holds_alternative<ast::TypeName>(variant->kind)) nullary.insert(*name);
         if (!modulePath.empty()) continue;
         if (std::holds_alternative<ast::TypeName>(variant->kind))
             m_nullaryConstructors.insert(*name);
@@ -1095,6 +1121,7 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def,
     const auto identity =
         modulePath.empty() ? def.name : modulePath + "." + def.name;
     m_adtVariants[identity] = names;
+    m_nullaryVariants[identity] = std::move(nullary);
     if (modulePath.empty())
         for (const auto& name : names)
             m_adtOfConstructor[name] = def.name;
@@ -1161,13 +1188,38 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def,
 // constructors already passes argMatchesParam).
 auto TypeChecker::siblingConstructorJoin(const TypePtr& a, const TypePtr& b) const
     -> TypePtr {
-    const auto* left = std::get_if<NamedType>(&resolve(a)->kind);
-    const auto* right = std::get_if<NamedType>(&resolve(b)->kind);
-    if (!left || !right || left->name == right->name ||
-        !left->typeArgs.empty() || !right->typeArgs.empty())
+    const auto left = resolve(a);
+    const auto right = resolve(b);
+    // Where the two differ only by sibling variants, inside a tuple, list or
+    // optional as well: `[(Name, "a"), (Title, "b")]` is a list of
+    // `(Detail, String)`. Parts that are the same type stay as they are.
+    const auto part = [&](const TypePtr& x, const TypePtr& y) -> TypePtr {
+        if (typesEqual(x, y)) return x;
+        return siblingConstructorJoin(x, y);
+    };
+    if (const auto* l = std::get_if<TupleType>(&left->kind))
+        if (const auto* r = std::get_if<TupleType>(&right->kind);
+            r && l->elements.size() == r->elements.size()) {
+            std::vector<TypePtr> elements;
+            for (std::size_t i = 0; i < l->elements.size(); ++i) {
+                auto joined = part(l->elements[i], r->elements[i]);
+                if (!joined) return nullptr;
+                elements.push_back(std::move(joined));
+            }
+            return Type::tuple(std::move(elements));
+        }
+    if (const auto* l = std::get_if<ListType>(&left->kind))
+        if (const auto* r = std::get_if<ListType>(&right->kind))
+            if (auto joined = part(l->element, r->element)) return Type::list(std::move(joined));
+    if (const auto* l = std::get_if<OptionalType>(&left->kind))
+        if (const auto* r = std::get_if<OptionalType>(&right->kind))
+            if (auto joined = part(l->inner, r->inner)) return Type::optional(std::move(joined));
+    const auto* leftNamed = std::get_if<NamedType>(&left->kind);
+    const auto* rightNamed = std::get_if<NamedType>(&right->kind);
+    if (!leftNamed || !rightNamed || !leftNamed->typeArgs.empty() || !rightNamed->typeArgs.empty())
         return nullptr;
-    const auto* leftOwner = constructorOwner(*left);
-    const auto* rightOwner = constructorOwner(*right);
+    const auto* leftOwner = constructorOwner(*leftNamed);
+    const auto* rightOwner = constructorOwner(*rightNamed);
     if (!leftOwner || !rightOwner || *leftOwner != *rightOwner) return nullptr;
     return Type::named(*leftOwner);
 }
@@ -1204,6 +1256,7 @@ auto TypeChecker::scopedConstructorOwner(const std::string& name) const
 auto TypeChecker::constructorOwner(const NamedType& named) const
     -> const std::string* {
     if (!named.typeArgs.empty()) return nullptr;
+    if (!named.variant.empty()) return &named.name;
     auto owner = m_adtOfConstructor.find(named.name);
     if (owner == m_adtOfConstructor.end()) {
         // A constructor of a module's ADT — `Twomod.Access`'s `Private` — is
@@ -1875,12 +1928,12 @@ auto TypeChecker::annotationToSignature(
             result = resolvedFunc->result;
         }
     }
-    if (params.empty()) {
-        // Non-function annotation (e.g. `x : Int`) — treat as a zero-param
-        // constant whose type IS the annotated type.
-        return Signature{ann.name, {}, result};
-    }
-    return Signature{ann.name, std::move(params), result};
+    // Non-function annotation (e.g. `x : Int`): a zero-param constant whose
+    // type IS the annotated type. Recorded per contract, so an interface
+    // states the contract as the checker resolved it.
+    Signature signature{ann.name, std::move(params), result};
+    m_contractSignatures[&ann] = quantifiedContract(signature);
+    return signature;
 }
 
 auto TypeChecker::registerDeclaredSignatures(const ast::Program& program) -> void {
@@ -2312,58 +2365,89 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
         }
     }
     // A type implementing a trait has the trait's defaults as its own methods
-    // (`make Coin, implement: Addable` gives Coin `twice`), unless the block
-    // defines that name at that arity itself: registered for this receiver
-    // like the block's own, so a call checked before either body finds it.
+    // (`make Coin, implement: Addable` gives Coin `twice`), unless the type
+    // defines that name at that arity itself, in this block or another of its
+    // blocks: `make String, implement: Monoid` (algebra.kex) inherits no
+    // `repeat`, because string.kex's `make String` defines one. Registered for
+    // this receiver like the block's own, so a call checked before either body
+    // finds it, and recorded for the backends (inheritedDefaultsOf).
+    const auto own = m_ownMethodsByTarget.find(makeTargetKey(receiver));
+    const auto ownsKey = [&](const std::string& key) {
+        return overridden.contains(key) || (own != m_ownMethodsByTarget.end() && own->second.contains(key));
+    };
+    // A default known only by name (a trait of another unit): any arity of
+    // the type's own counts.
+    const auto ownsName = [&](const std::string& name) {
+        const auto prefix = name + "/";
+        const auto any = [&](const std::set<std::string>& keys) {
+            const auto found = keys.lower_bound(prefix);
+            return found != keys.end() && found->starts_with(prefix);
+        };
+        return any(overridden) || (own != m_ownMethodsByTarget.end() && any(own->second));
+    };
+    auto& inheritedHere = m_inheritedDefaults[&def];
+    std::set<std::string> inheritedKeys;
+    std::set<std::string> inheritedNames;
     for (const auto& written : def.implements) {
-        const auto defaults =
-            m_traitDefaults.find(resolveTraitReference(written, modulePath, nullptr));
-        if (defaults == m_traitDefaults.end()) continue;
+        const auto traitIdentity = resolveTraitReference(written, modulePath, nullptr);
+        const auto inherit = [&](const std::string& method) {
+            if (inheritedNames.insert(method).second) inheritedHere.push_back({traitIdentity, method});
+        };
+        const auto defaults = m_traitDefaults.find(traitIdentity);
+        if (defaults == m_traitDefaults.end()) {
+            // Declared in another unit: the defaults its implementors carry.
+            if (const auto* trait = m_traits.get(traitIdentity))
+                for (const auto& method : trait->defaultBodies)
+                    if (!ownsName(method)) inherit(method);
+            continue;
+        }
+        std::set<std::string> fromThisTrait;
         for (const auto* inherited : defaults->second) {
-            if (inherited->clauses.empty() ||
-                overridden.contains(inherited->name + "/" +
-                                    std::to_string(inherited->clauses[0].params.size())))
-                continue;
+            if (inherited->clauses.empty()) continue;
+            const auto key = ownMethodKey(*inherited);
+            if (ownsKey(key) || inheritedKeys.contains(key)) continue;
             for (const auto* clause : ast::signatureClauses(*inherited))
                 preRegister(*inherited, *clause, true);
+            if (!inherited->clauses[0].body.empty()) inherit(inherited->name);
+            fromThisTrait.insert(key);
         }
+        inheritedKeys.insert(fromThisTrait.begin(), fromThisTrait.end());
     }
 }
 
-auto TypeChecker::registerMakeSignaturesInModule(const ast::ModuleDef& mod,
-                                                const std::string& parentPath)
-    -> void {
-    const auto path = ast::nestedModulePath(parentPath, mod.name);
-    for (const auto& item : mod.body) {
-        std::visit([this, &path](const auto& node) {
+namespace {
+
+// Every `make` block of `items` with the module path it is written in,
+// nested modules and `private do` blocks included.
+template <typename Items, typename Visit>
+auto forEachMakeDef(const Items& items, const std::string& path, const Visit& visit) -> void {
+    for (const auto& item : items)
+        std::visit([&](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
-                if (node) registerMakeSignature(*node, path);
+                if (node) visit(*node, path);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (node) registerMakeSignaturesInModule(*node, path);
+                if (node) forEachMakeDef(node->body, ast::nestedModulePath(path, node->name), visit);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
                 // A `make` inside `private do ... end` is the module's too.
-                if (node)
-                    for (const auto& visible : node->items)
-                        if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&visible);
-                            make && *make)
-                            registerMakeSignature(**make, path);
+                if (node) forEachMakeDef(node->items, path, visit);
             }
         }, item);
-    }
 }
 
+} // namespace
+
+// Two passes: every block's own methods are known, by the type they are for,
+// before any block decides which trait defaults it inherits (registerMakeSignature).
 auto TypeChecker::registerMakeSignatures(const ast::Program& program) -> void {
-    for (const auto& item : program.items) {
-        std::visit([this](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
-                if (node) registerMakeSignature(*node, "");
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (node) registerMakeSignaturesInModule(*node, "");
-            }
-        }, item);
-    }
+    m_ownMethodsByTarget.clear();
+    m_inheritedDefaults.clear();
+    forEachMakeDef(program.items, "", [this](const ast::MakeDef& def, const std::string& path) {
+        noteOwnMethods(def, path);
+    });
+    forEachMakeDef(program.items, "", [this](const ast::MakeDef& def, const std::string& path) {
+        registerMakeSignature(def, path);
+    });
 }
 
 auto TypeChecker::registerExportsInModule(const ast::ModuleDef& mod,
@@ -2741,7 +2825,7 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
 auto TypeChecker::resolveTypeExprNode(const ast::TypeExpr& typeExpr,
                                        std::unordered_map<std::string, TypePtr>& genericVars)
     -> TypePtr {
-    return std::visit([this, &genericVars](const auto& node) -> TypePtr {
+    return std::visit([this, &genericVars, &typeExpr](const auto& node) -> TypePtr {
         using T = std::decay_t<decltype(node)>;
 
         if constexpr (std::is_same_v<T, ast::TypeQuery>) {
@@ -2778,6 +2862,22 @@ auto TypeChecker::resolveTypeExprNode(const ast::TypeExpr& typeExpr,
                 const auto recordName = resolveRecordName(last);
                 if (recordName != last) return Type::named(recordName);
             } else {
+                // `FileMode.Write`: a nullary variant of the ADT the rest of
+                // the name resolves to, which is how a constructor is written
+                // as a type.
+                ast::TypeExpr owner;
+                owner.kind = ast::TypeName{{node.parts.begin(), node.parts.end() - 1}};
+                const auto ownerType = [&] {
+                    const bool reporting = m_reportUnknownTypes;
+                    m_reportUnknownTypes = false;
+                    auto resolved = resolveTypeExprNode(owner, genericVars);
+                    m_reportUnknownTypes = reporting;
+                    return resolved;
+                }();
+                if (const auto* adt = std::get_if<NamedType>(&ownerType->kind);
+                    adt && adt->typeArgs.empty() && adt->variant.empty() &&
+                    isNullaryVariant(adt->name, last))
+                    return Type::variantOf(adt->name, last);
                 recordWithOwner(m_referencedModules, qualified);
                 if (auto nominal = qualifiedNominalType(qualified))
                     return Type::named(*nominal);
@@ -2814,8 +2914,10 @@ auto TypeChecker::resolveTypeExprNode(const ast::TypeExpr& typeExpr,
                     m_adtVariants.count(qualified) ||
                     (m_importedInterfaces &&
                      m_importedInterfaces->recordArities.count(qualified));
+                if (!namesDeclaredType(qualified, last)) reportUnknownType(node, typeExpr.location);
                 return Type::named(isNominal ? qualified : last);
             }
+            if (!namesDeclaredType(qualified, last)) reportUnknownType(node, typeExpr.location);
             return Type::named(resolveRecordName(last));
         }
         else if constexpr (std::is_same_v<T, ast::GenericType>) {
@@ -2856,6 +2958,7 @@ auto TypeChecker::resolveTypeExprNode(const ast::TypeExpr& typeExpr,
                 if (m_adtVariants.count(qualified))
                     return Type::named(qualified, std::move(args));
             }
+            if (!namesDeclaredType(node.name.dotted(), name)) reportUnknownType(node.name, typeExpr.location);
             return Type::named(resolveRecordName(name), std::move(args));
         }
         else if constexpr (std::is_same_v<T, ast::FunctionType>) {
@@ -3030,8 +3133,22 @@ auto TypeChecker::checkPatternConstructorOwner(const ast::Pattern& pattern,
     if (const auto variants = m_adtVariants.find(adt);
         variants != m_adtVariants.end() &&
         std::find(variants->second.begin(), variants->second.end(),
-                  ctorName) != variants->second.end())
+                  ctorName) != variants->second.end()) {
+        // A spelling constructors of several arities share is destructured
+        // as the matched ADT's (checkPatternArity leaves it to here).
+        if (const auto* ctor = std::get_if<ast::ConstructorPattern>(&pattern.kind);
+            ctor && spellingHasSeveralArities(ctorName))
+            if (const auto owners = m_constructorOwners.find(ctorName);
+                owners != m_constructorOwners.end())
+                for (const auto& owner : owners->second)
+                    if (owner.adt == adt && owner.arity != ctor->args.size())
+                        error(pattern.location,
+                              "`" + ctorName + "` constructor takes " +
+                                  std::to_string(owner.arity) +
+                                  " value(s), but the pattern destructures " +
+                                  std::to_string(ctor->args.size()));
         return;
+    }
     auto owner = m_adtOfConstructor.find(ctorName);
     if (owner == m_adtOfConstructor.end()) {
         // A name no type declares at all can't be one of the matched ADT's
@@ -3076,8 +3193,10 @@ auto TypeChecker::checkPatternArity(const ast::Pattern& pattern) -> void {
                     kind = "record";
                 }
             }
-            // An unregistered name (imported/opaque) carries no arity to check.
-            if (expected && *expected != node.args.size())
+            // An unregistered name (imported/opaque) carries no arity to check,
+            // and one several constructors of different arities share is
+            // checked against the matched ADT's (checkPatternConstructorOwner).
+            if (expected && *expected != node.args.size() && !spellingHasSeveralArities(node.name))
                 error(pattern.location,
                       "`" + node.name + "` " + kind + " takes " +
                           std::to_string(*expected) + " value(s), but the "
@@ -3285,9 +3404,18 @@ auto TypeChecker::bindPatternVars(
         }
         else if constexpr (std::is_same_v<T, ast::ListPattern>) {
             TypePtr elementType;
-            if (expected)
-                if (auto* list = std::get_if<ListType>(&expected->kind))
+            if (expected) {
+                if (auto* list = std::get_if<ListType>(&expected->kind)) {
                     elementType = list->element;
+                } else if (auto* primitive = std::get_if<PrimitiveType>(&expected->kind);
+                           primitive && primitive->kind == PrimitiveType::String) {
+                    // A String taken apart into its characters: its elements
+                    // are Chars, and the tail (bound to `expected` below) is
+                    // the rest of the String.
+                    m_stringPatterns.insert(&pat);
+                    elementType = Type::charT();
+                }
+            }
             for (const auto& elem : node.elements) {
                 if (elem) bindPatternVars(*elem, elementType);
             }
@@ -4770,17 +4898,31 @@ auto TypeChecker::nullaryConstructorType(const std::string& name) -> TypePtr {
     if (auto constructed = constructorResultType(name, {});
         constructed && m_nullaryConstructors.contains(name))
         return constructed;
-    if (m_nullaryConstructors.contains(name))
-        return Type::named(name);
+    // A nullary constructor's value is that variant of the ADT declaring it
+    // (NamedType::variant), found through the declaration the name means here:
+    // one this program declares at top level, else one its module or a `using`
+    // brings in, else a top-level one of an imported unit (the prelude's
+    // `CallError.Timeout` gives way to `using Net`'s `Timeout`).
+    const auto topLevel = [&]() -> TypePtr {
+        if (!m_nullaryConstructors.contains(name)) return nullptr;
+        const auto adt = m_adtOfConstructor.find(name);
+        return adt == m_adtOfConstructor.end() ? nullptr : Type::variantOf(adt->second, name);
+    };
+    if (const auto declared = m_constructorResult.find(name);
+        declared != m_constructorResult.end() && declared->second.declaredHere)
+        if (auto type = topLevel()) return type;
     for (const auto& [module, constructors] : m_moduleConstructors) {
         auto constructor = constructors.find(name);
-        if (constructor == constructors.end() || constructor->second.arity != 0) continue;
+        if (constructor == constructors.end() || constructor->second.arity != 0 ||
+            constructor->second.typeName.empty())
+            continue;
         // Inside its own module the constructor is in scope as written: `Name`
         // in `module App.Models.User` is its `UserDetail.Name`, not a
         // same-named record elsewhere (`Net.DNS.Name`).
-        if (withinModule(module)) return Type::named(constructor->second.typeName);
-        if (moduleMemberImported(module, name)) return Type::named(name);
+        if (withinModule(module) || moduleMemberImported(module, name))
+            return Type::variantOf(constructor->second.typeName, name);
     }
+    if (auto type = topLevel()) return type;
     if (m_importedInterfaces)
         for (const auto& [_, module] :
              m_importedInterfaces->modules)
@@ -4790,13 +4932,20 @@ auto TypeChecker::nullaryConstructorType(const std::string& name) -> TypePtr {
                     if (function.isConstructor &&
                         function.signature.params.empty() &&
                         importedFunctionVisible(function))
-                        return function.signature.result;
-    // A spelling two ADTs share: typed as whichever one is in scope,
-    // not left unknown. `x : Integer = Timeout` checked clean.
+                        return variantType(function.signature.result, name);
+    // A spelling two ADTs share: the one in scope.
     if (const auto* owner = scopedConstructorOwner(name);
         owner && owner->arity == 0 && !owner->generic)
-        return Type::named(owner->adt);
+        return Type::variantOf(owner->adt, name);
     return nullptr;
+}
+
+// The variant `name` of the ADT a constructor's declared result is, or that
+// result as declared when it is not a plain ADT.
+auto TypeChecker::variantType(const TypePtr& result, const std::string& name) const -> TypePtr {
+    const auto* adt = std::get_if<NamedType>(&resolve(result)->kind);
+    return adt && adt->typeArgs.empty() && adt->variant.empty() ? Type::variantOf(adt->name, name)
+                                                                : result;
 }
 
 } // namespace kex::semantic
@@ -5006,6 +5155,164 @@ auto TypeChecker::dispatcherTarget(const ImportedFunction& dispatcher) -> Resolv
     target.paramNames = dispatcher.paramNames;
     target.defaultSources = dispatcher.defaultSources;
     return target;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// A bare `name` that resolved to nothing in scope but is a constructor some
+// module declares: it is spelled out (`FS.FileMode.Write`, or `FS.Write`), or
+// brought in with `using`.
+auto TypeChecker::reportConstructorOutOfScope(const std::string& name, const SourceLocation& at)
+    -> void {
+    const auto owners = m_constructorOwners.find(name);
+    if (owners == m_constructorOwners.end()) return;
+    for (const auto& owner : owners->second)
+        if (!owner.module.empty()) {
+            error(at, "`" + name + "` is a constructor of " + owner.adt + ", declared in module " +
+                          owner.module + ": write `" + owner.module + "." + name +
+                          "`, or bring it in with `using " + owner.module + "`");
+            return;
+        }
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// Whether a type name an annotation wrote names a declared type: one this
+// program declares (at top level by its name, in a module by its identity or
+// its name), a record or sum type the checker registered, or one an imported
+// interface exports.
+auto TypeChecker::namesDeclaredType(const std::string& qualified, const std::string& last) const
+    -> bool {
+    // `This` in a trait names whichever type implements it.
+    if (last == names::kThisType || builtinType(last) || isPrimitiveTypeName(last)) return true;
+    if (m_traits.lookup(qualified)) return true;
+    if (m_declaredTypeNames.count(qualified) || m_declaredTypeNames.count(last) ||
+        m_moduleTypeIdentities.count(qualified) || m_recordFields.count(qualified) ||
+        m_adtVariants.count(qualified))
+        return true;
+    return m_importedInterfaces && (m_importedInterfaces->typeNames.count(qualified) ||
+                                    m_importedInterfaces->typeNames.count(last));
+}
+
+// An annotation naming no type the checker could resolve, reported once per
+// written name however often it is resolved.
+auto TypeChecker::reportUnknownType(const ast::TypeName& name, const SourceLocation& at) -> void {
+    if (!m_reportUnknownTypes || !m_reportedUnknownTypes.insert(&name).second) return;
+    // While declarations are still being registered a name may be one
+    // registered later (a trait an ADT payload names): judged once they all
+    // are (reportPendingUnknownTypes).
+    if (!m_declarationsRegistered) {
+        m_pendingUnknownTypes.push_back({&name, at});
+        return;
+    }
+    error(at, "Unknown type `" + name.dotted() + "`");
+}
+
+auto TypeChecker::reportPendingUnknownTypes() -> void {
+    m_declarationsRegistered = true;
+    for (const auto& [name, at] : m_pendingUnknownTypes)
+        if (!namesDeclaredType(name->dotted(), name->parts.empty() ? "" : name->parts.back()))
+            error(at, "Unknown type `" + name->dotted() + "`");
+    m_pendingUnknownTypes.clear();
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// A contract's type letters, still inference variables when it is resolved,
+// as a generalized signature numbers them (`A` is -1, `B` -2, ...): by first
+// appearance, parameters then result. What an interface states it as.
+auto TypeChecker::quantifiedContract(const Signature& contract) const -> Signature {
+    std::unordered_map<int, int> letters;
+    std::function<TypePtr(const TypePtr&)> quantify = [&](const TypePtr& type) -> TypePtr {
+        if (!type) return type;
+        const auto resolved = resolve(type);
+        if (const auto* variable = std::get_if<TypeVar>(&resolved->kind)) {
+            if (variable->id < 0) return resolved;
+            const auto [letter, _] =
+                letters.try_emplace(variable->id, -static_cast<int>(letters.size()) - 1);
+            return Type::typeVar(letter->second);
+        }
+        return mapTypeChildren(resolved, quantify);
+    };
+    Signature quantified = contract;
+    for (auto& param : quantified.params) param = quantify(param);
+    quantified.result = quantify(quantified.result);
+    return quantified;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// Whether constructors of different arities share the spelling `name`
+// (`ReadFailed` of ReadError, nullary, and of FS.FileError, with a path).
+auto TypeChecker::spellingHasSeveralArities(const std::string& name) const -> bool {
+    const auto owners = m_constructorOwners.find(name);
+    if (owners == m_constructorOwners.end()) return false;
+    return std::any_of(owners->second.begin(), owners->second.end(), [&](const auto& owner) {
+        return owner.arity != owners->second.front().arity;
+    });
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// The type a `make` block's methods belong to, as one key for every block
+// of it: `make String` and `make String, implement: Monoid` are one type's.
+auto TypeChecker::makeTargetKey(const TypePtr& receiver) const -> std::string {
+    // The key trait implementations are filed under: one notion of which type.
+    return m_traits.implementorKey(resolve(receiver));
+}
+
+// A method's key for overriding: its name and its parameters past the receiver.
+auto TypeChecker::ownMethodKey(const ast::FunctionDef& method) -> std::string {
+    return method.name + "/" +
+           std::to_string(method.clauses.empty() ? 0 : method.clauses[0].params.size());
+}
+
+// What a `make` block defines for its target, resolved where the block is
+// written (its module and its imports), so a trait default the type defines
+// in another block is not inherited by this one.
+auto TypeChecker::noteOwnMethods(const ast::MakeDef& def, const std::string& modulePath) -> void {
+    if (!def.target) return;
+    const auto previousModulePath = m_currentModulePath;
+    auto previousImports = m_declarationImports;
+    m_currentModulePath = modulePath;
+    if (auto imports = m_makeImports.find(&def); imports != m_makeImports.end())
+        m_declarationImports = imports->second;
+    std::unordered_map<std::string, TypePtr> targetVars;
+    const bool reporting = m_reportUnknownTypes;
+    m_reportUnknownTypes = false;
+    const auto key = makeTargetKey(resolveTypeExpr(*def.target, targetVars));
+    m_reportUnknownTypes = reporting;
+    m_currentModulePath = previousModulePath;
+    m_declarationImports = std::move(previousImports);
+    auto& own = m_ownMethodsByTarget[key];
+    for (const auto& item : def.body) {
+        if (const auto* function = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+            if (*function) own.insert(ownMethodKey(**function));
+        } else if (const auto* visibility = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item);
+                   visibility && *visibility) {
+            for (const auto& visible : (*visibility)->items)
+                if (const auto* function = std::get_if<std::unique_ptr<ast::FunctionDef>>(&visible))
+                    if (*function) own.insert(ownMethodKey(**function));
+        }
+    }
+}
+
+auto TypeChecker::recordFieldType(const std::string& record, const std::string& field,
+                                  const std::vector<std::string>& typeParams) const
+    -> TypePtr {
+    std::vector<TypePtr> named;
+    for (const auto& param : typeParams) named.push_back(Type::named(param));
+    return substituteInterfaceGenerics(recordFieldType(record, field), named);
 }
 
 } // namespace kex::semantic

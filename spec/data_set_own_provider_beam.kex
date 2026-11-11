@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # Foldable methods on an opt-in `Data.Set`: the prelude's generic `any?`
 # must not take a call the Set module provides for its own type. The
 # checker now records no prelude target there; lowering used to override

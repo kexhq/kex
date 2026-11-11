@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # An upgraded WebSocket must not keep holding one of the server's
 # `maximumHandlers` HTTP handler slots (kexhq/kex#390). With the slot held

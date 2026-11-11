@@ -193,7 +193,7 @@ auto cachedCheck(const ast::Program& program, const semantic::ImportedInterfaces
             }
     auto checked = checkSilently(program, interfaces);
     if (path) {
-        const auto bytes = save(*checked->program, order);
+        const auto bytes = save(*checked->program, program, order);
         cache::atomicWrite(*path, std::string_view(reinterpret_cast<const char*>(bytes.data()),
                                                    bytes.size()));
     }

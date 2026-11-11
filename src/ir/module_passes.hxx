@@ -1,6 +1,6 @@
 #pragma once
-// The IR level of the pass infrastructure (docs/pass-restructure-plan.md,
-// Stage 7): an ir::Module is the unit, as a Function is in LLVM. Every rewrite
+// The IR level of the pass infrastructure (docs/architecture.md): an
+// ir::Module is the unit, as a Function is in LLVM. Every rewrite
 // of a lowered module is a pass here, registered by name, and every module is
 // emitted through the same pipeline: `guards,upgrade-points,verify` unless
 // `kex --passes='...module(...)'` says otherwise.

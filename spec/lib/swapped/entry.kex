@@ -1,0 +1,9 @@
+# The record of spec/generic_record_parameter_order.kex: a module of its own
+# file, so its importer reads the record from its interface.
+module Swapped.Entry
+
+# Its fields name the parameters in the opposite order to the declaration.
+record Entry<K, V> do
+  value : V
+  key : K
+end
