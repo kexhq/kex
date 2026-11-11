@@ -26,6 +26,10 @@ auto methodSignatureTypes(const hir::Program& hir, const ast::FunctionDef& metho
     return types;
 }
 
+auto Lowering::typeTestOf(const std::string& written) const -> semantic::TypeTest {
+    return hir->typeTestOf(currentModulePath, written);
+}
+
 auto Lowering::guardTypeOf(const ast::TypeExpr& type) const -> std::string {
     return hir->annotationSpelling(type);
 }

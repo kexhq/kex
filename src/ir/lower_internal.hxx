@@ -97,24 +97,6 @@ inline auto mangleModuleMember(const std::string& path,
     return mangleQualifiedMember(mangleModulePath(path), member);
 }
 
-// How many parameters the rendered spelling of a function type takes: the
-// number of TOP-LEVEL arrows, so `(Env) -> String` is 1 and `(A) -> (B) -> C`
-// is 2. A Kex lambda is a fun of exactly that arity at runtime, which is what
-// separates `Env -> String` from the parameterless `Block<String>`.
-inline auto functionTypeArity(const std::string& written) -> int64_t {
-    int depth = 0;
-    int64_t arrows = 0;
-    for (size_t i = 0; i < written.size(); ++i) {
-        const char c = written[i];
-        if (c == '(' || c == '[' || c == '{' || c == '<') ++depth;
-        else if (c == ')' || c == ']' || c == '}') --depth;
-        else if (c == '>' && !(i && written[i - 1] == '-')) --depth;
-        else if (depth == 0 && c == '-' && i + 1 < written.size() &&
-                 written[i + 1] == '>') { ++arrows; ++i; }
-    }
-    return arrows;
-}
-
 inline auto localOverloadKey(const std::string& method,
                              const std::string& receiverType,
                              size_t arity) -> std::string {

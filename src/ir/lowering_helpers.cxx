@@ -176,24 +176,10 @@ auto Lowering::withDisplayInfo(ExprPtr body, const std::string& moduleName )
     // A type whose methods live in ANOTHER module of this build must name
     // that module: claiming it here sent the dispatch to a function this
     // one never defined, and a capability replaced by a stand-in from an
-    // opt-in module died `undef` (kexhq/kex#143). `localTypeModules` is
-    // keyed by the make target as written, which inside a module is the
-    // bare name.
+    // opt-in module died `undef` (kexhq/kex#143). `localTypeModules` holds
+    // each make target by its identity, which is what `records` is keyed by.
     auto ownerModuleFor = [&](const std::string& name) {
         auto declaring = localTypeModules.find(name);
-        if (declaring == localTypeModules.end())
-            if (auto dot = name.rfind('.'); dot != std::string::npos) {
-                // A tail lookup can answer for a DIFFERENT module's
-                // same-named record. Accept it only when the module it
-                // names actually reconstructs this record's qualified
-                // identity, or `Web.Response` gets registered as owned by
-                // whichever module declared the last `Response`
-                // (kexhq/kex#143).
-                auto tail = localTypeModules.find(name.substr(dot + 1));
-                if (tail != localTypeModules.end() &&
-                    tail->second + "." + name.substr(dot + 1) == name)
-                    declaring = tail;
-            }
         if (declaring == localTypeModules.end())
             if (auto owner = externalMethodOwners.find(name);
                 owner != externalMethodOwners.end())

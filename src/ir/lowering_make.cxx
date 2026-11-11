@@ -415,31 +415,6 @@ auto Lowering::primGuardBifs() -> const std::unordered_map<std::string, const ch
     return m;
 }
 
-auto Lowering::guardTag(const std::string& canonical) const -> std::string {
-    auto tagged = canonical;
-    if (!records.count(tagged) && tagged.find('.') == std::string::npos) {
-        std::string own;
-        for (auto scope = currentModulePath; !scope.empty();) {
-            if (declaredTypeIdentities.count(scope + "." + tagged)) {
-                own = scope;
-                break;
-            }
-            const auto dot = scope.rfind('.');
-            if (dot == std::string::npos) break;
-            scope.resize(dot);
-        }
-        if (!own.empty())
-            tagged = own + "." + tagged;
-        else if (auto declaring = localTypeModules.find(tagged);
-            declaring != localTypeModules.end())
-            tagged = declaring->second + "." + tagged;
-        else if (auto declared = moduleDeclaredTypes.find(tagged);
-                 declared != moduleDeclaredTypes.end())
-            tagged = declared->second + "." + tagged;
-    }
-    return tagged;
-}
-
 auto Lowering::runtimeShapes(const std::string& owner)
     -> std::optional<std::set<std::string>> {
     // As primGuardBifs tells them apart, wider guards spelled as the shapes
@@ -466,11 +441,11 @@ auto Lowering::runtimeShapes(const std::string& owner)
     // A distinct value is its erased backing value: no tag says it is one.
     const auto bare = owner.substr(owner.rfind('.') + 1);
     if (distinctTypes.count(owner) || distinctTypes.count(bare)) return std::nullopt;
-    // Anything else typeGuard tests as a tuple tagged with its identity: a
-    // record by its canonical name, an opaque type by guardTag's.
-    const auto canonical = ownerIdentity(owner);
-    if (owner.find_first_of("[{(<-") != std::string::npos) return std::nullopt;
-    return std::set<std::string>{"tuple:" + guardTag(canonical)};
+    // Anything else typeGuard tests as a tuple tagged with its identity.
+    const auto test = typeTestOf(owner);
+    if (test.form != semantic::TypeForm::Named) return std::nullopt;
+    const auto record = ownerIdentity(test.name);
+    return std::set<std::string>{"tuple:" + (records.count(record) ? record : test.identity)};
 }
 
 auto Lowering::shapesMeet(const std::optional<std::set<std::string>>& a,
@@ -528,77 +503,55 @@ auto Lowering::adtGuard(const std::vector<std::string>& tags, ExprPtr v) -> Expr
 }
 
 auto Lowering::typeGuard(const std::string& written, ExprPtr v) -> ExprPtr {
-    if (!traitIdentityOf(written).empty()) return litBool(true);
-    // `type Handler = Env -> String` names a SHAPE. No value carries a
-    // 'Handler' tag, so the tagged fallback below could never match one
-    // and a `Handler` parameter contributed no guard at all — which is
-    // half of why a `Block<A>` overload beside it misdispatched
-    // (docs/issue-free-function-overloads.md). A structural right-hand
-    // side is never a bare name, so this recurses at most once.
-    if (auto alias = structuralTypeAliases.find(written);
-        alias != structuralTypeAliases.end() && alias->second != written)
-        return typeGuard(alias->second, std::move(v));
+    const auto test = typeTestOf(written);
+    switch (test.form) {
+    case semantic::TypeForm::Any:
+        return litBool(true);
+    // Arity matters: a `Block<A>` is a fun too, and `is_function/1`
+    // accepts both, so an overload set holding a handler AND a
+    // parameterless block picked whichever clause came first and died
+    // `badarity` (docs/issue-free-function-overloads.md).
+    case semantic::TypeForm::Function:
+        return callE("erlang", "is_function", 2, two(std::move(v), litInt(test.arity)));
+    case semantic::TypeForm::Block:
+        return callE("erlang", "is_function", 2, two(std::move(v), litInt(0)));
+    // A Kex String IS `[Char]`, and it is a binary at runtime, so that one
+    // type has to admit both shapes.
+    case semantic::TypeForm::CharList: {
+        auto vRef = snap(v);
+        return callE("erlang", "or", 2,
+                     two(callE("erlang", "is_list", 1, one(vRef.get())),
+                         callE("erlang", "is_binary", 1, one(vRef.get()))));
+    }
+    // Structural types name a SHAPE, not a tag: `let +(other: [A])` guarded
+    // on `element(1, X) =:= '[A]'`, which no value carries, and an operator
+    // overloaded on a list argument died `function_clause` on BEAM while the
+    // walker dispatched it (kexhq/kex#205).
+    case semantic::TypeForm::List:
+        return callE("erlang", "is_list", 1, one(std::move(v)));
+    case semantic::TypeForm::Map:
+        return callE("erlang", "is_map", 1, one(std::move(v)));
+    case semantic::TypeForm::Tuple:
+        return callE("erlang", "is_tuple", 1, one(std::move(v)));
+    case semantic::TypeForm::Named:
+        break;
+    }
+    const auto& name = test.name;
     // `None` is an atom on BEAM, but it is the Optional value, not an
     // Atom: `Atom`'s clause in a dispatcher caught it, so `None.to(String)`
     // reached Atom's conversion and answered "None" where the walker, and
     // Optional's own `showValue`, answer "".
-    if (written == "Atom")
-        if (const auto* name = std::get_if<Var>(&v->node)) {
-            const auto copy = name->name;
+    if (name == "Atom")
+        if (const auto* atom = std::get_if<Var>(&v->node)) {
+            const auto copy = atom->name;
             return callE("erlang", "and", 2,
                 two(callE("erlang", "is_atom", 1, one(std::move(v))),
                     callE("erlang", "=/=", 2,
                           two(var(copy), lit(LitKind::Atom, "None")))));
         }
-    auto it = primGuardBifs().find(written);
-    if (it != primGuardBifs().end())
+    if (auto it = primGuardBifs().find(name); it != primGuardBifs().end())
         return callE("erlang", it->second, 1, one(std::move(v)));
-    // Structural spellings name a SHAPE, not a tag. `let +(other: [A])`
-    // records its parameter as `[A]`, which no value carries: the tagged
-    // fallback below asked `element(1, X) =:= '[A]'`, no dispatcher clause
-    // could match, and an operator overloaded on a list argument died
-    // `function_clause` on BEAM while the walker dispatched it
-    // (kexhq/kex#205). A function type is checked first because it is
-    // parenthesized too.
-    // Arity matters: a `Block<A>` is a fun too, and `is_function/1`
-    // accepts both, so an overload set holding a handler AND a
-    // parameterless block picked whichever clause came first and died
-    // `badarity` (docs/issue-free-function-overloads.md).
-    if (written.find("->") != std::string::npos)
-        return callE("erlang", "is_function", 2,
-                     two(std::move(v), litInt(functionTypeArity(written))));
-    // `Block<A>` is a PARAMETERLESS lambda — `do "x" end`. It carries no
-    // tag, so the base-name path below would have guarded on 'Block',
-    // which nothing is.
-    if (written.rfind("Block<", 0) == 0 && written.back() == '>')
-        return callE("erlang", "is_function", 2,
-                     two(std::move(v), litInt(0)));
-    if (written.size() >= 2 && written.front() == '[' &&
-        written.back() == ']') {
-        // A Kex String IS `[Char]`, and it is a binary at runtime, so
-        // that one spelling has to admit both shapes.
-        if (written == "[Char]") {
-            auto vRef = snap(v);
-            return callE("erlang", "or", 2,
-                         two(callE("erlang", "is_list", 1, one(vRef.get())),
-                             callE("erlang", "is_binary", 1,
-                                   one(vRef.get()))));
-        }
-        return callE("erlang", "is_list", 1, one(std::move(v)));
-    }
-    if (written.size() >= 2 && written.front() == '{' &&
-        written.back() == '}')
-        return callE("erlang", "is_map", 1, one(std::move(v)));
-    if (written.size() >= 2 && written.front() == '(' &&
-        written.back() == ')')
-        return callE("erlang", "is_tuple", 1, one(std::move(v)));
-    // Type arguments are erased at runtime: a `Set<A>` value is tagged
-    // `Set`, so guard on the base name rather than on the applied
-    // spelling, which is nothing's tag.
-    if (auto angle = written.find('<');
-        angle != std::string::npos && angle > 0 && written.back() == '>')
-        return typeGuard(written.substr(0, angle), std::move(v));
-    if (auto tags = typeVariantTags.find(written);
+    if (auto tags = typeVariantTags.find(name);
         tags != typeVariantTags.end() && !tags->second.empty())
         return adtGuard(tags->second, std::move(v));
     // Tagged record. Core Erlang exposes the guard-safe is_record/3 BIF
@@ -606,22 +559,18 @@ auto Lowering::typeGuard(const std::string& written, ExprPtr v) -> ExprPtr {
     // The guard tests the value's TAG, so it is the record's canonical
     // identity that has to appear here — `make Version` inside
     // Kex guards values tagged 'Kex.Version'.
-    const auto ty = ownerIdentity(written);
+    const auto ty = ownerIdentity(name);
     if (auto record = records.find(ty); record != records.end())
         return callE("erlang", "is_record", 3,
                      three(std::move(v), lit(LitKind::Atom, ty),
                            litInt(static_cast<int64_t>(
                                record->second.fields.size() + 1))));
-    // An OPAQUE type declared inside a module carries its QUALIFIED
-    // name as its tag, the same rule records follow — `type Client` in
-    // Net.HTTP is `{'Net.HTTP.Client', …}`, which is what the runtime
-    // intrinsic builds. Guarding on the written `Client` matched
-    // nothing, so `client.get(url)` fell through its make block's
-    // dispatcher to "Undefined method: get for Tuple".
-    const auto tagged = guardTag(ty);
-    // Unknown tagged type fallback. An ADT variant is `{'Tag', ...}` of no
-    // fixed arity, so is_record/3 above does not apply and the tag has to
-    // be read with element/2.
+    // Any other tagged type: an OPAQUE type declared inside a module carries
+    // its identity as its tag, the same rule records follow — `type Client`
+    // in Net.HTTP is `{'Net.HTTP.Client', …}`, which is what the runtime
+    // intrinsic builds. An ADT variant is `{'Tag', ...}` of no fixed arity,
+    // so is_record/3 above does not apply and the tag has to be read with
+    // element/2.
     //
     // A `case`, NOT `erlang:and(is_tuple(V), element(1,V) =:= Ty)`. That
     // conjunction is STRICT — `element/2` runs even when V is a binary —
@@ -635,7 +584,7 @@ auto Lowering::typeGuard(const std::string& written, ExprPtr v) -> ExprPtr {
         callE("erlang", "is_tuple", 1, one(vRef.get())),
         intrin(Op::Eq, two(callE("erlang", "element", 2,
                                  two(litInt(1), vRef.get())),
-                           lit(LitKind::Atom, tagged))),
+                           lit(LitKind::Atom, test.identity))),
         litBool(false));
 }
 
