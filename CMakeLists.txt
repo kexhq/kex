@@ -161,6 +161,7 @@ add_library(kex_lib
     src/semantic/collect_pass.cxx
     src/semantic/resolve_pass.cxx
     src/ast/clone.cxx
+    src/help/api_help.cxx
     src/ast/function_groups.cxx
     src/compiled/expand.cxx
     src/compiled/reify.cxx
@@ -772,6 +773,15 @@ target_include_directories(info_cli_test PRIVATE tests)
 target_compile_definitions(info_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
 add_dependencies(info_cli_test kex)
 add_test(NAME info_cli_test COMMAND info_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# `kex -s <Name>`: the standard library looked up by name. Mostly in-process,
+# on a source of the test's own; the binary is driven for the CLI contract.
+add_executable(api_help_test tests/api_help_test.cxx)
+target_link_libraries(api_help_test PRIVATE kex_lib)
+target_include_directories(api_help_test PRIVATE tests)
+target_compile_definitions(api_help_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(api_help_test kex)
+add_test(NAME api_help_test COMMAND api_help_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # Regression test for #248: `--parse` must report a syntax error rather than
 # silently printing a partial AST with the offending (and subsequent)

@@ -1,4 +1,5 @@
 #include "collect_pass.hxx"
+#include "../ast/type_text.hxx"
 #include "../common/type_def_utils.hxx"
 #include <variant>
 #include <cctype>
@@ -14,90 +15,9 @@ static auto declaredAt(const SourceLocation& location, std::string_view path)
     if (location.line > 0) return location;
     return SourceLocation{path, 0, 0};
 }
-namespace {
 
-auto typeExprText(const ast::TypeExpr& type) -> std::string;
-
-auto typeNameText(const ast::TypeName& name) -> std::string {
-    std::string result;
-    for (const auto& part : name.parts) {
-        if (!result.empty()) result += ".";
-        result += part;
-    }
-    return result;
-}
-
-auto typeExprText(const ast::TypeExpr& type) -> std::string {
-    return std::visit([](const auto& node) -> std::string {
-        using T = std::decay_t<decltype(node)>;
-        if constexpr (std::is_same_v<T, ast::TypeName>) {
-            return typeNameText(node);
-        } else if constexpr (std::is_same_v<T, ast::GenericType>) {
-            std::string result = typeNameText(node.name) + "<";
-            for (size_t i = 0; i < node.args.size(); ++i) {
-                if (i) result += ", ";
-                result += node.args[i] ? typeExprText(*node.args[i]) : "?";
-            }
-            return result + ">";
-        } else if constexpr (std::is_same_v<T, ast::FunctionType>) {
-            return (node.param ? typeExprText(*node.param) : "?") + " -> " +
-                   (node.result ? typeExprText(*node.result) : "?");
-        } else if constexpr (std::is_same_v<T, ast::TupleType>) {
-            std::string result = "(";
-            for (size_t i = 0; i < node.elements.size(); ++i) {
-                if (i) result += ", ";
-                result += node.elements[i] ? typeExprText(*node.elements[i]) : "?";
-            }
-            return result + ")";
-        } else if constexpr (std::is_same_v<T, ast::ListType>) {
-            return "[" + (node.element ? typeExprText(*node.element) : "?") + "]";
-        } else if constexpr (std::is_same_v<T, ast::MapType>) {
-            return "Map<" + (node.key ? typeExprText(*node.key) : "?") + ", " +
-                   (node.value ? typeExprText(*node.value) : "?") + ">";
-        } else if constexpr (std::is_same_v<T, ast::UnionType>) {
-            return (node.left ? typeExprText(*node.left) : "?") + " | " +
-                   (node.right ? typeExprText(*node.right) : "?");
-        } else if constexpr (std::is_same_v<T, ast::IntersectionType>) {
-            return (node.left ? typeExprText(*node.left) : "?") + " & " +
-                   (node.right ? typeExprText(*node.right) : "?");
-        } else if constexpr (std::is_same_v<T, ast::RecordType>) {
-            std::string result = "{";
-            for (size_t i = 0; i < node.fields.size(); i++) {
-                if (i) result += ", ";
-                result += node.fields[i].first + ": " +
-                    (node.fields[i].second
-                         ? typeExprText(*node.fields[i].second) : "?");
-            }
-            return result + "}";
-        } else if constexpr (std::is_same_v<T, ast::OptionalType>) {
-            return (node.inner ? typeExprText(*node.inner) : "?") + "?";
-        } else if constexpr (std::is_same_v<T, ast::BlockType>) {
-            std::string result = "Block<";
-            for (const auto& param : node.params)
-                result += (param ? typeExprText(*param) : "?") + ", ";
-            return result + (node.inner ? typeExprText(*node.inner) : "?") + ">";
-        } else if constexpr (std::is_same_v<T, ast::AtomType>) {
-            return ":" + node.name;
-        } else if constexpr (std::is_same_v<T, ast::GenericVar>) {
-            return node.name;
-        }
-        return "?";
-    }, type.kind);
-}
-
-auto variantText(const ast::TypeExpr& variant) -> std::string {
-    if (const auto* generic = std::get_if<ast::GenericType>(&variant.kind)) {
-        std::string result = typeNameText(generic->name) + "(";
-        for (size_t i = 0; i < generic->args.size(); ++i) {
-            if (i) result += ", ";
-            result += generic->args[i] ? typeExprText(*generic->args[i]) : "?";
-        }
-        return result + ")";
-    }
-    return typeExprText(variant);
-}
-
-} // namespace
+using ast::typeExprText;
+using ast::variantText;
 
 auto CollectPass::run(SemanticDB& db, const std::string& file) -> void {
     m_state = db.fileState(file);

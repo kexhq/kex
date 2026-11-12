@@ -7,6 +7,7 @@
 #include "beam/term_builder.hxx"
 #include "ast/convert.hxx"
 #include "ast/syntax.hxx"
+#include "ast/type_text.hxx"
 #include <atomic>
 #include <random>
 #include "common/artifact_versions.hxx"
@@ -57,6 +58,7 @@
 #include "common/prelude_interfaces.hxx"
 #include "common/prelude_loader.hxx"
 #include "common/repl_commands.hxx"
+#include "help/api_help.hxx"
 #include "semantic/completion_at.hxx"
 #include <functional>
 #include <thread>
@@ -1150,89 +1152,6 @@ auto nodeNameProblem(const std::string &name, bool shortName) -> std::string {
 
 auto isIdentChar(char c) -> bool {
   return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
-}
-
-// ===== TypeExpr pretty-printer =====
-
-auto typeExprToString(const kex::ast::TypeExpr &te) -> std::string;
-
-auto typeNameToString(const kex::ast::TypeName &tn) -> std::string {
-  std::string r;
-  for (size_t i = 0; i < tn.parts.size(); i++) {
-    if (i)
-      r += ".";
-    r += tn.parts[i];
-  }
-  return r;
-}
-
-auto typeExprToString(const kex::ast::TypeExpr &te) -> std::string {
-  return std::visit(
-      [](const auto &node) -> std::string {
-        using T = std::decay_t<decltype(node)>;
-        if constexpr (std::is_same_v<T, kex::ast::TypeName>) {
-          return typeNameToString(node);
-        } else if constexpr (std::is_same_v<T, kex::ast::GenericType>) {
-          std::string r = typeNameToString(node.name) + "<";
-          for (size_t i = 0; i < node.args.size(); i++) {
-            if (i)
-              r += ", ";
-            if (node.args[i])
-              r += typeExprToString(*node.args[i]);
-          }
-          return r + ">";
-        } else if constexpr (std::is_same_v<T, kex::ast::FunctionType>) {
-          std::string l = node.param ? typeExprToString(*node.param) : "?";
-          std::string r = node.result ? typeExprToString(*node.result) : "?";
-          return l + " -> " + r;
-        } else if constexpr (std::is_same_v<T, kex::ast::TupleType>) {
-          std::string r = "(";
-          for (size_t i = 0; i < node.elements.size(); i++) {
-            if (i)
-              r += ", ";
-            if (node.elements[i])
-              r += typeExprToString(*node.elements[i]);
-          }
-          return r + ")";
-        } else if constexpr (std::is_same_v<T, kex::ast::ListType>) {
-          return "[" + (node.element ? typeExprToString(*node.element) : "?") +
-                 "]";
-        } else if constexpr (std::is_same_v<T, kex::ast::MapType>) {
-          std::string k = node.key ? typeExprToString(*node.key) : "?";
-          std::string v = node.value ? typeExprToString(*node.value) : "?";
-          return "Map<" + k + ", " + v + ">";
-        } else if constexpr (std::is_same_v<T, kex::ast::UnionType>) {
-          std::string l = node.left ? typeExprToString(*node.left) : "?";
-          std::string r = node.right ? typeExprToString(*node.right) : "?";
-          return l + " | " + r;
-        } else if constexpr (std::is_same_v<T, kex::ast::IntersectionType>) {
-          std::string l = node.left ? typeExprToString(*node.left) : "?";
-          std::string r = node.right ? typeExprToString(*node.right) : "?";
-          return l + " & " + r;
-        } else if constexpr (std::is_same_v<T, kex::ast::RecordType>) {
-          std::string result = "{";
-          for (size_t i = 0; i < node.fields.size(); i++) {
-            if (i) result += ", ";
-            result += node.fields[i].first + ": " +
-                (node.fields[i].second
-                     ? typeExprToString(*node.fields[i].second) : "?");
-          }
-          return result + "}";
-        } else if constexpr (std::is_same_v<T, kex::ast::OptionalType>) {
-          return (node.inner ? typeExprToString(*node.inner) : "?") + "?";
-        } else if constexpr (std::is_same_v<T, kex::ast::BlockType>) {
-          std::string r = "Block<";
-          for (const auto &param : node.params)
-            r += (param ? typeExprToString(*param) : "?") + ", ";
-          return r + (node.inner ? typeExprToString(*node.inner) : "?") + ">";
-        } else if constexpr (std::is_same_v<T, kex::ast::AtomType>) {
-          return ":" + node.name;
-        } else if constexpr (std::is_same_v<T, kex::ast::GenericVar>) {
-          return node.name;
-        }
-        return "?";
-      },
-      te.kind);
 }
 
 // ===== JSON helpers (no external dep — hand-rolled) =====
@@ -4388,7 +4307,9 @@ auto printUsage(const char *progName) -> void {
       << "  -p, --parse       Print AST\n"
       << "  -j, --json        With --check: output diagnostics as JSON\n"
       << "      --lsp         Run the Kex language server over stdio\n"
-      << "  -s, --summary     Print public API signatures (Kex syntax)\n"
+      << "  -s, --summary     Print public API signatures (Kex syntax). With a name\n"
+         "                    instead of a file, the standard library's help:\n"
+         "                    `-s List`, `-s List.first`, or bare `-s` for the index\n"
       << "  -t, --types       With --check: dump inferred expression types\n"
       << "  -e, --eval <code> Enter <code> in the REPL before its first prompt, as\n"
       << "                    if typed (repeatable). A failing line ends the\n"
@@ -4939,6 +4860,22 @@ int main(int argc, char *argv[]) {
     for (const auto &c : completions)
       std::cout << c << "\n";
     return 0;
+  }
+
+  // `-s` with a name rather than a source file asks the standard library
+  // about itself; with nothing at all it lists what there is to ask about.
+  if (summaryMode && !replEval &&
+      (optind >= argc || !std::string_view(argv[optind]).ends_with(".kex"))) {
+    const auto index = kex::help::ApiIndex::fromStandardLibrary(std::cerr);
+    if (index.empty()) {
+      std::cerr << "error: the standard library sources were not found\n";
+      return 1;
+    }
+    if (optind >= argc) {
+      index.printOverview(std::cout);
+      return 0;
+    }
+    return index.printTopic(argv[optind], std::cout, std::cerr) ? 0 : 1;
   }
 
   if (replEval && (optind < argc || !((mode == Mode::Compile && compileRun) ||
@@ -8257,7 +8194,7 @@ int main(int argc, char *argv[]) {
                       << (annotation.isFoul ? "foul " : "")
                       << annotation.name << " : ";
             if (annotation.type)
-              std::cout << typeExprToString(*annotation.type);
+              std::cout << kex::ast::typeExprText(*annotation.type);
             std::cout << "\n";
           };
       std::function<void(const kex::ast::ModuleDef &, size_t)> printModule;
