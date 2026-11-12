@@ -167,7 +167,9 @@ auto signatureOf(const ast::FunctionDef& function, bool isMethod)
         clause.params.begin(), clause.params.end(),
         [](const ast::Param& param) { return param.type && *param.type; });
     if (!typed || !clause.returnAnnotation || !*clause.returnAnnotation) {
-        result += "let " + function.name + "(";
+        result += "let " + function.name;
+        // No parameters, no parentheses: as it is declared and as it is called.
+        if (!clause.params.empty()) result += "(";
         for (size_t i = 0; i < clause.params.size(); ++i) {
             const auto& param = clause.params[i];
             if (i) result += ", ";
@@ -175,7 +177,7 @@ auto signatureOf(const ast::FunctionDef& function, bool isMethod)
             if (param.type && *param.type)
                 result += ": " + ast::typeExprText(**param.type);
         }
-        result += ")";
+        if (!clause.params.empty()) result += ")";
         if (clause.returnAnnotation && *clause.returnAnnotation)
             result += " -> " + ast::typeExprText(**clause.returnAnnotation);
         return result;
@@ -209,10 +211,17 @@ public:
             std::visit([&](const auto& ptr) { collect(*ptr, top); }, item);
     }
 
-    // Owners this source declared, in order: how `addSource` learns which
-    // `using` brings them in.
+    // Owners this source declared, in order: the names its `using` brings in.
     auto declared() const -> const std::vector<std::string>& {
         return m_declared;
+    }
+
+    // Members this source added, as owner and position. A source may add
+    // methods to an owner it does not declare (`make Integer` in a units
+    // module), and those need this source's `using` though the owner does not.
+    auto added() const
+        -> const std::vector<std::pair<std::string, size_t>>& {
+        return m_added;
     }
 
 private:
@@ -312,17 +321,18 @@ private:
             // A `make` that came first only guessed at the kind.
             result.kind = kind;
         }
-        if (std::find(m_declared.begin(), m_declared.end(), name) ==
-            m_declared.end())
+        if (declares && std::find(m_declared.begin(), m_declared.end(),
+                                  name) == m_declared.end())
             m_declared.push_back(name);
         return result;
     }
 
     auto addMember(const ast::TypeAnnotation& annotation, ApiOwner& into,
                    const std::string& group) -> void {
+        m_added.emplace_back(into.name, into.members.size());
         into.members.push_back(ApiMember{
             annotation.name, signatureOf(annotation), group,
-            docAt(annotation.location.line)});
+            docAt(annotation.location.line), {}});
     }
 
     auto addMember(const ast::FunctionDef& function, ApiOwner& into,
@@ -334,9 +344,10 @@ private:
         for (const auto& member : into.members)
             if (member.group == group && member.signature == signature)
                 return;
+        m_added.emplace_back(into.name, into.members.size());
         into.members.push_back(ApiMember{function.name, std::move(signature),
-                                         group,
-                                         docAt(function.location.line)});
+                                         group, docAt(function.location.line),
+                                         {}});
     }
 
     // The body of a `make` or a `trait`: every member is a method of `into`.
@@ -363,7 +374,10 @@ private:
         Scope scope{qualified(module.name, outer),
                     declaredTypes(module.body), {}};
         noteAnnotated(module.body, scope.annotated);
-        auto& into = owner(scope.module, OwnerKind::Module, false);
+        auto& into =
+            owner(scope.module, OwnerKind::Module,
+                  !m_owners.count(scope.module) ||
+                      m_owners[scope.module].declaration.empty());
         if (into.declaration.empty()) {
             // A module that shares its name with a type holds that type's
             // constructors; the type's own declaration is the one to show.
@@ -444,6 +458,7 @@ private:
     const std::unordered_map<int, std::string>& m_docs;
     const std::vector<std::string>& m_lines;
     std::vector<std::string> m_declared;
+    std::vector<std::pair<std::string, size_t>> m_added;
 };
 
 auto kindWord(OwnerKind kind) -> std::string_view {
@@ -455,6 +470,12 @@ auto kindWord(OwnerKind kind) -> std::string_view {
     }
     return "type";
 }
+
+// The index runs to hundreds of names in alphabetical order, which puts
+// `Int8` and `Kex.AST` ahead of what a first program needs. These are named
+// above it.
+constexpr std::string_view kStartingPoints =
+    "List, Map, String, Integer, Float, Optional, Result, IO, Math";
 
 // The top level has no name to ask for, so it is listed under one.
 constexpr std::string_view kTopLevelName = "(top level)";
@@ -479,15 +500,19 @@ auto printMember(const ApiOwner& owner, const ApiMember& member,
     out << displayName(owner) << "." << member.name;
     if (!member.group.empty()) out << "  (" << member.group << ")";
     out << "\n  " << member.signature << "\n";
-    if (!owner.requiresUsing.empty())
-        out << "  needs `using " << owner.requiresUsing << "`\n";
+    const auto& needed = member.requiresUsing.empty() ? owner.requiresUsing
+                                                      : member.requiresUsing;
+    if (!needed.empty()) out << "  needs `using " << needed << "`\n";
     if (!member.doc.empty()) out << "\n" << proseMarkup(member.doc) << "\n";
 }
 
 auto printMemberLine(const ApiMember& member, size_t column,
                      std::ostream& out) -> void {
     out << "  " << member.signature;
-    const auto summary = summaryOf(member.doc);
+    auto summary = summaryOf(member.doc);
+    if (!member.requiresUsing.empty())
+        summary = "[using " + member.requiresUsing + "]" +
+                  (summary.empty() ? "" : " " + summary);
     if (!summary.empty()) {
         if (member.signature.size() < column)
             out << std::string(column - member.signature.size(), ' ');
@@ -518,6 +543,11 @@ auto ApiIndex::addSource(const std::string& path, std::string source,
         if (lowered(name) == lowered(usingName)) spelled = name;
     for (const auto& name : collector.declared())
         m_owners[name].requiresUsing = spelled;
+    for (const auto& [name, position] : collector.added()) {
+        auto& owner = m_owners[name];
+        if (owner.requiresUsing != spelled)
+            owner.members[position].requiresUsing = spelled;
+    }
 }
 
 auto ApiIndex::fromStandardLibrary(std::ostream& warnings) -> ApiIndex {
@@ -593,7 +623,9 @@ auto ApiIndex::printOverview(std::ostream& out) const -> void {
     out << "The Kex standard library.\n"
            "  kex -s <Name>           everything a type or module offers\n"
            "  kex -s <Name>.<member>  one function in full, with examples\n"
-           "  kex -s <member>         every type that has it\n";
+           "  kex -s <member>         every type that has it\n"
+           "Most programs are written with: "
+        << kStartingPoints << ".\n";
 
     size_t column = 0;
     for (const auto& [name, owner] : m_owners)

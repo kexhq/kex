@@ -320,7 +320,7 @@ make [X], implement: Enumerable, Foldable do
   contains? :> X -> Bool
   let contains?(elem) = Kex.Intrinsic.List.member(elem, this)
 
-  # Returns +true+ if the first index at which +elem+ appears, wrapped in
+  # Returns the first index at which +elem+ appears, wrapped in
   # +Just+, or +None+ if the element is not present.
   #
   # @param elem [X]

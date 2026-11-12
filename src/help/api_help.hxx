@@ -23,6 +23,9 @@ struct ApiMember {
     // module's own functions and a trait's own methods.
     std::string group;
     std::string doc;
+    // The `using` that brings this member in when its owner's does not: a
+    // method an opt-in module adds to a prelude type. Empty otherwise.
+    std::string requiresUsing;
 };
 
 // A name `kex -s` can be asked about: a module, a type, a record or a trait.

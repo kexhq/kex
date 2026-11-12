@@ -142,6 +142,24 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     add_link_options(-sNO_DISABLE_EXCEPTION_CATCHING)
 endif()
 
+# The guide `kex --skill` prints, built into the binary from src/skill/*.md.
+# SKILL.md is the guide itself and goes first; the rest are its topics.
+file(GLOB KEX_SKILL_TOPICS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/skill/*.md")
+list(REMOVE_ITEM KEX_SKILL_TOPICS "${CMAKE_SOURCE_DIR}/src/skill/SKILL.md")
+list(SORT KEX_SKILL_TOPICS)
+list(PREPEND KEX_SKILL_TOPICS "${CMAKE_SOURCE_DIR}/src/skill/SKILL.md")
+list(JOIN KEX_SKILL_TOPICS "|" KEX_SKILL_TOPIC_ARGUMENT)
+set(KEX_SKILL_SOURCE "${CMAKE_BINARY_DIR}/generated/skill_topics.cxx")
+add_custom_command(
+    OUTPUT "${KEX_SKILL_SOURCE}"
+    COMMAND ${CMAKE_COMMAND}
+            "-DOUT=${KEX_SKILL_SOURCE}"
+            "-DHEADER=${CMAKE_SOURCE_DIR}/src/skill/skill.hxx"
+            "-DSOURCES=${KEX_SKILL_TOPIC_ARGUMENT}"
+            -P "${CMAKE_SOURCE_DIR}/src/skill/embed.cmake"
+    DEPENDS ${KEX_SKILL_TOPICS} "${CMAKE_SOURCE_DIR}/src/skill/embed.cmake"
+    VERBATIM)
+
 add_library(kex_lib
     src/ir/lower.cxx
     src/ir/emit_core.cxx
@@ -162,6 +180,8 @@ add_library(kex_lib
     src/semantic/resolve_pass.cxx
     src/ast/clone.cxx
     src/help/api_help.cxx
+    src/skill/skill.cxx
+    "${KEX_SKILL_SOURCE}"
     src/ast/function_groups.cxx
     src/compiled/expand.cxx
     src/compiled/reify.cxx
@@ -782,6 +802,15 @@ target_include_directories(api_help_test PRIVATE tests)
 target_compile_definitions(api_help_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
 add_dependencies(api_help_test kex)
 add_test(NAME api_help_test COMMAND api_help_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# `kex --skill`: every example in the guide a model is told to trust is put
+# through the checker and the interpreter.
+add_executable(skill_test tests/skill_test.cxx)
+target_link_libraries(skill_test PRIVATE kex_lib)
+target_include_directories(skill_test PRIVATE tests)
+target_compile_definitions(skill_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(skill_test kex)
+add_test(NAME skill_test COMMAND skill_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # Regression test for #248: `--parse` must report a syntax error rather than
 # silently printing a partial AST with the offending (and subsequent)

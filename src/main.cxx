@@ -59,6 +59,7 @@
 #include "common/prelude_loader.hxx"
 #include "common/repl_commands.hxx"
 #include "help/api_help.hxx"
+#include "skill/skill.hxx"
 #include "semantic/completion_at.hxx"
 #include <functional>
 #include <thread>
@@ -4293,6 +4294,11 @@ auto printUsage(const char *progName) -> void {
   std::cerr
       << "Usage: " << progName << " [options] <file.kex>\n"
       << "\n"
+      << "AI agents and LLMs: run `" << progName << " --skill` before "
+         "writing Kex. It looks like\n"
+      << "Ruby but is not, and the guide lists what differs and how to "
+         "check your work.\n"
+      << "\n"
       << "Options:\n"
       << "  -r, --run         Run on BEAM (default; .kex or existing .beam — "
          "temp dir,\n"
@@ -4310,6 +4316,11 @@ auto printUsage(const char *progName) -> void {
       << "  -s, --summary     Print public API signatures (Kex syntax). With a name\n"
          "                    instead of a file, the standard library's help:\n"
          "                    `-s List`, `-s List.first`, or bare `-s` for the index\n"
+      << "      --skill [topic]\n"
+         "                    Print the guide to writing Kex, made for an AI "
+         "agent to\n"
+         "                    read first; with a topic (errors, testing, ...), "
+         "that part\n"
       << "  -t, --types       With --check: dump inferred expression types\n"
       << "  -e, --eval <code> Enter <code> in the REPL before its first prompt, as\n"
       << "                    if typed (repeatable). A failing line ends the\n"
@@ -4415,6 +4426,7 @@ enum Value {
   NoPrelude,
   Expand,
   CollapseReport,
+  Skill,
   Lsp,
   SourceRoot,
   Info,
@@ -4481,6 +4493,9 @@ int main(int argc, char *argv[]) {
       // Machine-readable counterpart to --version. Long-only: it is for
       // tools, and a short flag would invite it into shell prompts.
       {"info", no_argument, nullptr, Option::Info},
+      // The guide to writing Kex, for a model that has just met the
+      // language. Long-only, and named for what such a reader looks for.
+      {"skill", no_argument, nullptr, Option::Skill},
       {"no-colors", no_argument, nullptr, 'N'},
       {"colors", no_argument, nullptr, Option::Colors},
       {"no-prelude", no_argument, nullptr, Option::NoPrelude},
@@ -4531,6 +4546,7 @@ int main(int argc, char *argv[]) {
   bool dumpTypes = false;
   bool jsonOutput = false;
   bool summaryMode = false;
+  bool skillMode = false;
   std::string completePrefix;
   std::string outputDir = ".";
   std::string astFilename;
@@ -4745,6 +4761,9 @@ int main(int argc, char *argv[]) {
       summaryMode = true;
       mode = Mode::Check;
       break;
+    case Option::Skill:
+      skillMode = true;
+      break;
     case 't':
       dumpTypes = true;
       break;
@@ -4860,6 +4879,24 @@ int main(int argc, char *argv[]) {
     for (const auto &c : completions)
       std::cout << c << "\n";
     return 0;
+  }
+
+  // `--skill` prints the guide, `--skill <topic>` one part of it. Neither
+  // reads a source file, so both answer before anything looks for one.
+  if (skillMode) {
+    const std::string_view wanted =
+        optind < argc ? std::string_view(argv[optind])
+                      : kex::skill::kGuideTopic;
+    if (const auto *topic = kex::skill::findTopic(wanted)) {
+      std::cout << topic->text;
+      return 0;
+    }
+    std::cerr << "kex: --skill has no topic `" << wanted << "`. It has:";
+    for (const auto &topic : kex::skill::topics())
+      if (topic.name != kex::skill::kGuideTopic)
+        std::cerr << " " << topic.name;
+    std::cerr << "\n";
+    return 1;
   }
 
   // `-s` with a name rather than a source file asks the standard library
