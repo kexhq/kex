@@ -1,11 +1,16 @@
 # Testing Kex
 
 A spec is a file named `<name>.spec.kex` beside `<name>.kex`, with no `main`.
-It sees everything `<name>.kex` declares without importing it, unless that
-file starts with `module Name`: then the spec starts with `using Name` (there
-is an example in `kex --skill modules`). Run it with `kex <name>.spec.kex`, or
-`kex -R <name>.spec.kex` where there is no Erlang; the exit status is non-zero
-when a case fails.
+It sees everything `<name>.kex` declares without importing it.
+
+A file that starts with `module Name` is different: do not name its spec
+after it. Give the spec a name of its own and start it with `using Name`, as
+`stock.spec.kex` does for `inventory.kex` in `kex --skill modules`. A spec
+named after a module file loads that file twice, and on some systems the
+checker then reports every function as defined twice.
+
+Run a spec with `kex <name>.spec.kex`, or `kex -R <name>.spec.kex` where there
+is no Erlang; the exit status is non-zero when a case fails.
 
 ```kex stack.kex
 record Stack do

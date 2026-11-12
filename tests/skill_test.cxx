@@ -80,8 +80,12 @@ auto has(std::string_view text, std::string_view part) -> bool {
 
 int main() {
     const auto& topics = kex::skill::topics();
+    // Canonical, so a path reaches kex the way it does on Linux. macOS keeps
+    // its temp directory behind a symlink, and two spellings of one file
+    // once hid a spec that loaded its base twice from every Mac but not CI.
     const auto root =
-        std::filesystem::temp_directory_path() / "kex-skill-test";
+        std::filesystem::canonical(std::filesystem::temp_directory_path()) /
+        "kex-skill-test";
     std::filesystem::remove_all(root);
 
     describe("the guide", [&]() {

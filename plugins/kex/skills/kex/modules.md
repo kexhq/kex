@@ -81,8 +81,8 @@ main do
 end
 ```
 
-```kex inventory.spec.kex
-using Inventory                              # needed because inventory.kex is a module
+```kex stock.spec.kex
+using Inventory                              # a spec reaches a module like any file
 
 describe("Inventory") do
   it("refuses more than there is") do
