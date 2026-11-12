@@ -2,7 +2,7 @@ using Tey.Docgen.Model
 using Tey.Docgen.Extract, only: [pageFor]
 using Tey.Docgen.Relations, only: [build, traitMethods]
 using Tey.Docgen.Html, only: [pageBodyHtml, variantsHtml]
-using Tey.Docgen.Fragments, only: [sitePath]
+using Tey.Docgen.Fragments, only: [sitePath, tocOf]
 using Tey.Docgen.Index, only: [fileHeader]
 
 # The reader-facing rules docgen adds on top of extraction: signatures that
@@ -112,7 +112,7 @@ describe("Tey.Docgen signatures") do
 
   it("reads a zero-parameter member as a property") do
     let page = parsePage("bag.kex", bagSource())
-    Assert.equal(signaturesOf(page, "size"), ["size : Integer"])
+    Assert.equal(signaturesOf(page, "size"), ["size -> Integer"])
   end
 
   it("keeps the declared return type for the Returns check") do
@@ -256,5 +256,120 @@ describe("Tey.Docgen.Fragments.sitePath") do
   it("leaves in-page and external links alone") do
     Assert.equal(sitePath("#x", ["prelude"]), "#x")
     Assert.equal(sitePath("https://kex.run", ["prelude"]), "https://kex.run")
+  end
+end
+
+# A module long enough to need an index (six members), and one that is not.
+foul longModuleSource() -> String do
+  let names = ["one", "two", "three", "four", "five", "six"]
+  let functions = names.map { |n| "  # Answers with ${n}. More about it.\n  let ${n}() -> Integer = 1" }
+  return "module Long do\n${functions.join("\n\n")}\nend"
+end
+
+foul bodyOf(file: String, source: String) -> String do
+  let model = modelOf([parsePage(file, source)])
+  return pageBodyHtml(model.pages.first.try, model, true)
+end
+
+describe("Tey.Docgen.Html member index") do
+  it("opens a long member list with one line per member") do
+    let page = bodyOf("long.kex", longModuleSource())
+    assert(page.contains?("<section class=\"summary\">"))
+    assert(page.contains?("<a class=\"xref\" href=\"#function-long-three\"><code>three</code></a></dt><dd>Answers with three.</dd>"))
+  end
+
+  it("leaves a short member list as its own index") do
+    let page = bodyOf("short.kex", "module Short do\n  # Answers with one.\n  let one() -> Integer = 1\nend")
+    assert(!page.contains?("class=\"summary\""))
+  end
+end
+
+describe("Tey.Docgen.Fragments.tocOf") do
+  it("lists a declaration and then its members") do
+    let model = modelOf([parsePage("long.kex", longModuleSource())])
+    let toc = tocOf(model.pages.first.try, model)
+    Assert.equal(toc.map { |t| t.title }, ["Long", "one", "two", "three", "four", "five", "six"])
+    Assert.equal(toc.drop(1).map { |t| t.anchor }.take(2), ["function-long-one", "function-long-two"])
+    assert(toc.drop(1).all? { |t| t.kind == "member" })
+  end
+end
+
+# A file in a namespace: `module Data`, then the type and the module that
+# shares its name. Six functions, so the type gets a summary.
+foul namespacedSource() -> String do
+  let functions = ["one", "two", "three", "four", "five", "six"].map { |n| "  # Answers with ${n}.\n  let ${n} = 1" }
+  let companion = "module Bag do\n  # Builds a bag.\n  let from(items: [Integer]) -> Bag = Bag { items: items }\nend"
+  return "# Bags of things.\nmodule Data\n\nrecord Bag do\n  items : [Integer]\nend\n\n${companion}\n\nmake Bag do\n${functions.join("\n\n")}\nend"
+end
+
+describe("Tey.Docgen.Html namespaced pages") do
+  it("reads the namespace module as the page introduction, not a section") do
+    let page = bodyOf("data/bag.kex", namespacedSource())
+    assert(page.contains?("<div class=\"intro\" id=\"module-data\">"))
+    assert(!page.contains?("kind-module\">module</span> <code>Data</code>"))
+  end
+
+  it("lists the functions of the module that shares the type name first") do
+    let page = bodyOf("data/bag.kex", namespacedSource())
+    assert(page.contains?("On the <code>Bag</code> module"))
+    assert(page.contains?("<code>Bag.from</code></a></dt><dd>Builds a bag.</dd>"))
+  end
+
+  it("keeps the namespace out of the rail") do
+    let model = modelOf([parsePage("data/bag.kex", namespacedSource())])
+    let toc = tocOf(model.pages.first.try, model).reject { |t| t.kind == "member" }
+    Assert.equal(toc.map { |t| t.title }, ["Bag", "Data.Bag"])
+    assert(toc.all? { |t| !t.nested })
+  end
+end
+
+describe("Tey.Docgen.Html signatures") do
+  it("marks the opening name as the name, even one spelled like a keyword") do
+    let page = bodyOf("bag.kex", "module Bag do\n  # Builds a bag.\n  let from(items: [Integer]) -> Integer = 1\n\n  # Nothing.\n  let empty: Integer = 0\nend")
+    assert(page.contains?("<span class=\"sig-line\"><span class=\"tok-fn\">from</span>"))
+    assert(page.contains?("<span class=\"sig-line\"><span class=\"tok-fn\">empty</span>"))
+  end
+end
+
+describe("Tey.Docgen.Extract signature shapes") do
+  it("names the parameters of a curried annotation of any arity") do
+    let page = parsePage("three.kex", "module Three do\n  cut : String -> Regex -> Integer -> [String]\n  let cut(s, re, limit) = [s]\nend")
+    Assert.equal(signaturesOf(page, "cut"), ["cut(s: String, re: Regex, limit: Integer) -> [String]"])
+  end
+
+  it("does not count a pattern on the receiver as a parameter") do
+    let page = parsePage("unit.kex", "type Unit = | Nano | Micro\n\nmake Unit do\n  let factor(@Nano) -> Float = 0.1\n  let factor(@Micro) -> Float = 0.2\nend")
+    Assert.equal(signaturesOf(page, "factor"), ["factor -> Float"])
+  end
+
+  it("shows the type a conversion names, as a caller writes it") do
+    let page = parsePage("conv.kex", "type Unit = | Nano\n\nmake Unit do\n  let to(String) -> String? = Just(\"n\")\nend")
+    Assert.equal(signaturesOf(page, "to"), ["to(String) -> String?"])
+  end
+end
+
+describe("Tey.Docgen.Relations.withTraitSignatures") do
+  it("types an untyped member from the trait it implements") do
+    let source = "type Unit = | Nano\n\ntrait Scaled do\n  factor :> Float\n  twin :> This\nend\n\nmake Unit, implement: Scaled do\n  let factor(@Nano) = 0.1\n  let twin = this\nend"
+    let page = Tey.Docgen.Relations.withTraitSignatures([parsePage("unit.kex", source)]).first.try
+    let own = page.entities.flatMap { |e| makeFunctions(e) }
+    Assert.equal(own.flatMap { |f| f.signatures }, ["factor -> Float", "twin -> Unit"])
+  end
+end
+
+foul makeFunctions(e: Entity) -> [FunctionEntry] do
+  match e do
+    MakeDecl(entry) => entry.functions
+    _ => []
+  end
+end
+
+describe("Tey.Docgen.Html foul functions") do
+  it("says a function is foul on its card and in the index") do
+    let names = ["one", "two", "three", "four", "five"].map { |n| "  # Answers with ${n}.\n  let ${n}() -> Integer = 1" }
+    let page = bodyOf("out.kex", "module Out do\n  # Writes a line.\n  foul write(text: String) -> Integer = 1\n\n${names.join("\n\n")}\nend")
+    assert(page.contains?("<code>write</code></a> <span class=\"tag-foul\""))
+    assert(page.contains?("<a class=\"xref\" href=\"#function-out-write\"><code>write</code></a> <span class=\"tag-foul\""))
+    assert(!page.contains?("<code>one</code></a> <span class=\"tag-foul\""))
   end
 end

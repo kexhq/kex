@@ -37,7 +37,7 @@ module Tey.Docgen.Index do
     let versionDir = FS.Path.join(FS.Path.join(out, pkg), version)
     let _ = FS.Directory.create(versionDir)
     IO.printLine("${Console.BOLD}Documenting${Console.RESET} ${files.count} file(s) ${Console.DIM}into ${versionDir}${Console.RESET}")
-    let pages = buildPages(files, source)
+    let pages = Tey.Docgen.Relations.withTraitSignatures(buildPages(files, source))
     if pages.empty?
       IO.printError("${Console.RED}error:${Console.RESET} no files parsed successfully")
       return 1

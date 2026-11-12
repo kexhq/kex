@@ -56,7 +56,7 @@ module Tey.Docgen.Markdown do
       TraitDecl(entry) => traitSection(entry, page, model)
       MakeDecl(entry) => makeSection(entry, page, model)
       ModuleDecl(entry) => moduleSection(entry, page, model)
-      FuncDecl(entry) => "## function \`${entry.name}\`\n\n${overloadMd(entry, page, model)}"
+      FuncDecl(entry) => "## function \`${entry.name}\`${foulMd(entry.isFoul)}\n\n${overloadMd(entry, page, model)}"
       ConstDecl(entry) => constantSection(entry)
     end
   end
@@ -228,7 +228,7 @@ module Tey.Docgen.Markdown do
     let (members, declarations) = e.children.partition { |c| Tey.Docgen.Html.memberEntity?(c) }
     let api = members.map { |c|
       match c do
-        FuncDecl(f) => "### \`${f.name}\`\n\n${overloadMd(f, page, model)}"
+        FuncDecl(f) => "### \`${f.name}\`${foulMd(f.isFoul)}\n\n${overloadMd(f, page, model)}"
         ConstDecl(k) => "### \`${k.name}\` (constant)\n\n${k.typeName.empty? then "" else "```kex\n${k.name} : ${k.typeName}\n```\n\n"}${entityDocMd(k.doc)}"
         _ => ""
       end
@@ -249,10 +249,16 @@ module Tey.Docgen.Markdown do
     let names = functions.map { |f| f.name }.uniq
     let hashes = "#".repeat(level)
     return names.map { |n|
-      let tags = traitTagsMd(n, implements, page, model)
+      let tags = foulMd(functions.any? { |f| f.name == n && f.isFoul }) + traitTagsMd(n, implements, page, model)
       let body = functions.filter { |f| f.name == n }.map { |f| overloadMd(f, page, model) }.join("\n\n")
       "${hashes} \`${n}\`${tags}\n\n${body}"
     }.join("\n\n")
+  end
+
+  # Beside the name, as the HTML chip is: purity is part of what a caller
+  # has to know before calling.
+  foul foulMd(isFoul: Bool) -> String do
+    return isFoul then " (foul)" else ""
   end
 
   foul traitTagsMd(name: String, implements: [String], page: SourcePage, model: PackageModel) -> String do

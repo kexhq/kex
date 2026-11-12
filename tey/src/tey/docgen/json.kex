@@ -133,6 +133,7 @@ module Tey.Docgen.Json do
       name: f.name,
       qualifiedName: f.qualifiedName,
       signatures: f.signatures,
+      isFoul: f.isFoul,
       clauseCount: f.clauseCount,
       doc: docValue(f.doc),
       line: f.line

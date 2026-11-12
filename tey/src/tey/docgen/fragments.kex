@@ -20,7 +20,7 @@
 # sidecar a read-only page, nav.json the version's page tree.
 
 module Tey.Docgen.Fragments do
-  using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, SourcePage, PackageModel, kindOf, nameOf, qualifiedNameOf, anchorOf]
+  using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, FunctionEntry, SourcePage, PackageModel, kindOf, nameOf, qualifiedNameOf, anchorOf, memberAnchorOf]
 
   foul write(pages: [SourcePage], versionDir: String, model: PackageModel) -> Integer do
     let written = pages.map { |page| writePage(page, versionDir, model) }.count
@@ -49,7 +49,7 @@ module Tey.Docgen.Fragments do
       path: pageUrl(model, page.urlPath),
       template: "reference",
       body: "${stem}.html",
-      data: unitData(model, page.source, tocOf(page.entities))
+      data: unitData(model, page.source, tocOf(page, model))
     }))
     return ()
   end
@@ -86,11 +86,13 @@ module Tey.Docgen.Fragments do
   # iterate it. A page with a single section has nothing to navigate.
   foul tocHtml(toc: [TocEntry]) -> String do
     return "" if toc.count < 2
-    let items = toc.map { |t|
-      let klass = t.nested then " class=\"toc-nested\"" else ""
-      "<li${klass}><a href=\"#${Tey.Docgen.Html.esc(t.anchor)}\">${Tey.Docgen.Html.esc(t.title)}</a></li>"
-    }.join("")
-    return "<nav><p class=\"toc-heading\">On this page</p><ul>${items}</ul></nav>"
+    let items = toc.map { |t| "<li${tocClass(t)}><a href=\"#${Tey.Docgen.Html.esc(t.anchor)}\">${Tey.Docgen.Html.esc(t.title)}</a></li>" }
+    return "<nav><p class=\"toc-heading\">On this page</p><ul>${items.join("")}</ul></nav>"
+  end
+
+  foul tocClass(t: TocEntry) -> String do
+    return " class=\"toc-member\"" if t.kind == MemberKind
+    return t.nested then " class=\"toc-nested\"" else ""
   end
 
   # "/prelude/0.4.0/": where the unit is mounted.
@@ -117,19 +119,57 @@ module Tey.Docgen.Fragments do
   end
 
   # The sections a reader can jump to, in page order: each declaration with
-  # a section of its own, and those a module declares.
-  foul tocOf(entities: [Entity]) -> [TocEntry] do
-    return tocAt(entities, false)
+  # a section of its own, the functions and constants listed under it, and
+  # the declarations a module holds. The members are what make the rail
+  # worth having on the page of one long type: `List` is a single section
+  # fifty functions deep.
+  foul tocOf(page: SourcePage, model: PackageModel) -> [TocEntry] do
+    return tocAt(page.entities, false, page, model)
   end
 
-  foul tocAt(entities: [Entity], nested: Bool) -> [TocEntry] do
+  # A module that is only the file's namespace has no section, so what it
+  # declares stands at the top level of the rail.
+  foul tocAt(entities: [Entity], nested: Bool, page: SourcePage, model: PackageModel) -> [TocEntry] do
     return Tey.Docgen.Html.sectionEntities(entities).flatMap { |e|
       let own = TocEntry { title: tocTitle(e), anchor: anchorOf(e), kind: kindOf(e), nested: nested }
       match e do
-        ModuleDecl(entry) => [own] + tocAt(entry.children.reject { |c| Tey.Docgen.Html.memberEntity?(c) }, true)
-        _ => [own]
+        ModuleDecl(entry) => do
+          let declared = entry.children.reject { |c| Tey.Docgen.Html.memberEntity?(c) }
+          Tey.Docgen.Html.namespaceOnly?(entry, page) then tocAt(declared, nested, page, model) else [own] + memberToc(e, entities, model) + tocAt(declared, true, page, model)
+        end
+        _ => [own] + memberToc(e, entities, model)
       end
     }
+  end
+
+  # The `kind` of a rail entry that is a member rather than a declaration.
+  let MemberKind = "member"
+
+  # What the section of `e` lists, under the anchors the renderer gives
+  # them: a type's functions come from the make blocks folded into it.
+  foul memberToc(e: Entity, entities: [Entity], model: PackageModel) -> [TocEntry] do
+    match e do
+      TypeDecl(entry) => Tey.Docgen.Html.receiverOrder(Tey.Docgen.Html.makesFor(entities, entry.name), entry.name).flatMap { |m| functionToc(m.functions, m.target) }
+      RecordDecl(entry) => Tey.Docgen.Html.receiverOrder(Tey.Docgen.Html.makesFor(entities, entry.name), entry.name).flatMap { |m| functionToc(m.functions, m.target) }
+      MakeDecl(entry) => functionToc(entry.functions, entry.target)
+      TraitDecl(entry) => do
+        let (required, provided) = Tey.Docgen.Relations.traitMethods(model, entry)
+        functionToc(required + provided, entry.qualifiedName)
+      end
+      ModuleDecl(entry) => do
+        let members = entry.children.filter { |c| Tey.Docgen.Html.memberEntity?(c) }
+        members.map { |c| nameOf(c) }.uniq.map { |n| memberEntry(n, members.filter { |c| nameOf(c) == n }.map { |c| anchorOf(c) }.first.or("")) }
+      end
+      _ => []
+    end
+  end
+
+  foul functionToc(functions: [FunctionEntry], owner: String) -> [TocEntry] do
+    return functions.map { |f| f.name }.uniq.map { |n| memberEntry(n, memberAnchorOf(owner, n)) }
+  end
+
+  foul memberEntry(name: String, anchor: String) -> TocEntry do
+    return TocEntry { title: name, anchor: anchor, kind: MemberKind, nested: true }
   end
 
   foul tocTitle(e: Entity) -> String do
@@ -144,20 +184,8 @@ module Tey.Docgen.Fragments do
   foul descriptionOf(page: SourcePage) -> String do
     let intro = Tey.Docgen.Html.firstSentence(Tey.Docgen.Rdoc.parseOrEmpty(page.intro).summary)
     return intro if !intro.empty?
-    let first = page.entities.map { |e| Tey.Docgen.Html.firstSentence(summaryOf(e)) }.find { |s| !s.empty? }
+    let first = page.entities.map { |e| Tey.Docgen.Html.firstSentence(Tey.Docgen.Html.summaryOf(e)) }.find { |s| !s.empty? }
     return first.or(page.title).replace("`", "")
-  end
-
-  foul summaryOf(e: Entity) -> String do
-    match e do
-      TypeDecl(entry) => entry.doc.summary
-      RecordDecl(entry) => entry.doc.summary
-      TraitDecl(entry) => entry.doc.summary
-      MakeDecl(entry) => entry.doc.summary
-      ModuleDecl(entry) => entry.doc.summary
-      FuncDecl(entry) => entry.doc.summary
-      ConstDecl(entry) => entry.doc.summary
-    end
   end
 
   # Every relative href in a fragment, rewritten to a site path: from the

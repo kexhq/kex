@@ -177,6 +177,8 @@ module Tey.Docgen.Extract do
     line : Integer
     # The return type a clause declares inline (`-> This`), if any.
     returnType : String = ""
+    # Whether any clause is declared `foul`.
+    isFoul : Bool = false
   end
 
   # One parameter as a clause declares it. `named` is false for a pattern
@@ -342,7 +344,7 @@ module Tey.Docgen.Extract do
         ConstDecl(entry) => if receiverMethods
           [FunctionEntry {
             name: entry.name, qualifiedName: entry.qualifiedName,
-            signatures: entry.typeName.empty? then [] else ["${entry.name} : ${entry.typeName}"],
+            signatures: entry.typeName.empty? then [] else ["${entry.name} -> ${entry.typeName}"],
             clauseCount: 1, doc: entry.doc, line: entry.line
           }]
         else
@@ -387,7 +389,9 @@ module Tey.Docgen.Extract do
           paramLists: fn.paramLists,
           clauseCount: fn.clauseCount,
           doc: doc,
-          line: fn.line
+          line: fn.line,
+          returnType: fn.returnType,
+          isFoul: fn.isFoul
         })
       end
       _ => p
@@ -412,7 +416,8 @@ module Tey.Docgen.Extract do
         clauseCount: info.clauses.count,
         doc: Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
         line: info.location.line,
-        returnType: returnTypeText(info)
+        returnType: returnTypeText(info),
+        isFoul: info.isFoul
       })]
       Just(_) => accum.map { |p| addClause(p, info, lists) }
     end
@@ -466,7 +471,9 @@ module Tey.Docgen.Extract do
             paramLists: fn.paramLists,
             clauseCount: fn.clauseCount + info.clauses.count,
             doc: fn.doc,
-            line: fn.line
+            line: fn.line,
+            returnType: fn.returnType,
+            isFoul: fn.isFoul || info.isFoul
           })
         end
         let doc = if fn.doc.summary.empty?
@@ -520,7 +527,8 @@ module Tey.Docgen.Extract do
           clauseCount: fn.clauseCount + info.clauses.count,
           doc: doc,
           line: fn.line,
-          returnType: fn.returnType.empty? then declared else fn.returnType
+          returnType: fn.returnType.empty? then declared else fn.returnType,
+          isFoul: fn.isFoul || info.isFoul
         })
       end
       _ => p
@@ -551,7 +559,8 @@ module Tey.Docgen.Extract do
       doc: fn.doc,
       line: fn.line,
       types: functionTypes(fn),
-      returnType: declaredReturn(fn)
+      returnType: declaredReturn(fn),
+      isFoul: fn.isFoul
     }
   end
 
@@ -618,8 +627,9 @@ module Tey.Docgen.Extract do
   # `and(a: Integer, b: Integer) -> Integer`. The names come from a clause,
   # the types from the annotation (flattened to the clause's arity), from
   # the clause's own inline annotations, or — for a method nobody annotated
-  # — from its @param/@return tags. A zero-parameter member reads as the
-  # property it looks like at the call site (`sum : Number`). A method with
+  # — from its @param/@return tags. A zero-parameter function is still a
+  # function, written the way its definition is (`let sum -> Number`): `sum
+  # -> Number`. The `name : Type` form is left to constants. A method with
   # no clause at all (a trait's required method) has only its type, and
   # borrows parameter names from its @param tags when they line up.
 
@@ -638,11 +648,11 @@ module Tey.Docgen.Extract do
   foul plainSignature(fn: PendingFunction, params: [ParamSig]) -> String do
     let result = fn.returnType.empty? then docReturnType(fn.doc) else fn.returnType
     if params.empty?
-      return result.empty? then fn.name else "${fn.name} : ${result}"
+      return result.empty? then fn.name else "${fn.name} -> ${result}"
     end
     let shown = params.mapIndexed { |p, i|
-      let typeName = p.typeName.empty? then docParamType(fn.doc, displayName(p, i, fn.doc)) else p.typeName
-      paramText(displayName(p, i, fn.doc), typeName, p.hasDefault)
+      let typeName = p.typeName.empty? then docParamType(fn.doc, displayName(p, i, fn)) else p.typeName
+      paramText(displayName(p, i, fn), typeName, p.hasDefault)
     }
     let tail = result.empty? then "" else " -> ${result}"
     return "${fn.name}(${shown.join(", ")})${tail}"
@@ -653,16 +663,16 @@ module Tey.Docgen.Extract do
     match bestParams(matchingParamLists(ref, fn.paramLists)) do
       Just(params) => do
         if params.empty?
-          return "${info.name} : ${signatureTypeText(ref)}"
+          return "${info.name} -> ${signatureTypeText(ref)}"
         end
         match flattenToArity(ref, params.count) do
           FunctionType(types, result) => do
             let shown = params.mapIndexed { |p, i|
-              paramText(displayName(p, i, fn.doc), signatureParamText(types.at(i).or(AnyType)), p.hasDefault)
+              paramText(displayName(p, i, fn), signatureParamText(types.at(i).or(AnyType)), p.hasDefault)
             }
             return "${info.name}(${shown.join(", ")}) -> ${signatureTypeText(result)}"
           end
-          _ => return "${info.name} : ${signatureTypeText(ref)}"
+          _ => return "${info.name} ${annotationSigil(info)} ${signatureTypeText(ref)}"
         end
       end
       None => return docNamedSignature(info.name, ref, fn.doc)
@@ -673,7 +683,7 @@ module Tey.Docgen.Extract do
   # the parameters when there are exactly as many as the type has.
   foul docNamedSignature(name: String, ref: Kex.AST.TypeRef, doc: Doc) -> String do
     let arity = doc.params.count
-    let plain = "${name} : ${signatureTypeText(ref)}"
+    let plain = unnamedSignature(name, ref)
     return plain if arity == 0
     match flattenToArity(ref, arity) do
       FunctionType(types, result) => do
@@ -684,6 +694,23 @@ module Tey.Docgen.Extract do
         return "${name}(${shown.join(", ")}) -> ${signatureTypeText(result)}"
       end
       _ => return plain
+    end
+  end
+
+  # A type that cannot be paired with a clause is shown as the source wrote
+  # it, sigil included: `:>` is what says the receiver is implied, and a
+  # plain `:` in its place would describe a function that takes no receiver.
+  foul annotationSigil(info: Kex.AST.AnnotationInfo) -> String do
+    return info.implicitThis then ":>" else ":"
+  end
+
+  # A function with nothing to name its parameters by still reads as a
+  # function: `combine(This) -> This`, and with none to take, `lines ->
+  # [String]`.
+  foul unnamedSignature(name: String, ref: Kex.AST.TypeRef) -> String do
+    match ref do
+      FunctionType(types, result) => "${name}(${types.map { |t| signatureParamText(t) }.join(", ")}) -> ${signatureTypeText(result)}"
+      _ => "${name} -> ${signatureTypeText(ref)}"
     end
   end
 
@@ -701,12 +728,22 @@ module Tey.Docgen.Extract do
 
   # A pattern parameter (`repeat(0)`) shows the name its @param tag gives
   # that position, or `_` — never the literal, which reads as an argument.
-  foul displayName(p: ParamSig, index: Integer, doc: Doc) -> String do
-    return p.name if p.named
-    match doc.params.at(index) do
+  foul displayName(p: ParamSig, index: Integer, fn: PendingFunction) -> String do
+    return p.name if p.named || (fn.name == ConversionName && typeArgument?(p.name))
+    match fn.doc.params.at(index) do
       Just(tag) => tag.name
       None => "_"
     end
+  end
+
+  # The conversion protocol: `value.to(String)` names the type to convert
+  # to. That argument is the type itself, so the pattern in the clause is
+  # what a caller writes and is shown as written. Anywhere else a capitalised
+  # pattern is a constructor being matched (`None`), not something to pass.
+  let ConversionName = "to"
+
+  foul typeArgument?(pattern: String) -> Bool do
+    return pattern.take(1).chars.all? { |c| c.upper? } && !pattern.empty? && pattern.chars.all? { |c| c.letter? || c.digit? || c == '.' }
   end
 
   foul docParamType(doc: Doc, name: String) -> String do
@@ -784,17 +821,15 @@ module Tey.Docgen.Extract do
     end
   end
 
-  # Absorbs single-parameter curried layers while more than one argument
-  # remains. `(FilePath) -> (Read) -> R` with arity 2 becomes
-  # `(FilePath, Read) -> R`.
+  # Absorbs curried layers until the type takes `arity` arguments:
+  # `FilePath -> Read -> Mode -> R` with arity 3 becomes
+  # `(FilePath, Read, Mode) -> R`. A type that runs out of layers first, or
+  # whose next layer would overshoot, is left where it stands.
   foul flattenToArity(ref: Kex.AST.TypeRef, arity: Integer) -> Kex.AST.TypeRef do
-    if arity <= 1
-      return ref
-    end
     match ref do
-      FunctionType([only], FunctionType(innerParams, innerResult)) => do
-        let absorbed = FunctionType([only] + innerParams, innerResult)
-        return flattenToArity(absorbed, arity - 1)
+      FunctionType(params, FunctionType(innerParams, innerResult)) => do
+        return ref if params.count >= arity
+        return flattenToArity(FunctionType(params + innerParams, innerResult), arity)
       end
       _ => ref
     end
@@ -804,8 +839,17 @@ module Tey.Docgen.Extract do
   # `type` is a keyword after `.`, so typed-record access goes through
   # pattern matching instead.
 
+  # `let factor(@Nanosecond) = ...` matches on the receiver: the pattern
+  # picks the clause and is not something a caller passes.
   foul clauseParams(clause: Kex.AST.ClauseInfo) -> [ParamSig] do
-    return clause.params.map { |p| paramSig(p) }
+    return clause.params.reject { |p| receiverPattern?(p) }.map { |p| paramSig(p) }
+  end
+
+  foul receiverPattern?(p: Kex.AST.ParamInfo) -> Bool do
+    match p do
+      Kex.AST.ParamInfo { name: None, pattern: Just(ThisPattern(_)) } => true
+      _ => false
+    end
   end
 
   foul paramSig(p: Kex.AST.ParamInfo) -> ParamSig do
