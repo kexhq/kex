@@ -40,15 +40,21 @@ public:
     // through a forward per answer.
     auto checker() const -> const TypeChecker& { return m_checker; }
 
-    // The files whose names the analysis checks (undefined names, labels:
-    // resolveProgramNames), its first phase. A build sets its entry file (and
-    // a spec's base); without any, names are not checked.
-    auto setNameCheckFiles(std::vector<std::string> files) -> void {
-        m_nameCheckFiles = std::move(files);
+    // The program's own files, the entry first (then a spec's base), as
+    // opposed to the dependencies merged into it: a `using` of a module
+    // nothing describes is warned of there.
+    auto setEntryFiles(std::vector<std::string> files) -> void {
+        m_entryFiles = std::move(files);
     }
-    // What the name check found beyond its diagnostics: the program's symbols,
-    // the references to them and the names in scope at each point (empty
-    // when names are not checked).
+    // Keeps what tooling reads of the names (nameIndex), for the entry file.
+    // A build does not ask.
+    auto setIndexesNames(bool indexes) -> void {
+        m_checker.setRecordsNames(indexes);
+        m_indexesNames = indexes;
+    }
+    // The program's symbols, the references to them and the names in scope
+    // at each point of the entry file, from the checker's record of them
+    // (empty unless setIndexesNames).
     auto nameIndex() const -> const NameIndex& { return m_nameIndex; }
     // Where the build finds a module outside the program and its interfaces
     // (its source roots), for the rule that an exported module must exist.
@@ -273,7 +279,8 @@ private:
     TypeChecker m_checker;
     const ImportedInterfaces* m_importedInterfaces = nullptr;
     std::function<bool(const std::string&, const std::string&)> m_moduleLocator;
-    std::vector<std::string> m_nameCheckFiles;
+    std::vector<std::string> m_entryFiles;
+    bool m_indexesNames = false;
     NameIndex m_nameIndex;
     bool m_inFoulContext = false;
     bool m_inMakeBlock = false;

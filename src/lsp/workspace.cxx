@@ -1,8 +1,7 @@
-#include "db.hxx"
-#include "analyzer.hxx"
-#include "collect_pass.hxx"
-#include "resolve_pass.hxx"
-#include "symbol_queries.hxx"
+#include "workspace.hxx"
+#include "../semantic/collect_pass.hxx"
+#include "../semantic/module_rules.hxx"
+#include "../semantic/name_index.hxx"
 #include "../compiled/expand.hxx"
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
@@ -11,12 +10,17 @@
 #include <iterator>
 #include "../parser/parser.hxx"
 
-namespace kex::semantic {
+namespace kex::lsp {
 
-const std::vector<Diagnostic> SemanticDB::s_emptyDiagnostics;
-const std::vector<SymbolInfo> SemanticDB::s_emptySymbols;
+using semantic::collectSymbols;
+using semantic::indexNames;
+using semantic::ProgramModules;
+using semantic::SymbolKind;
 
-auto SemanticDB::updateFile(const std::string& path, std::string source,
+const std::vector<Diagnostic> Workspace::s_emptyDiagnostics;
+const std::vector<SymbolInfo> Workspace::s_emptySymbols;
+
+auto Workspace::updateFile(const std::string& path, std::string source,
                             const std::vector<std::string>& companionDeclFiles)
     -> void {
     FileState& state = m_files[path];
@@ -103,15 +107,16 @@ auto SemanticDB::updateFile(const std::string& path, std::string source,
     state.symbols = collectSymbols(state.ast, state.path);
 }
 
-auto SemanticDB::setResolved(const std::string& path, std::vector<SymbolInfo> symbols,
-                             std::vector<FileState::ScopeSnapshot> scopes) -> void {
+auto Workspace::setResolved(const std::string& path, std::vector<SymbolInfo> symbols,
+                             std::vector<ScopeSnapshot> scopes) -> void {
     auto found = m_files.find(path);
     if (found == m_files.end()) return;
     found->second.symbols = std::move(symbols);
     found->second.completionScopes = std::move(scopes);
 }
 
-auto SemanticDB::resolveTogether(const std::vector<std::string>& paths) -> void {
+auto Workspace::resolveTogether(
+    const std::vector<std::pair<std::string, const TypeChecker*>>& checked) -> void {
     std::vector<SymbolInfo> all;
     std::vector<std::string> owners;  // the file each symbol is indexed under
     for (const auto& [path, state] : m_files)
@@ -120,21 +125,16 @@ auto SemanticDB::resolveTogether(const std::vector<std::string>& paths) -> void 
             owners.push_back(path);
         }
     ProgramModules shared(std::move(all));
-    std::map<std::string, std::vector<FileState::ScopeSnapshot>> scopes;
-    for (const auto& path : paths)
+    std::map<std::string, std::vector<ScopeSnapshot>> scopes;
+    for (const auto& [path, checker] : checked)
         if (auto* state = fileState(path))
-            for (auto& diagnostic :
-                 ResolvePass(m_imports).run(state->ast, path, shared,
-                                            {.scopes = &scopes[path],
-                                             .checksModuleRules = true,
-                                             .fileLocalTopLevel = true}))
-                state->diagnostics.push_back(std::move(diagnostic));
+            scopes[path] = indexNames(state->ast, path, *checker, m_imports, shared, true);
     // Each file's symbols back to it, with the references now on them.
     std::map<std::string, std::vector<SymbolInfo>> byFile;
     auto& resolved = shared.symbols();
     for (size_t i = 0; i < resolved.size(); ++i)
         byFile[owners[i]].push_back(std::move(resolved[i]));
-    for (const auto& path : paths) byFile.try_emplace(path);
+    for (const auto& [path, _] : checked) byFile.try_emplace(path);
     for (auto& [path, symbols] : byFile) {
         auto fileScopes = scopes.contains(path) ? std::move(scopes[path])
                                                 : m_files[path].completionScopes;
@@ -142,15 +142,24 @@ auto SemanticDB::resolveTogether(const std::vector<std::string>& paths) -> void 
     }
 }
 
-auto SemanticDB::removeFile(const std::string& path) -> void {
+auto Workspace::removeFile(const std::string& path) -> void {
     m_files.erase(path);
 }
 
-auto SemanticDB::setModuleRoots(std::vector<std::string> roots) -> void {
+auto Workspace::indexFiles(const std::vector<std::string>& paths) -> void {
+    for (const auto& path : paths) {
+        std::ifstream file(path, std::ios::binary);
+        if (!file) continue;
+        updateFile(path, std::string((std::istreambuf_iterator<char>(file)),
+                                     std::istreambuf_iterator<char>()));
+    }
+}
+
+auto Workspace::setModuleRoots(std::vector<std::string> roots) -> void {
     m_moduleRoots = std::move(roots);
 }
 
-auto SemanticDB::ensureModule(const std::string& moduleName,
+auto Workspace::ensureModule(const std::string& moduleName,
                               const std::string& currentModule) -> std::optional<std::string> {
     module::Resolver resolver(m_moduleRoots);
     auto resolution = resolver.resolve(moduleName, currentModule);
@@ -194,17 +203,17 @@ auto SemanticDB::ensureModule(const std::string& moduleName,
     return std::nullopt;
 }
 
-auto SemanticDB::diagnosticsFor(const std::string& file) const -> const std::vector<Diagnostic>& {
+auto Workspace::diagnosticsFor(const std::string& file) const -> const std::vector<Diagnostic>& {
     auto it = m_files.find(file);
     return it != m_files.end() ? it->second.diagnostics : s_emptyDiagnostics;
 }
 
-auto SemanticDB::symbolsFor(const std::string& file) const -> const std::vector<SymbolInfo>& {
+auto Workspace::symbolsFor(const std::string& file) const -> const std::vector<SymbolInfo>& {
     auto it = m_files.find(file);
     return it != m_files.end() ? it->second.symbols : s_emptySymbols;
 }
 
-auto SemanticDB::hasModule(const std::string& moduleName) const -> bool {
+auto Workspace::hasModule(const std::string& moduleName) const -> bool {
     for (const auto& [_, state] : m_files)
         for (const auto& symbol : state.symbols)
             if (symbol.kind == SymbolKind::Module) {
@@ -217,7 +226,7 @@ auto SemanticDB::hasModule(const std::string& moduleName) const -> bool {
     return false;
 }
 
-auto SemanticDB::indexed() const -> IndexedFiles {
+auto Workspace::indexed() const -> IndexedFiles {
     IndexedFiles files;
     files.reserve(m_files.size());
     // The queries hand back symbols the resolve pass records references on.
@@ -226,43 +235,43 @@ auto SemanticDB::indexed() const -> IndexedFiles {
     return files;
 }
 
-auto SemanticDB::symbolInModule(const std::string& moduleName,
+auto Workspace::symbolInModule(const std::string& moduleName,
                                 const std::string& name) -> SymbolInfo* {
     return semantic::symbolInModule(indexed(), moduleName, name);
 }
 
-auto SemanticDB::receiverSymbol(const std::string& receiver,
+auto Workspace::receiverSymbol(const std::string& receiver,
                                 const std::string& name) const -> const SymbolInfo* {
     return semantic::receiverSymbol(indexed(), receiver, name);
 }
 
-auto SemanticDB::findSymbol(const std::string& name,
+auto Workspace::findSymbol(const std::string& name,
                             const std::string& preferFile) -> SymbolInfo* {
     return semantic::findSymbol(indexed(), name, preferFile);
 }
 
-auto SemanticDB::findSymbol(const std::string& name,
+auto Workspace::findSymbol(const std::string& name,
                             const std::string& preferFile) const -> const SymbolInfo* {
     return semantic::findSymbol(indexed(), name, preferFile);
 }
 
-auto SemanticDB::symbolAt(const std::string& file, uint32_t line, uint32_t col) const
+auto Workspace::symbolAt(const std::string& file, uint32_t line, uint32_t col) const
     -> const SymbolInfo* {
     return semantic::symbolAt(indexed(), file, line, col);
 }
 
-auto SemanticDB::completionsFor(const std::string& prefix) const -> std::vector<std::string> {
+auto Workspace::completionsFor(const std::string& prefix) const -> std::vector<std::string> {
     return semantic::completionsFor(indexed(), prefix, m_imports);
 }
 
-auto SemanticDB::completionsAt(const std::string& file, uint32_t line, uint32_t col,
+auto Workspace::completionsAt(const std::string& file, uint32_t line, uint32_t col,
                                const std::string& prefix) const -> std::vector<std::string> {
     return semantic::completionsAt(indexed(), file, line, col, prefix, m_imports);
 }
 
-auto SemanticDB::fileState(const std::string& path) -> FileState* {
+auto Workspace::fileState(const std::string& path) -> FileState* {
     auto it = m_files.find(path);
     return it != m_files.end() ? &it->second : nullptr;
 }
 
-} // namespace kex::semantic
+} // namespace kex::lsp

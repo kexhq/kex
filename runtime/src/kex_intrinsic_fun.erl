@@ -132,6 +132,11 @@ partial(F, Got, 6) ->
 partial(F, Got, _) ->
     erlang:error({badarity, {F, Got}}).
 
+%% A block of one parameter takes the whole item, whatever it is: nothing to
+%% look up. This is the case nearly every `map`, `filter` and `each` is, once
+%% per element.
+applyItem(F, Item) when is_function(F, 1) ->
+    F(Item);
 applyItem(F, Item) ->
     {arity, N} = erlang:fun_info(F, arity),
     case spreadable(Item, N) of
@@ -139,6 +144,8 @@ applyItem(F, Item) ->
         false -> F(Item)
     end.
 
+applyIndexed(F, Item, _I) when is_function(F, 1) ->
+    F(Item);
 applyIndexed(F, Item, I) ->
     {arity, N} = erlang:fun_info(F, arity),
     case spreadable(Item, N - 1) of

@@ -1,0 +1,5 @@
+spec/error_constructor_payload_type.kex:15:29: error: `Count` expects a value of type Integer, but got String
+spec/error_constructor_payload_type.kex:24:15: error: `Circle` expects a value of type Float, but got String
+spec/error_constructor_payload_type.kex:25:14: error: `Count` expects a value of type Integer, but got String
+spec/error_constructor_payload_type.kex:26:30: error: `Count` expects a value of type Integer, but got String
+spec/error_constructor_payload_type.kex:27:16: error: `Rename` expects value 2 of type String, but got Integer

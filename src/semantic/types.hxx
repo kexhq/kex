@@ -245,6 +245,9 @@ auto isPrimitiveTypeName(const std::string& name) -> bool;
 auto isNumericType(const TypePtr& type) -> bool;
 // Not known yet: Unknown, or an inference variable nothing has bound.
 auto isUndetermined(const TypePtr& type) -> bool;
+// A type a failed `.try` can be the value of: a Result or an Optional, or one
+// not known yet.
+auto holdsFailure(const TypePtr& type) -> bool;
 
 // A trait's `This` left as written (`NamedType("This")`), which only a
 // receiver's type substitutes.
@@ -291,6 +294,12 @@ class TypeEnv {
 public:
     auto set(const std::string& name, TypePtr type) -> void;
     auto get(const std::string& name) const -> TypePtr;
+    // Every name bound here, for a hint beside an undefined one.
+    auto names() const -> std::vector<std::string> {
+        std::vector<std::string> result;
+        for (const auto& [name, _] : m_types) result.push_back(name);
+        return result;
+    }
 
 private:
     std::unordered_map<std::string, TypePtr> m_types;

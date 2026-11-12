@@ -2,8 +2,8 @@
 // What tooling asks of a set of indexed files' symbols: a definition by name,
 // a module's or a type's member, the symbol at a position, completions by
 // prefix and at a point. One implementation, over whatever holds the files:
-// SemanticDB's documents, or the checker's name index (NameIndex).
-#include "db.hxx"
+// the language server's documents, or the checker's name index (NameIndex).
+#include "symbol_info.hxx"
 #include "imported_interfaces.hxx"
 
 #include <cstdint>
@@ -18,7 +18,7 @@ namespace kex::semantic {
 struct IndexedFile {
     std::string_view path;
     std::vector<SymbolInfo>* symbols;
-    const std::vector<FileState::ScopeSnapshot>* scopes = nullptr;
+    const std::vector<ScopeSnapshot>* scopes = nullptr;
 };
 using IndexedFiles = std::vector<IndexedFile>;
 

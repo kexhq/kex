@@ -18,22 +18,43 @@
 #
 #   (1..10).items.filter(~even?)   # => [2, 4, 6, 8, 10]
 #   (1..3).items.each { |n| IO.printLine(n) }
-type Range
+type Range<A>
 
-make Range, implement: Enumerable, Foldable do
+make Range<A>, implement: Enumerable, Foldable do
   # Folds over the range's elements in ascending order.
   #
   # This is +Range+'s +Enumerable+ primitive; the traversal functions are built
   # on it. A range stays structurally minimal, so the fold runs over its
   # materialized items.
   #
-  # @param acc [A] the initial accumulator
-  # @param f [A -> B -> A] combines the accumulator with each element
-  # @return [A] the final accumulator
+  # @param acc [B] the initial accumulator
+  # @param f [B -> A -> B] combines the accumulator with each element
+  # @return [B] the final accumulator
   #
   # @example
   #   (1..4).reduce(0) { |sum, n| sum + n }   # => 10
+  reduce :> B -> (B -> A -> B) -> B
   let reduce(acc, f) = this.items.reduce(acc, f)
+
+  # Calls +f+ with each element in ascending order, for its side effects.
+  #
+  # @param f [A -> Void] called with each element
+  # @return [Void]
+  #
+  # @example
+  #   (1..3).each { |n| IO.printLine(n) }
+  each :> (A -> Void) -> Void
+  let each(f) = this.items.each(f)
+
+  # Transforms each element by applying +f+, in ascending order.
+  #
+  # @param f [A -> B] the transformation
+  # @return [[B]] the results, as a list
+  #
+  # @example
+  #   (1..3).map { |n| n * n }   # => [1, 4, 9]
+  map :> (A -> B) -> [B]
+  let map(f) = this.items.map(f)
 
   # Returns the sum of the range's elements.
   #

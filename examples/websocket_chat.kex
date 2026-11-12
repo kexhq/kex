@@ -30,6 +30,7 @@ foul serveChat(socket: Connection) -> Void do
       _ => Void
     end
   end
+rescue return Void
 end
 
 foul socketRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |handshake|

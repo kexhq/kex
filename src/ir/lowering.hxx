@@ -626,6 +626,9 @@ struct Lowering {
 
     // ---- Loops ------------------------------------------------------------
     void collectMutated(const ast::ExprPtr& e, std::unordered_set<std::string>& out);
+    auto iteratedBlock(const ast::MethodCall& call) const -> const ast::Lambda*;
+    auto lowerIteration(const ast::MethodCall& call, const std::function<ExprPtr()>& rest)
+        -> ExprPtr;
 
     auto requireNoOuterMutation(const std::vector<ast::ExprPtr>& body,
                                 const char* what) -> void;

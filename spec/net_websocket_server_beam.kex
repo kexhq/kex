@@ -14,7 +14,11 @@ using Net.Socket
 # keeps the ambiguity out of the checker, but the record CONSTRUCTOR below
 # is still spelled out fully to sidestep it.
 
-foul readLine(connection: TCP.TCPConnection) -> String = connection.receiveLine(8192).try.to(String).try
+# A line that cannot be read ends the headers, as the blank line does.
+foul readLine(connection: TCP.TCPConnection) -> String do
+  connection.receiveLine(8192).try.to(String).try
+rescue return "\r\n"
+end
 
 foul readHeaderLines(connection: TCP.TCPConnection) -> [String] do
   let line = readLine(connection)
@@ -30,6 +34,7 @@ foul echo(socket: Connection) -> Void do
     Text(text) => socket.send(Text(text)).try
     _ => Void
   end
+rescue return Void
 end
 
 foul socketRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |handshake|

@@ -1,5 +1,6 @@
 #include "test.hxx"
-#include "../src/semantic/db.hxx"
+#include "workspace_index.hxx"
+#include "../src/lsp/workspace.hxx"
 #include "../src/semantic/analyzer.hxx"
 #include "../src/common/completion.hxx"
 #include "../src/common/prelude_interfaces.hxx"
@@ -12,10 +13,10 @@
 #include <algorithm>
 
 using namespace test;
-using kex::semantic::SemanticDB;
+using kex::lsp::Workspace;
 
-static auto makePreludeDb() -> SemanticDB {
-    SemanticDB db;
+static auto makePreludeDb() -> Workspace {
+    Workspace db;
     std::filesystem::path dir = "src/stdlib";
     std::error_code ec;
     for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
@@ -56,7 +57,8 @@ static auto checkSource(const std::string& path, const std::string& source)
     kex::Parser parser(lexer.tokenizeAll(), path);
     *program = parser.parseProgram();
     auto analyzer = std::make_shared<kex::semantic::Analyzer>(&interfaces());
-    analyzer->setNameCheckFiles({path});
+    analyzer->setEntryFiles({path});
+    analyzer->setIndexesNames(true);
     analyzer->analyze(*program);
     return kex::semantic::CheckedSource{program, analyzer, nullptr};
 }
@@ -76,7 +78,7 @@ static auto has(const std::vector<std::string>& v, const std::string& s) -> bool
 
 // Simulates the full completion pipeline: resolveCompletionQuery + DB lookup +
 // rewriteCompletions — returning what readline would actually insert.
-static auto simulate(SemanticDB& db, const std::string& linebuf,
+static auto simulate(Workspace& db, const std::string& linebuf,
                      int start, const char* text) -> std::vector<std::string> {
     auto cq  = kex::resolveCompletionQuery(linebuf.c_str(), start, text);
     auto raw = db.completionsFor(cq.dbQuery);
@@ -401,7 +403,7 @@ int main() {
             assertTrue(has(fields, "Version.number"), "Version.number missing");
         });
         it("replaces module exports safely when an editor updates a file", []() {
-            SemanticDB db;
+            Workspace db;
             const std::string path = "/tmp/kex-lsp-reload.kex";
             db.updateFile(path,
                 "module Old do\n"
@@ -418,20 +420,20 @@ int main() {
             assertTrue(has(db.completionsFor("New.be"), "New.beta"));
         });
         it("offers lexical bindings at the requested editor position", []() {
-            SemanticDB db;
+            Workspace db;
             const std::string path = "/tmp/kex-lsp-scope.kex";
             db.updateFile(path,
                 "main do\n"
                 "  let localValue = 1\n"
                 "  localValue\n"
                 "end\n");
-            db.resolveTogether({path});
+            resolveTogether(db, {path});
             auto matches = db.completionsAt(path, 3, 7, "loc");
             assertTrue(has(matches, "localValue"),
                        "position-aware completion lost a local let binding");
         });
         it("offers the implicit new binding inside make functions", []() {
-            SemanticDB db;
+            Workspace db;
             const std::string path = "/tmp/kex-lsp-new-scope.kex";
             db.updateFile(path,
                 "record User do\n"
@@ -443,7 +445,7 @@ int main() {
                 "    new\n"
                 "  end\n"
                 "end\n");
-            db.resolveTogether({path});
+            resolveTogether(db, {path});
             auto matches = db.completionsAt(path, 7, 7, "ne");
             assertTrue(has(matches, "new"),
                        "make completion omitted the implicit new binding");

@@ -19,11 +19,8 @@
 #include "parser/parser.hxx"
 #include "compiled/expand.hxx"
 #include "interpreter/evaluator.hxx"
-// db.hxx only forward-declares Diagnostic; SemanticDB's FileState member
-// needs the complete type to be destructible, so this include is load-
-// bearing even though nothing here names Diagnostic directly.
 #include "semantic/analyzer.hxx"
-#include "semantic/db.hxx"
+#include "semantic/symbol_info.hxx"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -336,7 +333,8 @@ const char* kex_repl_complete(KexReplSession* session, const char* lineIn,
         options.interfaces = &preludeSemanticInterfaces("");
         compiled::expand(*program, diagnostics, options);
         auto analyzer = std::make_shared<semantic::Analyzer>();
-        analyzer->setNameCheckFiles({path});
+        analyzer->setEntryFiles({path});
+        analyzer->setIndexesNames(true);
         analyzer->analyze(*program);
         return semantic::CheckedSource{program, analyzer, nullptr};
     };

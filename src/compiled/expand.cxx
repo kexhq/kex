@@ -3707,7 +3707,7 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
         // does not declare that module — the container heuristic accepts
         // `mid.kex` for a nested `Mid.Leaf` it need not define. Then `Leaf`
         // written inside `module Mid` means the top-level `Leaf`, as it does
-        // to SemanticDB::ensureModule.
+        // to lsp::Workspace::ensureModule.
         const auto declares = [&](const module::Resolution& found) {
             if (self(found)) return ownModules.contains(found.moduleName);
             const auto* exports = exportsOf(found.path, options);

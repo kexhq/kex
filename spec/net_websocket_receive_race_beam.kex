@@ -26,6 +26,7 @@ foul serve(socket: Connection) -> Void do
       Error(_) => break
     end
   end
+rescue return Void
 end
 
 foul socketRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |_handshake|

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../semantic/db.hxx"
+#include "../semantic/symbol_info.hxx"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -276,18 +276,6 @@ inline auto standardLibraryArtifactSourceFiles()
         return result;
     }();
     return files;
-}
-
-// The prelude's sources, indexed into `db` (the language server's, until it
-// reads the checker's name index).
-inline auto loadDiscoveredPrelude(kex::semantic::SemanticDB& db) -> void {
-    for (const auto& filePath : preludeSourceFiles()) {
-        std::ifstream file(filePath);
-        if (!file.is_open()) continue;
-        std::ostringstream contents;
-        contents << file.rdbuf();
-        db.updateFile(filePath, contents.str());
-    }
 }
 
 } // namespace kex

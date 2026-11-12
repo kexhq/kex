@@ -7,7 +7,7 @@
 #include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
 #include "../semantic/analyzer.hxx"
-#include "../semantic/db.hxx"
+#include "../semantic/symbol_info.hxx"
 #include <algorithm>
 #include <cctype>
 #include <cstring>

@@ -136,6 +136,27 @@ enclosing it, then in what its `using` lines brought in. A top-level `using`
 covers the rest of **its own file**: a module merged in from another file does
 not see the entry file's imports.
 
+What a module's file declares outside the module is that file's own. The
+module may use it; a program that brings the module in with `using` gets the
+module's names, not the file's:
+
+```kex
+# lib/pantry.kex
+module Pantry do
+  let stocked() -> Integer = shelves() * 2
+end
+
+let shelves() -> Integer = 3     # this file's own
+
+# main.kex
+using Pantry
+
+main do
+  IO.printLine(stocked())        # 6
+  IO.printLine(shelves())        # error: pantry.kex declares it for itself
+end
+```
+
 A qualified name means what it spells. `Net.HTTP.Request<Binary>` written
 inside a module that declares its own `Request` is Net.HTTP's, and so is
 `Web.Request<Binary>` after `using Net.HTTP, as: Web`.

@@ -81,16 +81,19 @@ in its own file's expansion.
 
 `runSemanticCheck` runs one sema over the merged program:
 
-1. **Names** (`resolveProgramNames`, `ResolvePass`): finds undefined names,
-   constructors, tags and named-argument labels. It covers the program's own
-   modules through `collectSymbols` and the prelude's through their imported
-   interfaces.
-2. **Analyzer** (`Analyzer::analyze`):
-   - Phase 0 checks receiver conflicts and module rules (`module_rules.hxx`,
-     the `using`/`export` visibility rules).
-   - Then it checks scopes and purity, computes transitive effects, and runs
-     the type checker (`typechecker*.cxx`).
-3. **Validation:** tagged literals.
+1. **Analyzer** (`Analyzer::analyze`):
+   - The module rules (`module_rules.hxx`: what a `using` or `export` may
+     take from another module).
+   - Purity and mutability, over its own scope table (`SymbolTable`, which
+     reports no name any more; folding it onto the checker's scopes is open),
+     then transitive effects.
+   - The type checker (`typechecker*.cxx`), which is also the one place a
+     name is resolved: an undefined name, constructor, tag or named-argument
+     label is its report (`TypeChecker::reportUndefined`), and so is a bare
+     name two `using`s bring in from two modules
+     (`reportAmbiguousImports`).
+   - Receiver conflicts, from the receivers the checker resolved.
+2. **Validation:** tagged literals.
 
 The type checker is where calls are decided. Every call it understands gets a
 decision: an imported target (`ResolvedCallTarget`), a selected signature, or
@@ -105,9 +108,14 @@ a method call:
 - the run-time value, when the receiver is erased and providers compete;
 - or the overload winner.
 
-SemanticDB (`db.cxx`, `collect_pass.cxx`, `resolve_pass.cxx`) is the
-language server's index. It runs the same collector, resolver and module
-rules over the files it indexes. It is no longer part of a build.
+Tooling reads names from the checker too. When asked
+(`Analyzer::setIndexesNames`; a build does not ask), the checker records
+each expression that names something no scope binds and the names in scope
+at each expression, and `name_index.cxx` turns that into the symbols'
+references and the completion scopes. `symbol_queries.hxx` answers
+definitions, references and completions over such an index. The language
+server's documents (`src/lsp/workspace`) hold parsed files and their
+symbols and analyze nothing themselves.
 
 ## The checked program (`src/hir/`)
 

@@ -809,8 +809,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         def.declaringModule = L.currentModulePath;
                         mod.functions.push_back(std::move(def));
                     };
-                    auto emitMake = [&](const ast::MakeDef* mk,
-                                        const std::set<std::string>& declaredRecords) {
+                    auto emitMake = [&](const ast::MakeDef* mk) {
                         if (!mk) return;
                         for (const auto& typeName :
                              Lowering::makeTargetNameList(*L.hir, *mk)) {
@@ -835,8 +834,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     lowerModuleBody = [&](const ast::ModuleDef& m) {
                         auto savedModulePath = L.currentModulePath;
                         L.currentModulePath = m.name;
-                        std::set<std::string> declaredRecords;
-                        kex::collectDeclaredRecordNames(m.body, declaredRecords);
                         auto emitType = [&](const ast::TypeDef* td) {
                             if (!td || !td->variants) return;
                             if (auto constructors =
@@ -898,11 +895,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                     } else if (auto* vmk =
                                                    std::get_if<std::unique_ptr<
                                                        ast::MakeDef>>(&vi)) {
-                                        emitMake(vmk->get(), declaredRecords);
+                                        emitMake(vmk->get());
                                     }
                                 }
                             } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&bi)) {
-                                emitMake(mk->get(), declaredRecords);
+                                emitMake(mk->get());
                             } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&bi)) {
                                 if (*child) lowerModuleBody(**child);
                             } else if (std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&bi) ||

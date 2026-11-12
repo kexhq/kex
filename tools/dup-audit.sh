@@ -42,7 +42,9 @@ cd "$ROOT" || exit 1
 BASELINE="tools/dup-audit.baseline"
 MODE="${1:-report}"
 
-FILES="$(git ls-files src | grep -E '\.(cxx|hxx)$')"
+# The working tree's sources: tracked or new, and still on disk.
+FILES="$(git ls-files --cached --others --exclude-standard src | grep -E '\.(cxx|hxx)$' |
+    sort -u | while read -r file; do [ -f "$file" ] && echo "$file"; done)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/kex-dup-audit.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 

@@ -141,7 +141,7 @@ web-demo: build-wasm
 # failure, not a note.
 test-all: test spec-orphans check-examples spec spec-prelude spec-stdlib spec-examples \
           spec-beam spec-prelude-beam spec-stdlib-beam spec-examples-beam spec-test-json \
-          verify-hir-stdlib
+          verify-hir-stdlib build-tey
 
 # The checker decides every call the standard library makes: none is left
 # for a backend to work out (`--verify-hir`, src/hir/).
