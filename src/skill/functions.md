@@ -58,6 +58,19 @@ end
 # A generic function: single capital letters stand for any type.
 let pairUp(a: A, b: B) -> (A, B) = (a, b)
 
+# Two results at once are a tuple, taken apart where it is received.
+let divided(a: Integer, b: Integer) -> (Integer, Integer) = (a / b, a % b)
+
+# A parameter list too long for one line breaks one parameter per line.
+let clamped(
+  value: Integer,
+  low: Integer,
+  high: Integer
+) -> Integer do
+  return low if value < low
+  value > high then high else value
+end
+
 # `foul` marks I/O. A function without it cannot call a foul one.
 foul log(message: String) -> Void = IO.printLine("[log] ${message}")
 
@@ -80,6 +93,8 @@ main do
   log("${increment(1)} ${applyTwice(increment, 1)}")
   log(repeated(2) { |i| "pass ${i}" }.join(", "))
   log("${pairUp(1, "one")}")
+  let (quotient, remainder) = divided(17, 5)
+  log("${quotient} r ${remainder}, ${clamped(12, 0, 10)}")
 end
 ```
 
@@ -112,10 +127,15 @@ end
   parameter, the receiver, implied.
 - **Calling.** `f(a, b)` and `a.f(b)` are the same call, for every function,
   so `4.square` works on a function you wrote a line earlier.
+- **Several results** are a tuple: `-> (Integer, Integer)`, received with
+  `let (a, b) = ...`.
+- **A long parameter list** breaks after `(`, one parameter per line, with
+  `) -> RetType do` on a line of its own.
 - **Functions as values.** `~square` is the function; `~add(10)` fixes its
   first argument; `{ |n| n + 1 }` is a lambda; `&.even?` is the lambda that
   calls `even?` on its argument. Call a function held in a variable with
-  parentheses: `increment(1)`.
+  parentheses: `increment(1)`. `~` does not take a variant constructor:
+  write `{ |n| Just(n) }`, not `~Just`.
 - **Blocks.** A function whose last parameter is a function can be called
   with a trailing block: `repeated(2) { |i| "pass ${i}" }`.
 - **Generics.** Single capital letters are type parameters:

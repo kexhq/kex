@@ -99,6 +99,8 @@ main do
     several lines,
     kept as written
   `                                          # backticks for text over lines
+  IO.printLine(`no ${holes} in here`)        # backticks are raw: this prints ${holes}
+  IO.printLine($`but ${user} here`)          # a leading $ turns interpolation on
   IO.printLine(page.lines.count)
 
   # Conversion is `to(Type)` and answers an optional.
@@ -218,6 +220,7 @@ main do
   IO.printLine(numbers.map(&.pow(2)))        # &. takes arguments too
   IO.printLine(numbers.map(~add(10)))        # ~add(10) is { |n| add(10, n) }
   IO.printLine(numbers.reduce(0, ~add))      # ~add is the function itself
+  IO.printLine(numbers.map { |n| Just(n) })  # not: ~Just; `~` takes no constructor
 
   # Chains read left to right with dots. There is no |> operator.
   let result = numbers
@@ -268,6 +271,9 @@ end
 
 # Spellings: [X] list, X? optional, A or! E result, Map<K, V>, (A, B) tuple,
 # A -> B function. A type parameter is a single capital letter.
+# A name for a type that already exists is an alias:
+type Scores = Map<String, Integer>
+
 let firstOr(items: [X], fallback: X) -> X = items.first.or(fallback)
 
 let describePayment(payment: Payment) -> String do
@@ -294,7 +300,8 @@ end
 
 `IO`, `List`, `Map`, `String`, `Math`, `Process` and the rest of the prelude
 need nothing. Everything else needs `using`; `kex -s <Name>` says which. Your
-own files work the same way: see `kex --skill modules`.
+own files work the same way: see `kex --skill modules`. A program of more
+than a few files should be a package: see `kex --skill tey`.
 
 ```kex
 using FS                                     # not: require, import
@@ -337,3 +344,5 @@ Each of these is one worked program followed by its rules:
   which is a GenServer with a declared protocol.
 - `kex --skill testing` covers `describe` / `it` / `assert` and spec files.
 - `kex --skill style` covers layout, naming and which form to pick.
+- `kex --skill tey` covers packages: creating one, where files go, running,
+  testing and dependencies.

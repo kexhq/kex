@@ -93,7 +93,9 @@ end
 
 - Two spaces per level, no tabs. `end` goes under the line that opened the
   block. No blank line straight after `do` or straight before `end`.
-- Lines stay under 80 columns, and never over 100.
+- Lines stay under 80 columns, and never over 100. A definition too long for
+  one line breaks its parameters one per line inside the parentheses; a
+  chain breaks before each dot.
 - One space around every binary operator and `=`: `a + b`, `n >= low`. None
   around `..` (`1..10`) and none after a unary operator: `-count`, `!done?`,
   `~parse`, `&.even?`, `@radius`.

@@ -90,6 +90,83 @@ main do
 end
 ```
 
+## A slot that can refuse
+
+A server that validates answers a result, so its caller sees two layers: the
+call itself may fail (`CallError`), and the request may be refused. Keep the
+decision in a `make` function that answers the next state or the reason, and
+let the slot wrap it:
+
+```kex
+type BankError = Insufficient(Integer) | Frozen
+
+record Account do
+  balance : Integer = 0
+  frozen? : Bool = false
+end
+
+# The pure step answers the next state, or why there is none.
+make Account do
+  let withdrawn(amount: Integer) -> This or! BankError do
+    return Error(Frozen) if @frozen?
+    return Error(Insufficient(@balance)) if amount > @balance
+    Ok(New { balance: @balance - amount })
+  end
+
+  # Two answers at once are a tuple.
+  let deposited(amount: Integer) -> (This, Integer) do
+    let total = @balance + amount
+    (New { balance: total }, total)
+  end
+end
+
+serving Account do
+  # A slot that can refuse answers a result. In a `match` arm the answer needs
+  # `return`: without it the braces are read as an ordinary map.
+  slot withdraw(amount: Integer) -> Reply<Integer or! BankError> do
+    match this.withdrawn(amount) do
+      Ok(account)  => return { new: account, reply: Ok(account.balance) }
+      Error(error) => return { reply: Error(error) }
+    end
+  end
+
+  slot deposit(amount: Integer) -> Reply<Integer> do
+    let (account, total) = this.deposited(amount)
+    return { new: account, reply: total }
+  end
+
+  slot freeze -> Void = New { frozen?: true }
+end
+
+# A parameter list too long for the line breaks one parameter per line.
+foul transfer(
+  from: Server<Account>,
+  to: Server<Account>,
+  amount: Integer
+) -> String do
+  # The caller sees two layers: the call may fail, and so may the withdrawal.
+  match from.withdraw(amount) do
+    Ok(Ok(left))                => do
+      to.deposit(amount)
+      "moved ${amount}, ${left} left"
+    end
+    Ok(Error(Insufficient(has))) => "only ${has} available"
+    Ok(Error(Frozen))            => "account frozen"
+    Error(_)                     => "account unreachable"
+  end
+end
+
+main do
+  let ada = Process.spawn(Account { balance: 100 })
+  let bob = Process.spawn(Account {})
+  IO.printLine(transfer(ada, bob, 30))
+  IO.printLine(transfer(ada, bob, 500))
+  ada.freeze
+  IO.printLine(transfer(ada, bob, 1))
+  IO.printLine(bob.deposit(0).or(-1))
+end
+```
+
 ## Slots with several clauses, and `::>`
 
 A slot with one body carries its types in the `slot` line, as a function does
@@ -192,6 +269,17 @@ end
 
 - A slot's return type is its protocol: `Reply<T>` for a call that answers
   (`handle_call`), `Void` for a message nobody waits on (`handle_cast`).
+- The braces are a slot's answer only where the slot ends: after `=`, as the
+  last expression of its body, or after `return`. In a `match` arm or an `if`
+  branch write `return { ... }`; without it the braces are an ordinary map
+  and the checker reports a type mismatch.
+- Never build the answer as a record (`Reply { new: ..., reply: ... }`) and
+  never have a helper function return one: a `make` function answers the
+  next state, and the slot writes the braces itself.
+- A slot that can refuse is `Reply<T or! E>`, and its caller gets
+  `(T or! E) or! CallError`: match `Ok(Ok(value))`, `Ok(Error(reason))` and
+  `Error(_)`.
+- Match a failed call as `Error(_)` unless the reason matters.
 - A slot answers with one of: `{ reply: value }` to answer and keep the state,
   `{ new, reply: value }` to install the changed state and answer, or the new
   record itself (`New { ... }`, or `new` after assigning its fields) to change

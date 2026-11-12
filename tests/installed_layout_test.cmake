@@ -43,4 +43,25 @@ foreach(mode IN ITEMS walker beam)
     endif()
 endforeach()
 
+# The help a model reaches for first has to survive an install too. `--skill`
+# is built into the binary; `-s` reads the stdlib sources the install ships.
+# Neither may quietly depend on the source tree the binary was built from.
+foreach(help IN ITEMS "--skill|name: kex" "--skill|make|functions on a type"
+                      "-s|List.first|first :> X?" "-s|FS|needs `using FS`")
+    string(REPLACE "|" ";" parts "${help}")
+    list(POP_BACK parts expected)
+    execute_process(
+        COMMAND "${kex}" ${parts}
+        WORKING_DIRECTORY "${KEX_INSTALL_TEST_PREFIX}"
+        RESULT_VARIABLE help_result
+        OUTPUT_VARIABLE help_output
+        ERROR_VARIABLE help_error)
+    string(FIND "${help_output}" "${expected}" found)
+    if(NOT help_result EQUAL 0 OR found EQUAL -1)
+        message(FATAL_ERROR
+            "installed `kex ${parts}` failed (${help_result}): "
+            "expected `${expected}` in: ${help_output}${help_error}")
+    endif()
+endforeach()
+
 file(REMOVE_RECURSE "${KEX_INSTALL_TEST_PREFIX}")
