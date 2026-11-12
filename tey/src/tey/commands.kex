@@ -1273,7 +1273,7 @@ private do
   let collectClosure(state: LockState, pending: [String],
                      found: [String]) -> [String] do
     return found if pending.empty?
-    let name = pending.first.try
+    let Just(name) = pending.first
     return Tey.Commands.collectClosure(state, pending.drop(1), found) if found.contains?(name)
     let edges = match state.lockedDependencies.find { |dependency| dependency.name == name } do
       Just(dependency) => dependency.dependencies
@@ -1300,7 +1300,8 @@ private do
   foul buildLayers(layers: [[Member]], jobs: Integer,
                    state: WorkspaceRunState) -> WorkspaceRunState do
     return state if layers.empty?
-    let (ready, prepared) = Tey.Commands.readyMembers(layers.first.try, state)
+    let Just(layer) = layers.first
+    let (ready, prepared) = Tey.Commands.readyMembers(layer, state)
     let layerState = Tey.Commands.buildChunks(ready, jobs, prepared)
     return Tey.Commands.buildLayers(layers.drop(1), jobs, layerState)
   end
@@ -1335,7 +1336,8 @@ private do
                   interpret?: Bool, json?: Bool, list?: Bool, only: String,
                   state: WorkspaceRunState) -> WorkspaceRunState do
     return state if layers.empty?
-    let (ready, prepared) = Tey.Commands.readyMembers(layers.first.try, state)
+    let Just(layer) = layers.first
+    let (ready, prepared) = Tey.Commands.readyMembers(layer, state)
     let layerState = Tey.Commands.testChunks(ready, jobs, requested,
                                              interpret?, json?, list?, only,
                                              prepared)

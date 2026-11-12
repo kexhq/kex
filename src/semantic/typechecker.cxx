@@ -3,12 +3,15 @@
 #include "../common/mangle.hxx"
 #include "typechecker.hxx"
 #include "analyzer.hxx"
+#include "collect_pass.hxx"
 #include "declaration_validator.hxx"
+#include "module_rules.hxx"
 #include "../common/type_def_utils.hxx"
 #include "../common/well_known.hxx"
 #include "typechecker_internal.hxx"
 #include "resolve_core.hxx"
 #include <cctype>
+#include <filesystem>
 #include <functional>
 #include <set>
 #include <unordered_set>
@@ -43,10 +46,16 @@ auto makeOwnerNames(const ast::TypeExprPtr& written, const TypePtr& target)
 
 } // namespace
 
-auto TypeChecker::check(const ast::Program& program,
-                        std::vector<Diagnostic>& diagnostics) -> void {
+auto TypeChecker::check(const ast::Program& program, std::vector<Diagnostic>& diagnostics,
+                        const std::vector<std::string>& entryFiles) -> void {
     m_diagnostics = &diagnostics;
+    m_entryFiles = entryFiles;
     m_makeTargetIdentities.clear();
+    m_nameUses.clear();
+    m_scopeNames.clear();
+    m_scopeContexts.clear();
+    m_scopeContextIds.clear();
+    m_namespaceRoots.clear();
     m_patternBindings.clear();
     m_stringPatterns.clear();
     m_functionSignatures.clear();
@@ -92,12 +101,42 @@ auto TypeChecker::check(const ast::Program& program,
     pushScope();
 
     m_importedModulePaths.clear();
+    m_programModules = std::make_shared<ProgramModules>(collectSymbols(program));
+    // What a merged dependency's file declares outside its module is that
+    // file's own, as it is where the file is compiled apart.
+    m_fileLocalTopLevel.clear();
+    if (!m_entryFiles.empty()) {
+        const auto own = [&](std::string_view file) {
+            return std::find(m_entryFiles.begin(), m_entryFiles.end(), file) != m_entryFiles.end();
+        };
+        std::unordered_set<std::string> entryNames;
+        const auto each = [&](const auto& visit) {
+            for (const auto& item : program.items)
+                if (const auto* function = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
+                    function && *function)
+                    visit((*function)->name, (*function)->location.file);
+                else if (const auto* type = std::get_if<std::unique_ptr<ast::TypeDef>>(&item);
+                         type && *type)
+                    if (auto constructors = kex::typeConstructors(**type))
+                        for (const auto& constructor : *constructors)
+                            visit(constructor.name, (*type)->location.file);
+        };
+        each([&](const std::string& name, std::string_view file) {
+            if (own(file)) entryNames.insert(name);
+        });
+        each([&](const std::string& name, std::string_view file) {
+            if (!own(file) && !entryNames.contains(name))
+                m_fileLocalTopLevel.try_emplace(name, std::string(file));
+        });
+    }
+    m_reportedOnce.clear();
     auto selectionFor = [this](const ast::UsingBlock& block) {
         ImportSelection selection;
         selection.module += block.module.dotted();
         selection.onlyNames = block.onlyNames;
         selection.exceptNames = block.exceptNames;
         selection.alias = block.alias;
+        selection.location = block.location;
         m_importedModulePaths.insert(selection.module);
         return selection;
     };
@@ -128,16 +167,19 @@ auto TypeChecker::check(const ast::Program& program,
                     m_typeImports[type->get()] = active;
             }
         };
-    std::function<void(const ast::ModuleDef&, std::vector<ImportSelection>)>
+    std::function<void(const ast::ModuleDef&, std::vector<ImportSelection>, const std::string&)>
         collectModuleImports;
     collectModuleImports = [&](const ast::ModuleDef& module,
-                               std::vector<ImportSelection> active) {
+                               std::vector<ImportSelection> active, const std::string& parent) {
+        const auto path = ast::nestedModulePath(parent, module.name);
         for (const auto& item : module.body) {
             std::visit([&](const auto& node) {
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
-                    if (node && node->body.empty())
+                    if (node && node->body.empty()) {
                         active.push_back(selectionFor(*node));
+                        reportAmbiguousImports(active, path);
+                    }
                 } else if constexpr (
                     std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
                     if (node) m_functionImports[node.get()] = active;
@@ -155,7 +197,7 @@ auto TypeChecker::check(const ast::Program& program,
                     if (node) collectVisibilityImports(*node, active);
                 } else if constexpr (
                     std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                    if (node) collectModuleImports(*node, active);
+                    if (node) collectModuleImports(*node, active, path);
                 }
             }, item);
         }
@@ -180,6 +222,12 @@ auto TypeChecker::check(const ast::Program& program,
                 if (node && node->body.empty()) {
                     topLevelImports.push_back(selectionFor(*node));
                     topLevelImportFiles.push_back(node->location.file);
+                    // Against the `using`s of its own file.
+                    std::vector<ImportSelection> sameFile;
+                    for (size_t i = 0; i < topLevelImports.size(); ++i)
+                        if (topLevelImportFiles[i] == node->location.file)
+                            sameFile.push_back(topLevelImports[i]);
+                    reportAmbiguousImports(sameFile, "");
                 }
             } else if constexpr (
                 std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
@@ -201,7 +249,7 @@ auto TypeChecker::check(const ast::Program& program,
                 if (node) collectVisibilityImports(*node, topLevelImports);
             } else if constexpr (
                 std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (node) collectModuleImports(*node, importsVisibleIn(*node));
+                if (node) collectModuleImports(*node, importsVisibleIn(*node), "");
             }
         }, item);
     }
@@ -385,9 +433,15 @@ auto TypeChecker::check(const ast::Program& program,
             for (const auto& e : (*main)->body)
                 if (const auto* let = e ? std::get_if<ast::LetExpr>(&e->kind) : nullptr;
                     let && let->pattern)
-                    if (const auto* var =
-                            std::get_if<ast::VarPattern>(&let->pattern->kind))
-                        m_topLevelValueNames.insert(var->name);
+                    ast::forEachSubPattern(*let->pattern, [&](const ast::Pattern& bound) {
+                        if (const auto* var = std::get_if<ast::VarPattern>(&bound.kind))
+                            m_topLevelValueNames.insert(var->name);
+                        else if (const auto* typed = std::get_if<ast::TypePattern>(&bound.kind))
+                            m_topLevelValueNames.insert(typed->name);
+                        else if (const auto* record = std::get_if<ast::RecordPattern>(&bound.kind))
+                            for (const auto& field : record->fields)
+                                if (!field.pattern) m_topLevelValueNames.insert(field.name);
+                    });
     registerDeclaredSignatures(program);
     registerMakeSignatures(program);
     m_moduleReexports.clear();
@@ -1330,6 +1384,18 @@ auto TypeChecker::constructorInfo(const std::string& name, const std::string& sc
         module.resize(dot);
     }
     if (found == m_constructorResult.end()) found = m_constructorResult.find(name);
+    // A constructor of a module of this program that a `using` brings in
+    // bare (`WantStore(pid)` under `using Store`), where one module does.
+    if (found == m_constructorResult.end() && !name.empty() &&
+        std::isupper(static_cast<unsigned char>(name.front()))) {
+        for (const auto& [module, constructors] : m_moduleConstructors) {
+            if (!constructors.count(name) || !moduleMemberImported(module, name, true)) continue;
+            const auto imported = m_constructorResult.find(kex::mangle::qualify(module, name));
+            if (imported == m_constructorResult.end()) continue;
+            if (found != m_constructorResult.end()) return nullptr;
+            found = imported;
+        }
+    }
     return found == m_constructorResult.end() ? nullptr : &found->second;
 }
 
@@ -1355,6 +1421,34 @@ auto TypeChecker::checkConstructorPayloads(const std::string& name,
         error(loc, "`" + name + "` takes " + std::to_string(arity) +
                        (arity == 1 ? " value" : " values") + ", but got " +
                        std::to_string(argTypes.size()));
+        return;
+    }
+    // Each value against the payload as declared, where both are known:
+    // a payload that is one of the type's parameters (`Just(A)`) takes any.
+    for (std::size_t i = 0; i < arity; ++i) {
+        if (i < info->slots.size() && info->slots[i] >= 0) continue;
+        const auto declared = declaredPayload(*info, i);
+        if (!declared || !argTypes[i]) continue;
+        const auto expected = resolve(declared);
+        const auto actual = resolve(argTypes[i]);
+        if (isUndetermined(expected) || isUndetermined(actual) ||
+            argMatchesParam(actual, expected))
+            continue;
+        // A bare `Pid` where the payload is a `Process<T>` (`Ask(Process.self)`):
+        // programs rely on it, though a function parameter refuses the same.
+        // Left as it was until the language says which it is.
+        const auto* expectedName = std::get_if<NamedType>(&expected->kind);
+        const auto* actualName = std::get_if<NamedType>(&actual->kind);
+        if (expectedName && actualName && expectedName->name == names::kProcessType &&
+            actualName->name == names::kPidType)
+            continue;
+        // Once, however often the call is inferred.
+        auto message = "`" + name + "` expects " +
+                       (arity == 1 ? "a value" : "value " + std::to_string(i + 1)) + " of type " +
+                       typeToString(expected) + ", but got " + typeToString(actual);
+        const auto key = std::string(loc.file) + ':' + std::to_string(loc.line) + ':' +
+                         std::to_string(loc.column) + ':' + message;
+        if (m_reportedOnce.insert(key).second) error(loc, message);
     }
 }
 
@@ -3594,13 +3688,13 @@ auto TypeChecker::checkUsingBlock(const ast::UsingBlock& block) -> void {
     selection.onlyNames = block.onlyNames;
     selection.exceptNames = block.exceptNames;
     selection.alias = block.alias;
+    selection.location = block.location;
     if (block.body.empty()) {
-        if (!m_importScopeStack.empty())
-            m_importScopeStack.back().push_back(std::move(selection));
+        if (!m_importScopeStack.empty()) pushImport(std::move(selection));
         return;
     }
     pushScope();
-    m_importScopeStack.back().push_back(std::move(selection));
+    pushImport(std::move(selection));
     inferBody(block.body);
     popScope();
 }
@@ -3912,7 +4006,14 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                     std::to_string(clause.params.size())});
             }
         }
+        // The `.try`s of this clause's own body (not a block's, not a
+        // `trying`'s), for the check against its declared result below.
+        std::vector<SourceLocation> clauseTries;
+        auto* const outerTries = std::exchange(m_clauseTries, &clauseTries);
+        const auto outerTriesDepth = std::exchange(m_clauseTriesDepth, m_blockDepth);
         auto bodyType = inferBody(clause.body);
+        m_clauseTries = outerTries;
+        m_clauseTriesDepth = outerTriesDepth;
         if (clause.rescue) checkRescue(*clause.rescue);
         m_inCastSlot = previousCastSlot;
         // Verify body matches declared return type (if declared and concrete).
@@ -3929,6 +4030,19 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             : clause.returnAnnotation
                 ? resolveTypeExpr(**clause.returnAnnotation, genericVars)
                 : inlineReturnType;
+        // A failed `.try` leaves the function with the failure as its
+        // result. A function that declares a result which is no Result and
+        // no Optional has nowhere to put it: its caller would get an `Error`
+        // where a `User` was promised. Refused, unless the clause rescues.
+        if (effectiveReturnType && !clause.rescue && !clauseTries.empty()) {
+            const auto promised = resolve(effectiveReturnType);
+            if (!holdsFailure(promised))
+                for (const auto& at : clauseTries)
+                    error(at, "`.try` can fail, and `" + def.name + "` returns " +
+                                  typeToString(promised) +
+                                  ", which cannot hold the failure: return a Result or an "
+                                  "Optional, or handle it with `trying` or a `rescue`");
+        }
         const auto servingTransitionMatches = [&]() {
             if (!def.isSlot || !effectiveReturnType || clause.body.empty())
                 return false;
@@ -4396,6 +4510,8 @@ auto TypeChecker::freeFunctionVisible(const std::string& module,
     if (m_privateFreeFunctions.contains(module + "\n" + name)) return false;
     const auto admits = [&](const ImportSelection& import) {
         if (import.module != module) return false;
+        // `as:` binds the module to a name and brings none of its names in.
+        if (!resolve_core::usingImportsNames(import.alias, import.onlyNames)) return false;
         if (!import.onlyNames.empty() &&
             std::find(import.onlyNames.begin(), import.onlyNames.end(), name) ==
                 import.onlyNames.end())
@@ -4975,6 +5091,32 @@ auto TypeChecker::variantType(const TypePtr& result, const std::string& name) co
 
 namespace kex::semantic {
 
+// Inside a `make` block, `name` with `argTypes` as a function of the block's
+// own type called on `this` (`decorate(@name)`, or `seed` named bare): one
+// such function takes `this` and those arguments. Decided as the type's own;
+// null when none does.
+auto TypeChecker::ownFunctionOnThis(const ast::Expr& expr, const std::string& name,
+                                    const std::vector<TypePtr>& argTypes) -> TypePtr {
+    if (!m_inMakeBlock || !m_currentMakeType) return nullptr;
+    const auto functions = m_methodSignatures.find(name);
+    if (functions == m_methodSignatures.end()) return nullptr;
+    const auto* wanted = std::get_if<NamedType>(&resolve(m_currentMakeType)->kind);
+    const bool takesThis = std::any_of(
+        functions->second.begin(), functions->second.end(), [&](const Signature& function) {
+            if (function.params.size() != argTypes.size() + 1) return false;
+            const auto* own = std::get_if<NamedType>(&resolve(function.params.front())->kind);
+            if (wanted && own) return ownTypeIdentity(own->name) == ownTypeIdentity(wanted->name);
+            return typesEqual(resolve(function.params.front()), resolve(m_currentMakeType));
+        });
+    if (!takesThis) return nullptr;
+    std::vector<TypePtr> withThis{m_currentMakeType};
+    withThis.insert(withThis.end(), argTypes.begin(), argTypes.end());
+    auto result = checkCall(name, withThis, expr.location, true, nullptr, &expr);
+    m_decidedCalls.try_emplace(&expr,
+                               DecidedCall{CallKind::OwnMethod, typeToString(m_currentMakeType)});
+    return result;
+}
+
 // A bare call that only `make` methods answer is a method call, as both
 // backends run it (lowering's FunctionCall cascade): inside a make block,
 // written one argument short of the block's own method, `this` is the
@@ -5007,15 +5149,7 @@ auto TypeChecker::bareMethodCall(const ast::Expr& expr, const ast::FunctionCall&
                 return typesEqual(resolve(method.params.front()), resolve(receiver));
             });
     };
-    if (m_inMakeBlock && m_currentMakeType &&
-        methodAt(argTypes.size() + 1, m_currentMakeType)) {
-        std::vector<TypePtr> withThis{m_currentMakeType};
-        withThis.insert(withThis.end(), argTypes.begin(), argTypes.end());
-        auto result = checkCall(name, withThis, expr.location, true, nullptr, &expr);
-        m_decidedCalls.try_emplace(
-            &expr, DecidedCall{CallKind::OwnMethod, typeToString(m_currentMakeType)});
-        return result;
-    }
+    if (auto own = ownFunctionOnThis(expr, name, argTypes)) return own;
     if (argTypes.empty() || !methodAt(argTypes.size(), nullptr)) return nullptr;
     auto result = checkCall(name, argTypes, expr.location, true, nullptr, &expr);
     if (!m_decidedCalls.contains(&expr)) {
@@ -5188,16 +5322,183 @@ namespace kex::semantic {
 // module declares: it is spelled out (`FS.FileMode.Write`, or `FS.Write`), or
 // brought in with `using`.
 auto TypeChecker::reportConstructorOutOfScope(const std::string& name, const SourceLocation& at)
-    -> void {
+    -> bool {
     const auto owners = m_constructorOwners.find(name);
-    if (owners == m_constructorOwners.end()) return;
+    if (owners == m_constructorOwners.end()) return false;
     for (const auto& owner : owners->second)
         if (!owner.module.empty()) {
             error(at, "`" + name + "` is a constructor of " + owner.adt + ", declared in module " +
                           owner.module + ": write `" + owner.module + "." + name +
                           "`, or bring it in with `using " + owner.module + "`");
-            return;
+            return true;
         }
+    return false;
+}
+
+auto TypeChecker::reportAmbiguousImports(const std::vector<ImportSelection>& active,
+                                         const std::string& within) -> void {
+    if (active.empty() || !m_programModules) return;
+    std::vector<resolve_core::ImportScope> origins(1);
+    for (const auto& import : active)
+        forEachImportedName(
+            *m_programModules, m_importedInterfaces, within, import.module, import.alias,
+            import.onlyNames, import.exceptNames,
+            [&](const std::string& name, const std::string& module, bool receiverMethod) {
+                const auto merged = resolve_core::mergeImportOrigin(
+                    origins, name, {module, !import.onlyNames.empty(), receiverMethod});
+                if (!merged.ambiguity || &import != &active.back()) return;
+                const auto key = std::string(import.location.file) + ':' +
+                                 std::to_string(import.location.line) + ':' +
+                                 std::to_string(import.location.column) + ':' + name;
+                if (m_reportedOnce.insert(key).second)
+                    error(import.location, *merged.ambiguity);
+            });
+}
+
+auto TypeChecker::pushImport(ImportSelection selection) -> void {
+    m_importScopeStack.back().push_back(std::move(selection));
+    auto active = m_declarationImports;
+    for (const auto& frame : m_importScopeStack)
+        active.insert(active.end(), frame.begin(), frame.end());
+    reportAmbiguousImports(active, m_currentModulePath);
+}
+
+auto TypeChecker::scopeContext() -> std::size_t {
+    ScopeContext context{m_currentModulePath, m_declarationImports};
+    for (const auto& frame : m_importScopeStack)
+        context.imports.insert(context.imports.end(), frame.begin(), frame.end());
+    auto key = context.module;
+    for (const auto& import : context.imports) {
+        key += '\n' + import.module + '\x1f' + import.alias.value_or("");
+        for (const auto& name : import.onlyNames) key += '\x1e' + name;
+        key += '\x1f';
+        for (const auto& name : import.exceptNames) key += '\x1e' + name;
+    }
+    const auto [found, added] = m_scopeContextIds.try_emplace(std::move(key), m_scopeContexts.size());
+    if (added) m_scopeContexts.push_back(std::move(context));
+    return found->second;
+}
+
+auto TypeChecker::recordNames(const ast::Expr& expr) -> void {
+    const auto context = scopeContext();
+    auto& names = m_scopeNames[&expr];
+    names = {{}, context};
+    for (const auto& scope : m_scopeStack) {
+        auto bound = scope.names();
+        names.bound.insert(names.bound.end(), bound.begin(), bound.end());
+    }
+    names.bound.insert(names.bound.end(), m_topLevelValueNames.begin(), m_topLevelValueNames.end());
+    if (m_inMakeBlock) names.bound.push_back("new");
+
+    const std::string* name = nullptr;
+    if (const auto* identifier = std::get_if<ast::Identifier>(&expr.kind))
+        name = &identifier->name;
+    else if (const auto* upper = std::get_if<ast::UpperIdentifier>(&expr.kind))
+        name = &upper->name;
+    else if (const auto* call = std::get_if<ast::FunctionCall>(&expr.kind))
+        name = &call->name;
+    else if (const auto* tagged = std::get_if<ast::TaggedLiteral>(&expr.kind))
+        name = &tagged->tag;
+    else if (const auto* capture = std::get_if<ast::CurryExpr>(&expr.kind)) {
+        if (capture->module.empty() && !capture->isOperator) name = &capture->name;
+    } else if (const auto* method = std::get_if<ast::MethodCall>(&expr.kind)) {
+        if (method->receiver &&
+            std::holds_alternative<ast::UpperIdentifier>(method->receiver->kind))
+            m_namespaceRoots.insert(method->receiver.get());
+    }
+    if (!name || name->empty() || *name == "_" || m_namespaceRoots.contains(&expr)) return;
+    if (std::find(names.bound.begin(), names.bound.end(), *name) != names.bound.end()) return;
+    m_nameUses[&expr] = context;
+}
+
+auto TypeChecker::reportOtherFilesTopLevel(const std::string& what, const std::string& name,
+                                           const SourceLocation& at) -> bool {
+    const auto found = m_fileLocalTopLevel.find(name);
+    if (found == m_fileLocalTopLevel.end() || found->second == at.file || lookupVar(name))
+        return false;
+    const auto message = "Undefined " + what + ": `" + name + "` — " +
+                         std::filesystem::path(found->second).filename().string() +
+                         " declares it outside its module, for itself";
+    const auto key = std::string(at.file) + ':' + std::to_string(at.line) + ':' +
+                     std::to_string(at.column) + ':' + message;
+    if (m_reportedOnce.insert(key).second) error(at, message);
+    return true;
+}
+
+auto TypeChecker::bareFunctionReachable(const std::string& name) const -> bool {
+    std::vector<Signature> visible;
+    std::set<std::string> hidden;
+    const auto* reached = reachableFreeFunctions(name, false, visible, hidden);
+    return reached && !reached->empty();
+}
+
+auto TypeChecker::bareNameDeclared(const std::string& name) const -> bool {
+    if (!m_declarationsRegistered) return true;
+    if (m_topLevelValueNames.contains(name) || bareFunctionReachable(name)) return true;
+    if (m_inMakeBlock && m_methodSignatures.contains(name)) return true;
+    // A function of a module compiled apart, where a `using` brings its
+    // names in bare (`as:` alone does not).
+    if (m_importedInterfaces)
+        for (const auto& [moduleName, module] : m_importedInterfaces->modules)
+            if (module.compiledApart && module.exports.count(name) &&
+                moduleMemberImported(moduleName, name, true))
+                return true;
+    // A type or a module, named as a value (`x.to(Binary)`), and a
+    // constructor the prelude brings in.
+    if (name.empty() || !std::isupper(static_cast<unsigned char>(name.front()))) return false;
+    if (namesKnownType(name) || namesDeclaredType(name, name) || m_constructorOwners.contains(name))
+        return true;
+    // A module's constructor, inside the module or under a `using` of it.
+    for (const auto& [module, constructors] : m_moduleConstructors)
+        if (constructors.count(name) &&
+            (withinModule(module) || moduleMemberImported(module, name, true)))
+            return true;
+    if (!m_importedInterfaces) return false;
+    if (m_importedInterfaces->modules.count(name)) return true;
+    for (const auto& adt : m_importedInterfaces->adts)
+        if (std::find(adt.constructors.begin(), adt.constructors.end(), name) !=
+            adt.constructors.end())
+            return true;
+    return std::any_of(m_importedInterfaces->modules.begin(), m_importedInterfaces->modules.end(),
+                       [&](const auto& module) {
+                           return module.second.automaticImport && module.second.exports.count(name);
+                       });
+}
+
+auto TypeChecker::reportUndefined(const std::string& what, const std::string& name,
+                                  const SourceLocation& at) -> void {
+    // The names in reach, nearest scope first, then the program's own.
+    std::vector<std::string> candidates;
+    for (auto scope = m_scopeStack.rbegin(); scope != m_scopeStack.rend(); ++scope) {
+        auto names = scope->names();
+        std::sort(names.begin(), names.end());
+        candidates.insert(candidates.end(), names.begin(), names.end());
+    }
+    std::vector<std::string> declared;
+    for (const auto& [function, _] : m_userSignatures)
+        if (!kex::mangle::hasScope(function)) declared.push_back(function);
+    declared.insert(declared.end(), m_topLevelValueNames.begin(), m_topLevelValueNames.end());
+    std::sort(declared.begin(), declared.end());
+    candidates.insert(candidates.end(), declared.begin(), declared.end());
+    std::erase(candidates, name);
+    auto message = "Undefined " + what + ": `" + name + "`";
+    // A module declares it, but not where this can see: name that module
+    // rather than guess at a spelling.
+    std::vector<Signature> visible;
+    std::set<std::string> hidden;
+    reachableFreeFunctions(name, false, visible, hidden);
+    hidden.erase("");
+    std::string owners;
+    for (const auto& module : hidden)
+        owners += (owners.empty() ? "" : ", ") + std::string("`") + module + "." + name + "`" +
+                  (m_privateFreeFunctions.contains(module + "\n" + name)
+                       ? " is private to `" + module + "`"
+                       : " is not imported here");
+    if (!owners.empty())
+        message += " — " + owners;
+    else if (const auto hint = closestName(name, candidates); !hint.empty())
+        message += " — did you mean `" + hint + "`?";
+    error(at, message);
 }
 
 } // namespace kex::semantic

@@ -112,9 +112,76 @@ auto checkUsing(const ImportedInterfaces& interfaces,
             report("module " + requested + " has no name `" + name + "`");
 }
 
+auto forEachImportedName(
+    const ModuleSymbols& modules, const ImportedInterfaces* imports, const std::string& within,
+    const std::string& written, const std::optional<std::string>& alias,
+    const std::vector<std::string>& only, const std::vector<std::string>& except,
+    const std::function<void(const std::string&, const std::string&, bool)>& visit) -> void {
+    if (!resolve_core::usingImportsNames(alias, only)) return;
+    const auto module = resolve_core::resolveModulePathIn(
+        within, written, [&](const std::string& candidate) { return modules.hasModule(candidate); });
+    if (modules.hasModule(module)) {
+        for (const auto* symbol : modules.publicMembers(module))
+            if (resolve_core::usingSelectsName(symbol->name, only, except))
+                visit(symbol->name, module, !symbol->makeTarget.empty());
+        return;
+    }
+    if (!imports) return;
+    const auto interface = imports->modules.find(written);
+    if (interface == imports->modules.end()) return;
+    for (const auto& [name, overloads] : interface->second.exports)
+        if (resolve_core::usingSelectsName(name, only, except))
+            visit(name, written,
+                  !overloads.empty() &&
+                      std::all_of(overloads.begin(), overloads.end(),
+                                  [](const ImportedFunction& function) {
+                                      return function.isReceiverMethod;
+                                  }));
+}
+
+auto forEachUsing(const ast::Program& program,
+                  const std::function<void(const WrittenUsing&)>& visit) -> void {
+    const auto inExpr = [&](const auto& self, const ast::Expr& expr, const std::string& path) -> void {
+        if (const auto* written = std::get_if<ast::UsingExpr>(&expr.kind))
+            visit({written->module, written->alias, written->onlyNames, written->exceptNames,
+                   expr.location, path});
+        ast::forEachChild(expr, [&](const ast::ExprPtr& child) {
+            if (child) self(self, *child, path);
+        });
+    };
+    const auto inBody = [&](const std::vector<ast::ExprPtr>& body, const std::string& path) {
+        for (const auto& expr : body)
+            if (expr) inExpr(inExpr, *expr, path);
+    };
+    const auto inItems = [&](const auto& self, const auto& items, const std::string& path) -> void {
+        for (const auto& item : items)
+            std::visit([&](const auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if (!node) return;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+                    visit({node->module, node->alias, node->onlyNames, node->exceptNames,
+                           node->location, path});
+                    inBody(node->body, path);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                    for (const auto& clause : node->clauses) inBody(clause.body, path);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
+                    inBody(node->body, path);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                    self(self, node->body, path);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                    self(self, node->items, path);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                    self(self, node->body, ast::nestedModulePath(path, node->name));
+                }
+            }, item);
+    };
+    inItems(inItems, program.items, "");
+}
+
 auto findModuleRuleViolations(const ast::Program& program,
                               const ImportedInterfaces* interfaces,
-                              const ModuleLocator* locate)
+                              const ModuleLocator* locate,
+                              const std::vector<std::string>& warnedFiles)
     -> std::vector<Diagnostic> {
     const ProgramModules modules(collectSymbols(program));
     std::vector<Diagnostic> found;
@@ -129,57 +196,23 @@ auto findModuleRuleViolations(const ast::Program& program,
         const auto found = interfaces->modules.find(module);
         return found == interfaces->modules.end() ? nullptr : &found->second;
     };
-    // A `using`, a declaration (UsingBlock) or one written in a body
-    // (UsingExpr), against what its module declares.
-    const auto usingNames = [&](const ast::TypeName& written, const std::vector<std::string>& only,
-                                const std::vector<std::string>& except, const SourceLocation& at,
-                                const std::string& current) {
+    // Each `using` against what its module declares.
+    forEachUsing(program, [&](const WrittenUsing& written) {
         const auto report = [&](const std::string& message) {
-            found.push_back({Diagnostic::Level::Error, at, message});
+            found.push_back({Diagnostic::Level::Error, written.location, message});
         };
-        const auto requested = written.dotted();
-        const auto module = resolved(current, requested);
+        const auto requested = written.module.dotted();
+        const auto module = resolved(written.within, requested);
         if (modules.hasModule(module))
-            checkUsing(modules, module, only, except, report);
+            checkUsing(modules, module, written.onlyNames, written.exceptNames, report);
         else if (const auto* interface = interfaceOf(requested))
-            checkUsing(*interfaces, *interface, requested, only, report);
-        // A module nothing here describes is the build's to find (or warn of).
-    };
-    const auto using_ = [&](const ast::UsingBlock& block, const std::string& current) {
-        usingNames(block.module, block.onlyNames, block.exceptNames, block.location, current);
-    };
-    // The `using`s written in the bodies of `items`, which are in module `path`.
-    const auto bodyUsings = [&](const auto& self, const auto& items, const std::string& path) -> void {
-        const auto inExpr = [&](const auto& expression, const ast::Expr& expr) -> void {
-            if (const auto* written = std::get_if<ast::UsingExpr>(&expr.kind))
-                usingNames(written->module, written->onlyNames, written->exceptNames, expr.location, path);
-            ast::forEachChild(expr, [&](const ast::ExprPtr& child) {
-                if (child) expression(expression, *child);
-            });
-        };
-        const auto inFunction = [&](const ast::FunctionDef& function) {
-            for (const auto& clause : function.clauses)
-                for (const auto& expr : clause.body)
-                    if (expr) inExpr(inExpr, *expr);
-        };
-        for (const auto& item : items)
-            std::visit([&](const auto& node) {
-                using T = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                    if (node) inFunction(*node);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
-                    if (node)
-                        for (const auto& expr : node->body)
-                            if (expr) inExpr(inExpr, *expr);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
-                    if (node) self(self, node->body, path);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
-                    if (node) self(self, node->items, path);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                    if (node) self(self, node->body, ast::nestedModulePath(path, node->name));
-                }
-            }, item);
-    };
+            checkUsing(*interfaces, *interface, requested, written.onlyNames, report);
+        // A module nothing here describes is the build's to find.
+        else if (std::find(warnedFiles.begin(), warnedFiles.end(), written.location.file) !=
+                 warnedFiles.end())
+            found.push_back({Diagnostic::Level::Warning, written.location,
+                             "module not found in source roots: " + requested});
+    });
     const auto export_ = [&](const ast::ExportDecl& decl, const std::string& current) {
         const auto target = resolved(current, decl.module.dotted());
         // Not one of the program's: described by an interface, or on disk
@@ -200,9 +233,7 @@ auto findModuleRuleViolations(const ast::Program& program,
             std::visit([&](const auto& node) {
                 using T = std::decay_t<decltype(node)>;
                 if (!node) return;
-                if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>)
-                    using_(*node, path);
-                else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ExportDecl>>)
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::ExportDecl>>)
                     export_(*node, path);
                 else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>)
                     self(self, *node, path);
@@ -212,12 +243,9 @@ auto findModuleRuleViolations(const ast::Program& program,
         std::visit([&](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if (!node) return;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>)
-                using_(*node, "");
-            else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>)
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>)
                 module(module, *node, "");
         }, item);
-    bodyUsings(bodyUsings, program.items, "");
     return found;
 }
 

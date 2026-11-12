@@ -60,19 +60,14 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                     ex->node = localCall(symbol, {});
                     return ex;
                 }
-                // A bare reference inside a `make` method to one of that
-                // block's own PARAMETERLESS methods — the identifier form
-                // of the implicit-receiver call rule: `seed` means
+                // A bare reference inside a `make` block to one of its
+                // type's own parameterless functions, as the checker
+                // decided it (TypeChecker::ownFunctionOnThis): `seed` means
                 // `this.seed` exactly as `decorate(x)` means
-                // `this.decorate(x)`. A LOCAL binding of the same name
-                // always wins (the guard above), as does a zero-arity
-                // function — an ordinary `let seed = …` constant. Ahead of
-                // the constructor fallback and `knownFns` (a name-only set
-                // holding every make method) (kexhq/kex#292).
-                if (!currentMakeType.empty() && subst.count("this") &&
-                    !definedFnArities.count(n.name + "/0") &&
-                    definedFnArities.count(n.name + "/1") &&
-                    ownsMethod(currentMakeType, n.name)) {
+                // `this.decorate(x)`. A local binding of the same name wins
+                // (the guard above) (kexhq/kex#292).
+                if (hir->targetOf(*e).kind == hir::TargetKind::OwnMethod &&
+                    subst.count("this")) {
                     auto ex = std::make_unique<Expr>();
                     ex->node = localCall(n.name,
                                          one(var(currentName("this"))));

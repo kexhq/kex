@@ -187,7 +187,8 @@ end
 
 foul bagHtml() -> String do
   let model = modelOf([parsePage("walkable.kex", enumerableSource()), parsePage("bag.kex", bagSource()), parsePage("extra.kex", extraSource())])
-  return pageBodyHtml(model.pages.find { |p| p.urlPath == "bag" }.try, model, true)
+  let Just(page) = model.pages.find { |p| p.urlPath == "bag" }
+  return pageBodyHtml(page, model, true)
 end
 
 describe("Tey.Docgen.Html type pages") do

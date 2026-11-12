@@ -1,7 +1,7 @@
 #pragma once
 
 #include "analyzer.hxx"  // completes db.hxx's forward-declared Diagnostic
-#include "db.hxx"
+#include "symbol_info.hxx"
 #include "imported_interfaces.hxx"
 #include "types.hxx"
 

@@ -609,7 +609,7 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
         // module turns out not to exist, the absolute name is still owed a
         // look — `Leaf` means the top-level `Leaf`.
         //
-        // Mirrors the same fallback in SemanticDB::ensureModule. Without it a
+        // Mirrors the same fallback in lsp::Workspace::ensureModule. Without it a
         // module that imports another module fails at run time having already
         // type-checked.
         if (canonicalName != moduleName)

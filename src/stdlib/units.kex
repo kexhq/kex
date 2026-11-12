@@ -424,7 +424,7 @@ make Measure<D>, implement: Showable do
     let magnitude = Math.abs(@canonical)
     let selected = magnitude == 0.0 then base else
       family.filter { |unit| unit.conversionFactor <= magnitude }
-        .last.or(family.first.try)
+        .last.or(family.first.or(base))
     return Measure {
       canonical: @canonical,
       value: scaledValue(@canonical, selected.conversionFactor),

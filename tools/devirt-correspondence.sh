@@ -14,6 +14,9 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 audit="$tmp/audit.log"
 core="$tmp/core"
 mkdir -p "$core"
+# Its own empty cache: a unit served from the unit cache is not lowered, so
+# it records no firing, and the count would follow whatever ran before.
+export XDG_CACHE_HOME="$tmp/cache"
 
 mkdir -p "$tmp/prelude"
 "$KEX" --build-prelude "$tmp/prelude" >/dev/null 2>&1 || {

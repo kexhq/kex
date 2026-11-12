@@ -1,7 +1,6 @@
 #include "analyzer.hxx"
 #include "../ast/walk.hxx"
 #include "module_rules.hxx"
-#include "resolve_pass.hxx"
 #include "receiver_conflicts.hxx"
 #include "resolve_core.hxx"
 
@@ -112,16 +111,10 @@ auto Analyzer::bindPatternVars(const ast::Pattern& pat, SourceLocation loc,
 }
 
 auto Analyzer::analyze(const ast::Program& program) -> bool {
-    // Names first: an undefined name is reported as such, not as the type
-    // errors it causes.
-    if (!m_nameCheckFiles.empty()) {
-        m_nameIndex = resolveProgramNames(program, m_nameCheckFiles, m_importedInterfaces);
-        for (const auto& diagnostic : m_nameIndex.diagnostics) m_diagnostics.push_back(diagnostic);
-    }
     // Which names one module may take from another (`using`, `export`).
     for (auto& violation : findModuleRuleViolations(
              program, m_importedInterfaces,
-             m_moduleLocator ? &m_moduleLocator : nullptr))
+             m_moduleLocator ? &m_moduleLocator : nullptr, m_entryFiles))
         m_diagnostics.push_back(std::move(violation));
 
     // Phase 0.5: per-module member effects, so a qualified call can be checked
@@ -143,7 +136,11 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
 
     // Phase 2: type checking
     const auto checkedFrom = m_diagnostics.size();
-    m_checker.check(program, m_diagnostics);
+    m_checker.check(program, m_diagnostics, m_entryFiles);
+    if (m_indexesNames)
+        m_nameIndex = buildNameIndex(program,
+                                     m_entryFiles.empty() ? std::string{} : m_entryFiles.front(),
+                                     m_checker, m_importedInterfaces);
     // Two definitions of one method for one receiver type, the receivers as
     // the checker resolved them. Reported ahead of the type errors so the
     // message is not buried under those an ambiguous method tends to cause.
@@ -489,13 +486,8 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
         else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
             if (node.value) analyzeExpr(*node.value);
             auto* sym = m_symbols.lookup(node.name);
-            if (!sym && m_inMakeBlock && node.name == "new") return;
-            if (!sym && node.name == "new") return; // ResolvePass owns its diagnostic.
-            if (!sym) {
-                error(expr.location, "Undefined variable: " + node.name);
-            } else if (!sym->isMutable) {
+            if (sym && !sym->isMutable)
                 error(expr.location, "Cannot assign to immutable binding: " + node.name);
-            }
         }
         else if constexpr (std::is_same_v<T, ast::Identifier>) {
             auto* sym = m_symbols.lookup(node.name);
@@ -506,8 +498,6 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                     if (isQualifiedCallFoul(module, node.name) && !m_inFoulContext)
                         error(expr.location, "Cannot call foul function '" +
                                                  node.name + "' from pure context");
-                } else {
-                    error(expr.location, "Undefined identifier: " + node.name);
                 }
             }
         }
@@ -587,7 +577,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             if (node.condition) analyzeExpr(*node.condition);
             if (node.letPattern) {
                 // `if let Pattern = expr` — the pattern's bindings are in
-                // scope only for the then-body, mirroring resolve_pass.cxx.
+                // scope only for the then-body.
                 m_symbols.pushScope();
                 bindPatternVars(*node.letPattern, expr.location);
                 analyzeBody(node.thenBody);

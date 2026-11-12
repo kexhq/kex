@@ -213,6 +213,145 @@ other (it does here); both must check against the same interfaces.
    (declaration-identity stage 5, with the `::` → `.` flip and the runtime's
    serving lookup), the walker's visibility copies gone, one resolver, the IR
    rewrites as passes.
+
+   State (2026-11-11, later): symbols are spelled from identities
+   (`declaredNames` and `ownerIdentities` are gone from lowering, the
+   runtime's `state_type` takes the tag as it is); the walker's visibility
+   copies are gone; the IR rewrites were passes already (finding 3). Still
+   open: the `::` → `.` flip (`mangle::kSeparator`), one resolver, and
+   SemanticDB.
+
+   **One resolver, reconsidered (2026-11-11).** The code holds three scope
+   trackers, not two: `ResolvePass` (names, labels, references, completion
+   scopes), the Analyzer's phase 1 (`SymbolTable`: purity, mutability, and
+   its own "Undefined identifier") and the type checker's scope and import
+   stacks. `spec/error_undefined_variable.expected` pinned the result: one
+   undefined name reported twice, by the first two. SemanticDB is only a
+   document store over what `ResolvePass` produces, so deleting it first
+   would be a rename. The order:
+
+   a. **The checker is the only reporter of an undefined name** — DONE
+      2026-11-11. `TypeChecker::reportUndefined` (identifier, constructor or
+      type, function, tag, capture, assignment) and the unknown-label check
+      in `checkCall`'s placement; `bareNameDeclared` is the one rule for
+      what a bare name nothing binds may still name. `ResolvePass` reports
+      no name (908 → 694 lines: `suggest`, `editDistance`, the label tables
+      gone) and the Analyzer's two copies are deleted. Verified by checking
+      all 981 corpus files (`spec/`, `examples/`, `src/stdlib/`) with the
+      binary before and after: 9 outputs differ, each the duplicate line
+      gone or the one message reworded. Six goldens changed: one line per
+      name, in source order, and `vended` under `using Vend, only: [other]`
+      now says `Vend.vended` is not imported here.
+      Found doing it, each a place the checker's own scope rule was wrong
+      and the second resolver hid it:
+      - `freeFunctionVisible` counted `using M, as: A` as bringing M's
+        names in bare (fixed: `usingImportsNames`).
+      - A bare zero-parameter function read as a value
+        (`zeroArgBindingResult`, `functionValueType`) ignored `only:` and
+        privacy (fixed: `bareFunctionReachable`).
+      - A top-level destructuring `let (a, b) = ...` was not among the
+        program's top-level values (fixed).
+      Found and NOT fixed (each needs its own decision or step):
+      - A payload constructor named bare under a `using` of its module
+        (`WantStore(Process.self)` in `examples/cluster/client_node.kex`)
+        was left undecided, with no error. FIXED 2026-11-12, see
+        "Constructors" below.
+      - A dependency file's declarations outside its `module ... end`
+        (`type Request` after `module Store do ... end`) were in scope for
+        `-C` and the walker and undefined for the default run. FIXED
+        2026-11-12: they are that file's own on every path. The checker
+        refuses a bare name only another file's top level declares
+        (`TypeChecker::reportOtherFilesTopLevel`, for the files
+        `Analyzer::setEntryFiles` does not name; a spec and its base are
+        one program), as the separate build always has
+        (`spec/error_dependency_top_level`, `spec/dependency_top_level_own`,
+        `docs/modules.md`). Nothing in the corpus or Tey relied on it.
+      - A sibling `make` function named bare (`seed`, `unitKind` in
+        `spec/make_block_bare_sibling_binding`) was typed Unknown and
+        undecided, each backend finding it by name and arity. FIXED
+        2026-11-12: it is the type's own function called on `this`
+        (`TypeChecker::ownFunctionOnThis`, the one rule the call form
+        `decorate(x)` uses too), typed by its result, and lowering reads
+        that decision in place of its `definedFnArities`/`ownsMethod` test.
+      - Without imported interfaces (unit tests) the checker cannot tell a
+        prelude function from an undefined one, so it reports no undefined
+        function there.
+   b. **References and scopes from the checker; `ResolvePass` deleted** —
+      DONE 2026-11-12. `resolve_pass.{hxx,cxx}` are gone. What it did, and
+      where each part went:
+      - The name index (references, the names in scope at each point) is
+        built by `name_index.cxx` from what the checker records when asked
+        (`TypeChecker::setRecordsNames`: `nameUses`, `scopeNames`,
+        `scopeContexts`). A use the checker bound to a module's function or
+        constant lands on that declaration; nothing is resolved a second
+        time. Only tooling asks (`Analyzer::setIndexesNames`: the language
+        server, completion, the wasm REPL), so a build no longer walks the
+        program for it nor snapshots the scope at every expression.
+      - Two `using`s bringing one bare name in from two modules: the
+        checker's, at each `using` it pushes
+        (`TypeChecker::reportAmbiguousImports`, over the one rule
+        `resolve_core::mergeImportOrigin`). It had no spec, and with the
+        pass gone such a program checked clean and failed at run time
+        (found by trying it; now `spec/error_ambiguous_using`). Top-level
+        `using`s are compared within their own file, as the checker scopes
+        them (kexhq/kex#476); the old pass compared every file's at once.
+      - "module not found in source roots" is the module rules' warning
+        (`findModuleRuleViolations`, for `Analyzer::setEntryFiles`).
+      - `forEachUsing` and `forEachImportedName` (`module_rules`) are the
+        one walk over a program's `using`s and the one enumeration of what
+        a `using` brings in, shared by the rules, the checker and the index.
+      - The workspace mode's module-rule diagnostics (`resolveTogether`)
+        had no consumer: the language server publishes the Analyzer's. Its
+        unit tests assert the same rules through the Analyzer now.
+      - Scope snapshots of merged dependencies' files are no longer kept
+        for the entry file: `completionsAt` compared positions without the
+        file, so another file's scopes could answer.
+      Measured 2026-11-12, this machine, after (a) and (b): `kex --check`
+      of each of the 981 corpus files in turn (`spec/`, `examples/`,
+      `src/stdlib/`), CPU seconds for the whole run, the commit before
+      against the working tree, two rounds alternated: 234.7 → 225.9 and
+      212.8 → 197.5 (4% and 7% less). The rounds differ from each other
+      by about 10%, so read it as "not slower, probably a few percent
+      faster"; most of each run is start-up and loading the prelude's
+      interfaces, which this work does not touch. Slick was not run.
+      REPL completion (`/complete` on the walker and BEAM REPLs, 15
+      probes) and `kex --complete` answer byte for byte as before.
+      Gates after (a), (b) and (d), 2026-11-12: `make test-all` (38 unit
+      tests, 699 walker specs, 605 BEAM specs matching, the prelude,
+      stdlib and example suites on both backends, 0 undecided call sites
+      in the prelude), fuzz 400 + 4, devirt, dup-audit (literal compares
+      399 → 394, expression walkers 18 → 17; nothing rose). `src/` and
+      `tests/` are 482 lines shorter. Not run: `make test-wasm`, slick.
+      Two gate tools were wrong about a working tree and are fixed:
+      `dup-audit` listed tracked files, so it broke on a deleted one and
+      missed a new one; `devirt-correspondence` counted firings through
+      whatever unit cache the run before had left (1131 or 1452 for the
+      same compiler), and now uses its own empty cache.
+   c. **The Analyzer's phase 1 off its own scope table** — open. It still
+      keeps a `SymbolTable` (57 uses in `analyzer.cxx`) for three things:
+      whether a called name is foul, whether an assigned binding is
+      mutable, and redeclaration. Proposed split, rather than moving
+      purity into the checker (which would only make the checker larger):
+      the checker's scopes carry whether a binding is `var`, and it
+      reports assignment to a `let` and redeclaration where it binds;
+      the purity walk keeps its foul-context tracking but asks the
+      checker which function a call names (`calledFunctionOf`, the call's
+      target) instead of looking the name up again. `symbol.{hxx,cxx}`'s
+      `Scope` and `SymbolTable` then go.
+   d. **SemanticDB deleted** — the class, DONE 2026-11-12: `src/semantic`
+      holds no document store. What it was is `lsp::Workspace`
+      (`src/lsp/workspace`): files parsed and expanded, their symbols, the
+      modules they name loaded from the source roots; it analyzes nothing.
+      `SymbolInfo` and `ScopeSnapshot` are `semantic/symbol_info.hxx`, so
+      the semantic layer no longer includes the lexer, the parser,
+      expansion and the module resolver through `db.cxx`.
+      Still open: the server's own lookups. Hover, definition and
+      references still find a symbol by its NAME (`findSymbol`,
+      `receiverSymbol`, about forty sites in `server.cxx`), with heuristics
+      around it; they should ask which declaration the node under the
+      cursor means, which the checker now records for calls and constants
+      (`calledFunctionOf`, `referencedConstantOf`) and has still to record
+      for types, constructors and `make` functions.
 5. **Clean up last** (only once 1–4 are done; the benchmarks stay until
    then): `make bench`, `test-bench`, `bench-slick` (needs `../slick`,
    which nobody else has), `dup-audit` and their `tools/` scripts; the
@@ -225,6 +364,176 @@ what a trait provides: `String` had its own `repeat` beside `Monoid`'s (now
 removed, the trait's serves it), and `Char` and `String` each define
 `alpha?`, `upperCase` and the like, meaning slightly different things for
 each. One definition per operation, in the trait or type it belongs to.
+
+**Run time (2026-11-12).** Measured before changing anything, 30 million
+iterations on this machine, start-up (about 0.78 s) taken off: a `while`
+loop summing integers 0.13 s (about 4 ns an iteration: plain BIFs, nothing
+left to gain there; `docs/plan_codegen_performance.md`'s 370 ms for 10
+million is from before the checker decided operators); the same sum as
+`(1..n).each { |i| acc = acc + i }` 3.6 s, 27 times slower. Three causes,
+each fixed where it belongs:
+- *The checker did not know the block parameter's type*, so `acc + i` was
+  the generic run-time `add`. `range.kex` declared `type Range` with no
+  element (the checker's own `Range<Integer>` had nothing to line up with);
+  it is `type Range<A>` now, with `reduce`, `each` and `map` annotated (the
+  user approved the standard-library change). `(1..3).map { ... }` is
+  `[Integer]`, where it was `Unknown`. And `n.times`, with one overload
+  taking the index and one taking none, got no hint at all: the block as
+  written says which it is for (`resolveBlockHints`' `writtenParams`).
+- *The range was built as a list first.* A range written in place, and a
+  count, are walked by counting (`Lowering::lowerIteration`). Whether the
+  bounds are integers is asked of the values (lowering reads no type), so a
+  range of characters goes the general way as before.
+- *Every element of `map`, `filter` and `each` looked up the block's arity*
+  (`erlang:fun_info`) and asked whether to spread a tuple across it. A
+  block of one parameter never spreads: `applyItem` and `applyIndexed`
+  take it directly.
+After: the range loop 0.32 s (11 times faster, about 3 times a `while`,
+the rest being one closure call an iteration), and `map`, `filter` and
+`reduce` over 3 million elements 2.3 s → 0.93 s.
+Found doing it, both silent wrong answers on BEAM and neither new:
+- An iteration inside another, or inside a `while`, did not thread the
+  variables its block reassigns (`grid` stayed 0): the loop-body walker had
+  no case for it. Fixed: `lowerIteration` is one function both statement
+  walkers call (`spec/range_each_counting`).
+- `3.times { n = n + 1 }`, the block taking no parameter, was a run-time
+  dispatch to the checker (`--dump-hir`: `dispatch times`), not the
+  prelude's `times`: both of `times`' overloads accept a block of no
+  parameters, so nothing chose, lowering did not thread `n`, and BEAM
+  answered 0 where the walker answers 3. Fixed: among overloads that take
+  blocks of different shapes, the block as written says which
+  (`checkCall`, beside the same rule in `resolveBlockHints`).
+
+**Constructors (2026-11-12),** from the gap found in (a):
+- A payload constructor of a module, named bare under a `using` of it
+  (`WantStore(pid)` under `using Store`), was no decided call and had no
+  type: `constructorInfo` looked in the enclosing modules and the bare
+  names only. It finds the one module a `using` brings it in from now, so
+  the call is a `constructor` in `--dump-hir` (it was `undecided`, the
+  backends building the tuple by themselves).
+- A constructor's values were checked for their COUNT only: `Count("many")`
+  built a `Count(Integer)`, at top level, in a module or through its path.
+  `checkConstructorPayloads` compares each value with the payload as
+  declared, where both are known and the payload is not one of the type's
+  own parameters (`spec/error_constructor_payload_type`). Over the corpus
+  it found two mistakes and no false positive: `examples/read_currency.kex`
+  passed the unparsed String to `NoCurrency(Float)` (fixed), and
+  `spec/record_equality` built `Just(1)` under its own `Just(String)`
+  (fixed).
+- Open, for the user: a `Pid` is accepted where a payload is declared
+  `Process<T>` (`Ask(Process.self)`; six specs and examples do it), while a
+  function parameter `Process<T>` refuses a `Pid`. The payload check leaves
+  it as it was (`names::kPidType`/`kProcessType`); one rule should hold for
+  both.
+Still slow, not started: a `map`/`filter`/`reduce` chain builds every
+intermediate list, and each stage goes through `kex_prelude` and
+`kex_intrinsic_list` with `as_list`/`repack` for a String receiver.
+Gates after it: `make test-all` (38 unit tests, 700 walker specs, 606 BEAM
+specs matching, the prelude, stdlib and example suites on both backends, 0
+undecided call sites), fuzz 400 + 4, devirt (1456 firings, 130 distinct),
+dup-audit (nothing rose). Two goldens changed, both a list of candidates
+in an error message that now names `Range<A>`. Not run: `make test-wasm`
+(the standard library changed, so it should be), slick.
+`spec/compiled_template_large_scan` times out on the unoptimized build
+whenever no cached scan exists; see "The local build is unoptimized" below.
+
+**The local build is unoptimized (found 2026-11-12).** `cmake -B build` and
+`make build` set no `CMAKE_BUILD_TYPE`; CI, the Docker images and releases
+pass `Release`. Every local timing in this plan, the suites' hour and more,
+and the measurements above were taken on a `-O0` compiler. Optimized
+(`RelWithDebInfo`) against it, on this machine: the walker's `while` loop
+of 100,000 additions 3.56 s → 0.31 s; `Template.scan` of a 9 KB template
+on the walker 10.5 s → 0.74 s; `kex -C examples/json_stdlib.kex` 0.17 s →
+0.03 s. The price is the edit cycle: rebuilding after a change to
+`typechecker_expr.cxx` 38 s → 92 s, to `lowering_expr.cxx` 22 s → 38 s (a
+clean build takes about as long either way). Decided by the user: the
+default stays unoptimized; the optimized build is documented
+(`AGENTS.md`, Build) and is what gates and measurements should use
+(`make BUILD_DIR=cmake-build-release ...`).
+This is also what `spec/compiled_template_large_scan` is: the scan it
+guards runs on the walker at compile time and takes about 11 s on the
+`-O0` build, over its 10 s limit, at the commit before this work as well.
+It passes there only when an earlier run left the scan in the cache, which
+is why it failed in sweeps and in the devirt gate's fresh cache.
+
+**Real programs (2026-11-12).** `make test-all` built neither Tey nor Slick,
+and both showed it:
+- Tey did not build at the commit before this work:
+  `tey/src/tey/docgen/extract.kex` named `AnyType` bare with no `using
+  Kex.AST`, which the constructor rule of 2026-11-11 refuses. Fixed
+  (`Kex.AST.AnyType`), and `build-tey` is part of `test-all` now (about 11 s
+  on an optimized build), so a rule change cannot leave Tey unbuildable
+  unnoticed.
+- `make spec-tey` (not in `test-all`; minutes long): 361 passed, 4 failed,
+  the same four before and after this work. `resolver.spec` calls
+  `Tey.Resolver.chooseFromTags` and `externalizeWorkspaceDependencies`,
+  which are in a `private do`: refused since the 2026-11-11 rule for a
+  private function called through its path. The message says "has no
+  function", not "is private", because the spec sees `Tey.Resolver` by its
+  interface, which lists no private name. For the user: make the two
+  public, test them through the public function, or let a spec reach its
+  own package's private functions. The other three (`lockfile.spec` twice,
+  `programs_install.spec`) are assertion failures not looked into.
+- Slick (`../slick`, through this checkout's `tey-run`; the Homebrew `tey`
+  on PATH is too old for its `package.kex`) builds: 34.6 s cold, 5.8 s
+  with nothing changed, on an optimized compiler (one run each, no
+  comparison made). Its specs fail, the same before and after this work:
+  `spec/teams.spec.kex` 0 of 8, each `Undefined method: createOrganization
+  for Result<?, Atom>`: a `Result` reaches `App.Live.Organizations.create`,
+  whose `user` is declared a `User`. Its cause is the next entry: a spec
+  helper declared `-> User` whose `.try` failed (why the registration
+  fails in this copy was not looked into).
+
+**A `.try` its function cannot hold (2026-11-12, decided by the user).**
+Found through Slick's failing specs. A failed `.try` leaves the function
+with the failure as the function's result (`wrapPropagateTryError`; the
+walker does the same), whatever result the function declares:
+`registered(name) -> User` with `find(name).try` in it returned
+`Error("nobody")`, the checker accepted it, the walker died later on
+`Undefined method: name for Result` and BEAM printed the error's payload as
+the user's name. The rule now: `.try` in a function clause whose DECLARED
+result is neither a `Result` nor an `Optional` is a compile error, unless
+the clause has a `rescue` or the `.try` is inside `trying`
+(`spec/error_try_needs_holder`, `docs/error-handling.md`). 37 places wrote
+it: 3 in the standard library (`random.kex`, `units.kex`), 19 in specs and
+`examples/websocket_chat.kex`, 15 in Tey. Each is rewritten as what it
+meant: a pattern binding where the value cannot be missing (`let Just(name)
+= pending.first`), a `rescue` where a `Void` handler stops quietly.
+Left open by it:
+- A function that declares NO result is not covered: its inferred result is
+  the body's type, and a failed `.try` in it still returns an `Error` the
+  type does not show. Sound would be to infer `T or! E` for it.
+- A block is a function boundary too (`xs.map { |x| find(x).try }` hands
+  `map` an `Error` among its `User`s); not covered.
+- Slick (`../slick`, another repository) writes this in its spec helpers
+  (`registered(...) -> User`) and will not compile until they are rewritten.
+- After such a failure the backends still differ in what they do with the
+  wrong value; with the rule, checked programs no longer get there from a
+  declared function.
+
+**Where this should go (the user, 2026-11-12): any `each` or `map` that
+makes a loop is lowered as one, a user's own functions included.** What was
+done above is a special case: it knows the prelude's `each` and `times` by
+name, and only a block written in place. The general rule has nothing about
+loops in it: *specialize a function on a block it is called with.* Where a
+function takes a function parameter and a call passes a literal block, emit
+a copy of the callee with the block's body in place of the parameter. A
+callee that recurses over its input then IS a local loop, with no closure
+call per element; `each`, `map`, `reduce`, a user's `eachPair` and whatever
+is written on top of them all follow, and `lowerIteration`'s name test goes.
+What it needs:
+- an IR pass (after lowering, before `guards`) that substitutes a known
+  lambda for a parameter and reduces its applications;
+- the callee's IR at the call site: there within a unit; across units it is
+  another unit's body compiled into this one, so the two reload together
+  (`plan_codegen_performance.md`, constraint 3: record the dependency, and
+  keep it to the standard library, pinned per toolchain, unless asked);
+- the standard library's iteration written in Kex down to a recursive
+  function, where today `Kex.Intrinsic.List.map` ends in Erlang the pass
+  cannot see into;
+- variables a block reassigns threaded through the copy as state, which is
+  what the fold in `lowerIteration` does by hand for two functions.
+Not started.
 
 6. **At the very end, revisit the GitHub issues.** Go through the open
    kexhq/kex issues and check which this refactor fixed indirectly, by
@@ -318,7 +627,7 @@ units    unit graph; each unit checked and lowered against the KexI of the
          units below it; unit cache keyed by sources + those interfaces
 front    Lex → Parse → AST → compiled-expand (AST→AST)
 sema     names → TypeCheck → Select → HIR   (+ hir::verify)
-         └─ the LSP reads the same symbols (SemanticDB is deleted)
+         └─ the LSP reads the same names (name_index; no second resolver)
 mid      HIR ──► Walker (evaluates HIR)
          HIR ──► Lower (mechanical HIR→IR, no name resolution)
 ir       IR passes: guard expansion, rescue guards, loop lifting,

@@ -1,43 +1,28 @@
 #pragma once
-
+// The language server's documents: each file parsed and expanded, with the
+// symbols it declares, and the modules it names loaded from the source roots.
+// It analyzes nothing itself: a file's references and scopes are the
+// checker's (setResolved, resolveTogether), and the queries are
+// semantic/symbol_queries.hxx's over these files.
 #include "../ast/ast.hxx"
-#include "imported_interfaces.hxx"
-#include "symbol.hxx"
-#include "types.hxx"
+#include "../semantic/analyzer.hxx"
+#include "../semantic/imported_interfaces.hxx"
+#include "../semantic/symbol_info.hxx"
+#include "../semantic/symbol_queries.hxx"
 #include <string>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-namespace kex::semantic {
+namespace kex::lsp {
 
-struct Diagnostic;
-struct IndexedFile;
-using IndexedFiles = std::vector<IndexedFile>;
-
-struct SymbolInfo {
-    std::string name;
-    SymbolKind kind;
-    TypePtr type;                   // resolved type (Unknown before pass 3)
-    SourceLocation definition;
-    std::vector<SourceLocation> references;
-    std::string module;             // owning module, "" for top-level
-    bool isFoul = false;
-    bool isCapability = false;
-    bool isServingSlot = false;
-    bool isExported = true;
-    std::vector<std::pair<std::string, TypePtr>> params;
-    // A record's fields in declaration order, each with its type: as written
-    // until the file is checked, then as the checker resolved it.
-    std::vector<std::pair<std::string, std::string>> fields;
-    int clauseCount = 1;
-    std::string makeTarget; // set for functions inside a `make TypeName do` block
-    // Kex source-shaped declaration text used by editor hover. This is
-    // populated when syntax alone carries useful structure (notably records)
-    // and enriched with inferred function signatures after type checking.
-    std::string detail;
-};
+using semantic::Diagnostic;
+using semantic::ImportedInterfaces;
+using semantic::IndexedFiles;
+using semantic::ScopeSnapshot;
+using semantic::SymbolInfo;
+using semantic::TypeChecker;
 
 struct FileState {
     std::string path;
@@ -49,17 +34,10 @@ struct FileState {
     // no sema produces: the language server adds the one sema's to them.
     std::vector<Diagnostic> sourceDiagnostics;
     std::vector<SymbolInfo> symbols;
-    // Names visible at expression boundaries, retained by ResolvePass for
-    // position-aware editor completion after its transient scope stack is
-    // gone. Entries are in source traversal order.
-    struct ScopeSnapshot {
-        SourceLocation location;
-        std::vector<std::string> names;
-    };
     std::vector<ScopeSnapshot> completionScopes;
 };
 
-class SemanticDB {
+class Workspace {
 public:
     auto setImportedInterfaces(const ImportedInterfaces* ifaces) -> void {
         m_imports = ifaces;
@@ -77,15 +55,19 @@ public:
     auto updateFile(const std::string& path, std::string source,
                     const std::vector<std::string>& companionDeclFiles = {}) -> void;
     auto removeFile(const std::string& path) -> void;
+    // Indexes each of the files at `paths` it can read.
+    auto indexFiles(const std::vector<std::string>& paths) -> void;
     // `path`'s symbols, with their references and the names in scope at each
     // point, as the checker resolved them (Analyzer::nameIndex), in place of
     // the index's own pass: an open document is resolved once.
     auto setResolved(const std::string& path, std::vector<SymbolInfo> symbols,
-                     std::vector<FileState::ScopeSnapshot> scopes) -> void;
-    // `paths` resolved by the checker's name pass against every indexed file's
-    // symbols at once, as one program's: a reference in one file to a
-    // declaration in another is recorded on it (a workspace's references).
-    auto resolveTogether(const std::vector<std::string>& paths) -> void;
+                     std::vector<ScopeSnapshot> scopes) -> void;
+    // The references several files make, recorded on every indexed file's
+    // symbols at once: a reference in one file to a declaration in another
+    // lands on it (a workspace's references). Each of `checked` is a file's
+    // path and the checker that checked its AST with its names recorded.
+    auto resolveTogether(
+        const std::vector<std::pair<std::string, const TypeChecker*>>& checked) -> void;
     auto setModuleRoots(std::vector<std::string> roots) -> void;
     auto ensureModule(const std::string& moduleName,
                       const std::string& currentModule = "") -> std::optional<std::string>;
@@ -133,4 +115,4 @@ private:
     static const std::vector<SymbolInfo> s_emptySymbols;
 };
 
-} // namespace kex::semantic
+} // namespace kex::lsp

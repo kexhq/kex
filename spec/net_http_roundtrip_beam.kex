@@ -22,10 +22,9 @@ foul headPong(
   _request: Request<Binary>,
   _context: Context
 ) -> Response<Binary> do
-  return Response.binary(
-    200,
-    "ignored".to(Binary).try,
-    Headers.from([("X-Route", "head")]).try)
+  let Just(body) = "ignored".to(Binary)
+  let Ok(headers) = Headers.from([("X-Route", "head")])
+  return Response.binary(200, body, headers)
 end
 
 foul drainHeaders(connection: TCP.TCPConnection) -> Void do
@@ -33,6 +32,7 @@ foul drainHeaders(connection: TCP.TCPConnection) -> Void do
   if line != "\r\n"
     drainHeaders(connection)
   end
+rescue return Void
 end
 
 main do

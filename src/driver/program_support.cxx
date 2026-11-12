@@ -10,7 +10,7 @@
 #include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
 #include "../semantic/analyzer.hxx"
-#include "../semantic/db.hxx"
+#include "../semantic/symbol_info.hxx"
 #include "../validation/tag_validator.hxx"
 #include "dependencies.hxx"
 #include "build_support.hxx"
@@ -210,7 +210,8 @@ auto checkForCompletion(const std::string &path, const std::string &source)
   }
   g_dependencyFailureThrows = throws;
   auto analyzer = std::make_shared<kex::semantic::Analyzer>(&preludeSemanticInterfaces());
-  analyzer->setNameCheckFiles({path});
+  analyzer->setEntryFiles({path});
+  analyzer->setIndexesNames(true);
   analyzer->analyze(*program);
   return kex::semantic::CheckedSource{program, analyzer, dependencies};
 }
@@ -306,8 +307,8 @@ auto displayTypeOf(const kex::semantic::Analyzer &analyzer,
 // reported — the abort message quotes it so a long compile shows progress as
 // the count comes down, rather than just repeating "fix type errors".
 // The full check's setup, for the merged program and for each unit checked
-// apart alike: names are reported for `files` (the entry and a spec's base),
-// and an exported module the program does not merge is looked for where the
+// apart alike: a `using` of a module nothing describes is warned of in `files`
+// (the entry and a spec's base), and an exported module the program does not merge is looked for where the
 // build finds modules.
 auto configureFullCheck(kex::semantic::Analyzer &analyzer, std::vector<std::string> files,
                         const std::string &entryPath) -> void {
@@ -316,7 +317,7 @@ auto configureFullCheck(kex::semantic::Analyzer &analyzer, std::vector<std::stri
           const std::string &module, const std::string &current) {
         return resolver.resolve(module, current).has_value();
       });
-  analyzer.setNameCheckFiles(std::move(files));
+  analyzer.setEntryFiles(std::move(files));
 }
 
 // What the full check adds after a clean analysis: tagged literals.
@@ -339,9 +340,8 @@ auto runSemanticCheck(const kex::ast::Program &program,
   // KEX_TIMINGS=1 splits the type check into its passes (kexhq/kex#323).
   kex::timings::PhaseTimer passTimer(4, false);
   auto phase = [&](const char *name) { passTimer.mark(name); };
-  // One sema: names (the resolver SemanticDB indexes files with, over the
-  // checked program, its dependencies and a spec's base merged in; reported
-  // for the entry file and the base), module rules, purity and types.
+  // One sema: the name index (over the checked program, its dependencies and
+  // a spec's base merged in), module rules, purity and types.
   std::vector<std::string> files{filepath};
   if (!extraDeclFile.empty()) files.push_back(extraDeclFile);
   kex::semantic::Analyzer localAnalyzer(&preludeSemanticInterfaces());

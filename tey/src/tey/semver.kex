@@ -64,8 +64,9 @@ let stable?(text: String) -> Bool do
 end
 
 let satisfies(versionText: String, requirement: String) -> Bool do
-  let version = Tey.Semver.parseVersion(versionText)
-  return false if version == None
+  let parsed = Tey.Semver.parseVersion(versionText)
+  return false if parsed == None
+  let Just(version) = parsed
   let req = requirement.trim
     .replace(",", " ")
     .replace(">= ", ">=")
@@ -81,10 +82,10 @@ let satisfies(versionText: String, requirement: String) -> Bool do
   # means "a released 0.3.x", and resolving it to `0.4.0-rc.1` because the
   # numbers fit is how a package manager ships an untested compiler to
   # someone who never opted in.
-  if version.try.preRelease != "" && !clauses.any? { |clause| clause.contains?("-") }
+  if version.preRelease != "" && !clauses.any? { |clause| clause.contains?("-") }
     return false
   end
-  clauses.all? { |clause| satisfiesClause(version.try, clause) }
+  clauses.all? { |clause| satisfiesClause(version, clause) }
 end
 
 # The requirement satisfied only by versions satisfying BOTH, for when two
@@ -224,15 +225,16 @@ private do
     let raw = clause.startsWith?(op) then clause.drop(op.count) else clause
     let wanted = Tey.Semver.parseVersion(raw)
     return false if wanted == None
-    let order = version.compare(wanted.try)
+    let Just(target) = wanted
+    let order = version.compare(target)
     match op do
       ">=" => order != Less
       "<=" => order != Greater
       ">" => order == Greater
       "<" => order == Less
       "=" => order == Equal
-      "^" => order != Less && version.major == wanted.try.major
-      "~>" => order != Less && version.major == wanted.try.major && version.minor == wanted.try.minor
+      "^" => order != Less && version.major == target.major
+      "~>" => order != Less && version.major == target.major && version.minor == target.minor
       _ => false
     end
   end

@@ -39,8 +39,8 @@ struct ImportedFunction {
     // Declared in a `make T do` block, so this name is reached through a
     // typed receiver rather than as a bare call. `addReceiverSig` files such a
     // method under `exports` as well as `receiverFunctions`, and the import
-    // scope must not let it compete for the bare name — see ResolvePass's
-    // ambiguity check (kexhq/kex#272).
+    // scope must not let it compete for the bare name — see
+    // resolve_core::mergeImportOrigin (kexhq/kex#272).
     bool isReceiverMethod = false;
     // Reached through its receiver wherever that type is, whatever the
     // caller imports: the rule for a `make` function of a unit of the same

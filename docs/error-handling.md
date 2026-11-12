@@ -82,3 +82,37 @@ end
 
 Use `match`, `or`, or `flatMap` when handling a single missing value or failure
 is clearer at the call site.
+
+A failure that nothing handles leaves the function with the failure as the
+function's result. So a function that declares its result must be able to hold
+one: `.try` is refused in a function whose declared result is neither a
+`Result` nor an `Optional`, unless the function has a `rescue` or the `.try`
+is inside `trying`.
+
+```kex
+# Refused: a caller would get an `Error` where a `User` was promised.
+let registered(name: String) -> User do
+  let user = find(name).try
+  user
+end
+
+# The failure is the function's own result.
+let registered(name: String) -> User or! String do
+  let user = find(name).try
+  Ok(user)
+end
+
+# Or the function answers for it.
+let registered(name: String) -> User do
+  find(name).try
+rescue |reason|
+  User { name: "nobody" }
+end
+```
+
+Where a value cannot be missing, bind it by its pattern instead; a mismatch is
+a fault, not a result:
+
+```kex
+let Just(first) = names.first
+```

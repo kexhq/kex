@@ -18,7 +18,10 @@ record NoonClock do
 end
 
 make NoonClock, implement: Time.Clock do
-  foul now() -> DateTime = DateTime.parse("${@day.iso}T12:00:00Z").try
+  foul now() -> DateTime do
+    let Ok(noon) = DateTime.parse("${@day.iso}T12:00:00Z")
+    noon
+  end
 end
 
 # Declares no dependency and threads nothing: written exactly as in production.

@@ -1,9 +1,10 @@
 #include "test.hxx"
+#include "workspace_index.hxx"
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
 #include "../src/semantic/analyzer.hxx"
 #include "../src/hir/persist.hxx"
-#include "../src/semantic/db.hxx"
+#include "../src/lsp/workspace.hxx"
 #include "../src/semantic/types.hxx"
 #include "../src/semantic/traits.hxx"
 #include "../src/common/prelude_interfaces.hxx"
@@ -48,6 +49,20 @@ auto hasError(const std::string& source, const std::string& containing = "") -> 
             }
         }
     }
+    return false;
+}
+
+// Whether the `using` and `export` rules refuse `source` with `containing`,
+// where no module exists outside it.
+auto moduleRuleError(const std::string& source, const std::string& containing) -> bool {
+    Lexer lexer(source);
+    Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    semantic::Analyzer analyzer;
+    analyzer.setModuleLocator([](const std::string&, const std::string&) { return false; });
+    analyzer.analyze(program);
+    for (const auto& diagnostic : analyzer.diagnostics())
+        if (diagnostic.message.find(containing) != std::string::npos) return true;
     return false;
 }
 
@@ -157,9 +172,9 @@ int main() {
         });
     });
 
-    describe("SemanticDB — Modules", []() {
+    describe("Workspace — Modules", []() {
         it("resolves selectively imported names across indexed files", []() {
-            semantic::SemanticDB db;
+            lsp::Workspace db;
             db.updateFile("util.kex",
                 "module Util\n"
                 "let twice(n) = n * 2\n");
@@ -168,7 +183,7 @@ int main() {
                 "main do\n"
                 "  twice(21)\n"
                 "end\n");
-            db.resolveTogether({"util.kex", "main.kex"});
+            resolveTogether(db, {"util.kex", "main.kex"});
             bool hasError = false;
             for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
                 if (diagnostic.level == semantic::Diagnostic::Level::Error) hasError = true;
@@ -179,7 +194,7 @@ int main() {
         });
 
         it("supports go-to-definition for an imported name across files", []() {
-            semantic::SemanticDB db;
+            lsp::Workspace db;
             db.updateFile("util.kex",
                 "module Util\n"
                 "let twice(n) = n * 2\n");
@@ -188,7 +203,7 @@ int main() {
                 "main do\n"
                 "  twice(21)\n"
                 "end\n");
-            db.resolveTogether({"util.kex", "main.kex"});
+            resolveTogether(db, {"util.kex", "main.kex"});
             auto* definition = db.symbolInModule("Util", "twice");
             assertTrue(definition != nullptr);
             assertTrue(!definition->references.empty());
@@ -200,7 +215,7 @@ int main() {
         });
 
         it("completes public module members but hides private ones", []() {
-            semantic::SemanticDB db;
+            lsp::Workspace db;
             db.updateFile("util.kex",
                 "module Util\n"
                 "let visible() = 1\n"
@@ -215,49 +230,27 @@ int main() {
         });
 
         it("rejects importing a private module symbol", []() {
-            semantic::SemanticDB db;
-            db.updateFile("secrets.kex",
-                "module Secrets\n"
-                "private do\n"
-                "  let hidden() = 42\n"
-                "end\n");
-            db.updateFile("main.kex",
-                "using Secrets, only: [hidden]\n");
-            db.resolveTogether({"secrets.kex", "main.kex"});
-            bool found = false;
-            for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
-                if (diagnostic.message.find("private name `hidden`") != std::string::npos)
-                    found = true;
-            assertTrue(found);
+            assertTrue(moduleRuleError(
+                "module Secrets do\n"
+                "  private do\n"
+                "    let hidden() = 42\n"
+                "  end\n"
+                "end\n"
+                "using Secrets, only: [hidden]\n",
+                "private name `hidden`"));
         });
 
         it("does not leak module members into the enclosing file", []() {
-            semantic::SemanticDB db;
-            db.updateFile("main.kex",
+            semantic::ImportedInterfaces interfaces;
+            assertTrue(hasErrorWithInterfaces(
                 "module Helpers do\n"
                 "  let answer() = 42\n"
                 "end\n"
                 "main do\n"
                 "  answer()\n"
-                "end\n");
-            db.resolveTogether({"main.kex"});
-            bool found = false;
-            for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
-                if (diagnostic.message.find("Undefined function: `answer`") != std::string::npos)
-                    found = true;
-            assertTrue(found);
-        });
-
-        it("keeps top-level definitions file-local", []() {
-            semantic::SemanticDB db;
-            db.updateFile("one.kex", "let helper() = 42\n");
-            db.updateFile("two.kex", "main do\n  helper()\nend\n");
-            db.resolveTogether({"one.kex", "two.kex"});
-            bool found = false;
-            for (const auto& diagnostic : db.diagnosticsFor("two.kex"))
-                if (diagnostic.message.find("Undefined function: `helper`") != std::string::npos)
-                    found = true;
-            assertTrue(found);
+                "end\n",
+                interfaces,
+                "Undefined function: `answer` — `Helpers.answer` is not imported here"));
         });
 
         it("discovers an unindexed module from configured source roots", []() {
@@ -270,7 +263,7 @@ int main() {
                 module << "module Http.Router\n"
                           "let get(path) = path\n";
             }
-            semantic::SemanticDB db;
+            lsp::Workspace db;
             db.setModuleRoots({root.string()});
             db.updateFile("main.kex",
                 "using Http.Router, only: [get]\n"
@@ -280,7 +273,7 @@ int main() {
             // The modules a file names are loaded before it resolves, as the
             // language server loads those its analysis names.
             db.ensureModule("Http.Router");
-            db.resolveTogether({"main.kex"});
+            resolveTogether(db, {"main.kex"});
             fs::remove_all(root);
             assertTrue(db.hasModule("Http.Router"));
             bool hasError = false;
@@ -290,7 +283,7 @@ int main() {
         });
 
         it("rejects only: and except: together", []() {
-            semantic::SemanticDB db;
+            lsp::Workspace db;
             db.updateFile("util.kex",
                 "module Util\n"
                 "let a() = 1\n"
@@ -298,7 +291,7 @@ int main() {
             db.updateFile("main.kex",
                 "using Util, only: [a], except: [b]\n"
                 "main do\n  a()\nend\n");
-            db.resolveTogether({"util.kex", "main.kex"});
+            resolveTogether(db, {"util.kex", "main.kex"});
             bool found = false;
             for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
                 if (diagnostic.message.find("mutually exclusive") != std::string::npos)
@@ -307,48 +300,33 @@ int main() {
         });
 
         it("validates export target module exists", []() {
-            semantic::SemanticDB db;
-            db.updateFile("app.kex",
-                "module App\n"
-                "export Nonexistent\n");
-            db.resolveTogether({"app.kex"});
-            bool found = false;
-            for (const auto& diagnostic : db.diagnosticsFor("app.kex"))
-                if (diagnostic.message.find("exported module not found") != std::string::npos)
-                    found = true;
-            assertTrue(found);
+            assertTrue(moduleRuleError(
+                "module App do\n"
+                "  export Nonexistent\n"
+                "end\n",
+                "exported module not found"));
         });
 
         it("rejects exporting private names", []() {
-            semantic::SemanticDB db;
-            db.updateFile("secrets.kex",
-                "module Secrets\n"
-                "private do\n"
-                "  let hidden() = 42\n"
+            assertTrue(moduleRuleError(
+                "module Secrets do\n"
+                "  private do\n"
+                "    let hidden() = 42\n"
+                "  end\n"
+                "  let visible() = 1\n"
                 "end\n"
-                "let visible() = 1\n");
-            db.updateFile("app.kex",
-                "module App\n"
-                "export Secrets, only: [hidden]\n");
-            db.resolveTogether({"secrets.kex", "app.kex"});
-            bool found = false;
-            for (const auto& diagnostic : db.diagnosticsFor("app.kex"))
-                if (diagnostic.message.find("cannot export private name `hidden`") != std::string::npos)
-                    found = true;
-            assertTrue(found);
+                "module App do\n"
+                "  export Secrets, only: [hidden]\n"
+                "end\n",
+                "cannot export private name `hidden`"));
         });
 
         it("rejects self-export", []() {
-            semantic::SemanticDB db;
-            db.updateFile("app.kex",
-                "module App\n"
-                "export App\n");
-            db.resolveTogether({"app.kex"});
-            bool found = false;
-            for (const auto& diagnostic : db.diagnosticsFor("app.kex"))
-                if (diagnostic.message.find("cannot export itself") != std::string::npos)
-                    found = true;
-            assertTrue(found);
+            assertTrue(moduleRuleError(
+                "module App do\n"
+                "  export App\n"
+                "end\n",
+                "cannot export itself"));
         });
 
         it("allows circular dependencies between lazy module functions", []() {
@@ -360,13 +338,13 @@ int main() {
                 std::ofstream b(root / "b.kex");
                 b << "module B\nusing A\nlet fb() = 2\n";
             }
-            semantic::SemanticDB db;
+            lsp::Workspace db;
             db.setModuleRoots({root.string()});
             // Index A first (it uses B which will be discovered on disk)
             db.updateFile("a.kex",
                 "module A\nusing B\nlet fa() = 1\n");
             db.ensureModule("B");
-            db.resolveTogether({"a.kex", (root / "b.kex").string()});
+            resolveTogether(db, {"a.kex", (root / "b.kex").string()});
             fs::remove_all(root);
             bool foundError = false;
             for (const auto& diagnostic : db.diagnosticsFor((root / "b.kex").string()))

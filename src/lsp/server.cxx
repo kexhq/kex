@@ -9,7 +9,7 @@
 #include "../parser/parser.hxx"
 #include "../semantic/analyzer.hxx"
 #include "../semantic/completion_at.hxx"
-#include "../semantic/db.hxx"
+#include "workspace.hxx"
 #include "../semantic/types.hxx"
 #include "../common/type_def_utils.hxx"
 #include "../module/discovery.hxx"
@@ -73,6 +73,9 @@ struct Document {
     std::string path;
     std::string text;
     int version = 0;
+    // The files whose declarations are checked as part of this one (a spec's
+    // base, a manifest's vocabulary): one program with it.
+    std::vector<std::string> companions;
     // Non-empty exactly for a `.ket` template: `text` above is then the
     // SYNTHETIC Kex source `ket::translate` produced (what the rest of this
     // struct, and the analyzer, actually see), and `ketOriginalText` is the
@@ -664,7 +667,7 @@ auto withTargetPrefix(const std::string& source, unsigned int line,
     return std::string(target);
 }
 
-auto capabilityCompletions(const semantic::SemanticDB& db,
+auto capabilityCompletions(const Workspace& db,
                            const semantic::ImportedInterfaces& interfaces,
                            const std::string& path,
                            std::string_view prefix)
@@ -1133,7 +1136,7 @@ auto insideAtomLiteral(const std::string& text, unsigned int line,
 
 auto atFieldType(const std::string& source, unsigned int line,
                  uint32_t byteColumn, std::string_view field,
-                 const semantic::SemanticDB& db,
+                 const Workspace& db,
                  const std::string& file) -> std::string {
     size_t lineStart = 0;
     for (unsigned int current = 0; current < line; ++current) {
@@ -1221,7 +1224,7 @@ auto documentationBeforeSource(std::string_view source,
     return result;
 }
 
-auto documentationBefore(const semantic::FileState& state,
+auto documentationBefore(const FileState& state,
                          const SourceLocation& definition) -> std::string {
     return documentationBeforeSource(state.source, definition);
 }
@@ -1890,14 +1893,14 @@ auto documentImports(const std::string& source)
     return modules;
 }
 
-// The shared recovery analysis, checking through a SemanticDB kept between
+// The shared recovery analysis, checking through a Workspace kept between
 // calls so the module sources are parsed once rather than per keystroke.
 auto recoveredReceiverQualifier(
     const std::string& source, const std::string& path,
     const DotReceiver& receiver, size_t cursor,
     const semantic::ImportedInterfaces* interfaces,
     const std::vector<std::string>& moduleRoots) -> std::string {
-    static semantic::SemanticDB recoveryDb;
+    static Workspace recoveryDb;
     recoveryDb.setImportedInterfaces(interfaces);
     recoveryDb.setModuleRoots(moduleRoots);
     const semantic::CompletionChecker check =
@@ -2021,7 +2024,7 @@ auto recoveredDotReceiverQualifier(
     return {};
 }
 
-void enrichFunctionSymbols(semantic::FileState& state,
+void enrichFunctionSymbols(FileState& state,
                            const semantic::Analyzer& analyzer) {
     auto enrich = [&](const ast::FunctionDef& function) {
         const auto* signatures = analyzer.functionSignatures(&function);
@@ -2045,7 +2048,7 @@ void enrichFunctionSymbols(semantic::FileState& state,
 
 // A checked file's record fields as the checker resolved them, in place of
 // the types the declarations wrote.
-void enrichRecordSymbols(semantic::FileState& state,
+void enrichRecordSymbols(FileState& state,
                          const semantic::Analyzer& analyzer) {
     ast::forEachDeclared<ast::RecordDef>(state.ast, [&](const ast::RecordDef& record) {
         for (auto& symbol : state.symbols) {
@@ -2076,8 +2079,8 @@ public:
           m_standardParameterNames(standardLibraryParameterNames()) {
         m_db.setImportedInterfaces(&m_interfaces);
         m_referenceDb.setImportedInterfaces(&m_interfaces);
-        loadDiscoveredPrelude(m_db);
-        loadDiscoveredPrelude(m_referenceDb);
+        m_db.indexFiles(preludeSourceFiles());
+        m_referenceDb.indexFiles(preludeSourceFiles());
         registerHandlers();
     }
 
@@ -2282,17 +2285,22 @@ private:
                         });
                 }), sources.end());
         }
-        // Indexed, then resolved together by the checker's name pass once the
-        // modules they name are loaded too (resolveTogether, below).
+        // Indexed and checked, then their references recorded together once
+        // the modules they name are loaded too (resolveTogether, below).
         for (auto& [path, source] : sources) {
             m_referenceDb.updateFile(path, std::move(source));
             m_referenceIndexedPaths.push_back(path);
         }
+        std::vector<std::unique_ptr<semantic::Analyzer>> analyses;
+        std::vector<std::pair<std::string, const semantic::TypeChecker*>> checked;
         for (const auto& [path, _] : sources) {
             auto* state = m_referenceDb.fileState(path);
             if (!state) continue;
-            semantic::Analyzer analyzer(&m_interfaces);
+            auto& analyzer = *analyses.emplace_back(
+                std::make_unique<semantic::Analyzer>(&m_interfaces));
+            analyzer.setIndexesNames(true);
             analyzer.analyze(state->ast);
+            checked.emplace_back(path, &analyzer.checker());
             for (const auto& module : analyzer.referencedModules())
                 m_referenceDb.ensureModule(module);
             for (const auto& [call, target] : analyzer.resolvedCalls()) {
@@ -2313,7 +2321,7 @@ private:
                 }
             }
         }
-        m_referenceDb.resolveTogether(m_referenceIndexedPaths);
+        m_referenceDb.resolveTogether(checked);
         m_referenceIndexReady = true;
     }
 
@@ -2357,6 +2365,7 @@ private:
             text = std::move(translation.source);
         }
         document = {path, std::move(text), version};
+        document.companions = companions;
         document.ketOriginalText = std::move(ketOriginalText);
         document.ketSegments = std::move(ketSegments);
         document.recoveredReceivers.clear();
@@ -2390,7 +2399,11 @@ private:
             state ? state->sourceDiagnostics : m_db.diagnosticsFor(document.path);
         if (state) {
             semantic::Analyzer analyzer(&m_interfaces);
-            analyzer.setNameCheckFiles({document.path});
+            std::vector<std::string> entryFiles{document.path};
+            entryFiles.insert(entryFiles.end(), document.companions.begin(),
+                              document.companions.end());
+            analyzer.setEntryFiles(std::move(entryFiles));
+            analyzer.setIndexesNames(true);
             analyzer.setModuleLocator(
                 [resolver = module::Resolver(documentModuleRoots(document.path))](
                     const std::string& module, const std::string& current) {
@@ -4292,9 +4305,9 @@ private:
             for (const auto& reference : symbol->references)
                 if (spellsWord(reference)) append(reference);
 
-            // Qualified method calls are resolved by the type checker rather
-            // than ResolvePass, so supplement the symbol index from open,
-            // unsaved documents using the exact module qualifier.
+            // A qualified call is no bare name, so the name index holds no
+            // reference for it: found in the open, unsaved documents by the
+            // exact module qualifier.
             if (!qualifier.empty())
                 for (const auto& [_, open] : m_documents) {
                     Lexer lexer(open.text, open.path);
@@ -4465,8 +4478,8 @@ private:
         m_standardDocumentation;
     std::unordered_map<std::string, std::vector<std::vector<std::string>>>
         m_standardParameterNames;
-    semantic::SemanticDB m_db;
-    semantic::SemanticDB m_referenceDb;
+    Workspace m_db;
+    Workspace m_referenceDb;
     std::unordered_map<std::string, Document> m_documents;
     // The sibling modules merged into each document's AST. Keyed by document
     // because the merged items borrow their `location.file` from these

@@ -1,0 +1,29 @@
+# kex: check-only
+# A constructor's value is checked against the payload its type declares,
+# however the constructor is named: bare at top level, bare under a `using`
+# of its module, inside the module, or through the module's path. Only the
+# count used to be checked, so `Count("many")` built a `Count(Integer)`.
+# A payload that is one of the type's own parameters takes any value.
+
+type Shape = Circle(Float) | Square(Float) | Label(String)
+
+type Box<A> = Full(A) | Empty
+
+module Store do
+  type Request = Count(Integer) | Rename(String, String) | Stop
+
+  let inside() -> Request = Count("inside")
+end
+
+using Store
+
+main do
+  let fine = [Circle(1.5), Label("round")]
+  let boxed = [Full(1), Full(2)]
+  let asked = [Count(3), Store.Count(4), Rename("a", "b")]
+  let wrong = Circle("wide")
+  let bare = Count("many")
+  let qualified = Store.Count("many")
+  let second = Rename("a", 2)
+  IO.printLine(fine.count + boxed.count + asked.count)
+end

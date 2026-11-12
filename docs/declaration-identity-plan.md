@@ -1,7 +1,12 @@
 # Declaration identity: the checker names declarations, backends name symbols
 
-> **Not done**: stage 5 is partial. Ordered open work: the review findings
-> at the top of `docs/pass-restructure-plan.md` (2026-11-11).
+> **Stage 5, state 2026-11-11 (later):** the receiver, serving and
+> distinct-type tables are keyed by identity (`declaredNames`,
+> `declaredNameOf` and `ownerIdentities` are deleted; `state_type` in
+> `kex_intrinsic_process.erl` takes the tag as it is), so the paragraph
+> below that calls them written spellings is out of date. Open: the `::` →
+> `.` flip (`mangle::kSeparator`). Ordered open work: the review findings at
+> the top of `docs/pass-restructure-plan.md`.
 
 Status: in progress (2026-11-10). Stages 1–4 done: the checker gives each
 record one identity, records the declaration of every record construction,

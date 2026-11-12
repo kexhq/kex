@@ -36,7 +36,7 @@ module Money do
   type MoneyError = NoCurrency(Float) | UnsupportedCurrency(String)
   let fromValue(value: String) -> Money or! MoneyError do
     match Float.parse(value) do
-      Ok(_) => Error(NoCurrency(value))
+      Ok(amount) => Error(NoCurrency(amount))
       Error(ParseError { value, rest }) => do
         let rem = rest.trim
         let curr = Currency.fromCode(rem)

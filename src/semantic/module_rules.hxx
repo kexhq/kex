@@ -1,11 +1,9 @@
 #pragma once
 // The `using` and `export` rules: which names one module may take from
-// another. They are written once, over a ModuleSymbols view. SemanticDB answers
-// that view from the files it indexes; the checker answers it from the program
-// it checks (collectSymbols), so the build no longer needs SemanticDB for
-// these checks.
+// another. They are written once, over a ModuleSymbols view, which the checker
+// answers from the program it checks (collectSymbols).
 #include "analyzer.hxx"
-#include "db.hxx"
+#include "symbol_info.hxx"
 #include "imported_interfaces.hxx"
 
 #include <functional>
@@ -89,9 +87,36 @@ using ModuleLocator =
 // `interfaces`: the Analyzer's module-rules pass. An exported module neither
 // describes is missing only when `locate` (the build's source roots) cannot
 // find it either; without one, nothing is claimed missing.
+// A `using` of a module neither describes is the build's to find; in
+// `warnedFiles` it is warned of.
 auto findModuleRuleViolations(const ast::Program& program,
                               const ImportedInterfaces* interfaces,
-                              const ModuleLocator* locate = nullptr)
+                              const ModuleLocator* locate = nullptr,
+                              const std::vector<std::string>& warnedFiles = {})
     -> std::vector<Diagnostic>;
+
+// What `using written` (in module `within`) brings in bare, from a module of
+// the program or one known only by its interface: `visit(name, module,
+// receiverMethod)` for each name. Nothing for an `as:` alone.
+auto forEachImportedName(
+    const ModuleSymbols& modules, const ImportedInterfaces* imports, const std::string& within,
+    const std::string& written, const std::optional<std::string>& alias,
+    const std::vector<std::string>& only, const std::vector<std::string>& except,
+    const std::function<void(const std::string& name, const std::string& module,
+                             bool receiverMethod)>& visit) -> void;
+
+// One `using` as written: a declaration, or one in a body.
+struct WrittenUsing {
+    const ast::TypeName& module;
+    const std::optional<std::string>& alias;
+    const std::vector<std::string>& onlyNames;
+    const std::vector<std::string>& exceptNames;
+    SourceLocation location;
+    // The module it is written in, "" at file level.
+    std::string within;
+};
+// Every `using` of `program`, in source order within each declaration.
+auto forEachUsing(const ast::Program& program,
+                  const std::function<void(const WrittenUsing&)>& visit) -> void;
 
 } // namespace kex::semantic

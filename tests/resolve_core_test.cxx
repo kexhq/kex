@@ -1,6 +1,6 @@
 #include "test.hxx"
 #include "../src/semantic/analyzer.hxx"
-#include "../src/semantic/db.hxx"
+#include "../src/semantic/symbol_info.hxx"
 #include "../src/semantic/resolve_core.hxx"
 
 using namespace test;

@@ -9,8 +9,7 @@
 
 namespace kex::semantic {
 
-// Shared name-resolution rules (Phase 2). ResolvePass consumes these
-// first; the typechecker and lowerer migrate onto them in later steps.
+// Shared name-resolution rules, for the checker and the name index.
 // Each rule is pure over caller-provided tables: enumeration and
 // diagnostics stay with the consumer, whose sinks differ too much to
 // share (the checker defers `using` selections without enumerating,
@@ -54,8 +53,7 @@ auto mergeImportOrigin(std::vector<ImportScope>& scopes,
 
 // `using M[, as: A][, only: ...]` imports M's names — except when it
 // only binds an alias. `as:` alone imports nothing; an `only:` list
-// beside it still asks (ResolvePass, the checker, and the lowerer
-// agree on this shape; each enumerates its own tables).
+// beside it still asks.
 auto usingImportsNames(const std::optional<std::string>& alias,
                        const std::vector<std::string>& only) -> bool;
 

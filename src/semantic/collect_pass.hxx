@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../ast/ast.hxx"
-#include "db.hxx"
+#include "symbol_info.hxx"
 #include <string>
 
 namespace kex::semantic {
@@ -30,7 +30,7 @@ private:
 
 // The one rule for what a program declares, and where: every function, type,
 // record, trait, `make` method and annotation, with its module and whether it
-// is exported. SemanticDB indexes files with it; the checker validates
+// is exported. The language server indexes files with it; the checker validates
 // `using` and `export` against it.
 auto collectSymbols(const ast::Program& program, const std::string& path = {})
     -> std::vector<SymbolInfo>;

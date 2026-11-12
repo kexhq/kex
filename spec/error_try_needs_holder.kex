@@ -1,0 +1,56 @@
+# kex: check-only
+# A failed `.try` leaves its function with the failure as the function's
+# result. A function that declares a result which is neither a Result nor an
+# Optional has nowhere to put it: `registered` below would hand its caller an
+# `Error` where it promised a `User`. That is refused where the `.try` is
+# written. It is fine where the failure has somewhere to go: a Result or an
+# Optional result, a `rescue` on the function, or a `trying` around it.
+
+record User do
+  name : String
+end
+
+let find(name: String) -> User or! String do
+  return Error("nobody") if name == ""
+  Ok(User { name: name })
+end
+
+let registered(name: String) -> User do
+  let user = find(name).try
+  user
+end
+
+let shouted(name: String) -> String = find(name).try.name.upperCase
+
+let passedOn(name: String) -> User or! String do
+  let user = find(name).try
+  Ok(user)
+end
+
+let maybe(name: String) -> User? do
+  let user = find(name).optional.try
+  Just(user)
+end
+
+let rescued(name: String) -> User do
+  find(name).try
+rescue |reason|
+  User { name: "nobody" }
+end
+
+let handled(name: String) -> User do
+  trying do
+    find(name).try
+  rescue
+    _ => User { name: "nobody" }
+  end
+end
+
+let bound(name: String) -> User do
+  let Ok(user) = find(name)
+  user
+end
+
+main do
+  IO.printLine(rescued("").name)
+end

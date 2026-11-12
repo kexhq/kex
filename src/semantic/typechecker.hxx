@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -21,12 +22,17 @@ namespace kex::semantic {
 
 struct Diagnostic;
 
+class ModuleSymbols;
+
 class TypeChecker {
 public:
     explicit TypeChecker(const ImportedInterfaces* importedInterfaces = nullptr)
         : m_importedInterfaces(importedInterfaces) {}
 
-    auto check(const ast::Program& program, std::vector<Diagnostic>& diagnostics) -> void;
+    // `entryFiles`: the program's own files (Analyzer::setEntryFiles); what
+    // any other merged file declares at its top level is that file's own.
+    auto check(const ast::Program& program, std::vector<Diagnostic>& diagnostics,
+               const std::vector<std::string>& entryFiles = {}) -> void;
     auto linkModules(std::set<std::string> modules) -> void {
         m_linkedModules = std::move(modules);
     }
@@ -64,6 +70,42 @@ public:
     auto patternBindings() const -> const std::vector<PatternBinding>& {
         return m_patternBindings;
     }
+
+    // One `using`: its module as written, and what it brings in.
+    struct ImportSelection {
+        std::string module;
+        std::vector<std::string> onlyNames;
+        std::vector<std::string> exceptNames;
+        // `using Module, as: Alias`'s alias, so a qualified reference
+        // written through it (`Alias.Member`) can be resolved back to
+        // `Module.Member` — the identity every other lookup (record fields,
+        // method ownership, ...) is keyed by.
+        std::optional<std::string> alias;
+        // Where it is written.
+        SourceLocation location;
+    };
+    // What tooling reads of a program's names (name_index.hxx), kept only
+    // when asked for (setRecordsNames): a build has no use for it.
+    // The module an expression is written in and the `using`s in force there.
+    struct ScopeContext {
+        std::string module;
+        std::vector<ImportSelection> imports;
+    };
+    // The names bound around an expression, and its context.
+    struct ScopeNames {
+        std::vector<std::string> bound;
+        std::size_t context = 0;
+    };
+    auto setRecordsNames(bool records) -> void { m_recordsNames = records; }
+    // Each expression that names something no scope binds (an identifier, a
+    // bare call, a constructor, a tag, a capture), with its context.
+    auto nameUses() const -> const std::unordered_map<const ast::Expr*, std::size_t>& {
+        return m_nameUses;
+    }
+    auto scopeNames() const -> const std::unordered_map<const ast::Expr*, ScopeNames>& {
+        return m_scopeNames;
+    }
+    auto scopeContexts() const -> const std::vector<ScopeContext>& { return m_scopeContexts; }
     // The list patterns that take a String apart into its characters
     // (`[c | rest]` against a String): the elements bind Chars, the tail the
     // rest of the String. Pattern sugar, decided here; a String is no list.
@@ -283,7 +325,17 @@ private:
     auto constantDeclaration(const std::string& name) const -> std::string;
     // The type of the nullary constructor `name` names here, or null.
     auto nullaryConstructorType(const std::string& name) -> TypePtr;
-    auto reportConstructorOutOfScope(const std::string& name, const SourceLocation& at) -> void;
+    auto reportConstructorOutOfScope(const std::string& name, const SourceLocation& at) -> bool;
+    // A name nothing in scope declares: the one report of it, for every
+    // consumer of the check (`what` is "name", "function", "variable"...).
+    auto reportUndefined(const std::string& what, const std::string& name,
+                         const SourceLocation& at) -> void;
+    // Whether a free function of the program named `name` is in reach here.
+    auto bareFunctionReachable(const std::string& name) const -> bool;
+    // Whether a bare `name` no scope binds still names something here: a
+    // top-level value, a function in reach, a sibling of the `make` block
+    // being checked, or a function a `using` brings in.
+    auto bareNameDeclared(const std::string& name) const -> bool;
     auto namesDeclaredType(const std::string& qualified, const std::string& last) const -> bool;
     auto reportUnknownType(const ast::TypeName& name, const SourceLocation& at) -> void;
     auto reportPendingUnknownTypes() -> void;
@@ -291,6 +343,8 @@ private:
     auto variantType(const TypePtr& result, const std::string& name) const -> TypePtr;
     auto bareMethodCall(const ast::Expr& expr, const ast::FunctionCall& call,
                         const std::vector<TypePtr>& argTypes) -> TypePtr;
+    auto ownFunctionOnThis(const ast::Expr& expr, const std::string& name,
+                           const std::vector<TypePtr>& argTypes) -> TypePtr;
     auto withinModule(const std::string& module) const -> bool;
     // Whether a bare call to `name` may reach a free function declared in
     // `module`: from inside it, or — unless it is private there — under a
@@ -411,7 +465,8 @@ private:
                            const std::vector<TypePtr>& nonBlockArgTypes,
                            bool isMethodCall = false,
                            bool* collection = nullptr,
-                           std::string* skippedTo = nullptr)
+                           std::string* skippedTo = nullptr,
+                           std::optional<std::size_t> writtenParams = std::nullopt)
         -> std::vector<TypePtr>;
     // The parameter types a block passed by label (`named(from: { |t| … })`)
     // should take: those of the labelled parameter's function type.
@@ -635,17 +690,36 @@ private:
     // own name, and an import of the same name must not answer the call.
     std::unordered_set<std::string> m_topLevelValueNames;
     std::vector<TypeEnv> m_scopeStack;
-    struct ImportSelection {
-        std::string module;
-        std::vector<std::string> onlyNames;
-        std::vector<std::string> exceptNames;
-        // `using Module, as: Alias`'s alias, so a qualified reference
-        // written through it (`Alias.Member`) can be resolved back to
-        // `Module.Member` — the identity every other lookup (record fields,
-        // method ownership, ...) is keyed by.
-        std::optional<std::string> alias;
-    };
     std::vector<std::vector<ImportSelection>> m_importScopeStack;
+    // The program's modules and their members, for what a `using` brings in.
+    std::shared_ptr<const ModuleSymbols> m_programModules;
+    // Reports each bare name the newest of `active` (the `using`s in force
+    // in module `within`) brings in that an earlier one already did, from
+    // another module (resolve_core::mergeImportOrigin).
+    auto reportAmbiguousImports(const std::vector<ImportSelection>& active,
+                                const std::string& within) -> void;
+    // A `using` written in a body: in force for the rest of the scope.
+    auto pushImport(ImportSelection selection) -> void;
+    // Reports made once per place, however often the place is checked.
+    std::unordered_set<std::string> m_reportedOnce;
+    std::vector<std::string> m_entryFiles;
+    // The functions and constructors a merged dependency's file declares
+    // outside its module, by name, with that file: its own, not the program's.
+    std::unordered_map<std::string, std::string> m_fileLocalTopLevel;
+    // Reports a bare `name` no scope binds that only another file's top level
+    // declares; false when it is not one.
+    auto reportOtherFilesTopLevel(const std::string& what, const std::string& name,
+                                  const SourceLocation& at) -> bool;
+    // What recordNames keeps (setRecordsNames).
+    bool m_recordsNames = false;
+    std::unordered_map<const ast::Expr*, std::size_t> m_nameUses;
+    std::unordered_map<const ast::Expr*, ScopeNames> m_scopeNames;
+    std::vector<ScopeContext> m_scopeContexts;
+    std::unordered_map<std::string, std::size_t> m_scopeContextIds;
+    // A module path's root (`Util` of `Util.twice()`): no use of a name.
+    std::unordered_set<const ast::Expr*> m_namespaceRoots;
+    auto recordNames(const ast::Expr& expr) -> void;
+    auto scopeContext() -> std::size_t;
     std::vector<ImportSelection> m_declarationImports;
     // The imports in force at each of `m_unresolvedMethods`' calls, in step
     // with it: whether a method name is in reach depends on the call's own
@@ -1043,6 +1117,10 @@ private:
     // never reaches the enclosing rescue — see the TryingExpr case.
     int m_blockDepth = 0;
     int m_tryingBlockDepth = -1;
+    // Where the function clause being checked collects the `.try`s of its own
+    // body, and the block depth that body is at.
+    std::vector<SourceLocation>* m_clauseTries = nullptr;
+    int m_clauseTriesDepth = 0;
     int m_tryBelowBlock = 0;
     // The complete receiver type of the current `make X do` block, used for
     // `this`, `This`, and receiver-aware body inference.

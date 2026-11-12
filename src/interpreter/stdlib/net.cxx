@@ -619,7 +619,8 @@ auto Evaluator::registerNetBuiltins() -> void {
     defineIntrinsic("NetHTTP::redactedHeaders", [](std::vector<ValuePtr> args) {
         std::ostringstream out; out << "Headers { "; bool first = true;
         if (!args.empty()) for (const auto& [name, value] : headerEntries(args[0])) {
-            if (!first) out << ", "; first = false;
+            if (!first) out << ", ";
+            first = false;
             auto key = lowerASCII(name);
             const bool sensitive = key == "authorization" || key == "proxy-authorization" ||
                                    key == "cookie" || key == "set-cookie";

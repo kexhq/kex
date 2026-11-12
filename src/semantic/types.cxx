@@ -765,6 +765,12 @@ auto isUndetermined(const TypePtr& type) -> bool {
            std::holds_alternative<TypeVar>(type->kind);
 }
 
+auto holdsFailure(const TypePtr& type) -> bool {
+    if (isUndetermined(type) || std::holds_alternative<OptionalType>(type->kind)) return true;
+    const auto* named = std::get_if<NamedType>(&type->kind);
+    return named && (named->name == names::kResultType || named->name == names::kOptionalType);
+}
+
 auto isThisPlaceholder(const TypePtr& type) -> bool {
     const auto* named = type ? std::get_if<NamedType>(&type->kind) : nullptr;
     return named && named->name == names::kThisType && named->typeArgs.empty();

@@ -13,7 +13,7 @@
 //
 // This runs as an AST->AST pass BEFORE semantic analysis: it replaces
 // CompiledBlock nodes with the ordinary declarations they generate, so
-// everything downstream — SemanticDB, the type checker, the tree-walk
+// everything downstream — the type checker, the tree-walk
 // interpreter, IR lowering, the Core Erlang emitter, --summary — sees only
 // plain FunctionDef/TypeDef/RecordDef/MakeDef and needs no changes. It is also
 // what keeps the interpreter and the BEAM backend from drifting: neither knows

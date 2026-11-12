@@ -40,7 +40,8 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
                                      const std::vector<TypePtr>& nonBlockArgTypes,
                                      bool isMethodCall,
                                      bool* collection,
-                                     std::string* skippedTo) -> std::vector<TypePtr> {
+                                     std::string* skippedTo,
+                                     std::optional<std::size_t> writtenParams) -> std::vector<TypePtr> {
     if (skippedTo) skippedTo->clear();
     auto imported = importedCandidateSignatures(name);
     if (isMethodCall)
@@ -150,6 +151,13 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
                     [](const Candidate& c) { return c.concreteReceiver; }))
         std::erase_if(candidates,
                       [](const Candidate& c) { return !c.concreteReceiver; });
+    // Overloads that take blocks of different shapes (`times` with the index
+    // or without): the block as written says which one it is for.
+    if (writtenParams &&
+        std::any_of(candidates.begin(), candidates.end(),
+                    [&](const Candidate& c) { return c.hints.size() == *writtenParams; }))
+        std::erase_if(candidates,
+                      [&](const Candidate& c) { return c.hints.size() != *writtenParams; });
     // UFCS lets a plain call like `times(3) do ... end` match both a local
     // `times(n, block)` and an unrelated `Integer.times(block)` visible as a
     // free function. When such same-arity candidates disagree on the
@@ -500,6 +508,7 @@ auto TypeChecker::resolvedCalls() const
 }
 
 auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
+    if (m_recordsNames) recordNames(expr);
     auto result = std::visit([this, &expr](const auto& node) -> TypePtr {
         using T = std::decay_t<decltype(node)>;
 
@@ -529,6 +538,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return Type::atom();
         }
         else if constexpr (std::is_same_v<T, ast::Identifier>) {
+            if (reportOtherFilesTopLevel("name", node.name, expr.location)) return Type::unknown();
             if (auto constant = constantDeclaration(node.name); !constant.empty())
                 m_referencedConstants[&expr] = std::move(constant);
             if (node.name == "from" && m_inCastSlot) {
@@ -549,19 +559,34 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // and naming it auto-calls it — so the name has the declared
                 // result type. Left Unknown, `ids.reduce(...)` picked String's
                 // `reduce` overload and typed each element as Char (#329).
-                if (auto result = zeroArgBindingResult(node.name))
-                    return result;
-                if (auto result = functionValueType(node.name))
-                    return result;
+                // A function out of reach here (a `using ..., only:` left it
+                // out, or it is private to its module) is not this name.
+                if (bareFunctionReachable(node.name)) {
+                    if (auto result = zeroArgBindingResult(node.name))
+                        return result;
+                    if (auto result = functionValueType(node.name))
+                        return result;
+                }
             }
+            // A sibling function of the `make` block being checked, named
+            // bare: called on `this`, as the call form is (bareMethodCall).
+            if (!type && !boundLocally)
+                if (auto own = ownFunctionOnThis(expr, node.name, {})) return own;
             if (!type) {
-                if (node.name == "new" && m_inMakeBlock && m_currentMakeType)
-                    error(expr.location, "`new` requires a record receiver");
+                if (node.name == "new")
+                    error(expr.location, m_inMakeBlock && m_currentMakeType
+                              ? "`new` requires a record receiver"
+                              : "`new` requires a record receiver (or an explicit local binding)");
+                else if (node.name != "_" && !bareNameDeclared(node.name) &&
+                         !m_referencedConstants.contains(&expr))
+                    reportUndefined("name", node.name, expr.location);
                 return Type::unknown();
             }
             return type;
         }
         else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
+            if (reportOtherFilesTopLevel("constructor or type", node.name, expr.location))
+                return Type::unknown();
             if (auto constant = constantDeclaration(node.name); !constant.empty())
                 m_referencedConstants[&expr] = std::move(constant);
             if (auto constructed = nullaryConstructorType(node.name)) return constructed;
@@ -582,7 +607,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                    {named ? named : Type::named(node.name)});
             }
             if (auto constant = constantType(node.name)) return constant;
-            reportConstructorOutOfScope(node.name, expr.location);
+            if (!reportConstructorOutOfScope(node.name, expr.location) &&
+                !bareNameDeclared(node.name))
+                reportUndefined("constructor or type", node.name, expr.location);
             return Type::unknown();
         }
         else if constexpr (std::is_same_v<T, ast::WithExpr>) {
@@ -625,13 +652,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             selection.onlyNames = node.onlyNames;
             selection.exceptNames = node.exceptNames;
             selection.alias = node.alias;
+            selection.location = expr.location;
             if (node.body.empty()) {
-                if (!m_importScopeStack.empty())
-                    m_importScopeStack.back().push_back(std::move(selection));
+                if (!m_importScopeStack.empty()) pushImport(std::move(selection));
                 return Type::unit();
             }
             pushScope();
-            m_importScopeStack.back().push_back(std::move(selection));
+            pushImport(std::move(selection));
             auto bodyType = inferBody(node.body);
             popScope();
             return bodyType;
@@ -639,6 +666,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::TryExpr>) {
             if (m_tryingBlockDepth >= 0 && m_blockDepth > m_tryingBlockDepth)
                 m_tryBelowBlock++;
+            // In a function clause's own body, where no `trying` takes it.
+            if (m_clauseTries && m_blockDepth == m_clauseTriesDepth &&
+                m_tryingBlockDepth != m_blockDepth)
+                m_clauseTries->push_back(expr.location);
             auto operand = resolve(
                 node.operand ? inferExpr(*node.operand) : Type::unknown());
             if (auto* optional = std::get_if<OptionalType>(&operand->kind))
@@ -785,6 +816,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             auto valueType = node.value ? inferExpr(*node.value) : Type::unknown();
             auto varType = lookupVar(node.name);
             if (varType) m_assignmentTargetTypes[&expr] = varType;
+            else if (node.name != "new" && !m_topLevelValueNames.contains(node.name))
+                reportUndefined("variable", node.name, expr.location);
             if (!node.path.empty()) {
                 if (node.path.size() != 1) {
                     error(expr.location,
@@ -1136,8 +1169,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             if (node.block) {
                 bool collection = false;
                 std::string skippedTo;
+                const auto* written = std::get_if<ast::Lambda>(&(**node.block).kind);
                 auto hints = resolveBlockHints(node.name, argTypes, false,
-                                               &collection, &skippedTo);
+                                               &collection, &skippedTo,
+                                               written ? std::optional(written->params.size())
+                                                       : std::nullopt);
                 if (collection)
                     if (auto* lambda = std::get_if<ast::Lambda>(
                             &(**node.block).kind))
@@ -1145,6 +1181,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 argTypes.push_back(inferBlock(**node.block, hints));
                 passBlockByLabel(node, skippedTo);
             }
+            // Declared by a merged dependency's file outside its module:
+            // that file's own name, undefined here as it is where the file
+            // is compiled apart.
+            if (reportOtherFilesTopLevel("function", node.name, expr.location))
+                return Type::unknown();
             if (auto constructed =
                     constructorResultType(node.name, argTypes)) {
                 checkConstructorPayloads(node.name, argTypes, expr.location);
@@ -1744,9 +1785,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             if (node.block) {
                 bool collection = false;
                 std::string skippedTo;
+                const auto* written = std::get_if<ast::Lambda>(&(**node.block).kind);
                 auto hints = resolveBlockHints(
                     callName, argTypes, /*isMethodCall=*/!isNamespaceCall,
-                    &collection, &skippedTo);
+                    &collection, &skippedTo,
+                    written ? std::optional(written->params.size()) : std::nullopt);
                 if (collection)
                     if (auto* lambda = std::get_if<ast::Lambda>(
                             &(**node.block).kind))
@@ -1873,6 +1916,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 std::isupper(static_cast<unsigned char>(node.method.front())))
                 if (auto constructed =
                         constructorResultType(node.method, argTypes, *importedPath)) {
+                    checkConstructorPayloads(node.method, argTypes, expr.location, *importedPath);
                     const auto* adt = std::get_if<NamedType>(&resolve(constructed)->kind);
                     m_decidedCalls[&expr] = {CallKind::Constructor,
                                              adt ? adt->name : node.method};
@@ -2531,6 +2575,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     candidates = *reached;
                 if (candidates.empty())
                     candidates = importedCandidateSignatures(node.name);
+                if (candidates.empty() && m_importedInterfaces && !node.name.empty() &&
+                    std::islower(static_cast<unsigned char>(node.name.front())) &&
+                    !lookupVar(node.name) && !bareNameDeclared(node.name))
+                    reportUndefined("function", node.name, expr.location);
             } else {
                 // A qualified one names its module as a call would: through
                 // an alias, an enclosing module, or a module a `using` opened.
@@ -4929,7 +4977,14 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (allHidden && !hidden.empty())
                 m_decidedCalls[callExpr] = {CallKind::Hidden, hidden};
         }
-        return Type::unknown();  // unknown name, or not yet registered (forward/recursive ref)
+        // Nothing in reach is called that. Checked without the prelude's
+        // interfaces, a call may still name one of its functions.
+        if (!isMethodCall && callExpr && m_importedInterfaces && !kex::mangle::hasScope(name) &&
+            !lookupVar(name) && !bareNameDeclared(name))
+            reportUndefined(std::holds_alternative<ast::TaggedLiteral>(callExpr->kind) ? "tag"
+                                                                                      : "function",
+                            name, loc);
+        return Type::unknown();
     }
 
     // Named arguments occupy their declared slots, while positional arguments
@@ -4953,6 +5008,24 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         const bool throughReceiver =
             isMethodCall && !kex::mangle::hasScope(name);
         const std::size_t receiverSlots = throughReceiver ? 1 : 0;
+        // A label no function of this name in reach declares. Left to the
+        // call where one of them does not say its parameters' names.
+        if (functionCall && !functionCall->namedArgs.empty() &&
+            std::none_of(sigs->begin(), sigs->end(), [](const Signature& sig) {
+                return sig.paramNames.empty() && !sig.params.empty();
+            })) {
+            std::vector<std::string> labels;
+            for (const auto& sig : *sigs)
+                labels.insert(labels.end(), sig.paramNames.begin(), sig.paramNames.end());
+            std::sort(labels.begin(), labels.end());
+            for (const auto& [label, _] : functionCall->namedArgs) {
+                if (std::binary_search(labels.begin(), labels.end(), label)) continue;
+                auto message = "Unknown named argument `" + label + ":` for `" + name + "`";
+                if (const auto hint = closestName(label, labels); !hint.empty())
+                    message += " — did you mean `" + hint + ":`?";
+                error(loc, message);
+            }
+        }
         std::vector<const Signature*> layouts;
         for (const auto& sig : *sigs) {
             if (sig.paramNames.empty() ||
@@ -5357,6 +5430,26 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 if (dominates(other, cand)) { dominated = true; break; }
             }
             if (!dominated) undominated.push_back(cand);
+        }
+        // Overloads that take blocks of different shapes (`times` with the
+        // index or without) both accept a block of no parameters: the block
+        // as written says which one it is for.
+        {
+            const auto* functionCall =
+                callExpr ? std::get_if<ast::FunctionCall>(&callExpr->kind) : nullptr;
+            const auto* blockExpr = functionCall && functionCall->block ? functionCall->block->get()
+                : methodCall && methodCall->block ? methodCall->block->get() : nullptr;
+            if (const auto* written = blockExpr ? std::get_if<ast::Lambda>(&blockExpr->kind) : nullptr) {
+                const auto takesIt = [&](const Signature* candidate) {
+                    if (candidate->params.empty()) return false;
+                    const auto* block =
+                        std::get_if<FuncType>(&resolve(candidate->params.back())->kind);
+                    return block && block->params.size() == written->params.size();
+                };
+                if (std::any_of(undominated.begin(), undominated.end(), takesIt))
+                    std::erase_if(undominated,
+                                  [&](const Signature* candidate) { return !takesIt(candidate); });
+            }
         }
         // Matching a candidate can bind an argument's type variable: a
         // tagged literal's `re` result became `Regex` while the Regex

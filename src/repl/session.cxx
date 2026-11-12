@@ -13,7 +13,7 @@
 #include "../module/discovery.hxx"
 #include "../parser/parser.hxx"
 #include "../semantic/analyzer.hxx"
-#include "../semantic/db.hxx"
+#include "../semantic/symbol_info.hxx"
 #include "../common/runtime_dir.hxx"
 #include "../driver/dependencies.hxx"
 #include <algorithm>

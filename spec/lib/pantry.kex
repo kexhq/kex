@@ -1,0 +1,11 @@
+# For spec/error_dependency_top_level.kex. What this file declares outside
+# `module Pantry` is this file's own: the module uses it, a program that
+# brings the module in does not get it.
+module Pantry do
+  let stocked() -> Integer = shelves() * 2
+  let first() -> Jar = Full(shelves())
+end
+
+type Jar = Full(Integer) | Empty
+
+let shelves() -> Integer = 3

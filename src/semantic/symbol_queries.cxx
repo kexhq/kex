@@ -196,7 +196,7 @@ auto completionsAt(const IndexedFiles& files, const std::string& file, uint32_t 
     const auto state = std::find_if(files.begin(), files.end(),
                                     [&](const IndexedFile& indexed) { return indexed.path == file; });
     if (state == files.end() || !state->scopes) return results;
-    const FileState::ScopeSnapshot* nearest = nullptr;
+    const ScopeSnapshot* nearest = nullptr;
     for (const auto& snapshot : *state->scopes) {
         const bool before = snapshot.location.line < static_cast<int>(line) ||
             (snapshot.location.line == static_cast<int>(line) &&

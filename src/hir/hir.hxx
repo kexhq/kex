@@ -182,10 +182,10 @@ private:
     const decltype(Answers::types)* m_types = nullptr;
     const decltype(Answers::typeOfAnswers)* m_typeOfAnswers = nullptr;
     const decltype(Answers::selected)* m_selected = nullptr;
+    const decltype(Answers::shownThroughDistinct)* m_shownThrough = nullptr;
     const decltype(Answers::inheritedDefaults)* m_inheritedDefaults = nullptr;
     const decltype(Answers::stringPatterns)* m_stringPatterns = nullptr;
     const decltype(Answers::makeTargets)* m_makeTargets = nullptr;
-    const decltype(Answers::shownThroughDistinct)* m_shownThrough = nullptr;
     std::unique_ptr<Answers> m_owned;
     std::vector<CallSite> m_sites;
     // Keyed by the call node (the Expr, and the MethodCall / BinaryOp inside

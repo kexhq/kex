@@ -13,6 +13,19 @@ cmake --build build
 
 Run: `./build/kex <file.kex>`
 
+That build sets no `CMAKE_BUILD_TYPE`, so it is unoptimized: quick to rebuild
+after an edit, slow to run (the tree-walk interpreter about 10x slower, the
+checker about 5x). For running the suites or measuring anything, build an
+optimized copy beside it and point `make` at it:
+
+```
+cmake -B cmake-build-release -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build cmake-build-release
+make BUILD_DIR=cmake-build-release test-all
+```
+
+CI, the Docker images and releases build with `-DCMAKE_BUILD_TYPE=Release`.
+
 ### Emscripten/wasm build
 
 Powers `web/index.html`'s in-browser REPL. Requires `emsdk` active, pinned to
@@ -36,7 +49,8 @@ make test-wasm    # + runs the interpreter test suite via Node
   - `src/lexer/` — tokenizer (token.hxx/cxx, lexer.hxx/cxx)
   - `src/parser/` — recursive descent parser (parser.hxx/cxx)
   - `src/ast/` — AST node types (ast.hxx)
-  - `src/semantic/` — semantic analysis: SemanticDB, collect/resolve passes, typechecker, traits
+  - `src/semantic/` — semantic analysis: analyzer, typechecker, traits, module rules, the name index tooling reads
+  - `src/lsp/` — language server; `workspace` holds its documents
   - `src/interpreter/` — tree-walk interpreter, fiber/scheduler process runtime, stdlib (stdlib/)
   - `src/ir/` — lowering IR + IR→Core Erlang emitter (ir.hxx, lower, emit_core)
   - `src/common/` — shared helpers (color, completion, prelude_loader)
