@@ -21,7 +21,12 @@ shop/
   src/main.kex            the entrypoint
   spec/                   specs: spec/*.spec.kex
   README.md  .gitignore  .gitattributes
+  AGENTS.md  CLAUDE.md  .claude/skills/kex/SKILL.md
 ```
+
+The last line is for AI agents: three small files that send an agent to
+`kex --skill` before it writes any Kex. They hold no copy of the guide, so
+they do not go stale. `tey new shop --app --skip-agent` leaves them out.
 
 The entrypoint is an ordinary program:
 

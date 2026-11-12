@@ -1201,7 +1201,7 @@ end
 # creates. The pair with `init` below follows what `git init` and `cargo new`
 # already taught everyone: `new` makes the directory, `init` adopts the one
 # you are standing in.
-foul new(directory: String, library: Bool) -> Integer do
+foul new(directory: String, library: Bool, agentFiles: Bool) -> Integer do
   # The argument is a DIRECTORY, and the package is named after its last
   # component: `tey new /tmp/ooo` makes `ooo` in `/tmp/ooo`.
   let name = Tey.Commands.packageNameIn(directory)
@@ -1215,7 +1215,7 @@ foul new(directory: String, library: Bool) -> Integer do
     return Tey.Commands.fail("could not create project '${name}'")
   end
   IO.printLine(Tey.Commands.creating(name, library, directory))
-  let status = Tey.Commands.scaffold(directory, name, library)
+  let status = Tey.Commands.scaffold(directory, name, library, agentFiles)
   return status if status != 0
   0
 end
@@ -1227,7 +1227,7 @@ end
 #
 # The name is overridable because a directory name is not always the package
 # name — `kexhq/greet` checked out as `greet-main` is still `greet`.
-foul init(name: String, library: Bool) -> Integer do
+foul init(name: String, library: Bool, agentFiles: Bool) -> Integer do
   if FS.File.file?("package.kex")
     return Tey.Commands.fail("this directory already holds a package.kex")
   end
@@ -1236,7 +1236,7 @@ foul init(name: String, library: Bool) -> Integer do
     return Tey.Commands.fail("could not name the package after this directory; pass a name")
   end
   IO.printLine(Tey.Commands.creating(chosen, library, "."))
-  let status = Tey.Commands.scaffold(".", chosen, library)
+  let status = Tey.Commands.scaffold(".", chosen, library, agentFiles)
   return status if status != 0
   0
 end
@@ -1784,7 +1784,8 @@ private do
   # Writes a package into `directory`. Shared by `new` and `init` so the two
   # cannot drift into producing different packages — the bug that shape of
   # duplication always ends in.
-  foul scaffold(directory: String, name: String, library: Bool) -> Integer do
+  foul scaffold(directory: String, name: String, library: Bool,
+                agentFiles: Bool) -> Integer do
     let sources = Tey.Commands.createDirectory(directory, "${directory}/src")
     let specs = Tey.Commands.createDirectory(directory, "${directory}/spec")
     if !sources || !specs
@@ -1839,7 +1840,35 @@ private do
     # writes one wherever it died, and nobody wants it in a commit.
     Tey.Commands.writeCreated(directory, "${directory}/.gitignore",
                               "${Tey.Commands.outputDirectory}/\nerl_crash.dump\n")
-    0
+    return 0 if !agentFiles
+    Tey.Commands.scaffoldAgentFiles(directory, name, library)
+  end
+
+  # What an AI agent reads before it touches the package. A model that has
+  # never seen Kex writes Ruby, and nothing in a fresh package said otherwise.
+  #
+  # None of these files holds the language guide. The guide is in the compiler
+  # (`kex --skill`), where it cannot describe a different Kex than the one
+  # installed; these only send the agent there, so they do not go stale with
+  # every release. `--skip-agent` leaves all three out.
+  #
+  # - AGENTS.md is what most agents read on their own.
+  # - CLAUDE.md is what Claude Code reads; it imports AGENTS.md rather than
+  #   repeating it.
+  # - The skill is how Claude Code is reminded when a task turns to Kex.
+  foul scaffoldAgentFiles(directory: String, name: String, library: Bool) -> Integer do
+    let instructions = Template.text(Kex.embed("templates/AGENTS.md.ket"))
+    let skillDirectory = "${directory}/.claude/skills/kex"
+    let wroteInstructions = Tey.Commands.writeCreated(
+      directory, "${directory}/AGENTS.md", instructions(name, library))
+    let wroteImport = Tey.Commands.writeCreated(
+      directory, "${directory}/CLAUDE.md", "@AGENTS.md\n")
+    let skill = Kex.embed("templates/agent-skill.md")
+    let skillPath = "${skillDirectory}/SKILL.md"
+    let madeSkillDirectory = FS.Directory.create(skillDirectory).ok?
+    let wroteSkill = madeSkillDirectory && Tey.Commands.writeCreated(directory, skillPath, skill)
+    return 0 if wroteInstructions && wroteImport && wroteSkill
+    Tey.Commands.fail("could not write the agent files for '${name}'")
   end
 
   foul readLock -> LockState or! String do

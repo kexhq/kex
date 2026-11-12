@@ -21,6 +21,9 @@ model writes from Ruby or Elixir habit is rejected. Work in this loop instead:
    runs the same program in the built-in interpreter. `kex name.spec.kex` runs
    tests.
 
+No `kex` on the path? `brew install kexhq/tey/tey`, or
+`curl -fsSL https://kex.run/install.sh | sh`, installs it.
+
 Every example below is a whole program that this compiler checks and runs.
 A `# not:` comment shows the habit that does not work, beside the line that
 does.
@@ -330,7 +333,9 @@ end
 
 ## More
 
-Each of these is one worked program followed by its rules:
+Each of these is one worked program followed by its rules. Read as an
+installed skill, each topic is also a file beside this one, named for the
+topic: `control.md`, `make.md` and so on.
 
 - `kex --skill functions` covers the forms of a function, clauses,
   declarations, defaults, lambdas and `~`.

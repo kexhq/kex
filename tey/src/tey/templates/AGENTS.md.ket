@@ -1,0 +1,34 @@
+---
+params: [name: String, library: Bool]
+---
+# Working on <%= name %>
+
+This is a Kex package. Kex looks like Ruby but is a statically typed,
+immutable, functional language: Ruby and Elixir habits produce code that does
+not compile.
+
+**Before writing or editing any Kex, run `kex --skill`** and read it. It is the
+language guide the compiler carries, so it describes exactly the Kex installed
+here. `kex --skill <topic>` goes deeper: `functions`, `make`, `control`,
+`errors`, `modules`, `processes`, `testing`, `style`, `tey`.
+
+## While working
+
+- Look names up, never guess them: `kex -s List`, `kex -s List.find`,
+  `kex -s find`.
+- Check after every edit: `kex -C --source-root src <file>`.
+- Run the specs: `tey test`. One case: `tey test --only "<describe> > <it>"`.
+<% if library %>
+- This is a library: its modules live under `src/` and it has no entrypoint.
+<% end %>
+<% if !library %>
+- Run the program: `tey run`.
+<% end %>
+- `tey test --interpret` needs no Erlang.
+
+## Layout
+
+- `package.kex` is the manifest: name, version, dependencies, commands.
+- `src/` holds the modules. `module Shop.Cart` is the file `src/shop/cart.kex`.
+- `spec/` holds the specs, directly in it, named `<name>.spec.kex`.
+- `tey.lock` is committed. `ebin/` is build output.

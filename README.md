@@ -31,6 +31,16 @@ release, verifies its checksum, and runs `tey kex install` for the compiler:
 curl -fsSL https://kex.run/install.sh | sh
 ```
 
+### Teaching an AI agent Kex
+
+`kex --skill` prints a guide to writing Kex, made for an AI agent to read
+before it writes any; `kex --help` points every agent at it. In Claude Code the
+same guide installs as a plugin:
+
+```
+/plugin install kex --marketplace kexhq/kex
+```
+
 The `kex` on your PATH is Tey's dispatcher: it runs whichever toolchain Tey has
 selected, so there is only ever one compiler command and Tey decides what it
 means.

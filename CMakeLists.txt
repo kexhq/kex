@@ -142,12 +142,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     add_link_options(-sNO_DISABLE_EXCEPTION_CATCHING)
 endif()
 
-# The guide `kex --skill` prints, built into the binary from src/skill/*.md.
+# The guide `kex --skill` prints, built into the binary from the Markdown of
+# the Claude Code plugin in plugins/kex. One set of files is both: the skill
+# people install and the text the compiler carries, so the two cannot differ.
 # SKILL.md is the guide itself and goes first; the rest are its topics.
-file(GLOB KEX_SKILL_TOPICS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/skill/*.md")
-list(REMOVE_ITEM KEX_SKILL_TOPICS "${CMAKE_SOURCE_DIR}/src/skill/SKILL.md")
+set(KEX_SKILL_DIR "${CMAKE_SOURCE_DIR}/plugins/kex/skills/kex")
+file(GLOB KEX_SKILL_TOPICS CONFIGURE_DEPENDS "${KEX_SKILL_DIR}/*.md")
+list(REMOVE_ITEM KEX_SKILL_TOPICS "${KEX_SKILL_DIR}/SKILL.md")
 list(SORT KEX_SKILL_TOPICS)
-list(PREPEND KEX_SKILL_TOPICS "${CMAKE_SOURCE_DIR}/src/skill/SKILL.md")
+list(PREPEND KEX_SKILL_TOPICS "${KEX_SKILL_DIR}/SKILL.md")
 list(JOIN KEX_SKILL_TOPICS "|" KEX_SKILL_TOPIC_ARGUMENT)
 set(KEX_SKILL_SOURCE "${CMAKE_BINARY_DIR}/generated/skill_topics.cxx")
 add_custom_command(

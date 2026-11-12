@@ -5,7 +5,7 @@
 
 // `kex --skill`: the guide to writing Kex that the compiler carries for a
 // model meeting the language for the first time. The text is the Markdown
-// under src/skill/, built into the binary, so the guide a model reads is the
+// of the plugin in plugins/kex/skills/kex/, built into the binary, so the guide a model reads is the
 // guide for the compiler it is about to run and needs no file beside it.
 namespace kex::skill {
 
@@ -19,7 +19,7 @@ struct Topic {
 inline constexpr std::string_view kGuideTopic = "SKILL";
 
 // Every topic, the guide first. Defined by the source CMake generates from
-// src/skill/*.md (see embed.cmake).
+// those files (see embed.cmake).
 auto topics() -> const std::vector<Topic>&;
 
 // Null when there is no such topic. Names compare without regard to case.

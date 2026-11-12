@@ -110,6 +110,7 @@ make Account do
   let withdrawn(amount: Integer) -> This or! BankError do
     return Error(Frozen) if @frozen?
     return Error(Insufficient(@balance)) if amount > @balance
+
     Ok(New { balance: @balance - amount })
   end
 

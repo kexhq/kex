@@ -41,7 +41,9 @@ make test-wasm    # + runs the interpreter test suite via Node
   - `src/ir/` — lowering IR + IR→Core Erlang emitter (ir.hxx, lower, emit_core)
   - `src/common/` — shared helpers (color, completion, prelude_loader)
   - `src/help/` — `kex -s <Name>`: stdlib help read from the stdlib sources
-  - `src/skill/` — `kex --skill`: the guide for models writing Kex (`*.md`, built into the binary; every example is run by `skill_test`)
+  - `src/skill/` — `kex --skill`: embeds the guide for models writing Kex into the binary
+- `plugins/kex/` — the Claude Code plugin. Its `skills/kex/*.md` are the guide: the same files `kex --skill` prints, and every example in them is run by `skill_test`
+- `.claude-plugin/marketplace.json` — lists that plugin, so the repository is its own marketplace
   - `src/stdlib/` — standard-library `.kex` sources; `prelude.kex` selects the automatically visible subset
   - `src/main.cxx` — CLI entry point
 
