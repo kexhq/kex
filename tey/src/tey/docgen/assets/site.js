@@ -412,7 +412,35 @@
     render();
   }
 
+  // ── Copy controls ──────────────────────────────────────────────────
+
+  // The "#" beside a declaration is a link to its own anchor, and a click
+  // also copies that address. A code block's "Copy" copies its source; it
+  // is hidden markup until this script, which is what makes it work, shows
+  // it. Either says "Copied" for a moment.
+  function startCopyControls() {
+    if (!navigator.clipboard) return;
+    document.querySelectorAll("button.copy-code").forEach((button) => { button.hidden = false; });
+    document.addEventListener("click", (event) => {
+      const control = event.target.closest ? event.target.closest("a.permalink, button.copy-code") : null;
+      if (!control || control.classList.contains("copied")) return;
+      const block = control.closest(".code-block");
+      const text = block ? block.querySelector("code").textContent : control.href;
+      navigator.clipboard.writeText(text).then(() => {
+        const label = control.textContent;
+        control.classList.add("copied");
+        control.textContent = "Copied";
+        setTimeout(() => {
+          control.textContent = label;
+          control.classList.remove("copied");
+        }, 1400);
+      }).catch(() => {});
+    });
+  }
+
   // ── Start ───────────────────────────────────────────────────────────
+
+  startCopyControls();
 
   const versionBadge = document.getElementById("version-badge");
   if (versionBadge) startVersionSwitcher(versionBadge).catch(() => {});

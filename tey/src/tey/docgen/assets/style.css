@@ -558,24 +558,203 @@ pre.code a.xref { color: inherit; border-bottom: 1px dotted color-mix(in oklab, 
 }
 
 /* Which trait a member fulfils: a small link chip beside its name. */
-.tag-trait, .tag-kind {
+.tag-trait, .tag-kind, .tag-foul {
   margin-left: 0.5rem;
-  padding: 0.05rem 0.45rem;
+  padding: 0.2rem 0.6rem;
   border: 1px solid #efcfe0;
   border-radius: 999px;
   background: #f9ecf3;
   color: #c2498a;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 500;
+  line-height: 1.2;
   text-decoration: none;
   vertical-align: middle;
+  white-space: nowrap;
 }
 .tag-kind { border-color: #e6d2b4; background: #f6ecdd; color: #9a5a13; }
+/* Foul: may touch the outside world. The one chip that is a warning. */
+.tag-foul { border-color: #efcdc3; background: #fbece7; color: #b4432b; font-weight: 600; }
+.index .tag-foul { font-size: 11px; padding: 0.1rem 0.45rem; }
 .tag-trait:hover { border-color: #c2498a; }
 
 /* Methods a type gets from a trait without writing them. */
 .inherited dt, .elsewhere dt { min-width: 9rem; }
+
+/* ── Reference: finding a member ────────────────────────────────────── */
+
+/* What a declaration offers, ahead of the full entries: one line per
+   member, so a long type is read as a list before it is read as a page. */
+.summary { margin: 1.4rem 0 2.4rem; }
+.summary > h3 {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--faint);
+  margin: 1.5rem 0 0.3rem;
+}
+.summary > h3:first-child { margin-top: 0; }
+.summary > h3 a, .summary > h3 a.xref { color: inherit; text-decoration: none; border-bottom: 0; }
+.summary > h3 code:not(pre code) { font-size: 1em; letter-spacing: 0; text-transform: none; }
+.summary .params { margin-bottom: 0; }
+.summary .param { padding: 0.28rem 0; }
+.summary dd { font-size: 0.9rem; }
+/* One name column for the whole list, as wide as its longest name and
+   its chip, so every summary starts on the same edge. */
+.summary .params { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 1.2rem; }
+.summary .param { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
+
+/* A member's entry is a card headed by its signature: a band across the
+   top, flush with the card's edges, rather than a box inside a box. The
+   band is light, so the dark surface is left to the examples and the two
+   are told apart at a glance. What the signature does not say shares the
+   band with it, at the right: whether the member is foul, the traits it
+   fulfils, its permalink. */
+.fn {
+  --fn-band: #faf7e4;
+  overflow: hidden;
+  padding: 0.95rem 1.2rem 1rem;
+  border-radius: 12px;
+}
+.fn:has(> .fn-head) { padding-top: 0; }
+.fn-head, .fn > pre.code.sig {
+  margin: 0 -1.2rem 0.95rem;
+  padding: 0.75rem 1.2rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--fn-band);
+}
+.fn-head { display: flex; align-items: flex-start; gap: 0.9rem; }
+.fn pre.code.sig {
+  border: 0;
+  border-radius: 0;
+  color: var(--ink-soft);
+  font-size: 13.5px;
+  line-height: 1.75;
+}
+/* A signature keeps its line: one longer than its room scrolls there,
+   beside the chips, never under them. */
+.sig-line { display: block; }
+.fn-head > pre.code.sig { flex: 1; min-width: 0; margin: 0; padding: 0; background: none; }
+/* A further overload: its own band, part-way down the card. */
+.fn > pre.code.sig { margin-top: 1.2rem; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+/* The token colours are made for the dark code surface. On the band every
+   token starts from the band's own ink, and only what helps read a
+   signature is picked out: the name, the types, the default values. */
+.fn pre.code.sig span { color: inherit; }
+.fn pre.code.sig .tok-fn { color: var(--ink); font-weight: 700; }
+.fn pre.code.sig .tok-type { color: var(--accent-strong); }
+.fn pre.code.sig .tok-op, .fn pre.code.sig .tok-punct { color: var(--faint); }
+.fn pre.code.sig :is(.tok-string, .tok-number, .tok-bool, .tok-atom) { color: var(--accent); }
+.fn pre.code.sig a.xref { border-bottom-color: color-mix(in oklab, var(--accent) 45%, transparent); }
+
+/* The heading beside a signature repeats its name, so only its chips show. */
+.fn-head > :is(h3, h4) {
+  order: 2;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  line-height: 1;
+}
+.fn-head > :is(h3, h4) a.self { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.fn :is(h3, h4) :is(.tag-trait, .tag-kind, .tag-foul) { margin-left: 0; }
+.fn > :is(h3, h4) a.self + :is(.tag-trait, .tag-kind, .tag-foul, .permalink) { margin-left: 0.5rem; }
+.fn h5 { margin: 0.9rem 0 0.35rem; }
+
+/* Parameters as two aligned columns, and what comes back labelled the
+   same way: inside a card the rules between rows are one frame too many. */
+.fn .params { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.35rem 1rem; margin-bottom: 0.9rem; }
+.fn .param { display: contents; }
+.fn .returns { color: var(--muted); font-size: 0.95rem; }
+.fn .returns strong {
+  margin-right: 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--faint);
+}
+
+/* A block of example code, and the control that copies it: in the block's
+   corner, waiting for the pointer like a card's permalink. */
+.code-block { position: relative; margin: 0 0 1.1rem; }
+.code-block > pre.code { margin: 0; }
+.fn .code-block:last-child { margin-bottom: 0; }
+.copy-code {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  height: 1.6rem;
+  padding: 0 0.55rem;
+  border: 1px solid var(--code-border);
+  border-radius: 6px;
+  background: var(--code-bg-soft);
+  box-shadow: 0 0 0 0.35rem var(--code-bg);
+  color: #c9bfa9;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, opacity 0.15s;
+}
+.copy-code:hover { color: #fff; border-color: #e6a960; }
+.copy-code.copied { color: #8fd3a8; border-color: #3d6b4c; }
+@media (hover: hover) {
+  .copy-code { opacity: 0; }
+  .code-block:hover .copy-code, .copy-code:focus-visible, .copy-code.copied { opacity: 1; }
+}
+
+/* The address of a declaration or member: a link to its own anchor that
+   the page script also copies to the clipboard. */
+.prose a.permalink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6rem;
+  height: 1.6rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  text-decoration: none;
+  vertical-align: middle;
+  transition: color 0.15s, border-color 0.15s, opacity 0.15s;
+}
+.prose a.permalink:hover { color: var(--accent-strong); border-color: var(--accent); }
+.prose a.permalink.copied { color: #2f855a; border-color: #c6e6d4; background: #e8f4ec; }
+.entity > h2 a.permalink { margin-left: 0.4rem; }
+/* With a pointer, a permalink waits for it: beside a declaration's heading,
+   and in the corner of a member's card, where it takes no room from the
+   signature until the card is under the pointer. Without one it is always
+   there, in the row. */
+@media (hover: hover) {
+  .entity > h2 a.permalink { opacity: 0; }
+  .entity > h2:hover a.permalink, .entity > h2 a.permalink:focus-visible, .entity > h2 a.permalink.copied { opacity: 1; }
+  .fn { position: relative; }
+  .fn-head a.permalink {
+    position: absolute;
+    top: 0.6rem;
+    right: 0.9rem;
+    opacity: 0;
+    background: var(--bg);
+    box-shadow: 0 0 0 0.4rem var(--fn-band);
+  }
+  .fn:hover .fn-head a.permalink, .fn-head a.permalink:focus-visible, .fn-head a.permalink.copied { opacity: 1; }
+  /* The chips step aside for it rather than sit under it. */
+  .fn-head :is(.tag-trait, .tag-kind, .tag-foul) { transition: transform 0.15s; }
+  .fn:hover .fn-head :is(.tag-trait, .tag-kind, .tag-foul) { transform: translateX(-2.1rem); }
+}
 
 .prose ul { margin: 0 0 1.1rem; padding-left: 1.3rem; }
 .prose li { margin: 0.25rem 0; }

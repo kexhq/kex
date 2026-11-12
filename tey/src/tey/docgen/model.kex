@@ -102,6 +102,9 @@ module Tey.Docgen.Model do
     # The result type the source declares (annotation or inline `-> T`),
     # or "" when it declares none.
     returnType : String = ""
+    # Declared `foul`: it may touch the outside world, and only foul code
+    # may call it.
+    isFoul : Bool = false
   end
 
   record ConstantEntry do

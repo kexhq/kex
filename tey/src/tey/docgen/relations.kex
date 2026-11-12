@@ -22,6 +22,36 @@ module Tey.Docgen.Relations do
     return (types, traits)
   end
 
+  # A member that fulfils a trait function and declares no type of its own
+  # (`let identity = 0` under `make Integer, implement: Monoid`) is typed by
+  # the trait: the signature the trait declares, with `This` read as the
+  # implementing type. Done on the pages, before anything renders them, so
+  # every output states the same signature.
+  foul withTraitSignatures(pages: [SourcePage]) -> [SourcePage] do
+    let traits = pages.flatMap { |p| traitEntries(p.entities) }
+    return pages.map { |p| SourcePage { ...p, entities: p.entities.map { |e| typedByTraits(e, traits) } } }
+  end
+
+  foul typedByTraits(e: Entity, traits: [TraitEntry]) -> Entity do
+    match e do
+      MakeDecl(m) => MakeDecl(MakeEntry { ...m, functions: m.functions.map { |f| typedByTrait(f, m, traits) } })
+      ModuleDecl(m) => ModuleDecl(Tey.Docgen.Model.ModuleEntry { ...m, children: m.children.map { |c| typedByTraits(c, traits) } })
+      _ => e
+    end
+  end
+
+  foul typedByTrait(f: FunctionEntry, m: MakeEntry, traits: [TraitEntry]) -> FunctionEntry do
+    return f if !f.signatures.all? { |s| s == f.name }
+    let implemented = m.implements.map { |i| baseTypeOf(i) }
+    let declared = traits.filter { |t| implemented.contains?(t.name) || implemented.contains?(t.qualifiedName) }.flatMap { |t| t.functions }
+    let signatures = declared.filter { |g| g.name == f.name }.flatMap { |g| g.signatures }.map { |s| asImplementor(s, m.target) }.uniq
+    return signatures.empty? then f else FunctionEntry { ...f, signatures: signatures }
+  end
+
+  foul asImplementor(signature: String, target: String) -> String do
+    return Tey.Docgen.Nav.segmentsOf(signature).map { |seg| seg == "This" then target else seg }.join("")
+  end
+
   foul pageExtensions(page: SourcePage, entities: [Entity]) -> [Extension] do
     return entities.flatMap { |e|
       match e do
