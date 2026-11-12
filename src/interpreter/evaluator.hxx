@@ -648,7 +648,7 @@ private:
     // that declared it (e.g. "Option", "Result", "FizzBuzz"). Populated in
     // execTopLevel's TypeDef handling. Lets method dispatch resolve
     // `make Option<A> do let map(@Just(x), f) = ... end` (registered under
-    // "Option::map") when called on a `Just(...)` value (tagged "Just").
+    // "Option.map") when called on a `Just(...)` value (tagged "Just").
     std::unordered_map<std::string, std::string> m_variantParent;
     std::unordered_map<std::string, std::string> m_typeModules;
     // Each sum type's variants as declared, in order: what

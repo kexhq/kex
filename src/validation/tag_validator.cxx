@@ -577,7 +577,7 @@ auto validateTaggedLiterals(
             if (!matchedModule) continue;
         } else if (!functions.contains(qualified(owner, use.literal->tag))) {
             // A module file collects its functions under its own scope
-            // ("Regex::regex"), while the tag at the use site is unqualified
+            // ("Regex.regex"), while the tag at the use site is unqualified
             // ("regex") — `using` brought it into scope. Match on the trailing
             // segment, and remember the qualified key for evaluation.
             const Functions* fromModule = nullptr;

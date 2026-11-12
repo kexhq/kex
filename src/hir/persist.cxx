@@ -14,7 +14,7 @@ using beam::TermPtr;
 
 constexpr int kMagic = 0x4b584852;  // "KXHR"
 // Bump with any change to the shape below.
-constexpr int kVersion = 6;
+constexpr int kVersion = 7;
 
 auto none() -> TermPtr { return Term::atom("none"); }
 
@@ -42,7 +42,7 @@ auto targetToTerm(const Target& target) -> TermPtr {
                         Term::integer(target.arity), Term::binary(target.owner),
                         Term::boolean(target.servingCast),
                         Term::integer(static_cast<int64_t>(target.operands)),
-                        Term::boolean(target.negated)});
+                        Term::boolean(target.negated), Term::boolean(target.onThis)});
 }
 
 auto targetFromSax(SaxReader& sax) -> Target {
@@ -56,6 +56,7 @@ auto targetFromSax(SaxReader& sax) -> Target {
     target.servingCast = sax.readBool();
     target.operands = static_cast<semantic::BuiltinOperands>(sax.readInt());
     target.negated = sax.readBool();
+    target.onThis = sax.readBool();
     return target;
 }
 

@@ -13,9 +13,9 @@ namespace kex::semantic {
 auto findCompileTimeIntrinsic(std::string_view name, std::size_t arity)
     -> const CompileTimeIntrinsic* {
     static const CompileTimeIntrinsic intrinsics[] = {
-        {"Type::returnedBy", 1, &TypeChecker::checkTypeReturnedBy, nullptr},
-        {"Type::of", 1, &TypeChecker::checkTypeOf, &TypeChecker::foldTypeOf},
-        {"Process::spawn", 1, &TypeChecker::checkProcessSpawn, &TypeChecker::foldProcessSpawn},
+        {"Type.returnedBy", 1, &TypeChecker::checkTypeReturnedBy, nullptr},
+        {"Type.of", 1, &TypeChecker::checkTypeOf, &TypeChecker::foldTypeOf},
+        {"Process.spawn", 1, &TypeChecker::checkProcessSpawn, &TypeChecker::foldProcessSpawn},
         {"as", 1, &TypeChecker::checkAs, nullptr},
     };
     for (const auto& intrinsic : intrinsics)

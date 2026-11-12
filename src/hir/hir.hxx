@@ -44,6 +44,9 @@ struct Target {
     semantic::BuiltinOperands operands = semantic::BuiltinOperands::Checked;
     // An Operator that negates the implementation it names (`!=` as `==`).
     bool negated = false;
+    // An OwnMethod written with no receiver inside its type's `make` block:
+    // `this` is the receiver.
+    bool onThis = false;
 };
 
 // The checker's answers a Program reads besides its call targets: borrowed

@@ -6,7 +6,7 @@ namespace kex::interpreter {
 
 auto Evaluator::registerDigestBuiltins() -> void {
     defineModule("Digest");
-    defineIntrinsic("Digest::sha256", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Digest.sha256", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string(sha256Hex(std::string_view{}));
         if (const auto* binary = std::get_if<BinaryValue>(&args[0]->data)) {
             const auto digest = sha256(binary->bytes);
@@ -16,7 +16,7 @@ auto Evaluator::registerDigestBuiltins() -> void {
         if (!text) return Value::string(sha256Hex(std::string_view{}));
         return Value::string(sha256Hex(text->value));
     });
-    defineIntrinsic("Digest::fileSha256", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Digest.fileSha256", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         const auto* path = std::get_if<StringValue>(&args[0]->data);
         if (!path) return Value::none();

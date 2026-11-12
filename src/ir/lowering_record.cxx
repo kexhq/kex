@@ -237,7 +237,7 @@ auto Lowering::checkedCallModule(const ast::MethodCall& n) const -> std::string 
     case hir::TargetKind::ValueCall:
         return kex::mangle::scopeOf(target.owner);
     case hir::TargetKind::Constructor:
-        return kex::mangle::pathScopeOf(target.owner);
+        return kex::mangle::scopeOf(target.owner);
     default:
         return {};
     }

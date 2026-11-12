@@ -153,7 +153,7 @@ auto Evaluator::testCaseSelected(const std::vector<std::string>& path,
 // stays its own. `Mock.*` and the `kex test` subcommand are separate concerns.
 auto Evaluator::registerTestBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        defineIntrinsic("Test::" + name, std::move(fn));
+        defineIntrinsic("Test." + name, std::move(fn));
     };
 
     // describe(name) do ... end — purely organizational: prints a header

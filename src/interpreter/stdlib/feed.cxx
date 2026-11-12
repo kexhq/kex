@@ -18,14 +18,14 @@ auto Evaluator::registerFeedBuiltins() -> void {
     };
 
     // Feed.empty — a feed that is spent from the start.
-    defineIntrinsic("Feed::empty", [](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("Feed.empty", [](std::vector<ValuePtr>) -> ValuePtr {
         return lazy::feedValue(nullptr);
     });
 
     // Feed.Elements(xs) — a feed over an already-materialised list. For a
     // source that is a list all along (a test fake standing in for a file),
     // so that what it hands back consumes like the real thing.
-    defineIntrinsic("Feed::elements", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Feed.elements", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return lazy::feedValue(nullptr);
         auto* list = std::get_if<ListValue>(&args[0]->data);
         if (!list) return lazy::feedValue(nullptr);
@@ -43,7 +43,7 @@ auto Evaluator::registerFeedBuiltins() -> void {
     // NOT `next`: that is the loop-continue keyword, and the lexer takes it as
     // one even in member position, so `Kex.Intrinsic.Feed.next(this)` silently
     // swallowed the whole enclosing `make` block.
-    defineIntrinsic("Feed::pull", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Feed.pull", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto state = feedOf(args[0]);
         if (!state) return Value::none();
@@ -54,7 +54,7 @@ auto Evaluator::registerFeedBuiltins() -> void {
     // Feed.spent? -> Bool — whether the source has run out. False does not
     // promise another element, only that the feed has not yet been told
     // otherwise; the source is asked, and may end, on the next pull.
-    defineIntrinsic("Feed::spent?", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Feed.spent?", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(true);
         auto state = feedOf(args[0]);
         return Value::boolean(!state || state->spent);
@@ -63,7 +63,7 @@ auto Evaluator::registerFeedBuiltins() -> void {
     // Feed.take(n) -> [A] — the next n elements, consumed. Unlike the stream
     // operation of the same name, taking twice answers two DIFFERENT windows:
     // the first n elements, then the n after them.
-    defineIntrinsic("Feed::take", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Feed.take", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         auto state = feedOf(args[0]);
         auto* n = std::get_if<IntValue>(&args[1]->data);
@@ -79,7 +79,7 @@ auto Evaluator::registerFeedBuiltins() -> void {
 
     // Feed.drop(n) -> Feed<A> — discards n elements and answers the same feed,
     // since there is only ever the one cursor to hand back.
-    defineIntrinsic("Feed::drop", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Feed.drop", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return args.empty() ? Value::none() : args[0];
         auto state = feedOf(args[0]);
         auto* n = std::get_if<IntValue>(&args[1]->data);
@@ -88,7 +88,7 @@ auto Evaluator::registerFeedBuiltins() -> void {
         return args[0];
     });
 
-    defineIntrinsic("Feed::map", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Feed.map", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         auto state = feedOf(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -96,7 +96,7 @@ auto Evaluator::registerFeedBuiltins() -> void {
         return lazy::mapFeed(state, fn->native);
     });
 
-    defineIntrinsic("Feed::filter", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Feed.filter", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         auto state = feedOf(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -106,7 +106,7 @@ auto Evaluator::registerFeedBuiltins() -> void {
 
     // Feed.each(f) — drains the feed. Terminates for any real source, since a
     // feed ends when its source does.
-    defineIntrinsic("Feed::each", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Feed.each", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::unit();
         auto state = feedOf(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -117,7 +117,7 @@ auto Evaluator::registerFeedBuiltins() -> void {
 
     // Feed.collect -> [A] — drains the feed into a list. The operation that
     // gives up on constant space, so it is named rather than implicit.
-    defineIntrinsic("Feed::collect", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Feed.collect", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         auto state = feedOf(args[0]);
         if (!state) return Value::list({});
@@ -130,7 +130,7 @@ auto Evaluator::registerFeedBuiltins() -> void {
     // a source small enough to be worth replaying. This is the one direction
     // that trades space for reusability: the resulting stream retains every
     // element forced through it.
-    defineIntrinsic("Feed::toStream", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Feed.toStream", [feedOf](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return lazy::streamValue(nullptr);
         auto state = feedOf(args[0]);
         if (!state) return lazy::streamValue(nullptr);

@@ -69,6 +69,9 @@ struct DecidedCall {
     BuiltinOperands operands = BuiltinOperands::Checked;
     bool negated = false;
     std::string backendModule = {};
+    // An OwnMethod written with no receiver inside its type's `make` block
+    // (`decorate(x)`, or `seed` named bare): `this` is the receiver.
+    bool onThis = false;
 };
 
 } // namespace kex::semantic

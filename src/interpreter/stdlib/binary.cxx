@@ -72,7 +72,7 @@ auto decodeBase64(const std::string& text) -> std::optional<std::vector<uint8_t>
 auto Evaluator::registerBinaryBuiltins() -> void {
     defineModule("Binary");
     defineModule("Byte");
-    defineIntrinsic("Binary::fromBytes", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Binary.fromBytes", [](std::vector<ValuePtr> args) -> ValuePtr {
         std::vector<uint8_t> bytes;
         if (args.empty()) return Value::binary({});
         const auto* list = std::get_if<ListValue>(&args[0]->data);
@@ -86,7 +86,7 @@ auto Evaluator::registerBinaryBuiltins() -> void {
         }
         return Value::binary(std::move(bytes));
     });
-    defineIntrinsic("Binary::bytes", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Binary.bytes", [](std::vector<ValuePtr> args) -> ValuePtr {
         std::vector<ValuePtr> values;
         if (!args.empty()) if (const auto* value = binaryArg(args[0])) {
             values.reserve(value->bytes.size());
@@ -94,11 +94,11 @@ auto Evaluator::registerBinaryBuiltins() -> void {
         }
         return Value::list(std::move(values));
     });
-    defineIntrinsic("Binary::length", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Binary.length", [](std::vector<ValuePtr> args) -> ValuePtr {
         const auto* value = args.empty() ? nullptr : binaryArg(args[0]);
         return Value::integer(value ? static_cast<int64_t>(value->bytes.size()) : 0);
     });
-    defineIntrinsic("Binary::at", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Binary.at", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         const auto* value = binaryArg(args[0]);
         const auto index = integerArg(args[1]);
@@ -116,9 +116,9 @@ auto Evaluator::registerBinaryBuiltins() -> void {
         if (take) return Value::binary({value->bytes.begin(), value->bytes.begin() + n});
         return Value::binary({value->bytes.begin() + n, value->bytes.end()});
     };
-    defineIntrinsic("Binary::take", [slice](std::vector<ValuePtr> args) { return slice(true, std::move(args)); });
-    defineIntrinsic("Binary::drop", [slice](std::vector<ValuePtr> args) { return slice(false, std::move(args)); });
-    defineIntrinsic("Binary::concat", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Binary.take", [slice](std::vector<ValuePtr> args) { return slice(true, std::move(args)); });
+    defineIntrinsic("Binary.drop", [slice](std::vector<ValuePtr> args) { return slice(false, std::move(args)); });
+    defineIntrinsic("Binary.concat", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::binary({});
         const auto* left = binaryArg(args[0]);
         const auto* right = binaryArg(args[1]);
@@ -127,11 +127,11 @@ auto Evaluator::registerBinaryBuiltins() -> void {
         bytes.insert(bytes.end(), right->bytes.begin(), right->bytes.end());
         return Value::binary(std::move(bytes));
     });
-    defineIntrinsic("Binary::hex", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Binary.hex", [](std::vector<ValuePtr> args) -> ValuePtr {
         const auto* value = args.empty() ? nullptr : binaryArg(args[0]);
         return Value::string(value ? hexEncode(value->bytes) : std::string{});
     });
-    defineIntrinsic("Binary::fromHex", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Binary.fromHex", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         const auto* text = std::get_if<StringValue>(&args[0]->data);
         if (!text || text->value.size() % 2) return Value::none();
@@ -144,18 +144,18 @@ auto Evaluator::registerBinaryBuiltins() -> void {
         }
         return Value::just(Value::binary(std::move(out)));
     });
-    defineIntrinsic("Binary::base64", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Binary.base64", [](std::vector<ValuePtr> args) -> ValuePtr {
         const auto* value = args.empty() ? nullptr : binaryArg(args[0]);
         return Value::string(value ? encodeBase64(value->bytes) : "");
     });
-    defineIntrinsic("Binary::fromBase64", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Binary.fromBase64", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         const auto* text = std::get_if<StringValue>(&args[0]->data);
         if (!text) return Value::none();
         auto bytes = decodeBase64(text->value);
         return bytes ? Value::just(Value::binary(std::move(*bytes))) : Value::none();
     });
-    defineIntrinsic("Binary::render", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Binary.render", [](std::vector<ValuePtr> args) -> ValuePtr {
         const auto* value = args.empty() ? nullptr : binaryArg(args[0]);
         return Value::string("#Binary<" + std::to_string(value ? value->bytes.size() : 0) + " bytes>");
     });

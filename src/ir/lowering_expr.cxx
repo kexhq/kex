@@ -66,8 +66,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 // `this.seed` exactly as `decorate(x)` means
                 // `this.decorate(x)`. A local binding of the same name wins
                 // (the guard above) (kexhq/kex#292).
-                if (hir->targetOf(*e).kind == hir::TargetKind::OwnMethod &&
-                    subst.count("this")) {
+                if (hir->targetOf(*e).onThis && subst.count("this")) {
                     auto ex = std::make_unique<Expr>();
                     ex->node = localCall(n.name,
                                          one(var(currentName("this"))));

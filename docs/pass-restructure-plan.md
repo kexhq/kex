@@ -217,9 +217,10 @@ other (it does here); both must check against the same interfaces.
    State (2026-11-11, later): symbols are spelled from identities
    (`declaredNames` and `ownerIdentities` are gone from lowering, the
    runtime's `state_type` takes the tag as it is); the walker's visibility
-   copies are gone; the IR rewrites were passes already (finding 3). Still
-   open: the `::` → `.` flip (`mangle::kSeparator`), one resolver, and
-   SemanticDB.
+   copies are gone; the IR rewrites were passes already (finding 3). The
+   `::` → `.` flip is done (2026-11-12): one spelling for a qualified name
+   inside the compiler, the one a program writes. Still open then: one
+   resolver, and SemanticDB (below).
 
    **One resolver, reconsidered (2026-11-11).** The code holds three scope
    trackers, not two: `ResolvePass` (names, labels, references, completion
@@ -273,6 +274,10 @@ other (it does here); both must check against the same interfaces.
         (`TypeChecker::ownFunctionOnThis`, the one rule the call form
         `decorate(x)` uses too), typed by its result, and lowering reads
         that decision in place of its `definedFnArities`/`ownsMethod` test.
+        The call form reads it too now (`DecidedCall::onThis`, carried in
+        the HIR and its cache): lowering's own arity test sent
+        `shown("!")`, beside a `shown()`, to the wrong one on BEAM
+        (`spec/make_block_sibling_arities`).
       - Without imported interfaces (unit tests) the checker cannot tell a
         prelude function from an undefined one, so it reports no undefined
         function there.
@@ -470,9 +475,10 @@ and both showed it:
   which are in a `private do`: refused since the 2026-11-11 rule for a
   private function called through its path. The message says "has no
   function", not "is private", because the spec sees `Tey.Resolver` by its
-  interface, which lists no private name. For the user: make the two
-  public, test them through the public function, or let a spec reach its
-  own package's private functions. The other three (`lockfile.spec` twice,
+  interface, which lists no private name. Decided by the user (2026-11-12):
+  a spec cannot see private functions. The two are pure helpers the spec
+  exists to test, so they are public now (moved above `private do`);
+  `resolver.spec` passes, 16 of 16. The other three (`lockfile.spec` twice,
   `programs_install.spec`) are assertion failures not looked into.
 - Slick (`../slick`, through this checkout's `tey-run`; the Homebrew `tey`
   on PATH is too old for its `package.kex`) builds: 34.6 s cold, 5.8 s

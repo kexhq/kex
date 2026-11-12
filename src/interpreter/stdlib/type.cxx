@@ -185,7 +185,7 @@ auto renderedType(const ValuePtr& type) -> std::string {
 // Result and the element type of an empty list); this is the fallback, and
 // kex_intrinsic_type.erl mirrors it clause for clause so both backends agree.
 auto Evaluator::registerTypeBuiltins() -> void {
-    defineIntrinsic("Type::ofValue", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Type.ofValue", [](std::vector<ValuePtr> args) -> ValuePtr {
         // A type value describes itself (`Type.of(as)` for `as: Type<User>`).
         if (!args.empty() && args[0])
             if (const auto* record = std::get_if<RecordValue>(&args[0]->data);
@@ -197,7 +197,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
     // `Type.values`: a record's field values in declaration order. The
     // fields are held by name here, so the order comes from the declaration,
     // as the tuple layout gives it on BEAM.
-    defineIntrinsic("Type::recordValues", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Type.recordValues", [this](std::vector<ValuePtr> args) -> ValuePtr {
         const auto* value = args.empty() || !args[0]
             ? nullptr : std::get_if<RecordValue>(&args[0]->data);
         if (!value) return Value::none();
@@ -212,7 +212,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
         return Value::just(Value::list(std::move(values)));
     });
 
-    defineIntrinsic("Type::fieldsOf", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Type.fieldsOf", [this](std::vector<ValuePtr> args) -> ValuePtr {
         std::vector<ValuePtr> fields;
         const auto* record = findByTypeName(m_recordDefs, stringArg(args));
         if (record && *record)
@@ -226,7 +226,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
     // (semantic::structuredTypeOfDeclared), a transparent alias read as what
     // it stands for — the same shape the BEAM runtime is handed by the
     // compiler.
-    defineIntrinsic("Type::fieldLayoutsOf",
+    defineIntrinsic("Type.fieldLayoutsOf",
                     [this](std::vector<ValuePtr> args) -> ValuePtr {
         std::vector<ValuePtr> fields;
         const auto* record = findByTypeName(m_recordDefs, stringArg(args));
@@ -247,7 +247,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
 
     // `Type.constructors`: one `(name, [argument type])` tuple per variant,
     // in declaration order.
-    defineIntrinsic("Type::constructorLayoutsOf",
+    defineIntrinsic("Type.constructorLayoutsOf",
                     [this](std::vector<ValuePtr> args) -> ValuePtr {
         std::vector<ValuePtr> constructors;
         const auto* variants = findByTypeName(m_adtVariants, stringArg(args));
@@ -274,7 +274,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
         return Value::list(std::move(constructors));
     });
 
-    defineIntrinsic("Type::constructorsOf",
+    defineIntrinsic("Type.constructorsOf",
                     [this](std::vector<ValuePtr> args) -> ValuePtr {
         // In declaration order, as written: iterating m_variantParent (a
         // hash map) answered in whatever order it happened to hold them.
@@ -297,7 +297,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
 
     // `Type.construct`: a record of the named type from values by field name
     // (kexhq/kex#487). The same rules and messages as kex_intrinsic_type.erl.
-    defineIntrinsic("Type::construct", [this, matches](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Type.construct", [this, matches](std::vector<ValuePtr> args) -> ValuePtr {
         const auto name = stringArg(args);
         const auto key = typeNameKey(m_recordDefs, name);
         if (!key) return Value::error(Value::string("Not a record type: " + name));
@@ -343,7 +343,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
 
     // `Type.variant`: the named constructor of a sum type, applied to its
     // arguments (kexhq/kex#509).
-    defineIntrinsic("Type::constructVariant",
+    defineIntrinsic("Type.constructVariant",
                     [this, matches](std::vector<ValuePtr> args) -> ValuePtr {
         const auto name = stringArg(args);
         const auto key = typeNameKey(m_adtVariants, name);

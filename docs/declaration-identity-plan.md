@@ -4,9 +4,9 @@
 > distinct-type tables are keyed by identity (`declaredNames`,
 > `declaredNameOf` and `ownerIdentities` are deleted; `state_type` in
 > `kex_intrinsic_process.erl` takes the tag as it is), so the paragraph
-> below that calls them written spellings is out of date. Open: the `::` →
-> `.` flip (`mangle::kSeparator`). Ordered open work: the review findings at
-> the top of `docs/pass-restructure-plan.md`.
+> below that calls them written spellings is out of date. The `::` → `.`
+> flip is done too (2026-11-12, `mangle::kSeparator`). Ordered open work:
+> the review findings at the top of `docs/pass-restructure-plan.md`.
 
 Status: in progress (2026-11-10). Stages 1–4 done: the checker gives each
 record one identity, records the declaration of every record construction,
