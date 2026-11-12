@@ -27,7 +27,7 @@ auto Evaluator::registerListBuiltins() -> void {
     defineModule("Range");
 
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        defineIntrinsic("List::" + name, std::move(fn));
+        defineIntrinsic("List." + name, std::move(fn));
     };
 
     // Captured by value in every lambda below — rangeToList and getElements
@@ -92,7 +92,7 @@ auto Evaluator::registerListBuiltins() -> void {
     // methods do not apply to one. `items` is the explicit conversion, and
     // the only way to walk a tuple generically without reaching for
     // `BEAM.erlang.tuple_to_list`.
-    defineIntrinsic("Tuple::items", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Tuple.items", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         if (auto* tuple = std::get_if<TupleValue>(&args[0]->data))
             return Value::list(tuple->elements);
@@ -182,7 +182,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return acc;
     });
 
-    defineIntrinsic("Range::bounds", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Range.bounds", [](std::vector<ValuePtr> args) -> ValuePtr {
         const auto& range = std::get<RangeValue>(args.at(0)->data);
         auto low = range.lower ? range.lower : range.isChar
             ? Value::character(static_cast<char32_t>(range.start))
@@ -195,7 +195,7 @@ auto Evaluator::registerListBuiltins() -> void {
 
     // Kex.Intrinsic.Range.items — the range's elements as a real list.
     // Backs the prelude's Range `items` (src/stdlib/range.kex).
-    defineIntrinsic("Range::items", [rangeToList](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Range.items", [rangeToList](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         if (auto* range = std::get_if<RangeValue>(&args[0]->data))
             return Value::list(rangeToList(*range));
@@ -507,7 +507,7 @@ auto Evaluator::registerListBuiltins() -> void {
                 return ac->value < bc->value ? "Less" : (ac->value > bc->value ? "Greater" : "Equal");
         auto dispatchCompare = [&](const std::string& typeName) -> std::string {
             try {
-                auto r = callFunction(typeName + "::compare", {a, b}, {}, {});
+                auto r = callFunction(typeName + ".compare", {a, b}, {}, {});
                 if (auto* var = std::get_if<VariantValue>(&r->data)) return var->tag;
             } catch (...) {}
             return "";

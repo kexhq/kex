@@ -78,7 +78,7 @@ auto Evaluator::defineIntrinsic(const std::string& name, const ValuePtr& value) 
     defineIntrinsic(name, function->native);
 }
 
-// By category, the part of the name before `::`: the built-ins of these only
+// By category, the part of the name before its last `.`: the built-ins of these only
 // compute, and every other one may read or change something outside the
 // program (a file, a socket, the clock, the environment, the terminal). Named
 // the other way round, a category nobody listed was taken for pure: `File`,
@@ -92,8 +92,8 @@ auto Evaluator::watchOutside(const std::string& name, NativeFunc fn) -> NativeFu
         "Namespace", "Number", "Option", "Range", "Regex", "String", "Tuple",
         "Type", "URI", "URL",
     };
-    static const std::unordered_set<std::string> reads{"AST::parseFile", "Digest::fileSha"};
-    const auto category = kex::mangle::headOf(name);
+    static const std::unordered_set<std::string> reads{"AST.parseFile", "Digest.fileSha"};
+    const auto category = kex::mangle::scopeOf(name);
     if (!fn || (pure.contains(category) && !reads.contains(name))) return fn;
     return [this, name, category, fn = std::move(fn)](std::vector<ValuePtr> args) -> ValuePtr {
         if (m_sandbox && !sandboxAllows(category))
@@ -218,8 +218,8 @@ auto Evaluator::evaluateLoadedFunction(
                 "process termination is not allowed during compile-time evaluation");
         };
         definePublic("die", blockedTermination);
-        defineIntrinsic("System::die", blockedTermination);
-        defineIntrinsic("System::exit", blockedTermination);
+        defineIntrinsic("System.die", blockedTermination);
+        defineIntrinsic("System.exit", blockedTermination);
 
         auto result = m_scheduler->runToCompletion(
             [this, &name, &args]() mutable -> ValuePtr {
@@ -250,8 +250,8 @@ auto Evaluator::runCompileTime(const ast::Program* program,
                 "process termination is not allowed during compile-time evaluation");
         };
         definePublic("die", blockedTermination);
-        defineIntrinsic("System::die", blockedTermination);
-        defineIntrinsic("System::exit", blockedTermination);
+        defineIntrinsic("System.die", blockedTermination);
+        defineIntrinsic("System.exit", blockedTermination);
 
         m_scheduler->runToCompletion(
             [this, program, &produce]() -> ValuePtr {
@@ -1026,14 +1026,7 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
                 // target of the Kex wrapper, not a reason to suppress it.
                 // Public-only helpers (and intentionally native-wins module
                 // functions such as variadic IO calls) remain preserved.
-                bool hasNative = hasPublicNative(nativeName);
-                if (!hasNative && nativeName.find('.') != std::string::npos) {
-                    const auto altName =
-                        kex::mangle::qualify(kex::mangle::manglePath(moduleName),
-                                             node->name);
-                    hasNative = hasPublicNative(altName);
-                }
-                if (!hasNative)
+                if (!hasPublicNative(nativeName))
                     execFunctionDef(*node, moduleName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 execModule(*node, moduleName);
@@ -1787,7 +1780,7 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                     m_env->define("from", m_servingFrom);
                 bool matched = true;
 
-                // UFCS: if this function is a type-scoped method (name contains "::"),
+                // UFCS: if this function is a type-scoped method (its name carries a scope),
                 // the first arg is always "this" (the receiver). Fall back to the old
                 // args.size() > params heuristic for free functions that might receive
                 // extra args through some other path.
@@ -2279,7 +2272,7 @@ auto Evaluator::evalIntrinsicCall(const ast::MethodCall& call, const std::string
     std::vector<ValuePtr> args;
     for (const auto& arg : call.args) args.push_back(arg ? eval(*arg) : Value::none());
     if (call.block) args.push_back(eval(**call.block));
-    const auto scope = kex::mangle::pathScopeOf(path);
+    const auto scope = kex::mangle::scopeOf(path);
     const auto category = scope.substr(scope.rfind('.') + 1);
     const auto native = m_intrinsicEnv->get(kex::mangle::qualify(category, call.method));
     if (!native)
@@ -2677,7 +2670,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 // of the ADT the checker named (`Units.Data` for
                 // `Units.Data.DataUnit`), a top-level one by its bare name.
                 if (node.args.empty() && node.namedArgs.empty() && !node.block) {
-                    const auto module = kex::mangle::pathScopeOf(target.owner);
+                    const auto module = kex::mangle::scopeOf(target.owner);
                     for (const auto& binding :
                          {module.empty() ? node.method : kex::mangle::qualify(module, node.method),
                           node.method})
@@ -2909,7 +2902,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 if (node.block) {
                     args.push_back(eval(**node.block));
                 }
-                // Prefer the mangled "Namespace::method" name (e.g. "IO::putLine")
+                // Prefer the mangled "Namespace.method" name (e.g. "IO.putLine")
                 // so namespaced builtins can't collide with unrelated plain-name
                 // globals. Falls back to the plain name for namespaces that were
                 // registered without a mangled prefix (e.g. Stream.Sequence).
@@ -2920,11 +2913,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     return callFunction(decided, std::move(args), std::move(namedArgs),
                                         expr.location);
                 std::string dispatchName = node.method;
-                auto mangled = kex::mangle::qualify(namespaceName, node.method);
-                if (namespaceName.find('.') != std::string::npos && !m_env->get(mangled)) {
-                    mangled = kex::mangle::qualify(
-                        kex::mangle::manglePath(namespaceName), node.method);
-                }
+                const auto mangled = kex::mangle::qualify(namespaceName, node.method);
                 if (auto target = m_env->get(mangled)) {
                     if (node.args.empty() && node.namedArgs.empty() &&
                         !node.block &&
@@ -3567,7 +3556,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         slots.push_back({false, eval(*argExpr)});
 
             auto fnName = node.name;
-            // `~Mod.fn` — resolve to the mangled "Mod::fn" binding that
+            // `~Mod.fn` — resolve to the mangled "Mod.fn" binding that
             // namespace calls use, so callFunction dispatches to the module's
             // function rather than a same-named global.
             std::string defKey = fnName;
@@ -3881,7 +3870,7 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
         throw PlaceholderMisuse(leftPlaceholder->name, "this operator");
 
     // Operator overloading: `make Type do let +(other) -> Type ... end`
-    // registers "Type::+", dispatched here through the same receiver-type
+    // registers "Type.+", dispatched here through the same receiver-type
     // resolution as method calls (including ADT variants), before built-ins.
     std::string opSymbol;
     switch (op) {
@@ -4170,7 +4159,7 @@ auto Evaluator::showErasedArgument(const ast::Expr& call, size_t index,
     // parameter, which only that type's own `showValue` shows right.
     const auto* type = m_programs.shownThroughOf(call, index);
     if (!type) return value;
-    const auto method = *type + "::showValue";
+    const auto method = *type + ".showValue";
     if (!m_functionValues.count(method) && !m_env->get(method)) return value;
     return callFunction(method, {std::move(value)}, {}, argument->location);
 }
@@ -4784,7 +4773,7 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
     }
 
     // A value kind with no dispatch name of its own (a module, a function) has
-    // nothing to key the name-based lookups below on — `"" + "::" + method`
+    // nothing to key the name-based lookups below on — `"" + "." + method`
     // matches nothing and the import-scope search would resolve the bare name
     // to some unrelated module's function. It can still be carried by a
     // trait's generic make block, so offer that and stop.
@@ -5314,7 +5303,7 @@ auto Evaluator::registerBuiltins() -> void {
     // two-arg block. Backs all Enumerable HOFs (map/filter/each/etc.)
     // for Map enumeration where each item is a (K,V) tuple.
     {
-        defineIntrinsic("Fun::convertTo", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        defineIntrinsic("Fun.convertTo", [this](std::vector<ValuePtr> args) -> ValuePtr {
             if (args.size() < 2) return Value::none();
             const auto& val = args[0];
             std::string targetName;
@@ -5469,7 +5458,7 @@ auto Evaluator::registerBuiltins() -> void {
             return Value::none();
         });
 
-        defineIntrinsic("Fun::applyItem", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        defineIntrinsic("Fun.applyItem", [this](std::vector<ValuePtr> args) -> ValuePtr {
             if (args.size() < 2) return Value::none();
             auto& fn = *args[0];
             // Don't splat here — pass the item as-is. The lambda wrapper
@@ -5494,7 +5483,7 @@ auto Evaluator::registerBuiltins() -> void {
         // `|k, v, i|` while a 2-parameter one reads `|entry, i|`. A
         // 1-parameter block simply ignores the extra argument, exactly as the
         // lambda wrapper does. Mirrors kex_intrinsic_fun:applyIndexed/3.
-        defineIntrinsic("Fun::applyIndexed", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        defineIntrinsic("Fun.applyIndexed", [this](std::vector<ValuePtr> args) -> ValuePtr {
             if (args.size() < 3) return Value::none();
             auto& fn = *args[0];
             std::vector<ValuePtr> callArgs;

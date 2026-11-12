@@ -124,8 +124,23 @@ auto TypeChecker::check(const ast::Program& program, std::vector<Diagnostic>& di
         each([&](const std::string& name, std::string_view file) {
             if (own(file)) entryNames.insert(name);
         });
+        // Not what the standard library declares at its top level: its
+        // interfaces hand those names to every program, bare.
+        const auto everywhere = [&](const std::string& name) {
+            if (!m_importedInterfaces) return false;
+            if (m_importedInterfaces->receiverFunctions.count(name)) return true;
+            for (const auto& adt : m_importedInterfaces->adts)
+                if (std::find(adt.constructors.begin(), adt.constructors.end(), name) !=
+                    adt.constructors.end())
+                    return true;
+            return std::any_of(
+                m_importedInterfaces->modules.begin(), m_importedInterfaces->modules.end(),
+                [&](const auto& module) {
+                    return module.second.automaticImport && module.second.exports.count(name);
+                });
+        };
         each([&](const std::string& name, std::string_view file) {
-            if (!own(file) && !entryNames.contains(name))
+            if (!own(file) && !entryNames.contains(name) && !everywhere(name))
                 m_fileLocalTopLevel.try_emplace(name, std::string(file));
         });
     }
@@ -4394,8 +4409,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                     for (auto& sig : signatures)
                         m_userSignatures[def.name].push_back(sig);
                     if (!m_currentModulePath.empty()) {
-                        const auto key =
-                            m_currentModulePath + "::" + def.name;
+                        const auto key = kex::mangle::qualify(m_currentModulePath, def.name);
                         if (m_qualifiedPublished.contains(key))
                             for (const auto& sig : signatures)
                                 m_userSignatures[key].push_back(sig);
@@ -4422,7 +4436,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
 }
 
 // A module function is also reachable QUALIFIED (`M.lines("x")`), which checks
-// as the call name `M::lines` — but its signatures were only ever filed under
+// as the call name `M.lines` — but its signatures were only ever filed under
 // the bare `lines`, so every qualified call came back Unknown. A declared
 // result type then bought nothing: `let n: Integer = M.lines("x")` passed with
 // `lines : String -> [String]?` in plain sight.
@@ -4711,9 +4725,9 @@ auto TypeChecker::importedCandidates(const std::string& name) const
     std::vector<const ImportedFunction*> result;
     if (!m_importedInterfaces) return result;
     if (kex::mangle::hasScope(name)) {
-        auto module = m_importedInterfaces->modules.find(kex::mangle::headOf(name));
+        auto module = m_importedInterfaces->modules.find(kex::mangle::scopeOf(name));
         if (module != m_importedInterfaces->modules.end())
-            if (auto functions = module->second.exports.find(kex::mangle::tailOf(name));
+            if (auto functions = module->second.exports.find(kex::mangle::memberOf(name));
                 functions != module->second.exports.end())
                 for (const auto& function : functions->second) result.push_back(&function);
         return result;
@@ -5112,8 +5126,10 @@ auto TypeChecker::ownFunctionOnThis(const ast::Expr& expr, const std::string& na
     std::vector<TypePtr> withThis{m_currentMakeType};
     withThis.insert(withThis.end(), argTypes.begin(), argTypes.end());
     auto result = checkCall(name, withThis, expr.location, true, nullptr, &expr);
-    m_decidedCalls.try_emplace(&expr,
-                               DecidedCall{CallKind::OwnMethod, typeToString(m_currentMakeType)});
+    // Whatever the call itself decided, this is what it is.
+    DecidedCall own{CallKind::OwnMethod, typeToString(m_currentMakeType)};
+    own.onThis = true;
+    m_decidedCalls[&expr] = std::move(own);
     return result;
 }
 

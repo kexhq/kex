@@ -53,11 +53,11 @@ auto Evaluator::registerStringBuiltins() -> void {
     defineModule("Char");
     defineModule("Bool");
     defineModule("Atom");
-    defineIntrinsic("Atom::from", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Atom.from", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* text = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         return Value::atom(text ? text->value : std::string{});
     });
-    defineIntrinsic("Atom::name", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Atom.name", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* atom = args.empty() ? nullptr : std::get_if<AtomValue>(&args[0]->data);
         return Value::string(atom ? atom->name : std::string{});
     });
@@ -74,7 +74,7 @@ auto Evaluator::registerStringBuiltins() -> void {
                                    const std::string& intrinsicName,
                                    NativeFunc fn) {
         definePublic(publicName, fn);
-        defineIntrinsic("Char::" + intrinsicName, std::move(fn));
+        defineIntrinsic("Char." + intrinsicName, std::move(fn));
     };
 
     // String.at(i) -> Char? (a Char, not a 1-char String) — Char and String
@@ -94,11 +94,11 @@ auto Evaluator::registerStringBuiltins() -> void {
         const auto& cps = cachedCodepoints(*str);
         return i < cps.size() ? Value::just(Value::character(cps[i])) : Value::none();
     };
-    defineIntrinsic("List::at", std::move(at));
+    defineIntrinsic("List.at", std::move(at));
 
     // Kex.Intrinsic.String.chars — the string's characters as a [Char].
     // Backs the prelude's String `chars` (src/stdlib/string.kex).
-    defineIntrinsic("String::chars", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.chars", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::list({});
@@ -157,7 +157,7 @@ auto Evaluator::registerStringBuiltins() -> void {
             utf8::categories::inRanges(utf8::categories::spaceRanges, c->value));
     });
 
-    defineIntrinsic("Char::codepoint", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Char.codepoint", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) return Value::integer(0);
@@ -168,7 +168,7 @@ auto Evaluator::registerStringBuiltins() -> void {
     // A String has two views: `chars` is the TEXT view (codepoints) and
     // `bytes` is the STORAGE view (the UTF-8 encoding). Kex code needed
     // `BEAM.erlang.binary_to_list` to reach the latter.
-    defineIntrinsic("String::bytes", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.bytes", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::list({});
@@ -184,14 +184,14 @@ auto Evaluator::registerStringBuiltins() -> void {
     // number; these three read the buffer directly. Written for a driver
     // handing back a BLOB (docs/sql-types-plan.md, "Bytes"), where the whole
     // point is not to walk the payload.
-    defineIntrinsic("String::byteSize", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.byteSize", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         auto* str = std::get_if<StringValue>(&args[0]->data);
         return Value::integer(str ? static_cast<int64_t>(str->value.size()) : 0);
     });
 
     // Out of range is None, matching `at` on every other indexed type.
-    defineIntrinsic("String::byteAt", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.byteAt", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         auto* str = std::get_if<StringValue>(&args[0]->data);
         auto* index = std::get_if<IntValue>(&args[1]->data);
@@ -204,7 +204,7 @@ auto Evaluator::registerStringBuiltins() -> void {
     });
 
     // Clamped rather than raising, the way `take`/`drop` already behave.
-    defineIntrinsic("String::bytePart", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.bytePart", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 3) return Value::string("");
         auto* str = std::get_if<StringValue>(&args[0]->data);
         auto* offset = std::get_if<IntValue>(&args[1]->data);
@@ -220,14 +220,14 @@ auto Evaluator::registerStringBuiltins() -> void {
     // Kex.Intrinsic.String.graphemeCount — backs the prelude's
     // `graphemeCount` (src/stdlib/string.kex), distinct from `count`
     // (codepoints, via Kex.Intrinsic.List.length).
-    defineIntrinsic("String::graphemeCount", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.graphemeCount", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::integer(0);
         return Value::integer(graphemeClusterCount(str->value));
     });
 
-    defineIntrinsic("String::fromBytes", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.fromBytes", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* list = std::get_if<ListValue>(&args[0]->data);
         if (!list) return Value::none();
@@ -249,7 +249,7 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::just(Value::string(std::move(out)));
     });
 
-    defineIntrinsic("String::fromCodepoint", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.fromCodepoint", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* value = std::get_if<IntValue>(&args[0]->data);
         if (!value) return Value::none();
@@ -276,7 +276,7 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::just(Value::string(std::move(result)));
     });
 
-    defineIntrinsic("String::startsWith?", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.startsWith?", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         auto* str = std::get_if<StringValue>(&args[0]->data);
         auto* pre = std::get_if<StringValue>(&args[1]->data);
@@ -284,7 +284,7 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::boolean(str->value.starts_with(pre->value));
     });
 
-    defineIntrinsic("String::endsWith?", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.endsWith?", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         auto* str = std::get_if<StringValue>(&args[0]->data);
         auto* suf = std::get_if<StringValue>(&args[1]->data);
@@ -292,7 +292,7 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::boolean(str->value.ends_with(suf->value));
     });
 
-    defineIntrinsic("String::contains?", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.contains?", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         // String.contains?(substr)
         auto* str = std::get_if<StringValue>(&args[0]->data);
@@ -317,7 +317,7 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::boolean(false);
     });
 
-    defineIntrinsic("String::split", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.split", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::list({});
@@ -358,7 +358,7 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::list(std::move(parts));
     });
 
-    defineIntrinsic("String::replace", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.replace", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 3) return Value::string("");
         auto* source = std::get_if<StringValue>(&args[0]->data);
         auto* pattern = std::get_if<StringValue>(&args[1]->data);
@@ -418,18 +418,18 @@ auto Evaluator::registerStringBuiltins() -> void {
             : cps.end();
         return Value::string(utf8::encodeAll({first, last}));
     };
-    defineIntrinsic("String::trim", [trimmed](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.trim", [trimmed](std::vector<ValuePtr> args) -> ValuePtr {
         return trimmed(args, true, true);
     });
-    defineIntrinsic("String::trimStart", [trimmed](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.trimStart", [trimmed](std::vector<ValuePtr> args) -> ValuePtr {
         return trimmed(args, true, false);
     });
-    defineIntrinsic("String::trimEnd", [trimmed](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.trimEnd", [trimmed](std::vector<ValuePtr> args) -> ValuePtr {
         return trimmed(args, false, true);
     });
 
     // String.find(s, sub) -> Integer?  (codepoint index of the first match)
-    defineIntrinsic("String::find", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.find", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         auto* str = std::get_if<StringValue>(&args[0]->data);
         auto* sub = std::get_if<StringValue>(&args[1]->data);
@@ -440,7 +440,7 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::just(Value::integer(static_cast<int64_t>(index)));
     });
 
-    defineIntrinsic("String::upperCase", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.upperCase", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("");
         // Char -> Char (so map(&.upperCase) on a String round-trips back to String)
         if (auto* cv = std::get_if<CharValue>(&args[0]->data))
@@ -450,7 +450,7 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::string(utf8::toUpper(str->value));
     });
 
-    defineIntrinsic("String::lowerCase", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String.lowerCase", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("");
         // Char -> Char (so map(&.lowerCase) on a String round-trips back to String)
         if (auto* cv = std::get_if<CharValue>(&args[0]->data))
@@ -462,7 +462,7 @@ auto Evaluator::registerStringBuiltins() -> void {
 
     // Also handles List (reversing elements), since the same `reverse`
     // name is used UFCS-style on both strings and lists.
-    defineIntrinsic("List::reverse", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("List.reverse", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
             // By codepoint — reversing bytes would shred multi-byte characters.

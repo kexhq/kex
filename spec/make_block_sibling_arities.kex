@@ -1,0 +1,23 @@
+# A sibling function called with no receiver inside its type's `make` block is
+# called on `this`, whichever of its arities the arguments choose. BEAM used
+# to pick by name and arity on its own: with `shown()` beside
+# `shown(suffix)`, `shown("!")` went to the first, the String as its
+# receiver ("Undefined method: shown for String"), where the walker ran the
+# second on `this`.
+record Tag do
+  name : String
+end
+
+make Tag do
+  let shown() -> String = "<${@name}>"
+  let shown(suffix: String) -> String = "<${@name}${suffix}>"
+
+  let both(other: Tag) -> String do
+    let mine = shown("!")
+    "${mine} ${other.shown} ${shown}"
+  end
+end
+
+main do
+  IO.printLine(Tag { name: "a" }.both(Tag { name: "b" }))
+end

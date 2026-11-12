@@ -76,7 +76,7 @@ auto Evaluator::registerParserBuiltins() -> void {
     }
 
     // Kex.AST.parse(source) or Kex.AST.parse(source, filename)
-    defineIntrinsic("AST::parse", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("AST.parse", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(makeParseError("parse requires a source string", std::nullopt, ""));
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
         if (!srcVal) return Value::error(makeParseError("parse requires a source string", std::nullopt, ""));
@@ -107,7 +107,7 @@ auto Evaluator::registerParserBuiltins() -> void {
     });
 
     // Kex.AST.parseFile(path)
-    defineIntrinsic("AST::parseFile", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("AST.parseFile", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(makeParseError("parseFile requires a file path", std::nullopt, ""));
         auto* pathVal = std::get_if<StringValue>(&args[0]->data);
         if (!pathVal) return Value::error(makeParseError("parseFile requires a file path", std::nullopt, ""));
@@ -141,7 +141,7 @@ auto Evaluator::registerParserBuiltins() -> void {
     // Kex.AST.parseSyntax(source): the lossless syntax tree — every token as
     // written, with the trivia in front of it, nested under the nodes the
     // parser completed (kexhq/kex#136).
-    defineIntrinsic("AST::parseSyntax", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("AST.parseSyntax", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(makeParseError("parseSyntax requires a source string", std::nullopt, ""));
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
         if (!srcVal) return Value::error(makeParseError("parseSyntax requires a source string", std::nullopt, ""));
@@ -173,7 +173,7 @@ auto Evaluator::registerParserBuiltins() -> void {
     });
 
     // Kex.AST.parseType(typeStr)
-    defineIntrinsic("AST::parseType", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("AST.parseType", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(makeParseError("parseType requires a type string", std::nullopt, ""));
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
         if (!srcVal) return Value::error(makeParseError("parseType requires a type string", std::nullopt, ""));
@@ -210,7 +210,7 @@ auto Evaluator::registerParserBuiltins() -> void {
     });
 
     // Kex.AST.parseExpression(source)
-    defineIntrinsic("AST::parseExpression", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("AST.parseExpression", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(makeParseError("parseExpression requires a source string", std::nullopt, ""));
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
         if (!srcVal) return Value::error(makeParseError("parseExpression requires a source string", std::nullopt, ""));

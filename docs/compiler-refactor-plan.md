@@ -1103,11 +1103,12 @@ question below needs a signal.
 
 ## Deferred
 
-- **`::` → `.` mangling flip** — now a one-line `kSeparator` change in
-  `common/mangle.hxx` (plus checking `manglePath`, which becomes an identity).
-  Deferred until after the rest of the refactor lands. The "one-line" claim is
-  unproven until the goldens are re-blessed — when attempted, budget the
-  golden-update churn explicitly.
+- **`::` → `.` mangling flip** — DONE 2026-11-12. Not the one line it was
+  called: besides `kSeparator`, the walker spelled the separator out in 434
+  string literals (`"File::read"`, `typeName + "::compare"`), all rewritten.
+  No golden changed: the separator never reached a BEAM symbol or a message.
+  `manglePath`, `headOf`, `tailOf` and `pathScopeOf` are deleted (a path is
+  its own spelling now, and a name is split at its last separator).
 
 ---
 

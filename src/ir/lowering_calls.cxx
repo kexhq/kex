@@ -317,16 +317,10 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
     // is what lets a method call a sibling, or itself recursively, without
     // spelling `this.` (rodolfo docs/kex-issues.md #13, kexhq/kex#281).
     //
-    // Ahead of `knownFns` because that set is name-only and already holds
-    // every make method: `decorate` looked defined, so the call was
-    // emitted as `decorate/1`, which nothing defines and erlc rejected.
-    // Only when NO definition answers at the written arity, so an ordinary
-    // function of the same name still wins.
-    else if (!currentMakeType.empty() && subst.count("this") &&
-             !definedFnArities.count(n.name + "/" + std::to_string(arity)) &&
-             definedFnArities.count(n.name + "/" +
-                                    std::to_string(arity + 1)) &&
-             ownsMethod(currentMakeType, n.name)) {
+    // The checker decides it (TypeChecker::ownFunctionOnThis): by name and
+    // arity here, a type with `shown()` and `shown(suffix)` sent
+    // `shown("!")` to the first, with the String as its receiver.
+    else if (hir->targetOf(n).onThis && subst.count("this")) {
         args.insert(args.begin(), var(currentName("this")));
         ex->node = localCall(n.name, std::move(args));
     }

@@ -614,7 +614,7 @@ auto Lowering::lowerTypeNamespaceCall(const ast::MethodCall& n, const ast::Upper
 // `call 'kex_intrinsic_list':'reverse'(x)`, the runtime module owning it and
 // the prelude its typed semantics). A trailing block is the last argument.
 auto Lowering::lowerRuntimeCall(const ast::MethodCall& n, const std::string& path) -> ExprPtr {
-    const auto scope = kex::mangle::pathScopeOf(path);
+    const auto scope = kex::mangle::scopeOf(path);
     std::string module;
     if (names::isIntrinsicPath(path)) {
         // `Kex.Intrinsic.List` is `kex_intrinsic_list`.

@@ -143,6 +143,47 @@ foul resolvePackage(manifest: ManifestPackage) -> LockState or! String do
                 kexVersion: Tey.Semver.release(toolchain.version), lockedDependencies: locked })
 end
 
+# A monorepo can release its members independently as `parser-v1.2.3`.
+# Prefer that package's namespace when it exists; a repository with no
+# package-prefixed tags retains the ordinary `v1.2.3` convention.
+let chooseFromTags(name: String, tags: [String],
+                   requested: String) -> String or! String do
+  let prefix = "${name}-"
+  let scoped = tags.filter { |tag| tag.startsWith?("${prefix}v") }
+  let candidates = scoped.empty? then tags else scoped
+  let matching = candidates.filter do |tag|
+    Tey.Semver.satisfies(Tey.Semver.versionOf(tag), requested)
+  end
+  let versions = Tey.Semver.newestFirst(
+    matching.map { |tag| Tey.Semver.versionOf(tag) }
+  )
+  match versions.first do
+    None => return Error("no tag of ${name} satisfies `${requested}`")
+    Just(version) => return Ok(matching.find do |tag|
+      Tey.Semver.versionOf(tag) == version
+    end.try)
+  end
+end
+
+# `workspace: true` inside a fetched package refers to a sibling in that
+# package's repository, at exactly the same commit. Once outside the source
+# workspace it is therefore a Git source with an implicit discoverable
+# subdirectory, not a reference to the consumer's local workspace.
+let externalizeWorkspaceDependencies(
+  dependencies: [Tey.Manifest.Dependency],
+  parent: Tey.Lockfile.Dependency
+) -> [Tey.Manifest.Dependency] do
+  return dependencies.map do |dependency|
+    match dependency.manifestSource do
+      WorkspaceSource => Tey.Manifest.Dependency {
+        ...dependency,
+        manifestSource: GitSource(parent.git, "ref", parent.commit, "")
+      }
+      _ => dependency
+    end
+  end
+end
+
 private do
   foul uniqueDependencies(entries: [Tey.Lockfile.Dependency],
                           found: [Tey.Lockfile.Dependency]) -> [Tey.Lockfile.Dependency] or! String do
@@ -303,28 +344,6 @@ private do
     return Tey.Resolver.chooseFromTags(name, tags, requested)
   end
 
-  # A monorepo can release its members independently as `parser-v1.2.3`.
-  # Prefer that package's namespace when it exists; a repository with no
-  # package-prefixed tags retains the ordinary `v1.2.3` convention.
-  let chooseFromTags(name: String, tags: [String],
-                     requested: String) -> String or! String do
-    let prefix = "${name}-"
-    let scoped = tags.filter { |tag| tag.startsWith?("${prefix}v") }
-    let candidates = scoped.empty? then tags else scoped
-    let matching = candidates.filter do |tag|
-      Tey.Semver.satisfies(Tey.Semver.versionOf(tag), requested)
-    end
-    let versions = Tey.Semver.newestFirst(
-      matching.map { |tag| Tey.Semver.versionOf(tag) }
-    )
-    match versions.first do
-      None => return Error("no tag of ${name} satisfies `${requested}`")
-      Just(version) => return Ok(matching.find do |tag|
-        Tey.Semver.versionOf(tag) == version
-      end.try)
-    end
-  end
-
   # Breadth-first over the whole graph, not just the root's own list.
   #
   # A dependency's `package.kex` is read once it is in the cache, and its own
@@ -418,25 +437,6 @@ private do
       end
     end
     Ok(resolved)
-  end
-
-  # `workspace: true` inside a fetched package refers to a sibling in that
-  # package's repository, at exactly the same commit. Once outside the source
-  # workspace it is therefore a Git source with an implicit discoverable
-  # subdirectory, not a reference to the consumer's local workspace.
-  let externalizeWorkspaceDependencies(
-    dependencies: [Tey.Manifest.Dependency],
-    parent: Tey.Lockfile.Dependency
-  ) -> [Tey.Manifest.Dependency] do
-    return dependencies.map do |dependency|
-      match dependency.manifestSource do
-        WorkspaceSource => Tey.Manifest.Dependency {
-          ...dependency,
-          manifestSource: GitSource(parent.git, "ref", parent.commit, "")
-        }
-        _ => dependency
-      end
-    end
   end
 
   # The `tey(...)` lines of a package already in the cache. A checkout with no

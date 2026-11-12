@@ -33,7 +33,7 @@ auto Evaluator::registerMapBuiltins() -> void {
     defineModule("Map");
 
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        defineIntrinsic("Map::" + name, std::move(fn));
+        defineIntrinsic("Map." + name, std::move(fn));
     };
 
     // get(map, key) -> V? (Just(value) / None)

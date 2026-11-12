@@ -10,7 +10,7 @@ namespace kex::interpreter {
 // which also records what the index-addressed generator this replaced got
 // wrong). `take` is the only materialiser.
 auto Evaluator::registerStreamBuiltins() -> void {
-    defineIntrinsic("Stream::generate", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Stream.generate", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         ValuePtr seed;
         const FunctionValue* stepFn = nullptr;
@@ -25,11 +25,11 @@ auto Evaluator::registerStreamBuiltins() -> void {
     });
 
     // Stream.empty — the stream with no elements, which is just a null chain.
-    defineIntrinsic("Stream::empty", [](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("Stream.empty", [](std::vector<ValuePtr>) -> ValuePtr {
         return lazy::streamValue(nullptr);
     });
 
-    defineIntrinsic("Stream::take", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Stream.take", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         auto* stream = std::get_if<StreamValue>(&args[0]->data);
         auto* n = std::get_if<IntValue>(&args[1]->data);
@@ -50,7 +50,7 @@ auto Evaluator::registerStreamBuiltins() -> void {
     // Stream.drop(n) — the rest of the chain, still lazy. The receiver is
     // untouched, so a dropped stream and the one it came from share the cells
     // they have in common rather than recomputing them.
-    defineIntrinsic("Stream::drop", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Stream.drop", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         auto* stream = std::get_if<StreamValue>(&args[0]->data);
         if (!stream) return Value::list({});
@@ -65,7 +65,7 @@ auto Evaluator::registerStreamBuiltins() -> void {
         return lazy::streamValue(std::move(at));
     });
 
-    defineIntrinsic("Stream::map", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Stream.map", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         auto* stream = std::get_if<StreamValue>(&args[0]->data);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -73,7 +73,7 @@ auto Evaluator::registerStreamBuiltins() -> void {
         return lazy::streamValue(lazy::mapStream(stream->cell, fn->native));
     });
 
-    defineIntrinsic("Stream::filter", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Stream.filter", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         auto* stream = std::get_if<StreamValue>(&args[0]->data);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -84,7 +84,7 @@ auto Evaluator::registerStreamBuiltins() -> void {
     // Stream.each(f) — forces the whole chain. Only ever finite for a stream
     // that ends (a file's lines); on `Stream.Sequence` it deliberately runs
     // forever, exactly as writing the same loop by hand would.
-    defineIntrinsic("Stream::each", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Stream.each", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::unit();
         auto* stream = std::get_if<StreamValue>(&args[0]->data);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -97,7 +97,7 @@ auto Evaluator::registerStreamBuiltins() -> void {
     // Stream.toFeed — hands the chain to a one-shot cursor. The point is to
     // stop retaining: a feed drawn from a stream walks it without anything
     // holding the head, so the prefix is released as it goes.
-    defineIntrinsic("Stream::toFeed", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Stream.toFeed", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* stream = std::get_if<StreamValue>(&args[0]->data);
         if (!stream) return Value::none();

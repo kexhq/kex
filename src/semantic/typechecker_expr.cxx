@@ -3123,7 +3123,7 @@ auto TypeChecker::namespaceCallProblem(const std::string& written,
 }
 
 auto TypeChecker::moduleNamesType(const std::string& path) const -> bool {
-    const auto last = kex::mangle::memberOf(kex::mangle::manglePath(path));
+    const auto last = kex::mangle::memberOf(path);
     return isPrimitiveTypeName(last) || m_recordFields.count(resolveRecordName(last)) ||
            m_recordFields.count(path) || m_adtVariants.count(last) ||
            m_typeAliases.count(last);
@@ -4397,8 +4397,8 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     std::string qualifiedModule;
     if (m_importedInterfaces) {
         if (kex::mangle::hasScope(name)) {
-            qualifiedModule = kex::mangle::headOf(name);
-            auto functionName = kex::mangle::tailOf(name);
+            qualifiedModule = kex::mangle::scopeOf(name);
+            auto functionName = kex::mangle::memberOf(name);
             if (auto module = m_importedInterfaces->modules.find(qualifiedModule);
                 module != m_importedInterfaces->modules.end())
                 if (auto functions = module->second.exports.find(functionName);
@@ -4488,7 +4488,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         const auto* receiver =
             std::get_if<NamedType>(&function->signature.params.front()->kind);
         return receiver &&
-               m_localModules.contains(kex::mangle::pathScopeOf(receiver->name));
+               m_localModules.contains(kex::mangle::scopeOf(receiver->name));
     });
     // A bare call this program declares nothing for names a function a
     // `using` brought in from a unit compiled apart (`regex(...)` under
@@ -6439,7 +6439,7 @@ auto TypeChecker::ownTypeAnswers(const std::vector<TypePtr>& argTypes,
         for (const auto& signature : local->second) {
             if (signature.params.empty() ||
                 !(makeModuleVisible(signature.makeModule) ||
-                  signature.makeModule == kex::mangle::pathScopeOf(owner)))
+                  signature.makeModule == kex::mangle::scopeOf(owner)))
                 continue;
             const auto* receiver =
                 std::get_if<NamedType>(&resolve(signature.params.front())->kind);

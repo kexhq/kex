@@ -488,7 +488,7 @@ private:
 
     // Signatures of `name` visible through the imported package interfaces:
     // receiver functions for bare names, qualified module exports for
-    // `Module::name`, and automatic-import module exports otherwise.
+    // `Module.name`, and automatic-import module exports otherwise.
     auto importedCandidateSignatures(const std::string& name) const
         -> std::vector<Signature>;
     // The same, as the imported functions that carry them.

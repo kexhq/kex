@@ -60,7 +60,8 @@ Program::Program(const ast::Program& ast, const semantic::Analyzer& analysis)
     };
     for (const auto& [expr, decided] : analysis.decidedCalls())
         record(*expr, {kindOf(decided.kind), decided.backendModule, decided.function, 0,
-                       decided.owner, false, decided.operands, decided.negated});
+                       decided.owner, false, decided.operands, decided.negated,
+                       decided.onThis});
     for (const auto& [expr, signature] : analysis.selectedCallSignatures()) {
         (void)signature;
         if (!m_targets.contains(expr)) record(*expr, {TargetKind::Selected});
