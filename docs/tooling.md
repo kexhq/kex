@@ -125,7 +125,8 @@ off.
 
 `--skill` prints a guide for a model writing Kex for the first time: what
 differs from Ruby and Elixir, and the look-up / check / run loop built on `-s`
-and `-C`. Its text is the Markdown under `src/skill/`, built into the binary;
+and `-C`. Its text is the Markdown under `plugins/kex/skills/kex/`, built into
+the binary;
 `SKILL.md` is the guide and every other file there is a topic, printed by
 `kex --skill <topic>`. The output of `kex --skill` is a complete `SKILL.md`,
 so it can be saved as an agent skill:
