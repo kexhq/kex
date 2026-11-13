@@ -789,6 +789,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 }
             } else {
                 lam.body = lowerBody(n.body);
+                if (!n.body.empty()) lam.body = wrapSuccess(std::move(lam.body), n.body.back().get());
             }
             // Same rule a named function gets: an unrescued `.try` failure
             // makes THIS body's result `Error(e)` rather than unwinding
@@ -944,11 +945,14 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
             std::vector<PatternPtr> justArgs; justArgs.push_back(mkVarPat(justVar));
             justClause.patterns.push_back(mkConstructPat("Just", std::move(justArgs)));
             justClause.body = var(justVar);
-            // None -> throw try error(none)
+            // None -> throw try error(None): the failure is the value itself,
+            // as on the walker, and a function without a rescue answers it.
             MatchClause noneClause;
             noneClause.patterns.push_back(mkConstructPat("None", {}));
+            auto noneValue = std::make_unique<Expr>();
+            noneValue->node = Construct{"None", {}};
             auto noneThrow = std::make_unique<Expr>();
-            noneThrow->node = TryThrow{lit(LitKind::Atom, "none")};
+            noneThrow->node = TryThrow{std::move(noneValue)};
             noneClause.body = std::move(noneThrow);
             // Native Optional-returning APIs may erase Just on success
             // and return the payload directly. Static checking guarantees

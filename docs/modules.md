@@ -86,6 +86,19 @@ parentheses:
 using Vector, only: [magnitude, (+), (==)]
 ```
 
+A type brings its constructors along. After `using Shades, only: [Shade]`,
+`Shade`'s constructors (`Light`, `Tint`) can be named bare, both to build a
+value and in a pattern. `except: [Shade]` leaves them out. Without a `using`
+that brings it in, a module's constructor is written with its module,
+`Shades.Light` or `Shades.Tint(2)`, in a pattern as well:
+
+```kex
+match shade do
+  Shades.Light => "light"
+  Shades.Tint(level) => "tint ${level}"
+end
+```
+
 Prefer a short `only:` list to a bare `using`: it says what this scope borrowed,
 and a name added to the module later cannot appear here without an edit. See
 [STYLE.md](../STYLE.md) §7 for the full ladder — qualified call, `as:`,

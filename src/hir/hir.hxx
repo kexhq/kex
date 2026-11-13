@@ -60,6 +60,9 @@ struct Answers {
     std::unordered_map<const ast::MakeDef*, std::vector<semantic::InheritedDefault>> inheritedDefaults;
     // The types each `make` block is for, by identity (makeTargetsOf).
     std::unordered_map<const ast::MakeDef*, std::vector<std::string>> makeTargets;
+    // What a clause's successful value is wrapped in, by its last body
+    // expression (successWrapperOf).
+    std::unordered_map<const ast::Expr*, std::string> successWrappers;
     // The list patterns that take a String apart (destructuresString).
     std::unordered_set<const ast::Pattern*> stringPatterns;
 };
@@ -166,6 +169,12 @@ public:
     // resolved the target (`Units.SI.SIPrefix`; one per union member); null
     // when it has none.
     auto makeTargetsOf(const ast::MakeDef& make) const -> const std::vector<std::string>*;
+    // For a clause with no declared result whose `.try` can fail: the
+    // constructor its successful value is wrapped in, `Just` or `Ok`; "" for
+    // every other clause (TypeChecker::inferredFailingResult).
+    auto successWrapperOf(const ast::FunctionClause& clause) const -> std::string;
+    // The same, by the clause's last body expression (how it is persisted).
+    auto successWrapperAfter(const ast::Expr& last) const -> std::string;
     // Whether `pattern`, a list pattern, takes a String apart into its
     // characters (TypeChecker::stringPatterns).
     auto destructuresString(const ast::Pattern& pattern) const -> bool;
@@ -189,6 +198,7 @@ private:
     const decltype(Answers::inheritedDefaults)* m_inheritedDefaults = nullptr;
     const decltype(Answers::stringPatterns)* m_stringPatterns = nullptr;
     const decltype(Answers::makeTargets)* m_makeTargets = nullptr;
+    const decltype(Answers::successWrappers)* m_successWrappers = nullptr;
     std::unique_ptr<Answers> m_owned;
     std::vector<CallSite> m_sites;
     // Keyed by the call node (the Expr, and the MethodCall / BinaryOp inside
@@ -216,6 +226,9 @@ public:
     // Read after every pushed one: the prelude's, which outlives them all.
     auto setBase(const Program* program) -> void { m_base = program; }
 
+    // What any expression is decided as (a bare nullary constructor's
+    // module, say), where the call forms below do not cover it.
+    auto targetOf(const ast::Expr& expr) const -> const Target&;
     auto targetOf(const ast::MethodCall& call) const -> const Target&;
     auto targetOf(const ast::FunctionCall& call) const -> const Target&;
     auto targetOf(const ast::BinaryOp& op) const -> const Target&;
@@ -228,6 +241,11 @@ public:
     auto shownThroughOf(const ast::Expr& call, std::size_t index) const -> const std::string*;
     auto inheritedDefaultsOf(const ast::MakeDef& make) const
         -> const std::vector<semantic::InheritedDefault>*;
+    // `Just` or `Ok` for a clause whose failing `.try` made its result
+    // `T?` or `T or! E`; "" for any other.
+    auto successWrapperOf(const ast::FunctionClause& clause) const -> std::string;
+    // The same, by the last expression of a clause's or a block's body.
+    auto successWrapperAfter(const ast::Expr& last) const -> std::string;
     auto destructuresString(const ast::Pattern& pattern) const -> bool;
 
 private:

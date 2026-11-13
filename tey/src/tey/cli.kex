@@ -4,6 +4,7 @@ using Tey.Docgen.Cli, only: [dispatch]
 using Tey.Commands, only: [add, build, generate, pluginCommand, buildSelected, clean, init, install, installPrograms, installWorkspace, list, lock, runCommand, runPackage, setupMergeDriver, test, testSelected, updateDependencies]
 using Tey.Manifest, only: [Command]
 using Tey.Programs, only: [InstallOptions]
+using Tey.SelfUpdate, only: [UpgradeOutcome]
 using Tey.Toolchain, only: [installSource, use]
 
 # Options AND commands in one declaration: OptionParser matches the command

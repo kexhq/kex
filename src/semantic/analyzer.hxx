@@ -2,7 +2,6 @@
 
 #include "../ast/ast.hxx"
 #include "name_index.hxx"
-#include "symbol.hxx"
 #include "typechecker.hxx"
 #include <functional>
 #include <optional>
@@ -205,32 +204,23 @@ public:
     }
 
 private:
-    // Top-level declarations
-    auto analyzeTopLevel(const ast::TopLevelItem& item) -> void;
+    // The purity walk: which effects run where, by the functions the checker
+    // says each call runs, and where `break` and `next` may stand.
+    template <typename Item> auto analyzeItem(const Item& item) -> void;
     auto analyzeModule(const ast::ModuleDef& mod) -> void;
-    auto analyzeTypeDef(const ast::TypeDef& def) -> void;
-    auto analyzeRecordDef(const ast::RecordDef& def) -> void;
-    auto analyzeMakeDef(const ast::MakeDef& def) -> void;
-    auto analyzeVisibilityBlock(const ast::VisibilityBlock& block) -> void;
     auto analyzeFunctionDef(const ast::FunctionDef& def) -> void;
-    auto analyzeMainBlock(const ast::MainBlock& block) -> void;
-
-    // Expressions
     auto analyzeExpr(const ast::Expr& expr) -> void;
     auto analyzeBody(const std::vector<ast::ExprPtr>& body) -> void;
-    auto analyzeRescue(const ast::RescueBlock& rescue, SourceLocation loc) -> void;
-
-    // Defines every variable a pattern introduces (VarPattern, shorthand
-    // record fields, nested constructor/list/tuple args) as a Symbol in
-    // the current scope — mirrors TypeChecker::bindPatternVars, just
-    // populating SymbolTable instead of TypeEnv. `isVar` marks the bindings
-    // mutable and reports a same-kind redeclare as one (kexhq/kex#601).
-    auto bindPatternVars(const ast::Pattern& pat, SourceLocation loc,
-                         bool isVar = false) -> void;
+    // Whether a bare call, tagged literal or bare zero-parameter function
+    // runs a foul function, by the declaration the checker chose for it.
+    auto callsFoul(const ast::Expr& call) const -> bool;
+    // A record declared twice in one module (or at top level), or under a
+    // type's name.
+    template <typename Items> auto reportDuplicateRecords(const Items& items) -> void;
 
     // Records which member of which module is foul, for the modules declared
-    // in THIS compilation unit. Runs before Phase 1 so a call can be checked
-    // against a module declared later in the file. Imported modules answer the
+    // in THIS compilation unit, so a call can be checked against a module
+    // declared later in the file. Imported modules answer the
     // same question through `isExportFoul`.
     auto collectModuleMemberEffects(const ast::Program& program) -> void;
     // Whether `module.member` is a foul function, consulting local modules
@@ -238,19 +228,14 @@ private:
     // asked about a qualified call — there is no module-level foulness.
     auto isQualifiedCallFoul(const std::string& module,
                              const std::string& member) const -> bool;
-    // The module whose function a bare `name` means through a `using` in
-    // scope — `using Vend` then `vended` — or empty. Respects `only:` and
-    // `except:`; checks modules declared in this unit, then imported
-    // interfaces.
-    auto moduleImportingName(const std::string& name) const -> std::string;
-    // The public functions of each module declared in this unit.
-    std::unordered_map<std::string, std::unordered_set<std::string>>
-        m_localModuleFunctions;
+    // The foul functions declared at top level, by name: what a guard's
+    // `x.name` (UFCS) is checked against.
+    std::unordered_set<std::string> m_topLevelFoul;
     // The `using` directives in scope, innermost last: the file's own, then
     // those of each module being analyzed.
     std::vector<const ast::UsingBlock*> m_usings;
 
-    // Transitive effect computation — runs after Phase 1, before Phase 2.
+    // Foulness spread through the call graph, after the purity walk.
     auto computeTransitiveEffects(const ast::Program& program) -> void;
     // Post-typechecking enrichment: feed resolved call isFoul into the
     // transitive set and re-check guards.
@@ -274,7 +259,6 @@ private:
     // Helpers
     auto error(SourceLocation loc, const std::string& msg) -> void;
 
-    SymbolTable m_symbols;
     std::vector<Diagnostic> m_diagnostics;
     TypeChecker m_checker;
     const ImportedInterfaces* m_importedInterfaces = nullptr;
@@ -283,7 +267,6 @@ private:
     bool m_indexesNames = false;
     NameIndex m_nameIndex;
     bool m_inFoulContext = false;
-    bool m_inMakeBlock = false;
 
     // break/next bind to the nearest enclosing Loop marker, but a Closure
     // marker in between makes them illegal — they don't cross into a

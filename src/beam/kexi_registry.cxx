@@ -963,7 +963,7 @@ auto KexiRegistry::buildSemanticInterfaces() const
             for (auto& function : functions) expandSignature(function.signature);
     }
 
-    kex::semantic::qualifyModuleAdtNames(interfaces);
+    kex::semantic::qualifyModuleTypeIdentities(interfaces);
     return interfaces;
 }
 

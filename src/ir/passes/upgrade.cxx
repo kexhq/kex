@@ -1,4 +1,5 @@
 #include "upgrade.hxx"
+#include "../clone.hxx"
 #include "../walk.hxx"
 
 #include <algorithm>
@@ -19,80 +20,6 @@ auto receives(ExprPtr& e) -> bool {
     bool found = false;
     forEachChild(*e, [&](ExprPtr& c) { found = found || receives(c); });
     return found;
-}
-
-// Does an early `return` inside this body escape to the enclosing function?
-// Such a loop cannot move to a function of its own: the emitter catches a
-// `return` per function, so it would return from the lifted loop instead.
-auto returns(ExprPtr& e) -> bool {
-    if (!e) return false;
-    if (std::holds_alternative<Return>(e->node)) return true;
-    if (std::holds_alternative<Lambda>(e->node)) return false;
-    bool found = false;
-    forEachChild(*e, [&](ExprPtr& c) { found = found || returns(c); });
-    return found;
-}
-
-auto bindPattern(const Pattern& p, std::set<std::string>& bound) -> void {
-    if (p.kind == PatKind::Var) bound.insert(p.name);
-    for (const auto& a : p.args)
-        if (a) bindPattern(*a, bound);
-    if (p.rest) bindPattern(*p.rest, bound);
-}
-
-// Variables referenced in `e` but bound outside it.
-auto collectFree(ExprPtr& e, std::set<std::string> bound,
-                 std::set<std::string>& out) -> void {
-    if (!e) return;
-    std::visit([&](auto& n) {
-        using T = std::decay_t<decltype(n)>;
-        if constexpr (std::is_same_v<T, Var>) {
-            if (!bound.count(n.name)) out.insert(n.name);
-        } else if constexpr (std::is_same_v<T, Let>) {
-            collectFree(n.value, bound, out);
-            auto inner = bound;
-            inner.insert(n.name);
-            collectFree(n.body, inner, out);
-        } else if constexpr (std::is_same_v<T, Match>) {
-            for (auto& s : n.subjects) collectFree(s, bound, out);
-            for (auto& c : n.clauses) {
-                auto inner = bound;
-                for (const auto& p : c.patterns)
-                    if (p) bindPattern(*p, inner);
-                if (c.guard) collectFree(*c.guard, inner, out);
-                collectFree(c.body, inner, out);
-            }
-        } else if constexpr (std::is_same_v<T, Lambda>) {
-            auto inner = bound;
-            inner.insert(n.params.begin(), n.params.end());
-            collectFree(n.body, inner, out);
-        } else if constexpr (std::is_same_v<T, TryCatch>) {
-            collectFree(n.body, bound, out);
-            for (auto& c : n.clauses) {
-                auto inner = bound;
-                for (const auto& p : c.patterns)
-                    if (p) bindPattern(*p, inner);
-                if (c.guard) collectFree(*c.guard, inner, out);
-                collectFree(c.body, inner, out);
-            }
-        } else if constexpr (std::is_same_v<T, LetRec>) {
-            auto inner = bound;
-            inner.insert(n.params.begin(), n.params.end());
-            collectFree(n.funBody, inner, out);
-            collectFree(n.contBody, bound, out);
-        } else if constexpr (std::is_same_v<T, Receive>) {
-            for (auto& c : n.clauses) {
-                auto inner = bound;
-                if (n.senderVar) inner.insert(*n.senderVar);
-                if (c.pattern) bindPattern(*c.pattern, inner);
-                collectFree(c.body, inner, out);
-            }
-            if (n.timeout) collectFree(*n.timeout, bound, out);
-            if (n.afterBody) collectFree(*n.afterBody, bound, out);
-        } else {
-            forEachChild(*e, [&](ExprPtr& c) { collectFree(c, bound, out); });
-        }
-    }, e->node);
 }
 
 // The Kex name an SSA variable was derived from: `_ir_count3` → `count`.
@@ -135,11 +62,11 @@ struct UpgradePass {
         if (!e) return;
         while (auto* rec = std::get_if<LetRec>(&e->node)) {
             if (rec->name.rfind("__loop", 0) != 0 || !receives(rec->funBody) ||
-                returns(rec->funBody))
+                (rec->funBody && returnsEarly(*rec->funBody)))
                 break;
             std::set<std::string> bound(rec->params.begin(), rec->params.end());
             std::set<std::string> freeSet;
-            collectFree(rec->funBody, bound, freeSet);
+            if (rec->funBody) collectFree(*rec->funBody, bound, freeSet);
             std::vector<std::string> captured(freeSet.begin(), freeSet.end());
             std::stable_sort(captured.begin(), captured.end(),
                              [](const std::string& a, const std::string& b) {

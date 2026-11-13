@@ -161,12 +161,15 @@ auto Evaluator::execute(const ast::Program& program) -> ValuePtr {
     // examples/proc_ping.kex) stay alive in the Scheduler's process table
     // for a later execute() call (e.g. the next REPL line) to `send` to.
     ValuePtr lastResult = m_scheduler->runToCompletion([this, &program]() -> ValuePtr {
+        // The top-level bindings first (`let later = 5`, wrapped in synthetic
+        // main blocks): a binding is a declaration, there for `main` wherever
+        // it is written, as it is on BEAM and to the checker.
         ValuePtr result = Value::none();
-        for (const auto& item : program.items) {
-            if (auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(&item)) {
-                result = execMainBlock(**main);
-            }
-        }
+        for (const bool bindings : {true, false})
+            for (const auto& item : program.items)
+                if (auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(&item);
+                    main && (*main)->synthetic == bindings)
+                    result = execMainBlock(**main);
         return result;
     }, m_globalEnv);
 
@@ -1929,6 +1932,10 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                     try {
                         auto result = evalBody(clause.body);
                         popEnv();
+                        // A failing `.try` made this clause's result `T?` or
+                        // `T or! E`: its success is `Just(v)` or `Ok(v)`.
+                        if (const auto wrapper = m_programs.successWrapperOf(clause); !wrapper.empty())
+                            return wrappedSuccess(wrapper, std::move(result));
                         return result;
                     } catch (TryException& e) {
                         if (clause.rescue) {
@@ -1949,9 +1956,7 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                         // that try's sibling handlers) and be caught by the
                         // caller instead — which silently ended `main` when a
                         // `.try` failure propagated out of a nested call.
-                        auto errorVal = std::make_shared<Value>();
-                        errorVal->data = VariantValue{"Error", "Result", {e.error()}, {}, {}};
-                        return errorVal;
+                        return tryFailureResult(e.error());
                     } catch (ReturnException& ret) {
                         popEnv();
                         // A block's `return` for some other call — the one it
@@ -3327,10 +3332,15 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             const bool collection = node.collection;
             const bool namedFunction = node.namedFunction;
             auto capturedCapabilities = m_capabilityBindings;
+            // A failing `.try` made this block's result `T?` or `T or! E`:
+            // its success is `Just(v)` or `Ok(v)`. Looked up once, here.
+            const auto successWrapper = node.body.empty() || !node.body.back()
+                ? std::string{} : m_programs.successWrapperAfter(*node.body.back());
             auto collectionDepth = std::make_shared<int>(0);
             lambda->data = FunctionValue{"<lambda>",
                 [this, bodyPtr, paramNames, capturedEnv, rescuePtr,
                  collection, namedFunction,
+                 successWrapper,
                  collectionDepth,
                  capturedCapabilities](std::vector<ValuePtr> args) -> ValuePtr {
                     CapabilityScope capabilityScope{m_capabilityBindings, capturedCapabilities};
@@ -3400,6 +3410,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             result = Value::list(std::move(values));
                         } else {
                             result = evalBody(*bodyPtr);
+                            if (!successWrapper.empty())
+                                result = wrappedSuccess(successWrapper, std::move(result));
                         }
                     } catch (TryException& e) {
                         if (rescuePtr) {
@@ -3423,10 +3435,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             // produced a bare `Error(...)` instead of a list
                             // containing one, and blew past `each` entirely.
                             m_env = prevEnv;
-                            auto errorVal = std::make_shared<Value>();
-                            errorVal->data =
-                                VariantValue{"Error", "Result", {e.error()}, {}, {}};
-                            return errorVal;
+                            return tryFailureResult(e.error());
                         }
                     } catch (ReturnException& ret) {
                         // `return` in a block leaves the function the block
@@ -3752,6 +3761,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // names, even when the program imported Net.HTTP.WebSocket's
             // `Session` into the global scope (kexhq/kex#539).
             ValuePtr val;
+            // A module's constructor the checker resolved (brought in by a
+            // `using` of its type, say): bound under that module.
+            if (const auto& target = m_programs.targetOf(expr);
+                target.kind == hir::TargetKind::Constructor)
+                val = m_env->get(kex::mangle::qualify(kex::mangle::scopeOf(target.owner), node.name));
             for (auto scope = m_currentModule; !val && !scope.empty();) {
                 val = m_env->get(kex::mangle::qualify(scope, node.name));
                 const auto dot = scope.rfind('.');
@@ -5525,6 +5539,25 @@ auto Evaluator::popEnv() -> void {
         m_importScopes.pop_back();
         m_usingModules.pop_back();
     }
+}
+
+// What a call answers when a `.try` in it failed and nothing rescued it: the
+// failure as it was — `None` for an Optional's, `Error(e)` for a Result's —
+// so a function declared `-> T?` never answers a Result.
+auto Evaluator::wrappedSuccess(const std::string& wrapper, ValuePtr value) -> ValuePtr {
+    auto wrapped = std::make_shared<Value>();
+    wrapped->data = VariantValue{wrapper, wrapper == "Just" ? "Optional" : "Result",
+                                 {std::move(value)}, {}, {}};
+    return wrapped;
+}
+
+auto Evaluator::tryFailureResult(const ValuePtr& failure) -> ValuePtr {
+    if (const auto* variant = std::get_if<VariantValue>(&failure->data);
+        variant && variant->tag == "None" && variant->args.empty())
+        return failure;
+    auto errorVal = std::make_shared<Value>();
+    errorVal->data = VariantValue{"Error", "Result", {failure}, {}, {}};
+    return errorVal;
 }
 
 auto Evaluator::evalRescue(const ast::RescueBlock& rescue, const ValuePtr& error,

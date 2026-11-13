@@ -611,9 +611,32 @@ auto Lowering::irHasEscapingTryThrow(const ExprPtr& e) -> bool {
 // Wrap a rescue-less function body so an escaped `.try` failure becomes
 // `return Error(e)` — matching the interpreter, which catches an unhandled
 // TryException at the function boundary (evaluator.cxx execFunctionDef).
+auto Lowering::wrapSuccess(ExprPtr body, const ast::Expr* last) -> ExprPtr {
+    const auto wrapper = last ? hir->successWrapperAfter(*last) : std::string{};
+    if (wrapper.empty()) return body;
+    const auto value = fresh("succeeded");
+    std::vector<ExprPtr> args;
+    args.push_back(var(value));
+    auto wrapped = std::make_unique<Expr>();
+    wrapped->node = Construct{wrapper, std::move(args)};
+    return makeLet(value, std::move(body), std::move(wrapped));
+}
+
 auto Lowering::wrapPropagateTryError(ExprPtr body) -> ExprPtr {
     TryCatch tc;
     tc.body = std::move(body);
+    // A failed Optional's `.try` leaves the function with `None`, a failed
+    // Result's with `Error(e)`: the failure as it was, not a Result made of
+    // an Optional's `None`.
+    MatchClause none;
+    auto nonePattern = std::make_unique<Pattern>();
+    nonePattern->kind = PatKind::Construct;
+    nonePattern->tag = "None";
+    none.patterns.push_back(std::move(nonePattern));
+    auto noneValue = std::make_unique<Expr>();
+    noneValue->node = Construct{"None", {}};
+    none.body = std::move(noneValue);
+    tc.clauses.push_back(std::move(none));
     MatchClause c;
     std::string en = fresh("_TryE");
     auto p = std::make_unique<Pattern>();

@@ -1,0 +1,29 @@
+# A function that declares no result takes a failing `.try` into the result
+# it infers: `.try` on an Optional makes it `T?`, on a `Result<T, E>` it makes
+# it `T or! E`. The failure is that result as it is, and the success comes back
+# wrapped as `Just(v)` or `Ok(v)`. A body that already answers an Optional or a
+# Result is left as it is. Both backends agree on every shape.
+
+let initial(names: [String]) = names.first.try.upperCase
+
+let nextOf(text: String) = Integer.parse(text).try + 1
+
+let twice(text: String) do
+  let first = Integer.parse(text).try
+  let second = Integer.parse(text).try
+  first + second
+end
+
+let already(names: [String]) = Just(names.first.try)
+
+main do
+  let initialOf: String? = initial(["ada"])
+  IO.printLine(initialOf == Just("ADA"))
+  IO.printLine(initial([]) == None)
+  let following: Integer or! ParseError = nextOf("41")
+  IO.printLine(following == Ok(42))
+  IO.printLine(nextOf("x").ok?)
+  IO.printLine(twice("2") == Ok(4))
+  IO.printLine(already(["b"]) == Just("b"))
+  IO.printLine(already([]) == None)
+end

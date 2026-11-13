@@ -40,76 +40,6 @@ auto receiverModuleName(const ast::Expr& receiver) -> std::string {
 
 } // namespace
 
-auto Analyzer::bindPatternVars(const ast::Pattern& pat, SourceLocation loc,
-                               bool isVar) -> void {
-    std::visit([this, loc, isVar](const auto& node) {
-        using T = std::decay_t<decltype(node)>;
-        if constexpr (std::is_same_v<T, ast::VarPattern>) {
-            if (node.name != "_") {
-                auto* existing = m_symbols.currentScope().lookupLocal(node.name);
-                const bool shadowsImplicit =
-                    existing && existing->kind == SymbolKind::Variable &&
-                    existing->isImplicit;
-                if (existing && existing->kind == SymbolKind::Variable &&
-                    !existing->isImplicit) {
-                    if (existing->isMutable) {
-                        error(loc, "Cannot redeclare '" + node.name + "': " +
-                                     (isVar ? "already declared with 'var'"
-                                            : "was declared with 'var'"));
-                    } else {
-                        error(loc, "Cannot redeclare immutable binding: " + node.name);
-                    }
-                }
-                Symbol bound{node.name, SymbolKind::Variable, false, isVar,
-                             true, loc};
-                // Replaces the implicit binding so a second explicit one
-                // still redeclares (and a `let` shadow is immutable).
-                if (shadowsImplicit)
-                    m_symbols.redefine(std::move(bound));
-                else
-                    m_symbols.define(std::move(bound));
-            }
-        }
-        else if constexpr (std::is_same_v<T, ast::TypePattern>) {
-            if (!node.name.empty() && node.name != "_")
-                m_symbols.define(Symbol{node.name, SymbolKind::Variable, false,
-                                        isVar, true, loc});
-        }
-        else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
-            if (node.inner) bindPatternVars(*node.inner, loc, isVar);
-        }
-        else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
-            for (const auto& arg : node.args) {
-                if (arg) bindPatternVars(*arg, loc, isVar);
-            }
-        }
-        else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
-            for (const auto& field : node.fields) {
-                if (field.pattern) bindPatternVars(**field.pattern, loc, isVar);
-                else if (!field.isStringKey) {
-                    m_symbols.define(Symbol{field.name, SymbolKind::Variable, false, isVar, true, loc});
-                }
-            }
-        }
-        else if constexpr (std::is_same_v<T, ast::ListPattern>) {
-            for (const auto& elem : node.elements) {
-                if (elem) bindPatternVars(*elem, loc, isVar);
-            }
-            if (node.rest) bindPatternVars(**node.rest, loc, isVar);
-        }
-        else if constexpr (std::is_same_v<T, ast::TuplePattern>) {
-            for (const auto& elem : node.elements) {
-                if (elem) bindPatternVars(*elem, loc, isVar);
-            }
-        }
-        else if constexpr (std::is_same_v<T, ast::RangePattern>) {
-            if (node.start) bindPatternVars(*node.start, loc, isVar);
-            if (node.end) bindPatternVars(*node.end, loc, isVar);
-        }
-        // LiteralPattern, WildcardPattern introduce nothing.
-    }, pat.kind);
-}
-
 auto Analyzer::analyze(const ast::Program& program) -> bool {
     // Which names one module may take from another (`using`, `export`).
     for (auto& violation : findModuleRuleViolations(
@@ -117,24 +47,7 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
              m_moduleLocator ? &m_moduleLocator : nullptr, m_entryFiles))
         m_diagnostics.push_back(std::move(violation));
 
-    // Phase 0.5: per-module member effects, so a qualified call can be checked
-    // against a module declared anywhere in the unit, including below it.
-    collectModuleMemberEffects(program);
-    m_usings.clear();
-    for (const auto& item : program.items)
-        if (const auto* using_ = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item))
-            if (*using_) m_usings.push_back(using_->get());
-
-    // Phase 1: scope resolution and purity checking
-    for (const auto& item : program.items) {
-        analyzeTopLevel(item);
-    }
-
-    // Phase 1.5: transitive effect computation — propagate foulness through
-    // the call graph so guard checks reject transitively foul calls.
-    computeTransitiveEffects(program);
-
-    // Phase 2: type checking
+    // Type checking: the checker decides what every name and call means.
     const auto checkedFrom = m_diagnostics.size();
     m_checker.check(program, m_diagnostics, m_entryFiles);
     if (m_indexesNames)
@@ -149,8 +62,30 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
                          std::make_move_iterator(conflicts.begin()),
                          std::make_move_iterator(conflicts.end()));
 
-    // Phase 2.5: enrich transitive effects with resolved-call foulness
-    // from imported interfaces (KexI isFoul on receiver functions).
+    // Purity, over the functions the checker says each call runs. Reported
+    // ahead of the checker's diagnostics: an effect in the wrong place is
+    // usually the first thing to fix.
+    std::vector<Diagnostic> checked(
+        std::make_move_iterator(m_diagnostics.begin() + static_cast<std::ptrdiff_t>(checkedFrom)),
+        std::make_move_iterator(m_diagnostics.end()));
+    m_diagnostics.resize(checkedFrom);
+    // Per-module member effects, so a qualified call can be checked against
+    // a module declared anywhere in the unit, including below it.
+    collectModuleMemberEffects(program);
+    m_usings.clear();
+    for (const auto& item : program.items)
+        if (const auto* using_ = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item))
+            if (*using_) m_usings.push_back(using_->get());
+    reportDuplicateRecords(program.items);
+    for (const auto& item : program.items) analyzeItem(item);
+    // Foulness through the call graph, so a guard rejects a transitively
+    // foul call.
+    computeTransitiveEffects(program);
+    m_diagnostics.insert(m_diagnostics.end(), std::make_move_iterator(checked.begin()),
+                         std::make_move_iterator(checked.end()));
+
+    // Foul calls through a value receiver or a trait, which only the
+    // checker's resolved targets show.
     enrichEffectsFromResolvedCalls(program);
 
     return std::none_of(m_diagnostics.begin(), m_diagnostics.end(),
@@ -183,569 +118,170 @@ auto Analyzer::resolvedCalls() const
     return m_checker.resolvedCalls();
 }
 
-auto Analyzer::analyzeTopLevel(const ast::TopLevelItem& item) -> void {
+auto Analyzer::callsFoul(const ast::Expr& call) const -> bool {
+    const auto& selected = m_checker.selectedCallSignatures();
+    if (const auto found = selected.find(&call);
+        found != selected.end() && found->second.isFoul)
+        return true;
+    // A module's function, by its module's record of its effects.
+    std::string named;
+    if (const auto found = m_checker.calledFunctions().find(&call);
+        found != m_checker.calledFunctions().end())
+        named = found->second;
+    else if (const auto constant = m_checker.referencedConstants().find(&call);
+             constant != m_checker.referencedConstants().end())
+        named = constant->second;
+    const auto dot = named.rfind('.');
+    return dot != std::string::npos &&
+           isQualifiedCallFoul(named.substr(0, dot), named.substr(dot + 1));
+}
+
+template <typename Items>
+auto Analyzer::reportDuplicateRecords(const Items& items) -> void {
+    // A type may be reopened; a record may not, nor share a type's name.
+    std::set<std::string> declared;
+    auto declare = [&](const auto& item) {
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if (!node) return;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>)
+                declared.insert(node->name);
+            else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                if (!declared.insert(node->name).second)
+                    error(node->location, "Duplicate record definition: " + node->name);
+            }
+        }, item);
+    };
+    for (const auto& item : items) {
+        declare(item);
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>)
+                if (node)
+                    for (const auto& inner : node->items) declare(inner);
+        }, item);
+    }
+}
+
+template <typename Item>
+auto Analyzer::analyzeItem(const Item& item) -> void {
     std::visit([this](const auto& node) {
         using T = std::decay_t<decltype(node)>;
+        if (!node) return;
         if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
             analyzeModule(*node);
-        } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
-            analyzeTypeDef(*node);
-        } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
-            analyzeRecordDef(*node);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
-            analyzeMakeDef(*node);
+            // A `make` block's `private do` members are not walked (yet).
+            for (const auto& member : node->body)
+                if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&member))
+                    if (*fn) analyzeFunctionDef(**fn);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
             analyzeFunctionDef(*node);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
-            analyzeMainBlock(*node);
-        } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
-            // Skip compiled blocks for now
-        } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
-            // Using blocks — would need module resolution
-        } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::Pragma>>) {
-            // Pragmas are metadata
+            // A main block may do anything.
+            const auto outer = std::exchange(m_inFoulContext, true);
+            analyzeBody(node->body);
+            m_inFoulContext = outer;
+        } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+            // Visibility decides who may CALL a function, not whether its
+            // body is checked: a `private do` member is purity-checked too.
+            for (const auto& inner : node->items) analyzeItem(inner);
         }
     }, item);
 }
 
 auto Analyzer::analyzeModule(const ast::ModuleDef& mod) -> void {
-    m_symbols.define(Symbol{
-        mod.name, SymbolKind::Module, false, false, true, mod.location});
-
     // A module never carries an effect of its own: entering one leaves the
     // surrounding purity exactly as it was, and each member declares its own.
-    m_symbols.pushScope();
     // Its own `using`s apply inside it, and only there.
     const auto outerUsings = m_usings.size();
     for (const auto& item : mod.body)
         if (const auto* using_ = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item))
             if (*using_) m_usings.push_back(using_->get());
-
-    // Members are visible to each other regardless of the order they are
-    // written in — a `make` block above a `private do` may still name what the
-    // block binds. Only declaring them as the walk reached them made
-    // `defaultPort` an undefined identifier purely for standing lower in the
-    // file.
-    const auto declare = [this](const ast::FunctionDef& def) {
-        Symbol symbol{def.name, SymbolKind::Function, def.isFoul, false, true,
-                      def.location};
-        symbol.clauseCount = static_cast<int>(def.clauses.size());
-        m_symbols.define(std::move(symbol));
-    };
-    for (const auto& item : mod.body) {
-        if (const auto* fn =
-                std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
-            if (*fn) declare(**fn);
-        } else if (const auto* visibility =
-                       std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
-            if (!*visibility) continue;
-            for (const auto& inner : (*visibility)->items)
-                if (const auto* fn =
-                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&inner))
-                    if (*fn) declare(**fn);
-        }
-    }
-
-    for (const auto& item : mod.body) {
-        std::visit([this](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                analyzeModule(*node);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
-                analyzeTypeDef(*node);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
-                analyzeRecordDef(*node);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
-                analyzeMakeDef(*node);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                analyzeFunctionDef(*node);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
-                // skip
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
-                // Visibility decides who may CALL a function, not whether its
-                // body is checked. Skipping the block entirely meant a
-                // `private do` member was never purity-checked — every
-                // effectful helper in tey's private blocks passed as pure.
-                analyzeVisibilityBlock(*node);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
-                // skip
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
-                // Type annotations are handled with their function defs
-            }
-        }, item);
-    }
-
+    reportDuplicateRecords(mod.body);
+    for (const auto& item : mod.body) analyzeItem(item);
     m_usings.resize(outerUsings);
-    m_symbols.popScope();
-}
-
-auto Analyzer::analyzeVisibilityBlock(const ast::VisibilityBlock& block) -> void {
-    for (const auto& item : block.items) {
-        std::visit([this](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                if (node) analyzeFunctionDef(*node);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
-                if (node) analyzeTypeDef(*node);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
-                if (node) analyzeRecordDef(*node);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
-                if (node) analyzeMakeDef(*node);
-            }
-            // TypeAnnotation travels with its function def; UsingBlock is
-            // resolved elsewhere.
-        }, item);
-    }
-}
-
-auto Analyzer::analyzeTypeDef(const ast::TypeDef& def) -> void {
-    Symbol sym{def.name, SymbolKind::Type, false, false, true, def.location};
-    sym.typeParams = def.typeParams;
-    for (const auto& parent : def.parents) {
-        if (!parent.parts.empty()) {
-            sym.parents.push_back(parent.parts[0]);
-        }
-    }
-
-    if (!m_symbols.define(std::move(sym))) {
-        // Duplicate type names are allowed for reopening — skip error
-    }
-}
-
-auto Analyzer::analyzeRecordDef(const ast::RecordDef& def) -> void {
-    Symbol sym{def.name, SymbolKind::Record, false, false, true, def.location};
-    sym.typeParams = def.typeParams;
-
-    if (!m_symbols.define(std::move(sym))) {
-        error(def.location, "Duplicate record definition: " + def.name);
-    }
-}
-
-auto Analyzer::analyzeMakeDef(const ast::MakeDef& def) -> void {
-    m_symbols.pushScope();
-    const bool previousMake = m_inMakeBlock;
-    m_inMakeBlock = true;
-
-    // Declare every member's NAME up front — `private do` blocks included —
-    // so a method can reference a sibling defined later in the block: the
-    // same rule analyzeModule applies to module members. Without it a
-    // parameterless helper standing below its caller read as "Undefined
-    // identifier" purely for being lower in the block (kexhq/kex#292).
-    const auto declare = [this](const ast::FunctionDef& fn) {
-        Symbol symbol{fn.name, SymbolKind::Function, fn.isFoul, false, true,
-                      fn.location};
-        symbol.clauseCount = static_cast<int>(fn.clauses.size());
-        m_symbols.define(std::move(symbol));
-    };
-    for (const auto& item : def.body) {
-        if (const auto* fn =
-                std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
-            if (*fn) declare(**fn);
-        } else if (const auto* visibility =
-                       std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
-            if (!*visibility) continue;
-            for (const auto& inner : (*visibility)->items)
-                if (const auto* vfn =
-                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&inner))
-                    if (*vfn) declare(**vfn);
-        }
-    }
-
-    for (const auto& item : def.body) {
-        std::visit([this](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                analyzeFunctionDef(*node);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
-                // handled with function defs
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
-                // TODO
-            }
-        }, item);
-    }
-
-    m_inMakeBlock = previousMake;
-    m_symbols.popScope();
 }
 
 auto Analyzer::analyzeFunctionDef(const ast::FunctionDef& def) -> void {
-    Symbol sym{def.name, SymbolKind::Function, def.isFoul, false, true, def.location};
-    sym.clauseCount = static_cast<int>(def.clauses.size());
-    m_symbols.define(std::move(sym));
-
-    // Analyze function bodies
-    bool prevFoul = m_inFoulContext;
+    const auto outer = m_inFoulContext;
     if (def.isFoul) m_inFoulContext = true;
-
-    for (const auto& clause : def.clauses) {
-        m_symbols.pushScope();
-        if (m_inMakeBlock) {
-            Symbol implicitNew{"new", SymbolKind::Variable, false, true,
-                               true, def.location};
-            implicitNew.isImplicit = true;
-            m_symbols.define(std::move(implicitNew));
-        }
-        if (def.isSlot) {
-            Symbol implicitFrom{"from", SymbolKind::Variable, false, false,
-                                true, def.location};
-            implicitFrom.isImplicit = true;
-            m_symbols.define(std::move(implicitFrom));
-        }
-
-        // Register parameters as variables
-        for (const auto& param : clause.params) {
-            if (param.name.has_value() && *param.name != "_") {
-                m_symbols.define(Symbol{
-                    *param.name, SymbolKind::Variable, false, false, true, def.location});
-            }
-            if (param.pattern) {
-                bindPatternVars(**param.pattern, def.location);
-            }
-        }
-
-        analyzeBody(clause.body);
-        m_symbols.popScope();
-    }
-
-    m_inFoulContext = prevFoul;
-}
-
-auto Analyzer::analyzeMainBlock(const ast::MainBlock& block) -> void {
-    // Synthetic top-level binding wrappers run in the global scope so that
-    // `let x = expr` at top level remains visible to subsequent items.
-    if (!block.synthetic) m_symbols.pushScope();
-    bool prevFoul = m_inFoulContext;
-    m_inFoulContext = true;
-
-    // `main(args) do ... end` — args (and any pattern-shaped param) wasn't
-    // registered at all before, so referencing it inside main's body
-    // always failed with "Undefined identifier".
-    for (const auto& param : block.params) {
-        if (param.name.has_value() && *param.name != "_") {
-            m_symbols.define(Symbol{
-                *param.name, SymbolKind::Variable, false, false, true, block.location});
-        }
-        if (param.pattern) {
-            bindPatternVars(**param.pattern, block.location);
-        }
-    }
-
-    analyzeBody(block.body);
-
-    m_inFoulContext = prevFoul;
-    if (!block.synthetic) m_symbols.popScope();
-}
-
-auto Analyzer::analyzeRescue(const ast::RescueBlock& rescue,
-                             SourceLocation loc) -> void {
-    // A rescue clause binds names exactly like a match clause: its patterns
-    // introduce locals its guard and body can see, and `rescue |e|` binds the
-    // caught error. Each clause gets its own scope.
-    for (const auto& clause : rescue.clauses) {
-        m_symbols.pushScope();
-        for (const auto& pat : clause.patterns)
-            if (pat) bindPatternVars(*pat, loc);
-        if (clause.guard && *clause.guard) analyzeExpr(**clause.guard);
-        if (clause.body) analyzeExpr(*clause.body);
-        m_symbols.popScope();
-    }
-    m_symbols.pushScope();
-    if (!rescue.catchAllParam.empty())
-        m_symbols.define(Symbol{rescue.catchAllParam, SymbolKind::Variable,
-                                false, false, true, loc});
-    analyzeBody(rescue.catchAllBody);
-    if (rescue.inlineReturnExpr) analyzeExpr(*rescue.inlineReturnExpr);
-    m_symbols.popScope();
+    for (const auto& clause : def.clauses) analyzeBody(clause.body);
+    m_inFoulContext = outer;
 }
 
 auto Analyzer::analyzeBody(const std::vector<ast::ExprPtr>& body) -> void {
-    for (const auto& expr : body) {
+    for (const auto& expr : body)
         if (expr) analyzeExpr(*expr);
-    }
 }
 
 auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
-    std::visit([this, &expr](const auto& node) {
-        using T = std::decay_t<decltype(node)>;
-
-        if constexpr (std::is_same_v<T, ast::LetExpr>) {
-            if (node.value) analyzeExpr(*node.value);
-            // bindPatternVars generalizes the old VarPattern-only check to
-            // every destructuring shape `let` accepts (e.g. `let { host,
-            // port } = config`, `let (a, b) = pair`), which weren't
-            // registering their bound names at all before.
-            if (node.pattern) bindPatternVars(*node.pattern, expr.location);
+    auto foulCall = [&](const std::string& what, const std::string& name) {
+        if (!m_inFoulContext)
+            error(expr.location,
+                  "Cannot call foul " + what + " '" + name + "' from pure context");
+    };
+    if (const auto* ident = std::get_if<ast::Identifier>(&expr.kind)) {
+        // A zero-parameter function named bare is called.
+        if (callsFoul(expr)) foulCall("function", ident->name);
+    } else if (const auto* call = std::get_if<ast::FunctionCall>(&expr.kind)) {
+        if (callsFoul(expr)) foulCall("function", call->name);
+    } else if (const auto* tagged = std::get_if<ast::TaggedLiteral>(&expr.kind)) {
+        if (callsFoul(expr)) foulCall("tag", tagged->tag);
+    } else if (const auto* capture = std::get_if<ast::CurryExpr>(&expr.kind)) {
+        // `~shout` hands the function on to be run, so a pure body may not
+        // name a foul one any more than call it (kexhq/kex#640).
+        const auto decided = m_checker.decidedCalls().find(&expr);
+        if (!m_inFoulContext && decided != m_checker.decidedCalls().end() &&
+            decided->second.kind == CallKind::FunctionReference) {
+            const auto& owner = decided->second.owner;
+            const auto dot = owner.rfind('.');
+            const bool foul = dot == std::string::npos
+                ? m_topLevelFoul.contains(owner)
+                : isQualifiedCallFoul(owner.substr(0, dot), owner.substr(dot + 1));
+            if (foul)
+                error(expr.location, "Cannot capture foul function '" + capture->name +
+                                         "' in a pure context");
         }
-        else if constexpr (std::is_same_v<T, ast::VarExpr>) {
-            if (node.value) analyzeExpr(*node.value);
-            // Same shapes `let` accepts; the redeclare check rides along,
-            // keyed on the new declaration being a `var` (kexhq/kex#601).
-            if (node.pattern) bindPatternVars(*node.pattern, expr.location,
-                                              /*isVar=*/true);
-        }
-        else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
-            if (node.value) analyzeExpr(*node.value);
-            auto* sym = m_symbols.lookup(node.name);
-            if (sym && !sym->isMutable)
-                error(expr.location, "Cannot assign to immutable binding: " + node.name);
-        }
-        else if constexpr (std::is_same_v<T, ast::Identifier>) {
-            auto* sym = m_symbols.lookup(node.name);
-            if (!sym && node.name != "_" && node.name != "new") {
-                // A function a `using` brought in is as nameable as a local
-                // one: bare, a zero-arg function is auto-called (`vended`).
-                if (const auto module = moduleImportingName(node.name); !module.empty()) {
-                    if (isQualifiedCallFoul(module, node.name) && !m_inFoulContext)
-                        error(expr.location, "Cannot call foul function '" +
-                                                 node.name + "' from pure context");
-                }
-            }
-        }
-        else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
-            for (const auto& value : node.values)
-                if (value) analyzeExpr(*value);
-        }
-        else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
-            auto* sym = m_symbols.lookup(node.name);
-            if (sym && sym->isFoul && !m_inFoulContext) {
-                error(expr.location,
-                    "Cannot call foul function '" + node.name + "' from pure context");
-            } else if (!sym && !m_inFoulContext) {
-                // A function a `using` brought in, called bare: as foul as
-                // it is called qualified (kexhq/kex#584).
-                if (const auto module = moduleImportingName(node.name);
-                    !module.empty() && isQualifiedCallFoul(module, node.name))
-                    error(expr.location,
-                        "Cannot call foul function '" + node.name + "' from pure context");
-            }
-            for (const auto& arg : node.args) {
-                if (arg) analyzeExpr(*arg);
-            }
-            for (const auto& [_, arg] : node.namedArgs) {
-                if (arg) analyzeExpr(*arg);
-            }
-            if (node.block) analyzeExpr(**node.block);
-        }
-        else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
-            auto* sym = m_symbols.lookup(node.tag);
-            if (sym && sym->isFoul && !m_inFoulContext) {
-                error(expr.location,
-                    "Cannot call foul tag '" + node.tag + "' from pure context");
-            }
-            for (const auto& value : node.values)
-                if (value) analyzeExpr(*value);
-        }
-        else if constexpr (std::is_same_v<T, ast::MethodCall>) {
-            if (node.receiver) analyzeExpr(*node.receiver);
-            for (const auto& arg : node.args) {
-                if (arg) analyzeExpr(*arg);
-            }
-            for (const auto& [_, arg] : node.namedArgs) {
-                if (arg) analyzeExpr(*arg);
-            }
-            if (node.block) analyzeExpr(**node.block);
-
-            // IO.inspect is the documented purity-exempt escape hatch.
-            bool isInspect = (node.method == "inspect");
-            auto receiverName = node.receiver ? receiverModuleName(*node.receiver)
+    } else if (const auto* method = std::get_if<ast::MethodCall>(&expr.kind)) {
+        // `IO.inspect` is the documented purity-exempt escape hatch.
+        const auto module = method->receiver ? receiverModuleName(*method->receiver)
                                               : std::string{};
-            if (!m_inFoulContext && !isInspect && !receiverName.empty()
-                && isQualifiedCallFoul(receiverName, node.method)) {
-                error(expr.location,
-                    "Cannot call foul function '" + receiverName + "." +
-                    node.method + "' from pure context");
-            }
-            // Check mutating call on immutable
-            if (node.mutating) {
-                if (auto* ident = std::get_if<ast::Identifier>(&node.receiver->kind)) {
-                    auto* sym = m_symbols.lookup(ident->name);
-                    if (sym && !sym->isMutable) {
-                        error(expr.location,
-                            "Cannot use '!' on immutable binding: " + ident->name);
-                    }
-                }
-            }
-        }
-        else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
-            if (node.left) analyzeExpr(*node.left);
-            if (node.right) analyzeExpr(*node.right);
-        }
-        else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
-            if (node.operand) analyzeExpr(*node.operand);
-        }
-        else if constexpr (std::is_same_v<T, ast::IfExpr>) {
-            if (node.condition) analyzeExpr(*node.condition);
-            if (node.letPattern) {
-                // `if let Pattern = expr` — the pattern's bindings are in
-                // scope only for the then-body.
-                m_symbols.pushScope();
-                bindPatternVars(*node.letPattern, expr.location);
-                analyzeBody(node.thenBody);
-                m_symbols.popScope();
-            } else {
-                analyzeBody(node.thenBody);
-            }
-            for (const auto& [cond, body] : node.elifs) {
-                if (cond) analyzeExpr(*cond);
-                analyzeBody(body);
-            }
-            if (node.elseBody) analyzeBody(*node.elseBody);
-        }
-        else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
-            if (node.subject) analyzeExpr(*node.subject);
-            for (const auto& clause : node.clauses) {
-                m_symbols.pushScope();
-                if (node.subjectBinding) {
-                    m_symbols.define(Symbol{
-                        *node.subjectBinding, SymbolKind::Variable, false, false, true, expr.location});
-                }
-                for (const auto& pat : clause.patterns) {
-                    if (pat) bindPatternVars(*pat, expr.location);
-                }
-                if (clause.guard && *clause.guard) {
-                    analyzeExpr(**clause.guard);
-                }
-                if (clause.body) analyzeExpr(*clause.body);
-                m_symbols.popScope();
-            }
-        }
-        else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
-            m_symbols.pushScope();
-            if (node.counter && *node.counter != "_") {
-                m_symbols.define(Symbol{
-                    *node.counter, SymbolKind::Variable, false, false, true, expr.location});
-            }
-            m_loopScopes.push_back(LoopScope::Loop);
-            analyzeBody(node.body);
-            m_loopScopes.pop_back();
-            m_symbols.popScope();
-        }
-        else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
-            if (node.condition) analyzeExpr(*node.condition);
-            m_loopScopes.push_back(LoopScope::Loop);
-            analyzeBody(node.body);
-            m_loopScopes.pop_back();
-        }
-        else if constexpr (std::is_same_v<T, ast::BreakExpr>) {
-            checkLoopControl(expr.location, "break");
-        }
-        else if constexpr (std::is_same_v<T, ast::NextExpr>) {
-            checkLoopControl(expr.location, "next");
-        }
-        else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
-            if (node.value) analyzeExpr(*node.value);
-        }
-        else if constexpr (std::is_same_v<T, ast::SpawnExpr>) {
-            if (!m_inFoulContext) {
-                error(expr.location, "Cannot use 'spawn' in pure context");
-            }
-            m_symbols.pushScope();
-            analyzeBody(node.body);
-            m_symbols.popScope();
-        }
-        else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
-            if (!m_inFoulContext) {
-                error(expr.location, "Cannot use 'receive' in pure context");
-            }
-            for (const auto& clause : node.clauses) {
-                m_symbols.pushScope();
-                // When a sender binding is present, every message is a
-                // {Payload, Sender} tuple; the sender name is in scope for
-                // every clause (alongside the pattern vars).
-                if (node.senderBinding && *node.senderBinding != "_") {
-                    m_symbols.define(Symbol{*node.senderBinding, SymbolKind::Variable,
-                                            false, false, true, expr.location});
-                }
-                for (const auto& pat : clause.patterns) {
-                    if (pat) bindPatternVars(*pat, expr.location);
-                }
-                if (clause.body) analyzeExpr(*clause.body);
-                m_symbols.popScope();
-            }
-        }
-        else if constexpr (std::is_same_v<T, ast::Lambda>) {
-            m_symbols.pushScope();
-            for (const auto& param : node.params) {
-                if (param.name != "_") {
-                    m_symbols.define(Symbol{
-                        param.name, SymbolKind::Variable, false, false, true, expr.location});
-                }
-            }
-            m_loopScopes.push_back(LoopScope::Closure);
-            analyzeBody(node.body);
-            if (node.rescue) analyzeRescue(*node.rescue, expr.location);
-            m_loopScopes.pop_back();
-            m_symbols.popScope();
-        }
-        else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
-            analyzeBody(node.body);
-        }
-        else if constexpr (std::is_same_v<T, ast::ListExpr>) {
-            for (const auto& elem : node.elements) {
-                if (elem) analyzeExpr(*elem);
-            }
-            if (node.rest) analyzeExpr(**node.rest);
-        }
-        else if constexpr (std::is_same_v<T, ast::MapExpr>) {
-            for (const auto& entry : node.entries) {
-                if (entry.key) analyzeExpr(*entry.key);
-                if (entry.value) analyzeExpr(*entry.value);
-            }
-        }
-        else if constexpr (std::is_same_v<T, ast::TupleExpr>) {
-            for (const auto& elem : node.elements) {
-                if (elem) analyzeExpr(*elem);
-            }
-        }
-        else if constexpr (std::is_same_v<T, ast::RangeExpr>) {
-            if (node.start) analyzeExpr(*node.start);
-            if (node.end) analyzeExpr(*node.end);
-        }
-        else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
-            for (const auto& field : node.fields) {
-                if (field.value) analyzeExpr(*field.value);
-            }
-        }
-        else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
-            if (node.expr) analyzeExpr(*node.expr);
-            if (node.condition) analyzeExpr(*node.condition);
-        }
-        else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
-            if (node.condition) analyzeExpr(*node.condition);
-            if (node.thenExpr) analyzeExpr(*node.thenExpr);
-            if (node.elseExpr) analyzeExpr(*node.elseExpr);
-        }
-        else if constexpr (std::is_same_v<T, ast::SpreadExpr>) {
-            if (node.inner) analyzeExpr(*node.inner);
-        }
-        else if constexpr (std::is_same_v<T, ast::CurryExpr>) {
-            for (const auto& group : node.argGroups)
-                for (const auto& arg : group)
-                    if (arg && !std::holds_alternative<ast::CurryPlaceholder>(arg->kind))
-                        analyzeExpr(*arg);
-        }
-        else if constexpr (std::is_same_v<T, ast::TryExpr>) {
-            if (node.operand) analyzeExpr(*node.operand);
-        }
-        else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
-            analyzeBody(node.body);
-            analyzeRescue(node.rescue, expr.location);
-        }
-        // Literals and other simple nodes need no analysis
-    }, expr.kind);
+        if (method->method != "inspect" && !module.empty() &&
+            isQualifiedCallFoul(module, method->method))
+            foulCall("function", module + "." + method->method);
+    } else if (std::holds_alternative<ast::SpawnExpr>(expr.kind) ||
+               std::holds_alternative<ast::ReceiveExpr>(expr.kind)) {
+        if (!m_inFoulContext)
+            error(expr.location,
+                  std::string("Cannot use '") +
+                      (std::holds_alternative<ast::SpawnExpr>(expr.kind) ? "spawn" : "receive") +
+                      "' in pure context");
+    } else if (std::holds_alternative<ast::BreakExpr>(expr.kind)) {
+        checkLoopControl(expr.location, "break");
+    } else if (std::holds_alternative<ast::NextExpr>(expr.kind)) {
+        checkLoopControl(expr.location, "next");
+    }
+
+    // `break` and `next` bind to the nearest loop, and not across a block.
+    const bool loop = std::holds_alternative<ast::LoopExpr>(expr.kind) ||
+                      std::holds_alternative<ast::WhileExpr>(expr.kind);
+    const bool block = std::holds_alternative<ast::Lambda>(expr.kind);
+    if (loop || block) m_loopScopes.push_back(loop ? LoopScope::Loop : LoopScope::Closure);
+    ast::forEachChild(expr, [&](const ast::ExprPtr& child) { analyzeExpr(*child); });
+    if (loop || block) m_loopScopes.pop_back();
 }
 
 auto Analyzer::collectModuleMemberEffects(const ast::Program& program) -> void {
     m_localModuleFoulMembers.clear();
+    m_topLevelFoul.clear();
 
     std::function<void(const ast::ModuleDef&)> collect =
         [&](const ast::ModuleDef& mod) {
         auto& foulMembers = m_localModuleFoulMembers[mod.name];
-        auto& functions = m_localModuleFunctions[mod.name];
         for (const auto& item : mod.body) {
             if (const auto* fn =
                     std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
-                if (*fn) functions.insert((*fn)->name);
                 if (*fn && (*fn)->isFoul) foulMembers.insert((*fn)->name);
             } else if (const auto* ann =
                     std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item)) {
@@ -763,41 +299,20 @@ auto Analyzer::collectModuleMemberEffects(const ast::Program& program) -> void {
                 if (*visibility)
                     for (const auto& inner : (*visibility)->items)
                         if (const auto* fn = std::get_if<
-                                std::unique_ptr<ast::FunctionDef>>(&inner)) {
-                            if (*fn && (*fn)->isFoul)
-                                foulMembers.insert((*fn)->name);
-                            // Only a public member is importable.
-                            if (*fn && (*visibility)->isPublic)
-                                functions.insert((*fn)->name);
-                        }
+                                std::unique_ptr<ast::FunctionDef>>(&inner);
+                            fn && *fn && (*fn)->isFoul)
+                            foulMembers.insert((*fn)->name);
             }
         }
     };
 
-    for (const auto& item : program.items)
-        if (const auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+    for (const auto& item : program.items) {
+        if (const auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
             if (*mod) collect(**mod);
-}
-
-auto Analyzer::moduleImportingName(const std::string& name) const -> std::string {
-    for (auto it = m_usings.rbegin(); it != m_usings.rend(); ++it) {
-        const auto& using_ = **it;
-        // `using M as A` makes `A.name` available, not a bare `name`.
-        if (using_.alias) continue;
-        if (!resolve_core::usingSelectsName(name, using_.onlyNames,
-                                            using_.exceptNames))
-            continue;
-        std::string module = using_.module.dotted();
-        if (auto local = m_localModuleFunctions.find(module);
-            local != m_localModuleFunctions.end() && local->second.count(name))
-            return module;
-        if (m_importedInterfaces)
-            if (auto imported = m_importedInterfaces->modules.find(module);
-                imported != m_importedInterfaces->modules.end() &&
-                imported->second.exports.count(name))
-                return module;
+        } else if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+            if (*fn && (*fn)->isFoul) m_topLevelFoul.insert((*fn)->name);
+        }
     }
-    return {};
 }
 
 auto Analyzer::isQualifiedCallFoul(const std::string& module,
@@ -880,12 +395,10 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
         [&](const ast::Expr& e, std::set<std::string>& calls, bool& hasFoulOp) {
         if (const auto* call = std::get_if<ast::FunctionCall>(&e.kind)) {
             if (allFns.count(call->name)) calls.insert(call->name);
-            if (auto* sym = m_symbols.lookup(call->name); sym && sym->isFoul)
-                hasFoulOp = true;
+            if (callsFoul(e)) hasFoulOp = true;
         } else if (const auto* tagged = std::get_if<ast::TaggedLiteral>(&e.kind)) {
             if (allFns.count(tagged->tag)) calls.insert(tagged->tag);
-            if (auto* sym = m_symbols.lookup(tagged->tag); sym && sym->isFoul)
-                hasFoulOp = true;
+            if (callsFoul(e)) hasFoulOp = true;
         } else if (const auto* method = std::get_if<ast::MethodCall>(&e.kind)) {
             if (allFns.count(method->method)) calls.insert(method->method);
             if (method->receiver) {
@@ -1022,12 +535,7 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
         std::visit([&](const auto& n) {
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, ast::FunctionCall>) {
-                auto* sym = m_symbols.lookup(n.name);
-                if (sym && sym->isFoul) {
-                    error(e.location,
-                        "Cannot call foul function '" + n.name + "' in a guard");
-                } else if (const auto module = sym ? std::string{} : moduleImportingName(n.name);
-                           !module.empty() && isQualifiedCallFoul(module, n.name)) {
+                if (callsFoul(e)) {
                     error(e.location,
                         "Cannot call foul function '" + n.name + "' in a guard");
                 } else if (m_transitivelyFoul.count(n.name)) {
@@ -1040,8 +548,7 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
             } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
                 for (const auto& value : n.values) if (value) checkGuard(*value);
             } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
-                auto* sym = m_symbols.lookup(n.tag);
-                if (sym && sym->isFoul) {
+                if (callsFoul(e)) {
                     error(e.location,
                         "Cannot call foul tag '" + n.tag + "' in a guard");
                 } else if (m_transitivelyFoul.count(n.tag)) {
@@ -1063,8 +570,7 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                     }
                     checkGuard(*n.receiver);
                 }
-                auto* sym = m_symbols.lookup(n.method);
-                if (sym && sym->isFoul) {
+                if (m_topLevelFoul.contains(n.method)) {
                     error(e.location,
                         "Cannot call foul function '" + n.method + "' in a guard");
                 } else if (m_transitivelyFoul.count(n.method)) {
@@ -1096,9 +602,9 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
     // through a trait has no resolved targets at all (kexhq/kex#172).
 
     // A foul method reached through a VALUE receiver (`b.bang()`, `c.now()`)
-    // is invisible to the phase-1 purity check, which runs before type
-    // checking and so can only resolve module-qualified receivers by name.
-    // The resolved call target knows the answer, so record the first such
+    // is invisible to the purity walk, which checks a method call by its
+    // module-qualified receiver only. The resolved call target knows the
+    // answer, so record the first such
     // call per function and report it below (kexhq/kex#172).
     const ast::Expr* foulValueCall = nullptr;   // location lives on the Expr
     std::string foulValueMethod;
@@ -1111,7 +617,7 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
             auto it = resolved.find(&n);
             if (it != resolved.end() && it->second.isFoul) {
                 // `IO.inspect` is the documented purity-exempt hatch.
-                // A call phase 1 already reported must not be reported
+                // A call the purity walk already reported must not be reported
                 // twice — that is exactly the qualified-and-known-foul
                 // case, which `receiverModuleName` alone cannot identify
                 // (it returns the name of any lowercase identifier, so a
@@ -1230,8 +736,7 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
         std::visit([&](const auto& n) {
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, ast::FunctionCall>) {
-                auto* sym = m_symbols.lookup(n.name);
-                bool symbolFoul = sym && sym->isFoul;
+                bool symbolFoul = callsFoul(e);
                 bool newlyFoul = m_transitivelyFoul.count(n.name) && !priorFoul.count(n.name);
                 if (newlyFoul && !symbolFoul) {
                     error(e.location,
@@ -1243,8 +748,7 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
             } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
                 for (const auto& value : n.values) if (value) checkGuard(*value);
             } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
-                auto* sym = m_symbols.lookup(n.tag);
-                bool symbolFoul = sym && sym->isFoul;
+                bool symbolFoul = callsFoul(e);
                 bool newlyFoul = m_transitivelyFoul.count(n.tag) && !priorFoul.count(n.tag);
                 if (newlyFoul && !symbolFoul) {
                     error(e.location,
@@ -1259,8 +763,7 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
                         "Cannot call foul function '" + n.method +
                         "' in a guard");
                 }
-                auto* sym = m_symbols.lookup(n.method);
-                bool symbolFoul = sym && sym->isFoul;
+                bool symbolFoul = m_topLevelFoul.contains(n.method);
                 bool newlyFoulMethod = m_transitivelyFoul.count(n.method) && !priorFoul.count(n.method);
                 if (newlyFoulMethod && !symbolFoul) {
                     error(e.location,

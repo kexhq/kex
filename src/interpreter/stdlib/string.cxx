@@ -77,25 +77,6 @@ auto Evaluator::registerStringBuiltins() -> void {
         defineIntrinsic("Char." + intrinsicName, std::move(fn));
     };
 
-    // String.at(i) -> Char? (a Char, not a 1-char String) — Char and String
-    // are interchangeable for comparisons/concatenation (see valuesEqual/+),
-    // so code comparing the unwrapped result against a string literal keeps
-    // working either way.
-    NativeFunc at = [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::none();
-        auto* idx = std::get_if<IntValue>(&args[1]->data);
-        if (!idx || idx->value < 0) return Value::none();
-        auto i = static_cast<size_t>(idx->value);
-        if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
-            return i < list->elements.size() ? Value::just(list->elements[i]) : Value::none();
-        }
-        auto* str = std::get_if<StringValue>(&args[0]->data);
-        if (!str) return Value::none();
-        const auto& cps = cachedCodepoints(*str);
-        return i < cps.size() ? Value::just(Value::character(cps[i])) : Value::none();
-    };
-    defineIntrinsic("List.at", std::move(at));
-
     // Kex.Intrinsic.String.chars — the string's characters as a [Char].
     // Backs the prelude's String `chars` (src/stdlib/string.kex).
     defineIntrinsic("String.chars", [](std::vector<ValuePtr> args) -> ValuePtr {
@@ -107,6 +88,45 @@ auto Evaluator::registerStringBuiltins() -> void {
         elems.reserve(cps.size());
         for (auto cp : cps) elems.push_back(Value::character(cp));
         return Value::list(std::move(elems));
+    });
+
+    // Kex.Intrinsic.String.fromChars — the String of a [Char], the way back
+    // from `chars` for the String functions that work on the characters.
+    defineIntrinsic("String.fromChars", [](std::vector<ValuePtr> args) -> ValuePtr {
+        std::string text;
+        if (auto* list = args.empty() ? nullptr : std::get_if<ListValue>(&args[0]->data))
+            for (const auto& element : list->elements)
+                if (auto* c = std::get_if<CharValue>(&element->data)) text += utf8::encode(c->value);
+        return Value::string(std::move(text));
+    });
+
+    // The String operations that need no list of its characters, over the
+    // codepoints the String caches: what a scanner calls in a loop.
+    const auto text = [](const std::vector<ValuePtr>& args) -> const StringValue& {
+        static const StringValue empty{};
+        auto* str = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
+        return str ? *str : empty;
+    };
+    defineIntrinsic("String.count", [text](std::vector<ValuePtr> args) -> ValuePtr {
+        return Value::integer(static_cast<int64_t>(cachedCodepoints(text(args)).size()));
+    });
+    defineIntrinsic("String.take", [text](std::vector<ValuePtr> args) -> ValuePtr {
+        const auto& cps = cachedCodepoints(text(args));
+        const auto n = args.size() < 2 ? 0 : clampedCount(args[1], cps.size());
+        return Value::string(utf8::encodeAll({cps.begin(), cps.begin() + n}));
+    });
+    defineIntrinsic("String.drop", [text](std::vector<ValuePtr> args) -> ValuePtr {
+        const auto& cps = cachedCodepoints(text(args));
+        const auto n = args.size() < 2 ? 0 : clampedCount(args[1], cps.size());
+        return Value::string(utf8::encodeAll({cps.begin() + n, cps.end()}));
+    });
+    // The character at a 0-based index, in `Just`, or `None` past either end.
+    defineIntrinsic("String.at", [text](std::vector<ValuePtr> args) -> ValuePtr {
+        const auto& cps = cachedCodepoints(text(args));
+        auto* idx = args.size() < 2 ? nullptr : std::get_if<IntValue>(&args[1]->data);
+        if (!idx || idx->value < 0 || static_cast<size_t>(idx->value) >= cps.size())
+            return Value::none();
+        return Value::just(Value::character(cps[static_cast<size_t>(idx->value)]));
     });
 
     // c.digit? -> Bool — true for '0'..'9'. UFCS-callable on a Char.
@@ -460,22 +480,6 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::string(utf8::toLower(str->value));
     });
 
-    // Also handles List (reversing elements), since the same `reverse`
-    // name is used UFCS-style on both strings and lists.
-    defineIntrinsic("List.reverse", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
-        if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-            // By codepoint — reversing bytes would shred multi-byte characters.
-            auto cps = utf8::decode(str->value);
-            std::reverse(cps.begin(), cps.end());
-            return Value::string(utf8::encodeAll(cps));
-        }
-        if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
-            std::vector<ValuePtr> result(list->elements.rbegin(), list->elements.rend());
-            return Value::list(std::move(result));
-        }
-        return args[0];
-    });
 }
 
 } // namespace kex::interpreter

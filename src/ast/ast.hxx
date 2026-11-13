@@ -148,6 +148,9 @@ struct ThisPattern {
 struct ConstructorPattern {
     std::string name;
     std::vector<PatternPtr> args;
+    // The module path written before it (`Shades` of `Shades.Light`), "" when
+    // it is named bare. Only the checker reads it: the name is the tag.
+    std::string module = {};
 };
 
 struct FieldPattern {
@@ -247,6 +250,9 @@ struct MethodCall {
     // The literal is kept (without its values, which are the call's second
     // argument) so the compile-time validator can still find and check it.
     std::shared_ptr<const TaggedLiteral> tagged;
+    // Where the method's name is written (the call's own location is past
+    // it), for tooling that answers for the name.
+    SourceLocation methodLocation = {};
 };
 
 struct FunctionCall {

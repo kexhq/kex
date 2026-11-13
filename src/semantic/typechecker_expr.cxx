@@ -326,6 +326,28 @@ static auto isBareCapture(const ast::Expr* e) -> bool {
     return ce && ce->argGroups.empty() && !ce->isOperator && ce->module.empty();
 }
 
+// While it lives, the `.try`s written directly in one block's body (not in a
+// block nested in it, not under a `trying`) are collected into `tries`.
+struct BlockTries {
+    using Tries = std::vector<std::pair<SourceLocation, TypePtr>>;
+    BlockTries(Tries*& slot, int& depth, int blockDepth)
+        : m_slot(slot), m_depth(depth), m_savedSlot(std::exchange(slot, &tries)),
+          m_savedDepth(std::exchange(depth, blockDepth)) {}
+    ~BlockTries() {
+        m_slot = m_savedSlot;
+        m_depth = m_savedDepth;
+    }
+    BlockTries(const BlockTries&) = delete;
+    auto operator=(const BlockTries&) -> BlockTries& = delete;
+    Tries tries;
+
+private:
+    Tries*& m_slot;
+    int& m_depth;
+    Tries* m_savedSlot;
+    int m_savedDepth;
+};
+
 auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
                              const std::vector<TypePtr>& hintParams) -> TypePtr {
     if (auto* lam = std::get_if<ast::Lambda>(&blockExpr.kind)) {
@@ -387,6 +409,7 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
             }
         }
         m_blockDepth++;
+        BlockTries blockTries(m_clauseTries, m_clauseTriesDepth, m_blockDepth);
         TypePtr bodyType;
         if (lam->collection) {
             TypePtr element = freshTypeVar();
@@ -442,6 +465,7 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
                 typeMismatch(blockExpr.location, declared, resultType);
             resultType = declared;
         }
+        resultType = blockFailingResult(*lam, blockTries.tries, resultType);
         popScope();
         // Outwardly a spreading block still takes the whole element first,
         // the shape argMatchesParam recognises as destructuring.
@@ -539,20 +563,22 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         }
         else if constexpr (std::is_same_v<T, ast::Identifier>) {
             if (reportOtherFilesTopLevel("name", node.name, expr.location)) return Type::unknown();
-            if (auto constant = constantDeclaration(node.name); !constant.empty())
-                m_referencedConstants[&expr] = std::move(constant);
+            // A local binding is never a zero-parameter function, even an
+            // Unknown-typed one: `let root = match JSON.parse(...)` must not
+            // take the type of some module's `let root -> String`, nor
+            // `let manifest = ...` be the module's foul `manifest`.
+            const bool boundLocally = std::any_of(
+                m_scopeStack.begin(), m_scopeStack.end(),
+                [&](const auto& scope) { return scope.get(node.name) != nullptr; });
+            if (!boundLocally)
+                if (auto constant = constantDeclaration(node.name); !constant.empty())
+                    m_referencedConstants[&expr] = std::move(constant);
             if (node.name == "from" && m_inCastSlot) {
                 error(expr.location,
                       "`from` is not available in a cast — no caller is waiting for a reply");
                 return Type::unknown();
             }
             auto type = lookupVar(node.name);
-            // A local binding is never a zero-parameter function, even an
-            // Unknown-typed one: `let root = match JSON.parse(...)` must not
-            // take the type of some module's `let root -> String`.
-            const bool boundLocally = std::any_of(
-                m_scopeStack.begin(), m_scopeStack.end(),
-                [&](const auto& scope) { return scope.get(node.name) != nullptr; });
             if (!boundLocally &&
                 (!type || std::holds_alternative<UnknownType>(resolve(type)->kind))) {
                 // `let ids -> [String] = [...]` is a zero-parameter function,
@@ -589,7 +615,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 return Type::unknown();
             if (auto constant = constantDeclaration(node.name); !constant.empty())
                 m_referencedConstants[&expr] = std::move(constant);
-            if (auto constructed = nullaryConstructorType(node.name)) return constructed;
+            if (auto constructed = nullaryConstructorType(node.name)) {
+                // A module's constructor: which module's, so a backend binds
+                // it by that rather than by its own reading of the `using`s.
+                if (const auto* adt = std::get_if<NamedType>(&constructed->kind);
+                    adt && kex::mangle::hasScope(adt->name))
+                    m_decidedCalls[&expr] = {CallKind::Constructor, adt->name};
+                return constructed;
+            }
             auto type = lookupVar(node.name);
             // A built-in type's name reaches lookupVar through the globals that
             // annotations resolve against: as a value it is still a type name.
@@ -666,12 +699,12 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::TryExpr>) {
             if (m_tryingBlockDepth >= 0 && m_blockDepth > m_tryingBlockDepth)
                 m_tryBelowBlock++;
+            auto operand = resolve(
+                node.operand ? inferExpr(*node.operand) : Type::unknown());
             // In a function clause's own body, where no `trying` takes it.
             if (m_clauseTries && m_blockDepth == m_clauseTriesDepth &&
                 m_tryingBlockDepth != m_blockDepth)
-                m_clauseTries->push_back(expr.location);
-            auto operand = resolve(
-                node.operand ? inferExpr(*node.operand) : Type::unknown());
+                m_clauseTries->push_back({expr.location, operand});
             if (auto* optional = std::get_if<OptionalType>(&operand->kind))
                 return optional->inner;
             if (auto* named = std::get_if<NamedType>(&operand->kind);
@@ -769,7 +802,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (!declared && m_inSyntheticMain)
                     declared = declaredConstantType(varPat->name, valueType,
                                                     expr.location);
-                defineVar(varPat->name, declared ? declared : valueType);
+                declareVar(varPat->name, declared ? declared : valueType,
+                           /*isVar=*/false, expr.location);
                 // Record `f`'s origin when bound to a bare `~greet` capture
                 // (no partial application, no operator, no module prefix) so
                 // a later named-argument call through `f` can find `greet`'s
@@ -795,7 +829,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             if (auto* varPat = node.pattern
                     ? std::get_if<ast::VarPattern>(&node.pattern->kind)
                     : nullptr) {
-                defineVar(varPat->name, declared ? declared : valueType);
+                declareVar(varPat->name, declared ? declared : valueType,
+                           /*isVar=*/true, expr.location);
                 // Same origin tracking as `let`, so a named-argument call
                 // through `var f = ~greet` finds `greet`'s real parameter
                 // names (kexhq/kex#309).
@@ -808,7 +843,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 else
                     m_curryOrigin.erase(varPat->name);
             } else if (node.pattern) {
+                const auto outer = std::exchange(m_patternBindsVar, true);
                 bindDestructuredPattern(*node.pattern, valueType);
+                m_patternBindsVar = outer;
             }
             return Type::unit();
         }
@@ -818,6 +855,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             if (varType) m_assignmentTargetTypes[&expr] = varType;
             else if (node.name != "new" && !m_topLevelValueNames.contains(node.name))
                 reportUndefined("variable", node.name, expr.location);
+            if (const auto* binding = varType ? bindingOf(node.name) : nullptr;
+                binding && !binding->isVar)
+                error(expr.location, "Cannot assign to immutable binding: " + node.name);
             if (!node.path.empty()) {
                 if (node.path.size() != 1) {
                     error(expr.location,
@@ -860,6 +900,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
             auto leftType = node.left ? inferExpr(*node.left) : Type::unknown();
             auto rightType = node.right ? inferExpr(*node.right) : Type::unknown();
+            if (node.op == TokenType::EqEq || node.op == TokenType::NotEq)
+                checkNeverEqual(resolve(leftType), resolve(rightType), expr.location);
             // The left operand is what a make-block method answers before its
             // body is checked (m_pendingResults). The built-in rules would
             // type `price * 2` as the Integer on the right. So the operator is
@@ -1222,6 +1264,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                              adt ? adt->name : node.name};
                     return result;
                 }
+            // A module's constructor named bare where no `using` brings it
+            // in (`ReadFailed(path)` outside `FS`): written `FS.ReadFailed`.
+            if (!lookupVar(node.name) && !constructorInfo(node.name, {}))
+                if (const auto declaring = moduleOfUnreachableConstructor(node.name);
+                    !declaring.empty()) {
+                    reportUnreachableConstructor(node.name, declaring, expr.location);
+                    return Type::unknown();
+                }
             if (auto method = bareMethodCall(expr, node, argTypes)) return method;
             return checkCall(node.name, argTypes, expr.location,
                              false, nullptr, &expr);
@@ -1235,6 +1285,12 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 expr.location, false, nullptr, &expr);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
+            // `x.push!(v)` rebinds `x`, so `x` has to be a `var`.
+            if (const auto* ident = node.mutating && node.receiver
+                    ? std::get_if<ast::Identifier>(&node.receiver->kind) : nullptr)
+                if (const auto* binding = bindingOf(ident->name); binding && !binding->isVar)
+                    error(expr.location,
+                          "Cannot use '!' on immutable binding: " + ident->name);
             // Local module constructors use the same namespace syntax as
             // module constants. Imported constructors are ordinary typed
             // module exports and continue through checkCall below.
@@ -1604,8 +1660,21 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // A module named like a type (`Map`, beside `type Map<K, V>`)
                 // also answers that type's static functions (`Map.get(m, k)`),
                 // which its interface does not list.
+                // Such a module is still wrong about a name no function has,
+                // anywhere: `Time.monotonic` checked clean and was undefined
+                // on both backends.
+                const auto namedAnywhere = [&](const std::string& name) {
+                    if (m_methodSignatures.contains(name) || m_userSignatures.contains(name))
+                        return true;
+                    for (const auto& [_, other] : m_importedInterfaces->modules)
+                        if (other.exports.contains(name)) return true;
+                    return std::any_of(m_userSignatures.begin(), m_userSignatures.end(),
+                                       [&](const auto& entry) {
+                                           return entry.first.ends_with("." + name);
+                                       });
+                };
                 if (module.sourceModule == *importedPath && !compileTimeForm &&
-                    !moduleNamesType(*importedPath) &&
+                    (!moduleNamesType(*importedPath) || !namedAnywhere(node.method)) &&
                     !module.exports.count(node.method)) {
                     std::vector<std::string> exported;
                     for (const auto& [name, _] : module.exports) exported.push_back(name);
@@ -2241,7 +2310,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return resultType;
         }
         else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
-            return node.value ? inferExpr(*node.value) : Type::unit();
+            auto value = node.value ? inferExpr(*node.value) : Type::unit();
+            if (m_clauseReturns && m_blockDepth == m_clauseTriesDepth)
+                m_clauseReturns->push_back({&expr, value});
+            return value;
         }
         else if constexpr (std::is_same_v<T, ast::Lambda>) {
             // Lambda used as a value (not a trailing block — that path goes
@@ -2249,10 +2321,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // FuncType so call-site checking can validate the argument types.
             if (node.params.empty()) {
                 m_blockDepth++;
+                BlockTries blockTries(m_clauseTries, m_clauseTriesDepth, m_blockDepth);
+                pushScope();
                 auto bodyType = inferBody(node.body);
                 if (node.rescue) checkRescue(*node.rescue);
+                popScope();
                 m_blockDepth--;
-                return Type::func({}, resolve(bodyType));
+                return Type::func({}, blockFailingResult(node, blockTries.tries, resolve(bodyType)));
             }
             pushScope();
             std::vector<TypePtr> paramTypes;
@@ -2273,6 +2348,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
             }
             m_blockDepth++;
+            BlockTries blockTries(m_clauseTries, m_clauseTriesDepth, m_blockDepth);
             auto bodyType = inferBody(node.body);
             if (node.rescue) checkRescue(*node.rescue);
             m_blockDepth--;
@@ -2286,6 +2362,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     typeMismatch(expr.location, declared, resultType);
                 resultType = declared;
             }
+            resultType = blockFailingResult(node, blockTries.tries, resultType);
             popScope();
             // Resolve param types after body inference — body may have constrained them.
             for (auto& pt : paramTypes) pt = resolve(pt);
@@ -2300,14 +2377,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return Type::named("Process", {freshTypeVar()});
         }
         else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
-            if (node.counter) {
-                pushScope();
-                if (*node.counter != "_") defineVar(*node.counter, Type::integer());
-                inferBody(node.body);
-                popScope();
-            } else {
-                inferBody(node.body);
-            }
+            pushScope();
+            if (node.counter && *node.counter != "_")
+                defineVar(*node.counter, Type::integer());
+            inferBody(node.body);
+            popScope();
             return Type::voidType();  // infinite loop never returns
         }
         else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
@@ -3997,6 +4071,19 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     const auto fits = [&](std::size_t i, const TypePtr& param) {
         if (auto selected = selectedType(i, param))
             return argMatchesParam(selected, param);
+        // An Optional receiver is not the value it may hold: `xs[1].ok?` on a
+        // `Result?` reached Result's `ok?`, which the walker then could not
+        // run. Its functions are the Optional's own, or ones open to any type.
+        if (isMethodCall && i == 0 && i < argTypes.size()) {
+            const auto receiver = resolve(argTypes[0]);
+            const auto wanted = resolve(param);
+            const auto* named = std::get_if<NamedType>(&wanted->kind);
+            const bool otherHead =
+                (named && !isTrait(named->name) && !isThisPlaceholder(wanted)) ||
+                std::holds_alternative<PrimitiveType>(wanted->kind) ||
+                std::holds_alternative<ListType>(wanted->kind);
+            if (std::holds_alternative<OptionalType>(receiver->kind) && otherHead) return false;
+        }
         return argMatchesParam(argTypes[i], param) ||
                (i < argExprs.size() && argExprs[i] &&
                 literalCoercesTo(*argExprs[i], param));
@@ -4480,7 +4567,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 !declaredShadowsImport &&
                 functions != m_importedInterfaces->receiverFunctions.end())
                 for (const auto& function : functions->second)
-                    if (importedFunctionVisible(function))
+                    if (importedFunctionVisible(function, /*throughReceiver=*/false))
                         importedFunctions.push_back(&function);
         }
     }
@@ -5425,7 +5512,9 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         };
         auto dominates = [&](const Signature* a, const Signature* b) {
             bool aWins = false;
-            for (size_t i = 0; i < a->params.size(); i++) {
+            // The positions passed: a defaulted parameter leaves one side longer.
+            for (size_t i = 0; i < argTypes.size() && i < a->params.size() &&
+                               i < b->params.size(); i++) {
                 int sa = paramSpec(a->params[i]);
                 int sb = paramSpec(b->params[i]);
                 if (sb > sa) return false;
@@ -6310,7 +6399,8 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
 
     const Signature& first = *firstPtr;
     std::string detail = "different arguments";
-    for (size_t i = 0; i < first.params.size(); i++) {
+    // Only the arguments passed: a defaulted parameter may have none.
+    for (size_t i = 0; i < first.params.size() && i < argTypes.size(); i++) {
         if (!fits(i, first.params[i])) {
             auto* constrained = std::get_if<ConstrainedType>(&first.params[i]->kind);
             std::string expected = constrained ? constrained->traitName : typeToString(first.params[i]);
@@ -7052,6 +7142,33 @@ auto TypeChecker::typeIdentity(const std::string& scope, const std::string& name
         declaring != m_typeDeclaringModules.end())
         return declaring->second + "." + name;
     return name;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::checkNeverEqual(const TypePtr& lhs, const TypePtr& rhs, SourceLocation loc)
+    -> void {
+    const auto wrapper = [](const TypePtr& t) -> std::string {
+        if (std::holds_alternative<OptionalType>(t->kind)) return "Optional";
+        const auto* named = std::get_if<NamedType>(&t->kind);
+        return named && (named->name == "Optional" || named->name == "Result") ? named->name
+                                                                               : std::string{};
+    };
+    // A value whose type is settled and is no Optional or Result: not open,
+    // not a trait (or a union) an Optional could be one of.
+    const auto settled = [&](const TypePtr& t) {
+        const auto* named = std::get_if<NamedType>(&t->kind);
+        return !containsOpenType(t) && wrapper(t).empty() && !(named && isTrait(named->name)) &&
+               !std::holds_alternative<UnionType>(t->kind);
+    };
+    const auto left = wrapper(lhs), right = wrapper(rhs);
+    if (left.empty() == right.empty() || !settled(left.empty() ? lhs : rhs)) return;
+    const auto& wrapped = left.empty() ? right : left;
+    error(loc, "`" + typeToString(lhs) + "` and `" + typeToString(rhs) +
+                   "` are never equal: compare with `" + (wrapped == "Optional" ? "Just" : "Ok") +
+                   "(value)`, or unwrap first (`.or(default)`, a `match`)");
 }
 
 } // namespace kex::semantic

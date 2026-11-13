@@ -110,6 +110,34 @@ rescue |reason|
 end
 ```
 
+A function that declares no result takes the failure into the result it
+infers. `.try` on an `Optional` makes the result `T?`; `.try` on a
+`Result<T, E>` makes it `T or! E`. The success comes back wrapped as `Just(v)`
+or `Ok(v)`:
+
+```kex
+let initial(names: [String]) = names.first.try.upperCase   # String?
+```
+
+When the body already produces an `Optional` or a `Result`, that is the
+result as it is. The checker refuses the inference in two cases: when one
+function mixes `.try` on an `Optional` with `.try` on a `Result`, and when the
+function also leaves early with `return`. Declare the result there instead.
+
+A block is a function too, so the same holds for it. A block whose `.try`
+can fail gives `T?` or `T or! E`, and `map` hands back each element's
+outcome:
+
+```kex
+let parsed = ["1", "x"].map { |text| Integer.parse(text).try }
+# [Ok(1), Error(ParseError { ... })]
+```
+
+Where the block is passed as a function that must give a plain value, the
+call is refused like any other block of the wrong type. A block that mixes an
+Optional's `.try` with a Result's keeps its own result type, because most
+such blocks (`it`, `Task.start`) are not read.
+
 Where a value cannot be missing, bind it by its pattern instead; a mismatch is
 a fault, not a result:
 

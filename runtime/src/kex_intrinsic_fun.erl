@@ -210,7 +210,8 @@ is_variant_term(Item) ->
     end.
 
 %% Normalize an Enumerable receiver to the item representation used by Kex
-%% callbacks. Maps yield {Key, Value} pairs; lists and strings retain the same
-%% coercion used by the HOF helpers above.
+%% callbacks. Maps yield {Key, Value} pairs, a String its Chars, a Range its
+%% items.
 items(M) when is_map(M) -> maps:to_list(M);
+items(S) when is_binary(S) -> kex_intrinsic_string:chars(S);
 items(L) -> kex_intrinsic_list:as_list(L).

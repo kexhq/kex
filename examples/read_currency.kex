@@ -8,7 +8,7 @@ record Currency do
 end
 
 make Currency do
-  let codeName = @code.to(String).try.upperCase
+  let codeName = @code.to(String).or("").upperCase
 end
 
 let ACCEPTED_CURRENCY = [
@@ -54,7 +54,7 @@ make Money do
     let currency = currencies.find { |c| c.code == @currency }
     match currency do
       Just(c) => return this.displayWithCurrency(c)
-      None => return "${@value} ${@currency.to(String).try.upperCase}"
+      None => return "${@value} ${@currency.to(String).or("").upperCase}"
     end
   end
 
@@ -70,9 +70,7 @@ end
 main(args) do
   ["15 EUR", "1 USD", "1421 HUF", "nothing", "1500 EUR", "12", "8 GBP", ...args].each do |value|
     let money = Money.fromValue(value)
-    let currency = ACCEPTED_CURRENCY.find { |c| c.code == money.try.currency }
     # IO.inspect(money)
-    # IO.inspect(currency)
     match money do
       Ok(m) => IO.printLine(m.display(ACCEPTED_CURRENCY))
       Error(e) => IO.printLine("error: ${e}")

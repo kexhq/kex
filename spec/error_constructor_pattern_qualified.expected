@@ -1,0 +1,1 @@
+spec/error_constructor_pattern_qualified.kex:15:5: error: `Paints` has no constructor `Dark`

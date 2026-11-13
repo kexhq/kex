@@ -58,6 +58,7 @@ auto TypeChecker::check(const ast::Program& program, std::vector<Diagnostic>& di
     m_namespaceRoots.clear();
     m_patternBindings.clear();
     m_stringPatterns.clear();
+    m_successWrappers.clear();
     m_functionSignatures.clear();
     m_resolvedCalls.clear();
     m_selectedCallSignatures.clear();
@@ -3214,6 +3215,28 @@ auto TypeChecker::checkPatternConstructorOwner(const ast::Pattern& pattern,
     std::string ctorName;
     if (const auto* ctor = std::get_if<ast::ConstructorPattern>(&pattern.kind)) {
         ctorName = ctor->name;
+        // `Shades.Light`: the module written must be the one declaring it.
+        if (!ctor->module.empty()) {
+            const auto module = resolveModulePath(ctor->module, ctor->name);
+            const auto owners = m_constructorOwners.find(ctor->name);
+            const bool declared =
+                m_constructorResult.contains(kex::mangle::qualify(module, ctor->name)) ||
+                (owners != m_constructorOwners.end() &&
+                 std::any_of(owners->second.begin(), owners->second.end(),
+                             [&](const ConstructorOwner& owner) {
+                                 return owner.module == module ||
+                                        owner.adt.starts_with(module + ".");
+                             }));
+            if (!declared) {
+                error(pattern.location,
+                      "`" + ctor->module + "` has no constructor `" + ctor->name + "`");
+                return;
+            }
+        } else if (const auto declaring = moduleOfUnreachableConstructor(ctor->name);
+                   !declaring.empty()) {
+            reportUnreachableConstructor(ctor->name, declaring, pattern.location);
+            return;
+        }
     } else if (const auto* lit = std::get_if<ast::LiteralPattern>(&pattern.kind);
                lit && lit->literal.type == TokenType::None) {
         // `None` lexes as its own token, so it arrives as a LiteralPattern
@@ -3378,7 +3401,7 @@ auto TypeChecker::bindPatternVars(
         if constexpr (std::is_same_v<T, ast::VarPattern>) {
             if (node.name != "_") {
                 auto bound = expected ? expected : freshTypeVar();
-                defineVar(node.name, bound);
+                declareVar(node.name, bound, m_patternBindsVar, pat.location);
                 // Kept so tooling can answer for the binding itself. Types are
                 // resolved once at the end of check(), because a fresh
                 // variable here may only learn what it is from a later use.
@@ -3925,7 +3948,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             auto receiver = resolve(m_currentMakeType);
             if (auto* named = std::get_if<NamedType>(&receiver->kind);
                 named && m_recordFields.count(resolveRecordName(named->name)))
-                defineVar("new", m_currentMakeType);
+                defineVar("new", m_currentMakeType, {.isVar = true, .implicit = true});
         }
         const auto slotResult = resolve(returnType);
         const auto* slotReply = def.isSlot
@@ -3933,7 +3956,8 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         const bool callSlot = slotReply && slotReply->name == "Reply" &&
                               slotReply->typeArgs.size() == 1;
         if (callSlot)
-            defineVar("from", Type::named("From", {slotReply->typeArgs.front()}));
+            defineVar("from", Type::named("From", {slotReply->typeArgs.front()}),
+                      {.isVar = false, .implicit = true});
         const bool previousCastSlot = m_inCastSlot;
         m_inCastSlot = def.isSlot && !callSlot;
         auto genericVars = m_currentMakeTargetVars;
@@ -4017,11 +4041,14 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         }
         // The `.try`s of this clause's own body (not a block's, not a
         // `trying`'s), for the check against its declared result below.
-        std::vector<SourceLocation> clauseTries;
+        std::vector<std::pair<SourceLocation, TypePtr>> clauseTries;
+        std::vector<std::pair<const ast::Expr*, TypePtr>> clauseReturns;
         auto* const outerTries = std::exchange(m_clauseTries, &clauseTries);
+        auto* const outerReturns = std::exchange(m_clauseReturns, &clauseReturns);
         const auto outerTriesDepth = std::exchange(m_clauseTriesDepth, m_blockDepth);
         auto bodyType = inferBody(clause.body);
         m_clauseTries = outerTries;
+        m_clauseReturns = outerReturns;
         m_clauseTriesDepth = outerTriesDepth;
         if (clause.rescue) checkRescue(*clause.rescue);
         m_inCastSlot = previousCastSlot;
@@ -4039,19 +4066,23 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             : clause.returnAnnotation
                 ? resolveTypeExpr(**clause.returnAnnotation, genericVars)
                 : inlineReturnType;
-        // A failed `.try` leaves the function with the failure as its
-        // result. A function that declares a result which is no Result and
-        // no Optional has nowhere to put it: its caller would get an `Error`
-        // where a `User` was promised. Refused, unless the clause rescues.
-        if (effectiveReturnType && !clause.rescue && !clauseTries.empty()) {
-            const auto promised = resolve(effectiveReturnType);
-            if (!holdsFailure(promised))
-                for (const auto& at : clauseTries)
-                    error(at, "`.try` can fail, and `" + def.name + "` returns " +
-                                  typeToString(promised) +
-                                  ", which cannot hold the failure: return a Result or an "
-                                  "Optional, or handle it with `trying` or a `rescue`");
-        }
+        // Unless the clause rescues what its `.try`s fail with.
+        if (effectiveReturnType && !clause.rescue)
+            refuseUnheldTries("`" + def.name + "`", effectiveReturnType, clauseTries);
+        // A `return` leaves with its value as the result, so the value must be
+        // what the clause declares, as the body's last value must (below).
+        if (effectiveReturnType && !def.isSlot && !containsOpenType(effectiveReturnType))
+            for (const auto& [returned, type] : clauseReturns) {
+                const auto* value = std::get<ast::ReturnExpr>(returned->kind).value.get();
+                const auto actual = resolve(type);
+                if (returned != clause.body.back().get() && !containsOpenType(actual) &&
+                    !argMatchesParam(actual, effectiveReturnType) &&
+                    !(value && literalCoercesTo(*value, effectiveReturnType)))
+                    error(returned->location,
+                          "`" + def.name + "` declared to return " +
+                              typeToString(effectiveReturnType) + " but returns " +
+                              typeToString(actual) + " here");
+            }
         const auto servingTransitionMatches = [&]() {
             if (!def.isSlot || !effectiveReturnType || clause.body.empty())
                 return false;
@@ -4192,6 +4223,8 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         };
         auto resultType = (effectiveReturnType && concrete(effectiveReturnType))
                           ? effectiveReturnType : resolve(bodyType);
+        if (!effectiveReturnType && !clause.rescue && !clauseTries.empty() && !clause.body.empty())
+            resultType = inferredFailingResult("`" + def.name + "`", clause.body, clauseTries, resultType, true);
         // Trailing parameters with a default are optional at the call site.
         std::size_t required = clause.params.size();
         while (required > 0 && clause.params[required - 1].defaultValue) required--;
@@ -4758,7 +4791,7 @@ auto TypeChecker::usingImportedMethods(const std::string& name, bool asMethod) c
 }
 
 auto TypeChecker::importedFunctionVisible(
-    const ImportedFunction& function) const -> bool {
+    const ImportedFunction& function, bool throughReceiver) const -> bool {
     if (function.sourceModule.empty() || function.visibleByReceiver) return true;
     if (m_importedInterfaces) {
         if (auto module = m_importedInterfaces->modules.find(function.sourceModule);
@@ -4783,7 +4816,7 @@ auto TypeChecker::importedFunctionVisible(
                 std::get_if<NamedType>(&function.signature.params.front()->kind)) {
             // A qualified receiver carries access to its own companion's
             // methods, even when obtained without a using declaration.
-            if (named->name == function.sourceModule) return true;
+            if (throughReceiver && named->name == function.sourceModule) return true;
             const auto dot = named->name.rfind('.');
             const auto bare = dot == std::string::npos
                 ? named->name : named->name.substr(dot + 1);
@@ -4795,6 +4828,21 @@ auto TypeChecker::importedFunctionVisible(
 
 auto TypeChecker::moduleMemberImported(const std::string& module, const std::string& member,
                                        bool bare) const -> bool {
+    // A constructor comes in with its type: `using M, only: [Claim]` brings
+    // `Claim`'s constructors in too, and `except: [Claim]` leaves them out.
+    std::string owningType;
+    if (const auto constructors = m_moduleConstructors.find(module);
+        constructors != m_moduleConstructors.end())
+        if (const auto constructor = constructors->second.find(member);
+            constructor != constructors->second.end()) {
+            const auto& type = constructor->second.typeName;
+            owningType = type.substr(type.rfind('.') + 1);
+        }
+    const auto lists = [&](const std::vector<std::string>& names, const std::string& name) {
+        return std::find(names.begin(), names.end(), name) != names.end() ||
+               (name == member && !owningType.empty() &&
+                std::find(names.begin(), names.end(), owningType) != names.end());
+    };
     auto selected = [&](const ImportSelection& import) {
         if (bare && !resolve_core::usingImportsNames(import.alias, import.onlyNames))
             return false;
@@ -4830,12 +4878,8 @@ auto TypeChecker::moduleMemberImported(const std::string& module, const std::str
             const auto dot = rest.find('.');
             selectedMember = rest.substr(0, dot);
         }
-        if (!import.onlyNames.empty() &&
-            std::find(import.onlyNames.begin(), import.onlyNames.end(),
-                      selectedMember) == import.onlyNames.end())
-            return false;
-        return std::find(import.exceptNames.begin(), import.exceptNames.end(),
-                         selectedMember) == import.exceptNames.end();
+        if (!import.onlyNames.empty() && !lists(import.onlyNames, selectedMember)) return false;
+        return !lists(import.exceptNames, selectedMember);
     };
     if (std::any_of(m_declarationImports.begin(), m_declarationImports.end(),
                     selected))
@@ -4858,12 +4902,26 @@ auto TypeChecker::popScope() -> void {
     }
 }
 
-auto TypeChecker::defineVar(const std::string& name, TypePtr type) -> void {
-    if (!m_scopeStack.empty()) {
-        m_scopeStack.back().set(name, std::move(type));
-    } else {
-        m_globals.set(name, std::move(type));
+auto TypeChecker::defineVar(const std::string& name, TypePtr type,
+                            TypeEnv::Binding binding) -> void {
+    auto& env = m_scopeStack.empty() ? m_globals : m_scopeStack.back();
+    env.set(name, std::move(type), binding);
+}
+
+auto TypeChecker::declareVar(const std::string& name, TypePtr type, bool isVar,
+                             SourceLocation where) -> void {
+    const auto& env = m_scopeStack.empty() ? m_globals : m_scopeStack.back();
+    if (const auto* existing = env.binding(name); existing && !existing->implicit) {
+        const auto first = *existing;
+        error(where, first.isVar
+                         ? "Cannot redeclare '" + name + "': " +
+                               (isVar ? "already declared with 'var'"
+                                      : "was declared with 'var'")
+                         : "Cannot redeclare immutable binding: " + name);
+        defineVar(name, std::move(type), first);
+        return;
     }
+    defineVar(name, std::move(type), {isVar, false});
 }
 
 auto TypeChecker::lookupVar(const std::string& name) const -> TypePtr {
@@ -4871,6 +4929,12 @@ auto TypeChecker::lookupVar(const std::string& name) const -> TypePtr {
         if (auto type = it->get(name)) return type;
     }
     return m_globals.get(name);
+}
+
+auto TypeChecker::bindingOf(const std::string& name) const -> const TypeEnv::Binding* {
+    for (auto it = m_scopeStack.rbegin(); it != m_scopeStack.rend(); ++it)
+        if (const auto* binding = it->binding(name)) return binding;
+    return m_globals.binding(name);
 }
 
 // The declared result of a zero-parameter binding named `name` — what a bare
@@ -5345,6 +5409,25 @@ auto TypeChecker::reportConstructorOutOfScope(const std::string& name, const Sou
     return false;
 }
 
+auto TypeChecker::moduleOfUnreachableConstructor(const std::string& name) const -> std::string {
+    if (m_adtOfConstructor.contains(name)) return {};
+    std::string declaring;
+    for (const auto& [module, constructors] : m_moduleConstructors) {
+        if (!constructors.contains(name)) continue;
+        if (withinModule(module) || moduleMemberImported(module, name, true)) return {};
+        if (declaring.empty() || module < declaring) declaring = module;
+    }
+    return declaring;
+}
+
+auto TypeChecker::reportUnreachableConstructor(const std::string& name,
+                                               const std::string& declaring,
+                                               const SourceLocation& at) -> void {
+    if (!reportConstructorOutOfScope(name, at))
+        error(at, "`" + name + "` is `" + declaring + "." + name +
+                      "` here: name it so, or bring it in with `using " + declaring + "`");
+}
+
 auto TypeChecker::reportAmbiguousImports(const std::vector<ImportSelection>& active,
                                          const std::string& within) -> void {
     if (active.empty() || !m_programModules) return;
@@ -5433,6 +5516,94 @@ auto TypeChecker::reportOtherFilesTopLevel(const std::string& what, const std::s
                      std::to_string(at.column) + ':' + message;
     if (m_reportedOnce.insert(key).second) error(at, message);
     return true;
+}
+
+// A function with no declared result whose own `.try` can fail leaves with
+// the failure: `None` for an Optional's, `Error(e)` for a Result's. Its result
+// says so: `T?` or `T or! E`, its successful value wrapped to match (the
+// backends read `successWrapperOf`). A body that already answers a Result or
+// an Optional is left as it is. Not inferred, and refused instead, where the
+// clause `return`s (each exit would need wrapping) or mixes an Optional's
+// `.try` with a Result's (no one result holds both failures).
+auto TypeChecker::inferredFailingResult(
+    const std::string& who, const std::vector<ast::ExprPtr>& bodyExprs,
+    const std::vector<std::pair<SourceLocation, TypePtr>>& tries, const TypePtr& body,
+    bool isFunction) -> TypePtr {
+    // A body whose type is undetermined (a `match` whose arms all `return`)
+    // says nothing yet; only one known to hold the failure stands as it is.
+    if (!isUndetermined(body) && holdsFailure(body)) return body;
+    TypePtr errorType;
+    bool optional = false;
+    bool result = false;
+    for (const auto& [_, operand] : tries) {
+        const auto failing = resolve(operand);
+        const auto* named = std::get_if<NamedType>(&failing->kind);
+        if (std::holds_alternative<OptionalType>(failing->kind) ||
+            (named && named->name == names::kOptionalType)) {
+            optional = true;
+        } else if (named && named->name == names::kResultType && named->typeArgs.size() == 2) {
+            result = true;
+            if (!errorType) errorType = named->typeArgs[1];
+        } else {
+            return body;
+        }
+    }
+    const auto& first = tries.front().first;
+    const auto returns = isFunction && std::any_of(bodyExprs.begin(), bodyExprs.end(), [](const ast::ExprPtr& e) {
+        return e && ast::anyExpr(*e, [](const ast::Expr& node) {
+            // A block's `return` leaves the function too (kexhq/kex#408).
+            return std::holds_alternative<ast::ReturnExpr>(node.kind);
+        });
+    });
+    const auto refuse = [&](const std::string& why) {
+        const auto shown = isUndetermined(body) ? std::string{"T"} : typeToString(body);
+        error(first, "`.try` can fail, and " + who + " declares no result " + why +
+                         ": declare it, as `" + shown + "?` or `" + shown + " or! E`, or handle the failure with `trying` or a `rescue`");
+        return body;
+    };
+    // No one result holds both failures. A function must say which it
+    // means; a block (an `it`, a `Task.start`, most often unread) keeps
+    // its body's result, as before.
+    if (optional && result)
+        return isFunction ? refuse("and mixes an Optional's `.try` with a Result's") : body;
+    if (returns) return refuse("and `return`s");
+    if (isUndetermined(body)) return body;
+    m_successWrappers[bodyExprs.back().get()] = optional ? "Just" : "Ok";
+    return optional ? Type::optional(body)
+                    : Type::named(names::kResultType, {body, errorType ? errorType : Type::unknown()});
+}
+
+// A failed `.try` leaves its body with the failure as the result. A declared
+// result that is no Result and no Optional has nowhere to put it: a caller
+// would get an `Error` where a `User` was promised.
+auto TypeChecker::refuseUnheldTries(const std::string& who, const TypePtr& declared,
+                                    const std::vector<std::pair<SourceLocation, TypePtr>>& tries)
+    -> void {
+    const auto promised = resolve(declared);
+    if (holdsFailure(promised)) return;
+    for (const auto& [at, _] : tries)
+        error(at, "`.try` can fail, and " + who + " returns " + typeToString(promised) +
+                      ", which cannot hold the failure: return a Result or an Optional, or "
+                      "handle it with `trying` or a `rescue`");
+}
+
+// A block is a function boundary for `.try` as a named function is: its
+// failure is the block's result (`xs.map { |x| find(x).try }` hands `map` an
+// `Error` among the values). So the same rules hold. A declared result must
+// be able to hold the failure, and an undeclared one is inferred to. A
+// block's `return` leaves the function it is written in, not the block, so
+// it needs no wrapping and refuses nothing here.
+auto TypeChecker::blockFailingResult(const ast::Lambda& block,
+                                     const std::vector<std::pair<SourceLocation, TypePtr>>& tries,
+                                     const TypePtr& type) -> TypePtr {
+    if (tries.empty() || block.rescue || block.collection || block.body.empty() ||
+        !block.body.back())
+        return type;
+    if (block.returnAnnotation) {
+        refuseUnheldTries("this block", type, tries);
+        return type;
+    }
+    return inferredFailingResult("this block", block.body, tries, type, false);
 }
 
 auto TypeChecker::bareFunctionReachable(const std::string& name) const -> bool {

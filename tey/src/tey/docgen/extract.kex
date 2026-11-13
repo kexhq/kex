@@ -8,6 +8,7 @@
 # both sides.
 
 module Tey.Docgen.Extract do
+  using Kex.AST, only: [Node, TypeRef, PatternRef]
   using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, SourcePage, Doc, nameOf, qualifiedNameOf]
 
   foul fileEntities(items: [Kex.AST.Node]) -> [Entity] do

@@ -358,8 +358,10 @@ describe "date arithmetic (vs Ruby)" do
     CASES.times do
       date = random_clock_date
       time = random_time
-      instant = CalendarRef.format_date_time(date, time, 0)
-      assert_eq("(with Time.Clock = Mock.Clock { onNow: Just({ DateTime.parse(#{instant.inspect}).try }) } " \
+      # Built from its epoch seconds, which cannot fail: a `.try` here would
+      # make the rule a `DateTime or! TimeError`, not the `DateTime` it gives.
+      seconds = Time.utc(*date, *time).to_i
+      assert_eq("(with Time.Clock = Mock.Clock { onNow: Just({ DateTime.fromEpochSeconds(#{seconds}) }) } " \
                 "do Date.utcToday().iso end)",
                 CalendarRef.format_date(*date))
     end

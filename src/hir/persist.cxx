@@ -14,7 +14,7 @@ using beam::TermPtr;
 
 constexpr int kMagic = 0x4b584852;  // "KXHR"
 // Bump with any change to the shape below.
-constexpr int kVersion = 7;
+constexpr int kVersion = 8;
 
 auto none() -> TermPtr { return Term::atom("none"); }
 
@@ -188,6 +188,13 @@ auto save(const Program& program, const ast::Program& ast,
         targets.push_back(Term::tuple({Term::integer(static_cast<int64_t>(i)),
                                        Term::list(std::move(names))}));
     }
+    // What each inferred failing clause wraps its successful value in, by
+    // its last body expression's position.
+    std::vector<TermPtr> wrappers;
+    for (std::size_t i = 0; i < order.size(); ++i)
+        if (const auto wrapper = program.successWrapperAfter(*order[i]); !wrapper.empty())
+            wrappers.push_back(Term::tuple({Term::integer(static_cast<int64_t>(i)),
+                                            Term::binary(wrapper)}));
     // The list patterns that take a String apart, by their positions.
     const auto patterns = patternsOf(ast, order);
     std::vector<TermPtr> stringPatterns;
@@ -201,6 +208,7 @@ auto save(const Program& program, const ast::Program& ast,
         Term::list(std::move(inherited)),
         Term::list(std::move(stringPatterns)),
         Term::list(std::move(targets)),
+        Term::list(std::move(wrappers)),
     }));
 }
 
@@ -208,7 +216,7 @@ auto load(const ast::Program& ast, const std::vector<const ast::Expr*>& order,
           const std::vector<uint8_t>& bytes) -> std::unique_ptr<Program> {
     try {
         SaxReader sax(bytes.data(), bytes.size());
-        if (sax.beginTuple() != 8 || sax.readAtom() != "hir" ||
+        if (sax.beginTuple() != 9 || sax.readAtom() != "hir" ||
             sax.readInt() != kMagic || sax.readInt() != kVersion ||
             sax.readInt() != static_cast<int64_t>(order.size()))
             return nullptr;
@@ -281,6 +289,14 @@ auto load(const ast::Program& ast, const std::vector<const ast::Expr*>& order,
             const auto count = sax.beginList();
             for (size_t i = 0; i < count; ++i) owners.push_back(sax.readBinary());
             sax.endList();
+        }
+        sax.endList();
+        const auto wrapped = sax.beginList();
+        for (size_t i = 0; i < wrapped; ++i) {
+            sax.beginTuple();
+            const auto index = static_cast<std::size_t>(sax.readInt());
+            if (index >= order.size()) return nullptr;
+            answers->successWrappers.emplace(order[index], sax.readBinary());
         }
         sax.endList();
         return std::make_unique<Program>(ast, targets, std::move(answers));

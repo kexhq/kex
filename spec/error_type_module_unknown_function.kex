@@ -1,0 +1,10 @@
+# kex: check-only
+# A module named like a type (`Time`) also answers that type's own functions,
+# which its interface does not list, so its members went unchecked:
+# `Time.monotonic`, which nothing declares, checked clean and was undefined on
+# both backends. A name no function has anywhere is refused.
+
+main do
+  IO.inspect(Time.now)
+  IO.inspect(Time.monotonic)
+end

@@ -2,6 +2,7 @@
 
 #include "emit_core.hxx"
 #include "passes/guards.hxx"
+#include "passes/specialize.hxx"
 #include "passes/upgrade.hxx"
 #include "passes/verify.hxx"
 #include "../pass/options.hxx"
@@ -14,6 +15,11 @@ auto unitName(const Module& module) -> std::string { return module.name; }
 
 auto printUnit(std::ostream& out, const Module& module) -> void {
     out << emitCore(module).source;
+}
+
+auto SpecializeBlocksPass::run(Module& module, ModuleAnalysisManager&) -> pass::PreservedAnalyses {
+    specializeBlocks(module);
+    return pass::PreservedAnalyses::none();
 }
 
 auto GuardsPass::run(Module& module, ModuleAnalysisManager&) -> pass::PreservedAnalyses {
@@ -39,6 +45,7 @@ auto VerifierPass::run(Module& module, ModuleAnalysisManager&) -> pass::Preserve
 auto modulePassRegistry() -> const pass::PassRegistry<Module>& {
     static const auto registry = [] {
         pass::PassRegistry<Module> passes;
+        passes.registerPass<SpecializeBlocksPass>();
         passes.registerPass<GuardsPass>();
         passes.registerPass<UpgradePointsPass>();
         passes.registerPass<VerifierPass>();

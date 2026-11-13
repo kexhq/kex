@@ -1,0 +1,22 @@
+# kex: check-only
+# A constructor written with a module path must be that module's.
+
+module Shades do
+  type Shade = Light | Dark
+end
+
+module Paints do
+  type Paint = Gloss | Matte
+end
+
+let describe(shade: Shades.Shade) -> String do
+  match shade do
+    Shades.Light => "light"
+    Paints.Dark => "dark"
+    _ => "other"
+  end
+end
+
+main do
+  IO.printLine(describe(Shades.Light))
+end

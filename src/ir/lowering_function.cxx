@@ -334,6 +334,7 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
                 subst[*p.name] = bound;
             }
             ExprPtr body = lowerBody(clause.body);
+            if (!clause.body.empty()) body = wrapSuccess(std::move(body), clause.body.back().get());
             if (fn->isSlot)
                 body = makeLet(
                     "from",

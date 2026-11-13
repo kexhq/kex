@@ -926,3 +926,15 @@ auto defaultEvalAllowList() -> const std::vector<std::string>& {
 }
 
 } // namespace kex::interpreter
+
+namespace kex::interpreter {
+
+auto clampedCount(const ValuePtr& count, size_t size) -> size_t {
+    if (auto* n = std::get_if<IntValue>(&count->data))
+        return n->value <= 0 ? 0 : std::min(static_cast<size_t>(n->value), size);
+    if (auto* big = std::get_if<BigIntValue>(&count->data))
+        return sgn(big->value) <= 0 ? 0 : size;
+    return 0;
+}
+
+} // namespace kex::interpreter

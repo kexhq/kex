@@ -17,7 +17,8 @@ preserved inside each section.
 
 ## Roadmap order (remaining work)
 
-All phases landed. Module system + packaging are next (out of scope).
+The phases below landed, but the refactor is not finished. The open work
+is the ordered list at the top of `docs/pass-restructure-plan.md`.
 
 0. **Phase 0b — `make bench`** (done).
 1. **Phase 1/3a/3b — done.**

@@ -190,10 +190,11 @@ add_library(kex_lib
     src/ir/passes/guards.cxx
     src/ir/passes/verify.cxx
     src/ir/passes/upgrade.cxx
+    src/ir/passes/specialize.cxx
+    src/ir/clone.cxx
     src/lexer/token.cxx
     src/lexer/lexer.cxx
     src/parser/parser.cxx
-    src/semantic/symbol.cxx
     src/semantic/analyzer.cxx
     src/semantic/declaration_validator.cxx
     src/semantic/receiver_conflicts.cxx

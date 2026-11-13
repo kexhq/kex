@@ -11,15 +11,14 @@ sqrt(N) -> math:sqrt(N).
 
 %% add/2 — polymorphic + : string concat, Char+String splicing, list append,
 %% numeric add. A Kex String is a UTF-8 binary; a Char is a tagged tuple
-%% {'Char', Codepoint}; a [Char] list counts as a String too.
+%% {'Char', Codepoint}. A [Char] is a list, not a String: the checker refuses
+%% joining one to a String.
 add({'Char', A}, {'Char', B}) -> <<A/utf8, B/utf8>>;
 add(A, {'Char', B}) when is_binary(A) -> <<A/binary, B/utf8>>;
 add({'Char', A}, B) when is_binary(B) -> <<A/utf8, B/binary>>;
 add(A, B = {'Char', _}) when is_list(A) -> A ++ [B];
 add(A = {'Char', _}, B) when is_list(B) -> [A | B];
 add(A, B) when is_binary(A), is_binary(B) -> <<A/binary, B/binary>>;
-add(A, B) when is_binary(A), is_list(B) -> <<A/binary, (unicode:characters_to_binary(charlist(B)))/binary>>;
-add(A, B) when is_list(A), is_binary(B) -> <<(unicode:characters_to_binary(charlist(A)))/binary, B/binary>>;
 add(A, B) when is_list(A), is_integer(B) -> A ++ [B];
 add(A, B) when is_integer(A), is_list(B) -> [A | B];
 add(A, B) when is_list(A) -> A ++ B;
@@ -134,17 +133,6 @@ eq_elements(A, B, Index) ->
     eq(element(Index, A), element(Index, B)) andalso eq_elements(A, B, Index - 1).
 
 neq(A, B) -> not eq(A, B).
-
-%% The codepoint list of a [Char] (tagged) — errors on anything else.
-charlist(L) ->
-    case charlist_opt(L, []) of
-        {ok, Cs} -> Cs;
-        error -> L
-    end.
-
-charlist_opt([], Acc) -> {ok, lists:reverse(Acc)};
-charlist_opt([{'Char', C} | T], Acc) when is_integer(C) -> charlist_opt(T, [C | Acc]);
-charlist_opt(_, _) -> error.
 
 %% divide/2 — polymorphic / : integer division when both integers, float
 %% otherwise. Division-by-zero is a runtime error (caught in the emitter).

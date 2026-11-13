@@ -14,36 +14,13 @@
          minBy/2, maxBy/2,
          get/2, get/3]).
 
-%% as_list/1 — a String receiver (UTF-8 binary) as its [Char] list of tagged
-%% {'Char', N} tuples; everything else unchanged. The list HOF lowerings wrap
-%% their receiver in this so `"h3llo".filter(&alpha?)` etc. work; repack/2
-%% turns the result back into a String, since the two are distinct types.
+%% as_list/1 — a Range receiver as its list of items; a list as it is. A
+%% String is not a list: its functions take its `chars` (src/stdlib/string.kex).
 as_list({'Range', _, _} = R) -> kex_intrinsic_range:items(R);
-as_list(B) when is_binary(B) ->
-    [{'Char', C} || C <- unicode:characters_to_list(B)];
 as_list(L) -> L.
 
-%% Receiver is always the first argument (Kex UFCS convention). A Kex String
-%% is a UTF-8 binary, and the prelude's String methods reuse several List
-%% intrinsics (length/at/reverse/member) — so those take binaries too.
-%% Every receiver goes through as_list/1, so each function transparently
-%% takes a String binary as its [Char] codepoint list.
-reverse(B) when is_binary(B) ->
-    unicode:characters_to_binary(lists:reverse(unicode:characters_to_list(B)));
+%% Receiver is always the first argument (Kex UFCS convention).
 reverse(L) -> lists:reverse(L).
-%% repack/2 keeps the string-preserving contract: an operation on a String
-%% answers with a String, so `"hello".sort` is "ehllo" and not ['e','h',...].
-%% A String and a [Char] are DIFFERENT types, so handing back the list would
-%% both contradict the declared signature and disagree with the walker.
-repack(Src, Result) when is_binary(Src) -> repack_chars(Result);
-repack(_Src, Result) -> Result.
-
-repack_chars(L) when is_list(L) ->
-    case lists:all(fun({'Char', C}) -> is_integer(C); (_) -> false end, L) of
-        true -> unicode:characters_to_binary([C || {'Char', C} <- L]);
-        false -> L
-    end;
-repack_chars(X) -> X.
 
 %% sort/1 — ascending NATURAL order, which for a type with a `Comparable`
 %% implementation means that type's own `compare`, not Erlang term order over
@@ -55,10 +32,10 @@ repack_chars(X) -> X.
 %% numbers and strings as fast as it was.
 sort(L) ->
     Items = as_list(L),
-    repack(L, case lists:any(fun taggable/1, Items) of
+    case lists:any(fun taggable/1, Items) of
         false -> lists:sort(Items);
         true  -> lists:sort(fun kex_compare:less_or_equal/2, Items)
-    end).
+    end.
 
 taggable(X) -> is_tuple(X) orelse is_atom(X).
 
@@ -78,10 +55,10 @@ sort(L, Fun) ->
             _ -> Fun(B, A) =/= true
         end
     end,
-    repack(L, lists:sort(LessOrEqual, as_list(L))).
+    lists:sort(LessOrEqual, as_list(L)).
 %% Order-preserving, keeping the FIRST occurrence — `uniq` is a filter, not a
 %% sort, so lists:usort/1 is the wrong primitive here.
-uniq(L)    -> repack(L, uniq_seen(as_list(L), #{}, [])).
+uniq(L)    -> uniq_seen(as_list(L), #{}, []).
 uniq_seen([], _Seen, Acc) -> lists:reverse(Acc);
 uniq_seen([H | T], Seen, Acc) ->
     case maps:is_key(H, Seen) of
@@ -90,11 +67,11 @@ uniq_seen([H | T], Seen, Acc) ->
     end.
 flatten(L) -> lists:flatten(as_list(L)).
 %% A negative count takes nothing and drops nothing, as the interpreter does.
-take(L, N) when N =< 0 -> repack(L, []);
-take(L, N) -> repack(L, lists:sublist(as_list(L), N)).
+take(_L, N) when N =< 0 -> [];
+take(L, N) -> lists:sublist(as_list(L), N).
 drop(L, N) ->
     L2 = as_list(L),
-    repack(L, lists:nthtail(max(0, min(N, erlang:length(L2))), L2)).
+    lists:nthtail(max(0, min(N, erlang:length(L2))), L2).
 zip(L, R)  -> zip_short(as_list(L), as_list(R)).
 zip_short([], _) -> [];
 zip_short(_, []) -> [];
@@ -114,9 +91,7 @@ foldLeft(L, Acc, Fun) -> lists:foldl(fun(Elem, A) -> Fun(A, Elem) end, Acc, as_l
 %% partition/2 — splits into {Matching, NonMatching} per predicate. Kex is
 %% receiver-first; Erlang's lists:partition is fun-first, so swap.
 partition(L, Fun) ->
-    {Yes, No} = lists:partition(
-        fun(X) -> kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L)),
-    {repack(L, Yes), repack(L, No)}.
+    lists:partition(fun(X) -> kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L)).
 
 %% member/2 — element membership check, backing `.in?` on Integer/Float/Char.
 %% Element is the receiver, container is the arg.
@@ -131,32 +106,22 @@ member(Elem, Container) ->
 %% first/1, last/1 — the first/last element wrapped in Just, or None for [].
 %% Backing for the prelude's `first`/`last` (pattern-based impls hit the
 %% one-element-pattern semantics; a direct primitive is simpler and O(1)/O(n)).
-first(B) when is_binary(B) -> first(as_list(B));
 first([])      -> 'None';
 first([X | _]) -> {'Just', X}.
-last(B) when is_binary(B) -> last(as_list(B));
 last([])       -> 'None';
 last(L)        -> {'Just', lists:last(L)}.
 
 %% min/1, max/1 — the smallest/largest element wrapped in Just, or None for [].
 %% lists:min/max crash on the empty list, so guard here (the prelude's old
 %% recursive impl was non-tail and returned this same Just/None form).
-min(B) when is_binary(B) -> min(as_list(B));
 min([]) -> 'None';
 min([H | T])  -> {'Just', lists:foldl(fun kex_compare:min/2, H, T)}.
-max(B) when is_binary(B) -> max(as_list(B));
 max([]) -> 'None';
 max([H | T])  -> {'Just', lists:foldl(fun kex_compare:max/2, H, T)}.
 
 %% length/1 — element count, backing List.count (was a non-tail `1 + xs.count`
-%% recursion in the prelude). Also backs String.count (codepoint count) —
-%% `string:length/1` is the wrong primitive here: it counts *extended
-%% grapheme clusters* (Unicode UAX #29), which folds a `\r\n` pair into a
-%% single unit and silently undercounts any string containing one. Decoding
-%% through `unicode:characters_to_list/1`, the same way `as_list/1` above
-%% does for `.chars`, counts codepoints instead, so `String.count` agrees
-%% with `String.chars.count` the way the interpreter backend already does.
-length(B) when is_binary(B) -> erlang:length(unicode:characters_to_list(B));
+%% recursion in the prelude). String.count is its `chars`' count: codepoints,
+%% where `string:length/1` would count grapheme clusters (a `\r\n` as one).
 length(L) -> erlang:length(L).
 
 %% join/1,2 — string join for [String|Char] lists, producing a String (UTF-8
@@ -180,8 +145,6 @@ list_at(List, Idx) ->
 
 %% list_get/3 — `list.get(i, default)`, the total form: the raw element, or
 %% Default when the index is out of range.
-list_get(Bin, Idx, Default) when is_binary(Bin) ->
-    list_get(as_list(Bin), Idx, Default);
 list_get(List, Idx, _Default) when is_integer(Idx), Idx >= 0, Idx < erlang:length(List) ->
     lists:nth(Idx + 1, List);
 list_get(_List, _Idx, Default) ->
@@ -197,20 +160,17 @@ index_of(Value, [_ | Rest], I) -> index_of(Value, Rest, I + 1).
 list_product(List) -> lists:foldl(fun(E, A) -> A * E end, 1, List).
 
 %% HOF intrinsics — BIF-backed versions that override the Enumerable trait's
-%% reduce-based defaults. Handle String (binary) receivers via as_list/1.
+%% reduce-based defaults.
 %% Each HOF routes its block through kex_intrinsic_fun:applyItem/2 so that
 %% 2-param blocks (`{ |k, v| ... }`) auto-splat pair elements (e.g. when
 %% mapping over Map.entries), matching the Enumerable trait defaults and
 %% the interpreter's block invocation.
-map(L, Fun)    -> repack(L, [kex_intrinsic_fun:applyItem(Fun, I) || I <- as_list(L)]).
-filter(L, Fun) -> repack(L, lists:filter(fun(X) -> kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L))).
+map(L, Fun)    -> [kex_intrinsic_fun:applyItem(Fun, I) || I <- as_list(L)].
+filter(L, Fun) -> lists:filter(fun(X) -> kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L)).
 each(L, Fun)   -> lists:foreach(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)), 'None'.
-%% A block returning a String contributes its Chars, not the binary itself —
-%% lists:flatmap/2 cannot walk a binary.
 flatMap(L, Fun) ->
-    lists:flatmap(fun(X) -> as_list(kex_intrinsic_fun:applyItem(Fun, X)) end,
-                  as_list(L)).
-reject(L, Fun) -> repack(L, lists:filter(fun(X) -> not kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L))).
+    lists:flatmap(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)).
+reject(L, Fun) -> lists:filter(fun(X) -> not kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L)).
 'all?'(L, Fun)  -> lists:all(fun(X) -> kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L)).
 'any?'(L, Fun)  -> lists:any(fun(X) -> kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L)).
 find(L, Fun)   ->

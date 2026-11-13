@@ -4,7 +4,7 @@
 %% representation); the typed string stdlib lives in the Kex prelude
 %% (src/stdlib/string.kex). Receiver is the first argument.
 -module(kex_intrinsic_string).
--export([upperCase/1, lowerCase/1, trim/1, trimStart/1, trimEnd/1, find/2, split/1, split/2, replace/3, chars/1,
+-export([upperCase/1, lowerCase/1, trim/1, trimStart/1, trimEnd/1, find/2, split/1, split/2, replace/3, chars/1, fromChars/1, count/1, take/2, drop/2, at/2,
           'startsWith?'/2, 'endsWith?'/2, 'contains?'/2, fromCodepoint/1,
           bytes/1, fromBytes/1, graphemeCount/1,
           byteSize/1, byteAt/2, bytePart/3]).
@@ -46,7 +46,30 @@ find(S, Sub) ->
     end.
 
 %% chars/1 — the string's characters as a real [Char] (tagged tuples).
-chars(S) -> kex_intrinsic_list:as_list(S).
+chars(S) -> [{'Char', C} || C <- unicode:characters_to_list(S)].
+
+%% fromChars/1 — the String of a [Char], the way back from chars/1 for the
+%% String functions that work on the characters (src/stdlib/string.kex).
+fromChars(Chars) -> unicode:characters_to_binary([C || {'Char', C} <- Chars]).
+
+%% The String operations that need no [Char]: what a scanner calls in a
+%% loop. By codepoint, as `chars` counts (string:length/1 counts grapheme
+%% clusters, a `\r\n` as one).
+count(S) -> erlang:length(unicode:characters_to_list(S)).
+take(_S, N) when N =< 0 -> <<>>;
+take(S, N) -> unicode:characters_to_binary(lists:sublist(unicode:characters_to_list(S), N)).
+drop(S, N) when N =< 0 -> S;
+drop(S, N) ->
+    Cs = unicode:characters_to_list(S),
+    unicode:characters_to_binary(lists:nthtail(min(N, erlang:length(Cs)), Cs)).
+%% The character at a 0-based index, in Just, or None past either end.
+at(S, I) when is_integer(I), I >= 0 ->
+    Cs = unicode:characters_to_list(S),
+    case I < erlang:length(Cs) of
+        true -> {'Just', {'Char', lists:nth(I + 1, Cs)}};
+        false -> 'None'
+    end;
+at(_S, _I) -> 'None'.
 
 %% bytes/1 — the string's UTF-8 encoding, one integer per byte. `chars` is the
 %% TEXT view and this is the STORAGE view: "é" is one Char and two bytes.

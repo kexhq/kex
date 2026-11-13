@@ -83,7 +83,14 @@ auto moduleTypeQualifier(const kex::ast::Program& program, const std::string& mo
             if (*module) visit(visit, **module, "");
     return [modulePath, usings = std::move(usings), knownTypes = std::move(knownTypes)](
                const std::string& name) -> std::string {
-        if (knownTypes.contains(modulePath + "." + name)) return modulePath + "." + name;
+        // The module's own type, or one of a module around it: a `make`
+        // block's module is named after its type (`Net.Socket.TCP.Endpoint`),
+        // and the `Endpoint` it names is the one of `Net.Socket.TCP`.
+        if (auto own = kex::semantic::resolve_core::resolveInScopes(
+                modulePath, name, [&](const std::string& candidate) {
+                    return knownTypes.contains(candidate);
+                }))
+            return *own;
         for (const auto* use : usings) {
             if (!kex::semantic::resolve_core::usingSelectsName(name, use->onlyNames,
                                                                use->exceptNames))
@@ -822,11 +829,27 @@ void collectFromMakeDef(const kex::ast::MakeDef& md,
         auto method = std::move(iface.methods.back());
         iface.methods.pop_back();
         size_t defParams = method.paramTypes.size();
+        // A contract is the clause's whose own annotations agree with it:
+        // `get :> Integer -> X?` is `get(i: Integer)`'s, never
+        // `get(range: Range<Integer>)`'s. Pairing every contract with every
+        // clause of its arity made `[A] -> Range<Integer> -> A?` too.
+        const auto agrees = [&](const KexiTypePtr& sig) {
+            for (size_t i = 0; i < defParams && i < sig->typeArgs.size(); i++) {
+                const auto& written = method.paramTypes[i];
+                const auto& wanted = sig->typeArgs[i];
+                if (!written || !wanted || mentionsUnknown(written) ||
+                    mentionsGeneric(written) || mentionsGeneric(wanted))
+                    continue;
+                if (written->kind != wanted->kind || written->name != wanted->name)
+                    return false;
+            }
+            return true;
+        };
         bool added = false;
         for (const auto& sig : it->second) {
             if (!sig) continue;
             size_t sigParams = (sig->kind == KexiType::Func) ? sig->typeArgs.size() : 0;
-            if (sigParams == defParams) {
+            if (sigParams == defParams && (sigParams == 0 || agrees(sig))) {
                 auto overload = method;
                 patchMethodWithSig(overload, sig);
                 iface.methods.push_back(std::move(overload));
@@ -1296,6 +1319,7 @@ void collectFromTopLevel(const kex::ast::Program& program,
 }
 
 void collectFlattenedModuleBody(
+    const kex::ast::Program& program,
     const std::vector<kex::ast::ModuleItem>& body,
     const std::string& modulePath,
     KexiTypeInterface& iface,
@@ -1342,8 +1366,13 @@ void collectFlattenedModuleBody(
             } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
                 collectFromRecordDef(*ptr, iface, meta, modulePath, analysis);
             } else if constexpr (std::is_same_v<T, kex::ast::ModuleDef>) {
-                collectFlattenedModuleBody(ptr->body, ptr->name, iface, meta,
+                // A nested module's signatures name its own types by its own
+                // path: `TCP.Endpoint.parse` answers `Net.Socket.TCP.Endpoint`,
+                // which a bare `Endpoint` (UDP declares one too) could not say.
+                const auto marks = marksOf(iface, meta);
+                collectFlattenedModuleBody(program, ptr->body, ptr->name, iface, meta,
                                            analysis);
+                qualifyFrom(iface, meta, marks, moduleTypeQualifier(program, ptr->name, {}));
             }
         }, item);
     }
@@ -1370,7 +1399,7 @@ void collectFlattenedProgram(const kex::ast::Program& program,
         if (auto* module = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
             module && *module) {
             const auto marks = marksOf(iface, meta);
-            collectFlattenedModuleBody((*module)->body, (*module)->name,
+            collectFlattenedModuleBody(program, (*module)->body, (*module)->name,
                                        iface, meta, analysis);
             qualifyFrom(iface, meta, marks, moduleTypeQualifier(program, (*module)->name, {}));
         }

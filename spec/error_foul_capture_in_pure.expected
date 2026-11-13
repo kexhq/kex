@@ -1,0 +1,1 @@
+spec/error_foul_capture_in_pure.kex:10:46: error: Cannot capture foul function 'shout' in a pure context
