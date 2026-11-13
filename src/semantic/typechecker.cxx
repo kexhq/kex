@@ -1449,14 +1449,6 @@ auto TypeChecker::checkConstructorPayloads(const std::string& name,
         if (isUndetermined(expected) || isUndetermined(actual) ||
             argMatchesParam(actual, expected))
             continue;
-        // A bare `Pid` where the payload is a `Process<T>` (`Ask(Process.self)`):
-        // programs rely on it, though a function parameter refuses the same.
-        // Left as it was until the language says which it is.
-        const auto* expectedName = std::get_if<NamedType>(&expected->kind);
-        const auto* actualName = std::get_if<NamedType>(&actual->kind);
-        if (expectedName && actualName && expectedName->name == names::kProcessType &&
-            actualName->name == names::kPidType)
-            continue;
         // Once, however often the call is inferred.
         auto message = "`" + name + "` expects " +
                        (arity == 1 ? "a value" : "value " + std::to_string(i + 1)) + " of type " +
@@ -3481,9 +3473,11 @@ auto TypeChecker::bindPatternVars(
                     // so reading it bound every such pattern to whatever some
                     // unrelated use had unified it with: `let Just(i) = ...`
                     // came out `Char` in the merged prelude (kexhq/kex#249).
-                    payload = declaration->modulePath.empty()
-                        ? declaration->payloadTypes[i]
-                        : declaredPayload(*declaration, i);
+                    // Re-read now that every declaration is registered: read
+                    // at registration, `(Atom, [String])` kept `Atom` and
+                    // `String` as unresolved names, which matched no Atom or
+                    // String once a value was compared with it.
+                    payload = declaredPayload(*declaration, i);
                 }
                 // The built-in carriers come from the prelude interface, not a
                 // local declaration, so they have no slot above. Left untyped,

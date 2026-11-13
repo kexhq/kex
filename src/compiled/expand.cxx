@@ -1,6 +1,7 @@
 #include "expand.hxx"
 
 #include "reify.hxx"
+#include "../common/string_utils.hxx"
 #include "../ast/clone.hxx"
 #include "../ast/function_groups.hxx"
 #include "../common/digest.hxx"
@@ -1259,13 +1260,7 @@ auto parseOrDiagnose(Parse&& parse) -> decltype(parse()) {
     }
 }
 
-auto trimmed(std::string text) -> std::string {
-    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())))
-        text.erase(text.begin());
-    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())))
-        text.pop_back();
-    return text;
-}
+using kex::trimmed;
 
 // The options of the `expand` call in progress: what a template scan reads
 // its cache settings from, without threading them through every folder and

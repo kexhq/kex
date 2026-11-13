@@ -86,7 +86,7 @@ record Greeting do
   times : Integer
 end
 
-type Request = Ping(Pid, Greeting) | GetCounter(Pid) | Stop
+type Request = Ping(Process<(Atom, Atom, String)>, Greeting) | GetCounter(Process<Server<Counter>>) | Stop
 )KEX";
 
 constexpr const char* kNodeA = R"KEX(

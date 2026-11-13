@@ -42,6 +42,8 @@ struct Options {
   bool dumpTypes = false;
   bool jsonOutput = false;
   bool summaryMode = false;
+  // `--skill [topic]`: print the guide to writing Kex, or one part of it.
+  bool skillMode = false;
   // `--dump-hir` / `--verify-hir`: list every call site with what the
   // checker decided about it / fail when any is undecided (src/hir/).
   bool dumpHir = false;

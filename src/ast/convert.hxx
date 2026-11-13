@@ -12,6 +12,12 @@
 
 namespace kex::ast {
 
+// The documentation comment written above `line`, or "" (extractDocComments).
+inline auto docAt(const std::unordered_map<int, std::string>& docs, int line) -> std::string {
+    const auto found = docs.find(line);
+    return found == docs.end() ? std::string{} : found->second;
+}
+
 inline auto extractDocComments(const std::string& source)
     -> std::unordered_map<int, std::string> {
     std::unordered_map<int, std::string> result;
@@ -978,11 +984,6 @@ private:
                     appendMakeItem(body, nested, filename, docs);
             }
         }, item);
-    }
-
-    static auto docAt(const Docs& docs, int line) -> std::string {
-        auto it = docs.find(line);
-        return it == docs.end() ? "" : it->second;
     }
 
     auto typeVariant(const TypeExpr& expr) -> Value {

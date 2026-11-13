@@ -51,9 +51,6 @@ inline const std::string kMapType = "Map";
 
 // The unit type's name: named as a value it is the unit value, not a `Type`.
 inline const std::string kVoidType = "Void";
-// A process as its bare identifier, and as a handle typed by what it serves.
-inline const std::string kPidType = "Pid";
-inline const std::string kProcessType = "Process";
 inline const std::string kResultType = "Result";
 inline const std::string kOptionalType = "Optional";
 

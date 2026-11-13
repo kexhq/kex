@@ -548,7 +548,7 @@ auto parseCommandLine(int argc, char *argv[]) -> Options {
       options.mode = Mode::Check;
       break;
     case Option::Skill:
-      skillMode = true;
+      options.skillMode = true;
       break;
     case 't':
       options.dumpTypes = true;
@@ -1018,7 +1018,7 @@ int main(int argc, char *argv[]) {
 
   // `--skill` prints the guide, `--skill <topic>` one part of it. Neither
   // reads a source file, so both answer before anything looks for one.
-  if (skillMode) {
+  if (options.skillMode) {
     const std::string_view wanted =
         optind < argc ? std::string_view(argv[optind])
                       : kex::skill::kGuideTopic;
@@ -1036,7 +1036,7 @@ int main(int argc, char *argv[]) {
 
   // `-s` with a name rather than a source file asks the standard library
   // about itself; with nothing at all it lists what there is to ask about.
-  if (summaryMode && !replEval &&
+  if (options.summaryMode && !replEval &&
       (optind >= argc || !std::string_view(argv[optind]).ends_with(".kex"))) {
     const auto index = kex::help::ApiIndex::fromStandardLibrary(std::cerr);
     if (index.empty()) {

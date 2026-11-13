@@ -3385,7 +3385,18 @@ auto TypeChecker::literalCoercesTo(const ast::Expr& value, const TypePtr& target
     return written && argMatchesParam(written, backing);
 }
 
-auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool {
+auto TypeChecker::argMatchesParam(const TypePtr& writtenArg, const TypePtr& writtenParam) const -> bool {
+    // Each level resolved as it is compared: an unknown inside a list (`[T]`)
+    // may be known by now, and left unresolved it matched any element type.
+    // One known only by a bound (`n + 1` made it some Number) stays the
+    // unknown it was, as before: a bound is no type to compare with.
+    const auto known = [&](const TypePtr& written) -> TypePtr {
+        if (!written || !std::holds_alternative<TypeVar>(written->kind)) return written;
+        const auto resolved = resolve(written);
+        return std::holds_alternative<ConstrainedType>(resolved->kind) ? written : resolved;
+    };
+    const auto argType = known(writtenArg);
+    const auto paramType = known(writtenParam);
     // `Block<A…, R>` still spelled as a NAMED type is the block function type
     // it stands for; every resolver that knows it builds that. One spelling
     // reached a record field unconverted, and `Just({ DateTime.now() })` for
@@ -5983,6 +5994,8 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     if (i == 0) m_guessedReceiverTypes.insert(typeToString(param));
                     unifyVar(tv->id, param);
                 }
+            } else {
+                fixNestedVariables(resolved, matched.params[i]);
             }
         }
         // Instantiate interface-level generic placeholders in the result from
@@ -6076,14 +6089,20 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // vague — String IS [Char] here, so the leaked `[A]` went on to match
         // String's `at : String -> Integer -> Char?` and a list of strings
         // indexed as a list of characters. Placeholders the arguments do not
-        // bind (`map : (X -> B) -> [B]`) are left exactly as they were.
+        // bind become fresh variables of this call (below).
         std::function<TypePtr(const TypePtr&)> applyGenerics =
             [&](const TypePtr& type) -> TypePtr {
                 if (!type) return type;
                 if (auto* var = std::get_if<TypeVar>(&type->kind)) {
                     if (var->id >= 0) return type;
-                    auto found = genericSubst.find(var->id);
-                    return found == genericSubst.end() ? type : found->second;
+                    // One this call's arguments do not bind is this call's
+                    // own unknown, fixed by how the result is used: left the
+                    // signature's placeholder, it matched anything wherever
+                    // it went (`let one = Process.self` used as two message
+                    // types, `none() -> [A]` passed as [Integer] and [String]).
+                    auto [found, fresh] = genericSubst.try_emplace(var->id, nullptr);
+                    if (fresh) found->second = freshTypeVar();
+                    return found->second;
                 }
                 // A bound generic (`N: Number`) is bound by its id as well.
                 if (auto* constrained = std::get_if<ConstrainedType>(&type->kind);
@@ -6296,7 +6315,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             auto* constrained = std::get_if<ConstrainedType>(&first.params[i]->kind);
             std::string expected = constrained ? constrained->traitName : typeToString(first.params[i]);
             detail = "argument " + std::to_string(i + 1) + " to be " + expected +
-                      ", but got " + typeToString(argTypes[i]);
+                      ", but got " + typeToString(resolvedThroughout(argTypes[i]));
             break;
         }
     }

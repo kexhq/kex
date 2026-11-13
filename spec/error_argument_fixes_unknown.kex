@@ -1,0 +1,26 @@
+# kex: check-only
+# A value whose type is still partly unknown takes the type it is first passed
+# as: `none()` gives a list of something, and once that list goes where a
+# `[Integer]` goes it is a list of Integers. Passing it on as a `[String]` is
+# then refused, as it would be for a list written `[1, 2]`. The same holds for
+# a process known only by where it is used.
+
+let none() -> [A] = []
+let ints(xs: [Integer]) -> Integer = xs.count
+let strs(xs: [String]) -> Integer = xs.count
+
+let greet(to: Process<String>) -> Void = to.send("hi")
+let count(to: Process<Integer>) -> Void = to.send(1)
+
+main do
+  let numbers = none()
+  IO.printLine(ints(numbers))
+  IO.printLine(strs(numbers))
+
+  let fresh = none()
+  IO.printLine(strs(fresh))
+
+  let me = Process.self
+  greet(me)
+  count(me)
+end

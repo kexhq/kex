@@ -321,7 +321,7 @@ struct Value {
 auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool;
 
 // The method-dispatch type name for a value — the name used for UFCS resolution
-// (e.g. "Integer" for both IntValue/BigIntValue, "Pid" for ProcessValue).
+// (e.g. "Integer" for both IntValue/BigIntValue, "Process" for ProcessValue).
 // Separate from typeName() which is for display.
 auto dispatchTypeName(const ValuePtr& v) -> std::string;
 

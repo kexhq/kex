@@ -137,6 +137,45 @@ auto TypeChecker::generalizeSignature(Signature& signature, int varMark)
     signature.result = quantify(signature.result);
 }
 
+// An argument's unknowns inside a list, an optional, a tuple, a map, a
+// function or a generic type, fixed by the concrete parameter they are passed
+// as: `none()` passed where a `[Integer]` goes is a list of Integers from then
+// on, as a bare unknown argument already was (checkCall). Only where the
+// parameter is concrete there: a generic one says nothing about the argument.
+// The two types are walked side by side while they have the same shape; a
+// union or intersection lists its members in no order to pair them by.
+auto TypeChecker::fixNestedVariables(const TypePtr& argument, const TypePtr& parameter) -> void {
+    const auto actual = resolve(argument);
+    const auto wanted = resolve(parameter);
+    if (const auto* var = std::get_if<TypeVar>(&actual->kind)) {
+        if (var->id >= 0 && !containsOpenType(wanted)) unifyVar(var->id, wanted);
+        return;
+    }
+    if (actual->kind.index() != wanted->kind.index() ||
+        std::holds_alternative<UnionType>(actual->kind) ||
+        std::holds_alternative<IntersectionType>(actual->kind))
+        return;
+    if (const auto* named = std::get_if<NamedType>(&actual->kind);
+        named && std::get<NamedType>(wanted->kind).name != named->name)
+        return;
+    std::vector<TypePtr> given;
+    std::vector<TypePtr> expected;
+    forEachTypeChild(actual, [&](const TypePtr& child) { given.push_back(child); });
+    forEachTypeChild(wanted, [&](const TypePtr& child) { expected.push_back(child); });
+    if (given.size() != expected.size()) return;
+    for (std::size_t i = 0; i < given.size(); ++i) fixNestedVariables(given[i], expected[i]);
+}
+
+// `type` with every unknown that is known by now replaced, all the way down:
+// what a message shows (`[Integer]`, where the type as recorded is `[T3]`).
+auto TypeChecker::resolvedThroughout(const TypePtr& type) const -> TypePtr {
+    if (!type) return type;
+    std::function<TypePtr(const TypePtr&)> through = [&](const TypePtr& part) -> TypePtr {
+        return part ? mapTypeChildren(resolve(part), through) : part;
+    };
+    return through(type);
+}
+
 auto TypeChecker::unifyVar(int id, TypePtr concrete) -> void {
     if (m_subst.count(id) || m_pendingResultVars.count(id)) return;
     // Never bind a variable to a chain that leads back to itself. `a + b`

@@ -8,11 +8,37 @@
 namespace kex {
 
 // Lowercase a whole string.
-inline auto lowered(const std::string &s) -> std::string {
-  std::string result = s;
+inline auto lowered(std::string_view s) -> std::string {
+  std::string result(s);
   for (auto &c : result)
     c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   return result;
+}
+
+// `text` without the white space it starts or ends with.
+inline auto trimmed(std::string_view text) -> std::string {
+  const auto space = [](char c) {
+    return std::isspace(static_cast<unsigned char>(c)) != 0;
+  };
+  while (!text.empty() && space(text.front())) text.remove_prefix(1);
+  while (!text.empty() && space(text.back())) text.remove_suffix(1);
+  return std::string(text);
+}
+
+// `text` split at its line ends, a trailing one starting no empty line.
+inline auto splitLines(const std::string &text) -> std::vector<std::string> {
+  std::vector<std::string> lines;
+  std::string::size_type start = 0;
+  while (start < text.size()) {
+    const auto end = text.find('\n', start);
+    if (end == std::string::npos) {
+      lines.push_back(text.substr(start));
+      break;
+    }
+    lines.push_back(text.substr(start, end - start));
+    start = end + 1;
+  }
+  return lines;
 }
 
 // A CamelCase identifier as its conventional snake_case file spelling:

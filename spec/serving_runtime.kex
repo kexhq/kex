@@ -28,7 +28,7 @@ serving Counter do
     return { new }
   end
 
-  foul slot caller -> Reply<Pid> = { reply: from.pid }
+  foul slot caller -> Reply<Process<Any>> = { reply: from.pid }
 end
 
 main do

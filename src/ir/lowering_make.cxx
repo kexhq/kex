@@ -347,7 +347,7 @@ auto Lowering::primGuardBifs() -> const std::unordered_map<std::string, const ch
         // record also defines — see `make Tuple` in the prelude.
         {"Tuple","is_tuple"},
 
-        {"Pid","is_pid"}, {"Task","is_pid"}, {"Reference","is_reference"},
+        {"Process","is_pid"}, {"Task","is_pid"}, {"Reference","is_reference"},
         // Wider than the Kex type as well: a Bool, `None` and every
         // nullary variant are atoms too. The dispatcher emits it after
         // all of those (see `deferBroader`'s neighbour below).
@@ -364,7 +364,7 @@ auto Lowering::runtimeShapes(const std::string& owner)
         {"Integer", {"integer"}}, {"Float", {"float"}},
         {"Number", {"integer", "float"}}, {"String", {"binary"}},
         {"Bool", {"bool"}}, {"Map", {"map"}}, {"List", {"list"}},
-        {"Tuple", {"tuple"}}, {"Pid", {"pid"}}, {"Task", {"pid"}},
+        {"Tuple", {"tuple"}}, {"Process", {"pid"}}, {"Task", {"pid"}},
         {"Reference", {"reference"}}, {"Char", {"tuple:Char"}},
         {"Atom", {"bool", "atom"}},
     };
@@ -647,7 +647,7 @@ auto Lowering::makeDispatcher(const std::string& name, int arity,
         }
     };
     dropShadowed("List", "Range");
-    dropShadowed("Task", "Pid");
+    dropShadowed("Task", "Process");
     // `is_number` also answers true for an Integer and for a Float, so a
     // `make Number` block placed first would shadow the concrete ones.
     // Move the broader type after the narrower ones it subsumes, which is

@@ -106,7 +106,7 @@ load(N) ->
 
 // ---- A function that recurses from its receive arms ----------------------
 
-constexpr const char* kRecursiveLoop = R"KEX(type Msg = Inc | Get(Pid)
+constexpr const char* kRecursiveLoop = R"KEX(type Msg = Inc | Get(Process<Integer>)
 
 foul serve(count: Integer) do
   receive do
@@ -123,7 +123,7 @@ foul start = spawn do serve(0) end
 
 // ---- A `loop do receive` in a spawned block ------------------------------
 
-constexpr const char* kImperativeLoop = R"KEX(type Msg = Inc | Get(Pid)
+constexpr const char* kImperativeLoop = R"KEX(type Msg = Inc | Get(Process<Integer>)
 
 foul start = spawn do
   var count = 0
