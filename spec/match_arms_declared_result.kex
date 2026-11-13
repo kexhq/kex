@@ -1,0 +1,30 @@
+# The arms of a `match` or `if` ending a function body answer to the
+# function's declared result, as they do to a `let` annotation: each arm fits
+# `Result<Any, String>`, not the first arm's `Result<String, _>`.
+
+let read(kind: String, text: String) -> Result<Any, String> do
+  match kind do
+    "String" => Ok(text)
+    "Integer" => match text.to(Integer) do
+      Just(n) => Ok(Just(n))
+      None => Error("not an integer: ${text}")
+    end
+    _ => Error("unknown kind ${kind}")
+  end
+end
+
+let pick(flag: Bool) -> Result<Any, String> do
+  if flag
+    Ok("yes")
+  else
+    Ok(Just(1))
+  end
+end
+
+main do
+  IO.inspect(read("String", "a"))
+  IO.inspect(read("Integer", "42"))
+  IO.inspect(read("Integer", "x"))
+  IO.inspect(pick(true))
+  IO.inspect(pick(false))
+end

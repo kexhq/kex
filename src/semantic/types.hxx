@@ -289,6 +289,9 @@ auto isFullyConcrete(const TypePtr& type) -> bool;
 // type somewhere inside. Checks that would otherwise report a mismatch use
 // this to stay quiet rather than invent an error from incomplete information.
 auto containsOpenType(const TypePtr& type) -> bool;
+// A type variable or a trait constraint somewhere inside: a generic type.
+// Unlike containsOpenType, an unknown (`Any`) does not count.
+auto containsTypeVariable(const TypePtr& type) -> bool;
 
 // How a name was bound: `var` (so `=` and `!` may rebind it) or not, and
 // whether the language bound it (`new`, `from`) rather than the program,

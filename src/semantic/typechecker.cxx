@@ -2947,9 +2947,12 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
     // the annotation (lowering's run-time guards).
     if ((std::holds_alternative<ast::TypeName>(typeExpr.kind) ||
          std::holds_alternative<ast::GenericType>(typeExpr.kind)) && resolved)
-        if (const auto* named = std::get_if<NamedType>(&resolve(resolved)->kind);
-            named && m_recordFields.count(named->name))
-            m_annotatedRecords[&typeExpr] = named->name;
+        if (const auto* named = std::get_if<NamedType>(&resolve(resolved)->kind)) {
+            if (m_recordFields.count(named->name)) m_annotatedRecords[&typeExpr] = named->name;
+            // Any declared type, for tooling's go-to-definition.
+            if (m_declaredTypeArity.count(named->name))
+                m_annotatedTypes[&typeExpr] = named->name;
+        }
     return resolved;
 }
 
@@ -4079,7 +4082,22 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         auto* const outerTries = std::exchange(m_clauseTries, &clauseTries);
         auto* const outerReturns = std::exchange(m_clauseReturns, &clauseReturns);
         const auto outerTriesDepth = std::exchange(m_clauseTriesDepth, m_blockDepth);
-        auto bodyType = inferBody(clause.body);
+        // An inline result annotation shares the clause's type parameters:
+        // `let wrap(value: A) -> A? = None` relates its result to `value`.
+        // The early resolution above uses a separate map for declaration
+        // validation; publishing it would turn the result's A into another
+        // generic and accept `let n: Integer? = wrap("text")`.
+        auto effectiveReturnType = contract ? contract->result
+            : clause.returnAnnotation
+                ? resolveTypeExpr(**clause.returnAnnotation, genericVars)
+                : inlineReturnType;
+        // The declared result is what a `match` or `if` ending the body must
+        // produce, as a `let` annotation is for its value: each arm fits it,
+        // not the first arm's type. Not a generic result, which every arm
+        // would fit.
+        const bool expectsResult =
+            effectiveReturnType && !containsTypeVariable(effectiveReturnType);
+        auto bodyType = inferBody(clause.body, expectsResult ? effectiveReturnType : nullptr);
         m_clauseTries = outerTries;
         m_clauseReturns = outerReturns;
         m_clauseTriesDepth = outerTriesDepth;
@@ -4090,15 +4108,6 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         // relaxations that call-site checking uses — e.g. Int and Integer are
         // compatible, so `add : Int -> Int -> Int` with a body returning
         // Integer (inferred from literal arithmetic) isn't a mismatch.
-        // An inline result annotation shares the clause's type parameters:
-        // `let wrap(value: A) -> A? = None` relates its result to `value`.
-        // The early resolution above uses a separate map for declaration
-        // validation; publishing it would turn the result's A into another
-        // generic and accept `let n: Integer? = wrap("text")`.
-        auto effectiveReturnType = contract ? contract->result
-            : clause.returnAnnotation
-                ? resolveTypeExpr(**clause.returnAnnotation, genericVars)
-                : inlineReturnType;
         // Unless the clause rescues what its `.try`s fail with.
         if (effectiveReturnType && !clause.rescue)
             refuseUnheldTries("`" + def.name + "`", effectiveReturnType, clauseTries);
@@ -4259,6 +4268,20 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             error(def.location,
                   "`" + def.name + "` declared to return " + typeToString(effectiveReturnType) +
                   " but body returns " + typeToString(bodyType));
+        }
+        // A result written as a type variable promises any type the caller
+        // asks for: a body that answers one concrete type, which the
+        // variable never became, breaks it (`let same(a: A) -> A = 1`,
+        // kexhq/kex#644). The variable is still free after the body only
+        // where nothing in it tied the variable to a type. Written on the
+        // function itself: a trait's contract names its implementer's type.
+        if (!contract && clause.returnAnnotation && effectiveReturnType &&
+            std::holds_alternative<TypeVar>(resolve(effectiveReturnType)->kind)) {
+            const auto produced = resolve(bodyType);
+            if (!std::holds_alternative<VoidType>(produced->kind) && isFullyConcrete(produced))
+                error(def.location, "`" + def.name + "` declared to return " +
+                                        typeToString(effectiveReturnType) +
+                                        " but body returns " + typeToString(produced));
         }
         // Resolve TypeVars — body inference may have constrained unannotated
         // params via unifyVar (e.g. `n * 2` → n : Number).
@@ -4793,10 +4816,19 @@ auto TypeChecker::checkMainBlock(const ast::MainBlock& block) -> void {
     m_declarationImports = std::move(savedDeclarationImports);
 }
 
-auto TypeChecker::inferBody(const std::vector<ast::ExprPtr>& body) -> TypePtr {
+auto TypeChecker::inferBody(const std::vector<ast::ExprPtr>& body, const TypePtr& expected)
+    -> TypePtr {
     TypePtr lastType = Type::unit();
     for (const auto& expr : body) {
-        if (expr) lastType = inferExpr(*expr);
+        if (!expr) continue;
+        // Only the last expression's arms answer to the expectation.
+        const bool last = expected && &expr == &body.back() &&
+                          (std::holds_alternative<ast::MatchExpr>(expr->kind) ||
+                           std::holds_alternative<ast::IfExpr>(expr->kind) ||
+                           std::holds_alternative<ast::ThenElseExpr>(expr->kind));
+        const auto outer = last ? std::exchange(m_branchExpectation, expected) : nullptr;
+        lastType = inferExpr(*expr);
+        if (last) m_branchExpectation = outer;
     }
     return lastType;
 }

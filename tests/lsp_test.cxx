@@ -336,6 +336,48 @@ int main() {
                        "the binding took FS.Directory.list's documentation: " + list);
         });
 
+        it("navigates from a record pattern and a constructor to the checker's declaration", []() {
+            // Two modules declare `Point` and `Shade`. Inside B, the pattern
+            // `Point { x }` and the constructor `Tint(3)` are B's.
+            const std::string text =
+                "module A do\n  record Point do\n    x : Integer\n  end\n"
+                "  type Shade = Light | Tint(Integer)\nend\n\n"
+                "module B do\n  record Point do\n    x : Integer\n  end\n"
+                "  type Shade = Light | Tint(Integer)\n\n"
+                "  let read(p: Point) -> Integer do\n    match p do\n      Point { x } => x\n    end\n  end\n\n"
+                "  let shade -> Shade = Tint(3)\nend\n\n"
+                "main do\n  IO.inspect(B.read(B.Point { x: 1 }))\nend\n";
+            const auto pattern = askAt("file:///tmp/kex-lsp-pattern-definition.kex", text,
+                                       "definition", 15, 7);
+            assertTrue(pattern.find("\"line\":8") != std::string::npos,
+                       "the pattern did not lead to B's Point: " + pattern);
+            const auto constructor = askAt("file:///tmp/kex-lsp-pattern-definition.kex", text,
+                                           "definition", 19, 24);
+            assertTrue(constructor.find("\"line\":11") != std::string::npos,
+                       "the constructor did not lead to B's Shade: " + constructor);
+            const auto annotation = askAt("file:///tmp/kex-lsp-pattern-definition.kex", text,
+                                          "definition", 19, 17);
+            assertTrue(annotation.find("\"line\":11") != std::string::npos,
+                       "the annotation did not lead to B's Shade: " + annotation);
+        });
+
+        it("hovers a binding of unknown type as the binding", []() {
+            // `json` is a Map of Any, so `name` is of a type nothing knows:
+            // it is still the binding, not Weekday's `name`
+            // (examples/read_package.kex).
+            const std::string text =
+                "let lookup(json: Map<String, Any>) -> String do\n"
+                "  let name = json[\"name\"].or(\"?\")\n  \"${name}\"\nend\n\n"
+                "main do\n  IO.printLine(lookup({}))\nend\n";
+            const auto binding = askAt("file:///tmp/kex-lsp-any-hover.kex", text, "hover", 1, 6);
+            assertTrue(binding.find("name : Any") != std::string::npos, binding);
+            assertTrue(binding.find("Weekday") == std::string::npos,
+                       "the binding hovered as Weekday's name: " + binding);
+            const auto use = askAt("file:///tmp/kex-lsp-any-hover.kex", text, "hover", 2, 6);
+            assertTrue(use.find("Weekday") == std::string::npos,
+                       "the use hovered as Weekday's name: " + use);
+        });
+
         it("completes the members of a value an opt-in module's function returns", []() {
             // `TCP.bind(...).try` is a TCPListener: its own functions, not
             // `close` alone.

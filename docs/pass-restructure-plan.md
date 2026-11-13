@@ -179,6 +179,20 @@ other (it does here); both must check against the same interfaces.
      `moduleTypeQualifier` through the enclosing modules). OPEN: build the
      opt-in modules' interfaces from their checked KexI, and delete this
      second reading of types.
+     Looked into (2026-11-13). The 13 nested stdlib modules (`net/…`,
+     `units/…`, `kex/ast.kex`, `data/…`, `control/retry.kex`) check
+     cleanly together, under a second. A check-only interface is not
+     enough, though: a program that uses one merges its source and still
+     decides the calls through the imported interface
+     (`Kex.Net.Socket.TCP.Endpoint:parse/2`), so the interface carries
+     lowering's names too (`beamFunction`, per-type implementations), which
+     only compiling the modules gives. The way there: compile the nested
+     modules once with the stdlib (`--build-prelude`, as units, through
+     `DescribePass`, which already describes a unit compiled apart), ship
+     their beams and KexI beside `kex_prelude.beam`, and have a program link
+     them instead of merging their source. That is separate compilation by
+     default for the standard library, the step the separate-compilation
+     notes above name as next; `sourceSemanticInterfaces` goes with it.
    - With `Data.Set` named as it is, a bare `add(1, 2)` saw Set's `add`:
      a function on a qualified receiver type counted as visible without a
      `using`, a rule meant for `set.add(x)`. It holds for a call through a
@@ -450,9 +464,13 @@ other (it does here); both must check against the same interfaces.
       text heuristics around them, about forty sites in `server.cxx`)
       remain, now only as the fallback where the index has no answer: a
       buffer the checker could not read through, or a name it records
-      nothing for. Still to record: a constructor (no `SymbolInfo` kind for
-      one yet), a record pattern's name (`RecordPattern` has no location of
-      its own), and a type that is not a record.
+      nothing for. Since recorded too: a record named in a pattern (at the
+      enclosing pattern's position), and a constructor, which leads to the
+      type declaring it (no `SymbolInfo` kind for a constructor). Each has a
+      test: two modules' `Point` and `Shade`. And any declared type named in
+      an annotation, not only a record (`annotatedTypes`; `annotatedRecords`
+      stays the records lowering guards on): `-> Shade` inside B had led to
+      A's.
 5. **Clean up last** (only once 1–4 are done; the benchmarks stay until
    then): `make bench`, `test-bench`, `bench-slick` (needs `../slick`,
    which nobody else has), `dup-audit` and their `tools/` scripts; the
@@ -783,6 +801,28 @@ written in Kex down to recursion; and the reassigned-variable threading, so
        checks clean, because the source-derived interfaces file `make Env`'s
        functions under a placeholder module `Env` (the open item above about
        those interfaces).
+     - #611: an Optional stood for its payload wherever the payload fitted
+       (`let x: Integer = Just(0)`, `None`, `pick(Just(5))`, a declared
+       `Integer` returning `list.first`): `argMatchesParam` compared the
+       inner type. It refuses it now (`spec/error_optional_for_payload`).
+       What had leaned on it: five no-op arms written `None` beside an
+       assignment (`()` now, number.kex and culture.kex), and four specs
+       whose own code returned an optional as its payload. And `match` arms
+       were joined against the first arm only: the declared result of the
+       function is now what a `match` or `if` ending its body must produce,
+       as a `let` annotation already was (unless the result is generic),
+       so `Type.parse`'s `Ok(text)` and `Ok(Just(value))` arms both fit its
+       `Result<Any, String>` (`spec/match_arms_declared_result`).
+     - Reported by the user (2026-11-13): `Time.now(22)` was accepted, and
+       failed on BEAM with `badfun` (the walker answered None). Arguments
+       after a function of no parameters apply what it returns; what it
+       returns was never required to be a function of that many arguments
+       (`checkCall`). It is now (`spec/error_arguments_to_zero_parameter`).
+     - #644, in part: a result written on the function as a type variable,
+       left free by a body that answers one concrete type (`let same(a: A)
+       -> A = 1`), is refused (`spec/error_result_type_variable`). Not a
+       trait's contract, whose variable is the implementer's type. Rigid
+       variables throughout the body are still open.
    - Language server, reported by the user (2026-11-13), each now a test in
      `tests/lsp_test.cxx` (`askAt` opens a document and asks one request):
      - Hover on `let name = ...` (or `let list`) attached the documentation of
@@ -806,9 +846,8 @@ written in Kex down to recursion; and the reassigned-variable threading, so
      refusing every capture broke the documented idiom of registering foul
      handlers from pure configuration, `command(run: ~addNote)`,
      `get("/", ~home)`; telling those from `xs.map(~shout)` needs effect
-     types, #142), #644 (type variables not rigid), #642 (trait
-     implementations not checked against the trait), #611 (an Optional where
-     its inner type is expected, the general leniency), #643 (an untyped
+     types, #142), #644 (type variables not rigid inside a body; the result case is done), #642 (trait
+     implementations not checked against the trait), #643 (an untyped
      argument guesses an overload), #645
      (exhaustiveness for tuple, literal and list patterns), #647, #637. Backend bugs: #639, #635, #623, #618, #615, #614, #610, #613
      (parser), #654 (CLI), #575 (REPL), #561.

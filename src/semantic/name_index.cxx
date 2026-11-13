@@ -1,5 +1,6 @@
 #include "name_index.hxx"
 
+#include "../ast/walk.hxx"
 #include "collect_pass.hxx"
 #include "module_rules.hxx"
 #include "resolve_core.hxx"
@@ -132,16 +133,41 @@ auto indexNames(const ast::Program& program, const std::string& path,
         }
         if (symbol) references.emplace_back(call->methodLocation, symbol);
     }
-    // A record named as a type or constructed is a reference to the record
-    // the checker resolved the name to.
+    // A type named in an annotation, or a record constructed, is a reference
+    // to the type the checker resolved the name to.
     const auto recordNamed = [&](const std::string& identity) {
         const auto module = owningModule(identity);
         return modules.referenced(module, module.empty() ? identity
                                                          : identity.substr(module.size() + 1),
                                   path);
     };
-    for (const auto& [type, identity] : checker.annotatedRecords())
+    for (const auto& [type, identity] : checker.annotatedTypes())
         if (auto* symbol = recordNamed(identity)) references.emplace_back(type->location, symbol);
+    // A record named in a pattern (`Point { x }`), and a constructor
+    // (`Tint(3)`, `Shades.Light`), which leads to the type declaring it.
+    const auto visitExpr = [&](const auto& self, const ast::Expr& expr) -> void {
+        ast::forEachOwnedPattern(expr, [&](const ast::Pattern& owned) {
+            ast::forEachSubPattern(owned, [&](const ast::Pattern& pattern) {
+                if (const auto* record = std::get_if<ast::RecordPattern>(&pattern.kind))
+                    if (const auto found = checker.recordPatterns().find(record);
+                        found != checker.recordPatterns().end())
+                        if (auto* symbol = recordNamed(found->second))
+                            references.emplace_back(pattern.location, symbol);
+            });
+        });
+        if (const auto decided = checker.decidedCalls().find(&expr);
+            decided != checker.decidedCalls().end() &&
+            decided->second.kind == CallKind::Constructor &&
+            (std::holds_alternative<ast::FunctionCall>(expr.kind) ||
+             std::holds_alternative<ast::UpperIdentifier>(expr.kind)))
+            if (auto* symbol = recordNamed(decided->second.owner);
+                symbol && symbol->kind == SymbolKind::Type)
+                references.emplace_back(expr.location, symbol);
+        ast::forEachChild(expr, [&](const ast::ExprPtr& child) {
+            if (child) self(self, *child);
+        });
+    };
+    ast::forEachBodyExpr(program, [&](const ast::Expr& body) { visitExpr(visitExpr, body); });
     for (const auto& [expr, type] : checker.typeMap()) {
         const auto* construction = std::get_if<ast::RecordConstruction>(&expr->kind);
         const auto* named = construction && type ? std::get_if<NamedType>(&type->kind) : nullptr;

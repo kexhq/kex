@@ -2590,12 +2590,15 @@ private:
             for (const auto& binding : analyzer.patternBindings()) {
                 if (binding.location.file != document.path || !binding.type)
                     continue;
-                if (std::holds_alternative<semantic::UnknownType>(
-                        binding.type->kind))
-                    continue;
+                // An unknown type is still a binding: skipped, `let name =
+                // json["name"].or(x)` hovered as Weekday's `name`. `Any` is
+                // what a value of unknown type is to the program.
                 semantic::Signature display;
                 display.name = binding.name;
-                display.result = binding.type;
+                display.result =
+                    std::holds_alternative<semantic::UnknownType>(binding.type->kind)
+                        ? semantic::Type::named("Any")
+                        : binding.type;
                 // The recorded position is the binding's own for a pattern,
                 // but only an ANCHOR for a block parameter — `{ |x| … }` marks
                 // the block, since a LambdaParam has no location. When the

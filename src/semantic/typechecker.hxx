@@ -244,6 +244,10 @@ public:
         -> const std::unordered_map<const ast::TypeExpr*, std::string>& {
         return m_annotatedRecords;
     }
+    auto annotatedTypes() const
+        -> const std::unordered_map<const ast::TypeExpr*, std::string>& {
+        return m_annotatedTypes;
+    }
     auto recordPatterns() const
         -> const std::unordered_map<const ast::RecordPattern*, std::string>& {
         return m_recordPatterns;
@@ -474,7 +478,8 @@ private:
 
     // Type inference for expressions
     auto inferExpr(const ast::Expr& expr) -> TypePtr;
-    auto inferBody(const std::vector<ast::ExprPtr>& body) -> TypePtr;
+    auto inferBody(const std::vector<ast::ExprPtr>& body, const TypePtr& expected = nullptr)
+        -> TypePtr;
 
     // Infer a trailing block (Lambda or BlockExpr) with optional hint param
     // types so the call site constrains the lambda's params before the body
@@ -856,6 +861,8 @@ private:
     std::unordered_map<const ast::Expr*, std::string> m_referencedConstants;
     std::unordered_map<const ast::RecordPattern*, std::string> m_recordPatterns;
     std::unordered_map<const ast::TypeExpr*, std::string> m_annotatedRecords;
+    // Every declared type (record or not) a written type name means.
+    std::unordered_map<const ast::TypeExpr*, std::string> m_annotatedTypes;
     // Each standalone contract (`open : FilePath -> FileMode.Read -> ...`) as
     // annotationToSignature resolved it.
     std::unordered_map<const ast::TypeAnnotation*, Signature> m_contractSignatures;
