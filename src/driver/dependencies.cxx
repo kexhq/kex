@@ -458,6 +458,26 @@ auto loadDependencies(const kex::ast::Program &program,
           header = module->get();
           break;
         }
+      // A standard-library file found for a module it does not declare
+      // (`Env.get` reaching env.kex, which is `ENV`): the name is wrong, not
+      // the file. It is not found, and the checker says so at the use
+      // (kexhq/kex#562), instead of telling the user to rename the stdlib.
+      if (header && ownFile &&
+          !declaredModuleNames(*depProg).contains(resolved->moduleName)) {
+        const auto inStandardLibrary = [&] {
+          const auto file = std::filesystem::weakly_canonical(*path);
+          for (const auto &root : kex::standardLibraryModuleRoots()) {
+            const auto relative =
+                file.lexically_relative(std::filesystem::weakly_canonical(root));
+            if (!relative.empty() && *relative.begin() != "..") return true;
+          }
+          return false;
+        };
+        if (inStandardLibrary()) {
+          unresolved.insert(modName);
+          continue;
+        }
+      }
       if (header && ownFile &&
           !declaredModuleNames(*depProg).contains(resolved->moduleName)) {
         reportModuleFileError(

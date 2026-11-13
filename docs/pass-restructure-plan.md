@@ -771,6 +771,37 @@ written in Kex down to recursion; and the reassigned-variable threading, so
        block's own `pretty` answered. It reports "Undefined method" now, as
        BEAM does. Refusing the call on an unconstrained `T` needs a way to
        bound `T` (#651), a language feature.
+     - #619: a module function declared over several arities, two of one
+       arity, refused every call of that arity. The definition checked first
+       replaced every declared contract under the qualified name
+       (`publishQualifiedSignatures`, `spec/overloads_across_arities`).
+     - #562, in part: `Env.get` no longer blames `src/stdlib/env.kex`. A
+       standard-library file found for a module it does not declare is not
+       found (`dependencies.cxx`). An unknown namespace is reported where a
+       record of an unimported module, guessed by suffix, made it look
+       known (`Datagram.get` now says "Unknown module"). `Env` itself still
+       checks clean, because the source-derived interfaces file `make Env`'s
+       functions under a placeholder module `Env` (the open item above about
+       those interfaces).
+   - Language server, reported by the user (2026-11-13), each now a test in
+     `tests/lsp_test.cxx` (`askAt` opens a document and asks one request):
+     - Hover on `let name = ...` (or `let list`) attached the documentation of
+       a same-named stdlib function. A plain `let`/`var` recorded no binding
+       for tooling (only a destructuring pattern did), so the hover could not
+       tell a binding from a reference. Both record one now, and a binding's
+       hover entry wins and takes no documentation.
+     - `listener.` after `let listener = TCP.bind(...).try` offered only
+       `close`. It offers TCPListener's functions now: the result type of an
+       opt-in module's function named a bare `Endpoint`/`TCPListener` before
+       the record qualification above.
+     - `range.` completes Range's functions (and Random's `integer` and
+       `float`, which take one).
+     - `items.map(&.` completed global names. The shorthand's receiver is
+       the block's parameter: completion now types it by writing the block
+       out (`{ |kexItem| kexItem }`) and asking the checker
+       (`completion_at.cxx`).
+   - The BEAM REPL and BEAM's `IO.inspect` printed a range as
+     `(:Range, 1, 10)`; it is `1..10` now, as on the walker (`kex_io`).
    - Still open, checker bugs: #640 (a pure function capturing a foul one:
      refusing every capture broke the documented idiom of registering foul
      handlers from pure configuration, `command(run: ~addNote)`,
@@ -779,8 +810,7 @@ written in Kex down to recursion; and the reassigned-variable threading, so
      implementations not checked against the trait), #611 (an Optional where
      its inner type is expected, the general leniency), #643 (an untyped
      argument guesses an overload), #645
-     (exhaustiveness for tuple, literal and list patterns), #619, #647, #637,
-     #562. Backend bugs: #639, #635, #623, #618, #615, #614, #610, #613
+     (exhaustiveness for tuple, literal and list patterns), #647, #637. Backend bugs: #639, #635, #623, #618, #615, #614, #610, #613
      (parser), #654 (CLI), #575 (REPL), #561.
 
 ## Why

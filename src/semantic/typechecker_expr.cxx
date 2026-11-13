@@ -804,6 +804,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                                     expr.location);
                 declareVar(varPat->name, declared ? declared : valueType,
                            /*isVar=*/false, expr.location);
+                // For tooling, as a pattern's names are: hover on the name answers
+                // for the binding, not for some same-named function.
+                m_patternBindings.push_back(
+                    {varPat->name, node.pattern->location, declared ? declared : valueType});
                 // Record `f`'s origin when bound to a bare `~greet` capture
                 // (no partial application, no operator, no module prefix) so
                 // a later named-argument call through `f` can find `greet`'s
@@ -831,6 +835,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     : nullptr) {
                 declareVar(varPat->name, declared ? declared : valueType,
                            /*isVar=*/true, expr.location);
+                // For tooling, as a pattern's names are: hover on the name answers
+                // for the binding, not for some same-named function.
+                m_patternBindings.push_back(
+                    {varPat->name, node.pattern->location, declared ? declared : valueType});
                 // Same origin tracking as `let`, so a named-argument call
                 // through `var f = ~greet` finds `greet`'s real parameter
                 // names (kexhq/kex#309).
@@ -3114,10 +3122,20 @@ auto TypeChecker::namespaceCallProblem(const std::string& written,
                         return true;
             return false;
         };
+        // A record the root names in reach: not one of an unimported module
+        // that only the suffix guess finds (`Env` for `Mock.Env`, so
+        // `Env.get` checked clean and was undefined at run time,
+        // kexhq/kex#562).
+        const bool recordInReach = [&] {
+            const auto record = resolveRecordName(root);
+            if (!m_recordFields.count(record)) return false;
+            if (record == root) return true;
+            const auto module = kex::mangle::scopeOf(record);
+            return withinModule(module) || moduleMemberImported(module, root);
+        }();
         const bool rootIsSomething =
             root == names::kForeignRoot || root == names::kRuntimeRoot || root == names::kThisType ||
-            isPrimitiveTypeName(root) ||
-            m_recordFields.count(resolveRecordName(root)) ||
+            isPrimitiveTypeName(root) || recordInReach ||
             m_adtVariants.count(root) || m_typeAliases.count(root) ||
             m_nullaryConstructors.contains(root) ||
             constructorResultType(root, {}) != nullptr ||

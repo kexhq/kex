@@ -46,6 +46,40 @@ auto responseForId(const std::string& output, int id) -> std::string {
     return {};
 }
 
+// The text as a JSON string's contents.
+auto jsonText(const std::string& text) -> std::string {
+    std::string out;
+    for (const char c : text) {
+        if (c == '"' || c == '\\') out += '\\';
+        if (c == '\n') { out += "\\n"; continue; }
+        out += c;
+    }
+    return out;
+}
+
+// Opens `text` as `uri` and answers one request (`hover`, `completion`,
+// `definition`) at a 0-based line and character: the server's reply to it.
+auto askAt(const std::string& uri, const std::string& text, const std::string& method,
+           int line, int character) -> std::string {
+    std::string messages;
+    messages += frame(
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+    messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+    messages += frame(R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":")" +
+                      uri + R"(","languageId":"kex","version":1,"text":")" + jsonText(text) +
+                      R"("}}})");
+    messages += frame(R"({"jsonrpc":"2.0","id":2,"method":"textDocument/)" + method +
+                      R"(","params":{"textDocument":{"uri":")" + uri +
+                      R"("},"position":{"line":)" + std::to_string(line) +
+                      R"(,"character":)" + std::to_string(character) + "}}}");
+    messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+    messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+    std::istringstream input(messages);
+    std::ostringstream output;
+    kex::lsp::run(input, output, testRuntimeBeamDir());
+    return responseForId(output.str(), 2);
+}
+
 auto occurrences(const std::string& text, std::string_view needle) -> size_t {
     size_t count = 0;
     size_t cursor = 0;
@@ -283,6 +317,58 @@ int main() {
             assertTrue(definition.find("\"line\":3") != std::string::npos,
                        "definition range did not map back to the declaring hole's own "
                        "line: " + definition);
+        });
+
+        it("hovers a let-bound name as its binding, without a same-named function's docs", []() {
+            // `let name` and `let list` share their names with stdlib
+            // functions (Culture's `name`, FS.Directory's `list`), whose
+            // prose was attached to the binding's hover.
+            const std::string text =
+                "main do\n  let name = \"ada\".upperCase\n  let list = [1, 2].map { |x| x * 2 }\n"
+                "  IO.printLine(name)\nend\n";
+            const auto name = askAt("file:///tmp/kex-lsp-let-hover.kex", text, "hover", 1, 6);
+            assertTrue(name.find("name : String") != std::string::npos, name);
+            assertTrue(name.find("Display name") == std::string::npos,
+                       "the binding took Culture's documentation: " + name);
+            const auto list = askAt("file:///tmp/kex-lsp-let-hover.kex", text, "hover", 2, 6);
+            assertTrue(list.find("list : [Integer]") != std::string::npos, list);
+            assertTrue(list.find("Lists the names") == std::string::npos,
+                       "the binding took FS.Directory.list's documentation: " + list);
+        });
+
+        it("completes the members of a value an opt-in module's function returns", []() {
+            // `TCP.bind(...).try` is a TCPListener: its own functions, not
+            // `close` alone.
+            const auto reply = askAt(
+                "file:///tmp/kex-lsp-listener.kex",
+                "using Net.Socket\n\nmain do\n  let listener = TCP.bind(\"127.0.0.1:0\").try\n  listener.\nend\n",
+                "completion", 4, 11);
+            for (const auto* member : {"accept", "localAddress", "closed?", "close"})
+                assertTrue(reply.find(std::string("\"filterText\":\"") + member + "\"") != std::string::npos,
+                           std::string("missing ") + member + ": " + reply);
+        });
+
+        it("completes a range's own functions", []() {
+            const auto reply = askAt("file:///tmp/kex-lsp-range.kex",
+                                     "main do\n  let range = 1..10\n  range.\nend\n",
+                                     "completion", 2, 8);
+            for (const auto* member : {"map", "reduce", "first", "last", "contains?"})
+                assertTrue(reply.find(std::string("\"label\":\"") + member + "\"") != std::string::npos,
+                           std::string("missing ") + member + ": " + reply);
+        });
+
+        it("completes after the `&.` shorthand from the block's element type", []() {
+            // The shorthand's receiver is the block's parameter, typed by the
+            // call the block is passed to.
+            const auto reply = askAt(
+                "file:///tmp/kex-lsp-shorthand.kex",
+                "record Item do\n  text : String\nend\n\nmain do\n  let items = [Item { text: \"a\" }]\n"
+                "  IO.inspect(items.map(&.))\nend\n",
+                "completion", 6, 25);
+            assertTrue(reply.find("\"label\":\"text\"") != std::string::npos,
+                       "the shorthand did not complete the Item's field: " + reply);
+            assertTrue(reply.find("\"label\":\"Assert\"") == std::string::npos,
+                       "the shorthand completed global names: " + reply);
         });
 
         it("navigates from a method call to the function the checker chose", []() {

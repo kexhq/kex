@@ -54,6 +54,9 @@ struct Document {
         std::string detail;
         std::string documentationKey;
         bool completeDetail = false;
+        // A name a `let`, a parameter or a pattern binds here: declares nothing
+        // another file documents.
+        bool localBinding = false;
     };
 
     // Where a typed expression ENDS, and what to complete against there.
@@ -2621,6 +2624,7 @@ private:
                     .byteLength = static_cast<unsigned int>(binding.name.size()),
                     .detail = analyzer.displaySignature(binding.name, display),
                     .completeDetail = true,
+                    .localBinding = true,
                 });
             }
             for (const auto& [expression, signature] :
@@ -3543,9 +3547,10 @@ private:
         for (const auto& entry : document.hoverEntries) {
             if (entry.line == line && word.byteColumn >= entry.byteColumn &&
                 word.byteColumn < entry.byteColumn + entry.byteLength &&
-                (!expressionHover || entry.completeDetail)) {
+                (!expressionHover || entry.completeDetail) &&
+                !(expressionHover && expressionHover->localBinding)) {
                 expressionHover = &entry;
-                if (entry.completeDetail) break;
+                if (entry.localBinding) break;
             }
         }
         for (const auto& entry : document.selectedCallEntries)
@@ -3808,7 +3813,9 @@ private:
         // key called `name` was picking up OptionParser's prose about
         // `kex install`.
         bool detailFromExpression = false;
-        if (detail.empty()) {
+        // A name bound here is its binding, whatever a same-named stdlib
+        // function says: `let name = ...` hovered with Culture's prose.
+        if (detail.empty() || (expressionHover && expressionHover->localBinding)) {
             if (expressionHover) {
                 detail = expressionHover->completeDetail
                     ? expressionHover->detail
