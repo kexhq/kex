@@ -69,6 +69,7 @@ auto TypeChecker::check(const ast::Program& program, std::vector<Diagnostic>& di
     m_referencedModules.clear();
     m_localModules.clear();
     m_moduleConstructors.clear();
+    m_declaredTypeArity.clear();
     m_adtVariants.clear();
     m_adtOfConstructor.clear();
     m_nullaryConstructors.clear();
@@ -790,6 +791,7 @@ auto TypeChecker::registerRecordFields(const ast::Program& program,
             ? record.name : owner + "." + record.name;
         auto& fields = m_recordFields[name];
         m_programRecords.insert(name);
+        m_declaredTypeArity[name] = record.typeParams.size();
         if (namesOnly) return;
         const auto previousModule = m_currentModulePath;
         m_currentModulePath = owner;
@@ -1218,6 +1220,7 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def,
         modulePath.empty() ? def.name : modulePath + "." + def.name;
     m_adtVariants[identity] = names;
     m_nullaryVariants[identity] = std::move(nullary);
+    m_declaredTypeArity[identity] = def.typeParams.size();
     if (modulePath.empty())
         for (const auto& name : names)
             m_adtOfConstructor[name] = def.name;
@@ -3054,6 +3057,36 @@ auto TypeChecker::resolveTypeExprNode(const ast::TypeExpr& typeExpr,
                 args.push_back(arg ? resolveTypeExpr(*arg, genericVars) : Type::unknown());
             }
             std::string name = node.name.parts.empty() ? "" : node.name.parts.back();
+            // As many type arguments as the type declares (kexhq/kex#648):
+            // `Optional<Integer, String, Bool>` meant an Optional of Integer.
+            // A bare name stays the type over any arguments.
+            {
+                std::optional<std::size_t> declared;
+                if (name == "Optional" || name == kex::names::kListType) declared = 1;
+                else if (name == "Result" || name == kex::names::kMapType) declared = 2;
+                else if (const auto found = m_declaredTypeArity.find(
+                             node.name.parts.size() > 1 ? node.name.dotted()
+                                                        : resolveRecordName(name));
+                         found != m_declaredTypeArity.end())
+                    declared = found->second;
+                // `Type<T>` names a type as a value; the record carries no T.
+                if (declared && *declared != args.size() && name != kex::names::kTypeRecord &&
+                    m_diagnostics) {
+                    const auto message =
+                        "`" + node.name.dotted() + "` takes " + std::to_string(*declared) +
+                        " type argument" + (*declared == 1 ? "" : "s") + ", but " +
+                        std::to_string(args.size()) + " " + (args.size() == 1 ? "is" : "are") +
+                        " given";
+                    // Once, though an annotation is resolved by several passes.
+                    const bool reported = std::any_of(
+                        m_diagnostics->begin(), m_diagnostics->end(), [&](const Diagnostic& d) {
+                            return d.message == message && d.location.line == typeExpr.location.line &&
+                                   d.location.column == typeExpr.location.column &&
+                                   d.location.file == typeExpr.location.file;
+                        });
+                    if (!reported) error(typeExpr.location, message);
+                }
+            }
             // A qualified name means the type it spells and no other:
             // `Net.HTTP.Request<Binary>` written inside a module declaring
             // its own `Request` resolved to that local record by its last
@@ -4071,6 +4104,22 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             refuseUnheldTries("`" + def.name + "`", effectiveReturnType, clauseTries);
         // A `return` leaves with its value as the result, so the value must be
         // what the clause declares, as the body's last value must (below).
+        // An atom outside the declared set of atoms, as the last value or a
+        // `return`'s (kexhq/kex#641).
+        if (effectiveReturnType && !clause.body.empty()) {
+            std::vector<const ast::Expr*> results{clause.body.back().get()};
+            for (const auto& [returned, _] : clauseReturns)
+                if (returned != results.front()) results.push_back(returned);
+            for (const auto* result : results) {
+                if (const auto* returned = result ? std::get_if<ast::ReturnExpr>(&result->kind) : nullptr)
+                    result = returned->value.get();
+                if (const auto* guarded = result ? std::get_if<ast::TrailingIf>(&result->kind) : nullptr)
+                    result = guarded->expr.get();
+                if (result && atomOutsideSet(*result, effectiveReturnType))
+                    typeMismatch(result->location, effectiveReturnType,
+                                 Type::atom(std::get<ast::AtomLiteral>(result->kind).name));
+            }
+        }
         if (effectiveReturnType && !def.isSlot && !containsOpenType(effectiveReturnType))
             for (const auto& [returned, type] : clauseReturns) {
                 const auto* value = std::get<ast::ReturnExpr>(returned->kind).value.get();

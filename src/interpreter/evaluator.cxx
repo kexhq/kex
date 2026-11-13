@@ -3091,6 +3091,17 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             if (callableField && !args.empty())
                 fieldArgs.assign(args.begin() + 1, args.end());
 
+            // Nothing answers the name for this value: not a sibling of the
+            // `make` block the call is written in, which `callFunction` would
+            // find by the bare name (`.pretty` inside Box's `pretty`, on a
+            // String item, called Box's own `pretty` again until the stack ran
+            // out). BEAM's dispatcher reports it the same way.
+            if (receiver && !isNamespaceCall && !callableField && mangledName == node.method &&
+                !m_env->get(mangledName) && !m_functionDefs.count(mangledName) &&
+                !dispatchTypeName(receiver).empty())
+                throw RuntimeError("Undefined method: " + node.method + " for " +
+                                       receiver->typeName(),
+                                   expr.location);
             try {
                 return callFunction(mangledName, std::move(args),
                                     std::move(namedArgs), expr.location);

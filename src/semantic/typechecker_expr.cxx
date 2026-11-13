@@ -3333,6 +3333,10 @@ auto TypeChecker::declaredBindingType(const std::optional<ast::TypeExprPtr>& ann
             backing && !typesEqual(backing, declared) &&
             argMatchesParam(actual, backing))
             return declared;
+    if (value && atomOutsideSet(*value, declared)) {
+        typeMismatch(loc, declared, Type::atom(std::get<ast::AtomLiteral>(value->kind).name));
+        return declared;
+    }
     if (value && literalCoercesTo(*value, declared)) return declared;
     if (!std::holds_alternative<UnknownType>(actual->kind) &&
         !std::holds_alternative<TypeVar>(actual->kind) && !unsubstitutedThis &&
@@ -4071,6 +4075,8 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     const auto fits = [&](std::size_t i, const TypePtr& param) {
         if (auto selected = selectedType(i, param))
             return argMatchesParam(selected, param);
+        if (i < argExprs.size() && argExprs[i] && atomOutsideSet(*argExprs[i], param))
+            return false;
         // An Optional receiver is not the value it may hold: `xs[1].ok?` on a
         // `Result?` reached Result's `ok?`, which the walker then could not
         // run. Its functions are the Optional's own, or ones open to any type.
@@ -7169,6 +7175,35 @@ auto TypeChecker::checkNeverEqual(const TypePtr& lhs, const TypePtr& rhs, Source
     error(loc, "`" + typeToString(lhs) + "` and `" + typeToString(rhs) +
                    "` are never equal: compare with `" + (wrapped == "Optional" ? "Just" : "Ok") +
                    "(value)`, or unwrap first (`.or(default)`, a `match`)");
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::atomOutsideSet(const ast::Expr& value, const TypePtr& expected) const -> bool {
+    const auto* literal = std::get_if<ast::AtomLiteral>(&value.kind);
+    if (!literal || !expected) return false;
+    const auto bare = [](std::string name) {
+        if (!name.empty() && name.front() == ':') name.erase(0, 1);
+        return name;
+    };
+    // The atoms `expected` admits, when it is a set of them and nothing else.
+    std::vector<std::string> admitted;
+    const auto member = [&](const TypePtr& type) {
+        const auto* atom = std::get_if<PrimitiveType>(&type->kind);
+        if (!atom || atom->kind != PrimitiveType::Atom || atom->atomName.empty()) return false;
+        admitted.push_back(bare(atom->atomName));
+        return true;
+    };
+    const auto resolved = resolve(expected);
+    if (const auto* union_ = std::get_if<UnionType>(&resolved->kind)) {
+        for (const auto& option : union_->members)
+            if (!option || !member(resolve(option))) return false;
+    } else if (!member(resolved)) {
+        return false;
+    }
+    return std::find(admitted.begin(), admitted.end(), bare(literal->name)) == admitted.end();
 }
 
 } // namespace kex::semantic

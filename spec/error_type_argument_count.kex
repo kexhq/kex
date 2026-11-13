@@ -1,0 +1,17 @@
+# kex: check-only
+# A type takes as many type arguments as it declares (kexhq/kex#648):
+# `Optional<Integer, String, Bool>` was read as an Optional of Integer. A
+# bare name stays the type over any arguments.
+
+record Box<A> do
+  item : A
+end
+
+let f(b: Box<Integer, String>) -> Integer = 1
+let g(m: Map<String>) -> Integer = 2
+let h(o: Optional<Integer, String>) -> Integer = 3
+let bare(r: Result) -> Integer = 4
+
+main do
+  IO.printLine(bare(Ok(1)))
+end
