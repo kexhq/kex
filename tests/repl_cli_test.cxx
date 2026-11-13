@@ -207,6 +207,26 @@ auto runBeamFile(const std::string& source, const std::string& argument,
 } // namespace
 
 int main() {
+    describe("metamorphic file and REPL execution", []() {
+        it("preserves output when statements are entered separately", []() {
+            const std::array<std::string, 2> bodies = {
+                "var value = 7\nvalue += 1\nIO.printLine(value)\n",
+                "let twice(value: Integer) = value * 2\n"
+                "IO.printLine(twice(7))\n",
+            };
+            for (const auto& body : bodies) {
+                const auto file = "main do\n" + body + "end\n";
+                const auto walker = runWalkerFile(file);
+                const auto beam = runBeamFile(file, "");
+                assertEqual(beam, walker, "file backends disagree");
+                assertTrue(runRepl(body).find("\n" + walker) != std::string::npos,
+                           "walker REPL differs from file: " + body);
+                assertTrue(runBeamRepl(body).find("\n" + beam) != std::string::npos,
+                           "BEAM REPL differs from file: " + body);
+            }
+        });
+    });
+
     describe("CLI — qualified source-module discovery", []() {
         it("loads qualified-only dependencies transitively for BEAM", []() {
             namespace fs = std::filesystem;

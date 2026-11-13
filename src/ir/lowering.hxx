@@ -617,6 +617,8 @@ struct Lowering {
     auto lowerBodyScoped(const std::vector<ast::ExprPtr>& body) -> ExprPtr;
 
     auto lowerIf(const ast::IfExpr& n) -> ExprPtr;
+    auto lowerIfLet(const ast::IfExpr& n, const std::function<ExprPtr()>& lowerThen,
+                    const std::function<ExprPtr()>& lowerElse) -> ExprPtr;
 
     auto lowerMatch(const ast::MatchExpr& n) -> ExprPtr;
 

@@ -1,0 +1,83 @@
+describe("metamorphic generator") do
+  it("emits every relation as two losslessly parsed programs") do
+    var seed = 0
+    while seed < 33 do
+      let item = relation(seed)
+      assert(syntaxOk(item.original, "Program"), "original seed ${seed}: ${item.name}")
+      assert(syntaxOk(item.changed, "Program"), "changed seed ${seed}: ${item.name}")
+      seed += 1
+    end
+  end
+
+  it("places the binder inside the generated loop") do
+    let item = relation(1)
+    let tree = Kex.AST.parseSyntax(item.changed).try
+    assert(syntaxHas(tree, "WhileExpr"))
+    assert(syntaxHas(tree, "IfExpr"))
+    assert(item.changed.contains?("IO.printLine(value)"))
+  end
+
+  it("turns a valid annotation into a checker rejection") do
+    let item = relation(6)
+    assert(item.rejectChanged)
+    assert(item.original.contains?("let value: Integer"))
+    assert(item.changed.contains?("Just("))
+  end
+
+  it("uses an existing spec as a seed") do
+    let item = relation(8)
+    assert(item.original.contains?("# if let"))
+    assert(item.changed.contains?("metamorphicUnused"))
+  end
+
+  it("selects a literal node from an existing spec") do
+    let item = relation(10)
+    assert(item.changed.contains?("let METAMORPHIC_LITERAL = "))
+    assert(item.changed.contains?("METAMORPHIC_LITERAL"))
+  end
+
+  it("moves a function to a separate source module") do
+    let item = relation(9)
+    assert(item.moduleSource.contains?("module MetamorphicHelper"))
+    assert(item.changed.contains?("MetamorphicHelper.double"))
+  end
+end
+
+describe("metamorphic mutations") do
+  it("rewrites a plain call with an extra argument or none") do
+    let extra = mutations.at(2).try
+    assert(extra.rewrite("add(1, 2)") == ["add(1, 2, 0)"])
+    assert(extra.rewrite("Time.now()") == ["Time.now(0)"])
+    assert(extra.rewrite("items.map { |x| x }") == [])
+    let dropped = mutations.at(3).try
+    assert(dropped.rewrite("add(1, 2)") == ["add()"])
+    assert(dropped.rewrite("IO.printLine(1)") == [])
+  end
+
+  it("wraps, unwraps and retypes literals") do
+    assert(mutations.at(0).try.rewrite("7") == ["Just(7)"])
+    assert(mutations.at(1).try.rewrite("\"a\"") == ["7"])
+    assert(mutations.at(1).try.rewrite("7") == ["\"kex\""])
+    assert(mutations.at(4).try.rewrite("Just(x + 1)") == ["x + 1"])
+  end
+
+  it("drops one single-line arm of a match at a time") do
+    let text = "match n do\n  0 => \"zero\"\n  1 => \"one\"\n  _ => \"many\"\nend"
+    let variants = dropArm(text)
+    assert(variants.count == 3)
+    assert(!variants.at(0).or("").contains?("0 =>"))
+    assert(variants.at(0).or("").contains?("_ =>"))
+    assert(dropArm("match n do\n  _ => 1\nend") == [])
+  end
+
+  it("finds runnable specs and a site for every mutation") do
+    let files = corpus()
+    assert(files.count > 100)
+    assert(!files.any? { |path| path.contains?("/error_") })
+    var seed = 0
+    while seed < mutations.count do
+      assert(mutationCase(seed, files) != None, "no site for ${mutations.at(seed).try.name}")
+      seed += 1
+    end
+  end
+end

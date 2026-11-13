@@ -14,37 +14,43 @@ auto Lowering::lowerBodyScoped(const std::vector<ast::ExprPtr>& body) -> ExprPtr
     return r;
 }
 
-auto Lowering::lowerIf(const ast::IfExpr& n) -> ExprPtr {
-    // `if let Pat = scrutinee ... [else ...]`: match Pat, else fall through.
-    if (n.letPattern) {
-        auto subj = lower(n.condition); // condition holds the scrutinee
-        auto snap = subst;
-        // `if let { a, b } = x`: same structural test as a match arm.
-        if (auto* rp = std::get_if<ast::RecordPattern>(&n.letPattern->kind);
-            rp && rp->typeName.empty()) {
-            std::string sv = fresh("Anon");
-            std::vector<std::string> names;
-            collectRecordBindings(*rp, names);
-            for (const auto& name : names) subst[name] = name;
-            auto thenP = wrapAnonymousRecordPattern(sv, *rp, lowerBody(n.thenBody));
-            subst = snap;
-            auto elseP = n.elseBody ? lowerBodyScoped(*n.elseBody)
-                                    : lit(LitKind::Atom, "ok");
-            return makeLet(sv, std::move(subj),
-                           matchBool(anonymousRecordTest(sv, *rp),
-                                     std::move(thenP), std::move(elseP)));
-        }
-        auto pat = lowerPattern(n.letPattern);
-        auto thenP = lowerBody(n.thenBody);
+// `if let Pat = scrutinee ... [else ...]`: match Pat, else fall through. The
+// pattern's names are bound while +lowerThen+ lowers the body, so a body
+// lowered with its loop's continuation still sees them.
+auto Lowering::lowerIfLet(const ast::IfExpr& n, const std::function<ExprPtr()>& lowerThen,
+                          const std::function<ExprPtr()>& lowerElse) -> ExprPtr {
+    auto subj = lower(n.condition); // condition holds the scrutinee
+    auto snap = subst;
+    // `if let { a, b } = x`: same structural test as a match arm.
+    if (auto* rp = std::get_if<ast::RecordPattern>(&n.letPattern->kind);
+        rp && rp->typeName.empty()) {
+        std::string sv = fresh("Anon");
+        std::vector<std::string> names;
+        collectRecordBindings(*rp, names);
+        for (const auto& name : names) subst[name] = name;
+        auto thenP = wrapAnonymousRecordPattern(sv, *rp, lowerThen());
         subst = snap;
-        auto elseP = n.elseBody ? lowerBodyScoped(*n.elseBody) : lit(LitKind::Atom, "ok");
-        Match m; m.subjects.push_back(std::move(subj));
-        MatchClause hit; hit.patterns.push_back(std::move(pat)); hit.body = std::move(thenP);
-        MatchClause miss; auto w = std::make_unique<Pattern>(); w->kind = PatKind::Wild;
-        miss.patterns.push_back(std::move(w)); miss.body = std::move(elseP);
-        m.clauses.push_back(std::move(hit)); m.clauses.push_back(std::move(miss));
-        auto e = std::make_unique<Expr>(); e->node = std::move(m); return e;
+        auto elseP = lowerElse();
+        return makeLet(sv, std::move(subj),
+                       matchBool(anonymousRecordTest(sv, *rp),
+                                 std::move(thenP), std::move(elseP)));
     }
+    auto pat = lowerPattern(n.letPattern);
+    auto thenP = lowerThen();
+    subst = snap;
+    auto elseP = lowerElse();
+    Match m; m.subjects.push_back(std::move(subj));
+    MatchClause hit; hit.patterns.push_back(std::move(pat)); hit.body = std::move(thenP);
+    MatchClause miss; miss.patterns.push_back(wildPat()); miss.body = std::move(elseP);
+    m.clauses.push_back(std::move(hit)); m.clauses.push_back(std::move(miss));
+    auto e = std::make_unique<Expr>(); e->node = std::move(m); return e;
+}
+
+auto Lowering::lowerIf(const ast::IfExpr& n) -> ExprPtr {
+    if (n.letPattern)
+        return lowerIfLet(
+            n, [&] { return lowerBody(n.thenBody); },
+            [&] { return n.elseBody ? lowerBodyScoped(*n.elseBody) : lit(LitKind::Atom, "ok"); });
     ExprPtr elsePart = n.elseBody ? lowerBodyScoped(*n.elseBody)
                                   : lit(LitKind::Atom, "ok");
     for (int i = static_cast<int>(n.elifs.size()) - 1; i >= 0; --i) {
@@ -446,6 +452,12 @@ auto Lowering::lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i
             subst = snap;
             return r;
         };
+        // In a loop, the bound names must stay visible through the body
+        // and the rest of the iteration it continues with.
+        if (ie->letPattern)
+            return lowerIfLet(
+                *ie, [&] { return lowerLoopBodyFrom(ie->thenBody, 0, loopFn, mutVars, branchEnd); },
+                [&] { return ie->elseBody ? branch(*ie->elseBody) : fallthrough(); });
         ExprPtr elseP = ie->elseBody ? branch(*ie->elseBody)
                                      : fallthrough();
         for (auto it = ie->elifs.rbegin(); it != ie->elifs.rend(); ++it) {
