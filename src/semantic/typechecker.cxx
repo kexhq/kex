@@ -1434,14 +1434,30 @@ auto TypeChecker::checkConstructorPayloads(const std::string& name,
                                            const std::vector<TypePtr>& argTypes,
                                            SourceLocation loc, const std::string& scope) -> void {
     const auto* info = constructorInfo(name, scope);
-    if (!info || !info->declaredHere) return;
-    const auto arity = info->payloadTypes.size();
+    if (!info) return;
+    // How many values, wherever the constructor is declared: `Just()` was
+    // accepted, and failed on BEAM with a pattern mismatch. An imported
+    // one's payload types are not kept, its arity is.
+    std::optional<size_t> declaredArity;
+    if (info->declaredHere) {
+        declaredArity = info->payloadTypes.size();
+    } else if (!info->modulePath.empty()) {
+        if (const auto module = m_moduleConstructors.find(info->modulePath);
+            module != m_moduleConstructors.end())
+            if (const auto found = module->second.find(name); found != module->second.end())
+                declaredArity = found->second.arity;
+    } else if (const auto found = m_constructorArity.find(name); found != m_constructorArity.end()) {
+        declaredArity = found->second;
+    }
+    if (!declaredArity) return;
+    const auto arity = *declaredArity;
     if (argTypes.size() != arity) {
         error(loc, "`" + name + "` takes " + std::to_string(arity) +
                        (arity == 1 ? " value" : " values") + ", but got " +
                        std::to_string(argTypes.size()));
         return;
     }
+    if (!info->declaredHere) return;
     // Each value against the payload as declared, where both are known:
     // a payload that is one of the type's parameters (`Just(A)`) takes any.
     for (std::size_t i = 0; i < arity; ++i) {
@@ -4275,10 +4291,11 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         // kexhq/kex#644). The variable is still free after the body only
         // where nothing in it tied the variable to a type. Written on the
         // function itself: a trait's contract names its implementer's type.
-        if (!contract && clause.returnAnnotation && effectiveReturnType &&
-            std::holds_alternative<TypeVar>(resolve(effectiveReturnType)->kind)) {
+        const auto declaredResult = effectiveReturnType ? resolve(effectiveReturnType) : nullptr;
+        if (!contract && clause.returnAnnotation && declaredResult &&
+            isUndetermined(declaredResult) && containsTypeVariable(declaredResult)) {
             const auto produced = resolve(bodyType);
-            if (!std::holds_alternative<VoidType>(produced->kind) && isFullyConcrete(produced))
+            if (isConcreteValue(produced))
                 error(def.location, "`" + def.name + "` declared to return " +
                                         typeToString(effectiveReturnType) +
                                         " but body returns " + typeToString(produced));

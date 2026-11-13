@@ -469,6 +469,10 @@ auto isFullyConcrete(const TypePtr& type) -> bool {
     return !containsOpenType(type);
 }
 
+auto isConcreteValue(const TypePtr& type) -> bool {
+    return !std::holds_alternative<VoidType>(type->kind) && isFullyConcrete(type);
+}
+
 auto containsTypeVariable(const TypePtr& type) -> bool {
     return anyType(
         type,

@@ -184,12 +184,13 @@ fuzz: build
 METAMORPHIC_OUTDIR ?= /tmp/kex-metamorphic
 METAMORPHIC_SEED ?=
 METAMORPHIC_CASES ?= 40
+METAMORPHIC_MODE ?= search
 test-metamorphic: build
 	@"$(KEX)" --run-walker --no-colors tools/metamorphic.spec.kex
 	@"$(KEX)" --run-walker --no-colors -- tools/metamorphic.kex 0 10 "$(KEX)" "$(METAMORPHIC_OUTDIR)" 15000 gate
 
 metamorphic-search: build
-	@"$(KEX)" --run-walker --no-colors -- tools/metamorphic.kex "$(METAMORPHIC_SEED)" "$(METAMORPHIC_CASES)" "$(KEX)" "$(METAMORPHIC_OUTDIR)" 15000 search
+	@"$(KEX)" --run-walker --no-colors -- tools/metamorphic.kex "$(METAMORPHIC_SEED)" "$(METAMORPHIC_CASES)" "$(KEX)" "$(METAMORPHIC_OUTDIR)" 15000 "$(METAMORPHIC_MODE)"
 
 metamorphic-coverage:
 	@JOBS="$(JOBS)" METAMORPHIC_SEED="$(METAMORPHIC_SEED)" \

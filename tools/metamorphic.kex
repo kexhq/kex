@@ -11,10 +11,12 @@
 #   a finding: the checker let a wrong program through.
 #
 # make test-metamorphic gates the relations that pass. make
-# metamorphic-search runs every relation and mutation from a seed: a fresh
-# one from the clock unless METAMORPHIC_SEED is given, printed first so a run
-# replays. Every case and what each step answered are saved under the output
-# directory; a finding also writes finding.txt there.
+# metamorphic-search runs the relations and the mutations from a seed: a
+# fresh one from the clock unless METAMORPHIC_SEED is given, printed first so
+# a run replays. It leaves out the relations whose failure is an open bug
+# (knownOpen), so a failing search is always news; METAMORPHIC_MODE=search-all
+# runs them too. Every case and what each step answered are saved under the
+# output directory; a finding also writes finding.txt there.
 #
 # The runner uses the walker so a BEAM lowering bug cannot break the test
 # driver itself.
@@ -465,20 +467,34 @@ foul runMutation(kex: String, outDir: String, seed: Integer, budget: Integer,
   end
 end
 
+# Relations whose failure is an open bug, left out of `search` so a failing
+# search is always news; `search-all` runs them too. 0: assignment as a
+# value (kexhq/kex#614).
+let knownOpen -> [Integer] = [0]
+
+# The relation seed a search case runs. Leaving the known-open relations
+# out, each seed maps to its own relation seed whose relation is one of the
+# others, so no two cases of a run repeat one.
+let searchedRelation(seed: Integer, all: Bool) -> Integer do
+  if all then return seed end
+  let allowed = (0..relationCount - 1).items.reject { |r| knownOpen.contains?(r) }
+  seed / allowed.count * relationCount + allowed.at(seed % allowed.count).or(1)
+end
+
 foul drive(kex: String, outDir: String, seed: Integer, count: Integer,
-  budget: Integer, gated: Bool) -> Integer do
+  budget: Integer, mode: String) -> Integer do
   if !FS.Directory.exists?(outDir) && !FS.Directory.create(outDir).ok?
     IO.printError("metamorphic: cannot create ${outDir}")
     return 2
   end
   let version = Process.run(kex, ["--version"], budget)
-  let mode = if gated then "gate" else "search" end
   let metadata = "seed=${seed}\ncases=${count}\nmode=${mode}\ncompiler=${kex}\n${outcomeText(version)}\n"
   if !succeeded(version) || !save("${outDir}/run.txt", metadata)
     IO.printError("metamorphic: cannot record compiler preflight")
     return 2
   end
   IO.printLine("metamorphic ${mode}: seed ${seed}, ${count} cases")
+  let gated = mode == "gate"
   let files = if gated then [] else corpus() end
   var failed = 0
   var index = 0
@@ -490,7 +506,7 @@ foul drive(kex: String, outDir: String, seed: Integer, count: Integer,
     if gated
       passed = runRelation(kex, outDir, gateSeeds.at(index).or(-1), budget)
     elif caseSeed % 2 == 0
-      passed = runRelation(kex, outDir, caseSeed / 2, budget)
+      passed = runRelation(kex, outDir, searchedRelation(caseSeed / 2, mode == "search-all"), budget)
     else
       passed = runMutation(kex, outDir, caseSeed / 2, budget, files)
     end
@@ -509,10 +525,10 @@ main(args) do
   let outDir = args.at(3).or("/tmp/kex-metamorphic")
   let budget = Integer.parse(args.at(4).or("15000")).or(0)
   let mode = args.at(5).or("search")
-  let badMode = (mode != "search" && mode != "gate") || (mode == "gate" && count > 10)
+  let badMode = !["search", "search-all", "gate"].contains?(mode) || (mode == "gate" && count > 10)
   if seed < 0 || count < 1 || budget < 1 || args.length > 6 || badMode
-    IO.printError("usage: metamorphic [seed] [cases] [kex] [out dir] [timeout ms] [search|gate]")
+    IO.printError("usage: metamorphic [seed] [cases] [kex] [out dir] [timeout ms] [search|search-all|gate]")
     return System.exit(2)
   end
-  System.exit(drive(kex, outDir, seed, count, budget, mode == "gate"))
+  System.exit(drive(kex, outDir, seed, count, budget, mode))
 end
