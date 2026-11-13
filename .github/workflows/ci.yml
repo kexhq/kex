@@ -316,6 +316,15 @@ jobs:
           FUZZ_SEED: ${{ github.run_id }}
         run: make -o build fuzz
 
+      # The same for the metamorphic search: relations and type-breaking
+      # mutations of the spec programs, from this run's seed. Known-open
+      # relations are left out, so a failure here is a new finding.
+      - name: Metamorphic search
+        env:
+          METAMORPHIC_SEED: ${{ github.run_id }}
+          METAMORPHIC_CASES: "40"
+        run: make -o build metamorphic-search
+
       - name: Upload findings
         if: failure()
         uses: actions/upload-artifact@v4

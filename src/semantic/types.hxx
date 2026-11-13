@@ -292,6 +292,9 @@ auto containsOpenType(const TypePtr& type) -> bool;
 // A type variable or a trait constraint somewhere inside: a generic type.
 // Unlike containsOpenType, an unknown (`Any`) does not count.
 auto containsTypeVariable(const TypePtr& type) -> bool;
+// The type of a value an expression actually answers: fully concrete, and
+// not Never (which answers nothing).
+auto isConcreteValue(const TypePtr& type) -> bool;
 
 // How a name was bound: `var` (so `=` and `!` may rebind it) or not, and
 // whether the language bound it (`new`, `from`) rather than the program,

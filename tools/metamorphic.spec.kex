@@ -81,3 +81,12 @@ describe("metamorphic mutations") do
     end
   end
 end
+
+describe("metamorphic search") do
+  it("leaves known-open relations out without repeating a case") do
+    let seeds = (0..43).items.map { |seed| searchedRelation(seed, false) }
+    assert(!seeds.any? { |seed| knownOpen.contains?(seed % relationCount) })
+    assert(seeds.uniq.count == seeds.count)
+    assert(searchedRelation(11, true) == 11)
+  end
+end
