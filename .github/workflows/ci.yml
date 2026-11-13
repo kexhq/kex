@@ -299,6 +299,9 @@ jobs:
       - name: Fuzzer regression checks
         run: make -o build test-fuzz
 
+      - name: Metamorphic compiler checks
+        run: make -o build test-metamorphic
+
       - name: BEAM spec runner regression checks
         run: make -o build test-spec-beam-runner
 
@@ -321,6 +324,9 @@ jobs:
           path: |
             /tmp/kex-fuzz/fail_*
             /tmp/kex-fuzz/run.txt
+            /tmp/kex-metamorphic/*/finding.txt
+            /tmp/kex-metamorphic/*/*.kex
+            /tmp/kex-metamorphic/run.txt
 
   # musl is a supported platform, and glibc passing says nothing about it:
   # the spec suite pins float formatting, and that is exactly where libm

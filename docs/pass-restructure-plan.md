@@ -823,6 +823,19 @@ written in Kex down to recursion; and the reassigned-variable threading, so
        -> A = 1`), is refused (`spec/error_result_type_variable`). Not a
        trait's contract, whose variable is the implementer's type. Rigid
        variables throughout the body are still open.
+   - Why these went unfound: `make fuzz` generates only correct programs, of
+     literals and operators, with one fixed seed, and compares the backends,
+     which share the checker's decisions. Brought in from #617 and extended:
+     `tools/metamorphic.kex`. Its relations change a program without
+     changing what it does (or into one the checker must refuse); its
+     mutations break a runnable spec the way a type error would (an argument
+     added or dropped, `Just` wrapped or unwrapped, a literal of another
+     type, a match arm deleted), and the checker must then refuse it or it
+     must run alike on both backends without crashing. `make
+     test-metamorphic` gates the relations in CI; `make metamorphic-search`
+     takes a fresh seed each run. #617's own fix rides along: `if let` in a
+     loop body lost its bindings on BEAM (`lowerIfLet`, shared with the
+     plain `if let`; `spec/if_let_loop`).
    - Language server, reported by the user (2026-11-13), each now a test in
      `tests/lsp_test.cxx` (`askAt` opens a document and asks one request):
      - Hover on `let name = ...` (or `let list`) attached the documentation of

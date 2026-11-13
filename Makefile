@@ -65,6 +65,9 @@ help:
 	@echo "                    FAILS on any difference — the two backends are"
 	@echo "                    expected to agree on every spec."
 	@echo "  make test-fuzz    Test the fuzzer generator and failure handling"
+	@echo "  make test-metamorphic  Gate the metamorphic relations that pass"
+	@echo "  make metamorphic-search  Relations and type-breaking spec mutations, fresh seed"
+	@echo "  make metamorphic-coverage  The search with LLVM compiler coverage"
 	@echo "  make fuzz         Differential-fuzz walker vs BEAM on generated"
 	@echo "                    programs (tools/fuzz.kex). Override with"
 	@echo "                    FUZZ_SEED / FUZZ_CASES / FUZZ_OUTDIR / FUZZ_BUDGET_MS."
@@ -171,6 +174,27 @@ FUZZ_OUTDIR ?= /tmp/kex-fuzz
 FUZZ_BUDGET_MS ?= 15000
 fuzz: build
 	@"$(KEX)" --run-walker --no-colors -- tools/fuzz.kex "$(FUZZ_SEED)" "$(FUZZ_CASES)" "$(KEX)" "$(FUZZ_OUTDIR)" "$(FUZZ_BUDGET_MS)"
+
+# Metamorphic checks (tools/metamorphic.kex). The gate runs the fixed
+# relations that pass. The search runs every relation and mutates the spec
+# programs the way a type error would: the checker must reject the result,
+# or it must run alike on both backends. A fresh seed from the clock unless
+# METAMORPHIC_SEED is given; the run prints it, so a finding replays.
+.PHONY: test-metamorphic metamorphic-search metamorphic-coverage
+METAMORPHIC_OUTDIR ?= /tmp/kex-metamorphic
+METAMORPHIC_SEED ?=
+METAMORPHIC_CASES ?= 40
+test-metamorphic: build
+	@"$(KEX)" --run-walker --no-colors tools/metamorphic.spec.kex
+	@"$(KEX)" --run-walker --no-colors -- tools/metamorphic.kex 0 10 "$(KEX)" "$(METAMORPHIC_OUTDIR)" 15000 gate
+
+metamorphic-search: build
+	@"$(KEX)" --run-walker --no-colors -- tools/metamorphic.kex "$(METAMORPHIC_SEED)" "$(METAMORPHIC_CASES)" "$(KEX)" "$(METAMORPHIC_OUTDIR)" 15000 search
+
+metamorphic-coverage:
+	@JOBS="$(JOBS)" METAMORPHIC_SEED="$(METAMORPHIC_SEED)" \
+		METAMORPHIC_CASES="$(METAMORPHIC_CASES)" \
+		bash tools/metamorphic_coverage.sh
 
 # Informational benchmark harness (see tools/bench.sh and the plan's
 # measurement methodology). Not a gate: reports median + IQR, exits 0.
