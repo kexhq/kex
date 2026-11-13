@@ -1,0 +1,19 @@
+# kex: check-only
+# Arguments after a function of no parameters apply what it returns: `mk(3)`
+# calls the block `mk` returns. What it returns must then be a function of
+# that many arguments. `Time.now(22)` was accepted, and failed on BEAM with
+# `badfun` (the walker answered None).
+
+module M do
+  let zero() -> Integer = 1
+end
+
+let mk() -> (Integer -> Integer) = { |x| x + 1 }
+
+main do
+  IO.inspect(mk(3))
+  IO.inspect(mk(3, 4))
+  IO.inspect(mk("three"))
+  IO.inspect(M.zero(22))
+  IO.inspect(Time.now(22))
+end

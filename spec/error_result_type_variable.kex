@@ -1,0 +1,17 @@
+# kex: check-only
+# A result written as a type variable promises whatever type the caller
+# asks for (kexhq/kex#644): `same("hello")` must give back a String, so a
+# body answering `1` breaks the signature. A body that answers its
+# parameter, or a value built from it, keeps it.
+
+let same(a: A) -> A = 1
+
+let keep(a: A) -> A = a
+
+let firstOr(list: [A], fallback: A) -> A = list.first.or(fallback)
+
+main do
+  IO.printLine(same("hello"))
+  IO.printLine(keep("hello"))
+  IO.printLine(firstOr([1], 0))
+end

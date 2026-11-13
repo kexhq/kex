@@ -469,6 +469,16 @@ auto isFullyConcrete(const TypePtr& type) -> bool {
     return !containsOpenType(type);
 }
 
+auto containsTypeVariable(const TypePtr& type) -> bool {
+    return anyType(
+        type,
+        [](const TypePtr& t) {
+            return std::holds_alternative<TypeVar>(t->kind) ||
+                   std::holds_alternative<ConstrainedType>(t->kind);
+        },
+        NullType::Unknown);
+}
+
 auto containsOpenType(const TypePtr& type) -> bool {
     return anyType(
         type,

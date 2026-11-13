@@ -513,7 +513,7 @@ let validateFloat(text, culture: Culture) do
       mantissa = body.take(ei)
       exponent = body.drop(ei + 1)
     end
-    None => None
+    None => ()
   end
   if exponent.empty? == false
     let signed = exponent.startsWith?("-") || exponent.startsWith?("+")

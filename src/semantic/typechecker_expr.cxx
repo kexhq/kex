@@ -3653,9 +3653,8 @@ auto TypeChecker::argMatchesParam(const TypePtr& writtenArg, const TypePtr& writ
         auto* argOpt = std::get_if<OptionalType>(&argType->kind);
         return argOpt && argMatchesParam(argOpt->inner, paramOpt->inner);
     }
-    if (auto* argOpt = std::get_if<OptionalType>(&argType->kind)) {
-        return argMatchesParam(argOpt->inner, paramType);
-    }
+    // An optional never stands for its payload: `Just(0)` is no Integer.
+    if (std::holds_alternative<OptionalType>(argType->kind)) return false;
     auto isUnitLike = [](const TypePtr& t) -> bool {
         if (auto* p = std::get_if<PrimitiveType>(&t->kind))
             return p->kind == PrimitiveType::Unit;
@@ -5226,9 +5225,27 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // The value the binding holds is what is called.
         if (callExpr) m_decidedCalls[callExpr] = {CallKind::ValueCall, name};
         const auto held = resolve((*sigs)[0].result);
-        if (const auto* function = std::get_if<FuncType>(&held->kind);
-            function && function->params.size() == argTypes.size())
+        if (const auto* function = std::get_if<FuncType>(&held->kind)) {
+            if (function->params.size() == argTypes.size()) {
+                for (size_t i = 0; i < argTypes.size(); ++i)
+                    if (!argMatchesParam(argTypes[i], function->params[i]))
+                        typeMismatch(loc, function->params[i], argTypes[i]);
+                return function->result;
+            }
+            error(loc, "`" + sourceName(name) + "` takes no arguments; the function it returns expects " +
+                           std::to_string(function->params.size()) + " argument(s), got " +
+                           std::to_string(argTypes.size()));
             return function->result;
+        }
+        // What it returns is no function (`Time.now(22)`): there is nothing
+        // to apply the arguments to. Undetermined, or a Block named as such,
+        // it may be one.
+        const auto* named = std::get_if<NamedType>(&held->kind);
+        if (!containsOpenType(held) && !(named && named->name == "Block")) {
+            error(loc, "`" + sourceName(name) + "` takes no arguments, got " +
+                           std::to_string(argTypes.size()));
+            return held;
+        }
         return Type::unknown();
     }
 

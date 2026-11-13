@@ -526,10 +526,10 @@ module Integer do
         Ok(normalized) => do
           match Integer.parse(normalized) do
             Ok(v) => best = Just((v, s.drop(length)))
-            Error(_) => None
+            Error(_) => ()
           end
         end
-        Error(_) => None
+        Error(_) => ()
       end
       length = length + 1
     end
@@ -618,10 +618,10 @@ module Float do
         Ok(normalized) => do
           match Float.parse(normalized) do
             Ok(v) => best = Just((v, s.drop(length)))
-            Error(_) => None
+            Error(_) => ()
           end
         end
-        Error(_) => None
+        Error(_) => ()
       end
       length = length + 1
     end
