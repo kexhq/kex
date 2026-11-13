@@ -228,21 +228,6 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
         if (callsFoul(expr)) foulCall("function", call->name);
     } else if (const auto* tagged = std::get_if<ast::TaggedLiteral>(&expr.kind)) {
         if (callsFoul(expr)) foulCall("tag", tagged->tag);
-    } else if (const auto* capture = std::get_if<ast::CurryExpr>(&expr.kind)) {
-        // `~shout` hands the function on to be run, so a pure body may not
-        // name a foul one any more than call it (kexhq/kex#640).
-        const auto decided = m_checker.decidedCalls().find(&expr);
-        if (!m_inFoulContext && decided != m_checker.decidedCalls().end() &&
-            decided->second.kind == CallKind::FunctionReference) {
-            const auto& owner = decided->second.owner;
-            const auto dot = owner.rfind('.');
-            const bool foul = dot == std::string::npos
-                ? m_topLevelFoul.contains(owner)
-                : isQualifiedCallFoul(owner.substr(0, dot), owner.substr(dot + 1));
-            if (foul)
-                error(expr.location, "Cannot capture foul function '" + capture->name +
-                                         "' in a pure context");
-        }
     } else if (const auto* method = std::get_if<ast::MethodCall>(&expr.kind)) {
         // `IO.inspect` is the documented purity-exempt escape hatch.
         const auto module = method->receiver ? receiverModuleName(*method->receiver)

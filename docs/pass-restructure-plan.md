@@ -748,6 +748,41 @@ written in Kex down to recursion; and the reassigned-variable threading, so
    backends, with a spec where it is fixed); close those with a note, and
    list the rest in the PR.
 
+   Started 2026-11-13. The user's direction: skip large type-checker
+   features (type classes, higher-kinded types), and work the bugs a checker
+   should have caught. 44 open bug issues were rerun on both backends with
+   the working tree:
+   - Fixed by the work so far (to close, once the user agrees): #636, #629,
+     #628, #627, #626, #621, #590, #588, #585, #574 and #113.
+   - Fixed now:
+     - #641: an atom literal written where a set of atoms is expected (an
+       annotation, an argument, a result or `return`) must be one of them
+       (`spec/error_atom_outside_set`). An atom carried by a variable is not
+       followed: that needs literal types on values, a larger change.
+     - #648: a type takes as many type arguments as it declares
+       (`spec/error_type_argument_count`). `Type<T>` is exempt, a phantom by
+       design, and a bare name is left alone.
+     - #449, case 5: the checker crashed on a local function with a defaulted
+       parameter named like a prelude one. Two comparisons indexed past the
+       arguments passed (`spec/local_function_default_beside_prelude`).
+     - #646: the walker's crash only. `@item.pretty` on a String item
+       recursed until the stack ran out: a method call that nothing answers
+       for the value fell back to the bare name, which the enclosing `make`
+       block's own `pretty` answered. It reports "Undefined method" now, as
+       BEAM does. Refusing the call on an unconstrained `T` needs a way to
+       bound `T` (#651), a language feature.
+   - Still open, checker bugs: #640 (a pure function capturing a foul one:
+     refusing every capture broke the documented idiom of registering foul
+     handlers from pure configuration, `command(run: ~addNote)`,
+     `get("/", ~home)`; telling those from `xs.map(~shout)` needs effect
+     types, #142), #644 (type variables not rigid), #642 (trait
+     implementations not checked against the trait), #611 (an Optional where
+     its inner type is expected, the general leniency), #643 (an untyped
+     argument guesses an overload), #645
+     (exhaustiveness for tuple, literal and list patterns), #619, #647, #637,
+     #562. Backend bugs: #639, #635, #623, #618, #615, #614, #610, #613
+     (parser), #654 (CLI), #575 (REPL), #561.
+
 ## Why
 
 Measured against `main` when the plan was written:

@@ -1,0 +1,20 @@
+# kex: check-only
+# An atom written where a set of atoms is expected must be one of them
+# (kexhq/kex#641): in an annotation, as an argument, and as a result.
+
+let status: :ok | :error = :banana
+let fine: :ok | :error = :ok
+
+let check(s: :ok | :error) -> String = "${s}"
+
+let pick(flag: Bool) -> :yes | :no do
+  return :maybe if flag
+  :no
+end
+
+main do
+  IO.printLine("${status}")
+  IO.printLine(check(:ok))
+  IO.printLine(check(:nope))
+  IO.printLine("${pick(true)}")
+end

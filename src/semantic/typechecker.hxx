@@ -540,6 +540,9 @@ private:
     // `==` or `!=` between an Optional (or a Result) and a settled plain
     // value, which is never equal: refused.
     auto checkNeverEqual(const TypePtr& lhs, const TypePtr& rhs, SourceLocation loc) -> void;
+    // Whether `value` is an atom literal that `expected`, a set of atoms
+    // (`:ok | :error`), does not admit (kexhq/kex#641).
+    auto atomOutsideSet(const ast::Expr& value, const TypePtr& expected) const -> bool;
     auto inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr& right,
                        SourceLocation loc) -> TypePtr;
 
@@ -921,6 +924,9 @@ private:
         std::string module;
     };
     std::unordered_map<std::string, std::vector<ConstructorOwner>> m_constructorOwners;
+    // How many type parameters this program's records and sum types declare,
+    // by identity: `Box<A, B>` written for a `record Box<A>` is refused.
+    std::unordered_map<std::string, std::size_t> m_declaredTypeArity;
     // What applying a constructor produces. `slots[i]` is the index of the
     // ADT type parameter the i-th payload IS (`Just(X)` → slot 0), or -1 when
     // the payload is some other type expression and tells us nothing about
