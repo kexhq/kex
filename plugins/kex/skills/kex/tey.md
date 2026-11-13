@@ -55,8 +55,84 @@ end
 - `kex(">= 0.3.0")` is the compiler version the package needs.
 - `entrypoint` is what `tey run` runs; a library has none.
 - `target("shop", ...)` names a program `tey build` produces in `ebin/`.
-- `command("bench", run: "script/bench.kex", description: "...")` adds a
-  command of your own, run as `tey bench`.
+- `command(...)` adds a command of your own; see below.
+
+## The package's own commands
+
+A task the project needs, such as seeding a database, a benchmark, a
+release step or a code generator, is a command in `package.kex`, not a
+Makefile, a shell script to remember, or a note in the README:
+
+```text
+command("seed", run: "script/seed.kex", description: "Fill the database with sample data")
+command("where", run: "pwd", description: "Print the package root")
+```
+
+- `tey seed a b` runs it, from anywhere inside the package, with `a b` as the
+  program's `main(args)`.
+- A `run:` whose first word ends in `.kex` is a Kex program, given by its path
+  from the package root. Anything else is a shell command line, run from the
+  package root.
+- `tey help` lists the commands under **Package commands**, and editors that
+  ask tey what a project can do show them as tasks.
+- The built-in names (`build`, `test`, `run`, ...) cannot be redeclared, so
+  `tey test` means the same thing in every package.
+- A command script is an ordinary program: give it options with
+  `OptionParser`, as below.
+
+## A command-line program
+
+An application that reads options or commands uses `OptionParser`. Do not
+walk `args` by hand: the parser declares the interface once, prints `--help`
+from it, rejects a bad value with a message, and dispatches to the command.
+
+```kex
+using OptionParser
+
+# The whole interface, declared once. Each option is a name, a short letter
+# (or None), a help line, a default (or None), and whether it is required.
+let CLI = OptionParser.define("notes", "Keep short notes in a file")
+  .string("file", Just('f'), "Where the notes are kept", Just("notes.txt"), false)
+  .integer("limit", Just('n'), "How many notes to show", Just("10"), false)
+  .flag("verbose", Just('v'), "Say what is happening")
+  .command("add", "<text>", "Add a note", ~addNote)
+  .command("list", "Show the newest notes", ~listNotes)
+
+# A command answers the exit code.
+foul addNote(options: ParsedOptions) -> Integer do
+  let text = options.arguments.join(" ")
+  return 1 if text.empty?
+  IO.printLine("added to ${options.value("file", "")}: ${text}")
+  0
+end
+
+foul listNotes(options: ParsedOptions) -> Integer do
+  let limit = options.integerValue("limit").or(10)
+  IO.printLine("showing ${limit} from ${options.value("file", "")}")
+  IO.printLine("(verbose)") if options.flagEnabled?("verbose")
+  0
+end
+
+# `run` parses, prints help or the error, and calls the command.
+main(args) do
+  System.exit(CLI.run(args))
+end
+```
+
+- An option is `string`, `integer` or `flag`: a long name, a short letter or
+  `None`, a help line, then for `string` and `integer` a default (`Just("10")`
+  or `None`) and whether it is required.
+- A command is `command("list", "description", ~handler)`, or
+  `command("add", "<text>", "description", ~handler)` when the help line should
+  show what it takes. The handler gets the parsed options, with the command's
+  own words removed, and answers the exit code.
+- Read values with `options.value("file", "")`, `options.integerValue("limit")`
+  and `options.flagEnabled?("verbose")`; the words that were not options are
+  `options.arguments`.
+- `CLI.run(args)` parses and dispatches. For a program without commands, use
+  `CLI.parse(args)` instead, which answers the options or an error to show
+  with `OptionParser.errorMessage(error)` and `CLI.help`.
+- `kex -s OptionParser` and `kex -s OptionConfig` list the rest.
 
 ## Where files go
 

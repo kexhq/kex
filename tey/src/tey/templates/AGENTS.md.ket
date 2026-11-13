@@ -16,6 +16,12 @@ here. `kex --skill <topic>` goes deeper: `functions`, `make`, `control`,
 
 - Look names up, never guess them: `kex -s List`, `kex -s List.find`,
   `kex -s find`.
+- Use the standard library before writing your own. Command-line options and
+  commands go through `OptionParser` (`kex --skill tey` has an example),
+  never a hand-written argument loop.
+- A task the project needs (seeding data, a benchmark, a release step) is a
+  `command(...)` in `package.kex`, run as `tey <name>`, not a Makefile or a
+  loose script. `kex --skill tey` shows how.
 - Check after every edit: `kex -C --source-root src <file>`.
 - Run the specs: `tey test`. One case: `tey test --only "<describe> > <it>"`.
 <% if library %>

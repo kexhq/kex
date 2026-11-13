@@ -301,6 +301,12 @@ end
 
 ## Files, input and other modules
 
+Do not write what the standard library already has. Above all, never parse
+command-line arguments by hand: `OptionParser` declares the options and
+commands, prints the help, reports bad input and runs the command (an example
+is in `kex --skill tey`). `kex -s` lists the rest: JSON, regular expressions,
+files, paths, dates and times, sets, queues.
+
 `IO`, `List`, `Map`, `String`, `Math`, `Process` and the rest of the prelude
 need nothing. Everything else needs `using`; `kex -s <Name>` says which. Your
 own files work the same way: see `kex --skill modules`. A program of more
