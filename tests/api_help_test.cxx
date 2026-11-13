@@ -47,6 +47,12 @@ make Point, implement: Measurable do
   origin? :> Bool
   let origin? = x == 0.0
 
+  # The distance from the origin, i.e. the length. Never negative.
+  let length -> Float = x
+
+  # Moves the point by either kind of offset.
+  let moved(by: (Point | Float) -> Float) -> Point = this
+
   # Keeps the points the test accepts.
   keep :> (Point -> Bool) -> Point?
   let keep(test) = test(this) then Just(this) else None
@@ -128,6 +134,16 @@ int main() {
         it("puts the first sentence of the doc beside each member", [&]() {
             assertTrue(has(point, "Whether the point sits at the origin.\n"));
             assertFalse(has(point, "A second sentence"));
+        });
+
+        it("does not end a sentence at an abbreviation", [&]() {
+            assertTrue(has(point, "The distance from the origin, i.e. the "
+                                  "length.\n"));
+            assertFalse(has(point, "Never negative"));
+        });
+
+        it("keeps the parens around a union a function takes", [&]() {
+            assertTrue(has(point, "moved :> ((Point | Float) -> Float) -> Point"));
         });
 
         it("leaves private members out", [&]() {

@@ -107,6 +107,20 @@ auto proseMarkup(const std::string& doc) -> std::string {
     return result;
 }
 
+// Where the first sentence of `paragraph` ends: at a period followed by a
+// space and the start of a new sentence, a capital or a code mark. The period
+// of `i.e. the` or `e.g. 1.5` is followed by a lower-case word or a digit, so
+// it does not end anything.
+auto sentenceEnd(const std::string& paragraph) -> size_t {
+    for (auto at = paragraph.find(". "); at != std::string::npos;
+         at = paragraph.find(". ", at + 1)) {
+        if (at + 2 >= paragraph.size()) break;
+        const auto next = static_cast<unsigned char>(paragraph[at + 2]);
+        if (std::isupper(next) || next == '+' || next == '`') return at;
+    }
+    return std::string::npos;
+}
+
 // The first sentence of a doc comment: what a listing shows beside a name.
 auto summaryOf(const std::string& doc) -> std::string {
     std::string paragraph;
@@ -116,7 +130,7 @@ auto summaryOf(const std::string& doc) -> std::string {
         if (!paragraph.empty()) paragraph += " ";
         paragraph += text;
     }
-    const auto end = paragraph.find(". ");
+    const auto end = sentenceEnd(paragraph);
     if (end != std::string::npos) paragraph.resize(end + 1);
     return proseMarkup(paragraph);
 }

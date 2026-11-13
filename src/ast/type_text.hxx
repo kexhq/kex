@@ -77,11 +77,16 @@ inline auto typeExprText(const TypeExpr& type) -> std::string {
         }
         return "?";
     }, type.kind);
-    // Grouping parens change what a function type means: `(X -> Bool) -> X?`
-    // takes a predicate where `X -> Bool -> X?` takes two arguments. Around
-    // anything else they were decoration, and are not written back.
+    // Grouping parens change what a type means wherever an operator binds
+    // looser than the one around it: `(X -> Bool) -> X?` takes a predicate
+    // where `X -> Bool -> X?` takes two arguments, and `(A | B) -> C` takes
+    // either where `A | B -> C` is an `A` or a function. Around a name, a list
+    // or anything else that cannot come apart they were decoration, and are
+    // not written back.
     const bool grouped = type.parenthesized &&
-                         std::holds_alternative<FunctionType>(type.kind);
+                         (std::holds_alternative<FunctionType>(type.kind) ||
+                          std::holds_alternative<UnionType>(type.kind) ||
+                          std::holds_alternative<IntersectionType>(type.kind));
     return grouped ? "(" + text + ")" : text;
 }
 
