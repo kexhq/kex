@@ -1,5 +1,6 @@
 #include <algorithm>
 #include "../evaluator.hxx"
+#include "../../common/string_utils.hxx"
 #include "../../common/utf8.hxx"
 #include "lazy.hxx"
 #include <filesystem>
@@ -28,14 +29,10 @@ static auto modeFlags(const std::string& name)
     return std::nullopt;
 }
 
-// Helper: split a string into lines (no trailing newline per line)
-static auto splitLines(const std::string& content) -> std::vector<ValuePtr> {
+// A file's lines as Kex Strings (kex::splitLines).
+static auto lineValues(const std::string& content) -> std::vector<ValuePtr> {
     std::vector<ValuePtr> result;
-    std::istringstream ss(content);
-    std::string line;
-    while (std::getline(ss, line)) {
-        result.push_back(Value::string(line));
-    }
+    for (auto& line : kex::splitLines(content)) result.push_back(Value::string(std::move(line)));
     return result;
 }
 
@@ -757,7 +754,7 @@ auto Evaluator::registerFileBuiltins() -> void {
         if (!pathStr) return Value::none();
         auto mocked = mockFileContent(pathStr->value);
         if (mocked)
-            return Value::just(Value::list(splitLines((*mocked))));
+            return Value::just(Value::list(lineValues((*mocked))));
         std::ifstream file(pathStr->value, std::ios::binary);
         if (!file.is_open()) return Value::none();
         std::vector<ValuePtr> result;

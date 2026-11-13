@@ -320,10 +320,10 @@ int main() {
         it("does not route a shadowed owner", [&]() {
             const auto routes = routesOf(
                 "make Task do\n  let ping -> String = \"task\"\nend\n"
-                "make Pid do\n  let ping -> String = \"pid\"\nend\n"
+                "make Process<X> do\n  let ping -> String = \"pid\"\nend\n"
                 "main do\n  IO.printLine(\"x\")\nend\n");
             // Both are pids at run time; the dispatcher keeps Task's arm.
-            assertTrue(routes.count({"ping/Pid", 1}) == 0);
+            assertTrue(routes.count({"ping/Process", 1}) == 0);
         });
     });
 

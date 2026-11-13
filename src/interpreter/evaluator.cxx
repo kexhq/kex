@@ -5260,10 +5260,10 @@ auto Evaluator::bindPattern(const ast::Pattern& pattern, const ValuePtr& value,
         }
     } else if (auto* constrPat = std::get_if<ast::ConstructorPattern>(&pattern.kind)) {
         if (!matchPattern(pattern, value, isMutable))
-            throw RuntimeError("pattern mismatch — expected " + constrPat->name, loc);
+            throw RuntimeError("pattern mismatch — got " + value->inspect(), loc);
     } else if (std::get_if<ast::ListPattern>(&pattern.kind)) {
         if (!matchPattern(pattern, value, isMutable))
-            throw RuntimeError("pattern mismatch", loc);
+            throw RuntimeError("pattern mismatch — got " + value->inspect(), loc);
     }
 }
 

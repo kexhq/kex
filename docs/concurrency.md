@@ -201,9 +201,8 @@ kex --sname a --cookie secret server.kex
 kex --sname b --cookie secret client.kex
 ```
 
-Once connected, a `Pid` from one node works on the other. `send`, `link` and
-`monitor` cross the network unchanged, and so do typed `Process` handles and
-`Server` handles: a slot called on another node's server runs there, against
+Once connected, a `Process` from one node works on the other. `send`, `link` and
+`monitor` cross the network unchanged, and so do `Server` handles: a slot called on another node's server runs there, against
 that server's state.
 
 ```kex

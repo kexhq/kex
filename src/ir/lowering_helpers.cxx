@@ -324,11 +324,21 @@ auto Lowering::makeMatch1(ExprPtr subject, PatternPtr pattern, ExprPtr body) -> 
     mc.patterns.push_back(std::move(pattern));
     mc.body = std::move(body);
     m.clauses.push_back(std::move(mc));
+    // The value that did not match is part of the fault: what it was is
+    // what the reader needs (`let Ok(store) = started(...)` handed an
+    // `Error(cannot connect ...)`).
     MatchClause fallback;
-    auto wild = std::make_unique<Pattern>();
-    wild->kind = PatKind::Wild;
-    fallback.patterns.push_back(std::move(wild));
-    fallback.body = runtimeError("pattern mismatch");
+    const auto unmatched = fresh("Unmatched");
+    auto any = std::make_unique<Pattern>();
+    any->kind = PatKind::Var;
+    any->name = unmatched;
+    fallback.patterns.push_back(std::move(any));
+    std::string where;
+    if (currentLoc)
+        where = std::string(currentLoc->file) + ":" + std::to_string(currentLoc->line) + ":" +
+                std::to_string(currentLoc->column) + ": ";
+    fallback.body = callE("kex_intrinsic_fun", "patternMismatch", 2,
+                          two(lit(LitKind::String, where), var(unmatched)));
     m.clauses.push_back(std::move(fallback));
     auto e = std::make_unique<Expr>();
     e->node = std::move(m);

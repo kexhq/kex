@@ -1159,6 +1159,8 @@ private:
     // Record that TypeVar `id` equals `concrete`.
     // No-op if `id` already has a binding (first writer wins).
     auto unifyVar(int id, TypePtr concrete) -> void;
+    auto fixNestedVariables(const TypePtr& argument, const TypePtr& parameter) -> void;
+    auto resolvedThroughout(const TypePtr& type) const -> TypePtr;
 
     auto freshTypeVar() -> TypePtr;
 

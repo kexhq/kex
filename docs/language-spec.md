@@ -1538,15 +1538,18 @@ links, monitors, and supervision trees.
 
 ### Spawn and Send
 
-`spawn do ... end` starts a new process and returns a `Pid`:
+`spawn do ... end` starts a new process and returns it, a `Process<A>` whose `A`
+is the kind of message it accepts:
 
 ```kex
-foul startCounter -> Pid do
+type CounterMessage = Increment | Reset | Get(Process<Integer>)
+
+foul startCounter -> Process<CounterMessage> do
   return spawn do counterLoop(0) end
 end
 ```
 
-`pid.send(msg)` sends a message (any value) to a process:
+`process.send(msg)` sends it a message of that kind:
 
 ```kex
 counter.send(Increment)
@@ -1624,12 +1627,12 @@ end
 ### Process Introspection
 
 ```kex
-let me = Process.self            # caller's Pid
+let me = Process.self            # the calling process
 pid.alive?                       # is the process alive?
 pid.link                         # link caller to pid (bidirectional exit)
 pid.monitor                      # returns a Reference; demonitor with ref.demonitor
 Process.register(pid, :name)     # register pid under an atom
-Process.whereIs(:name)           # Pid? for a registered name
+Process.whereIs(:name)           # Process<A>? for a registered name
 Process.exit(pid, reason)        # send an exit signal
 ```
 
@@ -2194,7 +2197,8 @@ See §18 for the full process API. Summary:
 
 - `Process.self`, `Process.exit(pid, reason)`, `Process.register(pid, name)`,
   `Process.whereIs(name)`
-- `Pid.send(msg)`, `Pid.link`, `Pid.unlink`, `Pid.monitor`, `Pid.alive?`
+- `Process.send(msg)`, `Process.link`, `Process.unlink`, `Process.monitor`,
+  `Process.alive?`
 - `Reference.demonitor`
 - `Task.start { expr }`, `task.await(timeout)`, `Task.awaitAll([tasks])`
 - `Supervisor.start(restart: atom) do Supervisor.worker { spawnFn } end` — children one per line, or `Supervisor.start(restart: atom, [children])`; `Supervisor.supervisor` nests the same two ways

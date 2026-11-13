@@ -45,11 +45,6 @@ auto modulePath(const ast::Expr& receiver) -> std::optional<std::string> {
 using Functions =
     std::unordered_map<std::string, std::vector<const ast::FunctionDef*>>;
 
-auto qualified(const std::string& scope, const std::string& name)
-    -> std::string {
-    return kex::mangle::qualify(scope, name);
-}
-
 auto companionName(const std::string& tag) -> std::string {
     if (tag.empty()) return "validate";
     auto result = std::string{"validate"};
@@ -80,7 +75,7 @@ auto collectFunction(
     const std::string& scope,
     Functions& functions,
     std::vector<TagUse>& uses) -> void {
-    functions[qualified(scope, function.name)].push_back(&function);
+    functions[kex::mangle::qualify(scope, function.name)].push_back(&function);
     for (const auto& clause : function.clauses)
         for (const auto& expression : clause.body)
             if (expression) walkExpr(*expression, scope, uses);
@@ -555,18 +550,18 @@ auto validateTaggedLiterals(
 
         const auto companion = companionName(use.literal->tag);
         const auto owner = use.qualifier.empty() ? use.scope : use.qualifier;
-        const auto companionKey = qualified(owner, companion);
+        const auto companionKey = kex::mangle::qualify(owner, companion);
 
         // Prefer a program-local definition; fall back to an imported module's.
         const ast::Program* home = &program;
         const Functions* scope = &functions;
         std::string moduleCompanionKey;
         const ImportedModule* matchedModule = nullptr;
-        if (!use.qualifier.empty() && !functions.contains(qualified(owner, use.literal->tag))) {
+        if (!use.qualifier.empty() && !functions.contains(kex::mangle::qualify(owner, use.literal->tag))) {
             // A qualified tag is that module's own function: no trailing-
             // segment matching, which could find another module's tag.
             for (const auto& module : importedModules())
-                if (module.functions.contains(qualified(owner, use.literal->tag)) &&
+                if (module.functions.contains(kex::mangle::qualify(owner, use.literal->tag)) &&
                     module.functions.contains(companionKey)) {
                     scope = &module.functions;
                     home = module.program.get();
@@ -575,7 +570,7 @@ auto validateTaggedLiterals(
                     break;
                 }
             if (!matchedModule) continue;
-        } else if (!functions.contains(qualified(owner, use.literal->tag))) {
+        } else if (!functions.contains(kex::mangle::qualify(owner, use.literal->tag))) {
             // A module file collects its functions under its own scope
             // ("Regex.regex"), while the tag at the use site is unqualified
             // ("regex") — `using` brought it into scope. Match on the trailing

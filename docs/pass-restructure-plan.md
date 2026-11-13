@@ -425,11 +425,32 @@ Found doing it, both silent wrong answers on BEAM and neither new:
   passed the unparsed String to `NoCurrency(Float)` (fixed), and
   `spec/record_equality` built `Just(1)` under its own `Just(String)`
   (fixed).
-- Open, for the user: a `Pid` is accepted where a payload is declared
-  `Process<T>` (`Ask(Process.self)`; six specs and examples do it), while a
-  function parameter `Process<T>` refuses a `Pid`. The payload check leaves
-  it as it was (`names::kPidType`/`kProcessType`); one rule should hold for
-  both.
+- `Pid` is gone (decided by the user, 2026-11-13): a process is a
+  `Process<A>`, `A` the messages it takes. `Process.self`, `whereIs`,
+  `Node.spawn` answer `Process<A>`, `A` taken from where the value is used,
+  so a payload and a parameter follow one rule. `make Pid` duplicated
+  `make Process<X>` function for function and is deleted; lowering guards a
+  process as `Process`, the walker names it so.
+  Found doing it: a constructor's payload read at registration kept
+  `Atom` and `String` inside a tuple as unresolved names, so
+  `Orders(caller)` with `caller : Process<(Atom, [String])>` refused
+  `caller.send((:reply, orders))` ("expects (Atom, [String]), but got (Atom,
+  [String])"). Pattern bindings re-read the payload now (`declaredPayload`).
+  A generic the arguments do not bind (`self -> Process<A>`) was left the
+  signature's placeholder in the call's result, where it matched anything
+  and could be read as the next callee's own `A`. It is a fresh variable
+  per call now (`checkCall`'s `applyGenerics`); no corpus output changed.
+  An argument now fixes its unknowns inside a list, an optional, a tuple, a
+  map or a generic type from the concrete parameter it is passed as
+  (`TypeChecker::fixNestedVariables`, beside the rule a bare unknown argument
+  already had), and argument matching reads an unknown that is known by now
+  (`argMatchesParam`). So one binding of `Process.self` used as two message
+  types is refused, and so is a `none()` list passed as `[Integer]` and then
+  `[String]` (`spec/error_argument_fixes_unknown`). No corpus output changed.
+  Still lenient: an unknown known only by a bound (`n + 1` made it some
+  Number) stays an unknown; refusing it broke overload choice in the standard
+  library. `let a = []` is `[Unknown]`, not a list of one unknown, so it is
+  not fixed either.
 Still slow, not started: a `map`/`filter`/`reduce` chain builds every
 intermediate list, and each stage goes through `kex_prelude` and
 `kex_intrinsic_list` with `as_list`/`repack` for a String receiver.

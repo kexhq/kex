@@ -24,4 +24,4 @@ end
 # What a client asks the store node for. The node answers `WantStore` with the
 # store's own typed `Server<Entries>` handle; from then on the client calls
 # slots on it directly, and each call runs on the store node.
-type Request = WantStore(Pid) | StopStore
+type Request = WantStore(Process<Server<Entries>>) | StopStore

@@ -21,7 +21,7 @@ auto typeText(const TypeExpr& type, TypeSpelling spelling) -> std::string {
             out += (i ? ", " : "") + text(types[i]);
         return out;
     };
-    return std::visit([&](const auto& node) -> std::string {
+    const auto written = std::visit([&](const auto& node) -> std::string {
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, TypeName>) {
             return name(node);
@@ -61,6 +61,17 @@ auto typeText(const TypeExpr& type, TypeSpelling spelling) -> std::string {
         }
         return missing;
     }, type.kind);
+    // Grouping parens change what a type means wherever an operator binds
+    // looser than the one around it: `(X -> Bool) -> X?` takes a predicate
+    // where `X -> Bool -> X?` takes two arguments, and `(A | B) -> C` takes
+    // either where `A | B -> C` is an `A` or a function. Around a name, a list
+    // or anything else that cannot come apart they were decoration, and are
+    // not written back.
+    const bool grouped = !dispatch && type.parenthesized &&
+                         (std::holds_alternative<FunctionType>(type.kind) ||
+                          std::holds_alternative<UnionType>(type.kind) ||
+                          std::holds_alternative<IntersectionType>(type.kind));
+    return grouped ? "(" + written + ")" : written;
 }
 
 } // namespace kex::ast

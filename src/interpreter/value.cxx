@@ -872,7 +872,7 @@ auto dispatchTypeName(const ValuePtr& v) -> std::string {
         else if constexpr (std::is_same_v<T, ListValue>) return "List";
         else if constexpr (std::is_same_v<T, MapValue>) return "Map";
         else if constexpr (std::is_same_v<T, FileHandleValue>) return "FileHandle";
-        else if constexpr (std::is_same_v<T, ProcessValue>) return "Pid";
+        else if constexpr (std::is_same_v<T, ProcessValue>) return "Process";
         else if constexpr (std::is_same_v<T, TaskValue>) return "Task";
         else if constexpr (std::is_same_v<T, ServerValue>) return "Server";
         else if constexpr (std::is_same_v<T, IntValue> || std::is_same_v<T, BigIntValue>) return "Integer";

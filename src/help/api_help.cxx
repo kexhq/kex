@@ -3,6 +3,8 @@
 #include "../ast/ast.hxx"
 #include "../ast/convert.hxx"
 #include "../ast/type_text.hxx"
+#include "../common/mangle.hxx"
+#include "../common/string_utils.hxx"
 #include "../common/prelude_loader.hxx"
 #include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
@@ -32,34 +34,10 @@ constexpr size_t kSuggestionLimit = 12;
 // that column off the screen for every other member.
 constexpr size_t kSignatureColumnLimit = 44;
 
-auto trimmed(std::string_view text) -> std::string {
-    const auto first = text.find_first_not_of(" \t\r");
-    if (first == std::string_view::npos) return {};
-    const auto last = text.find_last_not_of(" \t\r");
-    return std::string(text.substr(first, last - first + 1));
-}
+using kex::lowered;
+using kex::splitLines;
+using kex::trimmed;
 
-auto lowered(std::string_view text) -> std::string {
-    std::string result(text);
-    std::transform(result.begin(), result.end(), result.begin(),
-                   [](unsigned char c) {
-                       return static_cast<char>(std::tolower(c));
-                   });
-    return result;
-}
-
-auto lastSegment(std::string_view name) -> std::string_view {
-    const auto dot = name.rfind('.');
-    return dot == std::string_view::npos ? name : name.substr(dot + 1);
-}
-
-auto splitLines(const std::string& text) -> std::vector<std::string> {
-    std::vector<std::string> lines;
-    std::istringstream stream(text);
-    std::string line;
-    while (std::getline(stream, line)) lines.push_back(line);
-    return lines;
-}
 
 auto withoutTrailingDo(std::string line) -> std::string {
     constexpr std::string_view suffix = " do";
@@ -141,9 +119,9 @@ auto ownerNameOf(const ast::TypeExpr& target) -> std::string {
     return std::visit([&](const auto& node) -> std::string {
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, ast::TypeName>)
-            return ast::typeNameText(node);
+            return node.dotted();
         else if constexpr (std::is_same_v<T, ast::GenericType>)
-            return ast::typeNameText(node.name);
+            return node.name.dotted();
         else if constexpr (std::is_same_v<T, ast::ListType>)
             return "List";
         else if constexpr (std::is_same_v<T, ast::MapType>)
@@ -155,7 +133,7 @@ auto ownerNameOf(const ast::TypeExpr& target) -> std::string {
         else if constexpr (std::is_same_v<T, ast::FunctionType>)
             return "Function";
         else
-            return ast::typeExprText(target);
+            return ast::typeText(target);
     }, target.kind);
 }
 
@@ -164,7 +142,7 @@ auto signatureOf(const ast::TypeAnnotation& annotation) -> std::string {
     result += annotation.name;
     result += annotation.implicitFrom ? " ::> "
               : annotation.implicitThis ? " :> " : " : ";
-    if (annotation.type) result += ast::typeExprText(*annotation.type);
+    if (annotation.type) result += ast::typeText(*annotation.type);
     return result;
 }
 
@@ -189,11 +167,11 @@ auto signatureOf(const ast::FunctionDef& function, bool isMethod)
             if (i) result += ", ";
             result += param.name.value_or("_");
             if (param.type && *param.type)
-                result += ": " + ast::typeExprText(**param.type);
+                result += ": " + ast::typeText(**param.type);
         }
         if (!clause.params.empty()) result += ")";
         if (clause.returnAnnotation && *clause.returnAnnotation)
-            result += " -> " + ast::typeExprText(**clause.returnAnnotation);
+            result += " -> " + ast::typeText(**clause.returnAnnotation);
         return result;
     }
     result += function.name + (isMethod ? " :> " : " : ");
@@ -202,10 +180,10 @@ auto signatureOf(const ast::FunctionDef& function, bool isMethod)
         const bool isFunction =
             std::holds_alternative<ast::FunctionType>(type.kind) &&
             !type.parenthesized;
-        const auto text = ast::typeExprText(type);
+        const auto text = ast::typeText(type);
         result += (isFunction ? "(" + text + ")" : text) + " -> ";
     }
-    return result + ast::typeExprText(**clause.returnAnnotation);
+    return result + ast::typeText(**clause.returnAnnotation);
 }
 
 // Walks one parsed source and files what it declares under the owners that a
@@ -282,11 +260,6 @@ private:
         return scope.module + "." + name;
     }
 
-    auto docAt(int line) const -> std::string {
-        const auto found = m_docs.find(line);
-        return found == m_docs.end() ? std::string{} : found->second;
-    }
-
     auto lineAt(int line) const -> std::string {
         if (line < 1 || static_cast<size_t>(line) > m_lines.size()) return {};
         return m_lines[static_cast<size_t>(line) - 1];
@@ -346,7 +319,7 @@ private:
         m_added.emplace_back(into.name, into.members.size());
         into.members.push_back(ApiMember{
             annotation.name, signatureOf(annotation), group,
-            docAt(annotation.location.line), {}});
+            ast::docAt(m_docs, annotation.location.line), {}});
     }
 
     auto addMember(const ast::FunctionDef& function, ApiOwner& into,
@@ -360,7 +333,7 @@ private:
                 return;
         m_added.emplace_back(into.name, into.members.size());
         into.members.push_back(ApiMember{function.name, std::move(signature),
-                                         group, docAt(function.location.line),
+                                         group, ast::docAt(m_docs, function.location.line),
                                          {}});
     }
 
@@ -399,7 +372,7 @@ private:
             into.declaration =
                 std::string(module.isCapability ? "capability " : "module ") +
                 scope.module;
-            into.doc = docAt(module.location.line);
+            into.doc = ast::docAt(m_docs, module.location.line);
         }
         for (const auto& item : module.body)
             std::visit([&](const auto& ptr) { collect(*ptr, scope); }, item);
@@ -428,21 +401,21 @@ private:
     auto collect(const ast::TypeDef& type, const Scope& scope) -> void {
         auto& into = owner(qualified(type.name, scope), OwnerKind::Type, true);
         into.declaration = declarationAt(type.location.line, false);
-        into.doc = docAt(type.location.line);
+        into.doc = ast::docAt(m_docs, type.location.line);
     }
 
     auto collect(const ast::RecordDef& record, const Scope& scope) -> void {
         auto& into =
             owner(qualified(record.name, scope), OwnerKind::Record, true);
         into.declaration = declarationAt(record.location.line, true);
-        into.doc = docAt(record.location.line);
+        into.doc = ast::docAt(m_docs, record.location.line);
     }
 
     auto collect(const ast::TraitDef& trait, const Scope& scope) -> void {
         auto& into =
             owner(qualified(trait.name, scope), OwnerKind::Trait, true);
         into.declaration = declarationAt(trait.location.line, false);
-        into.doc = docAt(trait.location.line);
+        into.doc = ast::docAt(m_docs, trait.location.line);
         std::set<std::string> annotated;
         noteAnnotated(trait.body, annotated);
         addMethods(trait.body, into, "", annotated);
@@ -457,7 +430,7 @@ private:
             if (std::find(into.traits.begin(), into.traits.end(),
                           implemented) == into.traits.end())
                 into.traits.push_back(implemented);
-        const auto group = "make " + ast::typeExprText(*make.target);
+        const auto group = "make " + ast::typeText(*make.target);
         std::set<std::string> annotated;
         noteAnnotated(make.body, annotated);
         addMethods(make.body, into, group, annotated);
@@ -621,7 +594,7 @@ auto ApiIndex::findOwners(std::string_view name) const
         if (ownerName.empty()) continue;
         const auto candidate = lowered(ownerName);
         if (candidate == wanted) sameSpelling.push_back(&owner);
-        else if (lastSegment(candidate) == wanted)
+        else if (kex::mangle::memberOf(std::string(candidate)) == wanted)
             sameLastSegment.push_back(&owner);
     }
     return sameSpelling.empty() ? sameLastSegment : sameSpelling;
@@ -777,7 +750,7 @@ auto ApiIndex::printTopic(std::string_view query, std::ostream& out,
 
     err << "kex: nothing in the standard library is called `" << query
         << "`\n";
-    const auto wanted = lowered(lastSegment(query));
+    const auto wanted = lowered(kex::mangle::memberOf(std::string(query)));
     std::vector<std::string> near;
     for (const auto& [name, owner] : m_owners) {
         if (!name.empty() && lowered(name).find(wanted) != std::string::npos)

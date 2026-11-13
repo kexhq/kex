@@ -1,9 +1,8 @@
 # Distributed Kex: this BEAM node, and the other nodes it is connected to.
 #
 # A node is one running BEAM VM with a name. Once two nodes share a cookie and
-# are connected, a +Pid+ from one works on the other: +send+, +link+ and
-# +monitor+ cross the network unchanged, and so do typed +Process+ and
-# +Server+ handles.
+# are connected, a +Process+ from one works on the other: +send+, +link+ and
+# +monitor+ cross the network unchanged, and so do +Server+ handles.
 #
 # Name a node when starting it (`kex --sname a --cookie secret app.kex`), or
 # from inside the program with +Node.start+:
@@ -99,7 +98,7 @@ module Node do
   foul setCookie(cookie) = Kex.Intrinsic.Node.setCookie(cookie)
 
   # Sends +message+ to the process registered as +name+ on +node+, unchanged.
-  # Like +Pid.send+, it never blocks and never fails.
+  # Like +Process.send+, it never blocks and never fails.
   #
   # @param node [Atom] the node the process runs on
   # @param name [Atom] the name it was registered under
@@ -111,18 +110,18 @@ module Node do
   send : Atom -> Atom -> X -> Void
   foul send(node, name, message) = Kex.Intrinsic.Node.send(node, name, message)
 
-  # The +Pid+ registered as +name+ on +node+, or +None+.
+  # The process registered as +name+ on +node+, or +None+.
   #
   # @param node [Atom] the node to ask
   # @param name [Atom] the registered name
-  # @return [Pid?] the process, or +None+
+  # @return [Process<A>?] the process, or +None+
   #
   # @example
   #   Node.whereIs(:b@myhost, :logger).map { |pid| pid.send(:flush) }
-  whereIs : Atom -> Atom -> Pid?
+  whereIs : Atom -> Atom -> Process<A>?
   foul whereIs(node, name) = Kex.Intrinsic.Node.whereIs(node, name)
 
-  # Runs +block+ in a new process on +node+ and returns its +Pid+.
+  # Runs +block+ in a new process on +node+ and returns it.
   #
   # The block is a function of THIS program. When +node+ has not loaded the
   # module it belongs to, that module's compiled code is sent over and loaded
@@ -130,11 +129,11 @@ module Node do
   #
   # @param node [Atom] where to run it
   # @param block [Block<X>] the work
-  # @return [Pid] the new process
+  # @return [Process<A>] the new process
   #
   # @example
   #   let me = Process.self
   #   Node.spawn(:b@myhost) do me.send(Node.self) end
-  spawn : Atom -> Block<X> -> Pid
+  spawn : Atom -> Block<X> -> Process<A>
   foul spawn(node, block) = Kex.Intrinsic.Node.spawn(node, block)
 end
