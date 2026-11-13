@@ -462,7 +462,7 @@ seen.contains?(2)                      # true — a hash lookup
 seen.items.sort                        # [1, 2, 3]
 ```
 
-`Set` iterates in ascending element order, so its elements must be `Orderable`.
+`Set` iterates in ascending element order, so its elements must be `Comparable`.
 `UnorderedSet` trades that for cheaper membership; its iteration order is
 unspecified, so sort `items` before comparing them. Both implement `Enumerable`,
 `Foldable` and `Monoid`, and offer `union`/`intersect`/`difference`/

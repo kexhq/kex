@@ -117,7 +117,7 @@ parentheses when precedence needs saying out loud.
 | Module | `PascalCase`, dotted for nesting | `URI`, `Kex.Intrinsic.List` |
 | Record, type, trait | `PascalCase` | `Input`, `ParseError`, `Enumerable` |
 | Type variant | `PascalCase` | `Just`, `Unexpected` |
-| Function, method, binding | `camelCase` | `fromIRI`, `takeWhile`, `peekAt` |
+| Function, binding | `camelCase` | `fromIRI`, `takeWhile`, `peekAt` |
 | Field | `camelCase` | `httpClient`, `pos` |
 | Atom | `:lowerCamel` or `:lowercase` | `:macos`, `:allowComments` |
 | Type parameter | single uppercase letter | `X`, `E`, `L`, `R` |
@@ -139,24 +139,66 @@ lambdas, and mathematical arguments.
 
 ---
 
-## 6. Declarations and signatures
+## 6. Functions: signatures and declarations
 
-**[F]** Signature separators and their spacing:
+Two words are used precisely from here on:
+
+- A function's **signature** is its types: what each parameter is and what
+  comes back.
+- A **declaration** is a line of its own that states a signature for a name:
+  `area : Shape -> Float`.
+
+A signature is written in one of two places, and which one is not a matter of
+taste:
 
 ```kex
-parse : String -> URI or! URIError   # module-level function
-or    :> X -> X                      # method; the receiver is this
+# One body: the signature is in the `let`.
+let scaled(v: Vector, factor: Float) -> Vector = ...
+
+# Several pattern-matching clauses: the signature is a declaration above
+# them, and the clauses carry patterns only.
+area : Shape -> Float
+let area(Circle(r))  = Math.PI * r * r
+let area(Rect(w, h)) = w * h
 ```
 
-`:` for a module-level function, `:>` for a method whose receiver is `this`.
-One space either side of the arrow, one space either side of `:` / `:>`.
+**[L]** **A function with one body carries its signature in the `let`:**
+`let name(arg: ArgType) -> RetType`. A declaration above a single `let` says
+the types twice, in two places that can drift apart
+(`redundant-declaration`):
 
-**[L]** A signature sits on the line directly above the definition it types,
-with no blank line between them (`signature-adjacent`).
+```kex
+let square(n: Integer) -> Integer = n * n      # yes
 
-**[L]** Every public function in a module or `make` block carries a signature.
-Private helpers and local `let` bindings do not need one
-(`missing-public-signature`).
+square : Integer -> Integer                    # no — one body, so the types
+let square(n) = n * n                          # belong in the `let`
+```
+
+**[L]** Every public function in a module or `make` block has a signature, in
+whichever of the two places its shape calls for: a `let` with every parameter
+and the return typed is one, and so is a declaration. A public function with
+an untyped parameter or no return type is the diagnostic. Private helpers and
+local `let` bindings do not need one (`missing-public-signature`).
+
+**[F]** Declaration separators and their spacing:
+
+```kex
+parse  : String -> URI or! URIError   # every parameter is written
+or     :> X -> X                      # in a `make` or `trait`: the receiver is implied
+apply ::> Command -> Reply<Integer>   # in a `serving`: the receiver and `from` are implied
+```
+
+One space either side of the arrow, one space either side of `:`, `:>` and
+`::>`.
+
+`:>` is `:` with the receiver left out. Inside a `make`, `or :> X -> X` is
+`or : This -> X -> X`: the caller passes one argument, and the receiver is the
+first. The same holds for a typed `let` there — `let scaled(factor: Float) ->
+This` has the type `This -> Float -> This`. `::>` leaves out one thing more,
+the caller a slot replies to (§14).
+
+**[L]** A declaration sits on the line directly above the definition it types,
+with no blank line between them (`declaration-adjacent`).
 
 **[F]** Parameter annotations bind tight: `x: Integer`, no space before the
 colon. Record fields are the opposite: `input : String`, one space before the
@@ -168,9 +210,10 @@ colon (§10). This asymmetry is deliberate and the formatter enforces both.
 let peekAt(offset: Integer) -> Char? do
 ```
 
-**[F]** Body form follows length: `let name(args) = expr` when the body is a
-single expression that fits, `let name(args) do ... end` otherwise. A
-single-expression function takes neither a block nor a `return` — the
+**[F]** Body form follows length: `let name(args) = expr` when the whole
+function fits on one line, `let name(args) do ... end` as soon as it takes
+more than one — several statements, or a single expression too long for the
+line. A function that fits takes neither a block nor a `return` — the
 formatter collapses one that has them, dropping the `return` with the `do`:
 
 ```kex
@@ -221,9 +264,9 @@ in the call path a reader encounters. Kex does not require declarations before
 their use; do not bury the entry point after helpers merely to satisfy a
 dependency-first ordering.
 
-**[L]** **A pattern-matching function types itself once, in a standalone
-signature.** Clause heads then carry patterns only — no per-parameter
-annotations, no return annotation (`clause-signature`):
+**[L]** **A pattern-matching function types itself once, in a declaration.**
+Clause heads then carry patterns only — no per-parameter annotations, no
+return annotation (`clause-declaration`):
 
 ```kex
 or :> X -> X                      # yes — the types live here
@@ -234,15 +277,18 @@ let or(@Just(x: X), _) = x        # no — annotations repeated per clause
 let or(@None, default: X) -> X = default
 ```
 
-The signature is the one place the reader looks for the type, and the one place
-it has to change. Annotating clause heads instead means saying it as many times
-as there are clauses, and nothing keeps those spellings agreeing with each
-other — clauses can drift apart in a way a single signature cannot.
+The declaration is the one place the reader looks for the type, and the one
+place it has to change. Annotating clause heads instead means saying it as many
+times as there are clauses, and nothing keeps those spellings agreeing with
+each other — clauses can drift apart in a way a single declaration cannot.
 
 This applies whatever the function's visibility: `missing-public-signature`
-asks for a signature on the public API, and a multi-clause function wants one
-even when it is private or local, because the clauses cannot carry the type
-between them.
+asks for a signature on the public API, and a multi-clause function wants its
+declaration even when it is private or local, because the clauses cannot carry
+the type between them.
+
+This is the only case, besides a trait's requirements (§8), that calls for a
+declaration.
 
 **[L]** **A function with no parameters drops its parentheses**, at the
 definition and at every call site (`empty-parens`). Empty parens are noise;
@@ -256,8 +302,8 @@ names.first.or("nobody")            # yes
 names.first().or("nobody")          # no
 ```
 
-This holds for predicates (`empty?`, `ok?`) and for zero-argument methods on a
-receiver alike. Parens come back the moment there is an argument to put in
+This holds for predicates (`empty?`, `ok?`) and for a function called on a
+receiver with no further arguments alike. Parens come back the moment there is an argument to put in
 them.
 
 The rule is about **declared** no-parameter functions. It does not touch a
@@ -457,18 +503,24 @@ ceremony.
 
 ## 8. Traits and `make`
 
+A `make` block is not a class, and Kex has no methods. `make Type do` declares
+ordinary functions whose first argument is a value of that type — the
+receiver, `this`. `circle.area` is the function `area` called on `circle`,
+exactly as `area(circle)` is. Nothing is constructed, inherited, or changed in
+place.
+
 **[F]** `make Type, implement: Trait do` — comma before `implement:`, one space
 after each colon. Multiple traits are comma-separated on one line:
 `make [X], implement: Enumerable, Foldable do`.
 
 **[L]** Inside a `make`, reach for the receiver's fields with `@field`, not
 `this.field`. Use `this` only for a whole-receiver reference or to call another
-method on it (`prefer-at-field`):
+function on it (`prefer-at-field`):
 
 ```kex
 make Circle, implement: Shape do
   let area      = Math.PI * @radius * @radius
-  let describe  = "Circle r=${@radius} (area=${this.area})"   # a method
+  let describe  = "Circle r=${@radius} (area=${this.area})"   # a call on the receiver
 end
 ```
 
@@ -478,14 +530,14 @@ only the fields that move and inherits the rest (`prefer-new-copy`):
 
 ```kex
 make OptionConfig do
-  let flag(long: String) -> OptionConfig do          # yes
+  let flag(long: String) -> This do                  # yes
     let option = OptionSpec { long: long, kind: FlagValue }
     New { options: [...@options, option] }
   end
 
   let within(timeout) = New { timeout: timeout }     # yes
 
-  let flag(long: String) -> OptionConfig do          # no — restates the record
+  let flag(long: String) -> This do                  # no — restates the record
     let option = OptionSpec { long: long, kind: FlagValue }
     OptionConfig { options: [...@options, option], commands: @commands,
                    description: @description, version: @version }
@@ -505,12 +557,44 @@ a test — names its type: `Input { input: text }`. The literal form is
 capitalized like `This`; lowercase `new` is the sibling binding you assign
 fields on (`new.items = ...`), not a second spelling of this one.
 
-**[A]** Order a `make` block: required trait methods first, then the rest, then
-`private do`.
+**[L]** **Inside a `make`, the type being made is `This`, not its own name**
+(`prefer-this`). `This` is the receiver's type: `OptionConfig` inside
+`make OptionConfig`, and whichever type implements it inside a trait.
 
-**[A]** A trait's default method bodies are for behavior derivable from the
-required methods. If a default needs a cast or a type test to work, it is not
-a default — make it required.
+```kex
+make Vector do
+  let scaled(factor: Float) -> This = ...        # yes
+  let scaled(factor: Float) -> Vector = ...      # no — names the type again
+end
+```
+
+Renaming the type, or moving a function to another `make`, then changes one
+line — the `make` itself — instead of every signature in the block. A generic
+`make` that answers a different instantiation still has to name it:
+`let map(f: A -> B) -> Box<B>`.
+
+**[L]** **A trait's requirement is a declaration; a default is a `let`.** A
+declaration with no definition under it says implementers must provide the
+function. A default carries its signature in its own `let` and has no
+declaration above it — the checker reads a declaration in a trait as a
+requirement whether or not a `let` follows.
+
+```kex
+trait Mergeable do
+  merge :> This -> This                          # required
+
+  let mergeAll(others: [This]) -> This do        # default
+    others.reduce(this) { |sum, other| sum.merge(other) }
+  end
+end
+```
+
+**[A]** Order a `make` block: the functions a trait requires first, then the
+rest, then `private do`.
+
+**[A]** A trait's defaults are for behavior derivable from what it requires. If
+a default needs a cast or a type test to work, it is not a default — make it
+required.
 
 ---
 
@@ -536,13 +620,14 @@ or an alias. An open record type — `{ label: String }` — asks only for the
 field the code touches, which is the lightest constraint available and the one
 to prefer when a whole trait would be overkill.
 
-**[A]** `This` is the receiver's own type inside a `make` or `trait` block. A
-method returning a new receiver returns `This`, so the type follows the
-implementing type rather than being restated per implementation.
+**[A]** `This` is the receiver's own type inside a `make`, `trait` or `serving`
+block (§8). In a trait it is what lets a signature say "the same type as
+whoever implements me": `compare :> This -> Ordering`.
 
 **[A]** The marker traits — `Optionable`, `Resultable`, `Eitherable` — exist to
 constrain a parameter to "some optional", "some result", "some either" without
-naming its payload. Use them for that and nothing else; they carry no methods.
+naming its payload. Use them for that and nothing else; they require no
+functions.
 
 **[A]** Single uppercase letters are the convention for type parameters (§5),
 and their meaning should be recoverable from position: `X` the element, `E` the
@@ -590,7 +675,7 @@ These kinds align, on the token named:
 |------|---------------|
 | Record fields | `:`, then the `=` of defaults as a second column |
 | One-line `let` / `foul` definitions | `=` |
-| Signature lines | `:` or `:>` |
+| Declarations | `:`, `:>` or `::>` |
 | `match`, `receive`, and `rescue` arms | `=>` |
 
 The column is one space past the widest left-hand side in the run; every other
@@ -763,9 +848,11 @@ return "." if present.empty?
 return None if index < 0 || index >= @input.count
 ```
 
-**[F]** Match arms are `pattern => expr`, one per line. A guard is a trailing
-`if` on the pattern: `n if n > 0 => "positive"`. The bare `when expr => expr`
-form is for a condition chain with no scrutinee.
+**[F]** Match arms are `pattern => expr`, one per line. A guard is `when` after
+the pattern: `n when n > 0 => "positive"`. An arm that is only
+`when expr => expr` tests the condition and ignores the shape; it is `_ when
+expr`. There is no `if` guard on an arm, and a function clause cannot carry a
+guard at all — match in the body when a clause needs one.
 
 **[L]** Every `match` is exhaustive by pattern, not by a trailing `_` that
 exists only to silence the checker. A `_` arm is for genuinely "everything
@@ -878,8 +965,9 @@ end
 **[F]** Block parameters: `{ |n| ... }` — one space inside each brace, no space
 inside the pipes, `, ` between parameters.
 
-**[L]** A lambda that only calls one method on its argument is written with
-`&.`; a lambda that only calls a named function is written with `~`
+**[L]** A lambda that only calls one function on its argument is written with
+`&.`; a lambda that only passes its argument to a named function is written
+with `~`
 (`prefer-receiver-shorthand`, `prefer-capture`):
 
 ```kex
@@ -890,7 +978,7 @@ cursor.takeWhile(~alpha?)           # not { |c| alpha?(c) }
 `&` is always followed by `.` and an identifier; every operator capture goes
 through `~`: `~(+)`, `~(!)`. `&name` and `&.+` are invalid.
 
-**[F]** A method chain fits on one line, or breaks with each `.` leading its
+**[F]** A chain of calls fits on one line, or breaks with each `.` leading its
 own line, indented one level from the receiver:
 
 ```kex
@@ -965,7 +1053,8 @@ running best — are fine, and §20's `var-count` is where the line sits.
 **[A]** State that outlives a call belongs to a process, and a process is
 declared by giving a record a `serving` block. `Process.spawn(state)` hands that
 record its own process and returns a `Server<State>`; every `slot` becomes a
-checked method on the handle.
+checked call on the handle. A `serving` block is a GenServer whose protocol is
+declared rather than conventional: on the BEAM it is an OTP `gen_server`.
 
 ```kex
 record ShoppingList do
@@ -995,10 +1084,11 @@ nothing, and a `Void` that should have been a `Reply` loses the failure
 updated record and answers, `{ new }` installs without answering, and adding
 `stop: reason` terminates after the transition.
 
-**[L]** Do not annotate a single-clause slot separately — the inline
-declaration carries the type. A multi-clause slot may take a standalone
-annotation, and then it uses `::>` for a call (the handler has `from`) or `:>`
-for a cast (`slot-annotation`):
+**[L]** A slot follows §6: with one body its signature is in the `slot` line,
+and no declaration goes above it. A slot written as several clauses takes a
+declaration, and then it uses `::>` for a call — the receiver and the caller,
+`from`, are both implied — or `:>` for a cast, where only the receiver is
+(`slot-annotation`):
 
 ```kex
 apply ::> Command -> Reply<Integer>
@@ -1157,7 +1247,7 @@ directly above it (`missing-doc`). The format is RDoc-like:
 # @example
 #   [1, 2, 3].first   # => Just(1)
 #   [].first          # => None
-first :> X?
+let first -> X? = this.at(0)
 
 # Returns the first element satisfying +pred+, or +None+ if none does.
 #
@@ -1166,8 +1256,11 @@ first :> X?
 #
 # @example
 #   [1, 2, 3].find(~even?)   # => Just(2)
-find :> (X -> Bool) -> X?
+let find(pred: X -> Bool) -> X? = this.filter(pred).first
 ```
+
+The comment goes above whatever introduces the name: the `let` of a function
+with one body, the declaration of one written as clauses.
 
 - First paragraph is a one-sentence summary in the third person present
   (“Returns…”, “Parses…”), ending in a period.
@@ -1237,8 +1330,8 @@ appear to mean. A finding here is a probable bug, not a preference, which is
 why several default to `error`.
 
 None of them duplicate the type checker. Where the compiler already refuses a
-program — a pure function calling a foul one, `!` on a `let`, a missing trait
-method — there is no lint rule and none is needed.
+program — a pure function calling a foul one, `!` on a `let`, a function a
+trait requires left out — there is no lint rule and none is needed.
 
 ### Dead code
 
@@ -1383,10 +1476,11 @@ legitimate is suppressing it everywhere because one function is over.
 |----|---|---------|
 | `line-too-long` | 3 | warn |
 | `predicate-naming` | 5 | warn |
-| `signature-adjacent` | 6 | error |
+| `redundant-declaration` | 6 | warn |
 | `missing-public-signature` | 6 | warn |
+| `declaration-adjacent` | 6 | error |
 | `split-clauses` | 6 | error |
-| `clause-signature` | 6 | warn |
+| `clause-declaration` | 6 | warn |
 | `param-match` | 6 | warn |
 | `empty-parens` | 6 | warn |
 | `overbroad-using` | 7 | warn |
@@ -1396,6 +1490,7 @@ legitimate is suppressing it everywhere because one function is over.
 | `self-qualified-call` | 7 | warn |
 | `prefer-at-field` | 8 | warn |
 | `prefer-new-copy` | 8 | warn |
+| `prefer-this` | 8 | warn |
 | `prefer-trait-param` | 9 | warn |
 | `single-variant-pipe` | 10 | error |
 | `prefer-optional-shorthand` | 10 | warn |
@@ -1481,11 +1576,13 @@ The formatter is expected to hold to these, and its test suite should pin them:
 
 ## 23. Adoption
 
-The rules above describe the target state, not the current corpus. Four rules
+The rules above describe the target state, not the current corpus. Six rules
 have a backlog in it:
 
 | Rule | Non-conforming sites in `src/stdlib` + `examples` |
 |------|--------------------------------------------------|
+| `redundant-declaration` | about 670, by a pattern count rather than a parse |
+| `prefer-this` | about 150, by the same kind of count |
 | `prefer-result-shorthand` | 281 (against 19 already written `or!`) |
 | `bool-match` | 10 — clustered in `units.kex`, `units/data.kex`, `units/si.kex` |
 | `prefer-optional-shorthand` | 6 |
@@ -1494,7 +1591,7 @@ have a backlog in it:
 **Sequencing.** `kex fmt` lands first. The corpus migration follows it, as one
 mechanical pass rather than as drive-by edits — a formatted tree is what makes
 the sugar rewrite a reviewable diff instead of a source of merge conflicts.
-Until that pass has run, the four rules above ship disabled by default for
+Until that pass has run, the six rules above ship disabled by default for
 `src/stdlib`, so the stdlib's own build stays quiet.
 
 Type rewriting is a migration, not a formatting concern: it belongs to

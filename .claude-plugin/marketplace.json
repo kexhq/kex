@@ -1,0 +1,14 @@
+{
+  "name": "kexhq",
+  "description": "Plugins for working with the Kex programming language",
+  "owner": {
+    "name": "Kex"
+  },
+  "plugins": [
+    {
+      "name": "kex",
+      "source": "./plugins/kex",
+      "description": "Teaches Claude to write, check and test Kex code"
+    }
+  ]
+}

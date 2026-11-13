@@ -67,6 +67,12 @@ kex -i                      # start the interactive tree-walk REPL
 kex -e <code>               # enter <code> in the REPL before its first prompt
 kex -C <file.kex>           # run semantic analysis only
 kex -E <file.kex>           # emit Core Erlang (.core) without invoking erlc
+kex -s <file.kex>           # print the file's public signatures
+kex -s                      # list every type and module of the standard library
+kex -s List                 # everything a type or module offers
+kex -s List.find            # one function in full, with its examples
+kex --skill                 # the guide to writing Kex, for an AI agent
+kex --skill errors          # one topic of it
 kex --test-json <spec.kex>  # report describe/it as JSON records, with locations
 kex --test-list <spec.kex>  # list the cases as JSON, running none of them
 kex --test-only <name> ...  # run one case, or one describe (repeatable)
@@ -108,3 +114,28 @@ The three `--test-*` flags are for tools reading a spec run rather than people:
 one JSON record per case, carrying the file and line of the `it` and of the
 failure. `docs/testing.md` documents the record shape; the VS Code test
 explorer is built on them.
+
+`-s` given a name instead of a `.kex` file is the standard library's help. It
+reads the stdlib sources this compiler loads, so it describes exactly the
+library a program is checked against: signatures, the first sentence of each
+doc comment in a listing, the whole comment for one function, the `using` a
+name needs, and the functions a type gets from its traits. `kex -s find` looks a
+bare name up on every type; quote a name that ends in `?`, or leave the `?`
+off.
+
+`--skill` prints a guide for a model writing Kex for the first time: what
+differs from Ruby and Elixir, and the look-up / check / run loop built on `-s`
+and `-C`. Its text is the Markdown under `plugins/kex/skills/kex/`, built into
+the binary;
+`SKILL.md` is the guide and every other file there is a topic, printed by
+`kex --skill <topic>`. The output of `kex --skill` is a complete `SKILL.md`,
+so it can be saved as an agent skill:
+
+```
+kex --skill > .claude/skills/kex/SKILL.md
+```
+
+Every ```` ```kex ```` block in those files is a whole program, and
+`skill_test` checks and runs each one, so an example that stops compiling
+fails the build rather than misleading a reader. `--help` points at `--skill`
+in its first lines, which is where an agent that has just met `kex` looks.

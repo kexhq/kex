@@ -1,0 +1,49 @@
+# `tey new` writes three small files for AI agents, which only point at the
+# guide the compiler carries. These cases pin that they appear by default, that
+# `--skip-agent` (agentFiles: false) leaves all of them out, and that none of
+# them carries a copy of the guide to go stale.
+describe("Tey scaffold: files for AI agents") do
+  let root = "/tmp/tey_scaffold_agent_spec_${DateTime.epochNanos()}"
+  let agentFiles = ["AGENTS.md", "CLAUDE.md", ".claude/skills/kex/SKILL.md"]
+
+  before do
+    FS.Directory.deleteAll(root)
+    FS.Directory.create(root)
+  end
+
+  after do
+    FS.Directory.deleteAll(root)
+  end
+
+  it("writes them into a new application") do
+    Assert.equal(Tey.Commands.new("${root}/shop", false, true), 0)
+    agentFiles.each { |file| assert(FS.File.file?("${root}/shop/${file}"), file) }
+  end
+
+  it("leaves every one of them out when asked to") do
+    Assert.equal(Tey.Commands.new("${root}/shop", false, false), 0)
+    agentFiles.each { |file| assert(!FS.File.file?("${root}/shop/${file}"), file) }
+    assert(FS.File.file?("${root}/shop/package.kex"))
+  end
+
+  it("sends the agent to the compiler's guide rather than copying it") do
+    Tey.Commands.new("${root}/shop", false, true)
+    let instructions = FS.File.read("${root}/shop/AGENTS.md").or("")
+    let skill = FS.File.read("${root}/shop/.claude/skills/kex/SKILL.md").or("")
+    assert(instructions.contains?("kex --skill"))
+    assert(skill.contains?("kex --skill"))
+    assert(skill.startsWith?("---\nname: kex\n"))
+    Assert.equal(FS.File.read("${root}/shop/CLAUDE.md"), Ok("@AGENTS.md\n"))
+  end
+
+  it("tells an application how to run and a library that it has no entrypoint") do
+    Tey.Commands.new("${root}/shop", false, true)
+    Tey.Commands.new("${root}/kit", true, true)
+    let application = FS.File.read("${root}/shop/AGENTS.md").or("")
+    let library = FS.File.read("${root}/kit/AGENTS.md").or("")
+    assert(application.contains?("# Working on shop"))
+    assert(application.contains?("tey run"))
+    assert(library.contains?("has no entrypoint"))
+    assert(!library.contains?("Run the program"))
+  end
+end

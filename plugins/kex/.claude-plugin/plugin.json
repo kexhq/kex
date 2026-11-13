@@ -1,0 +1,12 @@
+{
+  "name": "kex",
+  "description": "Teaches Claude to write, check and test Kex: the language guide the Kex compiler carries, as a skill.",
+  "author": {
+    "name": "Kex",
+    "url": "https://kex.run"
+  },
+  "homepage": "https://kex.run",
+  "repository": "https://github.com/kexhq/kex",
+  "license": "MIT",
+  "keywords": ["kex", "language", "functional", "beam"]
+}
