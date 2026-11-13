@@ -73,6 +73,10 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
     if (i == 0 || source[i - 1] != '.') return {};
     const size_t dot = i - 1;
 
+    // `&.text` in `items.map(&.text)`: the shorthand block's parameter is the
+    // receiver (recoveredReceiverQualifier types it).
+    if (dot > 0 && source[dot - 1] == '&')
+        return {.start = dot - 1, .dot = dot, .callOpen = 0, .valid = true};
     size_t callOpen = 0;
     i = skipSpaceBack(dot);
     while (i > 0) {
@@ -138,6 +142,30 @@ auto recoveredReceiverQualifier(const CompletionChecker& check,
                                 const ImportedInterfaces* interfaces)
     -> std::string {
     if (!receiver.valid || cursor < receiver.dot) return {};
+    // The shorthand `&.`: its parameter is a block's, typed by the call the
+    // block is passed to. Written out as `{ |kexItem| kexItem }`, the
+    // checker types it, and the body's `kexItem` is the receiver.
+    if (source[receiver.start] == '&') {
+        const std::string opening = "{ |kexItem| ";
+        auto rewritten = source.substr(0, receiver.start) + opening + "kexItem }" +
+                         source.substr(cursor);
+        const auto checked = check(path, rewritten);
+        if (!checked) return {};
+        const auto bodyAt = receiver.start + opening.size();
+        int line = 1;
+        size_t lineStart = 0;
+        for (size_t i = 0; i < bodyAt; ++i)
+            if (rewritten[i] == '\n') { ++line; lineStart = i + 1; }
+        const int column = static_cast<int>(bodyAt - lineStart) + 1;
+        for (const auto& [expression, _] : checked->analyzer->typeMap())
+            if (expression && expression->location.line == line &&
+                expression->location.column == column)
+                if (auto qualifier = completionQualifierForType(
+                        checked->analyzer->displayTypeOf(expression));
+                    !qualifier.empty())
+                    return qualifier;
+        return {};
+    }
     // Deleting through the cursor rather than just the dot is what makes
     // `makeBox(3).g` parse again.
     auto recovered = source;

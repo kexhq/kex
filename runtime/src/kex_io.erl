@@ -565,6 +565,10 @@ inspect_string(X) when is_atom(X) ->
         {0, _Owner} -> atom_to_list(X);
         _ -> ?GREEN ++ atom_literal(atom_to_list(X)) ++ ?RESET
     end;
+%% A range shows as it is written, `1..10`, as the walker shows it; the
+%% generic tuple clauses below printed its representation, `(:Range, 1, 10)`.
+inspect_string({'Range', _, _} = R) ->
+    to_string(R);
 inspect_string({'FileHandle', _Device, Path}) ->
     "<FileHandle: " ++ inspect_string(Path) ++ ">";
 inspect_string({'Binary', Bin}) when is_binary(Bin) ->

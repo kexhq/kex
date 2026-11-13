@@ -4526,9 +4526,21 @@ auto TypeChecker::publishQualifiedSignatures(
     // Only THIS definition's signatures: `Date.parse` and `Time.parse` share
     // the bare name `parse`, and publishing the accumulated set gave Date's
     // qualified key Time's result type.
-    if (m_qualifiedPublished.insert(key).second)
-        m_userSignatures[key] = signatures;
-    else
+    if (m_qualifiedPublished.insert(key).second) {
+        // The first checked definition replaces the declared contracts of its
+        // own arities only. The others stay until their definitions publish:
+        // `frob(a, b)` checked first wiped `frob : Integer -> String` and
+        // `frob : String -> String`, and every one-argument call was refused
+        // (kexhq/kex#619).
+        auto& existing = m_userSignatures[key];
+        std::erase_if(existing, [&](const Signature& declared) {
+            return std::any_of(signatures.begin(), signatures.end(),
+                               [&](const Signature& checked) {
+                                   return checked.params.size() == declared.params.size();
+                               });
+        });
+        existing.insert(existing.end(), signatures.begin(), signatures.end());
+    } else
         for (const auto& signature : signatures)
             m_userSignatures[key].push_back(signature);
 }

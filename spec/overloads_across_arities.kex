@@ -1,0 +1,18 @@
+# A module function with declared overloads over several arities, two of
+# them of one arity: the definition checked first replaced every declared
+# contract, so each one-argument call was refused (kexhq/kex#619).
+
+module Probe do
+  frob : Integer -> String
+  let frob(n) = "int"
+  frob : String -> String
+  let frob(s) = "str"
+  frob : Integer -> Integer -> String
+  let frob(a, b) = "two"
+end
+
+main do
+  IO.printLine(Probe.frob("hi"))
+  IO.printLine(Probe.frob(1))
+  IO.printLine(Probe.frob(1, 2))
+end
