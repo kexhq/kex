@@ -224,22 +224,32 @@ inline auto isExportFoul(const ImportedInterfaces& ifaces,
     return false;
 }
 
-// Gives every module ADT its qualified identity inside the signatures that
-// spell it. A signature is read from its spelling, so `BACKEND : Backend`
+// Gives every module ADT and record its qualified identity inside the
+// signatures that spell it. A signature is read from its spelling, so `BACKEND : Backend`
 // inside `module Kex` carries a bare `Backend`, while the ADT, and the
 // constructors it owns, are `Kex.Backend`. Left bare, that name could only be
 // matched by spelling, and NetErrorKind has a constructor spelled `Backend`
-// too. A bare name means the ADT declared by the innermost enclosing module
-// of the signature's own module that declares one; anything else is left as
-// written.
-inline auto qualifyModuleAdtNames(ImportedInterfaces& ifaces) -> void {
+// too. The same holds for records: `TCP.Endpoint.parse` spells its result
+// `Endpoint`, which UDP declares as well. A bare name means the type declared
+// by the innermost enclosing module of the signature's own module that
+// declares one; anything else is left as written.
+inline auto qualifyModuleTypeIdentities(ImportedInterfaces& ifaces) -> void {
     std::unordered_set<std::string> moduleAdts;
     for (const auto& adt : ifaces.adts)
         if (adt.name.find('.') != std::string::npos) moduleAdts.insert(adt.name);
-    if (moduleAdts.empty()) return;
+    // Records only in a module function's own signature: a receiver function
+    // of an opt-in module read from source has no backend of its own, and
+    // matching its receiver exactly would choose it over the type's `make`
+    // function (`cursor.peek` in template.kex, run at compile time).
+    std::unordered_set<std::string> moduleRecords;
+    for (const auto& [record, _] : ifaces.recordArities)
+        if (record.find('.') != std::string::npos) moduleRecords.insert(record);
+    if (moduleAdts.empty() && moduleRecords.empty()) return;
+    bool withRecords = false;
     auto adtIn = [&](std::string scope, const std::string& name) -> std::string {
         while (!scope.empty()) {
-            if (auto candidate = scope + "." + name; moduleAdts.count(candidate))
+            if (auto candidate = scope + "." + name;
+                moduleAdts.count(candidate) || (withRecords && moduleRecords.count(candidate)))
                 return candidate;
             const auto dot = scope.rfind('.');
             if (dot == std::string::npos) break;
@@ -271,7 +281,11 @@ inline auto qualifyModuleAdtNames(ImportedInterfaces& ifaces) -> void {
     };
     for (auto& [_, module] : ifaces.modules)
         for (auto& [__, functions] : module.exports)
-            for (auto& function : functions) qualifySignature(function);
+            for (auto& function : functions) {
+                withRecords = !function.isReceiverMethod;
+                qualifySignature(function);
+            }
+    withRecords = false;
     for (auto& [_, functions] : ifaces.receiverFunctions)
         for (auto& function : functions) qualifySignature(function);
     // A record's field types are spelled in the record's own module:

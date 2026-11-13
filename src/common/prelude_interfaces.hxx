@@ -1295,7 +1295,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
     // defining module's alias, the same way the KexI path carries them.
     for (auto& [name, body] : typeAliases)
         ifaces.typeAliases.try_emplace(name, body);
-    kex::semantic::qualifyModuleAdtNames(ifaces);
+    kex::semantic::qualifyModuleTypeIdentities(ifaces);
     resolveSharedNullaryConstructors(ifaces);
     return ifaces;
 }

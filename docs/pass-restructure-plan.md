@@ -136,17 +136,81 @@ other (it does here); both must check against the same interfaces.
    intrinsics on both backends still take a String receiver as its
    characters (`kex_intrinsic_list:as_list`/`repack`, the walker's
    `list.cxx` `getElements`/`repackChars`), and `kex_intrinsic_number:add`
-   joins a String and a charlist. Also found: `Time.monotonic` checks clean
-   and is undefined at run time on both backends.
+   joins a String and a charlist. DONE 2026-11-13 (approved by the user):
+   - `string.kex` handed the String itself to about twenty List intrinsics,
+     which is why they took one apart. Each of those String functions now
+     works on `this.chars`, and those that answer a String go back through
+     `Kex.Intrinsic.String.fromChars` (new, on both backends).
+   - The List intrinsics take lists (and a Range) only. `as_list`'s String
+     clause, `repack`, the walker's `getElements` String case,
+     `repackChars`, and the String branches of `first`, `last`, `min`,
+     `max`, `length`, `count`, `member`, `take`, `drop`, `at`, `reverse` and
+     `flatMap` are gone. The walker's `List.at` and `List.reverse` moved from
+     `string.cxx` to `list.cxx`.
+   - `add` no longer joins a String with a charlist; the checker already
+     refused that.
+   - `kex_intrinsic_fun:items`, which lowering's `each` folds over, takes a
+     String apart itself: a String is Enumerable over its Chars.
+   - The String operations a scanner calls in a loop (`count`, `take`,
+     `drop`, `at`, and `first`, `get`, `rest` through them) are String
+     intrinsics of their own, over the codepoints the walker caches. Going
+     through `chars` there made `spec/compiled_template_large_scan`'s
+     compile-time scan exceed its 10 s.
+   Found with it, through `T? == T` reporting comparisons that were not
+   wrong:
+   - A contract in a `make` block was paired with every clause of its arity
+     (`collectFromMakeDef`), so List's `get` reached importers as four
+     signatures, among them `[A] -> Range<Integer> -> A?`, and
+     `xs.get(1..2)` typed as `Integer?`. A contract now goes to the clauses
+     whose own annotations agree with it.
+   - The opt-in standard library's interfaces are still derived from SOURCE
+     (`sourceSemanticInterfaces`, "opt-in stdlib from source" in
+     `preludeSemanticInterfaces`). The claim under finding 2 that every stdlib
+     module's interface is its checked KexI holds for the prelude only. That
+     path left a record named bare in a module's signatures (`TCP.Endpoint.parse`
+     answered `Endpoint`, which UDP declares too), so `ep.host` was read as
+     URI's `host` and typed `URI.Host?`. Module records are qualified now
+     in a module function's signature, like module ADTs everywhere
+     (`qualifyModuleTypeIdentities`); not in receiver functions, whose
+     source-read entries have no backend and, matched exactly, were chosen
+     over the type's own `make` function (`cursor.peek` in `template.kex`,
+     at compile time in the language server), and so are a nested
+     module's signatures in the KexI path (`collectFlattenedModuleBody`,
+     `moduleTypeQualifier` through the enclosing modules). OPEN: build the
+     opt-in modules' interfaces from their checked KexI, and delete this
+     second reading of types.
+   - With `Data.Set` named as it is, a bare `add(1, 2)` saw Set's `add`:
+     a function on a qualified receiver type counted as visible without a
+     `using`, a rule meant for `set.add(x)`. It holds for a call through a
+     receiver only now (`importedFunctionVisible`'s `throughReceiver`).
+   Also found: `Time.monotonic` checks clean
+   and is undefined at run time on both backends. FIXED 2026-11-13: a module
+   named like a type (`Time`) was exempt from the member check, since it also
+   answers its type's functions. A name that no function has anywhere is now
+   refused (`spec/error_type_module_unknown_function`).
    Re-measured after it (2026-11-11): still 34 of the 89 differ on the walker,
    but the six `Write`/`Parse`/`UnsupportedOption` failures are gone: those
    specs now stop only where the walker has no sockets (`UnsupportedBackend`).
    Still real: `trait_alias_implement` (kexhq/kex#627), `task_await_timeout`,
    `net_http_chunk_limits_beam` (walker crash), `net_unix_policy_beam` (a
    different error kind).
-   Open: a module's constructor in a PATTERN has no qualified spelling
-   (`Shades.Light =>` does not parse) and is not under the scope rule;
-   patterns are still matched by the matched value's ADT.
+   DONE (2026-11-13): a module's constructor in a PATTERN.
+   - It is spelled the way it is declared: `Shades.Light =>` and
+     `Error(FS.CopyFailed(_, _)) =>` parse. `ConstructorPattern::module`
+     keeps the written path, and the checker requires that module to declare
+     the constructor (`spec/constructor_pattern_qualified`,
+     `spec/error_constructor_pattern_qualified`). The backends still match
+     by the constructor's name, its tag.
+   - A pattern follows the expression's scope rule. Named bare, a module's
+     constructor is in scope only inside its module or under a `using` that
+     brings it in. `TypeChecker::moduleOfUnreachableConstructor` is the one
+     test, shared by both.
+   - Found with it: a payload constructor of an imported module named bare
+     in an EXPRESSION (`CopyFailed("a", "b")` with no `using FS`) passed the
+     checker undecided, where the nullary `Write` was refused. It is refused
+     now, with the same message.
+   No corpus file named one out of scope. (`ReadFailed` named bare is the
+   prelude's own `ReadError.ReadFailed`, a top-level constructor.)
 
    Resolvers found while doing it (all deciding names apart from the
    checker, which is finding 3 below):
@@ -332,17 +396,35 @@ other (it does here); both must check against the same interfaces.
       missed a new one; `devirt-correspondence` counted firings through
       whatever unit cache the run before had left (1131 or 1452 for the
       same compiler), and now uses its own empty cache.
-   c. **The Analyzer's phase 1 off its own scope table** — open. It still
-      keeps a `SymbolTable` (57 uses in `analyzer.cxx`) for three things:
-      whether a called name is foul, whether an assigned binding is
-      mutable, and redeclaration. Proposed split, rather than moving
-      purity into the checker (which would only make the checker larger):
-      the checker's scopes carry whether a binding is `var`, and it
-      reports assignment to a `let` and redeclaration where it binds;
-      the purity walk keeps its foul-context tracking but asks the
-      checker which function a call names (`calledFunctionOf`, the call's
-      target) instead of looking the name up again. `symbol.{hxx,cxx}`'s
-      `Scope` and `SymbolTable` then go.
+   c. **The Analyzer's phase 1 off its own scope table** — DONE
+      2026-11-13. The Analyzer kept a `SymbolTable` (57 uses) for three
+      things, each now answered by the checker:
+      - Mutability and redeclaration: the checker's scopes record how each
+        name was bound (`TypeEnv::Binding`: `var` or not, and whether the
+        language bound it, as `new` and `from` are). The checker reports
+        assignment to a `let`, `!` on one, and a name bound twice in one
+        scope where it binds (`TypeChecker::declareVar`), with the same
+        messages as before.
+      - Whether a call is foul: the purity walk now runs after the checker.
+        It reads the signature the checker chose for the call
+        (`selectedCallSignatures`), or the module function it names
+        (`calledFunctions`, `referencedConstants`). Before, it looked the
+        name up again (`Analyzer::callsFoul`). Its diagnostics still come
+        ahead of the checker's.
+      - Duplicate records: `reportDuplicateRecords`, per module.
+      `Symbol`, `Scope`, `SymbolTable` and `symbol.cxx` are deleted, and
+      `symbol.hxx` keeps only `SymbolKind`, which tooling lists. The walk
+      itself is `ast::forEachChild` with the purity cases, about 120 lines
+      in place of 400. Found doing it: the checker gave a block with no
+      parameters, and a `loop` with no counter, no scope of their own, so a
+      `let` inside one stayed bound after it. Each has its own scope now.
+      Found by Tey's build: the checker recorded a module constant for a
+      bare name even where a local binding shadows it. In Tey,
+      `let manifest = ...` read as `Tey.Commands.manifest`, a foul
+      zero-parameter function. The purity walk took that answer and
+      refused the pure function. The answer is recorded only for a name
+      nothing local binds now (`referencedConstants`, which the backends
+      read too).
    d. **SemanticDB deleted** — the class, DONE 2026-11-12: `src/semantic`
       holds no document store. What it was is `lsp::Workspace`
       (`src/lsp/workspace`): files parsed and expanded, their symbols, the
@@ -350,13 +432,27 @@ other (it does here); both must check against the same interfaces.
       `SymbolInfo` and `ScopeSnapshot` are `semantic/symbol_info.hxx`, so
       the semantic layer no longer includes the lexer, the parser,
       expansion and the module resolver through `db.cxx`.
-      Still open: the server's own lookups. Hover, definition and
-      references still find a symbol by its NAME (`findSymbol`,
-      `receiverSymbol`, about forty sites in `server.cxx`), with heuristics
-      around it; they should ask which declaration the node under the
-      cursor means, which the checker now records for calls and constants
-      (`calledFunctionOf`, `referencedConstantOf`) and has still to record
-      for types, constructors and `make` functions.
+      The server's own lookups, in progress (2026-11-13). Hover, definition
+      and references ask the name index first (`symbolAt`: the declaration
+      the checker bound the name under the cursor to). The index now also
+      holds:
+      - a method call, as a reference to the function the checker decided
+        it runs: the receiver type's own `make` function or its home
+        module's (`decidedCalls`, at the name's own position,
+        `MethodCall::methodLocation`, new);
+      - a record named as a type or constructed, as a reference to the
+        record the checker resolved (`annotatedRecords`, the construction's
+        type).
+      Definition and references no longer replace that answer with the
+      lookup by module path. `tests/lsp_test` covers both: two types'
+      `render` and two modules' `Point`, where the name alone found the
+      wrong one. The lookups by name (`findSymbol`, `receiverSymbol` and the
+      text heuristics around them, about forty sites in `server.cxx`)
+      remain, now only as the fallback where the index has no answer: a
+      buffer the checker could not read through, or a name it records
+      nothing for. Still to record: a constructor (no `SymbolInfo` kind for
+      one yet), a record pattern's name (`RecordPattern` has no location of
+      its own), and a type that is not a record.
 5. **Clean up last** (only once 1–4 are done; the benchmarks stay until
    then): `make bench`, `test-bench`, `bench-slick` (needs `../slick`,
    which nobody else has), `dup-audit` and their `tools/` scripts; the
@@ -527,11 +623,62 @@ it: 3 in the standard library (`random.kex`, `units.kex`), 19 in specs and
 meant: a pattern binding where the value cannot be missing (`let Just(name)
 = pending.first`), a `rescue` where a `Void` handler stops quietly.
 Left open by it:
-- A function that declares NO result is not covered: its inferred result is
-  the body's type, and a failed `.try` in it still returns an `Error` the
-  type does not show. Sound would be to infer `T or! E` for it.
-- A block is a function boundary too (`xs.map { |x| find(x).try }` hands
-  `map` an `Error` among its `User`s); not covered.
+- ~~A function that declares NO result is not covered.~~ Done (2026-11-13,
+  the user chose "infer the failure"): its result is inferred as `T?` (an
+  Optional's `.try`) or `T or! E` (a Result's), and its success is wrapped
+  as `Just(v)`/`Ok(v)`. The checker records the wrapper by the clause's last
+  body expression (`hir::Program::successWrapperOf`, persisted since HIR
+  version 8). Lowering wraps the clause body, and the walker wraps the call's
+  result. A body that already holds a failure stays as it is. The inference
+  is refused, with a request to declare the result, where a clause mixes the
+  two kinds of `.try` or leaves with `return`, because each exit would need
+  wrapping (`spec/try_inferred_result`, `spec/error_try_inferred_refused`).
+  Found with it: a failed Optional `.try` returned `Error(None)` (walker) or
+  `Error(:none)` (BEAM) instead of `None`. Both now return `None`. In
+  `examples/read_currency.kex`, `codeName` became `String?` and its
+  `c.codeName == code.upperCase` was silently false; it now reads
+  `.or("")`. `T? == T` was accepted by the checker and is always false.
+  It is a type error now (decided by the user, 2026-11-13): `==` and `!=`
+  between an Optional or a Result and a settled plain value
+  (`TypeChecker::checkNeverEqual`, `spec/error_never_equal`). Over the
+  corpus it found nothing else.
+- ~~A block is a function boundary too.~~ Done (2026-11-13). The same
+  inference and wrapping applies to a block, through the same three helpers:
+  `inferredFailingResult`, the walker's `wrappedSuccess`, and lowering's
+  `wrapSuccess`. A block declared as a local function is held to the
+  declared-result rule (`refuseUnheldTries`, now shared). A block that is
+  passed where a plain value must come back is refused at the call. A block
+  that mixes the two kinds of `.try` keeps its own type, as before: most are
+  `it` or `Task.start` bodies that nothing reads
+  (`spec/try_inferred_block_result`, `spec/error_try_block_needs_holder`).
+  It found 3 real cases:
+  - `examples/read_currency.kex` had a dead `find` with `money.try` in its
+    predicate, now removed.
+  - `spec/net_block_forms_beam` had a TCP and a UDP block handing back
+    `Error` as a port string; they now use `.map … .or("")`.
+  - The generated mock-clock rules returned `DateTime or! TimeError`. They
+    are now built with `DateTime.fromEpochSeconds`, in both
+    `tools/calendar_ref/gen_spec.rb` and `time_generated_1`. The other
+    generated time specs were left alone: they were edited by hand after
+    generation (`10586447.second` where the generator writes
+    `Duration.seconds(10586447)`), so regenerating would undo those edits.
+    Bringing the generator in line with them is still open.
+  - `units.kex`'s `scaledMeasureFamily` returned, through an early
+    `return`, a `map` whose block read `symbols[power].try`: the block now
+    gives `UnitDefinition?`, and the checker accepted the list as the
+    declared `[UnitDefinition]`, because it compared only a clause's LAST
+    value with its declared result. Every `return` is checked now
+    (`spec/error_return_declared_result`). Over the corpus it found nothing
+    else; the block reads `.or("")`.
+  - With `xs[i]` returning an Optional, `parsed[1].ok?` on a `Result?` was
+    not refused by the checker (the walker reports `Undefined method: ok?
+    for Optional<Result>`). Cause: argument matching lets an Optional stand
+    where its inner type is expected (`argMatchesParam`). That leniency is
+    load-bearing elsewhere (joining `match` arms), so the rule is narrower:
+    a method call's Optional receiver fits only a function whose receiver
+    is an Optional, or open (a type variable, a trait). FIXED 2026-11-13
+    (`checkCall`'s `fits`, `spec/error_optional_receiver`). The general
+    leniency is still open.
 - Slick (`../slick`, another repository) writes this in its spec helpers
   (`registered(...) -> User`) and will not compile until they are rewritten.
 - After such a failure the backends still differ in what they do with the
@@ -560,7 +707,40 @@ What it needs:
   cannot see into;
 - variables a block reassigns threaded through the copy as state, which is
   what the fold in `lowerIteration` does by hand for two functions.
-Not started.
+
+Step 1 DONE (2026-11-13): the pass, within one module. `specialize-blocks`
+(`src/ir/passes/specialize.cxx`) runs first in the module pipeline, ahead of
+`guards`.
+- It applies where a call passes a block bound by a `let` in scope, and the
+  callee is a function of the same module whose clauses bind that parameter
+  to a name. The callee may use that name only to apply it at the block's own
+  arity, or to pass it as the same argument to itself.
+- It emits a copy of the callee (`eachPair__block0`, not exported) with the
+  block's body in place of each application, its names renamed per
+  instance. The block's captured variables become trailing parameters, the
+  recursive calls go to the copy, and the call goes to the copy too.
+- It refuses a block with an early `return`, and a callee with trait
+  dictionaries, a capability context, or over the size limits. A block
+  captured by a variable a nearer binding shadows is not specialised.
+  `spec/block_specialization` covers recursion, two clauses, a nested block,
+  a block that escapes (not copied) and two blocks for one callee.
+- Measured on `sumPairs` over 2,000,000 integers, 40 rounds, with separate
+  caches: 2.30-2.44 s → 1.70-2.10 s end to end, startup and list building
+  included.
+- `ir/clone` holds the deep copy with renaming, and `collectFree` and
+  `returnsEarly`, which the upgrade pass had kept to itself.
+Found with it:
+- The run cache and the unit cache ignored `--passes`: a run with another
+  pipeline reused what the default one had cached. A pipeline the user writes
+  is now part of the toolchain fingerprint.
+- The walker ran the program's `main` before the top-level bindings written
+  below it (`let later = 21` after `main` was undefined there). BEAM and the
+  checker take a binding as a declaration. The walker now runs the bindings
+  first (`spec/top_level_binding_after_main`).
+Still open: across units (the standard library's `each`, `map`, `reduce`),
+which needs the callee's IR from another unit and the stdlib's iteration
+written in Kex down to recursion; and the reassigned-variable threading, so
+`lowerIteration`'s name test can go.
 
 6. **At the very end, revisit the GitHub issues.** Go through the open
    kexhq/kex issues and check which this refactor fixed indirectly, by

@@ -1,0 +1,14 @@
+# kex: check-only
+# An Optional or a Result compared with a plain value is never equal, so it
+# is refused: `codeName == "USD"` with `codeName : String?` was silently
+# false (examples/read_currency.kex). Comparing with `Just(...)`, `None` or
+# an unwrapped value is fine.
+
+main do
+  let code: String? = Just("USD")
+  IO.inspect(code == "USD")
+  IO.inspect(code == Just("USD"))
+  IO.inspect(code == None)
+  IO.inspect(Integer.parse("1") == 1)
+  IO.inspect(code.or("") == "USD")
+end

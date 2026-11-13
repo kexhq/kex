@@ -109,6 +109,11 @@ public:
     // The list patterns that take a String apart into its characters
     // (`[c | rest]` against a String): the elements bind Chars, the tail the
     // rest of the String. Pattern sugar, decided here; a String is no list.
+    // The clauses with no declared result whose `.try` can fail, by their last
+    // body expression: the constructor their successful value is wrapped in.
+    auto successWrappers() const -> const std::unordered_map<const ast::Expr*, std::string>& {
+        return m_successWrappers;
+    }
     auto stringPatterns() const -> const std::unordered_set<const ast::Pattern*>& {
         return m_stringPatterns;
     }
@@ -326,12 +331,34 @@ private:
     // The type of the nullary constructor `name` names here, or null.
     auto nullaryConstructorType(const std::string& name) -> TypePtr;
     auto reportConstructorOutOfScope(const std::string& name, const SourceLocation& at) -> bool;
+    // The module declaring constructor `name` when only a module does and
+    // its bare name is out of scope here (not inside it, no `using` brings
+    // it in); "" when the bare name may be used.
+    auto moduleOfUnreachableConstructor(const std::string& name) const -> std::string;
+    // Refuses `name`, a constructor of `declaring` named bare out of scope.
+    auto reportUnreachableConstructor(const std::string& name, const std::string& declaring,
+                                      const SourceLocation& at) -> void;
     // A name nothing in scope declares: the one report of it, for every
     // consumer of the check (`what` is "name", "function", "variable"...).
     auto reportUndefined(const std::string& what, const std::string& name,
                          const SourceLocation& at) -> void;
     // Whether a free function of the program named `name` is in reach here.
     auto bareFunctionReachable(const std::string& name) const -> bool;
+    // The result a body with no declared result gets from its failing
+    // `.try`s (`T?` or `T or! E`), or `type` itself; `who` names the body in
+    // a refusal. A function's (`isFunction`) refuses its `return`s and a mix
+    // of the two kinds of `.try`; a block keeps its own type for a mix.
+    auto inferredFailingResult(const std::string& who, const std::vector<ast::ExprPtr>& body,
+                               const std::vector<std::pair<SourceLocation, TypePtr>>& tries,
+                               const TypePtr& type, bool isFunction) -> TypePtr;
+    // Each of `tries` refused where `declared` cannot hold its failure.
+    auto refuseUnheldTries(const std::string& who, const TypePtr& declared,
+                           const std::vector<std::pair<SourceLocation, TypePtr>>& tries) -> void;
+    // A block's result after its `.try`s: inferred as above where it
+    // declares none, refused where it declares one that cannot hold them.
+    auto blockFailingResult(const ast::Lambda& block,
+                            const std::vector<std::pair<SourceLocation, TypePtr>>& tries,
+                            const TypePtr& type) -> TypePtr;
     // Whether a bare `name` no scope binds still names something here: a
     // top-level value, a function in reach, a sibling of the `make` block
     // being checked, or a function a `using` brings in.
@@ -499,13 +526,20 @@ private:
     // the receiver.
     auto usingImportedMethods(const std::string& name, bool asMethod = true) const
         -> std::vector<const ImportedFunction*>;
-    auto importedFunctionVisible(const ImportedFunction& function) const -> bool;
+    // `throughReceiver`: the call goes through a value of the function's
+    // receiver type (`set.add(x)`), which reaches its own type's functions
+    // without a `using`; a bare call (`add(set, x)`) does not.
+    auto importedFunctionVisible(const ImportedFunction& function,
+                                 bool throughReceiver = true) const -> bool;
     // Whether a `using` in scope brings `module`'s `member` in; `bare`, for
     // a call by the bare name, which `using M, as: A` alone does not.
     auto moduleMemberImported(const std::string& module, const std::string& member,
                               bool bare = false) const -> bool;
 
     // Binary operator type resolution
+    // `==` or `!=` between an Optional (or a Result) and a settled plain
+    // value, which is never equal: refused.
+    auto checkNeverEqual(const TypePtr& lhs, const TypePtr& rhs, SourceLocation loc) -> void;
     auto inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr& right,
                        SourceLocation loc) -> TypePtr;
 
@@ -652,8 +686,18 @@ private:
     // Scope management
     auto pushScope() -> void;
     auto popScope() -> void;
-    auto defineVar(const std::string& name, TypePtr type) -> void;
+    auto defineVar(const std::string& name, TypePtr type,
+                   TypeEnv::Binding binding = {}) -> void;
+    // A binding the program writes (`let`, `var`, a pattern's name): a name
+    // the current scope already binds is a redeclaration, reported at
+    // `where`; the first binding's kind is kept.
+    auto declareVar(const std::string& name, TypePtr type, bool isVar,
+                    SourceLocation where) -> void;
     auto lookupVar(const std::string& name) const -> TypePtr;
+    // How the nearest binding of `name` was made, or null.
+    auto bindingOf(const std::string& name) const -> const TypeEnv::Binding*;
+    // Whether a pattern being bound is a `var`'s (set by `var` destructuring).
+    bool m_patternBindsVar = false;
     // The concrete declared result of a zero-parameter binding, which a bare
     // reference to it auto-calls; nullptr when there is none (#329).
     auto zeroArgBindingResult(const std::string& name) -> TypePtr;
@@ -1119,8 +1163,14 @@ private:
     int m_tryingBlockDepth = -1;
     // Where the function clause being checked collects the `.try`s of its own
     // body, and the block depth that body is at.
-    std::vector<SourceLocation>* m_clauseTries = nullptr;
+    std::vector<std::pair<SourceLocation, TypePtr>>* m_clauseTries = nullptr;
     int m_clauseTriesDepth = 0;
+    // The `return`s of the clause being checked (not a block's), each with its
+    // value's type, for the check against the declared result.
+    std::vector<std::pair<const ast::Expr*, TypePtr>>* m_clauseReturns = nullptr;
+    // The functions with no declared result whose `.try` can fail: each
+    // answers its successful value wrapped, `Just` or `Ok` (successWrappers).
+    std::unordered_map<const ast::Expr*, std::string> m_successWrappers;
     int m_tryBelowBlock = 0;
     // The complete receiver type of the current `make X do` block, used for
     // `this`, `This`, and receiver-aware body inference.

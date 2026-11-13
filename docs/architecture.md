@@ -48,7 +48,7 @@ The build (`src/driver/build_ir.hxx`, `build_passes.cxx`):
 ```
 spec-base,load-dependencies,run-cache,
 unit(unit-cache,assemble,check,lower,load-order,companion-forwards,
-     receiver-forwards,module(guards,upgrade-points,verify),emit-core,
+     receiver-forwards,module(specialize-blocks,guards,upgrade-points,verify),emit-core,
      describe,store-unit,return-items),
 merge-dependencies
 ```
@@ -84,15 +84,17 @@ in its own file's expansion.
 1. **Analyzer** (`Analyzer::analyze`):
    - The module rules (`module_rules.hxx`: what a `using` or `export` may
      take from another module).
-   - Purity and mutability, over its own scope table (`SymbolTable`, which
-     reports no name any more; folding it onto the checker's scopes is open),
-     then transitive effects.
    - The type checker (`typechecker*.cxx`), which is also the one place a
      name is resolved: an undefined name, constructor, tag or named-argument
      label is its report (`TypeChecker::reportUndefined`), and so is a bare
      name two `using`s bring in from two modules
-     (`reportAmbiguousImports`).
+     (`reportAmbiguousImports`). Its scopes record whether a name is a `var`,
+     so it also reports assignment to a `let` and a name bound twice in one
+     scope (`declareVar`).
    - Receiver conflicts, from the receivers the checker resolved.
+   - Purity, over the function the checker says each call runs
+     (`Analyzer::callsFoul`), then transitive effects. Its diagnostics are
+     listed ahead of the checker's.
 2. **Validation:** tagged literals.
 
 The type checker is where calls are decided. Every call it understands gets a

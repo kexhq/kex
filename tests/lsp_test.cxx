@@ -285,6 +285,62 @@ int main() {
                        "line: " + definition);
         });
 
+        it("navigates from a method call to the function the checker chose", []() {
+            // Two types have a `render`. By name the first came back (Tag's);
+            // the checker decided the call runs Box's, and the name index
+            // records the call as a reference to that one.
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-method-definition.kex","languageId":"kex","version":1,"text":"record Box do\n  value : Integer\nend\n\nrecord Tag do\n  value : Integer\nend\n\nmake Tag do\n  let render = \"tag\"\nend\n\nmake Box do\n  let render = \"box\"\nend\n\nmain do\n  let box = Box { value: 1 }\n  IO.printLine(box.render)\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-method-definition.kex"},"position":{"line":18,"character":20}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto definition = responseForId(output.str(), 2);
+            assertTrue(definition.find("\"line\":13") != std::string::npos,
+                       "definition did not land on Box's `render`: " + definition);
+        });
+
+        it("navigates from a record's name to the record the checker resolved", []() {
+            // Two modules declare a `Point`. In B, both the result annotation
+            // and the construction name B's; by name A's came first.
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-record-definition.kex","languageId":"kex","version":1,"text":"module A do\n  record Point do\n    x : Integer\n  end\nend\n\nmodule B do\n  record Point do\n    x : Integer\n  end\n  let origin -> Point = Point { x: 0 }\nend\n\nmain do\n  IO.inspect(B.origin)\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-record-definition.kex"},"position":{"line":10,"character":17}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-record-definition.kex"},"position":{"line":10,"character":25}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto annotation = responseForId(output.str(), 2);
+            assertTrue(annotation.find("\"line\":7") != std::string::npos,
+                       "the annotation did not lead to B's Point: " + annotation);
+            const auto construction = responseForId(output.str(), 3);
+            assertTrue(construction.find("\"line\":7") != std::string::npos,
+                       "the construction did not lead to B's Point: " + construction);
+        });
+
         it("hovers a params: name inside a .ket hole with its declared type", []() {
             // Same translation the diagnostics test exercises, but for the
             // request/response direction: the incoming position (line 3,

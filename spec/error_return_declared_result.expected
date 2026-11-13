@@ -1,0 +1,2 @@
+spec/error_return_declared_result.kex:8:5: error: `firstWords` declared to return [String] but returns [Char?] here
+spec/error_return_declared_result.kex:15:5: error: `count` declared to return Integer but returns String here

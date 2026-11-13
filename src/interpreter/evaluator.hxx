@@ -398,6 +398,10 @@ private:
                      SourceLocation loc, bool isMutable) -> void;
 
     // Try/rescue support
+    static auto tryFailureResult(const ValuePtr& failure) -> ValuePtr;
+    // A successful result of a body whose failing `.try` made it `T?` or
+    // `T or! E`: `Just(value)` or `Ok(value)`, as `wrapper` says.
+    static auto wrappedSuccess(const std::string& wrapper, ValuePtr value) -> ValuePtr;
     auto evalRescue(const ast::RescueBlock& rescue, const ValuePtr& error,
                     SourceLocation loc) -> ValuePtr;
 

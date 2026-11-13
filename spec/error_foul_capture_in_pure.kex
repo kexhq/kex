@@ -1,0 +1,17 @@
+# kex: check-only
+# `~shout` hands a foul function on to be run, so pure code may not capture
+# one any more than call it (kexhq/kex#640). Foul code may.
+
+foul shout(s: String) -> String do
+  IO.printLine(s)
+  s
+end
+
+let quiet(xs: [String]) -> [String] = xs.map(~shout)
+
+foul loud(xs: [String]) -> [String] = xs.map(~shout)
+
+main do
+  IO.printLine("${quiet(["a"])}")
+  IO.printLine("${loud(["b"])}")
+end

@@ -2,7 +2,8 @@
 // The IR level of the pass infrastructure (docs/architecture.md): an
 // ir::Module is the unit, as a Function is in LLVM. Every rewrite
 // of a lowered module is a pass here, registered by name, and every module is
-// emitted through the same pipeline: `guards,upgrade-points,verify` unless
+// emitted through the same pipeline:
+// `specialize-blocks,guards,upgrade-points,verify` unless
 // `kex --passes='...module(...)'` says otherwise.
 #include "ir.hxx"
 #include "../pass/pass_registry.hxx"
@@ -26,6 +27,15 @@ using ModuleAnalysisManager = pass::AnalysisManager<Module>;
 // For instrumentation: a module's name, and the module as Core Erlang.
 auto unitName(const Module& module) -> std::string;
 auto printUnit(std::ostream& out, const Module& module) -> void;
+
+// A function that takes a block, copied with the block it is called with in
+// place (passes/specialize.hxx).
+struct SpecializeBlocksPass : pass::PassInfoMixin<SpecializeBlocksPass> {
+    static constexpr std::string_view kName = "specialize-blocks";
+    static constexpr std::string_view kDescription =
+        "copy a function that takes a block, with the block it is called with in place";
+    auto run(Module& module, ModuleAnalysisManager& analyses) -> pass::PreservedAnalyses;
+};
 
 // `when` guards out of BEAM guard position, before any pass reads the control
 // flow they become.
@@ -54,7 +64,8 @@ struct VerifierPass : pass::PassInfoMixin<VerifierPass> {
 
 // Every module pass, by name.
 auto modulePassRegistry() -> const pass::PassRegistry<Module>&;
-inline constexpr std::string_view kDefaultModulePipeline = "guards,upgrade-points,verify";
+inline constexpr std::string_view kDefaultModulePipeline =
+    "specialize-blocks,guards,upgrade-points,verify";
 // The module pipeline to run: the user's (`--passes`), or the default. A
 // pipeline that does not parse is a usage error, reported as one.
 auto buildModulePipeline() -> ModulePassManager;

@@ -4138,7 +4138,9 @@ private:
             document.text, params.position.line, word.byteColumn);
         const semantic::SymbolInfo* symbol = m_db.symbolAt(
             document.path, params.position.line + 1, word.byteColumn);
-        if (!qualifier.empty()) {
+        // The checker's answer for this name, when the index has one; the
+        // lookups below by name only stand in where it has none.
+        if (!symbol && !qualifier.empty()) {
             symbol = m_db.symbolInModule(qualifier, word.text);
             // Source collection currently stores a nested module under its
             // local name (`File`) while imported interfaces expose its fully
@@ -4243,7 +4245,9 @@ private:
             document.text, params.position.line, word.byteColumn);
         const semantic::SymbolInfo* symbol = m_db.symbolAt(
             document.path, params.position.line + 1, word.byteColumn);
-        if (!qualifier.empty()) {
+        // The checker's answer for this name, when the index has one; the
+        // lookups below by name only stand in where it has none.
+        if (!symbol && !qualifier.empty()) {
             symbol = m_db.symbolInModule(qualifier, word.text);
             if (!symbol)
                 if (const auto dot = qualifier.rfind('.');

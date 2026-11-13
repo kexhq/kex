@@ -51,7 +51,8 @@ Program::Program(const ast::Program& ast, const semantic::Analyzer& analysis)
       m_shownThrough(&analysis.shownThroughDistinct()),
       m_inheritedDefaults(&analysis.checker().inheritedDefaults()),
       m_stringPatterns(&analysis.checker().stringPatterns()),
-      m_makeTargets(&analysis.checker().makeTargetIdentities()) {
+      m_makeTargets(&analysis.checker().makeTargetIdentities()),
+      m_successWrappers(&analysis.checker().successWrappers()) {
     // An imported target names the function; what else the checker decided
     // fills in the rest. Keyed by node and by expression alike.
     const auto record = [&](const ast::Expr& expr, Target target) {
@@ -93,6 +94,7 @@ Program::Program(const ast::Program& ast,
     m_inheritedDefaults = &m_owned->inheritedDefaults;
     m_stringPatterns = &m_owned->stringPatterns;
     m_makeTargets = &m_owned->makeTargets;
+    m_successWrappers = &m_owned->successWrappers;
     for (const auto& [expr, target] : targets) {
         if (const auto* node = callNodeOf(*expr)) m_targets.emplace(node, target);
         m_targets.emplace(expr, target);
@@ -257,6 +259,17 @@ auto Program::inheritedDefaultsOf(const ast::MakeDef& make) const
     return found == m_inheritedDefaults->end() ? nullptr : &found->second;
 }
 
+auto Program::successWrapperOf(const ast::FunctionClause& clause) const -> std::string {
+    return clause.body.empty() || !clause.body.back() ? std::string{}
+                                                       : successWrapperAfter(*clause.body.back());
+}
+
+auto Program::successWrapperAfter(const ast::Expr& last) const -> std::string {
+    if (!m_successWrappers) return {};
+    const auto found = m_successWrappers->find(&last);
+    return found == m_successWrappers->end() ? std::string{} : found->second;
+}
+
 auto Program::makeTargetsOf(const ast::MakeDef& make) const -> const std::vector<std::string>* {
     const auto found = m_makeTargets->find(&make);
     return found == m_makeTargets->end() ? nullptr : &found->second;
@@ -322,6 +335,12 @@ auto newestAnswer(const std::unordered_map<const void*, const Program*>& owners,
 
 } // namespace
 
+auto ProgramSet::targetOf(const ast::Expr& expr) const -> const Target& {
+    return *newestAnswer<const Target*>(
+        m_owners, &expr, m_base, &kUndecided, [&](const Program& p) { return &p.targetOf(expr); },
+        [](const Target* t) { return t->kind != TargetKind::Undecided; });
+}
+
 auto ProgramSet::targetOf(const ast::MethodCall& call) const -> const Target& {
     return *newestAnswer<const Target*>(
         m_owners, &call, m_base, &kUndecided, [&](const Program& p) { return &p.targetOf(call); },
@@ -363,6 +382,18 @@ auto ProgramSet::receiverTypeOf(const ast::Expr& call) const -> std::string {
         [](const std::string& t) { return !t.empty(); });
 }
 
+auto ProgramSet::successWrapperOf(const ast::FunctionClause& clause) const -> std::string {
+    return clause.body.empty() || !clause.body.back() ? std::string{}
+                                                       : successWrapperAfter(*clause.body.back());
+}
+
+auto ProgramSet::successWrapperAfter(const ast::Expr& last) const -> std::string {
+    return newestAnswer<std::string>(
+        m_owners, &last, m_base, std::string{},
+        [&](const Program& p) { return p.successWrapperAfter(last); },
+        [](const std::string& tag) { return !tag.empty(); });
+}
+
 auto ProgramSet::typeOfAnswer(const ast::MethodCall& call) const
     -> const semantic::StaticTypeAnswer* {
     return newestAnswer<const semantic::StaticTypeAnswer*>(
@@ -394,6 +425,8 @@ auto Program::forEachAnsweredNode(const std::function<void(const void*)>& visit)
     for (const auto& [expr, _] : *m_selected) visit(expr);
     for (const auto& [expr, _] : *m_shownThrough) visit(expr);
     for (const auto* pattern : *m_stringPatterns) visit(pattern);
+    if (m_successWrappers)
+        for (const auto& [expr, _] : *m_successWrappers) visit(expr);
 }
 
 auto Program::typeOf(const ast::Expr& expr) const -> semantic::TypePtr {

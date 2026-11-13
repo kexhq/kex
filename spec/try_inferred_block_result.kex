@@ -1,0 +1,16 @@
+# A block is a function boundary for `.try` as a named function is: a failure
+# is the block's result. So a block that declares no result takes the failure
+# into the one it infers, `T?` or `T or! E`, and its success comes back as
+# `Just(v)` or `Ok(v)`. `map` then hands back each element's outcome, rather
+# than an `Error` among plain values. A block that does not fail is untouched.
+
+main do
+  let parsed = ["1", "x", "3"].map { |text| Integer.parse(text).try + 1 }
+  IO.printLine(parsed.map { |outcome| outcome.ok? } == [true, false, true])
+  IO.printLine(parsed.first == Just(Ok(2)))
+  let initials = [["ada"], []].map { |names| names.first.try.upperCase }
+  IO.printLine(initials == [Just("ADA"), None])
+  let counted = ["1", "2"].map { |text| Integer.parse(text).or(0) }
+  IO.printLine(counted == [1, 2])
+  ["4", "y"].each { |text| IO.printLine(Integer.parse(text).try) }
+end

@@ -1,0 +1,20 @@
+# kex: check-only
+# `except:` a type leaves its constructors out too: named bare they are
+# out of scope, in a pattern as in an expression.
+
+module Shades do
+  type Shade = Light | Tint(Integer)
+end
+
+using Shades, except: [Shade]
+
+let describe(shade: Shades.Shade) -> String do
+  match shade do
+    Light => "light"
+    _ => "other"
+  end
+end
+
+main do
+  IO.printLine(describe(Tint(2)))
+end

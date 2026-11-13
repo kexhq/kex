@@ -1,0 +1,13 @@
+# A top-level binding is a declaration: `main`, and a function it calls, see
+# it wherever it is written. The walker ran the bindings and `main` in source
+# order, so one written below `main` was undefined there (BEAM and the checker
+# already took it as a declaration).
+
+let doubled() = later * 2
+
+main do
+  IO.printLine(later)
+  IO.printLine(doubled())
+end
+
+let later = 21

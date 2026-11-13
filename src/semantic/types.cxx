@@ -627,14 +627,18 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
     }, a->kind);
 }
 
-auto TypeEnv::set(const std::string& name, TypePtr type) -> void {
-    m_types[name] = std::move(type);
+auto TypeEnv::set(const std::string& name, TypePtr type, Binding binding) -> void {
+    m_entries[name] = Entry{std::move(type), binding};
 }
 
 auto TypeEnv::get(const std::string& name) const -> TypePtr {
-    auto it = m_types.find(name);
-    if (it != m_types.end()) return it->second;
-    return nullptr;
+    auto it = m_entries.find(name);
+    return it == m_entries.end() ? nullptr : it->second.type;
+}
+
+auto TypeEnv::binding(const std::string& name) const -> const Binding* {
+    auto it = m_entries.find(name);
+    return it == m_entries.end() ? nullptr : &it->second.binding;
 }
 
 // ── Structural traversal ─────────────────────────────────────────────────────

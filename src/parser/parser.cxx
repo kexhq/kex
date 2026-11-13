@@ -2013,6 +2013,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
           std::move(block), mutating, hasParens};
       std::get<ast::MethodCall>(call->kind).targetType =
           std::move(targetType);
+      std::get<ast::MethodCall>(call->kind).methodLocation = methodTok.location;
       expr = complete(std::move(call));
       continue;
     }
@@ -4272,11 +4273,17 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
     while (peekAt(pathOffset).type == TokenType::Dot &&
            peekAt(pathOffset + 1).type == TokenType::UpperIdent)
       pathOffset += 2;
-    if (pathOffset > 0 && peekAt(pathOffset).type == TokenType::LBrace) {
+    // `Geo.Point { x }` names a record by its path; `Shades.Light` and
+    // `Shades.Tint(n)` a module's constructor.
+    std::string module;
+    if (pathOffset > 0) {
       while (match(TokenType::Dot)) {
-        name += ".";
-        name +=
-            expect(TokenType::UpperIdent, "Expected record type name").value;
+        module += (module.empty() ? "" : ".") + name;
+        name = expect(TokenType::UpperIdent, "Expected a name").value;
+      }
+      if (check(TokenType::LBrace)) {
+        name = module + "." + name;
+        module.clear();
       }
     }
     // Named record pattern: `Foo { x, y }` — same field-list grammar as
@@ -4298,9 +4305,9 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
         }
       }
       expect(TokenType::RParen, "Expected ')'");
-      pattern->kind = ast::ConstructorPattern{name, std::move(args)};
+      pattern->kind = ast::ConstructorPattern{name, std::move(args), module};
     } else {
-      pattern->kind = ast::ConstructorPattern{name, {}};
+      pattern->kind = ast::ConstructorPattern{name, {}, module};
     }
     return complete(std::move(pattern));
   }

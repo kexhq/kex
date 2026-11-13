@@ -1,0 +1,20 @@
+# kex: check-only
+# A block's failing `.try` makes its result `T or! E`. Where the block is
+# passed as a function that must give a plain value, that is refused at the
+# call, as any other block of the wrong type is. Before, the failure reached
+# `lengths`'s caller as an `Error` among the Integers. A block that declares a
+# result which cannot hold the failure is refused where the `.try` is written (`parsed`, a function local to
+# `declared`, is such a block).
+
+let lengths(texts: [String]) -> [Integer] = texts.map { |text| Integer.parse(text).try }
+
+let declared(texts: [String]) do
+  let parsed(text: String) -> Integer = Integer.parse(text).try
+  texts.map(parsed)
+end
+
+let held(texts: [String]) -> [Integer or! ParseError] = texts.map { |text| Integer.parse(text).try }
+
+main do
+  IO.printLine(held(["1"]).length)
+end

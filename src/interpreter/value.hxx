@@ -373,4 +373,8 @@ auto parseIntegerInBase(const std::string& text, int base) -> std::optional<mpz_
 // extraction point for that (see valuesEqual, toString(), `+`).
 auto textContent(const ValuePtr& v) -> std::optional<std::string>;
 
+// A take/drop count clamped to [0, size]: a negative count means none, and a
+// count too big for int64_t (a BigIntValue) means all of a positive one.
+auto clampedCount(const ValuePtr& count, size_t size) -> size_t;
+
 } // namespace kex::interpreter

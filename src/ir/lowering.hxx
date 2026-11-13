@@ -679,6 +679,10 @@ struct Lowering {
     static auto irHasEscapingTryThrow(const ExprPtr& e) -> bool;
 
     auto wrapPropagateTryError(ExprPtr body) -> ExprPtr;
+    // `body`'s value as `Just(v)` or `Ok(v)`, where the checker inferred the
+    // body's result `T?` or `T or! E` from a failing `.try` (`last` is the
+    // body's last expression); `body` itself anywhere else.
+    auto wrapSuccess(ExprPtr body, const ast::Expr* last) -> ExprPtr;
 
     // ---- Function / program ----------------------------------------------
     auto lowerParam(const ast::Param& p) -> PatternPtr;

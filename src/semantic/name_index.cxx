@@ -105,6 +105,52 @@ auto indexNames(const ast::Program& program, const std::string& path,
         }
         if (symbol) references.emplace_back(expr->location, symbol);
     }
+    // A method call is a reference to the function the checker decided it
+    // runs: the receiver type's own `make` function, or its home module's.
+    for (const auto& [expr, decided] : checker.decidedCalls()) {
+        const auto* call = std::get_if<ast::MethodCall>(&expr->kind);
+        if (!call || call->methodLocation.line == 0) continue;
+        SymbolInfo* symbol = nullptr;
+        if (decided.kind == CallKind::ModuleFunction) {
+            symbol = modules.referenced(owningModule(decided.owner), call->method, path);
+        } else if (decided.kind == CallKind::OwnMethod) {
+            // The type as the checker names it (`Geo.Circle`); a `make`
+            // target as written (`Circle` inside `module Geo`).
+            for (auto& candidate : modules.symbols()) {
+                if (candidate.kind != SymbolKind::Function || candidate.name != call->method ||
+                    candidate.makeTarget.empty())
+                    continue;
+                const auto written = candidate.module.empty() ||
+                                             candidate.makeTarget.find('.') != std::string::npos
+                                         ? candidate.makeTarget
+                                         : candidate.module + "." + candidate.makeTarget;
+                if (written == decided.owner || candidate.makeTarget == decided.owner) {
+                    symbol = &candidate;
+                    break;
+                }
+            }
+        }
+        if (symbol) references.emplace_back(call->methodLocation, symbol);
+    }
+    // A record named as a type or constructed is a reference to the record
+    // the checker resolved the name to.
+    const auto recordNamed = [&](const std::string& identity) {
+        const auto module = owningModule(identity);
+        return modules.referenced(module, module.empty() ? identity
+                                                         : identity.substr(module.size() + 1),
+                                  path);
+    };
+    for (const auto& [type, identity] : checker.annotatedRecords())
+        if (auto* symbol = recordNamed(identity)) references.emplace_back(type->location, symbol);
+    for (const auto& [expr, type] : checker.typeMap()) {
+        const auto* construction = std::get_if<ast::RecordConstruction>(&expr->kind);
+        const auto* named = construction && type ? std::get_if<NamedType>(&type->kind) : nullptr;
+        // Only where the record's name is written: not `New { ... }`.
+        if (!named || !(named->name == construction->typeName ||
+                        named->name.ends_with("." + construction->typeName)))
+            continue;
+        if (auto* symbol = recordNamed(named->name)) references.emplace_back(expr->location, symbol);
+    }
     // A `using` is a reference to each name it brings in.
     forEachUsing(program, [&](const WrittenUsing& written) {
         eachImported(written.within, written.module.dotted(), written.alias, written.onlyNames,
@@ -118,6 +164,14 @@ auto indexNames(const ast::Program& program, const std::string& path,
                      [](const auto& left, const auto& right) {
                          return before(left.first, right.first);
                      });
+    // One place found by two of the answers above is one reference.
+    references.erase(std::unique(references.begin(), references.end(),
+                                 [](const auto& left, const auto& right) {
+                                     return left.second == right.second &&
+                                            !before(left.first, right.first) &&
+                                            !before(right.first, left.first);
+                                 }),
+                     references.end());
     for (const auto& [location, symbol] : references) symbol->references.push_back(location);
 
     std::vector<ScopeSnapshot> scopes;

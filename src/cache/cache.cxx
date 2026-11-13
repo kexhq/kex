@@ -2,6 +2,7 @@
 
 #include "../common/prelude_loader.hxx"
 #include "../common/version.hxx"
+#include "../pass/options.hxx"
 
 #include <atomic>
 #include <cstdlib>
@@ -54,6 +55,10 @@ auto toolchainFingerprint() -> const std::string& {
             text += fileStamp(file) + "\n";
         for (const auto& file : kex::standardLibrarySourceFiles())
             text += fileStamp(file) + "\n";
+        // A pipeline other than the default makes different code: what one
+        // caches is not another's.
+        for (const auto& [level, pipeline] : kex::pass::passOptions().pipelines)
+            text += "pipeline:" + level + "=" + pipeline + "\n";
         return text;
     }();
     return fingerprint;

@@ -290,19 +290,34 @@ auto isFullyConcrete(const TypePtr& type) -> bool;
 // this to stay quiet rather than invent an error from incomplete information.
 auto containsOpenType(const TypePtr& type) -> bool;
 
+// How a name was bound: `var` (so `=` and `!` may rebind it) or not, and
+// whether the language bound it (`new`, `from`) rather than the program,
+// which an explicit binding then shadows instead of redeclaring.
+struct VarBinding {
+    bool isVar = false;
+    bool implicit = false;
+};
+
 class TypeEnv {
 public:
-    auto set(const std::string& name, TypePtr type) -> void;
+    using Binding = VarBinding;
+    auto set(const std::string& name, TypePtr type, Binding binding = {}) -> void;
     auto get(const std::string& name) const -> TypePtr;
+    // How `name` was bound here, or null when it is not bound here.
+    auto binding(const std::string& name) const -> const Binding*;
     // Every name bound here, for a hint beside an undefined one.
     auto names() const -> std::vector<std::string> {
         std::vector<std::string> result;
-        for (const auto& [name, _] : m_types) result.push_back(name);
+        for (const auto& [name, _] : m_entries) result.push_back(name);
         return result;
     }
 
 private:
-    std::unordered_map<std::string, TypePtr> m_types;
+    struct Entry {
+        TypePtr type;
+        Binding binding;
+    };
+    std::unordered_map<std::string, Entry> m_entries;
 };
 
 } // namespace kex::semantic

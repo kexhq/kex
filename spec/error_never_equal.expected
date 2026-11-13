@@ -1,0 +1,2 @@
+spec/error_never_equal.kex:9:22: error: `String?` and `String` are never equal: compare with `Just(value)`, or unwrap first (`.or(default)`, a `match`)
+spec/error_never_equal.kex:12:36: error: `Result<Integer, ParseError>` and `Integer` are never equal: compare with `Ok(value)`, or unwrap first (`.or(default)`, a `match`)

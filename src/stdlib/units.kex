@@ -625,7 +625,7 @@ make Measure<D>, implement: Showable do
           UnitDefinition {
             conversionFactor: Math.pow(radix, power),
             dimension: :data,
-            notation: symbols[power].try
+            notation: symbols[power].or("")
           }
         end
       end
