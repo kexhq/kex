@@ -246,6 +246,26 @@ auto isPrimitiveTypeName(const std::string& name) -> bool {
            name == "Tuple" || name == "Block";
 }
 
+namespace {
+constexpr std::pair<PrimitiveType::Kind, std::string_view> kPrimitiveKindNames[] = {
+    {PrimitiveType::Integer, "Integer"}, {PrimitiveType::Char, "Char"},
+    {PrimitiveType::String, "String"},   {PrimitiveType::Bool, "Bool"},
+    {PrimitiveType::Atom, "Atom"},       {PrimitiveType::Unit, "Void"},
+};
+} // namespace
+
+auto primitiveKindName(PrimitiveType::Kind kind) -> std::string_view {
+    for (const auto& [each, name] : kPrimitiveKindNames)
+        if (each == kind) return name;
+    return "?";
+}
+
+auto primitiveKindNamed(std::string_view name) -> std::optional<PrimitiveType::Kind> {
+    for (const auto& [kind, each] : kPrimitiveKindNames)
+        if (each == name) return kind;
+    return std::nullopt;
+}
+
 auto typeToString(const TypePtr& type) -> std::string {
     if (!type) return "?";
 
@@ -253,16 +273,8 @@ auto typeToString(const TypePtr& type) -> std::string {
         using T = std::decay_t<decltype(t)>;
 
         if constexpr (std::is_same_v<T, PrimitiveType>) {
-            switch (t.kind) {
-                case PrimitiveType::Integer: return "Integer";
-                case PrimitiveType::Char: return "Char";
-                case PrimitiveType::String: return "String";
-                case PrimitiveType::Bool: return "Bool";
-                case PrimitiveType::Atom:
-                    return t.atomName.empty() ? "Atom" : ":" + t.atomName;
-                case PrimitiveType::Unit: return "Void";
-            }
-            return "?";
+            if (t.kind == PrimitiveType::Atom && !t.atomName.empty()) return ":" + t.atomName;
+            return std::string(primitiveKindName(t.kind));
         }
         else if constexpr (std::is_same_v<T, SizedIntType>) {
             if (!t.isSigned) {

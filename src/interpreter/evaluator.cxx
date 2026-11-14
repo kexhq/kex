@@ -1581,6 +1581,16 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                 typedSignatures.insert(std::move(signature));
             }
         const bool dispatchByParamType = typedSignatures.size() > 1;
+        // A parameter declared `This` is the receiver's own type: read by
+        // runtimeTypeMatches while these clauses are tried, for this call.
+        struct ThisTypeScope {
+            std::string& slot;
+            std::string saved;
+            ~ThisTypeScope() { slot = std::move(saved); }
+        } thisTypeScope{m_dispatchThisType,
+                        std::exchange(m_dispatchThisType,
+                                      isMethod && !args.empty() ? dispatchTypeName(args[0])
+                                                               : std::string{})};
         // With several declared signatures sharing this name, argument types
         // are supposed to pick the clause — but a clause declaring NO types
         // passed that filter untouched, and the prelude's definitions load
@@ -4651,6 +4661,10 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
         if constexpr (std::is_same_v<T, ast::TypeName>) {
             if (node.parts.empty()) return true;
             const auto& expected = node.parts.back();
+            // `This` in a `make` function is its receiver's type.
+            if (expected == kex::names::kThisType && node.parts.size() == 1 &&
+                !m_dispatchThisType.empty())
+                return dispatchTypeName(value) == m_dispatchThisType;
             if (expected == "Any" ||
                 (expected.size() == 1 &&
                  std::isupper(static_cast<unsigned char>(expected[0]))))
