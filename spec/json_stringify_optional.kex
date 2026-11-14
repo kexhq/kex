@@ -8,6 +8,7 @@ main do
   let selected: String? = Just("0.4.0")
   let missing: String? = None
   IO.printLine(JSON.stringify({ selected: selected, missing: missing }))
-  IO.printLine(JSON.stringify([Just(1), None, Just(Just(2))]))
+  IO.printLine(JSON.stringify([Just(1), None, Just(2)]))
+  IO.printLine(JSON.stringify(Just(Just(2))))
   IO.printLine(JSON.stringify(Just({ nested: Just([Just("a")]) })))
 end

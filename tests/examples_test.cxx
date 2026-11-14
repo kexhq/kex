@@ -2,6 +2,8 @@
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
 #include "../src/interpreter/evaluator.hxx"
+#include "../src/common/runtime_dir.hxx"
+#include "../src/driver/dependencies.hxx"
 #include <fstream>
 #include <sstream>
 
@@ -38,8 +40,13 @@ auto runFileWithRoots(const std::string& path,
     auto tokens = lexer.tokenizeAll();
     Parser parser(std::move(tokens), path);
     auto program = parser.parseProgram();
+    // As the walker runs a program: its modules merged in, expanded and
+    // checked first.
+    const auto checked =
+        driver::prepareForWalker(program, roots, &defaultPreludeInterfaces(), path);
     Evaluator evaluator;
     evaluator.setModuleRoots(std::move(roots));
+    evaluator.setProgram(&*checked->program);
     evaluator.execute(program);
     return evaluator.output();
 }

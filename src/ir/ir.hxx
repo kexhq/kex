@@ -1,4 +1,5 @@
 #pragma once
+#include "../common/well_known.hxx"
 // Kex in-memory lowering IR.
 //
 // This is the "desugar target" from docs/ir-format.md: a small,
@@ -112,6 +113,10 @@ struct Pattern {
     std::vector<PatternPtr> args;
     // List: the `| rest` tail pattern, if any (else a proper list).
     PatternPtr rest;
+    // List: takes a String (a UTF-8 binary) apart into its characters, as
+    // the checker decided (hir::Program::destructuresString). The elements
+    // bind Chars, the tail the rest of the String.
+    bool ofString = false;
 };
 
 struct MatchClause {
@@ -119,9 +124,22 @@ struct MatchClause {
     std::optional<ExprPtr> guard;
     ExprPtr body;
 };
+// What the `guards` pass (passes/guards.cxx) makes of a match's `when` guards.
+// BEAM guards cannot hold arbitrary calls, so a guard written in source
+// becomes ordinary code.
+enum class GuardExpansion {
+    Native,  // as lowered: lowering's own matches, `receive`
+    Source,  // a `match`: guards fail on anything but `true`; no clause
+             // matching is the walker's "no matching clause" error
+    Rescue,  // rescue arms: only a literal `false` skips one, and an error
+             // no arm takes is thrown again
+};
 struct Match {
     std::vector<ExprPtr> subjects; // usually 1; >1 for multi-value dispatch
     std::vector<MatchClause> clauses;
+    GuardExpansion guards = GuardExpansion::Native;
+    // Source: where the no-clause failure says it was (`file:line:col: `).
+    std::string unmatchedAt;
 };
 
 // ---- Data -----------------------------------------------------------------
@@ -208,6 +226,11 @@ struct FunClause {
     std::vector<PatternPtr> params;
     std::optional<ExprPtr> guard;
     ExprPtr body;
+    // On a receiver dispatcher's clause: the per-type implementations
+    // (`count/List`) a value of that type reaches through it, as the
+    // dispatcher put its arms in order. They hold while nothing is merged
+    // in ahead of this clause (emitCore checks).
+    std::vector<std::string> routes;
 };
 struct FunDef {
     std::string name;
@@ -311,5 +334,15 @@ inline auto var(std::string name) -> ExprPtr {
     e->node = Var{std::move(name)};
     return e;
 }
+// A pattern matching one atom.
+inline auto atomPattern(std::string atom) -> PatternPtr {
+    auto p = std::make_unique<Pattern>();
+    p->kind = PatKind::Lit;
+    p->litKind = LitKind::Atom;
+    p->litText = std::move(atom);
+    return p;
+}
+// What a caller passes for an argument it leaves out (names::kDefaultArgument).
+inline auto defaultArgument() -> ExprPtr { return lit(LitKind::Atom, kex::names::kDefaultArgument); }
 
 } // namespace kex::ir

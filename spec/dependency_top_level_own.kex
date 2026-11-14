@@ -1,0 +1,11 @@
+# A module may use what its own file declares outside it (spec/lib/pantry.kex:
+# `shelves` and the `Jar` constructors), on both backends, though a program
+# that brings the module in cannot name them
+# (spec/error_dependency_top_level.kex).
+
+using Pantry
+
+main do
+  IO.printLine(stocked())
+  IO.printLine(Pantry.first)
+end

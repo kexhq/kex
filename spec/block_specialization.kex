@@ -1,0 +1,51 @@
+# A function that only applies the block it takes is copied with the block
+# in place (the `specialize-blocks` pass): the copy must answer exactly what
+# the closure call did, captured variables, recursion and all.
+
+let eachPair(items: [Integer], visit: Integer -> Integer -> Integer) -> Integer do
+  match items do
+    [a, b | rest] => visit(a, b) + eachPair(rest, visit)
+    _ => 0
+  end
+end
+
+# Two clauses, the block bound in each; a nested block calls it too.
+let mapAll(items: [Integer], f: Integer -> Integer) -> [Integer] do
+  match items do
+    [] => []
+    [x | rest] => [f(x)] + mapAll(rest, f)
+  end
+end
+
+let twiceEach(items: [Integer], f: Integer -> Integer) -> [Integer] do
+  items.map { |x| f(f(x)) }
+end
+
+# The block escapes (stored in a tuple): no copy, the closure is called.
+let keep(f: Integer -> Integer) -> (Integer -> Integer, Integer) = (f, 1)
+
+let firstOver(items: [Integer], limit: Integer, test: Integer -> Bool) -> Integer do
+  match items do
+    [x | rest] => test(x) then x else firstOver(rest, limit, test)
+    [] => limit
+  end
+end
+
+main do
+  let scale = 3
+  IO.printLine(eachPair([1, 2, 3, 4]) { |a, b| (a + b) * scale })
+  let offset = 10
+  IO.printLine(mapAll([1, 2, 3]) { |x| x + offset })
+  IO.printLine(twiceEach([1, 2]) { |x| x * scale })
+  # Same callee, another block: a copy of its own.
+  IO.printLine(eachPair([5, 6]) { |a, b| a * b })
+  let (f, n) = keep { |x| x + n0 }
+  IO.printLine(f(n))
+  let limit = 7
+  IO.printLine(firstOver([1, 5, 9, 12], 0) { |x| x > limit })
+  # A block read from a variable rather than written in place.
+  let double = { |x| x * 2 }
+  IO.printLine(mapAll([4], double))
+end
+
+let n0 = 100

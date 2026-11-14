@@ -1,0 +1,11 @@
+# A generic record read from another unit's interface keeps each parameter in
+# its declared slot, whatever order its fields name them in: `Entry<K, V>`
+# with `value : V` first. Numbered in the order the fields mention them, V
+# came back as the first parameter and K as the second.
+using Swapped.Entry
+
+let describe(entry: Entry<String, Integer>) -> String = "${entry.key}=${entry.value + 1}"
+
+main do
+  IO.printLine(describe(Entry { value: 42, key: "answer" }))
+end

@@ -5,7 +5,6 @@
 
 #include <map>
 #include <set>
-#include <type_traits>
 #include <variant>
 #include <string>
 #include <vector>
@@ -53,6 +52,7 @@ auto paramCount(const ast::FunctionDef& def) -> size_t {
 
 class Collector {
 public:
+    explicit Collector(const TypeChecker& checker) : m_checker(checker) {}
     auto sites() -> std::map<Key, std::vector<Site>>& { return m_sites; }
 
     // Templated over the item container: a module body is a different variant
@@ -94,7 +94,9 @@ private:
     void collectMake(const ast::MakeDef& make) {
         const auto group = "make:" + std::to_string(
             reinterpret_cast<std::uintptr_t>(&make));
-        for (const auto& target : makeTargetNames(make.target)) {
+        const auto found = m_checker.makeTargetIdentities().find(&make);
+        if (found == m_checker.makeTargetIdentities().end()) return;
+        for (const auto& target : found->second) {
             auto method = [&](const ast::FunctionDef& def) {
                 const auto arity = paramCount(def) +
                     (receiverIsFirstParam(def) ? 0u : 1u);
@@ -122,11 +124,19 @@ private:
         const std::map<std::string, std::string>& annotatedReceiver) {
         // Each typed overload folded into the function names its own
         // receiver (`close(connection: TCPConnection)`, `close(listener:
-        // TCPListener)`).
+        // TCPListener)`): a declared type by the identity the checker gave
+        // its parameter, anything else as written.
+        const auto* signatures = m_checker.functionSignatures(&def);
         for (const auto* clause : ast::signatureClauses(def)) {
             if (clause->params.empty()) continue;
+            std::string receiver;
+            if (signatures)
+                for (const auto& signature : *signatures)
+                    if (signature.clause == clause && !signature.params.empty())
+                        if (const auto* named = std::get_if<NamedType>(&signature.params[0]->kind))
+                            receiver = named->name;
             const auto& declared = clause->params[0].type;
-            auto receiver = declared ? typeNameOf(*declared) : std::string{};
+            if (receiver.empty() && declared) receiver = typeNameOf(*declared);
             if (receiver.empty())
                 if (auto annotated = annotatedReceiver.find(def.name);
                     annotated != annotatedReceiver.end())
@@ -137,14 +147,15 @@ private:
         }
     }
 
+    const TypeChecker& m_checker;
     std::map<Key, std::vector<Site>> m_sites;
 };
 
 } // namespace
 
-auto findReceiverConflicts(const ast::Program& program)
+auto findReceiverConflicts(const ast::Program& program, const TypeChecker& checker)
     -> std::vector<Diagnostic> {
-    Collector collector;
+    Collector collector(checker);
     collector.walk(program.items);
 
     std::vector<Diagnostic> diagnostics;
@@ -167,102 +178,6 @@ auto findReceiverConflicts(const ast::Program& program)
             diagnostics.push_back(std::move(diagnostic));
             break;  // one report per (type, method, arity)
         }
-    }
-    return diagnostics;
-}
-
-namespace {
-
-// One `make` method of a type its own module declares.
-struct OwnedMethod {
-    std::string module;
-    SourceLocation location;
-};
-
-class OwnedMethodCollector {
-public:
-    template <typename Items>
-    void walk(const Items& items, const std::string& module) {
-        std::set<std::string> declared;
-        collectDeclaredTypeNames(items, declared);
-        std::set<std::string> records;
-        collectDeclaredRecordNames(items, records);
-        for (const auto& item : items) {
-            if (const auto* make =
-                    std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
-                if (*make && !module.empty()) collect(**make, module, declared, records);
-            } else if (const auto* child =
-                           std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
-                if (*child) walk((*child)->body, (*child)->name);
-            }
-        }
-    }
-
-    auto methods() const -> const std::map<Key, std::vector<OwnedMethod>>& {
-        return m_methods;
-    }
-
-private:
-    void collect(const ast::MakeDef& make, const std::string& module,
-                 const std::set<std::string>& declared,
-                 const std::set<std::string>& records) {
-        for (const auto& target : makeTargetNames(make.target)) {
-            if (!declared.count(target)) continue;
-            // A record's make functions are registered with its qualified
-            // identity, so equal last segments no longer collide.
-            if (records.count(target)) continue;
-            auto method = [&](const ast::FunctionDef& def) {
-                const auto arity = paramCount(def) +
-                    (receiverIsFirstParam(def) ? 0u : 1u);
-                auto& owners = m_methods[{target, def.name, arity}];
-                for (const auto& owner : owners)
-                    if (owner.module == module) return;
-                owners.push_back({module, def.location});
-            };
-            for (const auto& item : make.body) {
-                if (const auto* fn =
-                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
-                    if (*fn) method(**fn);
-                } else if (const auto* visibility =
-                               std::get_if<std::unique_ptr<ast::VisibilityBlock>>(
-                                   &item)) {
-                    if (!*visibility) continue;
-                    for (const auto& inner : (*visibility)->items)
-                        if (const auto* fn =
-                                std::get_if<std::unique_ptr<ast::FunctionDef>>(&inner))
-                            if (*fn) method(**fn);
-                }
-            }
-        }
-    }
-
-    std::map<Key, std::vector<OwnedMethod>> m_methods;
-};
-
-} // namespace
-
-auto findSameNamedTypeMethodCollisions(const ast::Program& program)
-    -> std::vector<Diagnostic> {
-    OwnedMethodCollector collector;
-    collector.walk(program.items, "");
-
-    std::vector<Diagnostic> diagnostics;
-    for (const auto& [key, owners] : collector.methods()) {
-        if (owners.size() < 2) continue;
-        const auto& [type, name, arity] = key;
-        (void)arity;
-        const auto& first = owners.front();
-        const auto& second = owners[1];
-        Diagnostic diagnostic;
-        diagnostic.level = Diagnostic::Level::Error;
-        diagnostic.location = second.location;
-        diagnostic.message = "`" + name + "` is a method of both `" +
-            first.module + "." + type + "` and `" + second.module + "." + type +
-            "` — a method is dispatched on its type's last name, so one of " +
-            "them would answer for the other's values; rename one of the " +
-            "types or one of the methods";
-        diagnostic.notes.push_back({first.location, "the other one is here"});
-        diagnostics.push_back(std::move(diagnostic));
     }
     return diagnostics;
 }

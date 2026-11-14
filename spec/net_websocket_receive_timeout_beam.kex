@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # kexhq/kex#381: `receiveMessage` gave up after a hardcoded 31s even though
 # the peer was still connected and simply hadn't sent anything — a WebSocket
@@ -24,7 +24,7 @@ using Net.Socket
 foul serveIdleThenEcho(socket: Connection) -> Void do
   var reportedTimeout = false
   loop do
-    match socket.receiveMessage(timeout: Just(100.milliseconds)) do
+    match socket.receiveMessage(timeout: Just(100.millisecond)) do
       Ok(Text(text)) => do
         socket.send(Text(text)).try
         break
@@ -40,6 +40,7 @@ foul serveIdleThenEcho(socket: Connection) -> Void do
       Error(_) => break
     end
   end
+rescue return Void
 end
 
 foul socketRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |_handshake|
@@ -58,7 +59,7 @@ main do
   # before the fix, the connection was torn down by the RUNTIME itself at
   # 31s regardless of what the handler asked for; a handler using a much
   # shorter bound on purpose is exactly the case that must keep working.
-  Task.sleep(500.milliseconds)
+  Task.sleep(500.millisecond)
 
   # `timeout: None` explicitly, rather than the bare zero-argument form —
   # the same unbounded wait, spelled out.
@@ -69,7 +70,7 @@ main do
   end
 
   socket.close
-  Task.sleep(100.milliseconds)
+  Task.sleep(100.millisecond)
 
   let shutdown = server.stop.try
   IO.printLine("ok")

@@ -69,7 +69,7 @@ make Stream<A> do
   #     .take(10)
   #
   # @example Generating retry delays without building an unbounded list
-  #   let delays = Stream.Sequence(from: 1.seconds) { |d| d * 2 }
+  #   let delays = Stream.Sequence(from: 1.second) { |d| d * 2 }
   #   delays.take(4)   # => four Durations: 1, 2, 4 and 8 seconds
   take :> Integer -> [A]
   let take(n) = Kex.Intrinsic.Stream.take(this, n)

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../ast/ast.hxx"
-#include "db.hxx"
+#include "symbol_info.hxx"
 #include <string>
 
 namespace kex::semantic {
@@ -11,7 +11,9 @@ namespace kex::semantic {
 // recursive calls are always resolvable by pass 2.
 class CollectPass {
 public:
-    auto run(SemanticDB& db, const std::string& file) -> void;
+    // The symbols `program` declares (collectSymbols).
+    auto collect(const ast::Program& program, const std::string& path)
+        -> std::vector<SymbolInfo>;
 
 private:
     auto collectTopLevel(const ast::TopLevelItem& item) -> void;
@@ -21,8 +23,16 @@ private:
     auto collectRecord(const ast::RecordDef& def, const std::string& module) -> void;
     auto collectMake(const ast::MakeDef& def, const std::string& module) -> void;
 
-    FileState* m_state = nullptr;
+    std::vector<SymbolInfo>* m_symbols = nullptr;
+    std::string m_path;
     std::string m_currentModule;
 };
+
+// The one rule for what a program declares, and where: every function, type,
+// record, trait, `make` method and annotation, with its module and whether it
+// is exported. The language server indexes files with it; the checker validates
+// `using` and `export` against it.
+auto collectSymbols(const ast::Program& program, const std::string& path = {})
+    -> std::vector<SymbolInfo>;
 
 } // namespace kex::semantic

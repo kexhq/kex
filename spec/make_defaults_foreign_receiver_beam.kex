@@ -1,0 +1,20 @@
+# kex: skip-wasm
+# A local `make` block with a defaulted `string(prefix = ...)` beside a call to
+# the prelude URI's own `string`: the URI call must not borrow the local
+# parameter list and its default (it went out as `string/3`, kexhq/kex#475).
+# Lowering used to guard this by reading the receiver's type itself; the
+# checker's recorded target now decides it.
+
+record Label do
+  text : String
+end
+
+make Label do
+  let string(prefix = "#") -> String = prefix + @text
+end
+
+main do
+  let uri = URI.parse("https://example.com/a").try
+  IO.printLine(uri.string)
+  IO.printLine(Label { text: "x" }.string)
+end

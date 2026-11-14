@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # String and char escapes (kexhq/kex#498): `\e` for ESC, `\0`, `\u{…}` for any
 # Unicode scalar value, `\x..` for an ASCII byte, and `\'` and `` \` `` beside
 # the old set. `\$` keeps a dollar literal even before a `{`.

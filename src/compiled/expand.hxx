@@ -13,7 +13,7 @@
 //
 // This runs as an AST->AST pass BEFORE semantic analysis: it replaces
 // CompiledBlock nodes with the ordinary declarations they generate, so
-// everything downstream — SemanticDB, the type checker, the tree-walk
+// everything downstream — the type checker, the tree-walk
 // interpreter, IR lowering, the Core Erlang emitter, --summary — sees only
 // plain FunctionDef/TypeDef/RecordDef/MakeDef and needs no changes. It is also
 // what keeps the interpreter and the BEAM backend from drifting: neither knows
@@ -86,6 +86,10 @@ struct ExpandOptions {
     // too). Empty: scan every time, keeping only this process's own scans.
     std::filesystem::path scanCache;
     std::string toolchainKey;
+    // The prelude's interfaces. Given, compile-time code is checked before
+    // it runs (hir::checkCompileTime), and the sandbox reads the checker's
+    // answers as every other walker run does; left null, it runs unchecked.
+    const semantic::ImportedInterfaces* interfaces = nullptr;
 };
 
 // Expands every `compiled` block in `program` in place, and folds every
@@ -97,6 +101,12 @@ struct ExpandOptions {
 // because both are AST rewrites that must run before semantic analysis sees
 // the program.
 //
+// The roots expansion actually searches: `roots`, then every standard-library
+// root not already among them. Two option sets with the same effective roots
+// expand a program the same way.
+auto effectiveModuleRoots(const std::vector<std::string>& roots)
+    -> std::vector<std::string>;
+
 // Returns false and appends to `diagnostics` if expansion failed; the program
 // is left in an unspecified state in that case and must not be compiled.
 // Diagnostics are anchored at the USER's source location, not inside whatever

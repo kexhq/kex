@@ -5,10 +5,14 @@
 #include "scheduler.hxx"
 #include "value.hxx"
 #include "../semantic/traits.hxx"
+#include "../hir/hir.hxx"
 #include "../semantic/types.hxx"
+#include "../hir/compile_time.hxx"
+#include "../common/well_known.hxx"
 #include <chrono>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <set>
 #include <string>
@@ -28,7 +32,6 @@ public:
     explicit ReturnException(ValuePtr value, std::shared_ptr<bool> frame = nullptr)
         : m_value(std::move(value)), m_frame(std::move(frame)) {}
     auto value() const -> ValuePtr { return m_value; }
-    auto frame() const -> const std::shared_ptr<bool>& { return m_frame; }
     // Whether the call at `frame` should take this return.
     auto targets(const std::shared_ptr<bool>& frame) const -> bool {
         return !m_frame || m_frame == frame;
@@ -59,19 +62,33 @@ public:
     RuntimeError(const std::string& msg, SourceLocation loc)
         : std::runtime_error(
             std::string(loc.file) + ":" + std::to_string(loc.line) + ":"
-            + std::to_string(loc.column) + ": runtime error: " + msg),
-          m_location(loc) {}
-
-    auto location() const -> SourceLocation { return m_location; }
-
-private:
-    SourceLocation m_location;
+            + std::to_string(loc.column) + ": runtime error: " + msg) {}
 };
 
 class EvaluationTimeout : public std::runtime_error {
 public:
     EvaluationTimeout()
         : std::runtime_error("compile-time evaluation timed out") {}
+};
+
+// Code run by `Evaluator.run` went past one of its EvaluatorOptions: a step
+// or depth limit, or a built-in its `allow` list leaves out. Not a
+// RuntimeError, so the evaluated code cannot `rescue` its way past a limit;
+// it ends the whole evaluation, which `Evaluator.run` reports as an Error.
+class SandboxViolation : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
+// What `Evaluator.run` lets the code it evaluates do (EvaluatorOptions).
+struct SandboxLimits {
+    int64_t maxSteps = 1'000'000; // expressions evaluated, in total
+    int64_t maxDepth = 256;       // nested function calls
+    // Built-in categories that reach outside the program (FS, Net, IO,
+    // Process, ...) the code may call; pure ones are always available. `Net`
+    // also allows `NetHTTP`, `NetDNS` and the other `Net*`; case is ignored,
+    // so `ENV` names `Env`.
+    std::vector<std::string> allow;
 };
 
 class Evaluator {
@@ -83,7 +100,13 @@ class Evaluator {
     friend class Scheduler;
 
 public:
+    // Every module loaded at run time (the prelude's own loads included) is
+    // checked as its own unit against `interfaces` before it runs, and its
+    // answers are read like the entry program's (Stage 4). By default the
+    // prelude's, from the prebuilt runtime; null where those interfaces are
+    // themselves being built.
     Evaluator();
+    explicit Evaluator(const semantic::ImportedInterfaces* interfaces);
 
     auto execute(const ast::Program& program) -> ValuePtr;
     // Loads source declarations without executing an explicit main, then
@@ -152,6 +175,10 @@ public:
         return m_typeModules;
     }
 
+    // Puts this evaluator under `limits` from now on. Called once its prelude
+    // is loaded, so only the code it is then asked to run is limited.
+    auto setSandbox(SandboxLimits limits) -> void;
+
     auto evaluateConstants(
         const ast::Program& program,
         const std::vector<std::string>& names,
@@ -216,7 +243,6 @@ public:
     // run the user explicitly opted into with --allow-mocks. Defaults to
     // denied.
     auto setMocksAllowed(bool allowed) -> void;
-    auto mocksAllowed() const -> bool { return m_mocksAllowed; }
 
     // Every mock's state, captured so a test can be given it back at the end
     // of its `it` block. Mock state is global and lives until cleared, which
@@ -347,21 +373,8 @@ private:
     auto moduleSupplyingNamedClause(const std::string& functionName,
                                     const NamedArgs& namedArgs) const
         -> std::optional<std::string>;
-    auto findImportedNamedOverload(const std::string& functionName,
-                                   const NamedArgs& namedArgs,
-                                   const ValuePtr& receiver,
-                                   size_t positionalCount) const
-        -> std::optional<std::string>;
     auto receiverArgumentOffset(const std::string& functionName,
                                 const std::vector<ValuePtr>& args) const -> size_t;
-    auto makeMethodInScope(const std::string& qualified) const -> bool;
-    auto moduleInScope(const std::string& module) const -> bool;
-    auto makeDefInScope(const ast::FunctionDef* def) const -> bool;
-    // The out-of-scope module whose gated definition of `functionName` takes
-    // these named arguments, for the "add `using`" hint.
-    auto gatedModuleTaking(const std::string& functionName,
-                           const NamedArgs& namedArgs) const
-        -> std::optional<std::string>;
     auto resolveMethodName(const ValuePtr& receiver, const std::string& method,
                            const std::vector<ValuePtr>* args = nullptr) const
         -> std::string;
@@ -370,7 +383,6 @@ private:
                                   bool implicitReceiver) -> void;
     auto runtimeTypeMatches(const ValuePtr& value,
                             const ast::TypeExpr& type) const -> bool;
-    auto runtimeTypeKey(const ast::TypeExpr& type) const -> std::string;
     auto resolveRecordTypeName(const std::string& name) const -> std::string;
 
     std::unordered_map<std::string, std::vector<std::string>> m_traitMethods;
@@ -386,6 +398,10 @@ private:
                      SourceLocation loc, bool isMutable) -> void;
 
     // Try/rescue support
+    static auto tryFailureResult(const ValuePtr& failure) -> ValuePtr;
+    // A successful result of a body whose failing `.try` made it `T?` or
+    // `T or! E`: `Just(value)` or `Ok(value)`, as `wrapper` says.
+    static auto wrappedSuccess(const std::string& wrapper, ValuePtr value) -> ValuePtr;
     auto evalRescue(const ast::RescueBlock& rescue, const ValuePtr& error,
                     SourceLocation loc) -> ValuePtr;
 
@@ -454,34 +470,46 @@ public:
         m_testFilters = std::move(filters);
     }
 
-    // `Type.of(x)` sites the checker typed concretely (see
-    // TypeChecker::staticTypeOfCalls). Optional: without analysis — `--no-check`
-    // — the table is simply absent and every `Type.of` asks the value.
-    auto setStaticTypeOfCalls(
-        const std::unordered_map<const ast::MethodCall*,
-                                 semantic::StaticTypeAnswer>* calls) -> void {
-        m_staticTypeOfCalls = calls;
+    // The checked program (src/hir/) the evaluator runs: each expression's
+    // static type, the `Type.of` answers and the signature chosen for each
+    // call — the same object lowering reads, so the two backends share what
+    // semantic analysis decided. Without one every answer comes from the
+    // value. `setProgram` replaces the programs read; `addProgram` adds one,
+    // read first: a REPL session keeps every input's, since a later input
+    // calls an earlier one's definitions.
+    auto setProgram(const hir::Program* program) -> void {
+        m_programs.clear();
+        for (const auto& checked : m_checkedPrograms)
+            m_programs.push(checked->program ? &*checked->program : nullptr);
+        m_programs.push(program);
     }
-    auto setExpressionTypes(
-        const std::unordered_map<const ast::Expr*, semantic::TypePtr>* types)
-        -> void {
-        m_expressionTypes = types;
-    }
-    // The signature the checker chose for each call. Optional, like the
-    // tables above.
-    auto setCallSignatures(
-        const std::unordered_map<const ast::Expr*, semantic::Signature>* calls)
-        -> void {
-        m_callSignatures = calls;
+    auto addProgram(const hir::Program* program) -> void {
+        m_programs.push(program);
     }
 
 private:
-    const std::unordered_map<const ast::MethodCall*,
-                             semantic::StaticTypeAnswer>* m_staticTypeOfCalls = nullptr;
-    const std::unordered_map<const ast::Expr*, semantic::TypePtr>*
-        m_expressionTypes = nullptr;
-    const std::unordered_map<const ast::Expr*, semantic::Signature>*
-        m_callSignatures = nullptr;
+    hir::ProgramSet m_programs;
+    const semantic::ImportedInterfaces* m_interfaces = nullptr;
+    // Every module this evaluator loaded at run time, checked (kept alive for
+    // their answers).
+    std::vector<std::shared_ptr<hir::CheckedProgram>> m_checkedPrograms;
+    // The function `type`'s own `method` is bound to, or "": the checker
+    // names a module's type qualified (`Accounts.AccountId`), a `make` block
+    // inside the module binds it as written there (`AccountId::successor`).
+    auto ownMethodName(const std::string& type, const std::string& method) const
+        -> std::string;
+    auto decidedFunction(const ast::Expr& expr, const ast::MethodCall& call) const -> std::string;
+    auto decidedModuleFunction(const ast::Expr& expr, const ast::MethodCall& call) const
+        -> std::string;
+    auto evalConversion(const ast::Expr& receiver, const std::string& target) -> ValuePtr;
+    auto evalIntrinsicCall(const ast::MethodCall& call, const std::string& path,
+                           const SourceLocation& location) -> ValuePtr;
+    // The testing DSL builtin a bare call is: as the checker decided, or by
+    // its spelling in a run nothing checked.
+    auto testBuiltinCalled(const ast::FunctionCall& call) const
+        -> std::optional<names::TestBuiltin>;
+    auto evalTestBuiltin(names::TestBuiltin builtin, const ast::FunctionCall& call,
+                         const SourceLocation& location) -> ValuePtr;
     // A distinct value passed where a `Showable` is expected, shown by its
     // own `showValue`. The value is the bare backing one, and nothing at run
     // time says it is a Tuplex: `IO.printLine(x)` printed `(5, 11)` here
@@ -513,7 +541,6 @@ private:
 
     struct ModuleEntry {
         std::unordered_map<std::string, ValuePtr> exports;
-        std::unordered_set<std::string> privateNames;
         std::unordered_map<std::string, std::string> submodules;
     };
     struct PendingExport { std::string owner; const ast::ExportDecl* decl; };
@@ -576,6 +603,13 @@ private:
                     return full;
         return name;
     }
+    // Whether `module` is a capability with a replacement in scope that
+    // supplies `member`.
+    auto replacedCapability(const std::string& module, const std::string& member) const -> bool {
+        const auto capability = canonicalCapability(module);
+        return m_capabilityMembers.contains(capability) && lookupCapability(capability) &&
+               capabilityMember(capability, member);
+    }
     auto lookupCapability(const std::string& name) const -> ValuePtr {
         for (auto it = m_capabilityBindings.rbegin();
              it != m_capabilityBindings.rend(); ++it)
@@ -605,16 +639,6 @@ private:
     std::vector<std::shared_ptr<std::string>> m_loadedModulePaths;
     std::vector<std::shared_ptr<ast::Program>> m_loadedModulePrograms;
     std::string m_currentModule;
-    // `Type::method` of every method a module-scoped `make` defines -> that
-    // module. A module-scoped `make` is import-gated like every other module
-    // member, so resolution skips one whose module is not in scope; a
-    // top-level `make` never appears here and stays global.
-    std::unordered_map<std::string, std::string> m_makeMethodModule;
-    // The same gate for one definition, for a method the prelude or a
-    // top-level `make` also defines: `Units.SI`'s `make Measure do let
-    // to(String, in: SIPrefix)` beside the prelude's `to`. The name stays
-    // global there, and only these definitions wait for the `using`.
-    std::unordered_map<const ast::FunctionDef*, std::string> m_gatedMakeDefs;
     // Type names each module declares, for the rule above.
     std::unordered_map<std::string, std::set<std::string>> m_moduleDeclaredTypes;
     std::unordered_map<std::string, std::set<std::string>> m_moduleDeclaredRecords;
@@ -628,7 +652,7 @@ private:
     // that declared it (e.g. "Option", "Result", "FizzBuzz"). Populated in
     // execTopLevel's TypeDef handling. Lets method dispatch resolve
     // `make Option<A> do let map(@Just(x), f) = ... end` (registered under
-    // "Option::map") when called on a `Just(...)` value (tagged "Just").
+    // "Option.map") when called on a `Just(...)` value (tagged "Just").
     std::unordered_map<std::string, std::string> m_variantParent;
     std::unordered_map<std::string, std::string> m_typeModules;
     // Each sum type's variants as declared, in order: what
@@ -655,6 +679,12 @@ private:
     bool m_replMode = false;
     bool m_preludeLoaded = false;
     std::optional<std::chrono::steady_clock::time_point> m_deadline;
+    // `Evaluator.run`'s limits, with the steps taken and the calls currently
+    // open against them.
+    std::optional<SandboxLimits> m_sandbox;
+    int64_t m_sandboxSteps = 0;
+    int64_t m_sandboxDepth = 0;
+    auto sandboxAllows(const std::string& category) const -> bool;
     // Declarations recorded by `let %name(...)` during compile-time
     // evaluation; drained by src/compiled/expand.cxx.
     std::vector<GeneratedDeclaration> m_generatedDeclarations;
@@ -730,6 +760,10 @@ private:
     // The `it`/`describe` call currently being dispatched — the DSL's natives
     // receive only their arguments, so the call site is handed to them here.
     SourceLocation m_lastCallLocation;
+    // While a `make` function's clauses are tried: its receiver's runtime
+    // type, which a parameter declared `This` means (kexhq/kex#639).
+    // Empty otherwise.
+    mutable std::string m_dispatchThisType;
     // While an `it` body runs: whether we are inside one at all, and where the
     // most recent `assert` was written. That assert is where a failure happened
     // as far as the file's reader is concerned — but only if it is in the spec

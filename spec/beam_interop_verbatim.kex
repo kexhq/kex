@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — calls Erlang through BEAM.*
 # `BEAM.<module>` names a BEAM module exactly as written (kexhq/kex#346):
 # lowercase, underscores and all. Before, only a capitalised segment reached
 # interop, and `Erlang.erlang.node()` passed the checker and then failed in

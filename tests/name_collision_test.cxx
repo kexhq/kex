@@ -585,7 +585,7 @@ let start -> Query = Query {}
 make Query do
   foul all -> [String] = ["u1", "u2"]
 
-  foul all(as: T, renamed: {String: String} = {}) -> [T] = this.all.map { |id| Type.of(as).construct({"id": id}).or(as) }
+  foul all(as: Type<T>, renamed: {String: String} = {}) -> [T] = this.all.map { |id| as.construct({"id": id}).try }
 end
 )KEX"},
                 {"main.kex", R"KEX(record User do

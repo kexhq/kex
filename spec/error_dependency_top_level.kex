@@ -1,0 +1,15 @@
+# kex: check-only
+# A module's file may declare things outside the module, for its own use.
+# They are that file's: a program that brings the module in names the
+# module's functions, not the file's. Checking the program on its own (as
+# here), running it on the walker and building it for BEAM used to disagree,
+# the first two taking every merged file's top level for one.
+
+using Pantry
+
+main do
+  IO.printLine(stocked())
+  IO.printLine(shelves())
+  IO.printLine(Full(1))
+  IO.printLine(Empty)
+end

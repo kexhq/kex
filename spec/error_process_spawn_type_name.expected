@@ -1,0 +1,2 @@
+spec/error_process_spawn_type_name.kex:10:30: error: `Process.spawn(Counter)` passes the type, not a value; spawn a server with its initial state: `Process.spawn(Counter {})`
+Aborted: 1 type error — fix before running (use --no-check to skip).

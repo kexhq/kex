@@ -33,7 +33,7 @@
 # Every reply is tagged `(:reply, value)`, so a worker waiting for an answer
 # never mistakes it for a request that happens to be in its mailbox too.
 
-type MetricsMessage = Count(Atom) | Total(Pid)
+type MetricsMessage = Count(Atom) | Total(Process<(Atom, Integer)>)
 
 foul metrics(events: Integer) do
   receive do
@@ -45,7 +45,7 @@ foul metrics(events: Integer) do
   end
 end
 
-type DatabaseMessage = Insert(String) | Orders(Pid)
+type DatabaseMessage = Insert(String) | Orders(Process<(Atom, [String])>)
 
 foul database(orders: [String]) do
   receive do
@@ -57,7 +57,7 @@ foul database(orders: [String]) do
   end
 end
 
-type CacheMessage = Lookup(Pid)
+type CacheMessage = Lookup(Process<(Atom, [String])>)
 
 foul cache(hot: [String]) do
   receive do
@@ -68,7 +68,7 @@ foul cache(hot: [String]) do
   end
 end
 
-type SessionsMessage = Login(String, Pid)
+type SessionsMessage = Login(String, Process<(Atom, Integer)>)
 
 foul sessions(users: [String]) do
   receive do
@@ -115,7 +115,7 @@ foul tell(name: Atom, message: X) do
 end
 
 # Sends the request `build` makes from our own pid, and waits for the reply.
-foul ask(name: Atom, build: Pid -> X) do
+foul ask(name: Atom, build: Process<A> -> X) do
   tell(name, build(Process.self))
   receive do
     (:reply, answer) => answer
@@ -169,7 +169,7 @@ foul crash(name: Atom) do
     Just(pid) => Process.exit(pid, :chaos)
     None => IO.printLine("  (nobody is ${name} right now)")
   end
-  Task.sleep(100.milliseconds)
+  Task.sleep(100.millisecond)
 end
 
 foul status do
@@ -193,7 +193,7 @@ main do
   tell(:acceptor, Order("ada", "keyboard"))
   tell(:acceptor, Order("alan", "mouse"))
   tell(:acceptor, Order("ada", "monitor"))
-  Task.sleep(100.milliseconds)
+  Task.sleep(100.millisecond)
   status()
 
   # Only the cache restarts, and warms up again from the database.
@@ -209,7 +209,7 @@ main do
   # Sessions and acceptor restart together; ada logs in again.
   crash(:sessions)
   tell(:acceptor, Order("ada", "cable"))
-  Task.sleep(100.milliseconds)
+  Task.sleep(100.millisecond)
   status()
 
   # Nothing else notices.

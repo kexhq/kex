@@ -1,9 +1,9 @@
 18:15  T6
 18:19  Unknown
-18:26  String
+18:26  Type<String>
 21:31  Integer
 21:35  String?
-21:42  String
+21:42  Type<String>
 28:26  Crate
 28:40  Crate
 28:40  Integer

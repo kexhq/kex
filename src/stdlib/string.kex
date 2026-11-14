@@ -37,7 +37,7 @@ make String, implement: Enumerable, Foldable do
   #   end
   #   # => {"a": 3, "b": 1, "n": 2}
   reduce :> A -> (A -> Char -> A) -> A
-  let reduce(acc, f) = Kex.Intrinsic.List.foldLeft(this, acc, f)
+  let reduce(acc, f) = Kex.Intrinsic.List.foldLeft(this.chars, acc, f)
 
   # Applies +f+ to every character and joins the results back into a +String+.
   #
@@ -59,7 +59,7 @@ make String, implement: Enumerable, Foldable do
   #   end
   #   # => "bcd"
   mapChars :> (Char -> Char) -> String
-  let mapChars(f) = Kex.Intrinsic.List.map(this, f)
+  let mapChars(f) = Kex.Intrinsic.String.fromChars(Kex.Intrinsic.List.map(this.chars, f))
 
   # Returns the characters satisfying +pred+, as a +String+.
   #
@@ -72,7 +72,7 @@ make String, implement: Enumerable, Foldable do
   # @example Stripping punctuation before comparing
   #   "Hello, World!".filter(~alpha?).lowerCase   # => "helloworld"
   filter :> (Char -> Bool) -> String
-  let filter(pred) = Kex.Intrinsic.List.filter(this, pred)
+  let filter(pred) = Kex.Intrinsic.String.fromChars(Kex.Intrinsic.List.filter(this.chars, pred))
 
   # Returns the string with repeated characters removed, keeping the first
   # occurrence of each.
@@ -83,7 +83,7 @@ make String, implement: Enumerable, Foldable do
   #   "banana".uniq   # => "ban"
   #   "hello".uniq    # => "helo"
   uniq :> String
-  let uniq = Kex.Intrinsic.List.uniq(this)
+  let uniq = Kex.Intrinsic.String.fromChars(Kex.Intrinsic.List.uniq(this.chars))
 
   # A String is its OWN type, not a [Char]: `chars` converts between them.
   # So the sequence operations below are declared here rather than inherited
@@ -103,7 +103,7 @@ make String, implement: Enumerable, Foldable do
   # @example Testing an initial without risking an empty string
   #   "hello".first.map(~upper?).or(false)   # => false
   first :> Char?
-  let first = Kex.Intrinsic.List.first(this)
+  let first = Kex.Intrinsic.String.at(this, 0)
 
   # Returns the last character, or +None+ when the string is empty.
   #
@@ -113,7 +113,7 @@ make String, implement: Enumerable, Foldable do
   #   "hi".last   # => Just('i')
   #   "".last     # => None
   last :> Char?
-  let last = Kex.Intrinsic.List.last(this)
+  let last = Kex.Intrinsic.String.at(this, this.count - 1)
 
   # Returns the character at index +i+, counting from 0.
   #
@@ -128,7 +128,7 @@ make String, implement: Enumerable, Foldable do
   #   "hi".get(9)    # => None
   #   "hi".get(-1)   # => Just('i')
   get :> Integer -> Char?
-  let get(i: Integer) = Kex.Intrinsic.List.get(this, i < 0 then this.count + i else i)
+  let get(i: Integer) = Kex.Intrinsic.String.at(this, i < 0 then this.count + i else i)
 
   # Returns the character at index +i+, or +default+ when the index is out of
   # range. The total form of +get+, for when a missing character has an
@@ -142,7 +142,7 @@ make String, implement: Enumerable, Foldable do
   #   "hi".get(1, '?')   # => 'i'
   #   "hi".get(9, '?')   # => '?'
   get :> Integer -> Char -> Char
-  let get(i, default) = Kex.Intrinsic.List.get(this, i < 0 then this.count + i else i, default)
+  let get(i, default) = Kex.Intrinsic.String.at(this, i < 0 then this.count + i else i).or(default)
 
   # Returns the substring addressed by +range+, both ends included. The same
   # as +slice+ over a range, and what the +s[1..2]+ bracket spelling calls.
@@ -174,7 +174,7 @@ make String, implement: Enumerable, Foldable do
   # @example Truncating for display
   #   let preview = title.take(30) + (title.count > 30 then "…" else "")
   take :> Integer -> String
-  let take(n) = Kex.Intrinsic.List.take(this, n)
+  let take(n) = Kex.Intrinsic.String.take(this, n)
 
   # Returns everything after the first +n+ characters. The complement of
   # +take+: +s.take(n) + s.drop(n)+ is +s+.
@@ -190,7 +190,7 @@ make String, implement: Enumerable, Foldable do
   #   let flag = "--verbose"
   #   flag.startsWith?("--") then flag.drop(2) else flag   # => "verbose"
   drop :> Integer -> String
-  let drop(n) = Kex.Intrinsic.List.drop(this, n)
+  let drop(n) = Kex.Intrinsic.String.drop(this, n)
 
   # Returns the substring of +length+ characters starting at index +start+,
   # counting from 0.
@@ -258,7 +258,7 @@ make String, implement: Enumerable, Foldable do
   # @example Removing whitespace
   #   "1 234 567".reject(~space?)   # => "1234567"
   reject :> (Char -> Bool) -> String
-  let reject(pred) = Kex.Intrinsic.List.reject(this, pred)
+  let reject(pred) = Kex.Intrinsic.String.fromChars(Kex.Intrinsic.List.reject(this.chars, pred))
 
   # Returns the characters in ascending codepoint order.
   #
@@ -270,7 +270,7 @@ make String, implement: Enumerable, Foldable do
   # @example An anagram check
   #   "listen".sort == "silent".sort   # => true
   sort :> String
-  let sort = Kex.Intrinsic.List.sort(this)
+  let sort = Kex.Intrinsic.String.fromChars(Kex.Intrinsic.List.sort(this.chars))
 
   # Returns the index of the first occurrence of +c+, or +None+ when the
   # character does not appear.
@@ -301,7 +301,7 @@ make String, implement: Enumerable, Foldable do
   # One definition serves both signatures, told apart by what it is handed:
   # a typed overload pair on one arity misroutes calls in the interpreter.
   let indexOf(x) do
-    return Kex.Intrinsic.List.indexOf(this, x) if Kex.Intrinsic.Kex.kind(x) == :char
+    return Kex.Intrinsic.List.indexOf(this.chars, x) if Kex.Intrinsic.Kex.kind(x) == :char
     return Kex.Intrinsic.String.find(this, x)
   end
 
@@ -356,7 +356,7 @@ make String, implement: Enumerable, Foldable do
   # @example Numbering the characters
   #   "abc".zip((0..2).items)   # => [('a', 0), ('b', 1), ('c', 2)]
   zip :> [Y] -> [(Char, Y)]
-  let zip(other) = Kex.Intrinsic.List.zip(this, other)
+  let zip(other) = Kex.Intrinsic.List.zip(this.chars, other)
 
   # Splits the string in two: the characters satisfying +pred+, then those
   # that do not. One pass, both answers.
@@ -372,7 +372,10 @@ make String, implement: Enumerable, Foldable do
   #   digits   # => "12"
   #   other    # => "ab"
   partition :> (Char -> Bool) -> (String, String)
-  let partition(pred) = Kex.Intrinsic.List.partition(this, pred)
+  let partition(pred) do
+    let (matching, others) = Kex.Intrinsic.List.partition(this.chars, pred)
+    (Kex.Intrinsic.String.fromChars(matching), Kex.Intrinsic.String.fromChars(others))
+  end
 
   # Returns the number of characters: characters, not bytes. See +bytes+ for
   # the storage-level length.
@@ -384,7 +387,7 @@ make String, implement: Enumerable, Foldable do
   #   "".count        # => 0
   #   "é".count       # => 1   (but "é".bytes.count is 2)
   count :> Integer
-  let count = Kex.Intrinsic.List.length(this)
+  let count = Kex.Intrinsic.String.count(this)
 
   # Returns how many times +sub+ occurs, counting non-overlapping matches
   # from the left. An empty +sub+ occurs 0 times. (Ruby spells this
@@ -408,7 +411,7 @@ make String, implement: Enumerable, Foldable do
   # @example
   #   "hello".length   # => 5
   length :> Integer
-  let length = Kex.Intrinsic.List.length(this)
+  let length = Kex.Intrinsic.String.count(this)
 
   # Returns the number of user-perceived characters: extended grapheme
   # clusters (Unicode UAX #29), which is not always +count+.
@@ -447,7 +450,7 @@ make String, implement: Enumerable, Foldable do
   #   "hi".empty?    # => false
   #   "  ".empty?    # => false
   empty? :> Bool
-  let empty? = Kex.Intrinsic.List.length(this) == 0
+  let empty? = this == ""
 
   # Returns the string with +wrapper+ added at both ends.
   #
@@ -489,7 +492,7 @@ make String, implement: Enumerable, Foldable do
   #   "hello".at(1)   # => Just('e')
   #   "hello".at(9)   # => None
   at :> Integer -> Char?
-  let at(i) = Kex.Intrinsic.List.at(this, i < 0 then this.count + i else i)
+  let at(i) = Kex.Intrinsic.String.at(this, i < 0 then this.count + i else i)
 
   # Returns the second character, or +None+ when the string is shorter than
   # two characters.
@@ -500,7 +503,7 @@ make String, implement: Enumerable, Foldable do
   #   "hi".second   # => Just('i')
   #   "h".second    # => None
   second :> Char?
-  let second = Kex.Intrinsic.List.first(Kex.Intrinsic.List.drop(this, 1))
+  let second = Kex.Intrinsic.String.at(this, 1)
 
   # Returns the third character, or +None+ when the string is shorter than
   # three characters.
@@ -511,7 +514,7 @@ make String, implement: Enumerable, Foldable do
   #   "hip".third   # => Just('p')
   #   "hi".third    # => None
   third :> Char?
-  let third = Kex.Intrinsic.List.first(Kex.Intrinsic.List.drop(this, 2))
+  let third = Kex.Intrinsic.String.at(this, 2)
 
   # Returns everything after the first character. The empty string has no
   # rest, and answers with itself.
@@ -522,7 +525,7 @@ make String, implement: Enumerable, Foldable do
   #   "hello".rest   # => "ello"
   #   "h".rest       # => ""
   rest :> String
-  let rest = Kex.Intrinsic.List.drop(this, 1)
+  let rest = Kex.Intrinsic.String.drop(this, 1)
 
   # Returns the string's characters as a list.
   #
@@ -832,17 +835,6 @@ make String, implement: Enumerable, Foldable do
   removeSuffix :> String -> String
   let removeSuffix(suffix) = this.endsWith?(suffix) then this.take(this.count - suffix.count) else this
 
-  # Returns the string repeated +n+ times; +""+ when +n+ is 0 or less. Ruby
-  # spells this +*+.
-  #
-  # @param n [Integer] how many copies
-  # @return [String] the copies, joined
-  #
-  # @example
-  #   "ab".repeat(3)    # => "ababab"
-  #   "-".repeat(10)    # => "----------"
-  repeat :> Integer -> String
-  let repeat(n) = n <= 0 then "" else (1..n).items.map { |_| this }.join
   # Pads the string on the left with spaces until it is +width+ characters
   # long. A string already that long is returned unchanged. Ruby calls this
   # +rjust+.
@@ -1080,7 +1072,7 @@ make String, implement: Enumerable, Foldable do
   #   let cleaned = "A man, a plan, a canal: Panama".filter(~alpha?).lowerCase
   #   cleaned == cleaned.reverse   # => true
   reverse :> String
-  let reverse = Kex.Intrinsic.List.reverse(this)
+  let reverse = Kex.Intrinsic.String.fromChars(Kex.Intrinsic.List.reverse(this.chars))
 
   # Returns +true+ when +sub+ appears anywhere in the string.
   #

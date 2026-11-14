@@ -92,6 +92,14 @@ module Http do
       end
     end
   end
+
+  # Stands in for a real listener, so the example stands on its own: it
+  # reports what it would serve.
+  module Server do
+    foul listen(port: Integer, router: Http.Router.Config) do
+      IO.printLine("Listening on port ${port} with ${router.routes.count} routes")
+    end
+  end
 end
 
 # The services the handlers below call into, stubbed so the example stands on

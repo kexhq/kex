@@ -1,0 +1,2 @@
+spec/error_receive_timeout_type.kex:8:18: error: `after timeout:` takes milliseconds, an Integer, but got Integer?
+spec/error_receive_timeout_type.kex:11:18: error: `after timeout:` takes milliseconds, an Integer, but got String

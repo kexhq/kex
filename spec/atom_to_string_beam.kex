@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # Atom <-> String through `to` on BEAM (kexhq/kex#92); see atom_to_string.kex.
 main do
   IO.inspect(:hello.to(String))

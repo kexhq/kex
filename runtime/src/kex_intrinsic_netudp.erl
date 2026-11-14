@@ -4,10 +4,10 @@
 
 bind({'Net.Socket.UDP.Endpoint', Host, {'Net.Port', Port}}) ->
     bindWith({'Net.Socket.UDP.Endpoint', Host, {'Net.Port', Port}},
-             {'Net.Socket.UDP.BindOptions', false, 1, true, {'Duration', 30.0}}).
+             {'Net.Socket.UDP.BindOptions', false, 1, true, kex_intrinsic_time:seconds(30.0)}).
 bindWith({'Net.Socket.UDP.Endpoint', Host, {'Net.Port', Port}},
          {'Net.Socket.UDP.BindOptions', Broadcast, Ttl, Loopback,
-          {'Duration', Timeout}})
+          {'Measure', Timeout, _, _}})
   when is_boolean(Broadcast), is_integer(Ttl), Ttl >= 0, Ttl =< 255,
        is_boolean(Loopback), is_number(Timeout), Timeout >= 0 ->
     case inet:parse_address(binary_to_list(Host)) of

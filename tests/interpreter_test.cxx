@@ -2,6 +2,8 @@
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
 #include "../src/interpreter/evaluator.hxx"
+#include "../src/common/runtime_dir.hxx"
+#include "../src/driver/dependencies.hxx"
 #include <cstdlib>
 #include <filesystem>
 #include <sstream>
@@ -10,13 +12,36 @@ using namespace kex;
 using namespace kex::interpreter;
 using namespace test;
 
-auto run(const std::string& source) -> ValuePtr {
+// Runs `source` as the walker runs a program: the modules it uses merged in,
+// expanded and checked first (kex::driver::prepareForWalker), the evaluator
+// reading the checked answers.
+auto runChecked(const std::string& source, Evaluator& evaluator,
+                const std::vector<std::string>& roots = {}) -> ValuePtr {
     Lexer lexer(source);
-    auto tokens = lexer.tokenizeAll();
-    Parser parser(std::move(tokens));
+    Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
-    Evaluator evaluator;
+    const auto checked =
+        driver::prepareForWalker(program, roots, &defaultPreludeInterfaces());
+    evaluator.setProgram(&*checked->program);
     return evaluator.execute(program);
+}
+
+auto run(const std::string& source) -> ValuePtr {
+    Evaluator evaluator;
+    return runChecked(source, evaluator);
+}
+
+// Whether checking `source` reports `text`: the checker decides who may name
+// what; the walker keeps no run-time copy of those rules.
+auto checkerReports(const std::string& source, const std::string& text) -> bool {
+    Lexer lexer(source);
+    Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    const auto checked = driver::prepareForWalker(program, {}, &defaultPreludeInterfaces());
+    const auto& diagnostics = checked->analyzer->diagnostics();
+    return std::any_of(diagnostics.begin(), diagnostics.end(), [&](const auto& diagnostic) {
+        return diagnostic.message.find(text) != std::string::npos;
+    });
 }
 
 auto runFS(const std::string& source) -> ValuePtr {
@@ -27,42 +52,27 @@ auto runFS(const std::string& source) -> ValuePtr {
 // from `run`/`runFS` on purpose: those stay in the default denied state, so
 // the gate itself is under test every time one of them runs mock-free code.
 auto runFSMocking(const std::string& source) -> ValuePtr {
-    Lexer lexer("using FS\n" + source);
-    auto tokens = lexer.tokenizeAll();
-    Parser parser(std::move(tokens));
-    auto program = parser.parseProgram();
     Evaluator evaluator;
     evaluator.setMocksAllowed(true);
-    return evaluator.execute(program);
+    return runChecked("using FS\n" + source, evaluator);
 }
 
 auto runOutput(const std::string& source) -> std::string {
-    Lexer lexer(source);
-    auto tokens = lexer.tokenizeAll();
-    Parser parser(std::move(tokens));
-    auto program = parser.parseProgram();
     Evaluator evaluator;
-    evaluator.execute(program);
+    runChecked(source, evaluator);
     return evaluator.output();
 }
 
 auto runWithArgs(const std::string& source, std::vector<std::string> args) -> ValuePtr {
-    Lexer lexer(source);
-    auto tokens = lexer.tokenizeAll();
-    Parser parser(std::move(tokens));
-    auto program = parser.parseProgram();
     Evaluator evaluator;
     evaluator.setArgs(std::move(args));
-    return evaluator.execute(program);
+    return runChecked(source, evaluator);
 }
 
 auto runWithModuleRoots(const std::string& source, std::vector<std::string> roots) -> ValuePtr {
-    Lexer lexer(source);
-    Parser parser(lexer.tokenizeAll());
-    auto program = parser.parseProgram();
     Evaluator evaluator;
-    evaluator.setModuleRoots(std::move(roots));
-    return evaluator.execute(program);
+    evaluator.setModuleRoots(roots);
+    return runChecked(source, evaluator, roots);
 }
 
 int main() {
@@ -178,22 +188,14 @@ int main() {
                     publicConstructor->data).tag,
                 std::string("Read"));
 
-            bool rejectedPrivate = false;
-            try {
-                run(
-                    "module Secrets do\n"
-                    "  private do\n"
-                    "    type SecretMode = Hidden | Other\n"
-                    "  end\n"
-                    "end\n"
-                    "main do Secrets.Hidden end\n");
-            } catch (const RuntimeError& error) {
-                rejectedPrivate =
-                    std::string(error.what()).find(
-                        "cannot access private name `Hidden`") !=
-                    std::string::npos;
-            }
-            assertTrue(rejectedPrivate);
+            assertTrue(checkerReports(
+                "module Secrets do\n"
+                "  private do\n"
+                "    type SecretMode = Hidden | Other\n"
+                "  end\n"
+                "end\n"
+                "main do Secrets.Hidden end\n",
+                "cannot access private name `Hidden`"));
         });
 
         it("does not export an alias target as a constructor", []() {
@@ -323,39 +325,29 @@ int main() {
                 "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
 
-            bool rejected = false;
-            try {
-                run(
-                    "module Secrets do\n"
-                    "  private do\n"
-                    "    let hidden() = 42\n"
-                    "  end\n"
-                    "end\n"
-                    "main do\n"
-                    "  Secrets.hidden()\n"
-                    "end\n");
-            } catch (const RuntimeError& error) {
-                rejected = std::string(error.what()).find("private name `hidden`") != std::string::npos;
-            }
-            assertTrue(rejected);
+            assertTrue(checkerReports(
+                "module Secrets do\n"
+                "  private do\n"
+                "    let hidden() = 42\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  Secrets.hidden()\n"
+                "end\n",
+                "private name `hidden`"));
         });
 
         it("rejects importing a private name explicitly", []() {
-            bool rejected = false;
-            try {
-                run(
-                    "module Secrets do\n"
-                    "  private do\n"
-                    "    let hidden() = 42\n"
-                    "  end\n"
-                    "end\n"
-                    "main do\n"
-                    "  using Secrets, only: [hidden]\n"
-                    "end\n");
-            } catch (const RuntimeError& error) {
-                rejected = std::string(error.what()).find("private name `hidden`") != std::string::npos;
-            }
-            assertTrue(rejected);
+            assertTrue(checkerReports(
+                "module Secrets do\n"
+                "  private do\n"
+                "    let hidden() = 42\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  using Secrets, only: [hidden]\n"
+                "end\n",
+                "private name `hidden`"));
         });
 
         it("resolves a filtered forward re-export as a nested namespace", []() {
@@ -374,22 +366,16 @@ int main() {
         });
 
         it("rejects exporting a module's private name", []() {
-            bool rejected = false;
-            try {
-                run(
-                    "module App do\n"
-                    "  export Secrets, only: [hidden]\n"
-                    "end\n"
-                    "module Secrets do\n"
-                    "  private do\n"
-                    "    let hidden() = 42\n"
-                    "  end\n"
-                    "end\n");
-            } catch (const RuntimeError& error) {
-                rejected = std::string(error.what()).find("cannot export private name `hidden`")
-                    != std::string::npos;
-            }
-            assertTrue(rejected);
+            assertTrue(checkerReports(
+                "module App do\n"
+                "  export Secrets, only: [hidden]\n"
+                "end\n"
+                "module Secrets do\n"
+                "  private do\n"
+                "    let hidden() = 42\n"
+                "  end\n"
+                "end\n",
+                "cannot export private name `hidden`"));
         });
 
         it("rejects a module exporting itself", []() {
@@ -1953,7 +1939,7 @@ int main() {
             // at/get are the partial forms: `Char?`, like Map.get. `or` is
             // what unwraps one here.
             auto result = run("main do\n  \"hello\".at(1).or('?')\nend\n");
-            assertEqual(std::get<CharValue>(result->data).value, 'e');
+            assertEqual(std::get<CharValue>(result->data).value, U'e');
         });
 
         it("returns None out of range", []() {

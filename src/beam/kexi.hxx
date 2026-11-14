@@ -1,9 +1,10 @@
 #pragma once
 // KexI chunk: combined type interface + structural metadata for one Kex
 // module, stored as a custom BEAM chunk in ETF format.
-#include "etf.hxx"
 #include "../module/package_metadata.hxx"
 #include <array>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -43,6 +44,7 @@ struct KexiType {
     Kind kind;
     std::string name;
     std::string traitName; // for Constrained
+    std::string variant;   // for Named: one nullary variant of the ADT `name` (`FileMode.Write`)
     std::vector<KexiTypePtr> typeArgs;
     std::vector<std::string> fieldNames; // for Record, parallel to typeArgs
     KexiTypePtr result; // for Func
@@ -76,9 +78,9 @@ struct KexiExport {
     // How many trailing parameters have a default, so a call may leave
     // them out. Absent in chunks written before it existed.
     int defaultedParams = 0;
-    // Each parameter's default as source text, "" for one with none: a
-    // unit compiled apart fills a call's missing arguments with these, as
-    // the merged build does from the callee's own AST.
+    // Each parameter's default as source text, "" for one with none. A
+    // caller compiled apart passes the sentinel for a missing argument that
+    // has one, and the callee fills it (names::kDefaultArgument).
     std::vector<std::string> defaultSources;
 };
 
@@ -89,6 +91,9 @@ struct KexiConstant {
 
 struct KexiTypeExport {
     std::string name;
+    // The module that declares it, "" at top level: its identity is
+    // `module.name`.
+    std::string module;
     std::vector<std::string> genericParams;
     std::vector<std::string> constructors;
     bool isDistinct = false;
@@ -115,6 +120,15 @@ struct KexiMethod {
     bool moduleFunction = false;
     // As KexiExport::defaultSources, the receiver left out.
     std::vector<std::string> defaultSources;
+    // The per-type implementation the emitter wrote for this receiver
+    // (`showValue/Box` at `beamArity`), when it wrote one: read from the
+    // emitted module (recordImplementations), never re-derived. "" when the
+    // method is reached only through its dispatcher.
+    std::string implementation;
+    // Declared by a `make` for a type its module does not declare (`Units.SI`'s
+    // `to` on `Measure`): reached only where that module is `using`-imported.
+    // A `make` for one of the module's own types travels with its values.
+    bool foreignTarget = false;
 };
 
 struct KexiTypeInterface {
@@ -143,7 +157,11 @@ struct KexiRecordField {
 
 struct KexiRecord {
     std::string name;
-    // The atom this record's tuples are actually tagged with. A record
+    // Which record this is, in Kex terms: its module path and name
+    // (`Parsing.Input`, a top-level one's bare name). What a checker and an
+    // importer know the record as, whatever a backend tags it with.
+    std::string identity;
+    // The BEAM backend's tag: the atom this record's tuples are tagged with. A record
     // declared inside a `module` block carries its module-qualified identity
     // (`Parsing.Input`) so same-named records in sibling modules stay
     // distinct; one declared at a file's top level keeps its bare name even
@@ -168,6 +186,9 @@ struct KexiConstructor {
 
 struct KexiADT {
     std::string name;
+    // The module that declares it (`FS` for `FS.FileMode`), "" at top level:
+    // where its constructors are in scope by their bare names.
+    std::string module;
     std::vector<std::string> typeParams;
     std::vector<KexiConstructor> constructors;
 };
@@ -190,6 +211,10 @@ struct KexiTraitRequiredMethod {
 struct KexiTraitDef {
     std::string name;
     std::vector<KexiTraitRequiredMethod> requiredMethods;
+    // The methods the trait's body defines: spliced into every implementor,
+    // so an implementor's own module emits them. A function over the trait
+    // declared elsewhere (`inspected(value: Inspectable)`) is not one.
+    std::vector<std::string> defaultBodies;
 };
 
 struct KexiStructuralMetadata {
@@ -249,7 +274,6 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk;
 
 auto computeInterfaceHash(const KexiChunk& chunk) -> Hash128;
 auto computeContentHash(const std::vector<uint8_t>& bytes) -> Hash128;
-auto computeSha256(const std::vector<uint8_t>& bytes) -> std::array<uint8_t, 32>;
 
 struct BeamFile;
 auto computeArtifactHash(const BeamFile& beam) -> Hash128;

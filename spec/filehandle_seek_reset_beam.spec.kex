@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # Spec: FileHandle.seek/.reset on BEAM specifically — the tree-walker and
 # BEAM implementations are two separate native backends (std::fstream vs
 # file:position/2), so this pins the same behavior spec/filehandle_seek_reset

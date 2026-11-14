@@ -4,6 +4,6 @@
 
 start(Fun)   -> kex_task:start(Fun).
 awaitAll(Tasks) -> kex_task:await_all(Tasks).
-sleep({'Duration', Seconds}) when is_number(Seconds) ->
+sleep({'Measure', Seconds, _, _}) when is_number(Seconds) ->
     timer:sleep(max(0, round(Seconds * 1000))),
     ok.

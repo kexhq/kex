@@ -1,5 +1,5 @@
 # Module features exercised through the BEAM backend.
-# kex: run-beam
+# kex: skip-wasm
 
 module Numbers do
   let double(n) = n * 2

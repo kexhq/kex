@@ -6,7 +6,7 @@
 
 foul scoped do
   using Task
-  sleep(1.milliseconds)
+  sleep(1.millisecond)
   IO.printLine("scoped")
 end
 
@@ -17,7 +17,7 @@ end
 
 foul blockForm do
   using Task do
-    sleep(1.milliseconds)
+    sleep(1.millisecond)
   end
   IO.printLine("block")
 end

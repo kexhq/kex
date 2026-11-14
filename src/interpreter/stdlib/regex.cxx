@@ -263,7 +263,7 @@ auto Evaluator::registerRegexBuiltins() -> void {
     // The `Regex` record carries only its source; the compiled pcre2_code
     // lives in the cache above, keyed by that source. RegexError mirrors
     // ParseError's shape (source/position/message) and implements Errorable.
-    defineIntrinsic("Regex::compile", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Regex.compile", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s)
             return Value::error(Value::record("Regex.RegexError", {
@@ -292,7 +292,7 @@ auto Evaluator::registerRegexBuiltins() -> void {
     // is both an injection hole and a spurious compile error. Per-character
     // escaping has no terminator to escape out of. (Perl's qr/\Q$x\E/ is safe
     // only because its interpolation does exactly this underneath.)
-    defineIntrinsic("Regex::quote", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Regex.quote", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::string("");
 
@@ -306,7 +306,7 @@ auto Evaluator::registerRegexBuiltins() -> void {
     // it cannot fail. Interpolated values are escaped per character, so they
     // contribute text and never pattern syntax — which is what keeps the bare
     // return type honest.
-    defineIntrinsic("Regex::tag", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Regex.tag", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::record("Regex.Regex", {{"source", Value::string("")}});
         auto* parts = std::get_if<ListValue>(&args[0]->data);
         const ListValue* values =
@@ -334,7 +334,7 @@ auto Evaluator::registerRegexBuiltins() -> void {
     // The offset here is a BYTE offset, unlike RegexError.position: the
     // compiler maps it back onto the literal's source span, and
     // TaggedValidation.ByteSpan is defined in bytes.
-    defineIntrinsic("Regex::validate", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Regex.validate", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::none();
         CompileFailure failure;
@@ -346,7 +346,7 @@ auto Evaluator::registerRegexBuiltins() -> void {
 
     // Regex::matches(subject, re) -> Match? — unanchored: finds the first
     // occurrence anywhere in the subject. Anchor with ^...$ in the pattern.
-    defineIntrinsic("Regex::matches", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Regex.matches", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         auto* subject = std::get_if<StringValue>(&args[0]->data);
         const auto* source = regexSource(args[1]);
@@ -373,7 +373,7 @@ auto Evaluator::registerRegexBuiltins() -> void {
 
     // Regex::matches?(subject, re) -> Bool — the boolean shadow of matches,
     // and unanchored for the same reason: "does the pattern occur anywhere".
-    defineIntrinsic("Regex::matches?", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Regex.matches?", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         auto* subject = std::get_if<StringValue>(&args[0]->data);
         const auto* source = regexSource(args[1]);
@@ -396,7 +396,7 @@ auto Evaluator::registerRegexBuiltins() -> void {
     //
     // Always [Match], never bare strings: unlike Ruby, adding a capture group
     // to a pattern must not change the type flowing out of scan.
-    defineIntrinsic("Regex::scan", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Regex.scan", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         auto* subject = std::get_if<StringValue>(&args[0]->data);
         const auto* source = regexSource(args[1]);
@@ -427,7 +427,7 @@ auto Evaluator::registerRegexBuiltins() -> void {
     // Global (Ruby's gsub, not sub) and literal: the replacement string is
     // inserted verbatim, with no $1/\1 backreference mini-language. To use
     // captures, pass a block instead — it receives the Match.
-    defineIntrinsic("Regex::replace", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Regex.replace", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 3) return args.empty() ? Value::string("") : args[0];
         auto* subject = std::get_if<StringValue>(&args[0]->data);
         const auto* source = regexSource(args[1]);
@@ -486,7 +486,7 @@ auto Evaluator::registerRegexBuiltins() -> void {
     //   * limit > 0 caps the field count, leaving the remainder unsplit
     //   * limit < 0 keeps trailing empties; limit == 0 is the default
     //   * capture groups are interleaved into the result
-    defineIntrinsic("Regex::split", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Regex.split", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         auto* subject = std::get_if<StringValue>(&args[0]->data);
         if (!subject) return Value::list({});

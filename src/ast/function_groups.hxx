@@ -17,11 +17,6 @@
 // a function as one node instead of re-deriving the grouping on its own.
 namespace kex::ast {
 
-// How a parameter's declared type reads for dispatch: the last segment of a
-// type name, generics and containers spelled out, `Any` where nothing is
-// declared.
-auto renderDispatchType(const TypeExpr& type) -> std::string;
-
 // The dispatch types of a make-block method's clause: the receiver type,
 // then one per parameter.
 auto methodDispatchTypes(const FunctionClause& clause,
@@ -37,6 +32,11 @@ auto methodDispatchTypes(const FunctionDef& function,
 auto separableOverloadSignatures(
     const std::map<std::string, std::vector<std::string>>& signatures) -> bool;
 
+// Whether a make-block method's first parameter is its receiver, matched by
+// pattern (`@[x | _]`, `Point { x, y }`, `x.._`), rather than an argument
+// after an implicit `this`: `repeat(0)`'s `0` is an argument.
+auto takesReceiverPattern(const FunctionClause& clause) -> bool;
+
 // A make-block method's BEAM arity: its receiver occupies position 0, either
 // implicitly as `this` or explicitly as a receiver pattern.
 auto methodArity(const FunctionClause& clause) -> size_t;
@@ -47,7 +47,9 @@ auto freeFunctionArity(const FunctionDef& function) -> size_t;
 
 // The clauses of a function that each declare a signature of their own: the
 // first, and every later one whose written parameter and result types differ
-// from all before it. An untyped multi-clause function has one; typed
+// from all before it. A clause declaring no types beside a typed sibling of
+// its arity adds none (`repeat(0)` is a case of `repeat(n: Integer)`). An
+// untyped multi-clause function has one; typed
 // overloads folded into one function (`close(connection: TCPConnection)`,
 // `close(listener: TCPListener)`) have one each. Whatever describes a
 // function's contract — an interface, an export, a published signature —

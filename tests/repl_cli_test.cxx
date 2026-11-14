@@ -207,6 +207,26 @@ auto runBeamFile(const std::string& source, const std::string& argument,
 } // namespace
 
 int main() {
+    describe("metamorphic file and REPL execution", []() {
+        it("preserves output when statements are entered separately", []() {
+            const std::array<std::string, 2> bodies = {
+                "var value = 7\nvalue += 1\nIO.printLine(value)\n",
+                "let twice(value: Integer) = value * 2\n"
+                "IO.printLine(twice(7))\n",
+            };
+            for (const auto& body : bodies) {
+                const auto file = "main do\n" + body + "end\n";
+                const auto walker = runWalkerFile(file);
+                const auto beam = runBeamFile(file, "");
+                assertEqual(beam, walker, "file backends disagree");
+                assertTrue(runRepl(body).find("\n" + walker) != std::string::npos,
+                           "walker REPL differs from file: " + body);
+                assertTrue(runBeamRepl(body).find("\n" + beam) != std::string::npos,
+                           "BEAM REPL differs from file: " + body);
+            }
+        });
+    });
+
     describe("CLI — qualified source-module discovery", []() {
         it("loads qualified-only dependencies transitively for BEAM", []() {
             namespace fs = std::filesystem;
@@ -672,6 +692,34 @@ int main() {
             assertTrue(out.find("=> 8 : Int") != std::string::npos, out);
         });
 
+        // An input is checked as the statements that run, so the walker reads
+        // the checker's decisions for them as it does for a file: a
+        // `Process.Shared` is an erased String at run time, and without them
+        // `site.put` went to String ("Undefined method: put for String").
+        // A definition is checked as it is defined; its body runs on those
+        // decisions when a later input calls it.
+        it("runs a definition's body on the checker's decisions", []() {
+            auto out = runRepl(
+                "foul stash(text: String) -> String do\n"
+                "  let site : Process.Shared<String> = Process.Shared.named(\"repl.def\")\n"
+                "  site.put(text)\n"
+                "  site.get.or(\"\")\n"
+                "end\n"
+                "stash(\"kept\")\n");
+            assertTrue(out.find("=> \"kept\" : String") != std::string::npos, out);
+            assertTrue(out.find("Undefined method") == std::string::npos, out);
+        });
+
+        it("runs an input on the checker's decisions", []() {
+            auto out = runRepl(
+                "let site : Process.Shared<String> = Process.Shared.named(\"repl.site\")\n"
+                "site.put(\"hi\")\n"
+                "site.get\n");
+            assertTrue(out.find("=> Just(\"hi\") : Optional<String>") != std::string::npos,
+                       out);
+            assertTrue(out.find("Undefined method") == std::string::npos, out);
+        });
+
         it("persists var bindings, reassignment, and ! mutation", []() {
             const std::string input =
                 "var s = \"hello\"\n"
@@ -925,6 +973,30 @@ int main() {
     });
 
     describe("REPL CLI — loaded definitions", []() {
+        // A loaded file is checked as the definitions that run, so a call into
+        // it reads the checker's decisions: `site.put` on a `Process.Shared`
+        // (an erased String at run time) went to String.
+        it("runs a loaded definition on the checker's decisions", []() {
+            char sourcePath[] = "/tmp/kex_repl_load_test_XXXXXX.kex";
+            int fd = mkstemps(sourcePath, 4);
+            assertTrue(fd >= 0, "mkstemps should create a Kex source file");
+            {
+                std::ofstream f(sourcePath);
+                f << "foul stash(text: String) -> String do\n"
+                     "  let site : Process.Shared<String> = "
+                     "Process.Shared.named(\"repl.load\")\n"
+                     "  site.put(text)\n"
+                     "  site.get.or(\"\")\n"
+                     "end\n";
+            }
+            close(fd);
+            auto out = runRepl(std::string("/load ") + sourcePath +
+                               "\nstash(\"loaded\")\n");
+            std::remove(sourcePath);
+            assertTrue(out.find("=> \"loaded\" : String") != std::string::npos, out);
+            assertTrue(out.find("Undefined method") == std::string::npos, out);
+        });
+
         it("keeps a loaded module's AST alive for later bindings", []() {
             char sourcePath[] = "/tmp/kex_repl_load_test_XXXXXX.kex";
             int fd = mkstemps(sourcePath, 4);
@@ -1650,7 +1722,7 @@ int main() {
                 "let p = spawn do echo() end\n"
                 "1\n2\n3\n"
                 "p.send(\"one\")\n"
-                "Task.sleep(100.milliseconds)\n"
+                "Task.sleep(100.millisecond)\n"
                 "p.alive?\n");
             assertTrue(out.find("got one") != std::string::npos, out);
             assertTrue(out.find("=> true : Bool") != std::string::npos, out);
@@ -1661,7 +1733,7 @@ int main() {
             // compile's diagnostics and dropped.
             auto out = runBeamRepl(
                 "spawn do IO.printLine(\"from child\") end\n"
-                "Task.sleep(100.milliseconds)\n"
+                "Task.sleep(100.millisecond)\n"
                 "1\n");
             assertTrue(out.find("from child") != std::string::npos, out);
         });

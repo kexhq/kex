@@ -146,7 +146,7 @@ auto Evaluator::registerKexBuiltins() -> void {
     // an intrinsic (not only as a public native) so the prelude can declare it
     // once and BOTH backends resolve the same name. Previously `.inspect` was
     // interpreter-only and failed with "Undefined method: inspect" on BEAM.
-    defineIntrinsic("Kex::inspect", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Kex.inspect", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("()");
         auto rendered = args[0]->inspect();
         if (args.size() > 1) {
@@ -169,7 +169,7 @@ auto Evaluator::registerKexBuiltins() -> void {
         return Value::string(std::move(rendered));
     });
 
-    defineIntrinsic("Kex::show", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Kex.show", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("");
         return Value::string(args[0]->toString());
     });
@@ -177,7 +177,7 @@ auto Evaluator::registerKexBuiltins() -> void {
     // Generic runtime category reflection used by libraries that operate on
     // Any values. This deliberately reports language-level categories rather
     // than library-specific tags; consumers such as JSON remain source-owned.
-    defineIntrinsic("Kex::kind", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Kex.kind", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::atom("none");
         const auto& data = args[0]->data;
         if (auto* variant = std::get_if<VariantValue>(&data))
@@ -199,38 +199,38 @@ auto Evaluator::registerKexBuiltins() -> void {
     });
 
     // A non-negative Integer below 2^32, like `erlang:phash2/2` on BEAM.
-    defineIntrinsic("Kex::hash", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Kex.hash", [](std::vector<ValuePtr> args) -> ValuePtr {
         const auto hash = args.empty() ? 0 : hashValue(args[0]);
         return Value::integer(static_cast<int64_t>((hash ^ (hash >> 32)) & 0xffffffffULL));
     });
 
     // Kex.Code (kexhq/kex#399): loading compiled modules is a BEAM matter.
-    defineIntrinsic("Code::load", [](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("Code.load", [](std::vector<ValuePtr>) -> ValuePtr {
         return Value::error(Value::string(
             "Kex.load needs the BEAM backend; the interpreter cannot load compiled modules"));
     });
-    defineIntrinsic("Code::loaded?", [](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("Code.loaded?", [](std::vector<ValuePtr>) -> ValuePtr {
         return Value::boolean(false);
     });
-    defineIntrinsic("Code::call", [](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("Code.call", [](std::vector<ValuePtr>) -> ValuePtr {
         return Value::error(Value::string(
             "Kex.LoadedModule.call needs the BEAM backend; the interpreter cannot call compiled modules"));
     });
 
-    defineIntrinsic("Kex::backend", [makeVariant](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("Kex.backend", [makeVariant](std::vector<ValuePtr>) -> ValuePtr {
         return makeVariant("Interpreter");
     });
 
     // The BEAM's JSON fast path (kex_intrinsic_json.erl). The interpreter has
     // none, so both answer None and json.kex runs its own parser/encoder.
-    for (const char* name : {"Json::decode", "Json::decodeCommented", "Json::encode"})
+    for (const char* name : {"Json.decode", "Json.decodeCommented", "Json.encode"})
         defineIntrinsic(name, [](std::vector<ValuePtr>) -> ValuePtr {
             return Value::none();
         });
 
     // Mirrors kex_intrinsic_kex:version/0 — see src/common/version.hxx for
     // why both sides read from one place.
-    defineIntrinsic("Kex::version", [](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("Kex.version", [](std::vector<ValuePtr>) -> ValuePtr {
         auto revision =
             *kGitRevision
                 ? Value::variant("Just", "", {Value::string(kGitRevision)})
@@ -244,7 +244,7 @@ auto Evaluator::registerKexBuiltins() -> void {
     // rather than a fifth tuple element: the tuple is a published shape
     // (`Kex.VERSION.tuple`), and widening it would break every
     // destructuring of it.
-    defineIntrinsic("Kex::versionPreRelease", [](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("Kex.versionPreRelease", [](std::vector<ValuePtr>) -> ValuePtr {
         return Value::string(kVersionPreRelease);
     });
 
@@ -253,7 +253,7 @@ auto Evaluator::registerKexBuiltins() -> void {
     // both things the compiler already does natively, so this works on the
     // tree walker as well as on BEAM; a Kex program needed
     // `BEAM.beam_lib.chunks` plus `BEAM.erlang.binary_to_term` for it.
-    defineIntrinsic("Interface::read", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Interface.read", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* path = std::get_if<StringValue>(&args[0]->data);
         if (!path) return Value::none();
@@ -269,8 +269,8 @@ auto Evaluator::registerKexBuiltins() -> void {
         }
     });
 
-    defineIntrinsic("Kex::featureHas?", hasFeature);
-    defineIntrinsic("Kex::featureList", listFeatures);
+    defineIntrinsic("Kex.featureHas?", hasFeature);
+    defineIntrinsic("Kex.featureList", listFeatures);
 }
 
 } // namespace kex::interpreter

@@ -1,5 +1,5 @@
 .PHONY: docs
-.PHONY: build-tey spec-tey build test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-examples spec-examples-beam check-examples spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz
+.PHONY: build-tey spec-tey build test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-examples spec-examples-beam check-examples spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz bench test-bench bench-slick dup-audit
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
@@ -65,12 +65,27 @@ help:
 	@echo "                    FAILS on any difference — the two backends are"
 	@echo "                    expected to agree on every spec."
 	@echo "  make test-fuzz    Test the fuzzer generator and failure handling"
+	@echo "  make test-metamorphic  Gate the metamorphic relations that pass"
+	@echo "  make metamorphic-search  Relations and type-breaking spec mutations, fresh seed"
+	@echo "  make lsp-sweep           Language-server answers checked against the checker's"
+	@echo "  make metamorphic-coverage  The search with LLVM compiler coverage"
 	@echo "  make fuzz         Differential-fuzz walker vs BEAM on generated"
 	@echo "                    programs (tools/fuzz.kex). Override with"
 	@echo "                    FUZZ_SEED / FUZZ_CASES / FUZZ_OUTDIR / FUZZ_BUDGET_MS."
 	@echo "  make spec-wasm    Same, but through the wasm-built kex CLI via Node"
 	@echo "                    (requires build-wasm; expected to match closely,"
 	@echo "                    since it's the same tree-walker as native)."
+	@echo "  make bench        Repeat-and-median benchmark (compile warm/"
+	@echo "                    cold-kex/dev-loop, fib, loop; informational only,"
+	@echo "                    per docs/compiler-refactor-plan.md). Override with"
+	@echo "                    BENCH_RUNS / BENCH_FIB_N / BENCH_LOOP_N / KEX."
+	@echo "  make test-bench   Smoke-test the bench harness itself (1 run,"
+	@echo "                    small scenarios; checks it runs and reports)."
+	@echo "  make bench-slick  Benchmark on ../slick, a real app (cold/no-op/"
+	@echo "                    incremental/dev-loop tey build, its specs). Compare"
+	@echo "                    compilers with BENCH_KEX=\"main=/path/kex branch=build/kex\"."
+	@echo "  make dup-audit    Count duplicate helpers, literal compares, hand-written"
+	@echo "                    Type/Expr recursions; fails if any rises over baseline."
 	@echo ""
 
 # Configure quietly, but NEVER quietly: piping cmake into `tail` discarded its
@@ -129,10 +144,18 @@ web-demo: build-wasm
 # Every suite gates, on both backends: a walker/BEAM difference is a build
 # failure, not a note.
 test-all: test spec-orphans check-examples spec spec-prelude spec-stdlib spec-examples \
-          spec-beam spec-prelude-beam spec-stdlib-beam spec-examples-beam spec-test-json
+          spec-beam spec-prelude-beam spec-stdlib-beam spec-examples-beam spec-test-json \
+          verify-hir-stdlib build-tey
+
+# The checker decides every call the standard library makes: none is left
+# for a backend to work out (`--verify-hir`, src/hir/).
+.PHONY: verify-hir-stdlib
+verify-hir-stdlib: build
+	@dir=$$(mktemp -d) && "$(KEX)" --verify-hir --build-prelude "$$dir"; \
+	status=$$?; rm -rf "$$dir"; exit $$status
 
 # Harness and generator regressions, including simulated crashes/timeouts.
-.PHONY: test-fuzz test-spec-beam-runner
+.PHONY: test-fuzz test-spec-beam-runner test-devirt
 test-spec-beam-runner: build
 	@"$(KEX)" --run-walker --no-colors tools/spec_beam_runner.spec.kex
 
@@ -140,15 +163,72 @@ test-fuzz: build
 	@KEX="$(KEX)" "$(KEX)" --run-walker --no-colors tools/fuzz.spec.kex
 	@KEX="$(KEX)" "$(KEX)" --run-walker --no-colors tools/fuzz_cli.spec.kex
 
+test-devirt: build
+	@tools/devirt-correspondence.sh "$(KEX)" $(BEAM_SPEC_FILES)
+
 # Differential fuzzer (tools/fuzz.kex): generates correct-by-construction
 # programs and requires the walker and BEAM backends to agree on every one.
 # Fixed seed by default, so a failure replays with the same invocation.
 FUZZ_SEED ?= 42
-FUZZ_CASES ?= 200
+FUZZ_CASES ?= 400
 FUZZ_OUTDIR ?= /tmp/kex-fuzz
 FUZZ_BUDGET_MS ?= 15000
 fuzz: build
 	@"$(KEX)" --run-walker --no-colors -- tools/fuzz.kex "$(FUZZ_SEED)" "$(FUZZ_CASES)" "$(KEX)" "$(FUZZ_OUTDIR)" "$(FUZZ_BUDGET_MS)"
+
+# Metamorphic checks (tools/metamorphic.kex). The gate runs the fixed
+# relations that pass. The search runs every relation and mutates the spec
+# programs the way a type error would: the checker must reject the result,
+# or it must run alike on both backends. A fresh seed from the clock unless
+# METAMORPHIC_SEED is given; the run prints it, so a finding replays.
+.PHONY: test-metamorphic metamorphic-search metamorphic-coverage
+METAMORPHIC_OUTDIR ?= /tmp/kex-metamorphic
+METAMORPHIC_SEED ?=
+METAMORPHIC_CASES ?= 40
+METAMORPHIC_MODE ?= search
+test-metamorphic: build
+	@"$(KEX)" --run-walker --no-colors tools/metamorphic.spec.kex
+	@"$(KEX)" --run-walker --no-colors -- tools/metamorphic.kex 0 10 "$(KEX)" "$(METAMORPHIC_OUTDIR)" 15000 gate
+
+metamorphic-search: build
+	@"$(KEX)" --run-walker --no-colors -- tools/metamorphic.kex "$(METAMORPHIC_SEED)" "$(METAMORPHIC_CASES)" "$(KEX)" "$(METAMORPHIC_OUTDIR)" 15000 "$(METAMORPHIC_MODE)"
+
+metamorphic-coverage:
+	@JOBS="$(JOBS)" METAMORPHIC_SEED="$(METAMORPHIC_SEED)" \
+		METAMORPHIC_CASES="$(METAMORPHIC_CASES)" \
+		bash tools/metamorphic_coverage.sh
+
+# Language-server sweep (tests/lsp_sweep.cxx): asks `kex --lsp` about the
+# identifiers of each file and reports where its answer contradicts the
+# checker's — a hover type, a name completion should offer or must not, the
+# diagnostics, a definition target. A search, not a gate; one finding per
+# line, so two runs diff. LSP_SWEEP_FILES picks the files.
+.PHONY: lsp-sweep
+LSP_SWEEP_FILES ?= $(wildcard examples/*.kex)
+LSP_SWEEP_OUTDIR ?= /tmp/kex-lsp-sweep
+LSP_SWEEP_SEED ?= 1
+lsp-sweep: build
+	@"$(BUILD_DIR)/lsp_sweep" --kex "$(KEX)" --out "$(LSP_SWEEP_OUTDIR)" --seed "$(LSP_SWEEP_SEED)" $(LSP_SWEEP_FILES)
+
+# Informational benchmark harness (see tools/bench.sh and the plan's
+# measurement methodology). Not a gate: reports median + IQR, exits 0.
+bench: build
+	@tools/bench.sh $(BENCH_SCENARIOS)
+
+# The harness's own smoke test — that it runs, times, and reports — with
+# one run of the two cheapest scenarios, fib shrunk to stay quick.
+test-bench: build
+	@BENCH_RUNS=1 BENCH_FIB_N=25 tools/bench.sh compile-warm fib
+
+# Slick (a real application with dependencies) through tey: the numbers perf
+# claims are judged on. See tools/bench-slick.sh for scenarios and knobs.
+bench-slick: build
+	@tools/bench-slick.sh $(BENCH_SLICK_SCENARIOS)
+
+# Duplication / magic-constant audit (tools/dup-audit.sh). Fails when a count
+# rises above tools/dup-audit.baseline; `tools/dup-audit.sh --record` lowers it.
+dup-audit:
+	@tools/dup-audit.sh --check
 
 SHELL := /bin/bash
 
@@ -219,7 +299,7 @@ spec-prelude: build
 	@echo "Running prelude spec suite..."
 	@failed=0; passed=0; \
 	for f in spec/prelude/*.kex; do \
-		output=$$($(KEX) --run-walker --no-check --no-colors "$$f" 2>&1); \
+		output=$$($(KEX) --run-walker --no-colors "$$f" 2>&1); \
 		rc=$$?; \
 		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
 		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
@@ -247,7 +327,7 @@ spec-prelude-beam: build
 	@failed=0; passed=0; \
 	for f in spec/prelude/*.kex; do \
 		if grep -q "# kex: interpreter-only" "$$f" 2>/dev/null; then continue; fi; \
-		output=$$($(TIMEOUT_SUITE) $(KEX) --run --no-check --no-colors "$$f" 2>&1); \
+		output=$$($(TIMEOUT_SUITE) $(KEX) --run --no-colors "$$f" 2>&1); \
 		rc=$$?; \
 		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
 		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \

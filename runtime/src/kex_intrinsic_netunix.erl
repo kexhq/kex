@@ -9,17 +9,17 @@ address(Path) when is_binary(Path), byte_size(Path)>0, byte_size(Path)<104 ->
     case Path of <<"/",_/binary>> -> {'Ok',{'Net.Socket.Unix.Address',Path}}; _ -> error_value('Parse',<<"Unix socket path must be absolute">>) end;
 address(_) -> error_value('Parse',<<"invalid Unix socket path">>).
 
-connect(Address) -> connectWith(Address,{'Net.Socket.Unix.ConnectOptions',{'Duration',10.0},{'Duration',30.0}}).
+connect(Address) -> connectWith(Address,{'Net.Socket.Unix.ConnectOptions',kex_intrinsic_time:seconds(10.0),kex_intrinsic_time:seconds(30.0)}).
 connectWith({'Net.Socket.Unix.Address',Path},{'Net.Socket.Unix.ConnectOptions',
-            {'Duration',ConnectTimeout},{'Duration',ReceiveTimeout}})
+            {'Measure', ConnectTimeout, _, _},{'Measure', ReceiveTimeout, _, _}})
   when is_number(ConnectTimeout),ConnectTimeout>=0,is_number(ReceiveTimeout),ReceiveTimeout>=0 ->
     ConnectMs=timeout_ms(ConnectTimeout),ReceiveMs=timeout_ms(ReceiveTimeout),
     start(fun()->gen_tcp:connect({local,binary_to_list(Path)},0,[binary,{active,false},{packet,raw}],ConnectMs) end,
           connection,Path,ReceiveMs,30000,ConnectMs+1000);
 connectWith(_,_) -> error_value('Parse',<<"invalid Unix connect options">>).
-listen(Address) -> listenWith(Address,{'Net.Socket.Unix.ListenOptions',128,false,{'Duration',30.0},{'Duration',30.0}}).
+listen(Address) -> listenWith(Address,{'Net.Socket.Unix.ListenOptions',128,false,kex_intrinsic_time:seconds(30.0),kex_intrinsic_time:seconds(30.0)}).
 listenWith({'Net.Socket.Unix.Address',Path},{'Net.Socket.Unix.ListenOptions',Backlog,
-           RemoveStale,{'Duration',AcceptTimeout},{'Duration',ReceiveTimeout}})
+           RemoveStale,{'Measure', AcceptTimeout, _, _},{'Measure', ReceiveTimeout, _, _}})
   when is_integer(Backlog),Backlog>0,is_boolean(RemoveStale),
        is_number(AcceptTimeout),AcceptTimeout>=0,is_number(ReceiveTimeout),ReceiveTimeout>=0 ->
     case prepare_path(Path,RemoveStale) of

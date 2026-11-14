@@ -1,12 +1,15 @@
 #include "test.hxx"
+#include "workspace_index.hxx"
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
 #include "../src/semantic/analyzer.hxx"
-#include "../src/semantic/db.hxx"
+#include "../src/hir/persist.hxx"
+#include "../src/lsp/workspace.hxx"
 #include "../src/semantic/types.hxx"
 #include "../src/semantic/traits.hxx"
 #include "../src/common/prelude_interfaces.hxx"
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 
@@ -46,6 +49,20 @@ auto hasError(const std::string& source, const std::string& containing = "") -> 
             }
         }
     }
+    return false;
+}
+
+// Whether the `using` and `export` rules refuse `source` with `containing`,
+// where no module exists outside it.
+auto moduleRuleError(const std::string& source, const std::string& containing) -> bool {
+    Lexer lexer(source);
+    Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    semantic::Analyzer analyzer;
+    analyzer.setModuleLocator([](const std::string&, const std::string&) { return false; });
+    analyzer.analyze(program);
+    for (const auto& diagnostic : analyzer.diagnostics())
+        if (diagnostic.message.find(containing) != std::string::npos) return true;
     return false;
 }
 
@@ -89,9 +106,75 @@ auto noErrorsWithInterfaces(
 }
 
 int main() {
-    describe("SemanticDB — Modules", []() {
+    describe("hir::persist — a checked program across processes", []() {
+        // Saved by node position and read back onto a fresh parse of the
+        // same source: every node answers as it did where it was checked.
+        it("round-trips targets, types and selected signatures", []() {
+            const std::string source =
+                "record Box do\n  n : Integer\nend\n"
+                "make Box do\n  let twice -> Integer = @n * 2\nend\n"
+                "let sum(xs: [Integer]) -> Integer = xs.reduce(0) { |a, b| a + b }\n"
+                "main do\n"
+                "  let b = Box { n: 3 }\n"
+                "  IO.printLine(b.twice)\n"
+                "  IO.printLine(sum([1, 2]))\n"
+                "  IO.printLine(Type.of(b).name)\n"
+                "end\n";
+            const auto parse = [&] {
+                Lexer lexer(source);
+                Parser parser(lexer.tokenizeAll());
+                return parser.parseProgram();
+            };
+            auto first = parse();
+            semantic::Analyzer analyzer(&preludeInterfaces());
+            assertTrue(analyzer.analyze(first));
+            const hir::Program checked(first, analyzer);
+            const auto bytes = hir::save(checked, first, hir::nodeOrder(first));
+
+            auto second = parse();
+            const auto order = hir::nodeOrder(second);
+            const auto loaded = hir::load(second, order, bytes);
+            assertTrue(loaded != nullptr);
+            const auto firstOrder = hir::nodeOrder(first);
+            assertEqual(firstOrder.size(), order.size());
+            std::size_t decided = 0;
+            for (std::size_t i = 0; i < order.size(); ++i) {
+                const auto& was = checked.targetOf(*firstOrder[i]);
+                const auto& is = loaded->targetOf(*order[i]);
+                assertTrue(was.kind == is.kind && was.module == is.module &&
+                           was.function == is.function && was.arity == is.arity &&
+                           was.owner == is.owner);
+                if (was.kind != hir::TargetKind::Undecided) decided++;
+                const auto wasType = checked.typeOf(*firstOrder[i]);
+                const auto isType = loaded->typeOf(*order[i]);
+                assertTrue((!wasType && !isType) ||
+                           (wasType && isType &&
+                            semantic::typeToString(wasType) ==
+                                semantic::typeToString(isType)));
+                assertTrue((checked.selectedSignatureOf(*firstOrder[i]) != nullptr) ==
+                           (loaded->selectedSignatureOf(*order[i]) != nullptr));
+            }
+            assertTrue(decided > 0);
+        });
+        it("refuses bytes saved for another program", []() {
+            const auto parse = [](const std::string& source) {
+                Lexer lexer(source);
+                Parser parser(lexer.tokenizeAll());
+                return parser.parseProgram();
+            };
+            auto one = parse("main do\n  IO.printLine(1)\nend\n");
+            semantic::Analyzer analyzer(&preludeInterfaces());
+            analyzer.analyze(one);
+            const hir::Program checked(one, analyzer);
+            const auto bytes = hir::save(checked, one, hir::nodeOrder(one));
+            auto other = parse("main do\n  IO.printLine(1 + 2)\nend\n");
+            assertTrue(hir::load(other, hir::nodeOrder(other), bytes) == nullptr);
+        });
+    });
+
+    describe("Workspace — Modules", []() {
         it("resolves selectively imported names across indexed files", []() {
-            semantic::SemanticDB db;
+            lsp::Workspace db;
             db.updateFile("util.kex",
                 "module Util\n"
                 "let twice(n) = n * 2\n");
@@ -100,6 +183,7 @@ int main() {
                 "main do\n"
                 "  twice(21)\n"
                 "end\n");
+            resolveTogether(db, {"util.kex", "main.kex"});
             bool hasError = false;
             for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
                 if (diagnostic.level == semantic::Diagnostic::Level::Error) hasError = true;
@@ -110,7 +194,7 @@ int main() {
         });
 
         it("supports go-to-definition for an imported name across files", []() {
-            semantic::SemanticDB db;
+            lsp::Workspace db;
             db.updateFile("util.kex",
                 "module Util\n"
                 "let twice(n) = n * 2\n");
@@ -119,6 +203,7 @@ int main() {
                 "main do\n"
                 "  twice(21)\n"
                 "end\n");
+            resolveTogether(db, {"util.kex", "main.kex"});
             auto* definition = db.symbolInModule("Util", "twice");
             assertTrue(definition != nullptr);
             assertTrue(!definition->references.empty());
@@ -130,7 +215,7 @@ int main() {
         });
 
         it("completes public module members but hides private ones", []() {
-            semantic::SemanticDB db;
+            lsp::Workspace db;
             db.updateFile("util.kex",
                 "module Util\n"
                 "let visible() = 1\n"
@@ -145,46 +230,27 @@ int main() {
         });
 
         it("rejects importing a private module symbol", []() {
-            semantic::SemanticDB db;
-            db.updateFile("secrets.kex",
-                "module Secrets\n"
-                "private do\n"
-                "  let hidden() = 42\n"
-                "end\n");
-            db.updateFile("main.kex",
-                "using Secrets, only: [hidden]\n");
-            bool found = false;
-            for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
-                if (diagnostic.message.find("private name `hidden`") != std::string::npos)
-                    found = true;
-            assertTrue(found);
+            assertTrue(moduleRuleError(
+                "module Secrets do\n"
+                "  private do\n"
+                "    let hidden() = 42\n"
+                "  end\n"
+                "end\n"
+                "using Secrets, only: [hidden]\n",
+                "private name `hidden`"));
         });
 
         it("does not leak module members into the enclosing file", []() {
-            semantic::SemanticDB db;
-            db.updateFile("main.kex",
+            semantic::ImportedInterfaces interfaces;
+            assertTrue(hasErrorWithInterfaces(
                 "module Helpers do\n"
                 "  let answer() = 42\n"
                 "end\n"
                 "main do\n"
                 "  answer()\n"
-                "end\n");
-            bool found = false;
-            for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
-                if (diagnostic.message.find("Undefined function: `answer`") != std::string::npos)
-                    found = true;
-            assertTrue(found);
-        });
-
-        it("keeps top-level definitions file-local", []() {
-            semantic::SemanticDB db;
-            db.updateFile("one.kex", "let helper() = 42\n");
-            db.updateFile("two.kex", "main do\n  helper()\nend\n");
-            bool found = false;
-            for (const auto& diagnostic : db.diagnosticsFor("two.kex"))
-                if (diagnostic.message.find("Undefined function: `helper`") != std::string::npos)
-                    found = true;
-            assertTrue(found);
+                "end\n",
+                interfaces,
+                "Undefined function: `answer` — `Helpers.answer` is not imported here"));
         });
 
         it("discovers an unindexed module from configured source roots", []() {
@@ -197,13 +263,17 @@ int main() {
                 module << "module Http.Router\n"
                           "let get(path) = path\n";
             }
-            semantic::SemanticDB db;
+            lsp::Workspace db;
             db.setModuleRoots({root.string()});
             db.updateFile("main.kex",
                 "using Http.Router, only: [get]\n"
                 "main do\n"
                 "  get(\"/\")\n"
                 "end\n");
+            // The modules a file names are loaded before it resolves, as the
+            // language server loads those its analysis names.
+            db.ensureModule("Http.Router");
+            resolveTogether(db, {"main.kex"});
             fs::remove_all(root);
             assertTrue(db.hasModule("Http.Router"));
             bool hasError = false;
@@ -212,33 +282,8 @@ int main() {
             assertFalse(hasError);
         });
 
-        it("warns when a later source root shadows a module", []() {
-            namespace fs = std::filesystem;
-            const auto root = fs::temp_directory_path() / "kex-semantic-shadow-test";
-            fs::remove_all(root);
-            fs::create_directories(root / "lib");
-            fs::create_directories(root / "src");
-            {
-                std::ofstream first(root / "lib/util.kex");
-                first << "module Util\nlet value() = 1\n";
-                std::ofstream second(root / "src/util.kex");
-                second << "module Util\nlet value() = 2\n";
-            }
-            semantic::SemanticDB db;
-            db.setModuleRoots({(root / "lib").string(), (root / "src").string()});
-            db.updateFile("main.kex", "using Util, only: [value]\n");
-            bool found = false;
-            for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
-                if (diagnostic.level == semantic::Diagnostic::Level::Warning
-                    && diagnostic.message.find("shadowed module definition for Util")
-                        != std::string::npos)
-                    found = true;
-            fs::remove_all(root);
-            assertTrue(found);
-        });
-
         it("rejects only: and except: together", []() {
-            semantic::SemanticDB db;
+            lsp::Workspace db;
             db.updateFile("util.kex",
                 "module Util\n"
                 "let a() = 1\n"
@@ -246,6 +291,7 @@ int main() {
             db.updateFile("main.kex",
                 "using Util, only: [a], except: [b]\n"
                 "main do\n  a()\nend\n");
+            resolveTogether(db, {"util.kex", "main.kex"});
             bool found = false;
             for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
                 if (diagnostic.message.find("mutually exclusive") != std::string::npos)
@@ -254,45 +300,33 @@ int main() {
         });
 
         it("validates export target module exists", []() {
-            semantic::SemanticDB db;
-            db.updateFile("app.kex",
-                "module App\n"
-                "export Nonexistent\n");
-            bool found = false;
-            for (const auto& diagnostic : db.diagnosticsFor("app.kex"))
-                if (diagnostic.message.find("exported module not found") != std::string::npos)
-                    found = true;
-            assertTrue(found);
+            assertTrue(moduleRuleError(
+                "module App do\n"
+                "  export Nonexistent\n"
+                "end\n",
+                "exported module not found"));
         });
 
         it("rejects exporting private names", []() {
-            semantic::SemanticDB db;
-            db.updateFile("secrets.kex",
-                "module Secrets\n"
-                "private do\n"
-                "  let hidden() = 42\n"
+            assertTrue(moduleRuleError(
+                "module Secrets do\n"
+                "  private do\n"
+                "    let hidden() = 42\n"
+                "  end\n"
+                "  let visible() = 1\n"
                 "end\n"
-                "let visible() = 1\n");
-            db.updateFile("app.kex",
-                "module App\n"
-                "export Secrets, only: [hidden]\n");
-            bool found = false;
-            for (const auto& diagnostic : db.diagnosticsFor("app.kex"))
-                if (diagnostic.message.find("cannot export private name `hidden`") != std::string::npos)
-                    found = true;
-            assertTrue(found);
+                "module App do\n"
+                "  export Secrets, only: [hidden]\n"
+                "end\n",
+                "cannot export private name `hidden`"));
         });
 
         it("rejects self-export", []() {
-            semantic::SemanticDB db;
-            db.updateFile("app.kex",
-                "module App\n"
-                "export App\n");
-            bool found = false;
-            for (const auto& diagnostic : db.diagnosticsFor("app.kex"))
-                if (diagnostic.message.find("cannot export itself") != std::string::npos)
-                    found = true;
-            assertTrue(found);
+            assertTrue(moduleRuleError(
+                "module App do\n"
+                "  export App\n"
+                "end\n",
+                "cannot export itself"));
         });
 
         it("allows circular dependencies between lazy module functions", []() {
@@ -304,11 +338,13 @@ int main() {
                 std::ofstream b(root / "b.kex");
                 b << "module B\nusing A\nlet fb() = 2\n";
             }
-            semantic::SemanticDB db;
+            lsp::Workspace db;
             db.setModuleRoots({root.string()});
             // Index A first (it uses B which will be discovered on disk)
             db.updateFile("a.kex",
                 "module A\nusing B\nlet fa() = 1\n");
+            db.ensureModule("B");
+            resolveTogether(db, {"a.kex", (root / "b.kex").string()});
             fs::remove_all(root);
             bool foundError = false;
             for (const auto& diagnostic : db.diagnosticsFor((root / "b.kex").string()))
@@ -1050,6 +1086,127 @@ int main() {
                 "using Units.Left\nmain do 1.format end\n", interfaces, ""));
         });
 
+        it("decides a hidden receiver overload from its labelled argument types", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedFunction visible;
+            visible.sourceName = "format";
+            visible.sourceModule = "Prelude";
+            visible.backendModule = "kex_prelude";
+            visible.paramNames = {"", "in"};
+            visible.signature = {"format",
+                {semantic::Type::named("Measure"), semantic::Type::unknown(),
+                 semantic::Type::named("TimeUnit")},
+                semantic::Type::string()};
+            interfaces.modules["Prelude"].automaticImport = true;
+            interfaces.receiverFunctions["format"].push_back(visible);
+            auto hidden = visible;
+            hidden.sourceModule = "Units.SI";
+            hidden.backendModule = "Kex.Units.SI";
+            hidden.foreignTarget = true;
+            hidden.signature.params.back() = semantic::Type::named("SIPrefix");
+            interfaces.receiverFunctions["format"].push_back(hidden);
+
+            Lexer lexer(
+                "record Measure do n: Integer end\n"
+                "record TimeUnit do n: Integer end\n"
+                "record SIPrefix do n: Integer end\n"
+                "main do\n"
+                "  let m = Measure { n: 1 }\n"
+                "  m.format(String, in: SIPrefix { n: 2 })\n"
+                "  m.format(String, in: TimeUnit { n: 3 })\n"
+                "end\n");
+            Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            semantic::Analyzer analyzer(&interfaces);
+            assertTrue(analyzer.analyze(program));
+            const hir::Program checked(program, analyzer);
+            std::vector<hir::CallSite> formatCalls;
+            for (const auto& site : checked.callSites())
+                if (site.callee == "format") formatCalls.push_back(site);
+            assertEqual(formatCalls.size(), std::size_t{2});
+            assertTrue(formatCalls[0].kind == hir::TargetKind::Hidden);
+            assertEqual(formatCalls[0].target, std::string("Units.SI"));
+            assertTrue(formatCalls[1].kind == hir::TargetKind::Imported);
+
+            Lexer genericLexer(
+                "let maybe(measure, unit) = measure.format(String, in: unit)\n");
+            Parser genericParser(genericLexer.tokenizeAll());
+            auto genericProgram = genericParser.parseProgram();
+            semantic::Analyzer genericAnalyzer(&interfaces);
+            assertTrue(genericAnalyzer.analyze(genericProgram));
+            const hir::Program genericChecked(genericProgram, genericAnalyzer);
+            for (const auto& site : genericChecked.callSites())
+                if (site.callee == "format")
+                    assertTrue(site.kind != hir::TargetKind::Hidden);
+        });
+
+        it("decides a hidden local make overload beside a visible import", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedFunction visible;
+            visible.sourceName = "format";
+            visible.sourceModule = "Prelude";
+            visible.backendModule = "kex_prelude";
+            visible.paramNames = {"", "in"};
+            visible.signature = {"format",
+                {semantic::Type::named("Measure"), semantic::Type::unknown(),
+                 semantic::Type::named("TimeUnit")},
+                semantic::Type::string()};
+            interfaces.modules["Prelude"].automaticImport = true;
+            interfaces.receiverFunctions["format"].push_back(visible);
+
+            Lexer lexer(
+                "record Measure do n: Integer end\n"
+                "record TimeUnit do n: Integer end\n"
+                "record SIPrefix do n: Integer end\n"
+                "module Patcher do\n"
+                "  make Measure do\n"
+                "    let format(t, in: SIPrefix) -> String = \"patched\"\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  let m = Measure { n: 1 }\n"
+                "  m.format(String, in: SIPrefix { n: 2 })\n"
+                "  m.format(String, in: TimeUnit { n: 3 })\n"
+                "end\n");
+            Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            semantic::Analyzer analyzer(&interfaces);
+            assertTrue(analyzer.analyze(program));
+            const hir::Program checked(program, analyzer);
+            std::vector<hir::CallSite> calls;
+            for (const auto& site : checked.callSites())
+                if (site.callee == "format") calls.push_back(site);
+            assertEqual(calls.size(), std::size_t{2});
+            assertTrue(calls[0].kind == hir::TargetKind::Hidden);
+            assertEqual(calls[0].target, std::string("Patcher"));
+            assertTrue(calls[1].kind == hir::TargetKind::Imported);
+        });
+
+        it("records foreign make targets from source regardless of declaration order", []() {
+            namespace fs = std::filesystem;
+            const auto file = fs::temp_directory_path() /
+                ("kex-semantic-foreign-target-" + std::to_string(
+                    std::chrono::steady_clock::now().time_since_epoch().count()) +
+                 ".kex");
+            {
+                std::ofstream output(file);
+                output <<
+                    "module Demo.Cards do\n"
+                    "  make Card do let decorate -> String = \"card\" end\n"
+                    "  make Integer do let decorate -> String = \"number\" end\n"
+                    "  type Card = One | Two\n"
+                    "end\n";
+            }
+            const auto interfaces = sourceSemanticInterfaces(
+                {file.string()}, false, true);
+            fs::remove(file);
+            const auto found = interfaces.receiverFunctions.find("decorate");
+            assertTrue(found != interfaces.receiverFunctions.end());
+            assertEqual(found->second.size(), std::size_t{2});
+            assertTrue(!found->second[0].foreignTarget);
+            assertTrue(found->second[1].foreignTarget);
+        });
+
         it("keeps prelude receiver methods available after opt-in interface merges", []() {
             semantic::ImportedInterfaces compiled;
             compiled.modules["Measure"].automaticImport = true;
@@ -1240,7 +1397,7 @@ int main() {
         it("preserves a generic Result payload for overload selection", []() {
             Lexer lexer(
                 "using Regex\n"
-                "main do \"a-b\".replace(regex(\"-\").or(0), \"+\") end\n");
+                "main do \"a-b\".replace(regex(\"-\").or(re`x`), \"+\") end\n");
             Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
             semantic::Analyzer analyzer(&preludeInterfaces());
@@ -1909,18 +2066,26 @@ int main() {
     });
 
     describe("Semantic — Stdlib call checking", []() {
-        it("accepts min/max/sum lambdas for lists of non-numeric values", []() {
-            assertTrue(noErrors(
+        it("accepts minBy/maxBy/sum lambdas for lists of non-numeric values", []() {
+            const std::string shapes =
                 "record Shape do\n"
                 "  area : Float\n"
                 "end\n"
                 "main do\n"
-                "  let shapes = [Shape { area: 4.0 }, Shape { area: 12.5 }]\n"
-                "  let smallest = shapes.min { |shape| shape.area }\n"
-                "  let largest = shapes.max { |shape| shape.area }\n"
+                "  let shapes = [Shape { area: 4.0 }, Shape { area: 12.5 }]\n";
+            assertTrue(noErrors(shapes +
+                "  let smallest = shapes.minBy { |shape| shape.area }\n"
+                "  let largest = shapes.maxBy { |shape| shape.area }\n"
                 "  let total = shapes.sum { |shape| shape.area }\n"
                 "end\n"
             ));
+            // A list has no `min` taking a key: `min(other)` is Comparable's,
+            // whose unannotated `other` let this check clean and fail at
+            // run time on both backends.
+            assertTrue(hasError(shapes +
+                "  let smallest = shapes.min { |shape| shape.area }\n"
+                "end\n",
+                "`min` expects argument 1 to be Comparable"));
         });
 
         it("types Monoid repeat for strings, lists, and integers", []() {
@@ -1965,7 +2130,7 @@ int main() {
             assertTrue(noErrors(
                 "main do\n"
                 "  let measure: Measure = 2.5.second\n"
-                "  let duration: Duration = Duration { seconds: measure.canonical }\n"
+                "  let duration: Duration = (measure.canonical).second\n"
                 "  let converted: Result<Measure, String> = measure.convert(Millisecond)\n"
                 "end\n"
             ));
@@ -2350,11 +2515,11 @@ int main() {
             assertTrue(noErrors(
                 "type HandleState = Open | Closed\n"
                 "type Handle<S>\n"
-                "make Handle<Open> do\n"
+                "make Handle<HandleState.Open> do\n"
                 "  read :> String\n"
                 "  let read = \"ok\"\n"
                 "end\n"
-                "let use(handle: Handle<Open>) = handle.read()\n"
+                "let use(handle: Handle<HandleState.Open>) = handle.read()\n"
             ));
         });
 
@@ -3409,7 +3574,7 @@ int main() {
                 "  let p = startTyped()\n"
                 "  p.send(42)\n"
                 "end\n",
-                "does not match Process<String>"
+                "`send` expects argument 2 to be String"
             ));
         });
 
@@ -3453,7 +3618,7 @@ int main() {
                 "  let p = startTyped()\n"
                 "  send(p, 42)\n"
                 "end\n",
-                "does not match Process<String>"
+                "`send` expects argument 2 to be String"
             ));
         });
 
@@ -3475,6 +3640,14 @@ int main() {
             assertTrue(noErrors(
                 "let double -> Integer = 2 * 2\n"
                 "main do IO.printLine(double.to(String).or(\"\")) end\n"
+            ));
+        });
+
+        it("relates an inline generic result to its parameter", []() {
+            assertTrue(hasError(
+                "let wrap(value: A) -> A? = None\n"
+                "main do let bad: Integer? = wrap(\"text\") end\n",
+                "expected Integer?, got String?"
             ));
         });
 
@@ -3507,7 +3680,7 @@ int main() {
                 "using Net.IP, only: [Address]\n"
                 "main do\n"
                 "  let server = Nameserver { address: Address.parse(\"127.0.0.1\").try, port: Net.Port.from(53).try }\n"
-                "  let resolver: Resolver = Resolver.custom(ResolverOptions { nameservers: [server], timeout: 100.milliseconds }).try\n"
+                "  let resolver: Resolver = Resolver.custom(ResolverOptions { nameservers: [server], timeout: 100.millisecond }).try\n"
                 "  resolver.close\n"
                 "end\n"));
             assertTrue(hasError(

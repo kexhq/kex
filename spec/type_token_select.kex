@@ -1,6 +1,6 @@
-# A record or sum type's name passed as a value is its token: a generic
-# `select(as: T)` binds `T` from it, so the result is typed, and `Type.of`
-# reads the type back off it at run time (kexhq/kex#509). This is the shape
+# A record or sum type's name passed as a value is its `Type` record: a
+# generic `select(as: Type<T>)` binds `T` from it, so the result is typed, and
+# the record describes the type at run time (kexhq/kex#509). This is the shape
 # a database library's `select(as: User)` takes, decoding rows of text with
 # `Type.Field.parse` and `Type.construct` (kexhq/kex#487).
 
@@ -42,9 +42,9 @@ module Db do
     end
   end
 
-  # `as:` is the record type itself: `select(as: User)`.
-  let select(as: T) -> Result<[T], String> do
-    let model = Type.of(as)
+  # `as:` is the record type as a value, a `Type<User>`: `select(as: User)`.
+  let select(as: Type<T>) -> Result<[T], String> do
+    let model = as
     let decodedRows : [T] = rows().map { |row| decoded(model, row).try }
     return Ok(decodedRows)
   end

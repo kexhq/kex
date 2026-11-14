@@ -93,7 +93,7 @@ end
 record ServerOptions do
   maximumHandlers : Integer = 1024
   backlog : Integer = 128
-  gracefulShutdown : Duration = Duration.seconds(10)
+  gracefulShutdown : Duration = 10.second
   # The largest request body a route reads, in bytes, unless the route sets
   # its own. A request declaring a longer +Content-Length+ is answered
   # +413 Payload Too Large+ before any of its body is read.
@@ -106,12 +106,12 @@ end
 # +Timeout+.
 #
 # @example A link preview: a short deadline and a small answer
-#   RequestOptions { timeout: Duration.seconds(2), maximumBodyBytes: 262144 }
+#   RequestOptions { timeout: 2.second, maximumBodyBytes: 262144 }
 record RequestOptions do
   # How long connecting to the server may take.
-  connectTimeout : Duration = Duration.seconds(10)
+  connectTimeout : Duration = 10.second
   # The whole exchange, from connecting to the last byte of the body.
-  timeout : Duration = Duration.seconds(30)
+  timeout : Duration = 30.second
   # The largest response body accepted, in bytes.
   maximumBodyBytes : Integer = 16777216
   # The largest response header block accepted, in bytes. +HTTP.request+
@@ -387,7 +387,7 @@ make Client do
   # Sends a buffered request with its own limits instead of the client's.
   #
   # @example A link preview that gives up after two seconds
-  #   let quick = RequestOptions { timeout: Duration.seconds(2), maximumBodyBytes: 262144 }
+  #   let quick = RequestOptions { timeout: 2.second, maximumBodyBytes: 262144 }
   #   client.request("GET", url, Headers.empty, Binary.empty, quick)
   foul request(method: String, url: String, headers: Headers, body: Binary, options: RequestOptions) -> Result<Response<Binary>, NetError> = Kex.Intrinsic.NetHTTPClient.request(this, method, url, headers, body, options)
   # Sends a buffered GET request.
@@ -508,7 +508,7 @@ module HTTP do
   # to bound body reads for every status.
   #
   # @example
-  #   HTTP.request("GET", url, Headers.empty, Binary.empty, RequestOptions { timeout: Duration.seconds(2) })
+  #   HTTP.request("GET", url, Headers.empty, Binary.empty, RequestOptions { timeout: 2.second })
   request : String -> String -> Headers -> Binary -> RequestOptions -> Result<Response<Binary>, NetError>
   let request(method, url, headers, body, options) = Kex.Intrinsic.NetHTTP.request(method, url, headers, body, options)
   # Sends one stateless buffered GET.

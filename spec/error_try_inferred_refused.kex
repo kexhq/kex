@@ -1,0 +1,28 @@
+# kex: check-only
+# A function that declares no result takes a failing `.try` into the result
+# it infers, unless no one result can say what happened. `mixed` fails with
+# an Optional's `None` in one place and a Result's `Error` in another, so it
+# has no single result to infer. `early` and `matched` leave with `return`,
+# and each of those exits would need its own wrapping. Each has to declare
+# its result.
+
+let mixed(names: [String]) do
+  let name = names.first.try
+  Integer.parse(name).try
+end
+
+let early(text: String) do
+  return 0 if text.empty?
+  Integer.parse(text).try
+end
+
+let matched(given: Integer?) do
+  match given do
+    Just(n) => return n
+    None => return Integer.parse("4").try
+  end
+end
+
+main do
+  IO.printLine("checked")
+end

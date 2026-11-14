@@ -13,6 +13,19 @@ cmake --build build
 
 Run: `./build/kex <file.kex>`
 
+That build sets no `CMAKE_BUILD_TYPE`, so it is unoptimized: quick to rebuild
+after an edit, slow to run (the tree-walk interpreter about 10x slower, the
+checker about 5x). For running the suites or measuring anything, build an
+optimized copy beside it and point `make` at it:
+
+```
+cmake -B cmake-build-release -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build cmake-build-release
+make BUILD_DIR=cmake-build-release test-all
+```
+
+CI, the Docker images and releases build with `-DCMAKE_BUILD_TYPE=Release`.
+
 ### Emscripten/wasm build
 
 Powers `web/index.html`'s in-browser REPL. Requires `emsdk` active, pinned to
@@ -36,7 +49,8 @@ make test-wasm    # + runs the interpreter test suite via Node
   - `src/lexer/` — tokenizer (token.hxx/cxx, lexer.hxx/cxx)
   - `src/parser/` — recursive descent parser (parser.hxx/cxx)
   - `src/ast/` — AST node types (ast.hxx)
-  - `src/semantic/` — semantic analysis: SemanticDB, collect/resolve passes, typechecker, traits
+  - `src/semantic/` — semantic analysis: analyzer, typechecker, traits, module rules, the name index tooling reads
+  - `src/lsp/` — language server; `workspace` holds its documents
   - `src/interpreter/` — tree-walk interpreter, fiber/scheduler process runtime, stdlib (stdlib/)
   - `src/ir/` — lowering IR + IR→Core Erlang emitter (ir.hxx, lower, emit_core)
   - `src/common/` — shared helpers (color, completion, prelude_loader)
@@ -64,6 +78,6 @@ Use the `STYLE.md` file for concrete rules and examples for Kex code (`.kex` fil
 
 Lexer, parser, AST, semantic analysis, tree-walk interpreter, the Elixir-style process runtime (fibers/scheduler), and BEAM codegen (lowering IR → Core Erlang) are all implemented. Type checker runs by default (`--no-check` to skip). Traits, currying (`~`), arbitrary-precision integers (GMP), and a rich stdlib are implemented.
 
-Compile-time metaprogramming (`compiled do ... end`) is implemented: constants inlined at their use sites, `let %name` / `type %name` / `make %name` declaration generation, and builder-chain collapse that evaluates a fully-determined expression during compilation and reifies the result — carrying free runtime variables through as placeholders. `--collapse-report` says what collapsed and why the rest did not. See `docs/compiled-status.md`.
+Compile-time metaprogramming (`compiled do ... end`) is implemented: constants inlined at their use sites, `let %name` / `type %name` / `make %name` declaration generation, and builder-chain collapse that evaluates a fully-determined expression during compilation and reifies the result — carrying free runtime variables through as placeholders. `--collapse-report` says what collapsed and why the rest did not. See `docs/compiled-eval.md`.
 
 Next: a full module system and packaging. (The `.kexo` binary IR/distribution format is dropped.)

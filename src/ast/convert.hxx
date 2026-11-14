@@ -2,6 +2,7 @@
 
 #include "ast.hxx"
 #include "../lexer/lexer.hxx"
+#include <gmpxx.h>
 #include <string>
 #include <string_view>
 #include <sstream>
@@ -10,6 +11,12 @@
 #include <vector>
 
 namespace kex::ast {
+
+// The documentation comment written above `line`, or "" (extractDocComments).
+inline auto docAt(const std::unordered_map<int, std::string>& docs, int line) -> std::string {
+    const auto found = docs.find(line);
+    return found == docs.end() ? std::string{} : found->second;
+}
 
 inline auto extractDocComments(const std::string& source)
     -> std::unordered_map<int, std::string> {
@@ -198,7 +205,7 @@ public:
 
         std::vector<Value> parents;
         for (const auto& parent : def.parents)
-            parents.push_back(namedType(joinName(parent), {}));
+            parents.push_back(namedType(parent.dotted(), {}));
 
         Value variants = m_builder.none();
         if (def.variants) {
@@ -329,7 +336,7 @@ public:
     auto usingBlock(const UsingBlock& block, const std::string& filename)
         -> Value {
         auto info = m_builder.record("UsingInfo", {
-            {"moduleName", m_builder.string(joinName(block.module))},
+            {"moduleName", m_builder.string(block.module.dotted())},
             {"alias", block.alias
                 ? m_builder.just(m_builder.string(*block.alias))
                 : m_builder.none()},
@@ -344,7 +351,7 @@ public:
     auto exportDef(const ExportDecl& decl, const std::string& filename)
         -> Value {
         auto info = m_builder.record("ExportInfo", {
-            {"moduleName", m_builder.string(joinName(decl.module))},
+            {"moduleName", m_builder.string(decl.module.dotted())},
             {"alias", decl.alias
                 ? m_builder.just(m_builder.string(*decl.alias))
                 : m_builder.none()},
@@ -547,12 +554,12 @@ public:
         return std::visit([&](const auto& node) -> Value {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, TypeName>) {
-                return namedType(joinName(node), {});
+                return namedType(node.dotted(), {});
             } else if constexpr (std::is_same_v<T, GenericType>) {
                 std::vector<Value> args;
                 for (const auto& arg : node.args)
                     args.push_back(typeRef(*arg));
-                return namedType(joinName(node.name), std::move(args));
+                return namedType(node.name.dotted(), std::move(args));
             } else if constexpr (std::is_same_v<T, FunctionType>) {
                 return variant("FunctionType", {m_builder.list({typeRef(*node.param)}),
                                                 typeRef(*node.result)});
@@ -785,7 +792,7 @@ public:
                 });
             } else if constexpr (std::is_same_v<T, ShorthandLambda>) {
                 return expressionVariant("ShorthandLambda", {
-                    m_builder.string(node.name), expressionList(node.args),
+                    m_builder.string(node.name), expressionList(shorthandCall(node).args),
                     m_builder.boolean(
                         node.kind == ShorthandLambda::Kind::MethodWithArgs),
                 });
@@ -805,7 +812,7 @@ public:
                 });
             } else if constexpr (std::is_same_v<T, WithExpr>) {
                 return expressionVariant("With", {
-                    m_builder.string(joinName(node.capability)),
+                    m_builder.string(node.capability.dotted()),
                     expressionPtr(node.value),
                     expressionList(node.body),
                 });
@@ -817,7 +824,7 @@ public:
                 for (const auto& name : node.exceptNames)
                     exceptNames.push_back(m_builder.string(name));
                 return expressionVariant("Using", {
-                    m_builder.string(joinName(node.module)),
+                    m_builder.string(node.module.dotted()),
                     node.alias
                         ? m_builder.just(m_builder.string(*node.alias))
                         : m_builder.none(),
@@ -977,11 +984,6 @@ private:
                     appendMakeItem(body, nested, filename, docs);
             }
         }, item);
-    }
-
-    static auto docAt(const Docs& docs, int line) -> std::string {
-        auto it = docs.find(line);
-        return it == docs.end() ? "" : it->second;
     }
 
     auto typeVariant(const TypeExpr& expr) -> Value {
@@ -1188,16 +1190,6 @@ private:
         for (const auto& value : strings)
             values.push_back(m_builder.string(value));
         return m_builder.list(std::move(values));
-    }
-
-    static auto joinName(const TypeName& name) -> std::string {
-        std::string result;
-        for (const auto& part : name.parts) {
-            if (!result.empty())
-                result += ".";
-            result += part;
-        }
-        return result;
     }
 
     Builder& m_builder;

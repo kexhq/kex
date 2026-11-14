@@ -21,7 +21,7 @@ open(_) -> error_value('Parse', <<"invalid HTTP client options">>).
 
 %% A `Net.HTTP.RequestOptions` record as limits, or `error` for a value no
 %% request could keep to.
-request_limits({'Net.HTTP.RequestOptions', {'Duration', Connect}, {'Duration', Timeout},
+request_limits({'Net.HTTP.RequestOptions', {'Measure', Connect, _, _}, {'Measure', Timeout, _, _},
                 Body, Header})
   when is_number(Connect), Connect > 0, is_number(Timeout), Timeout > 0,
        is_integer(Body), Body >= 0, is_integer(Header), Header > 0 ->

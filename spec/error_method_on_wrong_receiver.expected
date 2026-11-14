@@ -4,7 +4,7 @@ iso : Date -> String
 
 iso : DateTime -> String
 
-iso : Duration -> String
+iso : Measure<Quantity.Time> -> String
 
 iso : Period -> String
 

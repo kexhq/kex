@@ -34,12 +34,6 @@
 #
 # Backed by Kex.Intrinsic.Process and the BEAM runtime.
 
-# An opaque BEAM process identifier.
-#
-# Obtained from +Process.self+ or +Process.whereIs+. Send it messages, link to
-# it, monitor it, or ask whether it is still alive.
-type Pid
-
 # A handle on work running in another process, with a result you can await.
 #
 # Created by +Task.start+.
@@ -48,8 +42,10 @@ type Task<A>
 # A monitor reference, returned by +monitor+ and passed back to +demonitor+.
 type Reference
 
-# A typed process handle: like a +Pid+, but it remembers what kind of message
-# the process accepts.
+# A process: what +spawn+ makes, +Process.self+ is, and +Process.whereIs+
+# finds. +A+ is the kind of message it accepts, so sending it anything else is
+# refused. A process obtained without a declared message type takes its +A+
+# from where it is used (`Ping(Process.self)` where a +Process<String>+ goes).
 type Process<A>
 
 # A process termination reason. This remains open because the BEAM permits any
@@ -232,41 +228,30 @@ module Process do
     Error(_) => 127
   end
 
-  # Returns the calling process's own +Pid+.
+  # Returns the calling process.
   #
-  # @return [Pid] this process's identifier
+  # @return [Process<A>] this process
   #
   # @example Telling another process where to answer
   #   worker.send((Process.self, :ping))
-  self : Pid
+  self : Process<A>
   foul self = Kex.Intrinsic.Process.self
 
   # Sends an exit signal carrying +reason+ to +pid+.
   #
   # +:normal+ is the ordinary shutdown reason; +:kill+ cannot be trapped.
   #
-  # @param pid [Pid] the process to signal
+  # @param pid [Process<A>] the process to signal
   # @param reason [X] the exit reason
   # @return [Void]
   #
   # @example
   #   Process.exit(worker, :shutdown)
-  exit : Pid -> X -> Void
+  exit : Process<A> -> X -> Void
   foul exit(pid, reason) = Kex.Intrinsic.Process.exit(pid, reason)
 
-  # Registers +pid+ under the atom +name+, so it can be found by name rather
-  # than by passing the +Pid+ around.
-  #
-  # @param pid [Pid] the process to register
-  # @param name [Atom] the name to register it under
-  # @return [Void]
-  #
-  # @example
-  #   Process.register(Process.self, :main)
-  register : Pid -> Atom -> Void
-  foul register(pid, name) = Kex.Intrinsic.Process.register(pid, name)
-
-  # Registers the typed process +process+ under the atom +name+.
+  # Registers +process+ under the atom +name+, so it can be found by name
+  # rather than by passing it around.
   #
   # @param process [Process<X>] the process to register
   # @param name [Atom] the name to register it under
@@ -275,13 +260,14 @@ module Process do
   # @example
   #   let logger = spawn do logLoop() end
   #   Process.register(logger, :logger)
+  #   Process.register(Process.self, :main)
   register : Process<X> -> Atom -> Void
   foul register(process, name) = Kex.Intrinsic.Process.register(process, name)
 
-  # Returns the +Pid+ registered under +name+, or +None+ when nothing is.
+  # Returns the process registered under +name+, or +None+ when nothing is.
   #
   # @param name [Atom] the registered name
-  # @return [Pid?] the process, or +None+
+  # @return [Process<A>?] the process, or +None+
   #
   # @example
   #   Process.whereIs(:main)        # => Just(pid)
@@ -289,7 +275,7 @@ module Process do
   #
   # @example Sending to a named process if it is there
   #   Process.whereIs(:logger).map { |pid| pid.send(message) }
-  whereIs : Atom -> Pid?
+  whereIs : Atom -> Process<A>?
   foul whereIs(name) = Kex.Intrinsic.Process.whereIs(name)
 
   # A named, typed slot of state that every process can read without asking
@@ -367,8 +353,11 @@ record ProcessResult do
   stderr : String
 end
 
-make Pid do
-  # Sends +msg+ to the process, unchanged, as a raw BEAM term.
+# A spawned Process<X> is a typed process handle backed by the same runtime pid.
+# It therefore supports the ordinary pid lifecycle operations without erasing
+# its message type.
+make Process<X> do
+  # Sends +msg+ to the process. Only a message of the kind it accepts goes.
   #
   # Sending never blocks and never fails, even when the process is gone:
   # that is the BEAM's model, not an oversight. Monitor the process when
@@ -383,14 +372,14 @@ make Pid do
   send :> X -> Void
   let send(msg) = Kex.Intrinsic.Process.send(this, msg)
 
-  # Sends the conventional Erlang sender-bearing pair +{Process.self, msg}+,
-  # so the receiver knows where to answer.
+  # Sends the sender-bearing pair +(Process.self, msg)+, so the receiver
+  # knows where to answer.
   #
   # @param msg [X] the message to send
   # @return [Void]
   #
   # @example
-  #   server.sendFrom(:status)   # the server receives (senderPid, :status)
+  #   server.sendFrom(:status)   # the server receives (sender, :status)
   sendFrom :> X -> Void
   let sendFrom(msg) = Kex.Intrinsic.Process.sendFrom(this, msg)
 
@@ -445,51 +434,6 @@ make Pid do
   let alive? = Kex.Intrinsic.Process.alive?(this)
 end
 
-# A spawned Process<X> is a typed process handle backed by the same runtime pid.
-# It therefore supports the ordinary pid lifecycle operations without erasing
-# its message type.
-make Process<X> do
-  # Sends +msg+ to the process. Unlike +Pid.send+, the message type is
-  # checked.
-  #
-  # @param msg [X] the message to send
-  # @return [Void]
-  send :> X -> Void
-  let send(msg) = Kex.Intrinsic.Process.send(this, msg)
-
-  # Sends the sender-bearing pair +{Process.self, msg}+, with the message type
-  # checked.
-  #
-  # @param msg [X] the message to send
-  # @return [Void]
-  sendFrom :> X -> Void
-  let sendFrom(msg) = Kex.Intrinsic.Process.sendFrom(this, msg)
-
-  # Links the calling process to this one. See +Pid.link+.
-  #
-  # @return [Void]
-  link :> Void
-  let link = Kex.Intrinsic.Process.link(this)
-
-  # Removes the link between the calling process and this one.
-  #
-  # @return [Void]
-  unlink :> Void
-  let unlink = Kex.Intrinsic.Process.unlink(this)
-
-  # Starts monitoring this process. See +Pid.monitor+.
-  #
-  # @return [Reference] the monitor reference
-  monitor :> Reference
-  let monitor = Kex.Intrinsic.Process.monitor(this)
-
-  # Returns +true+ when the process is still running.
-  #
-  # @return [Bool] +true+ when the process is alive
-  alive? :> Bool
-  let alive? = Kex.Intrinsic.Process.alive?(this)
-end
-
 make Server<X> do
   # Returns the same server with a different default call timeout, in
   # milliseconds.
@@ -505,7 +449,7 @@ make Server<X> do
   within :> Integer -> Server<X>
   let within(timeout) = New { timeout: timeout }
 
-  # Links the calling process to the server. See +Pid.link+.
+  # Links the calling process to the server. See +Process.link+.
   #
   # @return [Void]
   #
@@ -520,7 +464,7 @@ make Server<X> do
   unlink :> Void
   let unlink = @process.unlink
 
-  # Starts monitoring the server. See +Pid.monitor+.
+  # Starts monitoring the server. See +Process.monitor+.
   #
   # @return [Reference] the monitor reference
   monitor :> Reference
@@ -552,10 +496,10 @@ make From<X> do
   reply :> X -> Void
   foul reply(value) = Kex.Intrinsic.Process.replyFrom(this, value)
 
-  # Returns the waiting caller's +Pid+.
+  # Returns the waiting caller.
   #
-  # @return [Pid] the caller
-  pid :> Pid
+  # @return [Process<A>] the caller
+  pid :> Process<A>
   let pid = Kex.Intrinsic.Process.fromPid(this)
 end
 
@@ -642,8 +586,8 @@ module Supervisor do
   # The interpreter supports +:only_crashed+ without nesting only.
   #
   # @param restart [Atom] the restart strategy
-  # @param children [Block<[(Atom, Block<Pid>)]>] the block listing the children
-  # @return [Result<Pid, Any>] the supervisor, or why it failed to start
+  # @param children [Block<[(Atom, Block<Process<A>>)]>] the block listing the children
+  # @return [Result<Process<A>, Any>] the supervisor, or why it failed to start
   #
   # @example
   #   using Supervisor
@@ -654,29 +598,29 @@ module Supervisor do
   #       worker { startListener() }
   #     end
   #   end
-  start : Atom -> Block<[(Atom, Block<Pid>)]> -> Result<Pid, Any>
+  start : Atom -> Block<[(Atom, Block<Process<A>>)]> -> Result<Process<A>, Any>
   foul start(restart, children) = Kex.Intrinsic.Supervisor.start(restart, children)
 
   # Starts a supervisor over a list of children already built.
   #
   # @param restart [Atom] the restart strategy
-  # @param children [[(Atom, Block<Pid>)]] the children
-  # @return [Result<Pid, Any>] the supervisor, or why it failed to start
+  # @param children [[(Atom, Block<Process<A>>)]] the children
+  # @return [Result<Process<A>, Any>] the supervisor, or why it failed to start
   #
   # @example
   #   Supervisor.start(restart: :all, [Supervisor.worker { startPool() }])
-  start : Atom -> [(Atom, Block<Pid>)] -> Result<Pid, Any>
+  start : Atom -> [(Atom, Block<Process<A>>)] -> Result<Process<A>, Any>
   foul start(restart, children) = Kex.Intrinsic.Supervisor.start(restart, children)
 
   # A child that runs the block to start, and again to restart. The block
-  # must spawn the worker and return its +Pid+.
+  # must spawn the worker and return it.
   #
-  # @param start [Block<Pid>] the block that spawns the worker
-  # @return [(Atom, Block<Pid>)] the worker spec
+  # @param start [Block<Process<A>>] the block that spawns the worker
+  # @return [(Atom, Block<Process<A>>)] the worker spec
   #
   # @example
   #   Supervisor.worker { spawn do cacheLoop([]) end }
-  worker : Block<Pid> -> (Atom, Block<Pid>)
+  worker : Block<Process<A>> -> (Atom, Block<Process<A>>)
   let worker(start) = Kex.Intrinsic.Supervisor.worker(start)
 
   # A child that is itself a supervisor over the children its block lists,
@@ -685,26 +629,26 @@ module Supervisor do
   # +restart:+ strategies as +Supervisor.start+. BEAM backend only.
   #
   # @param restart [Atom] +:only_crashed+, +:all+ or +:crashed_and_newer+
-  # @param children [Block<[(Atom, Block<Pid>)]>] the block listing its children
-  # @return [(Atom, Block<Pid>)] the supervisor spec
+  # @param children [Block<[(Atom, Block<Process<A>>)]>] the block listing its children
+  # @return [(Atom, Block<Process<A>>)] the supervisor spec
   #
   # @example
   #   Supervisor.supervisor(restart: :all) do
   #     Supervisor.worker { startPool() }
   #     Supervisor.worker { startListener() }
   #   end
-  supervisor : Atom -> Block<[(Atom, Block<Pid>)]> -> (Atom, Block<Pid>)
+  supervisor : Atom -> Block<[(Atom, Block<Process<A>>)]> -> (Atom, Block<Process<A>>)
   let supervisor(restart, children) = Kex.Intrinsic.Supervisor.nested(restart, children)
 
   # A nested supervisor over a list of children already built.
   #
   # @param restart [Atom] the restart strategy
-  # @param children [[(Atom, Block<Pid>)]] the children
-  # @return [(Atom, Block<Pid>)] the supervisor spec
+  # @param children [[(Atom, Block<Process<A>>)]] the children
+  # @return [(Atom, Block<Process<A>>)] the supervisor spec
   #
   # @example
   #   Supervisor.supervisor(restart: :all, [Supervisor.worker { startPool() }])
-  supervisor : Atom -> [(Atom, Block<Pid>)] -> (Atom, Block<Pid>)
+  supervisor : Atom -> [(Atom, Block<Process<A>>)] -> (Atom, Block<Process<A>>)
   let supervisor(restart, children) = Kex.Intrinsic.Supervisor.nested(restart, children)
 end
 

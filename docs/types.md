@@ -279,7 +279,7 @@ through `showValue` instead and need no unwrapping: `"took ${elapsed}"`.
 
 `Duration` is a separate elapsed-span concept, used by `Date`, `Time`, and
 `DateTime` (below); a value such as `5.second` is a `Measure`, not a `Duration`.
-The plural spellings build durations: `5.seconds`, `90.minutes`, `2.days`.
+The plural spellings build durations: `5.second`, `90.minute`, `2.day`.
 
 ## Types as values
 
@@ -360,7 +360,7 @@ time and no zone, `Time` a time of day with no date and no zone, and
 let due = Date.of(2026, 7, 30).try   # Date
 due.iso                                  # "2026-07-30"
 due.weekday.name                         # "Thursday"
-(due + 10.days).iso                    # "2026-08-09"
+(due + 10.day).iso                    # "2026-08-09"
 due.addMonths(1).iso                     # "2026-08-30"; clamps when needed
 
 let moment = DateTime.parse("2026-07-30T14:03:00+02:00").try

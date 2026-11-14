@@ -30,7 +30,7 @@ capability TCP do
   # disables Nagle's algorithm, which is usually right for request/response
   # traffic; bulk-transfer protocols may prefer fewer, larger packets.
   record ConnectOptions do
-    connectTimeout : Duration = 10.seconds
+    connectTimeout : Duration = 10.second
     noDelay? : Bool = true
     keepAlive? : Bool = true
     sendBuffer : Integer = 0
@@ -188,7 +188,7 @@ capability TCP do
   #
   # @example Accepting one connection with no +close+ to forget
   #   TCP.bind("127.0.0.1:9000") do |listener|
-  #     listener.accept(5.seconds).try
+  #     listener.accept(5.second).try
   #   end
   bind : String -> (TCPListener -> A) -> Result<A, NetError>
   foul bind(address, block) do
@@ -336,7 +336,7 @@ capability TCP do
   # the returned connection.
   #
   # @example Accepting one client in a small test server
-  #   let client = listener.accept(5.seconds).try
+  #   let client = listener.accept(5.second).try
   foul accept(listener: TCPListener) -> Result<TCPConnection, NetError> = Kex.Intrinsic.NetTCP.accept(listener)
   foul accept(listener: TCPListener, timeout: Duration) -> Result<TCPConnection, NetError> = Kex.Intrinsic.NetTCP.acceptWithin(listener, timeout)
   # @return [Bool] whether the connected stream owner has stopped
@@ -387,7 +387,7 @@ capability UDP do
     broadcast? : Bool = false
     multicastTtl : Integer = 1
     multicastLoopback? : Bool = true
-    receiveTimeout : Duration = 30.seconds
+    receiveTimeout : Duration = 30.second
   end
   module Endpoint do
     # Pairs a hostname or numeric address with a UDP port.
@@ -531,8 +531,8 @@ capability Unix do
 
   # Connection and read deadlines for a local IPC client.
   record ConnectOptions do
-    connectTimeout : Duration = 10.seconds
-    receiveTimeout : Duration = 30.seconds
+    connectTimeout : Duration = 10.second
+    receiveTimeout : Duration = 30.second
   end
 
   # Listener queue, stale-socket policy, and per-operation deadlines.
@@ -542,8 +542,8 @@ capability Unix do
   record ListenOptions do
     backlog : Integer = 128
     removeStale? : Bool = false
-    acceptTimeout : Duration = 30.seconds
-    receiveTimeout : Duration = 30.seconds
+    acceptTimeout : Duration = 30.second
+    receiveTimeout : Duration = 30.second
   end
   module Address do
     # Validates a nonempty absolute Unix-domain socket path.

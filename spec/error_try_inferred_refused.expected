@@ -1,0 +1,3 @@
+spec/error_try_inferred_refused.kex:10:29: error: `.try` can fail, and `mixed` declares no result and mixes an Optional's `.try` with a Result's: declare it, as `Integer?` or `Integer or! E`, or handle the failure with `trying` or a `rescue`
+spec/error_try_inferred_refused.kex:16:26: error: `.try` can fail, and `early` declares no result and `return`s: declare it, as `Integer?` or `Integer or! E`, or handle the failure with `trying` or a `rescue`
+spec/error_try_inferred_refused.kex:22:42: error: `.try` can fail, and `matched` declares no result and `return`s: declare it, as `T?` or `T or! E`, or handle the failure with `trying` or a `rescue`

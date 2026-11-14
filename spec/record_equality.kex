@@ -18,5 +18,5 @@ main do
   IO.printLine(Ok(1) == Error(1))
   IO.printLine({ "a": 1, "b": 2 } == { "b": 2, "a": 1 })
   IO.printLine({ "a": 1 } == { "a": 2 })
-  IO.printLine([Just(1), Just(2)] == [Just(1), Just(2)])
+  IO.printLine([Just("a"), Just("b")] == [Just("a"), Just("b")])
 end

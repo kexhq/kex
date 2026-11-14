@@ -32,8 +32,8 @@ main do
   IO.printLine("${named("ok")}")
   IO.printLine("${named("no")}")
 
-  # A block is a function too, so `map` collects the Error as an ordinary
-  # element — a list of results, not a crash and not a bare error.
+  # A block is a function too, so `map` collects each block's outcome: `Ok`
+  # for a success, the Error as it is — not a crash and not a bare error.
   IO.printLine("${["ok", "no"].map do |v| mk(v).try end}")
 
   # `each` discards the block's result, so the failure is dropped with it and

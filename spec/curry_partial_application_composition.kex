@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 #
 # `~name(a)` on a 3+-arity function returns a value still needing more
 # arguments; calling that value across SEPARATE, later calls (not all the

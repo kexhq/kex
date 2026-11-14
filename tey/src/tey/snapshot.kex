@@ -168,13 +168,13 @@ private do
   let matches(_, []) -> Bool = false
   let matches([], _) -> Bool = false
   let matches(path: [String], pattern: [String]) -> Bool do
-    let wanted = pattern.first.try
+    let Just(wanted) = pattern.first
     if wanted == "**"
       return true if Tey.Snapshot.matches(path, pattern.drop(1))
       return Tey.Snapshot.matches(path.drop(1), pattern)
     end
-    return false if !Tey.Snapshot.segmentMatches(path.first.try.chars,
-                                                  wanted.chars)
+    let Just(segment) = path.first
+    return false if !Tey.Snapshot.segmentMatches(segment.chars, wanted.chars)
     return Tey.Snapshot.matches(path.drop(1), pattern.drop(1))
   end
 
@@ -184,11 +184,13 @@ private do
     return pattern.all? { |character| character == '*' }
   end
   let segmentMatches(text: [Char], pattern: [Char]) -> Bool do
-    if pattern.first.try == '*'
+    let Just(expected) = pattern.first
+    if expected == '*'
       return true if Tey.Snapshot.segmentMatches(text, pattern.drop(1))
       return Tey.Snapshot.segmentMatches(text.drop(1), pattern)
     end
-    return false if text.first.try != pattern.first.try
+    let Just(character) = text.first
+    return false if character != expected
     return Tey.Snapshot.segmentMatches(text.drop(1), pattern.drop(1))
   end
 

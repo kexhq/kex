@@ -1,5 +1,6 @@
 #include <algorithm>
 #include "../evaluator.hxx"
+#include "../../common/string_utils.hxx"
 #include "../../common/utf8.hxx"
 #include "lazy.hxx"
 #include <filesystem>
@@ -28,14 +29,10 @@ static auto modeFlags(const std::string& name)
     return std::nullopt;
 }
 
-// Helper: split a string into lines (no trailing newline per line)
-static auto splitLines(const std::string& content) -> std::vector<ValuePtr> {
+// A file's lines as Kex Strings (kex::splitLines).
+static auto lineValues(const std::string& content) -> std::vector<ValuePtr> {
     std::vector<ValuePtr> result;
-    std::istringstream ss(content);
-    std::string line;
-    while (std::getline(ss, line)) {
-        result.push_back(Value::string(line));
-    }
+    for (auto& line : kex::splitLines(content)) result.push_back(Value::string(std::move(line)));
     return result;
 }
 
@@ -152,7 +149,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     };
 
     // FS.File.open(path, mode) -> Result<FileHandle<R, W>, FileError>
-    reg("File::open", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.open", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() != 2) return Value::none();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
@@ -214,9 +211,9 @@ auto Evaluator::registerFileBuiltins() -> void {
     };
 
     // handle.getLine -> String?
-    reg("FileHandle::getLine", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("FileHandle.getLine", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
-        if (auto forwarded = standardRead(args, "IO::getLine"))
+        if (auto forwarded = standardRead(args, "IO.getLine"))
             return optionalValueReadResult(*forwarded);
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         if (!h) return Value::none();
@@ -247,9 +244,9 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // handle.getChar -> Result<String?, ReadError> (single character)
-    reg("FileHandle::get", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("FileHandle.get", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
-        if (auto forwarded = standardRead(args, "IO::get"))
+        if (auto forwarded = standardRead(args, "IO.get"))
             return optionalValueReadResult(*forwarded);
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         if (!h) return Value::none();
@@ -289,9 +286,9 @@ auto Evaluator::registerFileBuiltins() -> void {
     // handle.printLine(msg) -> Void. The Bool these three used to answer was
     // never an error channel — nothing checked it — so kexhq/kex#139 dropped
     // it: the call says `ok`, and failure belongs to the device.
-    reg("FileHandle::printLine", [this, standardWrite](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("FileHandle.printLine", [this, standardWrite](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::unit();
-        if (auto forwarded = standardWrite(args, "IO::printLine", "IO::printError")) return *forwarded;
+        if (auto forwarded = standardWrite(args, "IO.printLine", "IO.printError")) return *forwarded;
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         if (!h) return Value::unit();
         std::string content = args[1]->toString();
@@ -308,9 +305,9 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // handle.print(msg) -> Void
-    reg("FileHandle::print", [this, standardWrite](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("FileHandle.print", [this, standardWrite](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::unit();
-        if (auto forwarded = standardWrite(args, "IO::print", "IO::printErrorRaw")) return *forwarded;
+        if (auto forwarded = standardWrite(args, "IO.print", "IO.printErrorRaw")) return *forwarded;
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         if (!h) return Value::unit();
         std::string content = args[1]->toString();
@@ -329,7 +326,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     // --- Binary/raw I/O ---
 
     // handle.read -> String? (remaining content)
-    reg("FileHandle::read", [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("FileHandle.read", [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         // `read` is "the rest of it", so on stdin it drains to EOF rather
         // than forwarding to a line-at-a-time IO intrinsic.
@@ -369,7 +366,7 @@ auto Evaluator::registerFileBuiltins() -> void {
         return textReadResult(buf.str());
     });
 
-    reg("FileHandle::readBytes", [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("FileHandle.readBytes", [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return readError("ReadFailed");
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         if (!h) return readError("ReadFailed");
@@ -394,7 +391,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     // handle.put(bytes) -> Result<Void, WriteError>. The bytes verbatim; a
     // String is its UTF-8 bytes. The write that reports failure: a closed
     // handle, a device error, or standard input.
-    reg("FileHandle::put", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("FileHandle.put", [this](std::vector<ValuePtr> args) -> ValuePtr {
         auto failed = [] { return Value::error(Value::variant("WriteFailed", "WriteError")); };
         if (args.size() < 2) return failed();
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
@@ -426,7 +423,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     // handle.getChunk(limit) -> Result<Binary?, ReadError>: up to +limit+
     // bytes, None at the end. Standard input answers a line at a time,
     // newline included, so an interactive read never waits for a full buffer.
-    reg("FileHandle::getChunk", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("FileHandle.getChunk", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return readError("ReadFailed");
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         auto* limitValue = std::get_if<IntValue>(&args[1]->data);
@@ -436,7 +433,7 @@ auto Evaluator::registerFileBuiltins() -> void {
             return Value::ok(Value::just(Value::binary({bytes.begin(), bytes.end()})));
         };
         if (h->path == kStdinPath) {
-            auto line = standardRead(args, "IO::getLine");
+            auto line = standardRead(args, "IO.getLine");
             if (!line || (*line)->isNone()) return Value::ok(Value::none());
             auto* variant = std::get_if<VariantValue>(&(*line)->data);
             if (!variant || variant->args.empty()) return readError("ReadFailed");
@@ -469,7 +466,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     // --- Lifecycle ---
 
     // handle.atEnd? -> Bool
-    reg("FileHandle::atEnd?", [this, mockCursor](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("FileHandle.atEnd?", [this, mockCursor](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(true);
         // stdin has no cheap end-of-input test that does not consume a
         // character; report "not at end" and let the read answer None.
@@ -493,7 +490,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // handle.close -> Void
-    reg("FileHandle::close", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("FileHandle.close", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (!args.empty()) {
             if (auto* h = std::get_if<FileHandleValue>(&args[0]->data)) {
                 if (h->stream && h->stream->is_open()) h->stream->close();
@@ -503,7 +500,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // handle.seek(offset) -> Result<Void, ReadError>
-    reg("FileHandle::seek", [this, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("FileHandle.seek", [this, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return readError("ReadFailed");
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         auto* offset = std::get_if<IntValue>(&args[1]->data);
@@ -525,7 +522,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // handle.reset -> Result<Void, ReadError>
-    reg("FileHandle::reset", [this, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("FileHandle.reset", [this, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return readError("ReadFailed");
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         if (!h) return readError("ReadFailed");
@@ -546,8 +543,8 @@ auto Evaluator::registerFileBuiltins() -> void {
     for (const auto& [publicName, primitiveName] :
          std::initializer_list<std::pair<const char*, const char*>>{
              {"readLine", "getLine"}, {"getChar", "get"}, {"eof?", "atEnd?"}}) {
-        if (auto value = m_intrinsicEnv->get("FileHandle::" + std::string(primitiveName)))
-            defineIntrinsic("FileHandle::" + std::string(publicName), value);
+        if (auto value = m_intrinsicEnv->get("FileHandle." + std::string(primitiveName)))
+            defineIntrinsic("FileHandle." + std::string(publicName), value);
     }
     // FileHandle.feed -> Feed<String>? — the handle's REMAINING lines.
     //
@@ -556,14 +553,14 @@ auto Evaluator::registerFileBuiltins() -> void {
     // with the feed advances one cursor, which is what having opened one file
     // once means. Delegating to `File::feed` by path, as this used to, opened
     // a second handle at the top of the file and answered the whole thing.
-    defineIntrinsic("FileHandle::feed", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("FileHandle.feed", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* handle = std::get_if<FileHandleValue>(&args[0]->data);
         if (!handle) return Value::none();
         if (!handle->stream) {
             // A standard stream sentinel carries no fstream (kexhq/kex#139);
             // there is nothing to read from stdout or stderr.
-            auto feed = m_intrinsicEnv->get("File::feed");
+            auto feed = m_intrinsicEnv->get("File.feed");
             auto* function = feed ? std::get_if<FunctionValue>(&feed->data) : nullptr;
             return function && function->native
                 ? function->native({Value::string(handle->path)})
@@ -578,7 +575,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // File.read(path) -> Result<String, FileError>
-    reg("File::read", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.read", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string("")}));
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string("")}));
@@ -599,7 +596,7 @@ auto Evaluator::registerFileBuiltins() -> void {
         return finish(buf.str());
     });
 
-    reg("File::readBytes", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.readBytes", [this](std::vector<ValuePtr> args) -> ValuePtr {
         auto* path = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         const auto name = path ? path->value : std::string{};
         if (!path) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}));
@@ -615,7 +612,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // File.writeBytes(path, bytes) -> Result<Void, FileError>
-    reg("File::writeBytes", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.writeBytes", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return writeFailed("");
         auto* path = std::get_if<StringValue>(&args[0]->data);
         if (!path) return writeFailed("");
@@ -633,7 +630,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // File.write(path, content) -> Result<Void, FileError>
-    reg("File::write", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.write", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return writeFailed("");
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return writeFailed("");
@@ -649,7 +646,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // File.append(path, content) -> Bool
-    reg("File::append", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.append", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::boolean(false);
@@ -674,11 +671,11 @@ auto Evaluator::registerFileBuiltins() -> void {
         return Value::boolean(std::filesystem::exists(pathStr->value, ec) &&
                               std::filesystem::is_regular_file(pathStr->value, ec));
     };
-    reg("File::exists?", fileExistsFn);
-    reg("File::file?",   fileExistsFn);
+    reg("File.exists?", fileExistsFn);
+    reg("File.file?",   fileExistsFn);
 
     // File.dir?(path) -> Bool
-    reg("File::directory?", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.directory?", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(false);
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::boolean(false);
@@ -688,7 +685,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // File.delete(path) -> Bool
-    reg("File::delete", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.delete", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(false);
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::boolean(false);
@@ -703,7 +700,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // File.copy(src, dst) -> Bool
-    reg("File::copy", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.copy", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         auto* src = std::get_if<StringValue>(&args[0]->data);
         auto* dst = std::get_if<StringValue>(&args[1]->data);
@@ -720,7 +717,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // File.rename(src, dst) -> Bool
-    reg("File::rename", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.rename", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         auto* src = std::get_if<StringValue>(&args[0]->data);
         auto* dst = std::get_if<StringValue>(&args[1]->data);
@@ -737,7 +734,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // File.changeMode(path, mode) -> Bool  (chmod with a numeric mode)
-    reg("File::changeMode", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.changeMode", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         auto* mode = std::get_if<IntValue>(&args[1]->data);
@@ -751,13 +748,13 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // File.lines(path) -> [String]?
-    reg("File::lines", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.lines", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
         auto mocked = mockFileContent(pathStr->value);
         if (mocked)
-            return Value::just(Value::list(splitLines((*mocked))));
+            return Value::just(Value::list(lineValues((*mocked))));
         std::ifstream file(pathStr->value, std::ios::binary);
         if (!file.is_open()) return Value::none();
         std::vector<ValuePtr> result;
@@ -775,7 +772,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     // so "process a file without holding it in memory" held the entire file in
     // memory before returning. A one-shot feed is what a file honestly is:
     // reading consumes, and rewinding is not on offer.
-    reg("File::feed", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.feed", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
@@ -806,7 +803,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // File.size(path) -> Int?
-    reg("File::size", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.size", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
@@ -821,7 +818,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // File.basename(path) -> String
-    reg("File::basename", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.basename", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("");
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::string("");
@@ -829,7 +826,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // File.dirname(path) -> String
-    reg("File::dirname", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.dirname", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string(".");
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::string(".");
@@ -838,7 +835,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // File.extension(path) -> String
-    reg("File::extension", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.extension", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("");
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::string("");
@@ -846,7 +843,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // File.join(base, part) -> String
-    reg("File::join", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.join", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return args.empty() ? Value::string("") : Value::string(args[0]->toString());
         auto* base = std::get_if<StringValue>(&args[0]->data);
         auto* part = std::get_if<StringValue>(&args[1]->data);
@@ -855,7 +852,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // File.absolute(path) -> String?
-    reg("File::absolute", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.absolute", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
@@ -868,7 +865,7 @@ auto Evaluator::registerFileBuiltins() -> void {
 
     // File.canonical(path) -> Result<String, FileError>: realpath(3), so every
     // symlink, `.` and `..` is resolved and a missing component is an error.
-    reg("File::canonical", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.canonical", [](std::vector<ValuePtr> args) -> ValuePtr {
         const auto path = args.empty() ? std::string{} : args[0]->toString();
         std::error_code ec;
         auto canon = std::filesystem::canonical(path, ec);
@@ -882,7 +879,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     // File.info(path) -> ((Atom, Integer, Integer))?: kind, size and
     // modification time in epoch seconds, from one lstat (kexhq/kex#401).
     // Whole seconds, because that is all OTP's file_info reports on BEAM.
-    reg("File::info", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.info", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
@@ -903,7 +900,7 @@ auto Evaluator::registerFileBuiltins() -> void {
     });
 
     // File.symlink?(path) -> Bool, without following the link (lstat).
-    reg("File::symlink?", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("File.symlink?", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(false);
         std::error_code ec;
         const auto status = std::filesystem::symlink_status(args[0]->toString(), ec);
@@ -925,11 +922,11 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
         std::error_code ec;
         return Value::boolean(std::filesystem::is_directory(pathStr->value, ec));
     };
-    reg("Directory::exists?", dirExistsFn);
-    reg("Directory::directory?",    dirExistsFn);
+    reg("Directory.exists?", dirExistsFn);
+    reg("Directory.directory?",    dirExistsFn);
 
     // Directory.file?(path) -> Bool
-    reg("Directory::file?", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Directory.file?", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(false);
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::boolean(false);
@@ -940,7 +937,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
     });
 
     // Directory.create(path) -> Bool  (creates including parents)
-    reg("Directory::create", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Directory.create", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(false);
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::boolean(false);
@@ -951,7 +948,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
     });
 
     // Directory.delete(path) -> Bool  (empty directory only)
-    reg("Directory::delete", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Directory.delete", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(false);
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::boolean(false);
@@ -969,7 +966,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
     });
 
     // Directory.deleteAll(path) -> Bool  (recursive)
-    reg("Directory::deleteAll", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Directory.deleteAll", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(false);
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::boolean(false);
@@ -994,7 +991,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
     });
 
     // Directory.list(path) -> [String]?  (entry names, not full paths)
-    reg("Directory::list", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Directory.list", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
@@ -1030,7 +1027,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
     });
 
     // Directory.files(path) -> [String]?
-    reg("Directory::files", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Directory.files", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
@@ -1061,7 +1058,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
     });
 
     // Directory.dirs(path) -> [String]?
-    reg("Directory::directories", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Directory.directories", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
@@ -1093,14 +1090,14 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
     });
 
     // Directory.current() -> String
-    reg("Directory::current", [](std::vector<ValuePtr>) -> ValuePtr {
+    reg("Directory.current", [](std::vector<ValuePtr>) -> ValuePtr {
         std::error_code ec;
         auto cwd = std::filesystem::current_path(ec);
         return Value::string(ec ? "" : cwd.string());
     });
 
     // Directory.home() -> String?
-    reg("Directory::home", [](std::vector<ValuePtr>) -> ValuePtr {
+    reg("Directory.home", [](std::vector<ValuePtr>) -> ValuePtr {
         const char* home = std::getenv("HOME");
         if (home) return Value::just(Value::string(home));
         return Value::none();
@@ -1112,7 +1109,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
     // directory when it names one, and /tmp when it does not. The BEAM side
     // (kex_file:dir_temporary/0) reads the same variables in the same order,
     // because the two backends have to agree on the answer.
-    reg("Directory::temporary", [](std::vector<ValuePtr>) -> ValuePtr {
+    reg("Directory.temporary", [](std::vector<ValuePtr>) -> ValuePtr {
         std::string dir;
         for (const char* var : {"TMPDIR", "TEMP", "TMP"}) {
             if (const char* value = std::getenv(var); value && *value) {
@@ -1204,11 +1201,11 @@ auto Evaluator::registerMockBuiltins() -> void {
         return Value::unit();
     };
 
-    defineIntrinsic("FS::files", std::move(mockFiles));
-    defineIntrinsic("FS::onRead", std::move(mockOnRead));
-    defineIntrinsic("FS::file", std::move(mockFile));
-    defineIntrinsic("FS::directory", std::move(mockDirectory));
-    defineIntrinsic("FS::clear", std::move(mockClear));
+    defineIntrinsic("FS.files", std::move(mockFiles));
+    defineIntrinsic("FS.onRead", std::move(mockOnRead));
+    defineIntrinsic("FS.file", std::move(mockFile));
+    defineIntrinsic("FS.directory", std::move(mockDirectory));
+    defineIntrinsic("FS.clear", std::move(mockClear));
 }
 
 } // namespace kex::interpreter

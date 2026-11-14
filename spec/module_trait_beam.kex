@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A trait declared inside a module is the module's to name: `Shop.Pricing`
 # from outside, `Pricing` alone where it is in scope. Only top-level traits
 # used to be registered, so either spelling was an "Unknown trait" to the

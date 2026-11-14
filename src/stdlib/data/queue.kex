@@ -132,6 +132,7 @@ make Queue<A>, implement: Enumerable, Foldable, Monoid, Showable do
   let dequeue(@Queue { front: [], back: back }) do
     return match back.reverse do
       [head | rest] => Just((head, Queue { front: rest, back: [] }))
+      [] => None
     end
   end
 

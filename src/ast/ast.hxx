@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../lexer/token.hxx"
+#include "../common/string_utils.hxx"
 #include <cctype>
 #include <memory>
 #include <optional>
@@ -22,6 +23,9 @@ using TypeExprPtr = std::unique_ptr<TypeExpr>;
 
 struct TypeName {
     std::vector<std::string> parts; // e.g. ["Html", "Element"]
+
+    // The name as written: `Html.Element`.
+    auto dotted() const -> std::string { return kex::join(parts, "."); }
 };
 
 struct GenericType {
@@ -144,6 +148,9 @@ struct ThisPattern {
 struct ConstructorPattern {
     std::string name;
     std::vector<PatternPtr> args;
+    // The module path written before it (`Shades` of `Shades.Light`), "" when
+    // it is named bare. Only the checker reads it: the name is the tag.
+    std::string module = {};
 };
 
 struct FieldPattern {
@@ -243,6 +250,9 @@ struct MethodCall {
     // The literal is kept (without its values, which are the call's second
     // argument) so the compile-time validator can still find and check it.
     std::shared_ptr<const TaggedLiteral> tagged;
+    // Where the method's name is written (the call's own location is past
+    // it), for tooling that answers for the name.
+    SourceLocation methodLocation = {};
 };
 
 struct FunctionCall {
@@ -438,12 +448,17 @@ struct Lambda {
 
 // `&.method` / `&.method(args)` — receiver shorthand. Capturing a named
 // function or an operator is spelled with `~` (CurryExpr), never `&`.
+// `lambda` is what it means, `{ |__shorthand| __shorthand.method(args) }`,
+// which every pass but reflection reads; the call holds the arguments.
 struct ShorthandLambda {
     enum class Kind { Method, MethodWithArgs };
     Kind kind;
     std::string name;
-    std::vector<ExprPtr> args;
+    ExprPtr lambda;
 };
+
+// The call inside a shorthand's lambda: `__shorthand.method(args)`.
+inline auto shorthandCall(const ShorthandLambda& shorthand) -> const MethodCall&;
 
 struct SpreadExpr {
     ExprPtr inner;
@@ -799,6 +814,15 @@ struct ModuleDef {
     bool isCapability = false;
 };
 
+// The qualified path of a module written as `name` inside `parent` ("" at the
+// top): `module Inner` in `Outer` is `Outer.Inner`, and a name already
+// written under its parent (`module Outer.Inner`) stays as written.
+inline auto nestedModulePath(const std::string& parent, const std::string& name)
+    -> std::string {
+    return parent.empty() || name.starts_with(parent + ".") ? name
+                                                            : parent + "." + name;
+}
+
 using TopLevelItem = std::variant<
     std::unique_ptr<ModuleDef>,
     std::unique_ptr<TypeDef>,
@@ -812,6 +836,14 @@ using TopLevelItem = std::variant<
     std::unique_ptr<Pragma>,
     std::unique_ptr<TypeAnnotation>
 >;
+
+// The node a top-level or module item holds; null once it has been moved out.
+// What lends an item to another program finds it by (hir::checkReplInput,
+// hir::checkCompileTime).
+template <typename Item>
+auto heldNode(const Item& item) -> const void* {
+    return std::visit([](const auto& node) -> const void* { return node.get(); }, item);
+}
 
 struct Program {
     std::vector<TopLevelItem> items;
@@ -840,6 +872,10 @@ inline auto isLocalConstantBind(const PatternPtr& pattern, const ExprPtr& value)
         return false;
     const auto* lambda = std::get_if<Lambda>(&value->kind);
     return lambda && lambda->namedFunction && lambda->params.empty();
+}
+
+inline auto shorthandCall(const ShorthandLambda& shorthand) -> const MethodCall& {
+    return std::get<MethodCall>(std::get<Lambda>(shorthand.lambda->kind).body.front()->kind);
 }
 
 } // namespace kex::ast

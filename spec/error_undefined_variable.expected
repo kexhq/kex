@@ -1,3 +1,2 @@
 spec/error_undefined_variable.kex:4:16: error: Undefined name: `doesNotExist`
-spec/error_undefined_variable.kex:4:16: error: Undefined identifier: doesNotExist
-Aborted: 2 type errors — fix before running (use --no-check to skip).
+Aborted: 1 type error — fix before running (use --no-check to skip).

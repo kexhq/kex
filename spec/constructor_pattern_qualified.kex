@@ -1,0 +1,25 @@
+# A module's constructor is named the way it was declared, in a pattern too:
+# `Shades.Light =>` matches it from outside the module, with no `using`.
+
+module Shades do
+  type Shade = Light | Dark | Tint(Integer)
+end
+
+let describe(shade: Shades.Shade) -> String do
+  match shade do
+    Shades.Light => "light"
+    Shades.Tint(level) => "tint ${level}"
+    _ => "dark"
+  end
+end
+
+main do
+  IO.printLine(describe(Shades.Light))
+  IO.printLine(describe(Shades.Tint(3)))
+  IO.printLine(describe(Shades.Dark))
+  match FS.File.read("/nonexistent/kex-spec") do
+    Error(FS.ReadFailed(_)) => IO.printLine("read failed")
+    Error(FS.OpenFailed(_)) => IO.printLine("open failed")
+    _ => IO.printLine("other")
+  end
+end

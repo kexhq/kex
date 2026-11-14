@@ -1,0 +1,4 @@
+spec/error_arguments_to_zero_parameter.kex:15:14: error: `mk` takes no arguments; the function it returns expects 1 argument(s), got 2
+spec/error_arguments_to_zero_parameter.kex:16:14: error: Type mismatch: expected Integer, got String
+spec/error_arguments_to_zero_parameter.kex:17:20: error: `M.zero` takes no arguments, got 1
+spec/error_arguments_to_zero_parameter.kex:18:22: error: `Time.now` takes no arguments, got 1

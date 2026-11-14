@@ -1,0 +1,4 @@
+Finding { endLine: Just(3), file: a }
+Finding { endLine: None, file: b }
+Finding { endLine: None, file: c }
+Error(Field "endLine" of Finding expects Option<Integer>, got String)

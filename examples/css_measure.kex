@@ -2,14 +2,20 @@
 #
 # CSS absolute units have fixed ratios to one another (`96px = 72pt = 1in`),
 # so they fit the shared `Measure` model directly: the canonical value is CSS
-# pixels and each unit carries its factor. Their dimension is `:css_length`, a
-# base identity of its own. A CSS pixel is a reference unit, not a physical
-# length, and it is certainly not a duration, so mixing either in is an error.
+# pixels and each unit carries its factor. Their dimension is a type of their
+# own, `Css.Length` (`Measure<Css.Length>`): a CSS pixel is a reference unit,
+# not a physical length, and it is certainly not a duration, so mixing either
+# in does not type-check (`60.pc + 1.second`).
 #
 # Font- and viewport-relative units (`rem`, `em`, `%`, `vh`) have no fixed
 # factor. They resolve against a context, which here is an explicit root font
 # size; see "Extensibility example: CSS" in docs/units-design.md for the typed
 # expression layer a real CSS library would add for the unresolved form.
+
+module Css do
+  record Length do
+  end
+end
 
 type CssUnit = Px | Pt | Pc | Inch | Cm | Mm
 
@@ -31,7 +37,7 @@ make CssUnit, implement: Unit do
   let symbol(@Mm) = "mm"
 end
 
-let cssLength(value: Number, unit: CssUnit) -> Measure do
+let cssLength(value: Number, unit: CssUnit) -> Measure<Css.Length> do
   return Measure {
     canonical: value * unit.factor,
     value: value * 1.0,
@@ -44,15 +50,15 @@ let cssLength(value: Number, unit: CssUnit) -> Measure do
 end
 
 make Integer | Float do
-  let px -> Measure = cssLength(this, Px)
-  let pt -> Measure = cssLength(this, Pt)
-  let pc -> Measure = cssLength(this, Pc)
-  let inch -> Measure = cssLength(this, Inch)
-  let cm -> Measure = cssLength(this, Cm)
-  let mm -> Measure = cssLength(this, Mm)
+  let px -> Measure<Css.Length> = cssLength(this, Px)
+  let pt -> Measure<Css.Length> = cssLength(this, Pt)
+  let pc -> Measure<Css.Length> = cssLength(this, Pc)
+  let inch -> Measure<Css.Length> = cssLength(this, Inch)
+  let cm -> Measure<Css.Length> = cssLength(this, Cm)
+  let mm -> Measure<Css.Length> = cssLength(this, Mm)
 
   # A root-relative length, resolved against the root font size it is given.
-  let rem(root: Measure) -> Measure = root.scale(this)
+  let rem(root: Measure<Css.Length>) -> Measure<Css.Length> = root.scale(this)
 end
 
 make Measure do
@@ -80,11 +86,12 @@ main do
   IO.printLine(1.inch.convertTo(Cm).map(&.css))
 
   # Mixed units add through CSS pixels; the left operand picks the display unit.
-  IO.printLine((12.pt + 4.px).map(&.css))
-  IO.printLine((4.px + 12.pt).map(&.css))
+  IO.printLine((12.pt + 4.px).css)
+  IO.printLine((4.px + 12.pt).css)
 
-  # A CSS length is not a duration.
-  IO.printLine(300.millisecond + 8.px)
+  # A CSS length is not a duration: `300.millisecond + 8.px` does not
+  # type-check, the one a `Measure<Quantity.Time>`, the other a
+  # `Measure<Css.Length>`.
 
   # Relative units need their context before they are a length.
   let heading = 2.5.rem(rootFont)
@@ -93,7 +100,6 @@ main do
   IO.printLine(".card {")
   IO.printLine(declaration("font-size", Ok(rootFont)))
   IO.printLine(declaration("padding", gutter.convertTo(Px)))
-  IO.printLine(declaration("margin-top", heading - 4.px))
-  IO.printLine(declaration("width", 60.pc + 1.second))
+  IO.printLine(declaration("margin-top", Ok(heading - 4.px)))
   IO.printLine("}")
 end

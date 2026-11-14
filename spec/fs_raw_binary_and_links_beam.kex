@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — calls Erlang through BEAM.*
 # `FS.File.writeBytes` takes the raw binary an Erlang call returns
 # (kexhq/kex#327), and `canonical` / `symlink?` inspect paths the way
 # realpath(3) and lstat do (kexhq/kex#334).

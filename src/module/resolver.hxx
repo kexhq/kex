@@ -28,8 +28,15 @@ public:
     // import itself and shadow the real module. Process-wide, set once by the
     // CLI; empty means no file is excluded.
     static auto setEntryFile(const std::string& path) -> void;
+    // Remember resolutions for the rest of the process (one build, where no
+    // source file comes or goes); off by default, and turning it off forgets
+    // them.
+    static auto setCaching(bool on) -> void;
 
 private:
+    auto resolveUncached(const std::string& moduleName,
+                         const std::string& currentModule) const
+        -> std::optional<Resolution>;
     std::vector<std::string> m_roots;
 };
 

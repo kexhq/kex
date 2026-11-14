@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # `Connection.send` with any `Message`, not only an inline `Text(...)`
 # (kexhq/kex#398): the checker used to treat every `.send` as process
@@ -17,6 +17,7 @@ foul echo(socket: Connection) -> Void do
       echo(socket)
     end
   end
+rescue return Void
 end
 
 foul socketRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |_handshake|

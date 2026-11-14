@@ -11,15 +11,14 @@ sqrt(N) -> math:sqrt(N).
 
 %% add/2 — polymorphic + : string concat, Char+String splicing, list append,
 %% numeric add. A Kex String is a UTF-8 binary; a Char is a tagged tuple
-%% {'Char', Codepoint}; a [Char] list counts as a String too.
+%% {'Char', Codepoint}. A [Char] is a list, not a String: the checker refuses
+%% joining one to a String.
 add({'Char', A}, {'Char', B}) -> <<A/utf8, B/utf8>>;
 add(A, {'Char', B}) when is_binary(A) -> <<A/binary, B/utf8>>;
 add({'Char', A}, B) when is_binary(B) -> <<A/utf8, B/binary>>;
 add(A, B = {'Char', _}) when is_list(A) -> A ++ [B];
 add(A = {'Char', _}, B) when is_list(B) -> [A | B];
 add(A, B) when is_binary(A), is_binary(B) -> <<A/binary, B/binary>>;
-add(A, B) when is_binary(A), is_list(B) -> <<A/binary, (unicode:characters_to_binary(charlist(B)))/binary>>;
-add(A, B) when is_list(A), is_binary(B) -> <<(unicode:characters_to_binary(charlist(A)))/binary, B/binary>>;
 add(A, B) when is_list(A), is_integer(B) -> A ++ [B];
 add(A, B) when is_integer(A), is_list(B) -> [A | B];
 add(A, B) when is_list(A) -> A ++ B;
@@ -109,21 +108,31 @@ ordering(A, B, Loc, _Op) ->
 %% numerically (`0 == 0.0`), matching the promotion `+`, `<` and friends
 %% already do, so `1 =< 1.0` and `1 >= 1.0` cannot both hold while `1 == 1.0`
 %% is false. Erlang's `==` is exactly that coercing comparison.
+%%
+%% Measures are the other: a measure is its quantity (units.kex), so two
+%% compare by dimension and canonical value whatever unit each displays in
+%% (`100.millisecond == 0.1.second`). Both rules hold wherever the values are,
+%% in a list, a tuple or a map, as the walker's valuesEqual applies them:
+%% equal terms answer at once, and only unequal ones are walked.
+eq(A, B) when A =:= B -> true;
 eq(A, B) when is_number(A), is_number(B) -> A == B;
-eq(A, B) -> A =:= B.
+eq({'Measure', CanonicalA, _, {'UnitDefinition', _, DimensionA, _}},
+   {'Measure', CanonicalB, _, {'UnitDefinition', _, DimensionB, _}}) ->
+    DimensionA =:= DimensionB andalso CanonicalA == CanonicalB;
+eq([HeadA | TailA], [HeadB | TailB]) -> eq(HeadA, HeadB) andalso eq(TailA, TailB);
+eq(A, B) when is_tuple(A), is_tuple(B), tuple_size(A) =:= tuple_size(B) ->
+    eq_elements(A, B, tuple_size(A));
+eq(A, B) when is_map(A), is_map(B), map_size(A) =:= map_size(B) ->
+    maps:fold(fun(Key, Value, Equal) ->
+                      Equal andalso maps:is_key(Key, B) andalso eq(Value, maps:get(Key, B))
+              end, true, A);
+eq(_, _) -> false.
+
+eq_elements(_, _, 0) -> true;
+eq_elements(A, B, Index) ->
+    eq(element(Index, A), element(Index, B)) andalso eq_elements(A, B, Index - 1).
 
 neq(A, B) -> not eq(A, B).
-
-%% The codepoint list of a [Char] (tagged) — errors on anything else.
-charlist(L) ->
-    case charlist_opt(L, []) of
-        {ok, Cs} -> Cs;
-        error -> L
-    end.
-
-charlist_opt([], Acc) -> {ok, lists:reverse(Acc)};
-charlist_opt([{'Char', C} | T], Acc) when is_integer(C) -> charlist_opt(T, [C | Acc]);
-charlist_opt(_, _) -> error.
 
 %% divide/2 — polymorphic / : integer division when both integers, float
 %% otherwise. Division-by-zero is a runtime error (caught in the emitter).

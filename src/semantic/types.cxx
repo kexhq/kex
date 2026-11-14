@@ -1,6 +1,7 @@
 #include "types.hxx"
+#include "../common/well_known.hxx"
 #include <algorithm>
-#include <unordered_set>
+#include <functional>
 
 namespace kex::semantic {
 
@@ -39,6 +40,10 @@ auto Type::voidType(std::string reason) -> TypePtr {
 
 auto Type::named(const std::string& name, std::vector<TypePtr> args) -> TypePtr {
     return std::make_shared<Type>(Type{NamedType{name, std::move(args)}});
+}
+
+auto Type::variantOf(const std::string& adt, const std::string& variant) -> TypePtr {
+    return std::make_shared<Type>(Type{NamedType{adt, {}, variant}});
 }
 
 auto Type::func(std::vector<TypePtr> params, TypePtr result, bool block) -> TypePtr {
@@ -187,19 +192,78 @@ auto Type::constrained(const std::string& varName, const std::string& traitName,
         Type{ConstrainedType{varName, traitName, genericId}});
 }
 
+namespace {
+
+// The built-in names and the factory of the type each one denotes.
+struct BuiltinTypeEntry {
+    std::string_view name;
+    TypePtr (*make)();
+};
+
+auto atomType() -> TypePtr { return Type::atom(); }
+
+constexpr BuiltinTypeEntry kBuiltinTypes[] = {
+    {"Integer", &Type::integer}, {"Int", &Type::integer},
+    {"Char", &Type::charT},      {"String", &Type::string},
+    {"Bool", &Type::boolean},    {"Atom", &atomType},
+    {"Byte", &Type::byte},       {"Int8", &Type::int8},
+    {"Int16", &Type::int16},     {"Int32", &Type::int32},
+    {"Int64", &Type::int64},     {"UInt8", &Type::uint8},
+    {"UInt16", &Type::uint16},   {"UInt32", &Type::uint32},
+    {"UInt64", &Type::uint64},   {"Float32", &Type::float32},
+    {"Float64", &Type::float64},
+};
+
+} // namespace
+
+auto builtinType(std::string_view name) -> TypePtr {
+    for (const auto& entry : kBuiltinTypes)
+        if (entry.name == name) return entry.make();
+    return nullptr;
+}
+
+auto builtinTypeNames() -> std::vector<std::string_view> {
+    std::vector<std::string_view> names;
+    for (const auto& entry : kBuiltinTypes) names.push_back(entry.name);
+    return names;
+}
+
+auto signatureBuiltinType(std::string_view name) -> TypePtr {
+    if (auto type = builtinType(name)) return type;
+    if (name == "Number" || name == "Float")
+        return Type::constrained(std::string(name), std::string(name));
+    if (name == "Void") return Type::unit();
+    return nullptr;
+}
+
 auto isPrimitiveTypeName(const std::string& name) -> bool {
     // Kept beside typeToString deliberately: these are exactly the names it
     // prints for types that no source file declares. A structural type such
     // as List or Map only appears here if the stdlib does not declare it —
     // `type List<X> = [X]` in list.kex means `List` resolves as a declared
     // type name and needs no entry.
-    static const std::unordered_set<std::string> names = {
-        "Integer", "Int", "Float", "Number", "String", "Char", "Bool",
-        "Atom", "Void", "Any", "Byte", "Int8", "Int16", "Int32", "Int64",
-        "UInt8", "UInt16", "UInt32", "UInt64", "Float32", "Float64",
-        "Tuple", "Block",
-    };
-    return names.count(name) != 0;
+    return signatureBuiltinType(name) != nullptr || name == "Any" ||
+           name == "Tuple" || name == "Block";
+}
+
+namespace {
+constexpr std::pair<PrimitiveType::Kind, std::string_view> kPrimitiveKindNames[] = {
+    {PrimitiveType::Integer, "Integer"}, {PrimitiveType::Char, "Char"},
+    {PrimitiveType::String, "String"},   {PrimitiveType::Bool, "Bool"},
+    {PrimitiveType::Atom, "Atom"},       {PrimitiveType::Unit, "Void"},
+};
+} // namespace
+
+auto primitiveKindName(PrimitiveType::Kind kind) -> std::string_view {
+    for (const auto& [each, name] : kPrimitiveKindNames)
+        if (each == kind) return name;
+    return "?";
+}
+
+auto primitiveKindNamed(std::string_view name) -> std::optional<PrimitiveType::Kind> {
+    for (const auto& [kind, each] : kPrimitiveKindNames)
+        if (each == name) return kind;
+    return std::nullopt;
 }
 
 auto typeToString(const TypePtr& type) -> std::string {
@@ -209,16 +273,8 @@ auto typeToString(const TypePtr& type) -> std::string {
         using T = std::decay_t<decltype(t)>;
 
         if constexpr (std::is_same_v<T, PrimitiveType>) {
-            switch (t.kind) {
-                case PrimitiveType::Integer: return "Integer";
-                case PrimitiveType::Char: return "Char";
-                case PrimitiveType::String: return "String";
-                case PrimitiveType::Bool: return "Bool";
-                case PrimitiveType::Atom:
-                    return t.atomName.empty() ? "Atom" : ":" + t.atomName;
-                case PrimitiveType::Unit: return "Void";
-            }
-            return "?";
+            if (t.kind == PrimitiveType::Atom && !t.atomName.empty()) return ":" + t.atomName;
+            return std::string(primitiveKindName(t.kind));
         }
         else if constexpr (std::is_same_v<T, SizedIntType>) {
             if (!t.isSigned) {
@@ -247,6 +303,7 @@ auto typeToString(const TypePtr& type) -> std::string {
         }
         else if constexpr (std::is_same_v<T, NamedType>) {
             std::string result = t.name;
+            if (!t.variant.empty()) result += "." + t.variant;
             if (!t.typeArgs.empty()) {
                 result += "<";
                 for (size_t i = 0; i < t.typeArgs.size(); i++) {
@@ -421,42 +478,41 @@ auto structuredTypeOf(const TypePtr& type) -> std::optional<StructuredType> {
 }
 
 auto isFullyConcrete(const TypePtr& type) -> bool {
-    if (!type) return false;
-    return std::visit([](const auto& t) -> bool {
-        using T = std::decay_t<decltype(t)>;
-        auto all = [](const std::vector<TypePtr>& types) {
-            for (const auto& element : types)
-                if (!isFullyConcrete(element)) return false;
-            return true;
-        };
-        if constexpr (std::is_same_v<T, UnknownType> ||
-                      std::is_same_v<T, TypeVar> ||
-                      std::is_same_v<T, ConstrainedType>) {
-            return false;
-        } else if constexpr (std::is_same_v<T, NamedType>) {
-            return all(t.typeArgs);
-        } else if constexpr (std::is_same_v<T, ListType>) {
-            return isFullyConcrete(t.element);
-        } else if constexpr (std::is_same_v<T, OptionalType>) {
-            return isFullyConcrete(t.inner);
-        } else if constexpr (std::is_same_v<T, MapType>) {
-            return isFullyConcrete(t.key) && isFullyConcrete(t.value);
-        } else if constexpr (std::is_same_v<T, TupleType>) {
-            return all(t.elements);
-        } else if constexpr (std::is_same_v<T, UnionType>) {
-            return all(t.members);
-        } else if constexpr (std::is_same_v<T, IntersectionType>) {
-            return all(t.members);
-        } else if constexpr (std::is_same_v<T, RecordType>) {
-            for (const auto& [_, fieldType] : t.fields)
-                if (!isFullyConcrete(fieldType)) return false;
-            return true;
-        } else if constexpr (std::is_same_v<T, FuncType>) {
-            return all(t.params) && isFullyConcrete(t.result);
-        } else {
-            return true;
-        }
-    }, type->kind);
+    return !containsOpenType(type);
+}
+
+auto isConcreteValue(const TypePtr& type) -> bool {
+    return !std::holds_alternative<VoidType>(type->kind) && isFullyConcrete(type);
+}
+
+auto isConcreteOrBound(const TypePtr& type) -> bool {
+    return isConcreteValue(type) || std::holds_alternative<ConstrainedType>(type->kind);
+}
+
+auto typeVariableId(const TypePtr& type) -> std::optional<int> {
+    if (const auto* variable = type ? std::get_if<TypeVar>(&type->kind) : nullptr) return variable->id;
+    return std::nullopt;
+}
+
+auto containsTypeVariable(const TypePtr& type) -> bool {
+    return anyType(
+        type,
+        [](const TypePtr& t) {
+            return std::holds_alternative<TypeVar>(t->kind) ||
+                   std::holds_alternative<ConstrainedType>(t->kind);
+        },
+        NullType::Unknown);
+}
+
+auto containsOpenType(const TypePtr& type) -> bool {
+    return anyType(
+        type,
+        [](const TypePtr& t) {
+            return std::holds_alternative<TypeVar>(t->kind) ||
+                   std::holds_alternative<UnknownType>(t->kind) ||
+                   std::holds_alternative<ConstrainedType>(t->kind);
+        },
+        NullType::Unknown);
 }
 
 // TupleType{} (empty tuple, from parsing `()` in a type annotation) and
@@ -506,6 +562,7 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
         }
         else if constexpr (std::is_same_v<AT, NamedType>) {
             if (!namedTypesMatch(at.name, bt->name)) return false;
+            if (at.variant != bt->variant) return false;
             if (at.typeArgs.size() != bt->typeArgs.size()) return false;
             for (size_t i = 0; i < at.typeArgs.size(); i++) {
                 if (!typesEqual(at.typeArgs[i], bt->typeArgs[i])) return false;
@@ -605,18 +662,165 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
     }, a->kind);
 }
 
-auto TypeEnv::set(const std::string& name, TypePtr type) -> void {
-    m_types[name] = std::move(type);
+auto TypeEnv::set(const std::string& name, TypePtr type, Binding binding) -> void {
+    m_entries[name] = Entry{std::move(type), binding};
 }
 
 auto TypeEnv::get(const std::string& name) const -> TypePtr {
-    auto it = m_types.find(name);
-    if (it != m_types.end()) return it->second;
-    return nullptr;
+    auto it = m_entries.find(name);
+    return it == m_entries.end() ? nullptr : it->second.type;
 }
 
-auto TypeEnv::has(const std::string& name) const -> bool {
-    return m_types.count(name) > 0;
+auto TypeEnv::binding(const std::string& name) const -> const Binding* {
+    auto it = m_entries.find(name);
+    return it == m_entries.end() ? nullptr : &it->second.binding;
+}
+
+// ── Structural traversal ─────────────────────────────────────────────────────
+//
+// The one place that knows which Type alternatives nest other types. A walk or
+// rewrite over types spells out only the kinds it treats specially and hands
+// the rest to these, so adding an alternative is one edit, not twenty.
+
+auto forEachTypeChild(const TypePtr& type,
+                      const std::function<void(const TypePtr&)>& visit) -> void {
+    if (!type) return;
+    std::visit([&](const auto& part) {
+        using Part = std::decay_t<decltype(part)>;
+        if constexpr (std::is_same_v<Part, ListType>) {
+            visit(part.element);
+        } else if constexpr (std::is_same_v<Part, MapType>) {
+            visit(part.key);
+            visit(part.value);
+        } else if constexpr (std::is_same_v<Part, OptionalType>) {
+            visit(part.inner);
+        } else if constexpr (std::is_same_v<Part, TupleType>) {
+            for (const auto& element : part.elements) visit(element);
+        } else if constexpr (std::is_same_v<Part, FuncType>) {
+            for (const auto& param : part.params) visit(param);
+            visit(part.result);
+        } else if constexpr (std::is_same_v<Part, NamedType>) {
+            for (const auto& arg : part.typeArgs) visit(arg);
+        } else if constexpr (std::is_same_v<Part, UnionType> ||
+                             std::is_same_v<Part, IntersectionType>) {
+            for (const auto& member : part.members) visit(member);
+        } else if constexpr (std::is_same_v<Part, RecordType>) {
+            for (const auto& field : part.fields) visit(field.second);
+        }
+    }, type->kind);
+}
+
+// Rebuild `type` with each directly-nested type replaced by `map(child)`.
+// Returns `type` unchanged for the leaf kinds, which have no children.
+auto mapTypeChildren(const TypePtr& type,
+                     const std::function<TypePtr(const TypePtr&)>& map)
+    -> TypePtr {
+    if (!type) return type;
+    // Each child mapped; `same` stays true while every one comes back as the
+    // very object it was, and then `type` itself is returned: an unchanged
+    // type keeps its identity and costs no allocation.
+    bool same = true;
+    auto mapped = [&](const TypePtr& child) {
+        auto result = map(child);
+        same = same && result == child;
+        return result;
+    };
+    auto mappedAll = [&](const std::vector<TypePtr>& children) {
+        std::vector<TypePtr> results;
+        results.reserve(children.size());
+        for (const auto& child : children) results.push_back(mapped(child));
+        return results;
+    };
+    return std::visit([&](const auto& part) -> TypePtr {
+        using Part = std::decay_t<decltype(part)>;
+        if constexpr (std::is_same_v<Part, ListType>) {
+            auto element = mapped(part.element);
+            return same ? type : Type::list(std::move(element));
+        } else if constexpr (std::is_same_v<Part, MapType>) {
+            auto key = mapped(part.key);
+            auto value = mapped(part.value);
+            return same ? type : Type::map(std::move(key), std::move(value));
+        } else if constexpr (std::is_same_v<Part, OptionalType>) {
+            auto inner = mapped(part.inner);
+            return same ? type : Type::optional(std::move(inner));
+        } else if constexpr (std::is_same_v<Part, TupleType>) {
+            auto elements = mappedAll(part.elements);
+            return same ? type : Type::tuple(std::move(elements));
+        } else if constexpr (std::is_same_v<Part, FuncType>) {
+            auto params = mappedAll(part.params);
+            auto result = mapped(part.result);
+            return same ? type
+                        : Type::func(std::move(params), std::move(result),
+                                     part.block);
+        } else if constexpr (std::is_same_v<Part, NamedType>) {
+            auto args = mappedAll(part.typeArgs);
+            if (same) return type;
+            return std::make_shared<Type>(Type{NamedType{part.name, std::move(args), part.variant}});
+        } else if constexpr (std::is_same_v<Part, IntersectionType>) {
+            auto members = mappedAll(part.members);
+            return same ? type : Type::intersection(std::move(members));
+        } else if constexpr (std::is_same_v<Part, UnionType>) {
+            auto members = mappedAll(part.members);
+            return same ? type
+                        : std::make_shared<Type>(Type{UnionType{std::move(members)}});
+        } else if constexpr (std::is_same_v<Part, RecordType>) {
+            std::vector<std::pair<std::string, TypePtr>> fields;
+            fields.reserve(part.fields.size());
+            for (const auto& [name, fieldType] : part.fields)
+                fields.emplace_back(name, mapped(fieldType));
+            return same ? type : Type::record(std::move(fields));
+        } else {
+            return type;
+        }
+    }, type->kind);
+}
+
+auto anyType(const TypePtr& type,
+             const std::function<bool(const TypePtr&)>& predicate,
+             NullType nullType) -> bool {
+    if (!type) return nullType == NullType::Unknown;
+    if (predicate(type)) return true;
+    bool found = false;
+    forEachTypeChild(type, [&](const TypePtr& child) {
+        found = found || anyType(child, predicate, nullType);
+    });
+    return found;
+}
+
+
+auto mentionsUnknown(const TypePtr& type, NullType nullType) -> bool {
+    return anyType(
+        type,
+        [](const TypePtr& t) { return std::holds_alternative<UnknownType>(t->kind); },
+        nullType);
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto isUndetermined(const TypePtr& type) -> bool {
+    return std::holds_alternative<UnknownType>(type->kind) ||
+           std::holds_alternative<TypeVar>(type->kind);
+}
+
+auto holdsFailure(const TypePtr& type) -> bool {
+    if (isUndetermined(type) || std::holds_alternative<OptionalType>(type->kind)) return true;
+    const auto* named = std::get_if<NamedType>(&type->kind);
+    return named && (named->name == names::kResultType || named->name == names::kOptionalType);
+}
+
+auto isThisPlaceholder(const TypePtr& type) -> bool {
+    const auto* named = type ? std::get_if<NamedType>(&type->kind) : nullptr;
+    return named && named->name == names::kThisType && named->typeArgs.empty();
+}
+
+auto isNumericType(const TypePtr& type) -> bool {
+    if (!type) return false;
+    if (const auto* primitive = std::get_if<PrimitiveType>(&type->kind))
+        return primitive->kind == PrimitiveType::Integer;
+    return std::holds_alternative<SizedIntType>(type->kind) ||
+           std::holds_alternative<SizedFloatType>(type->kind);
 }
 
 } // namespace kex::semantic

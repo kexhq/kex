@@ -1,55 +1,28 @@
-#include "../../beam/kexi.hxx"
+#include "../../common/digest.hxx"
+#include "../../common/file_io.hxx"
 #include "../evaluator.hxx"
-
-#include <filesystem>
-#include <fstream>
-#include <iomanip>
-#include <sstream>
 
 namespace kex::interpreter {
 
-namespace {
-
-auto sha256Hex(const std::vector<uint8_t>& bytes) -> std::string {
-    const auto digest = beam::computeSha256(bytes);
-    std::ostringstream out;
-    out << std::hex << std::setfill('0');
-    for (const auto byte : digest) out << std::setw(2) << static_cast<int>(byte);
-    return out.str();
-}
-
-} // namespace
-
 auto Evaluator::registerDigestBuiltins() -> void {
     defineModule("Digest");
-    defineIntrinsic("Digest::sha256", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::string(sha256Hex({}));
+    defineIntrinsic("Digest.sha256", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::string(sha256Hex(std::string_view{}));
         if (const auto* binary = std::get_if<BinaryValue>(&args[0]->data)) {
-            const auto digest = beam::computeSha256(binary->bytes);
+            const auto digest = sha256(binary->bytes);
             return Value::binary({digest.begin(), digest.end()});
         }
         const auto* text = std::get_if<StringValue>(&args[0]->data);
-        if (!text) return Value::string(sha256Hex({}));
-        return Value::string(sha256Hex(
-            std::vector<uint8_t>(text->value.begin(), text->value.end())));
+        if (!text) return Value::string(sha256Hex(std::string_view{}));
+        return Value::string(sha256Hex(text->value));
     });
-    defineIntrinsic("Digest::fileSha256", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Digest.fileSha256", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         const auto* path = std::get_if<StringValue>(&args[0]->data);
         if (!path) return Value::none();
-        // A directory opens as an ifstream on Linux and only fails at the
-        // first read, which libstdc++ reports by throwing: refuse it up front,
-        // as BEAM's file:read_file does.
-        std::error_code ec;
-        if (!std::filesystem::is_regular_file(path->value, ec)) return Value::none();
-        std::ifstream input(path->value, std::ios::binary);
-        if (!input) return Value::none();
-        try {
-            std::vector<uint8_t> bytes(std::istreambuf_iterator<char>(input), {});
-            return Value::just(Value::string(sha256Hex(bytes)));
-        } catch (const std::exception&) {
-            return Value::none();
-        }
+        const auto bytes = readFileBytes(path->value);
+        if (!bytes) return Value::none();
+        return Value::just(Value::string(sha256Hex(*bytes)));
     });
 }
 

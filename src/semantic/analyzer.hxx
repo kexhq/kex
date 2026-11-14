@@ -1,8 +1,9 @@
 #pragma once
 
 #include "../ast/ast.hxx"
-#include "symbol.hxx"
+#include "name_index.hxx"
 #include "typechecker.hxx"
+#include <functional>
 #include <optional>
 #include <map>
 #include <set>
@@ -32,12 +33,55 @@ class Analyzer {
 public:
     explicit Analyzer(const ImportedInterfaces* importedInterfaces = nullptr)
         : m_checker(importedInterfaces), m_importedInterfaces(importedInterfaces) {}
+    // The interfaces it checks against (the prelude's, usually), or null.
+    auto importedInterfaces() const -> const ImportedInterfaces* { return m_importedInterfaces; }
+    // The checker whose answers the analysis holds, read directly rather than
+    // through a forward per answer.
+    auto checker() const -> const TypeChecker& { return m_checker; }
+    // What completion may offer after `receiver` at `at` (TypeChecker::
+    // memberCompletions): probes the checker, so not const.
+    auto memberCompletions(const TypePtr& receiver, const ast::Expr& at)
+        -> std::vector<TypeChecker::MemberCompletion> {
+        return m_checker.memberCompletions(receiver, at);
+    }
+    // What completion may offer for a bare name at `at` (TypeChecker::
+    // bareCompletions).
+    auto bareCompletions(const ast::Expr& at) -> std::vector<std::string> {
+        return m_checker.bareCompletions(at);
+    }
 
+    // The program's own files, the entry first (then a spec's base), as
+    // opposed to the dependencies merged into it: a `using` of a module
+    // nothing describes is warned of there.
+    auto setEntryFiles(std::vector<std::string> files) -> void {
+        m_entryFiles = std::move(files);
+    }
+    // Keeps what tooling reads of the names (nameIndex), for the entry file.
+    // A build does not ask.
+    auto setIndexesNames(bool indexes) -> void {
+        m_checker.setRecordsNames(indexes);
+        m_indexesNames = indexes;
+    }
+    // The program's symbols, the references to them and the names in scope
+    // at each point of the entry file, from the checker's record of them
+    // (empty unless setIndexesNames).
+    auto nameIndex() const -> const NameIndex& { return m_nameIndex; }
+    // Where the build finds a module outside the program and its interfaces
+    // (its source roots), for the rule that an exported module must exist.
+    auto setModuleLocator(
+        std::function<bool(const std::string& module, const std::string& current)> locate)
+        -> void {
+        m_moduleLocator = std::move(locate);
+    }
+    // The backend modules this build links, which lowering finds providers
+    // in: a call one of them alone answers is resolved to its dispatcher.
+    // Unset (the REPL, the prelude build), no such call is resolved.
+    auto setLinkedModules(std::set<std::string> modules) -> void {
+        m_checker.linkModules(std::move(modules));
+    }
     auto analyze(const ast::Program& program) -> bool;
     auto diagnostics() const -> const std::vector<Diagnostic>&;
 
-    // Query the inferred type of an expression node after analyze() has run.
-    auto typeOf(const ast::Expr* expr) const -> TypePtr;
     // Presentation-widened `typeOf` — see TypeChecker::displayTypeOf.
     auto displayTypeOf(const ast::Expr* expr) const -> TypePtr;
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
@@ -87,9 +131,75 @@ public:
     }
     auto resolvedCalls() const
         -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
+    auto resolvedTraits() const
+        -> const std::unordered_map<const ast::MakeDef*,
+                                    std::vector<std::string>>& {
+        return m_checker.resolvedTraits();
+    }
     auto selectedCallSignatures() const
         -> const std::unordered_map<const ast::Expr*, Signature>& {
         return m_checker.selectedCallSignatures();
+    }
+    auto shownThroughDistinct() const -> const ShownThrough& {
+        return m_checker.shownThroughDistinct();
+    }
+    auto decidedCalls() const -> const std::unordered_map<
+        const ast::Expr*, TypeChecker::DecidedCall>& {
+        return m_checker.decidedCalls();
+    }
+    // The trait a parameter is declared as, or "".
+    auto parameterTraitOf(const ast::Param& param) const -> std::string {
+        const auto found = m_checker.parameterTraits().find(&param);
+        return found == m_checker.parameterTraits().end() ? std::string{} : found->second;
+    }
+    // The trait a type spelling written in module `scope` names, or "".
+    auto traitWrittenAs(const std::string& scope, const std::string& written) const
+        -> std::string {
+        return m_checker.traitWrittenAs(scope, written);
+    }
+    // The module constant a bare name names, or "".
+    auto referencedConstantOf(const ast::Expr& name) const -> std::string {
+        const auto found = m_checker.referencedConstants().find(&name);
+        return found == m_checker.referencedConstants().end() ? std::string{} : found->second;
+    }
+    // The function a bare call names, or "".
+    auto calledFunctionOf(const ast::Expr& call) const -> std::string {
+        const auto found = m_checker.calledFunctions().find(&call);
+        return found == m_checker.calledFunctions().end() ? std::string{} : found->second;
+    }
+    // The record a written type annotation names, or "".
+    auto recordAnnotatedBy(const ast::TypeExpr& type) const -> std::string {
+        const auto found = m_checker.annotatedRecords().find(&type);
+        return found == m_checker.annotatedRecords().end() ? std::string{} : found->second;
+    }
+    // The record a named record pattern names, or "".
+    auto recordOfPattern(const ast::RecordPattern& pattern) const -> std::string {
+        const auto found = m_checker.recordPatterns().find(&pattern);
+        return found == m_checker.recordPatterns().end() ? std::string{} : found->second;
+    }
+    auto declaredTypeOf(const ast::TypeExpr& type) const -> StructuredType {
+        return m_checker.declaredTypeOf(type);
+    }
+    auto expandDeclared(StructuredType type) const -> StructuredType {
+        return m_checker.expandDeclared(std::move(type));
+    }
+    auto annotationSpelling(const ast::TypeExpr& type) const -> std::string {
+        return m_checker.annotationSpelling(type);
+    }
+    auto typeTestOf(const std::string& scope, const std::string& written) const -> TypeTest {
+        return m_checker.typeTestOf(scope, written);
+    }
+    // The trait a method's `make` is for, or "".
+    auto makeTargetTraitOf(const ast::FunctionDef& method) const -> std::string {
+        const auto found = m_checker.makeTargetTraits().find(&method);
+        return found == m_checker.makeTargetTraits().end() ? std::string{} : found->second;
+    }
+    // Whether `pattern`, a parameter, is a bare type name taking that type.
+    auto isTypeSelector(const ast::Pattern& pattern) const -> bool {
+        return m_checker.typeSelectorPatterns().contains(&pattern);
+    }
+    auto dictionaryTypeOf(const ast::Expr& value) const -> std::string {
+        return m_checker.dictionaryTypeOf(value);
     }
     auto patternBindings() const
         -> const std::vector<TypeChecker::PatternBinding>& {
@@ -105,32 +215,23 @@ public:
     }
 
 private:
-    // Top-level declarations
-    auto analyzeTopLevel(const ast::TopLevelItem& item) -> void;
+    // The purity walk: which effects run where, by the functions the checker
+    // says each call runs, and where `break` and `next` may stand.
+    template <typename Item> auto analyzeItem(const Item& item) -> void;
     auto analyzeModule(const ast::ModuleDef& mod) -> void;
-    auto analyzeTypeDef(const ast::TypeDef& def) -> void;
-    auto analyzeRecordDef(const ast::RecordDef& def) -> void;
-    auto analyzeMakeDef(const ast::MakeDef& def) -> void;
-    auto analyzeVisibilityBlock(const ast::VisibilityBlock& block) -> void;
     auto analyzeFunctionDef(const ast::FunctionDef& def) -> void;
-    auto analyzeMainBlock(const ast::MainBlock& block) -> void;
-
-    // Expressions
     auto analyzeExpr(const ast::Expr& expr) -> void;
     auto analyzeBody(const std::vector<ast::ExprPtr>& body) -> void;
-    auto analyzeRescue(const ast::RescueBlock& rescue, SourceLocation loc) -> void;
-
-    // Defines every variable a pattern introduces (VarPattern, shorthand
-    // record fields, nested constructor/list/tuple args) as a Symbol in
-    // the current scope — mirrors TypeChecker::bindPatternVars, just
-    // populating SymbolTable instead of TypeEnv. `isVar` marks the bindings
-    // mutable and reports a same-kind redeclare as one (kexhq/kex#601).
-    auto bindPatternVars(const ast::Pattern& pat, SourceLocation loc,
-                         bool isVar = false) -> void;
+    // Whether a bare call, tagged literal or bare zero-parameter function
+    // runs a foul function, by the declaration the checker chose for it.
+    auto callsFoul(const ast::Expr& call) const -> bool;
+    // A record declared twice in one module (or at top level), or under a
+    // type's name.
+    template <typename Items> auto reportDuplicateRecords(const Items& items) -> void;
 
     // Records which member of which module is foul, for the modules declared
-    // in THIS compilation unit. Runs before Phase 1 so a call can be checked
-    // against a module declared later in the file. Imported modules answer the
+    // in THIS compilation unit, so a call can be checked against a module
+    // declared later in the file. Imported modules answer the
     // same question through `isExportFoul`.
     auto collectModuleMemberEffects(const ast::Program& program) -> void;
     // Whether `module.member` is a foul function, consulting local modules
@@ -138,19 +239,14 @@ private:
     // asked about a qualified call — there is no module-level foulness.
     auto isQualifiedCallFoul(const std::string& module,
                              const std::string& member) const -> bool;
-    // The module whose function a bare `name` means through a `using` in
-    // scope — `using Vend` then `vended` — or empty. Respects `only:` and
-    // `except:`; checks modules declared in this unit, then imported
-    // interfaces.
-    auto moduleImportingName(const std::string& name) const -> std::string;
-    // The public functions of each module declared in this unit.
-    std::unordered_map<std::string, std::unordered_set<std::string>>
-        m_localModuleFunctions;
+    // The foul functions declared at top level, by name: what a guard's
+    // `x.name` (UFCS) is checked against.
+    std::unordered_set<std::string> m_topLevelFoul;
     // The `using` directives in scope, innermost last: the file's own, then
     // those of each module being analyzed.
     std::vector<const ast::UsingBlock*> m_usings;
 
-    // Transitive effect computation — runs after Phase 1, before Phase 2.
+    // Foulness spread through the call graph, after the purity walk.
     auto computeTransitiveEffects(const ast::Program& program) -> void;
     // Post-typechecking enrichment: feed resolved call isFoul into the
     // transitive set and re-check guards.
@@ -173,14 +269,15 @@ private:
 
     // Helpers
     auto error(SourceLocation loc, const std::string& msg) -> void;
-    auto warning(SourceLocation loc, const std::string& msg) -> void;
 
-    SymbolTable m_symbols;
     std::vector<Diagnostic> m_diagnostics;
     TypeChecker m_checker;
     const ImportedInterfaces* m_importedInterfaces = nullptr;
+    std::function<bool(const std::string&, const std::string&)> m_moduleLocator;
+    std::vector<std::string> m_entryFiles;
+    bool m_indexesNames = false;
+    NameIndex m_nameIndex;
     bool m_inFoulContext = false;
-    bool m_inMakeBlock = false;
 
     // break/next bind to the nearest enclosing Loop marker, but a Closure
     // marker in between makes them illegal — they don't cross into a

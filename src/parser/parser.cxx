@@ -1,4 +1,5 @@
 #include "parser.hxx"
+#include "../lexer/lexer.hxx"
 #include "../ast/function_groups.hxx"
 #include "../common/signature_params.hxx"
 #include "../common/utf8.hxx"
@@ -7,7 +8,6 @@
 #include <cstdlib>
 #include <cxxabi.h>
 #include <memory>
-#include <stdexcept>
 
 namespace kex {
 
@@ -163,8 +163,9 @@ auto Parser::rejectReservedBindingName() -> void {
       name == TokenType::Spawn || name == TokenType::After ||
       name == TokenType::Next)
     return;
-  const auto after = m_pos + 2 < m_tokens.size() ? m_tokens[m_pos + 2].type
-                                                 : TokenType::Eof;
+  const auto after = static_cast<size_t>(m_pos) + 2 < m_tokens.size()
+                         ? m_tokens[m_pos + 2].type
+                         : TokenType::Eof;
   if (after != TokenType::Equals && after != TokenType::LParen)
     return;
   advance(); // let
@@ -397,11 +398,7 @@ auto Parser::parseModuleDef(bool allowStandalone,
     expect(TokenType::Module, "Expected 'module'");
   }
   auto moduleName = parseTypeName();
-  for (size_t i = 0; i < moduleName.parts.size(); ++i) {
-    if (i)
-      mod->name += ".";
-    mod->name += moduleName.parts[i];
-  }
+  mod->name += moduleName.dotted();
   if (!parentModule.empty() && mod->name.find('.') == std::string::npos)
     mod->name = parentModule + "." + mod->name;
   // A file-level `module Name` without `do` is desugared into the same
@@ -2016,6 +2013,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
           std::move(block), mutating, hasParens};
       std::get<ast::MethodCall>(call->kind).targetType =
           std::move(targetType);
+      std::get<ast::MethodCall>(call->kind).methodLocation = methodTok.location;
       expr = complete(std::move(call));
       continue;
     }
@@ -3835,6 +3833,7 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
     }
     std::vector<ast::ExprPtr> args;
 
+    auto kind = ast::ShorthandLambda::Kind::Method;
     if (match(TokenType::LParen)) {
       if (!check(TokenType::RParen)) {
         do {
@@ -3842,47 +3841,39 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
         } while (match(TokenType::Comma));
       }
       expect(TokenType::RParen, "Expected ')'");
-      expr->kind = ast::ShorthandLambda{
-          ast::ShorthandLambda::Kind::MethodWithArgs, name, std::move(args)};
+      kind = ast::ShorthandLambda::Kind::MethodWithArgs;
     } else if (isAtExprStart()) {
       // Operator with inline arg: &.+ 1 or &.+ "hello"
       args.push_back(parsePrimary());
-      expr->kind = ast::ShorthandLambda{
-          ast::ShorthandLambda::Kind::MethodWithArgs, name, std::move(args)};
-    } else {
-      expr->kind =
-          ast::ShorthandLambda{ast::ShorthandLambda::Kind::Method, name, {}};
+      kind = ast::ShorthandLambda::Kind::MethodWithArgs;
     }
-    // A continuation belongs inside the shorthand lambda:
-    // `&.to(String).or("")` desugars to
+    // What it means: `{ |__shorthand| __shorthand.method(args) }`, and a
+    // continuation belongs inside it: `&.to(String).or("")` is
     // `{ |__shorthand| __shorthand.to(String).or("") }`.
-    if (check(TokenType::Dot)) {
-      constexpr const char *paramName = "__shorthand";
-      auto receiver = std::make_unique<ast::Expr>();
-      receiver->location = expr->location;
-      receiver->kind = ast::Identifier{paramName};
-
-      auto firstCall = std::make_unique<ast::Expr>();
-      firstCall->location = expr->location;
-      auto shorthand = std::get<ast::ShorthandLambda>(std::move(expr->kind));
-      ast::MethodCall call;
-      call.receiver = std::move(receiver);
-      call.method = std::move(shorthand.name);
-      call.args = std::move(shorthand.args);
-      firstCall->kind = std::move(call);
-
-      auto chained = parsePostfixTail(std::move(firstCall));
-      ast::LambdaParam param;
-      param.name = paramName;
-      std::vector<ast::LambdaParam> params;
-      params.push_back(std::move(param));
-      std::vector<ast::ExprPtr> body;
-      body.push_back(std::move(chained));
-      expr = std::make_unique<ast::Expr>();
-      expr->location = body.front()->location;
-      expr->kind = ast::Lambda{std::move(params), std::move(body), std::nullopt,
-                               std::nullopt};
-    }
+    constexpr const char *paramName = "__shorthand";
+    auto receiver = std::make_unique<ast::Expr>();
+    receiver->location = expr->location;
+    receiver->kind = ast::Identifier{paramName};
+    auto firstCall = std::make_unique<ast::Expr>();
+    firstCall->location = expr->location;
+    ast::MethodCall call;
+    call.receiver = std::move(receiver);
+    call.method = name;
+    call.args = std::move(args);
+    firstCall->kind = std::move(call);
+    const bool chained = check(TokenType::Dot);
+    std::vector<ast::ExprPtr> body;
+    body.push_back(chained ? parsePostfixTail(std::move(firstCall)) : std::move(firstCall));
+    ast::LambdaParam param;
+    param.name = paramName;
+    std::vector<ast::LambdaParam> params;
+    params.push_back(std::move(param));
+    auto lambda = std::make_unique<ast::Expr>();
+    lambda->location = body.front()->location;
+    lambda->kind = ast::Lambda{std::move(params), std::move(body), std::nullopt, std::nullopt};
+    // A chain is no shorthand any more, only the lambda.
+    if (chained) return lambda;
+    expr->kind = ast::ShorthandLambda{kind, name, std::move(lambda)};
     return expr;
   }
 
@@ -4282,11 +4273,17 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
     while (peekAt(pathOffset).type == TokenType::Dot &&
            peekAt(pathOffset + 1).type == TokenType::UpperIdent)
       pathOffset += 2;
-    if (pathOffset > 0 && peekAt(pathOffset).type == TokenType::LBrace) {
+    // `Geo.Point { x }` names a record by its path; `Shades.Light` and
+    // `Shades.Tint(n)` a module's constructor.
+    std::string module;
+    if (pathOffset > 0) {
       while (match(TokenType::Dot)) {
-        name += ".";
-        name +=
-            expect(TokenType::UpperIdent, "Expected record type name").value;
+        module += (module.empty() ? "" : ".") + name;
+        name = expect(TokenType::UpperIdent, "Expected a name").value;
+      }
+      if (check(TokenType::LBrace)) {
+        name = module + "." + name;
+        module.clear();
       }
     }
     // Named record pattern: `Foo { x, y }` — same field-list grammar as
@@ -4308,9 +4305,9 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
         }
       }
       expect(TokenType::RParen, "Expected ')'");
-      pattern->kind = ast::ConstructorPattern{name, std::move(args)};
+      pattern->kind = ast::ConstructorPattern{name, std::move(args), module};
     } else {
-      pattern->kind = ast::ConstructorPattern{name, {}};
+      pattern->kind = ast::ConstructorPattern{name, {}, module};
     }
     return complete(std::move(pattern));
   }
@@ -4579,25 +4576,6 @@ auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
   return complete(std::move(block));
 }
 
-auto Parser::parseBody() -> std::vector<ast::ExprPtr> {
-  std::vector<ast::ExprPtr> body;
-  while (!check(TokenType::End) && !atEnd()) {
-    try {
-      body.push_back(parseSpreadableExpr());
-    } catch (const ParseError &e) {
-      // Insert an ErrorNode so the AST body stays complete, then sync
-      // to the next statement boundary before continuing.
-      auto errExpr = std::make_unique<ast::Expr>();
-      errExpr->location = e.location;
-      errExpr->kind = ast::ErrorNode{e.message};
-      body.push_back(std::move(errExpr));
-      syncToStatement();
-    }
-    skipNewlines();
-  }
-  return body;
-}
-
 // Looks ahead (without consuming) for a `do` token on the current logical
 // line, at bracket depth 0 — i.e. not inside a nested ( ), [ ], or { }. Used
 // to decide whether `name arg1, arg2` should be parsed as bare positional
@@ -4616,8 +4594,13 @@ auto Parser::hasDoBeforeNewline() const -> bool {
     case TokenType::RParen:
     case TokenType::RBracket:
     case TokenType::RBrace:
-      if (depth > 0)
-        depth--;
+      // Closing a bracket opened before this point ends the expression the
+      // call would be in: a `do` past it is some outer call's. In `[("C", k
+      // - 1)].each do`, the `do` is `each`'s, and `k - 1` is no call `k(-1)`
+      // taking it (kexhq/kex#613).
+      if (depth == 0)
+        return false;
+      depth--;
       break;
     case TokenType::Do:
       if (depth == 0)

@@ -35,14 +35,14 @@ auto Evaluator::registerTimeBuiltins() -> void {
     // The host clock. `Time.Clock`'s default body reads it, so every reading
     // in the language (Time.now, Date.today, DateTime.utcNow) comes through
     // here unless that capability is replaced.
-    defineIntrinsic("Time::nowNanos", [](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("Time.nowNanos", [](std::vector<ValuePtr>) -> ValuePtr {
         return Value::integer(hostNanos());
     });
 
     // Seconds east of UTC for the system zone AT the given instant, so a
     // date in July and one in January get their own DST answer rather than
     // today's offset being applied to every timestamp.
-    defineIntrinsic("Time::localOffset",
+    defineIntrinsic("Time.localOffset",
                     [](std::vector<ValuePtr> args) -> ValuePtr {
         const std::time_t instant = args.empty() ? 0 : toSeconds(args[0]);
         std::tm localParts{};

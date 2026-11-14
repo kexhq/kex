@@ -9,7 +9,7 @@ auto Evaluator::registerConsoleBuiltins() -> void {
     };
 
     const auto constant = [&](const char* name, const char* ansi) {
-        reg(std::string("Console::") + name, [ansi](std::vector<ValuePtr>) {
+        reg(std::string("Console.") + name, [ansi](std::vector<ValuePtr>) {
             return Value::string(color::apply(ansi));
         });
     };
@@ -38,10 +38,10 @@ auto Evaluator::registerConsoleBuiltins() -> void {
     constant("Home", color::home);
     constant("ClearLine", color::clearLine);
 
-    reg("Console::enabled?", [](std::vector<ValuePtr>) {
+    reg("Console.enabled?", [](std::vector<ValuePtr>) {
         return Value::boolean(color::enabled);
     });
-    reg("Console::colorize", [](std::vector<ValuePtr> args) {
+    reg("Console.colorize", [](std::vector<ValuePtr> args) {
         if (args.size() < 2) return Value::string("");
         if (!color::enabled) return Value::string(args[0]->toString());
         return Value::string(args[1]->toString() + args[0]->toString() + color::reset);

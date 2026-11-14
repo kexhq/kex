@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 #
 # The deterministic protocol round-trip is exercised by the runtime fixture;
 # this spec keeps the public WebSocket module and typed failure path covered by

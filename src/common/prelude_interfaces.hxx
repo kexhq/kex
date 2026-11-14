@@ -1,6 +1,14 @@
 #pragma once
 
+#include "../ast/clone.hxx"
+#include "well_known.hxx"
 #include "../ast/function_groups.hxx"
+#include "file_io.hxx"
+#include "mangle.hxx"
+#include "../beam/interface_cache.hxx"
+#include "../cache/cache.hxx"
+#include "digest.hxx"
+#include "timings.hxx"
 #include "../beam/kexi_registry.hxx"
 #include "../compiled/expand.hxx"
 #include "../lexer/lexer.hxx"
@@ -31,13 +39,10 @@ inline auto preludeSourceHash(const std::vector<std::string>& files)
         const auto name = std::filesystem::path(file).filename().string();
         bytes.insert(bytes.end(), name.begin(), name.end());
         bytes.push_back(0);
-        std::ifstream input(file, std::ios::binary);
-        if (!input)
+        const auto contents = readFileBytes(file);
+        if (!contents)
             throw std::runtime_error("cannot read standard-library source: " + file);
-        std::vector<uint8_t> contents{
-            std::istreambuf_iterator<char>(input),
-            std::istreambuf_iterator<char>()};
-        bytes.insert(bytes.end(), contents.begin(), contents.end());
+        bytes.insert(bytes.end(), contents->begin(), contents->end());
         bytes.push_back(0);
     }
     return kex::beam::computeContentHash(bytes);
@@ -95,31 +100,13 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
         if constexpr (std::is_same_v<T, ast::TypeName>) {
             if (node.parts.empty()) return Type::unknown();
             const auto& name = node.parts.back();
-            if (name == "Integer" || name == "Int") return Type::integer();
-            if (name == "String") return Type::string();
-            if (name == "Bool") return Type::boolean();
-            if (name == "Char") return Type::charT();
-            // Without these, an interface signature spelled `Atom` (or a
-            // sized numeric) came back as NamedType while the typechecker's
-            // own path builds a PrimitiveType/SizedIntType for the same name.
-            // Same printed name, different kind: typesEqual said no, so a
-            // signature was not equal to itself and overload dedupe reported
-            // `m.get(1, "")` ambiguous against its own `Atom | Integer`.
-            if (name == "Atom") return Type::atom();
-            if (name == "Byte") return Type::byte();
-            if (name == "Int8") return Type::int8();
-            if (name == "Int16") return Type::int16();
-            if (name == "Int32") return Type::int32();
-            if (name == "Int64") return Type::int64();
-            if (name == "UInt8") return Type::uint8();
-            if (name == "UInt16") return Type::uint16();
-            if (name == "UInt32") return Type::uint32();
-            if (name == "UInt64") return Type::uint64();
-            if (name == "Float32") return Type::float32();
-            if (name == "Float64") return Type::float64();
-            if (name == "Float") return Type::constrained("Float", "Float");
-            if (name == "Number") return Type::constrained("Number", "Number");
-            if (name == "Void") return Type::unit();
+            // The checker's own table: a signature spelled `Atom` (or a sized
+            // numeric) that came back as NamedType while the typechecker
+            // built a PrimitiveType/SizedIntType for the same name was not
+            // equal to itself, and overload dedupe reported `m.get(1, "")`
+            // ambiguous against its own `Atom | Integer`.
+            if (auto builtin = kex::semantic::signatureBuiltinType(name))
+                return builtin;
             if (name == "Any") return Type::unknown();
             if (name.size() == 1 && std::isupper(static_cast<unsigned char>(name[0]))) {
                 auto it = vars.find(name);
@@ -137,7 +124,7 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
             // Bare `List` is the erased form of `[X]`; applied `List<T>` is
             // normalized below. Without this an interface spelling bare
             // `List` read back nominal and matched no `[A]` receiver.
-            if (name == "List") return Type::list(Type::unknown());
+            if (name == kex::names::kListType) return Type::list(Type::unknown());
             return Type::named(name);
         }
         else if constexpr (std::is_same_v<T, ast::GenericType>) {
@@ -147,9 +134,9 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
                 if (a) args.push_back(resolveSourceType(*a, vars, aliases, traits));
             if (name == "Optional" && args.size() == 1)
                 return Type::optional(args[0]);
-            if (name == "Map" && args.size() == 2)
+            if (name == kex::names::kMapType && args.size() == 2)
                 return Type::map(args[0], args[1]);
-            if (name == "List" && args.size() == 1)
+            if (name == kex::names::kListType && args.size() == 1)
                 return Type::list(args[0]);
             if (name == "Result" && args.size() == 2)
                 return Type::named("Result", std::move(args));
@@ -317,8 +304,12 @@ inline auto collectImplementedTraitNames(const Item& item,
 // assembled program claims a trait it does not itself declare, search the
 // prelude's own source files for that trait's declaration and merge just the
 // trait node in — the same node a prelude-tier type would already have found
-// in its own file.
-inline auto backfillExternalTraitDefaults(ast::Program& program) -> void {
+// in its own file. A unit compiled apart claims traits of the units below it
+// too (`implement: Shop.Rules.Pricing`): those are cloned from `below`, found
+// by the qualified name the claim wrote, since their programs keep them.
+inline auto backfillExternalTraitDefaults(ast::Program& program,
+                                          const std::vector<const ast::Program*>& below = {})
+    -> void {
     std::unordered_set<std::string> implemented, declared;
     for (const auto& item : program.items) {
         collectImplementedTraitNames(item, implemented);
@@ -329,6 +320,32 @@ inline auto backfillExternalTraitDefaults(ast::Program& program) -> void {
         if (!declared.count(name)) missing.push_back(name);
     if (missing.empty()) return;
     std::sort(missing.begin(), missing.end());
+
+    std::function<void(const ast::ModuleDef&, const std::string&)> fromModule =
+        [&](const ast::ModuleDef& module, const std::string& parent) {
+            const auto path = ast::nestedModulePath(parent, module.name);
+            for (const auto& item : module.body) {
+                if (const auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                    if (*nested) fromModule(**nested, path);
+                    continue;
+                }
+                const auto* trait = std::get_if<std::unique_ptr<ast::TraitDef>>(&item);
+                if (!trait || !*trait) continue;
+                const auto found =
+                    std::find(missing.begin(), missing.end(), path + "." + (*trait)->name);
+                if (found == missing.end()) continue;
+                auto copy = ast::clone(**trait);
+                copy->name = *found;
+                program.items.push_back(std::move(copy));
+                missing.erase(found);
+            }
+        };
+    for (const auto* unit : below)
+        for (const auto& item : unit->items)
+            if (const auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
+                module && *module)
+                fromModule(**module, "");
+    if (missing.empty()) return;
 
     for (const auto& filePath : preludeSourceFiles()) {
         if (missing.empty()) break;
@@ -362,7 +379,10 @@ inline auto importedTraitFromSource(const ast::TraitDef& trait)
     result.name = trait.name;
     for (const auto& member : trait.body) {
         if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&member)) {
-            if (*fn) result.defaultMethods.push_back((*fn)->name);
+            if (*fn) {
+                result.defaultMethods.push_back((*fn)->name);
+                result.defaultBodies.push_back((*fn)->name);
+            }
         } else if (const auto* ann =
                        std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&member)) {
             if (*ann) {
@@ -522,7 +542,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
     };
 
     auto backendModuleFor = [directBackendOwnership](const std::string& mod) {
-        return directBackendOwnership && !mod.empty() ? "Kex." + mod : "";
+        return directBackendOwnership && !mod.empty() ? names::moduleAtom(mod) : "";
     };
 
     auto annotationToSignature = [&](const ast::TypeAnnotation& ann,
@@ -612,9 +632,20 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         return sig;
     };
 
+    // Whether a receiver parameter is written as one of the type aliases. An
+    // opaque type (`type Range`, recorded as an alias of Unknown) is nominal.
+    auto namesAlias = [&](const ast::TypeExpr* written) {
+        const auto* name = written ? std::get_if<ast::TypeName>(&written->kind) : nullptr;
+        if (!name || name->parts.empty()) return false;
+        const auto alias = typeAliases.find(name->parts.back());
+        return alias != typeAliases.end() && alias->second &&
+               !std::holds_alternative<kex::semantic::UnknownType>(alias->second->kind);
+    };
+
     auto addReceiverSig = [&](const std::string& mod,
                               const kex::semantic::Signature& sig,
-                              std::vector<std::string> paramNames = {}) {
+                              std::vector<std::string> paramNames = {},
+                              bool foreignTarget = false, bool aliasReceiver = false) {
         kex::semantic::ImportedFunction ifn;
         ifn.sourceName = sig.name;
         ifn.signature = sig;
@@ -627,46 +658,26 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 (sig.isFoul ? 1 : 0);
         }
         ifn.isReceiverMethod = true;
+        ifn.aliasReceiver = aliasReceiver;
+        ifn.foreignTarget = foreignTarget;
         ifaces.modules[mod].exports[sig.name].push_back(ifn);
         ifaces.receiverFunctions[sig.name].push_back(ifn);
     };
 
     for (auto& program : programs) {
 
-        auto makeTargetName = [](const ast::MakeDef& make) -> std::string {
-            if (!make.target) return "";
-            if (const auto* tn = std::get_if<ast::TypeName>(&make.target->kind))
-                return tn->parts.empty() ? "" : tn->parts.back();
-            if (const auto* gt = std::get_if<ast::GenericType>(&make.target->kind))
-                return gt->name.parts.empty() ? "" : gt->name.parts.back();
-            if (const auto* lt = std::get_if<ast::ListType>(&make.target->kind))
-                return "List";
-            if (const auto* mt = std::get_if<ast::MapType>(&make.target->kind))
-                return "Map";
-            return "";
+        auto makeTargetName = [](const ast::MakeDef& make) {
+            return makeTargetLeaf(make.target);
         };
 
-        auto makeTargetSpelling = [](const ast::MakeDef& make) -> std::string {
-            auto join = [](const std::vector<std::string>& parts) {
-                std::string out;
-                for (size_t i = 0; i < parts.size(); ++i) {
-                    if (i) out += ".";
-                    out += parts[i];
-                }
-                return out;
-            };
-            if (!make.target) return "";
-            if (const auto* tn = std::get_if<ast::TypeName>(&make.target->kind))
-                return join(tn->parts);
-            if (const auto* gt = std::get_if<ast::GenericType>(&make.target->kind))
-                return join(gt->name.parts);
-            if (std::get_if<ast::ListType>(&make.target->kind)) return "List";
-            if (std::get_if<ast::MapType>(&make.target->kind)) return "Map";
-            return "";
+        auto makeTargetSpelling = [](const ast::MakeDef& make) {
+            const auto name = writtenMakeTarget(make.target);
+            return name ? name->dotted() : std::string{};
         };
 
         auto collectMakeAnnotations = [&](const ast::MakeDef& make,
-                                          const std::string& owner = "") {
+                                          const std::string& owner = "",
+                                          const std::unordered_set<std::string>* ownTypes = nullptr) {
             auto typeName = makeTargetName(make);
             if (!typeName.empty())
                 for (const auto& trait : make.implements)
@@ -690,6 +701,9 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 ifaces.recordArities.count(qualifiedTarget) > 0;
             const auto sourceModule = targetIsOwnedRecord ? qualifiedTarget
                 : owner.empty() ? typeName : owner;
+            const bool foreignTarget = !owner.empty() &&
+                sourceModule != typeName && !targetIsOwnedRecord &&
+                !(ownTypes && ownTypes->contains(typeName));
             auto& module = ifaces.modules[sourceModule];
             module.sourceModule = sourceModule;
             module.backendModule = backendModuleFor(sourceModule);
@@ -709,7 +723,8 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             }
             auto collectMakeMember = [&](const auto& member) {
                 if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&member))
-                    if (*ann) addReceiverSig(sourceModule, annotationToSignature(**ann, selfType, tvars));
+                    if (*ann) addReceiverSig(sourceModule,
+                        annotationToSignature(**ann, selfType, tvars), {}, foreignTarget);
                 if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&member))
                     if (*fn) {
                         ifaces.modules[typeName].exports.try_emplace((*fn)->name);
@@ -738,13 +753,14 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                                         paramNames.push_back(
                                             param.name ? *param.name : "");
                                     addReceiverSig(sourceModule, *sig,
-                                                   std::move(paramNames));
+                                                   std::move(paramNames), foreignTarget);
                                 }
                             } else if (!directBackendOwnership) {
                                 for (const auto* clause :
                                      ast::signatureClauses(**fn))
                                     addReceiverSig(sourceModule,
-                                                   shapeOnlySignature(**fn, *clause, selfType));
+                                                   shapeOnlySignature(**fn, *clause, selfType),
+                                                   {}, foreignTarget);
                             }
                         }
                     }
@@ -817,6 +833,43 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 if (!std::holds_alternative<kex::semantic::NamedType>(resolved->kind) ||
                     std::get<kex::semantic::NamedType>(resolved->kind).name != td.name)
                     typeAliases[td.name] = resolved;
+                return;
+            }
+            // Mirror TypeChecker::registerTypeAliases' final rule: a typedef
+            // that is not an ADT — not every variant constructor-shaped — is
+            // an alias even when its right-hand side is structural (`type
+            // List<X> = [X]`) or a union of types. Without this the compile
+            // path (interfaces only) never learns `List`/`Map` while the Run
+            // path (sources parsed) does, so a `List<Integer>` annotation
+            // went nominal and a static `List.first(x)` failed with
+            // "Unknown module `List`" on BEAM only (risk #1). Type parameters
+            // bind in declared order to the negative TypeVar slots
+            // `substituteInterfaceGenerics` fills, exactly as `typeDefToType`.
+            if (td.variants && !td.variants->empty()) {
+                const auto ctors = kex::typeConstructors(td);
+                if (ctors && !ctors->empty()) return; // ADT, not an alias
+                std::unordered_map<std::string, kex::semantic::TypePtr> aliasVars;
+                for (size_t i = 0; i < td.typeParams.size(); ++i)
+                    aliasVars[td.typeParams[i]] =
+                        kex::semantic::Type::typeVar(
+                            -static_cast<int>(i + 1));
+                std::vector<kex::semantic::TypePtr> parts;
+                for (const auto& v : *td.variants)
+                    if (v) parts.push_back(resolveSourceType(*v, aliasVars, &typeAliases));
+                if (parts.empty()) {
+                    typeAliases[td.name] = kex::semantic::Type::unknown();
+                    return;
+                }
+                kex::semantic::TypePtr resolved = parts.size() == 1
+                    ? parts[0]
+                    : std::make_shared<kex::semantic::Type>(
+                          kex::semantic::Type{kex::semantic::UnionType{
+                              std::move(parts)}});
+                if (!std::holds_alternative<kex::semantic::NamedType>(
+                        resolved->kind) ||
+                    std::get<kex::semantic::NamedType>(resolved->kind).name !=
+                        td.name)
+                    typeAliases[td.name] = resolved;
             }
         };
 
@@ -831,6 +884,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             const auto identity = moduleName + "." + td.name;
             kex::semantic::ImportedADT adt;
             adt.name = identity;
+            adt.module = moduleName;
             adt.typeParamCount = td.typeParams.size();
             adt.typeParamNames = td.typeParams;
             // Both spellings are declared type NAMES, the way a record's are;
@@ -914,12 +968,10 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         std::function<void(const ast::ModuleDef&, const std::string&)>
             collectAnnotatedNames =
             [&](const ast::ModuleDef& mod, const std::string& parent) {
-            const auto moduleName = parent.empty() ||
-                    mod.name.starts_with(parent + ".")
-                ? mod.name : parent + "." + mod.name;
+            const auto moduleName = ast::nestedModulePath(parent, mod.name);
             for (const auto& item : mod.body) {
                 if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item))
-                    if (*ann) moduleAnnotated.insert(moduleName + "::" + (*ann)->name);
+                    if (*ann) moduleAnnotated.insert(kex::mangle::qualify(moduleName, (*ann)->name));
                 if (const auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
                     if (*nested) collectAnnotatedNames(**nested, moduleName);
             }
@@ -927,10 +979,34 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         std::function<void(const ast::ModuleDef&, const std::string&)>
             collectModule =
             [&](const ast::ModuleDef& mod, const std::string& parent) {
-            const auto moduleName = parent.empty() ||
-                    mod.name.starts_with(parent + ".")
-                ? mod.name : parent + "." + mod.name;
+            const auto moduleName = ast::nestedModulePath(parent, mod.name);
             collectAnnotatedNames(mod, parent);
+            // A bare name of a type this module declares means that type, by
+            // its qualified identity (`Match` in `Regex` is `Regex.Match`),
+            // wherever it appears in a signature: the compiled interface
+            // spells it so, and the two must agree.
+            std::unordered_set<std::string> ownTypes;
+            for (const auto& item : mod.body) {
+                if (const auto* record = std::get_if<std::unique_ptr<ast::RecordDef>>(&item))
+                    if (*record) ownTypes.insert((*record)->name);
+                if (const auto* type = std::get_if<std::unique_ptr<ast::TypeDef>>(&item))
+                    if (*type) ownTypes.insert((*type)->name);
+            }
+            const auto qualifyOwn = [&](const auto& self, const kex::semantic::TypePtr& type)
+                -> kex::semantic::TypePtr {
+                if (!type) return type;
+                auto rebuilt = kex::semantic::mapTypeChildren(
+                    type, [&](const kex::semantic::TypePtr& child) { return self(self, child); });
+                const auto* named = std::get_if<kex::semantic::NamedType>(&rebuilt->kind);
+                if (!named || !ownTypes.count(named->name)) return rebuilt;
+                auto copy = std::make_shared<kex::semantic::Type>(*rebuilt);
+                std::get<kex::semantic::NamedType>(copy->kind).name = moduleName + "." + named->name;
+                return copy;
+            };
+            const auto qualifySignature = [&](kex::semantic::Signature& sig) {
+                for (auto& param : sig.params) param = qualifyOwn(qualifyOwn, param);
+                sig.result = qualifyOwn(qualifyOwn, sig.result);
+            };
             ifaces.modules[moduleName].sourceModule = moduleName;
             ifaces.modules[moduleName].backendModule =
                 backendModuleFor(moduleName);
@@ -949,10 +1025,11 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
                     if (*fn) {
                         ifaces.modules[moduleName].exports.try_emplace((*fn)->name);
-                        if (!moduleAnnotated.count(moduleName + "::" + (*fn)->name))
+                        if (!moduleAnnotated.count(kex::mangle::qualify(moduleName, (*fn)->name)))
                             for (const auto* clause : ast::signatureClauses(**fn)) {
                                 auto sig = inlineSignature(**fn, *clause, nullptr);
                                 if (!sig) continue;
+                                qualifySignature(*sig);
                                 std::vector<std::string> paramNames;
                                 for (const auto& param : clause->params)
                                     paramNames.push_back(
@@ -960,14 +1037,6 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                                 addModuleSig(moduleName, *sig, paramNames);
                                 if (directBackendOwnership &&
                                     !sig->params.empty()) {
-                                    if (auto* named = std::get_if<
-                                            kex::semantic::NamedType>(
-                                            &sig->params.front()->kind)) {
-                                        const auto qualified =
-                                            moduleName + "." + named->name;
-                                        if (ifaces.typeNames.count(qualified) > 0)
-                                            named->name = qualified;
-                                    }
                                     // The first parameter is the UFCS
                                     // receiver here, so the receiver
                                     // registration's param names exclude it —
@@ -979,7 +1048,10 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                                         moduleName, *sig,
                                         std::vector<std::string>(
                                             paramNames.begin() + 1,
-                                            paramNames.end()));
+                                            paramNames.end()),
+                                        false,
+                                        clause->params.front().type &&
+                                            namesAlias(clause->params.front().type->get()));
                                 }
                             }
                     }
@@ -1005,32 +1077,27 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                                 sig.requiredParams = required;
                             }
                         }
-                        // A first parameter naming a type declared by this
-                        // nested companion has the companion's nominal
-                        // identity at import sites. Preserve that identity so
-                        // sibling operations such as TCP.accept and
-                        // Unix.accept remain distinct during UFCS selection.
-                        if (!sig.params.empty())
-                            if (auto* named = std::get_if<
-                                    kex::semantic::NamedType>(
-                                    &sig.params.front()->kind)) {
-                                const auto qualified = moduleName + "." + named->name;
-                                if (ifaces.typeNames.count(qualified) > 0)
-                                    named->name = qualified;
-                            }
+                        // The companion's own types keep their nominal
+                        // identity at import sites, so sibling operations
+                        // such as TCP.accept and Unix.accept stay distinct
+                        // during UFCS selection.
+                        qualifySignature(sig);
                         addModuleSig(moduleName, sig, sig.paramNames);
-                        if (directBackendOwnership && !sig.params.empty())
-                            addReceiverSig(moduleName, sig);
+                        if (directBackendOwnership && !sig.params.empty()) {
+                            const auto* function = (*ann)->type
+                                ? std::get_if<ast::FunctionType>(&(*ann)->type->kind) : nullptr;
+                            addReceiverSig(moduleName, sig, {}, false,
+                                           function && function->param &&
+                                               namesAlias(function->param.get()));
+                        }
                     }
                 if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item))
-                    if (*make) collectMakeAnnotations(**make, moduleName);
+                    if (*make) collectMakeAnnotations(**make, moduleName, &ownTypes);
                 if (const auto* record =
                         std::get_if<std::unique_ptr<ast::RecordDef>>(&item);
                     record && *record) {
                     const auto qualified = moduleName + "." + (*record)->name;
                     ifaces.recordArities[qualified] = (*record)->fields.size();
-                    ifaces.recordArities.try_emplace(
-                        (*record)->name, (*record)->fields.size());
                     auto& fields = ifaces.recordFieldNames[qualified];
                     std::unordered_map<std::string,
                                        kex::semantic::TypePtr> vars;
@@ -1046,10 +1113,6 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                                                 &typeAliases, &traitNames)
                             : kex::semantic::Type::unknown();
                     }
-                    ifaces.recordFieldNames.try_emplace((*record)->name,
-                                                        fields);
-                    ifaces.recordFields.try_emplace((*record)->name,
-                                                    fieldTypes);
                     ifaces.typeNames.insert((*record)->name);
                     ifaces.typeNames.insert(qualified);
                 }
@@ -1185,6 +1248,12 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 if (*fn) ifaces.receiverFunctions.try_emplace((*fn)->name);
             } else if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item)) {
                 if (*ann) addReceiverSig("", annotationToSignature(**ann, nullptr));
+            } else if (const auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
+                // Top-level aliases are interface entries too: only typedefs
+                // inside `module` blocks reached collectTypeAlias, so the
+                // compile path never learned `type List<X> = [X]` (risk #1).
+                // ADTs need no call here — collectArities above owns them.
+                if (*td) collectTypeAlias(**td);
             }
         }
     }
@@ -1226,7 +1295,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
     // defining module's alias, the same way the KexI path carries them.
     for (auto& [name, body] : typeAliases)
         ifaces.typeAliases.try_emplace(name, body);
-    kex::semantic::qualifyModuleAdtNames(ifaces);
+    kex::semantic::qualifyModuleTypeIdentities(ifaces);
     resolveSharedNullaryConstructors(ifaces);
     return ifaces;
 }
@@ -1360,27 +1429,71 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
 inline auto preludeSemanticInterfaces(const std::string& runtimeDir)
     -> const kex::semantic::ImportedInterfaces& {
     static const auto cached = [&]() -> kex::semantic::ImportedInterfaces {
-        // KEX_TIMINGS=1 splits this one-time load in two (kexhq/kex#323).
-        const bool timed = [] {
-            const char* value = std::getenv("KEX_TIMINGS");
-            return value && *value && std::string(value) != "0";
-        }();
-        auto phaseStart = std::chrono::steady_clock::now();
-        auto phase = [&](const char* name) {
-            if (!timed) return;
-            const auto now = std::chrono::steady_clock::now();
-            std::fprintf(stderr, "    %-26s %8.1f ms\n", name,
-                         std::chrono::duration<double, std::milli>(now - phaseStart).count());
-            phaseStart = now;
+        // KEX_TIMINGS=1 splits this one-time load (kexhq/kex#323).
+        const bool timed = kex::timings::enabled();
+        kex::timings::PhaseTimer loadTimer(4, false);
+        auto phase = [&](const char* name) { loadTimer.mark(name); };
+
+        // The snapshot is a pure function of the stdlib sources AND the
+        // compiler that derives it, so it is cached keyed by the toolchain
+        // fingerprint, which covers both: every stdlib source (prelude and
+        // opt-in, subdirectories included) and the compiler binary. A
+        // same-version rebuild never serves the previous build's interfaces
+        // (risk #2, the #372 class), and an edited opt-in module never
+        // serves its old signature.
+        std::optional<std::filesystem::path> cachePath;
+        if (!runtimeDir.empty()) {
+            if (const auto dir = kex::cache::directory("prelude-interface"))
+                cachePath = *dir / (kex::sha256Hex(
+                                        "kex-prelude-interface-v1\n" +
+                                        kex::cache::toolchainFingerprint()) +
+                                    ".bin");
+        }
+        const auto noteMiss = [&](const char* why) {
+            if (timed) std::fprintf(stderr, "      [cache] miss: %s\n", why);
         };
-        auto interfaces = runtimeDir.empty()
-            ? sourcePreludeSemanticInterfaces()
-            : preludeRegistry(runtimeDir).buildSemanticInterfaces();
+        if (cachePath) {
+            const auto bytes = readFileBytes(cachePath->string());
+            if (!bytes) {
+                noteMiss("absent");
+            } else {
+                // The key (stats of the stdlib files, see
+                // toolchainFingerprint) plus this read, apart from the
+                // deserialize below.
+                phase("cache key + read");
+                kex::beam::CacheMissReason reason =
+                    kex::beam::CacheMissReason::Corrupt;
+                if (auto loaded = kex::beam::deserializeImportedInterfaces(
+                        *bytes, &reason)) {
+                    phase("cache deserialize");
+                    return std::move(*loaded);
+                }
+                noteMiss(kex::beam::cacheMissReasonName(reason));
+            }
+        }
+
+        auto interfaces = [&]() -> kex::semantic::ImportedInterfaces {
+            if (runtimeDir.empty()) return sourcePreludeSemanticInterfaces();
+            const auto& registry = preludeRegistry(runtimeDir);
+            return registry.buildSemanticInterfaces();
+        }();
         phase("prebuilt KexI interfaces");
         auto stdlib = sourceSemanticInterfaces(
             standardLibrarySourceFiles(), false, true);
         phase("opt-in stdlib from source");
-        return mergeSemanticInterfaces(std::move(interfaces), std::move(stdlib));
+        auto merged =
+            mergeSemanticInterfaces(std::move(interfaces), std::move(stdlib));
+
+        if (cachePath) {
+            auto bytes = kex::beam::serializeImportedInterfaces(merged);
+            if (kex::cache::atomicWrite(
+                    *cachePath,
+                    std::string_view(reinterpret_cast<const char*>(bytes.data()),
+                                     bytes.size())))
+                kex::beam::pruneInterfaceCacheDirectory(
+                    cachePath->parent_path(), *cachePath);
+        }
+        return merged;
     }();
     return cached;
 }

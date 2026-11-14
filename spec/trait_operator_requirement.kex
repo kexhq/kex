@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A trait can require an operator, as a make block declares one. A value known
 # only by the trait reaches its type's operator, and a default can use it.
 trait Summable do

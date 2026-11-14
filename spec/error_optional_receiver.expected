@@ -1,0 +1,8 @@
+spec/error_optional_receiver.kex:8:27: error: `ok?` expects argument 1 to be Result<A, B>, but got Result<Integer, ParseError>?
+
+ok? : Result<A, B> -> Bool
+spec/error_optional_receiver.kex:11:32: error: `upperCase` expects argument 1 to be Char, but got String?
+
+upperCase : Char -> Char
+
+upperCase : String -> String

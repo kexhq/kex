@@ -1,11 +1,15 @@
 #include "expand.hxx"
 
 #include "reify.hxx"
+#include "../common/string_utils.hxx"
 #include "../ast/clone.hxx"
 #include "../ast/function_groups.hxx"
-#include "../beam/kexi.hxx"
+#include "../common/digest.hxx"
+#include "../common/mangle.hxx"
 #include "../common/prelude_loader.hxx"
 #include "../common/type_def_utils.hxx"
+#include "../common/well_known.hxx"
+#include "../hir/compile_time.hxx"
 #include "../interpreter/evaluator.hxx"
 #include "../interpreter/value.hxx"
 #include "../lexer/lexer.hxx"
@@ -20,6 +24,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <random>
 #include <regex>
@@ -29,6 +34,16 @@
 #include <utility>
 
 namespace kex::compiled {
+
+auto effectiveModuleRoots(const std::vector<std::string>& roots)
+    -> std::vector<std::string> {
+    auto effective = roots;
+    for (auto& root : kex::standardLibraryModuleRoots())
+        if (std::find(effective.begin(), effective.end(), root) == effective.end())
+            effective.push_back(std::move(root));
+    return effective;
+}
+
 
 namespace {
 // The template-scan cache settings of an expansion that has none of its own.
@@ -147,7 +162,7 @@ using ScopedConstants = std::unordered_map<std::string, Constants>;
 
 auto qualifiedName(const std::string& scope, const std::string& name)
     -> std::string {
-    return scope.empty() ? name : scope + "::" + name;
+    return kex::mangle::qualify(scope, name);
 }
 
 // Stable identity for a generation template, whichever declaration shape it
@@ -514,7 +529,7 @@ struct Substituter {
                         if (node.rescue) each(*node.rescue);
                     });
                 } else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
-                    each(node.args);
+                    substitute(node.lambda);
                 } else if constexpr (std::is_same_v<T, ast::SpreadExpr>) {
                     substitute(node.inner);
                 } else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
@@ -656,7 +671,6 @@ auto walkBodies(Items& items, Visit&& visit, bool intoCompiled = true) -> void {
     for (auto& item : items) {
         std::visit(
             [&](auto& node) {
-                using T = std::decay_t<decltype(node)>;
                 using Ptr = std::decay_t<decltype(*node)>;
                 if (!node) return;
                 if constexpr (std::is_same_v<Ptr, ast::FunctionDef>) {
@@ -859,7 +873,7 @@ struct EmbedFolder {
 
     static auto isKexReceiver(const ast::Expr& expr) -> bool {
         const auto* upper = std::get_if<ast::UpperIdentifier>(&expr.kind);
-        return upper && upper->name == "Kex";
+        return upper && upper->name == names::kRuntimeRoot;
     }
 
     auto fail(const SourceLocation& location, std::string message) -> bool {
@@ -871,7 +885,7 @@ struct EmbedFolder {
     auto claim(ast::ExprPtr& slot) -> bool {
         if (!slot) return false;
         const auto* call = std::get_if<ast::MethodCall>(&slot->kind);
-        if (!call || call->method != "embed" || !call->receiver ||
+        if (!call || call->method != names::kEmbedFunction || !call->receiver ||
             !isKexReceiver(*call->receiver))
             return false;
         if (call->args.size() != 1 || !call->namedArgs.empty() || call->block)
@@ -972,7 +986,7 @@ auto findDispatchEmbed(ast::FunctionClause& clause,
     walk.onSlot = [&](ast::ExprPtr& slot) {
         if (found || !slot) return found.has_value();
         auto* call = std::get_if<ast::MethodCall>(&slot->kind);
-        if (!call || call->method != "embed" || !call->receiver ||
+        if (!call || call->method != names::kEmbedFunction || !call->receiver ||
             !EmbedFolder::isKexReceiver(*call->receiver) ||
             call->args.size() != 1 || !call->args[0])
             return false;
@@ -1246,13 +1260,7 @@ auto parseOrDiagnose(Parse&& parse) -> decltype(parse()) {
     }
 }
 
-auto trimmed(std::string text) -> std::string {
-    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())))
-        text.erase(text.begin());
-    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())))
-        text.pop_back();
-    return text;
-}
+using kex::trimmed;
 
 // The options of the `expand` call in progress: what a template scan reads
 // its cache settings from, without threading them through every folder and
@@ -1265,21 +1273,9 @@ struct ScannedTemplate {
     std::vector<ExplicitParam> explicitParams;
 };
 
-// A digest written as hex, for a file name.
-template <typename Digest>
-auto hexDigest(const Digest& digest) -> std::string {
-    static const char* hex = "0123456789abcdef";
-    std::string text;
-    for (const auto byte : digest) {
-        text += hex[byte >> 4];
-        text += hex[byte & 0xF];
-    }
-    return text;
-}
-
 auto scanCacheKey(const std::string& source, const std::string& toolchainKey) -> std::string {
     const std::string material = "kex-template-scan-v1\n" + toolchainKey + "\n" + source;
-    return hexDigest(beam::computeSha256(std::vector<uint8_t>(material.begin(), material.end())));
+    return sha256Hex(material);
 }
 
 auto scanCachePath(const std::filesystem::path& root, const std::string& key) -> std::filesystem::path {
@@ -1450,7 +1446,7 @@ auto scanTemplateSourceUncached(const std::string& source, std::chrono::millisec
     std::vector<std::string> reasons;
     try {
         SandboxClock clock;
-        interpreter::Evaluator evaluator;
+        interpreter::Evaluator evaluator(activeOptions ? activeOptions->interfaces : nullptr);
         evaluator.loadPrelude();
         clock.started();
         interpreter::Evaluator::ExpressionRequest request{&callExpr, {}};
@@ -2455,10 +2451,7 @@ struct ChainCollapser {
 auto useModuleRoots(interpreter::Evaluator& evaluator,
                     const ExpandOptions& options) -> void {
     if (options.moduleRoots.empty()) return;
-    auto roots = options.moduleRoots;
-    for (auto& root : kex::standardLibraryModuleRoots())
-        if (std::find(roots.begin(), roots.end(), root) == roots.end())
-            roots.push_back(std::move(root));
+    auto roots = effectiveModuleRoots(options.moduleRoots);
     evaluator.setModuleRoots(std::move(roots));
 }
 
@@ -2551,24 +2544,19 @@ auto compiledNamesInFile(const std::string& path) -> const CompiledNames& {
 auto addImportedCompiledNames(const ast::Program& program,
                               const ExpandOptions& options,
                               CompiledNames& into) -> void {
-    auto roots = options.moduleRoots;
-    for (auto& root : kex::standardLibraryModuleRoots())
-        if (std::find(roots.begin(), roots.end(), root) == roots.end())
-            roots.push_back(std::move(root));
+    auto roots = effectiveModuleRoots(options.moduleRoots);
     const module::Resolver resolver(roots);
 
     auto add = [&](const ast::UsingBlock& use, const std::string& scope) {
-        std::string name;
-        for (const auto& part : use.module.parts)
-            name += (name.empty() ? "" : ".") + part;
+        std::string name = use.module.dotted();
         const auto resolved = resolver.resolve(name, scope);
         if (!resolved) return;
         const auto& theirs = compiledNamesInFile(resolved->path);
-        const auto prefix = resolved->moduleName + "::";
+        const auto prefix = resolved->moduleName + std::string(kex::mangle::kSeparator);
         for (const auto& identity : theirs.qualified) {
             if (identity.rfind(prefix, 0) != 0) continue;
             const auto bare = identity.substr(prefix.size());
-            if (bare.find("::") != std::string::npos) continue;
+            if (kex::mangle::hasScope(bare)) continue;
             into.qualified.insert(identity);
             if (name != resolved->moduleName)
                 into.qualified.insert(qualifiedName(name, bare));
@@ -3294,6 +3282,8 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
     // entry file, which takes five. What the sandbox ran stays alive for
     // it: a closure it made may point into a chain since replaced.
     std::vector<ast::ExprPtr> replaced;
+    // What the sandbox runs, checked when it starts (it outlives the sandbox).
+    std::unique_ptr<hir::CheckedProgram> checked;
     std::unique_ptr<interpreter::Evaluator> evaluator;
     auto replace = [&](ast::ExprPtr& slot, ast::ExprPtr literal) {
         if (evaluator) replaced.push_back(std::move(slot));
@@ -3315,9 +3305,7 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
             for (const auto& name : compiled.methods)
                 if (text.find(name) != std::string::npos) return true;
             for (const auto& identity : compiled.qualified) {
-                const auto split = identity.rfind("::");
-                const auto name = split == std::string::npos
-                    ? identity : identity.substr(split + 2);
+                const auto name = kex::mangle::memberOf(identity);
                 if (text.find(name) != std::string::npos) return true;
             }
             return false;
@@ -3368,8 +3356,7 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
             material += key;
             entry = storedRoundPath(
                 store->root,
-                hexDigest(beam::computeSha256(
-                    std::vector<uint8_t>(material.begin(), material.end()))));
+                sha256Hex(material));
         }
         if (auto kept = store ? readStoredRound(entry) : std::nullopt;
             kept && kept->outcomes.size() == collapser.candidates.size()) {
@@ -3424,9 +3411,13 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
         try {
             SandboxClock clock;
             if (!evaluator) {
-                evaluator = std::make_unique<interpreter::Evaluator>();
+                evaluator = std::make_unique<interpreter::Evaluator>(options.interfaces);
                 useModuleRoots(*evaluator, options);
                 evaluator->loadPrelude();
+                if (options.interfaces) {
+                    checked = hir::checkCompileTime(program, options.interfaces);
+                    evaluator->setProgram(&*checked->program);
+                }
                 clock.started();
                 values = evaluator->evaluateExpressions(
                     program, requests, options.timeout,
@@ -3496,8 +3487,7 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
             own.insert(options.sourcePath);
             own.erase(std::string{});
             for (auto& path : canonicalFiles(own)) remembered.dependencies.insert(std::move(path));
-            auto roots = options.moduleRoots;
-            for (auto& root : kex::standardLibraryModuleRoots()) roots.push_back(std::move(root));
+            const auto roots = effectiveModuleRoots(options.moduleRoots);
             for (auto& path : shadowsOf(remembered.dependencies, roots))
                 remembered.dependencies.insert(std::move(path));
             // Kept for later builds only when nothing the sandbox ran so far
@@ -3642,10 +3632,7 @@ auto exportsOf(const std::string& path, const ExpandOptions& options)
 // that declares no constants, costs a lookup and a parse, once.
 auto importConstants(ast::Program& program, const ExpandOptions& options,
                      std::vector<semantic::Diagnostic>& diagnostics) -> bool {
-    auto roots = options.moduleRoots;
-    for (auto& root : kex::standardLibraryModuleRoots())
-        if (std::find(roots.begin(), roots.end(), root) == roots.end())
-            roots.push_back(std::move(root));
+    auto roots = effectiveModuleRoots(options.moduleRoots);
     const module::Resolver resolver(roots);
 
     // Fully qualified owners are the same everywhere. Aliases are lexical:
@@ -3659,9 +3646,7 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
             if (const auto* use =
                     std::get_if<std::unique_ptr<ast::UsingBlock>>(&item)) {
                 if (!*use) continue;
-                std::string name;
-                for (const auto& part : (*use)->module.parts)
-                    name += (name.empty() ? "" : ".") + part;
+                std::string name = (*use)->module.dotted();
                 if ((*use)->alias) aliases[scope][*(*use)->alias] = name;
             } else if (const auto* mod =
                            std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
@@ -3717,7 +3702,7 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
         // does not declare that module — the container heuristic accepts
         // `mid.kex` for a nested `Mid.Leaf` it need not define. Then `Leaf`
         // written inside `module Mid` means the top-level `Leaf`, as it does
-        // to SemanticDB::ensureModule.
+        // to lsp::Workspace::ensureModule.
         const auto declares = [&](const module::Resolution& found) {
             if (self(found)) return ownModules.contains(found.moduleName);
             const auto* exports = exportsOf(found.path, options);
@@ -3768,13 +3753,12 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
         for (const auto& reference : substituter.remaining) {
             if (!reported.insert(qualifiedName(scope, reference)).second)
                 continue;
-            const auto split = reference.rfind("::");
             std::string why;
-            if (split != std::string::npos)
-                if (const auto found = visible.find(reference.substr(0, split));
+            if (kex::mangle::hasScope(reference))
+                if (const auto found = visible.find(kex::mangle::scopeOf(reference));
                     found != visible.end())
                     if (const auto value = found->second.find(
-                            reference.substr(split + 2));
+                            kex::mangle::memberOf(reference));
                         value != found->second.end())
                         (void)valueToLiteral(value->second, SourceLocation{},
                                              why, {&layouts, nullptr, &modules});
@@ -3919,15 +3903,19 @@ auto expand(ast::Program& program,
     // which on BEAM is its tuple layout.
     RecordLayouts layouts;
     std::unordered_map<std::string, std::string> typeModules;
+    // Checked first, so the sandbox reads the checker's answers.
+    const auto checked = options.interfaces
+        ? hir::checkCompileTime(program, options.interfaces) : nullptr;
     {
         const SourceLocation blame =
             locations.empty() ? SourceLocation{} : locations.front();
         std::vector<interpreter::ValuePtr> values;
         try {
             SandboxClock clock;
-            interpreter::Evaluator evaluator;
+            interpreter::Evaluator evaluator(options.interfaces);
             useModuleRoots(evaluator, options);
             evaluator.loadPrelude();
+            if (checked) evaluator.setProgram(&*checked->program);
             clock.started();
             values = evaluator.evaluateConstants(program, names, options.timeout);
             if (evaluator.touchedOutside()) noteReachedOutside();
@@ -3947,11 +3935,8 @@ auto expand(ast::Program& program,
         }
         for (std::size_t i = 0; i < names.size() && i < values.size(); i++) {
             if (!values[i]) continue;
-            const auto split = names[i].rfind("::");
-            const auto scope = split == std::string::npos
-                ? std::string{} : names[i].substr(0, split);
-            const auto bare = split == std::string::npos
-                ? names[i] : names[i].substr(split + 2);
+            const auto scope = kex::mangle::scopeOf(names[i]);
+            const auto bare = kex::mangle::memberOf(names[i]);
             constants[scope].emplace(bare, values[i]);
         }
     }
@@ -3982,11 +3967,9 @@ auto expand(ast::Program& program,
                     substituter.substitute(target);
             });
             for (const auto& reference : substituter.remaining) {
-                const auto split = reference.rfind("::");
-                const auto name = split == std::string::npos
-                    ? reference : reference.substr(split + 2);
-                const auto owner = split != std::string::npos
-                    ? reference.substr(0, split)
+                const auto name = kex::mangle::memberOf(reference);
+                const auto owner = kex::mangle::hasScope(reference)
+                    ? kex::mangle::scopeOf(reference)
                     : (constants[scope].count(name) ? scope : std::string{});
                 const auto identity = qualifiedName(owner, name);
                 keep.insert(identity);

@@ -1,0 +1,20 @@
+# kex: check-only
+# A generic several parameters share is one type at the call: the arguments
+# before bind it, and a later one that is something else is an error. All
+# three checked clean (also on `main`).
+
+same : A -> A -> Bool
+let same(a, b) = true
+
+record Box<X> do
+  item : X
+end
+
+put : Box<A> -> A -> Bool
+let put(box, value) = true
+
+main do
+  IO.printLine("${same(1, "s")}")
+  IO.printLine("${put(Box { item: 1 }, "s")}")
+  IO.printLine("${same(1, 2.5)}")
+end

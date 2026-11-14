@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # Two modules may each declare a trait called `Shape`: inside a module a
 # trait is known by its qualified name, the way a record is, so neither
 # replaces the other. Each make block below inherits its own trait's

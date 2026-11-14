@@ -1,8 +1,12 @@
 #include "emit_core.hxx"
+#include "module_passes.hxx"
+#include "../pass/options.hxx"
+#include "walk.hxx"
 #include "../common/utf8.hxx"
 #include <algorithm>
 #include <cctype>
 #include <sstream>
+#include <utility>
 
 namespace kex::ir {
 
@@ -54,6 +58,12 @@ auto erlBinary(const std::string& s) -> std::string {
     return out + "}#";
 }
 
+// The codepoint of a Char literal's text.
+auto charCodepoint(const std::string& text) -> unsigned {
+    const auto codepoints = utf8::decode(text);
+    return codepoints.empty() ? 0u : static_cast<unsigned>(codepoints.front());
+}
+
 struct Emitter {
     int wildCounter = 0;
     bool m_returnThrows = false;
@@ -69,50 +79,17 @@ struct Emitter {
     // to know that one exists — see hasBlockReturn.
     static auto hasReturn(const ExprPtr& e, bool throughLambdas = false) -> bool {
         if (!e) return false;
-        const auto r = [throughLambdas](const ExprPtr& x) { return hasReturn(x, throughLambdas); };
-        return std::visit([&](const auto& n) -> bool {
-            using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, Return>) return true;
-            else if constexpr (std::is_same_v<T, Let>) return r(n.value) || r(n.body);
-            else if constexpr (std::is_same_v<T, Seq>) {
-                for (auto& x : n.exprs) if (r(x)) return true; return false;
-            } else if constexpr (std::is_same_v<T, Match>) {
-                for (auto& s : n.subjects) if (r(s)) return true;
-                for (auto& c : n.clauses) {
-                    if (c.guard && r(*c.guard)) return true;
-                    if (r(c.body)) return true;
-                }
-                return false;
-            } else if constexpr (std::is_same_v<T, Intrinsic>) {
-                for (auto& a : n.args) if (r(a)) return true; return false;
-            } else if constexpr (std::is_same_v<T, Call>) {
-                for (auto& a : n.args) if (r(a)) return true; return false;
-            } else if constexpr (std::is_same_v<T, CallIndirect>) {
-                if (r(n.callee)) return true;
-                for (auto& a : n.args) if (r(a)) return true; return false;
-            } else if constexpr (std::is_same_v<T, MakeTuple>) {
-                for (auto& a : n.elements) if (r(a)) return true; return false;
-            } else if constexpr (std::is_same_v<T, MakeList>) {
-                for (auto& a : n.elements) if (r(a)) return true;
-                return n.rest && r(*n.rest);
-            } else if constexpr (std::is_same_v<T, Construct>) {
-                for (auto& a : n.args) if (r(a)) return true; return false;
-            } else if constexpr (std::is_same_v<T, TryCatch>) {
-                if (r(n.body)) return true;
-                for (auto& c : n.clauses) if (r(c.body)) return true;
-                return false;
-            } else if constexpr (std::is_same_v<T, LetRec>) {
-                // Loops and guard continuations lower to a LetRec but stay in
-                // the SAME return scope: a `return` inside a loop escapes the
-                // enclosing function, so recurse into both bodies.
-                return r(n.funBody) || r(n.contBody);
-            } else if constexpr (std::is_same_v<T, Lambda>) {
-                // A named local function's returns are its own.
-                return throughLambdas && !n.ownReturnScope && r(n.body);
-            }
-            // Leaves have none.
-            return false;
-        }, e->node);
+        if (std::holds_alternative<Return>(e->node)) return true;
+        // A named local function's returns are its own.
+        if (const auto* lambda = std::get_if<Lambda>(&e->node))
+            return throughLambdas && !lambda->ownReturnScope &&
+                   hasReturn(lambda->body, throughLambdas);
+        // Everything else — loops and guard continuations included: they
+        // lower to a LetRec but stay in the SAME return scope, so a `return`
+        // inside a loop escapes the enclosing function.
+        return anyChild(*e, [&](const ExprPtr& child) {
+            return hasReturn(child, throughLambdas);
+        });
     }
 
     // Does a block (Lambda) somewhere under this body contain a `return`? Such
@@ -123,34 +100,7 @@ struct Emitter {
         if (const auto* lambda = std::get_if<Lambda>(&e->node))
             return !lambda->ownReturnScope &&
                    hasReturn(lambda->body, /*throughLambdas=*/true);
-        return std::visit([](const auto& n) -> bool {
-            using T = std::decay_t<decltype(n)>;
-            const auto any = [](const auto& list) {
-                for (const auto& x : list) if (hasBlockReturn(x)) return true;
-                return false;
-            };
-            if constexpr (std::is_same_v<T, Return>) return hasBlockReturn(n.value);
-            else if constexpr (std::is_same_v<T, Let>) return hasBlockReturn(n.value) || hasBlockReturn(n.body);
-            else if constexpr (std::is_same_v<T, Seq>) return any(n.exprs);
-            else if constexpr (std::is_same_v<T, Match>) {
-                if (any(n.subjects)) return true;
-                for (const auto& c : n.clauses) {
-                    if (c.guard && hasBlockReturn(*c.guard)) return true;
-                    if (hasBlockReturn(c.body)) return true;
-                }
-                return false;
-            } else if constexpr (std::is_same_v<T, Intrinsic> || std::is_same_v<T, Call> ||
-                                 std::is_same_v<T, Construct>) return any(n.args);
-            else if constexpr (std::is_same_v<T, CallIndirect>) return hasBlockReturn(n.callee) || any(n.args);
-            else if constexpr (std::is_same_v<T, MakeTuple>) return any(n.elements);
-            else if constexpr (std::is_same_v<T, MakeList>) return any(n.elements) || (n.rest && hasBlockReturn(*n.rest));
-            else if constexpr (std::is_same_v<T, TryCatch>) {
-                if (hasBlockReturn(n.body)) return true;
-                for (const auto& c : n.clauses) if (hasBlockReturn(c.body)) return true;
-                return false;
-            } else if constexpr (std::is_same_v<T, LetRec>) return hasBlockReturn(n.funBody) || hasBlockReturn(n.contBody);
-            return false;
-        }, e->node);
+        return anyChild(*e, [](const ExprPtr& child) { return hasBlockReturn(child); });
     }
 
     // Wrap a body so a thrown {'kex_return', V} becomes the value; anything
@@ -256,12 +206,8 @@ struct Emitter {
             // A Char is a tagged tuple {'Char', Codepoint} — a bare integer
             // is indistinguishable from Int (display, dispatch, [Char] vs
             // [Int]). Works in both expression and pattern position.
-            case LitKind::Char: {
-                auto codepoints = utf8::decode(l.text);
-                return "{'Char'," +
-                    std::to_string(codepoints.empty()
-                        ? 0u : static_cast<unsigned>(codepoints.front())) + "}";
-            }
+            case LitKind::Char:
+                return "{'Char'," + std::to_string(charCodepoint(l.text)) + "}";
             case LitKind::String: return erlBinary(l.text);
             case LitKind::Bool:   return l.boolValue ? "'true'" : "'false'";
             case LitKind::None:   return "'None'";
@@ -281,8 +227,11 @@ struct Emitter {
     auto emitIntrinsic(const Intrinsic& in) -> std::string {
         auto a = [&](int i) { return emit(in.args[i]); };
         switch (in.op) {
-            // + is polymorphic (numeric add / string concat) at runtime.
-            case Op::Add:    return "call 'kex_intrinsic_number':'add'(" + a(0) + ", " + a(1) + ")";
+            // + is polymorphic (numeric add / string concat) at runtime; the
+            // lowerer routes everything except provably-integer addition
+            // through kex_intrinsic_number:add, so reaching here means both
+            // operands are integers and the raw BIF is exact.
+            case Op::Add:    return "call 'erlang':'+'(" + a(0) + ", " + a(1) + ")";
             case Op::Sub:    return "call 'erlang':'-'(" + a(0) + ", " + a(1) + ")";
             case Op::Mul:    return "call 'erlang':'*'(" + a(0) + ", " + a(1) + ")";
             case Op::Div:    return "call 'kex_intrinsic_number':'divide'(" + a(0) + ", " + a(1) + ")";
@@ -324,7 +273,7 @@ struct Emitter {
     // every path funnels through emitPattern.
     std::vector<std::string> patGuards;
 
-    auto beginPatGuards() -> void { patGuards.clear(); }
+    auto beginPatGuards() -> void { patGuards.clear(); charLets.clear(); }
 
     // Combines the collected conjuncts with a clause's own guard, nesting
     // `erlang:and`. Eager evaluation is safe HERE for one narrow reason: every
@@ -346,6 +295,53 @@ struct Emitter {
         if (acc.empty()) return own.empty() ? "'true'" : own;
         if (own.empty()) return acc;
         return "call 'erlang':'and'(" + acc + ", " + own + ")";
+    }
+
+    // What a String pattern's character segments bound (emitStringPattern):
+    // each variable with the raw codepoint its segment holds. The clause binds
+    // each as a Char around its guard and body (withCharLets), since a Char
+    // is the tagged {'Char', Codepoint} and a segment can only hold the
+    // codepoint.
+    std::vector<std::pair<std::string, std::string>> charLets;
+
+    auto takeCharLets() -> std::vector<std::pair<std::string, std::string>> {
+        return std::exchange(charLets, {});
+    }
+
+    static auto withCharLets(const std::vector<std::pair<std::string, std::string>>& lets,
+                             std::string expr) -> std::string {
+        for (auto let = lets.rbegin(); let != lets.rend(); ++let)
+            expr = "let <" + let->first + "> = {'Char', " + let->second + "} in " + expr;
+        return expr;
+    }
+
+    // `[c | rest]` taking a String apart, as Erlang's <<C/utf8, Rest/binary>>.
+    auto emitStringPattern(const Pattern& p) -> std::string {
+        static const std::string utf8 = "('undefined','undefined','utf8',['unsigned'|['big']])";
+        std::vector<std::string> segments;
+        for (const auto& element : p.args) {
+            std::string value;
+            if (element->kind == PatKind::Lit) {
+                value = std::to_string(charCodepoint(element->litText));
+            } else {
+                value = uniq("_Cp");
+                if (element->kind == PatKind::Var) charLets.push_back({erlVar(element->name), value});
+            }
+            segments.push_back("#<" + value + ">" + utf8);
+        }
+        if (p.rest) {
+            if (p.rest->kind == PatKind::Lit) {
+                const auto bytes = erlBinary(p.rest->litText);
+                // The literal's own byte segments, without its #{ }#.
+                if (bytes.size() > 4) segments.push_back(bytes.substr(2, bytes.size() - 4));
+            } else {
+                const auto tail = p.rest->kind == PatKind::Var ? erlVar(p.rest->name) : freshWild();
+                segments.push_back("#<" + tail + ">('all',8,'binary',['unsigned'|['big']])");
+            }
+        }
+        std::string out = "#{";
+        for (std::size_t i = 0; i < segments.size(); ++i) out += (i ? "," : "") + segments[i];
+        return out + "}#";
     }
 
     auto emitPattern(const Pattern& p) -> std::string {
@@ -377,6 +373,7 @@ struct Emitter {
                 return s + "}";
             }
             case PatKind::List: {
+                if (p.ofString) return emitStringPattern(p);
                 if (p.args.empty() && !p.rest) return "[]";
                 std::string s = "[";
                 for (size_t i = 0; i < p.args.size(); i++) {
@@ -412,8 +409,9 @@ struct Emitter {
                             [&](size_t i)->const PatternPtr&{ return cl.patterns[i]; }) + ">"
                 : emitPattern(*cl.patterns[0]);
             out += "  " + pat;
-            out += " when " + takePatGuards(cl.guard ? emit(*cl.guard) : "");
-            out += " ->\n    " + emit(cl.body) + "\n";
+            const auto lets = takeCharLets();
+            out += " when " + withCharLets(lets, takePatGuards(cl.guard ? emit(*cl.guard) : ""));
+            out += " ->\n    " + withCharLets(lets, emit(cl.body)) + "\n";
         }
         out += "end";
         return out;
@@ -426,6 +424,7 @@ struct Emitter {
         for (const auto& cl : r.clauses) {
             beginPatGuards();
             std::string pat = emitPattern(*cl.pattern);
+            const auto lets = takeCharLets();
             if (r.senderVar)
                 out += "  {" + erlVar(*r.senderVar) + ", " + pat + "}";
             else
@@ -433,7 +432,8 @@ struct Emitter {
             const auto senderGuard = r.senderVar
                 ? "call 'erlang':'is_pid'(" + erlVar(*r.senderVar) + ")"
                 : "";
-            out += " when " + takePatGuards(senderGuard) + " ->\n    " + emit(cl.body) + "\n";
+            out += " when " + takePatGuards(senderGuard) + " ->\n    " +
+                   withCharLets(lets, emit(cl.body)) + "\n";
         }
         if (r.timeout && r.afterBody)
             out += "after " + emit(*r.timeout) + " ->\n    " + emit(*r.afterBody);
@@ -570,9 +570,10 @@ struct Emitter {
                 for (size_t i = 0; i < n.clauses.size(); i++) {
                     beginPatGuards();
                     std::string cpat = emitPattern(*n.clauses[i].patterns[0]);
+                    const auto lets = takeCharLets();
                     catchBody += "      " + cpat;
                     catchBody += " when " + takePatGuards("") + " -> " +
-                                 emit(n.clauses[i].body);
+                                 withCharLets(lets, emit(n.clauses[i].body));
                     if (i + 1 < n.clauses.size()) catchBody += "\n";
                 }
                 // The rescue patterns may not be exhaustive. A non-exhaustive
@@ -675,8 +676,9 @@ struct Emitter {
             }
             pats += ">";
             out << "      " << pats;
-            out << " when " << takePatGuards(cl.guard ? emit(*cl.guard) : "");
-            out << " ->\n        " << emitClauseBody(cl.body) << "\n";
+            const auto lets = takeCharLets();
+            out << " when " << withCharLets(lets, takePatGuards(cl.guard ? emit(*cl.guard) : ""));
+            out << " ->\n        " << withCharLets(lets, emitClauseBody(cl.body)) << "\n";
         }
         // Non-exhaustive fallback: distinct fresh wildcards (a bare `_`
         // repeated in a value-list is a duplicate-variable error). Skip it
@@ -752,7 +754,30 @@ auto emitCore(const Module& mod) -> EmitResult {
     r.source = out.str();
     r.moduleName = mod.name;
     r.mainArity = mod.mainArity;
+    // A dispatcher's routes hold only as its function's first clause: one
+    // merged in ahead (a bare definition of the same name) answers first.
+    for (const auto& fn : mod.functions)
+        if (!fn.clauses.empty())
+            for (const auto& route : fn.clauses.front().routes)
+                r.routedImplementations.insert({route, fn.arity});
     return r;
+}
+
+} // namespace kex::ir
+
+namespace kex::ir {
+
+auto emitModules(std::vector<Module>& modules) -> std::vector<EmitResult> {
+    auto pipeline = buildModulePipeline();
+    ModuleAnalysisManager analyses(&pass::standardCallbacks());
+    std::vector<EmitResult> emitted;
+    emitted.reserve(modules.size());
+    for (auto& module : modules) {
+        pipeline.run(module, analyses);
+        analyses.clear(module);
+        emitted.push_back(emitCore(module));
+    }
+    return emitted;
 }
 
 } // namespace kex::ir

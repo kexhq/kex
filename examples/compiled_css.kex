@@ -5,10 +5,10 @@
 # compilation and replaced by its result: every `Css.px`/`Css.hex` call below is
 # gone before codegen, as is the first `.rule("*", ...)`.
 #
-# The rest still builds at runtime, because `primaryColor`/`textColor` are
-# runtime bindings — collapsing through a free variable needs the placeholder
-# work described in docs/compiled-todo.md. Validation of property names, unit
-# checking, dead-style elimination and vendor prefixing are all aspirational.
+# The rest still builds at runtime: `textColor` is a runtime binding, and a
+# method dispatched on it needs its value (`kex --collapse-report` says so).
+# Validation of property names, unit checking, dead-style elimination and
+# vendor prefixing are all aspirational.
 
 module Css do
   record Rule do

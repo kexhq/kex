@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # `Type.construct` builds a record from values by field name (kexhq/kex#487),
 # and `Type.variant` a sum type's constructor from its name (kexhq/kex#509):
 # defaults and optional fields filled in, and every mistake an error naming

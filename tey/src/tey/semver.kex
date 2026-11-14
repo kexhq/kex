@@ -64,8 +64,9 @@ let stable?(text: String) -> Bool do
 end
 
 let satisfies(versionText: String, requirement: String) -> Bool do
-  let version = Tey.Semver.parseVersion(versionText)
-  return false if version == None
+  let parsed = Tey.Semver.parseVersion(versionText)
+  return false if parsed == None
+  let Just(version) = parsed
   let req = requirement.trim
     .replace(",", " ")
     .replace(">= ", ">=")
@@ -81,10 +82,10 @@ let satisfies(versionText: String, requirement: String) -> Bool do
   # means "a released 0.3.x", and resolving it to `0.4.0-rc.1` because the
   # numbers fit is how a package manager ships an untested compiler to
   # someone who never opted in.
-  if version.try.preRelease != "" && !clauses.any? { |clause| clause.contains?("-") }
+  if version.preRelease != "" && !clauses.any? { |clause| clause.contains?("-") }
     return false
   end
-  clauses.all? { |clause| satisfiesClause(version.try, clause) }
+  clauses.all? { |clause| satisfiesClause(version, clause) }
 end
 
 # The requirement satisfied only by versions satisfying BOTH, for when two
@@ -130,13 +131,12 @@ end
 # Channel precedence, lowest first: prealpha < alpha < beta < rc < release.
 # Plain semver would order these alphabetically — putting `beta` BEFORE
 # `prealpha` — which is not what the words mean, so the ranking is explicit.
-let channelRank(channel: String) -> Integer do
-  return 1 if channel == "prealpha"
-  return 2 if channel == "alpha"
-  return 3 if channel == "beta"
-  return 4 if channel == "rc"
-  return 0
-end
+channelRank : String -> Integer
+let channelRank("prealpha") = 1
+let channelRank("alpha")    = 2
+let channelRank("beta")     = 3
+let channelRank("rc")       = 4
+let channelRank(_)          = 0
 
 # Whether a requested tag is a RANGE rather than one exact tag. `v1.2.0` is a
 # name to look up; `~> 1.2` is a question to answer against everything the
@@ -224,15 +224,16 @@ private do
     let raw = clause.startsWith?(op) then clause.drop(op.count) else clause
     let wanted = Tey.Semver.parseVersion(raw)
     return false if wanted == None
-    let order = version.compare(wanted.try)
+    let Just(target) = wanted
+    let order = version.compare(target)
     match op do
       ">=" => order != Less
       "<=" => order != Greater
       ">" => order == Greater
       "<" => order == Less
       "=" => order == Equal
-      "^" => order != Less && version.major == wanted.try.major
-      "~>" => order != Less && version.major == wanted.try.major && version.minor == wanted.try.minor
+      "^" => order != Less && version.major == target.major
+      "~>" => order != Less && version.major == target.major && version.minor == target.minor
       _ => false
     end
   end

@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # Text-oriented UDP helpers: string addresses.
 
@@ -12,7 +12,7 @@ main do
   assert(v6.host == "::1")
   assert(v6.port.string == "8080")
   match UDP.Endpoint.parse("noport") do
-    Error(error) => assert(error.kind == Parse)
+    Error(error) => assert(error.kind == Net.Parse)
     Ok(_) => assert(false, "address without a port must fail")
   end
   assert(UDP.Endpoint.parse("127.0.0.1:99999").error?, "out-of-range port must fail")

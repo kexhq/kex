@@ -1,0 +1,2 @@
+spec/error_using_except_type_constructors.kex:13:5: error: `Light` is `Shades.Light` here: name it so, or bring it in with `using Shades`
+spec/error_using_except_type_constructors.kex:19:25: error: `Tint` is `Shades.Tint` here: name it so, or bring it in with `using Shades`

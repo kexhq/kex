@@ -1,7 +1,12 @@
 #include "resolver.hxx"
 
+#include "../common/string_utils.hxx"
+
 #include <cctype>
 #include <filesystem>
+#include <mutex>
+#include <optional>
+#include <unordered_map>
 #include <sstream>
 #include <utility>
 
@@ -35,31 +40,6 @@ auto Resolver::setEntryFile(const std::string& path) -> void {
 }
 
 namespace {
-
-auto lowered(const std::string& part) -> std::string {
-    std::string result = part;
-    for (auto& c : result)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return result;
-}
-
-// `MockData` names `mockdata.kex` and `mock_data.kex` alike: a module name is
-// CamelCase and a file name is conventionally snake_case, so the resolver has
-// to try both spellings rather than force the run-together one.
-auto snakeCased(const std::string& part) -> std::string {
-    std::string result;
-    for (std::size_t i = 0; i < part.size(); ++i) {
-        const auto c = static_cast<unsigned char>(part[i]);
-        const bool boundary = i > 0 && std::isupper(c)
-            && (std::islower(static_cast<unsigned char>(part[i - 1]))
-                || std::isdigit(static_cast<unsigned char>(part[i - 1]))
-                || (i + 1 < part.size()
-                    && std::islower(static_cast<unsigned char>(part[i + 1]))));
-        if (boundary && !result.empty() && result.back() != '_') result += '_';
-        result += static_cast<char>(std::tolower(c));
-    }
-    return result;
-}
 
 // A part that opens with a letter and a number — `N0001CreateUsers`, the
 // first of a directory of migrations — is a file somebody numbered so the
@@ -119,8 +99,45 @@ auto candidates(const std::string& moduleName, std::string currentModule)
 
 } // namespace
 
+namespace {
+
+// Resolutions already made, by roots, name, enclosing module and entry file.
+// Only while caching is on (setCaching): within one build no source file
+// appears or disappears, while across REPL inputs one may.
+bool g_caching = false;
+std::mutex g_cacheMutex;
+std::unordered_map<std::string, std::optional<Resolution>> g_resolutions;
+
+} // namespace
+
+auto Resolver::setCaching(bool on) -> void {
+    std::lock_guard lock(g_cacheMutex);
+    g_caching = on;
+    if (!on) g_resolutions.clear();
+}
+
 auto Resolver::resolve(const std::string& moduleName,
                        const std::string& currentModule) const -> std::optional<Resolution> {
+    {
+        std::lock_guard lock(g_cacheMutex);
+        if (!g_caching) return resolveUncached(moduleName, currentModule);
+    }
+    std::string key = moduleName + '\x1f' + currentModule + '\x1f' + entryFile().string();
+    for (const auto& root : m_roots) key += '\x1f' + root;
+    {
+        std::lock_guard lock(g_cacheMutex);
+        if (const auto found = g_resolutions.find(key); found != g_resolutions.end())
+            return found->second;
+    }
+    auto resolution = resolveUncached(moduleName, currentModule);
+    std::lock_guard lock(g_cacheMutex);
+    g_resolutions.emplace(std::move(key), resolution);
+    return resolution;
+}
+
+auto Resolver::resolveUncached(const std::string& moduleName,
+                               const std::string& currentModule) const
+    -> std::optional<Resolution> {
     if (isForeignNamespace(moduleName)) return std::nullopt;
     // Relative module identities take precedence over absolute ones. Once an
     // identity has a winning source-root match, record any later matches so

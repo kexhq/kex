@@ -86,8 +86,8 @@ let ENGLISH_TIME_NAMES = TimeNames {
 # @return [TimeNames] the names to write with
 #
 # @example
-#   Culture.timeNames(Culture.of("HU_HU").or(Culture.DEFAULT)).months.first   # => Just("január")
-#   Culture.timeNames(Culture.DEFAULT).months.first                          # => Just("January")
+#   Culture.timeNames(Culture.of("HU_HU").or(Culture.DEFAULT)).month.first   # => Just("január")
+#   Culture.timeNames(Culture.DEFAULT).month.first                          # => Just("January")
 timeNames : Culture -> TimeNames
 let timeNames(culture) do
   match culture.time do
@@ -513,7 +513,7 @@ let validateFloat(text, culture: Culture) do
       mantissa = body.take(ei)
       exponent = body.drop(ei + 1)
     end
-    None => None
+    None => ()
   end
   if exponent.empty? == false
     let signed = exponent.startsWith?("-") || exponent.startsWith?("+")

@@ -11,21 +11,19 @@ spec/error_operator_before_make.kex:12:25: error: `+` expects argument 2 to be V
 
 + : Complex.Complex -> Number -> Complex.Complex
 
-+ : Date -> Duration -> Date
++ : Date -> Measure<Quantity.Time> -> Date
 
 + : Date -> Period -> Date
 
-+ : DateTime -> Duration -> DateTime
++ : DateTime -> Measure<Quantity.Time> -> DateTime
 
 + : DateTime -> Period -> DateTime
 
-+ : Duration -> Duration -> Duration
-
-+ : Measure -> Measure -> Result<Measure, String>
++ : Measure<A> -> Measure<A> -> Measure<A>
 
 + : Period -> Period -> Period
 
-+ : Time -> Duration -> Time
++ : Time -> Measure<Quantity.Time> -> Time
 
-+ : Vec -> Vec -> A
++ : Vec -> Vec -> Vec
 spec/error_operator_before_make.kex:13:3: error: Type mismatch: expected String, got Vec

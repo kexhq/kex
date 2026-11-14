@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # kexhq/kex#370: a server-accepted WebSocket connection, stashed away by
 # its route handler and pushed to from a THIRD process while the client
@@ -66,7 +66,7 @@ main do
   var waited = 0
   while registry.socketCount() != Ok(1) do
     assert(waited < 200, "the handler should register its socket promptly")
-    Task.sleep(50.milliseconds)
+    Task.sleep(50.millisecond)
     waited = waited + 1
   end
   registry.pingAll()

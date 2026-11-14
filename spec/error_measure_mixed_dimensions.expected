@@ -1,0 +1,6 @@
+spec/error_measure_mixed_dimensions.kex:8:30: error: `<` expects argument 2 to be Measure<A>, but got Measure<Length>
+
+< : Measure<A> -> Measure<A> -> Bool
+spec/error_measure_mixed_dimensions.kex:9:31: error: `==` expects argument 2 to be Measure<A>, but got Measure<Length>
+
+== : Measure<A> -> Measure<A> -> Bool

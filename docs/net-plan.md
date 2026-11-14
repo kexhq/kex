@@ -226,7 +226,7 @@ All long-running protocols use `Net.Server<E>`:
 let server = TCP.start(endpoint, options, handler).try
 IO.printLine("listening on ${server.localAddress}")
 
-let report = server.stop(grace: 10.seconds).try
+let report = server.stop(grace: 10.second).try
 IO.printLine("completed=${report.completed} forced=${report.forced}")
 server.join.try
 ```
@@ -261,8 +261,8 @@ IO.printLine("${address.private?} ${address.loopback?}")
 
 let resolver = Resolver.system(CacheOptions {
   entries: 1024,
-  maximumTtl: 1.hours,
-  negativeTtl: 30.seconds
+  maximumTtl: 1.hour,
+  negativeTtl: 30.second
 }).try
 let name = Name.parse("service.example").try
 let addresses = resolver.addresses(name).try
@@ -278,7 +278,7 @@ let localResolver = Resolver.custom(ResolverOptions {
   }],
   search: [Name.parse("internal.example").try],
   retries: 2,
-  timeout: 100.milliseconds
+  timeout: 100.millisecond
 }).try
 localResolver.close
 ```
@@ -304,9 +304,9 @@ Expose both primitives and helpers in the same protocol module:
 using Net.Socket
 
 let endpoint = TCP.Endpoint.host("example.com", Net.Port.from(80).try)
-let connection = TCP.connect(endpoint, timeout: 10.seconds).try
+let connection = TCP.connect(endpoint, timeout: 10.second).try
 connection.sendAll("ping\n".to(Binary).try).try
-let reply = connection.receiveExactly(5.bytes, timeout: 30.seconds).try
+let reply = connection.receiveExactly(5.bytes, timeout: 30.second).try
 connection.shutdownWrite.try
 connection.close
 ```
@@ -336,7 +336,7 @@ end.try
 Unix.connect(address).try do |connection|
   connection.sendAll("hello".to(Binary).try).try
 end.try
-server.stop(grace: 10.seconds).try
+server.stop(grace: 10.second).try
 ```
 
 ### UDP
@@ -414,7 +414,7 @@ let options = TLS.ServerOptions {
   defaultIdentity: TLS.Identity.files("cert.pem", "key.pem").try,
   identities: sniIdentities,
   clientAuthentication: TLS.RequireClient(trustAnchors),
-  handshakeDeadline: 10.seconds
+  handshakeDeadline: 10.second
 }
 let server = TLS.start(TCP.Endpoint.any(8443), options, handler).try
 ```
@@ -501,7 +501,7 @@ let client = Client.open(ClientOptions {
     perOrigin: 8,
     total: 128,
     queuedRequests: 256,
-    idleExpiry: 30.seconds
+    idleExpiry: 30.second
   },
   cookies: Just(CookieJar.memory),
   proxy: Just(Proxy.connect("http://proxy.example:8080").try),
@@ -511,7 +511,7 @@ let client = Client.open(ClientOptions {
 let response = client.get(URL.parse("https://example.com/private").try).try
 IO.printLine("redirects=${response.history.length}")
 IO.printLine("pool=${client.statistics.openConnections}")
-let closeReport = client.close(grace: 10.seconds).try
+let closeReport = client.close(grace: 10.second).try
 ```
 
 ```kex
@@ -583,8 +583,8 @@ let router = Router.new
   end
 
 let options = ServerOptions {
-  headerDeadline: 10.seconds,
-  handlerDeadline: 30.seconds,
+  headerDeadline: 10.second,
+  handlerDeadline: 30.second,
   expectContinue: { |request, context| authorizeBody(request, context) }
 }
 let server = Server.start(TCP.Endpoint.any(8080), router, options).try
@@ -618,7 +618,7 @@ end
 Server.serve(TCP.Endpoint.loopback(8080), router).try
 
 let running = Server.start(TCP.Endpoint.any(8081), router).try
-let report = running.stop(grace: 10.seconds).try
+let report = running.stop(grace: 10.second).try
 IO.printLine("done=${report.completed} forced=${report.forced}")
 running.join.try
 ```
@@ -653,8 +653,8 @@ let socket = WebSocket.connect(
   WebSocket.ClientOptions {
     subprotocols: ["chat.v2", "chat.v1"],
     heartbeat: Just(WebSocket.Heartbeat {
-      interval: 30.seconds,
-      pongDeadline: 10.seconds
+      interval: 30.second,
+      pongDeadline: 10.second
     })
   }
 ).try
@@ -719,8 +719,8 @@ using Control.Retry
 using Net.HTTP
 
 let schedule = Retry.Schedule {
-  attempts: 5, delay: 100.milliseconds, backoff: 2.0,
-  maximumDelay: 5.seconds, maximumTotalDelay: Just(20.seconds), jitter: 0.25
+  attempts: 5, delay: 100.millisecond, backoff: 2.0,
+  maximumDelay: 5.second, maximumTotalDelay: Just(20.second), jitter: 0.25
 }
 let result = Retry.run(schedule: schedule) do
   HTTP.get("https://api.example.com/inventory")

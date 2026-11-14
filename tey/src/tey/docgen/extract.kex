@@ -8,6 +8,7 @@
 # both sides.
 
 module Tey.Docgen.Extract do
+  using Kex.AST, only: [Node, TypeRef, PatternRef]
   using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, SourcePage, Doc, nameOf, qualifiedNameOf]
 
   foul fileEntities(items: [Kex.AST.Node]) -> [Entity] do
@@ -668,7 +669,7 @@ module Tey.Docgen.Extract do
         match flattenToArity(ref, params.count) do
           FunctionType(types, result) => do
             let shown = params.mapIndexed { |p, i|
-              paramText(displayName(p, i, fn), signatureParamText(types.at(i).or(AnyType)), p.hasDefault)
+              paramText(displayName(p, i, fn), signatureParamText(types.at(i).or(Kex.AST.AnyType)), p.hasDefault)
             }
             return "${info.name}(${shown.join(", ")}) -> ${signatureTypeText(result)}"
           end
@@ -689,7 +690,7 @@ module Tey.Docgen.Extract do
       FunctionType(types, result) => do
         return plain if types.count != arity
         let shown = doc.params.mapIndexed { |p, i|
-          paramText(p.name, signatureParamText(types.at(i).or(AnyType)), false)
+          paramText(p.name, signatureParamText(types.at(i).or(Kex.AST.AnyType)), false)
         }
         return "${name}(${shown.join(", ")}) -> ${signatureTypeText(result)}"
       end

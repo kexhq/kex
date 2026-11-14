@@ -1,0 +1,20 @@
+# kex: check-only
+# A `using M do ... end` body scopes its imports: the names are usable
+# inside the block but not visible after it, at top level or in a
+# module body.
+module M do
+  let answer() = 42
+end
+
+module N do
+  using M do
+    IO.printLine(answer())
+  end
+  let run() = answer()
+end
+
+using M do
+  IO.printLine(answer())
+end
+
+IO.printLine(answer())

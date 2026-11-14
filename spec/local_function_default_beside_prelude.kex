@@ -1,0 +1,9 @@
+# A local function named like a prelude one, with a defaulted parameter,
+# called without it: comparing the two candidates position by position read
+# past the shorter one, and the checker crashed (kexhq/kex#449, case 5).
+
+let string(label: Atom, width: Integer = 3) -> String = "col ${label} ${width}"
+
+main do
+  IO.printLine(string(:id))
+end

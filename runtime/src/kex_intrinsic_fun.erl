@@ -10,6 +10,7 @@
 %% the index.
 -module(kex_intrinsic_fun).
 -export([applyFlexible/2, applyItem/2, applyIndexed/3, applyPredicate/2, truthy/1,
+         patternMismatch/2,
          convertTo/2, convertTo/3, items/1]).
 
 %% A `Type` VALUE names its target too: `x.to(Type.of(y))`. Its name is a
@@ -70,6 +71,8 @@ convertTo(_, _) -> 'None'.
 %% Base-aware Integer <-> String, `.to(String, radix: 16)`. Only that pair is
 %% base dependent; anything else with a radix is a conversion that was not
 %% meant, so it fails rather than silently ignoring the base.
+convertTo(V, {'Type', Name, _Args, _Pure}, Radix) ->
+    convertTo(V, binary_to_atom(Name, utf8), Radix);
 convertTo(V, 'String', Radix)
   when is_integer(V), is_integer(Radix), Radix >= 2, Radix =< 36 ->
     %% integer_to_list/2 uppercases digits above 9; the walker's GMP get_str
@@ -130,6 +133,11 @@ partial(F, Got, 6) ->
 partial(F, Got, _) ->
     erlang:error({badarity, {F, Got}}).
 
+%% A block of one parameter takes the whole item, whatever it is: nothing to
+%% look up. This is the case nearly every `map`, `filter` and `each` is, once
+%% per element.
+applyItem(F, Item) when is_function(F, 1) ->
+    F(Item);
 applyItem(F, Item) ->
     {arity, N} = erlang:fun_info(F, arity),
     case spreadable(Item, N) of
@@ -137,6 +145,8 @@ applyItem(F, Item) ->
         false -> F(Item)
     end.
 
+applyIndexed(F, Item, _I) when is_function(F, 1) ->
+    F(Item);
 applyIndexed(F, Item, I) ->
     {arity, N} = erlang:fun_info(F, arity),
     case spreadable(Item, N - 1) of
@@ -144,6 +154,12 @@ applyIndexed(F, Item, I) ->
         false when N =:= 1 -> F(Item);
         false -> F(Item, I)
     end.
+
+%% A value a `let` pattern does not match (`let Ok(x) = ...` handed an
+%% `Error`): a fault that says what the value was, as the walker's does.
+patternMismatch(Where, Value) ->
+    Shown = unicode:characters_to_binary(kex_io:inspect_plain(Value)),
+    erlang:error(<<Where/binary, "runtime error: pattern mismatch — got "/utf8, Shown/binary>>).
 
 %% Kex truthiness (Crystal semantics, see src/stdlib/truthyable.kex): only
 %% `false`, `None` and `()` are falsy — every other value is truthy. The tree
@@ -194,7 +210,8 @@ is_variant_term(Item) ->
     end.
 
 %% Normalize an Enumerable receiver to the item representation used by Kex
-%% callbacks. Maps yield {Key, Value} pairs; lists and strings retain the same
-%% coercion used by the HOF helpers above.
+%% callbacks. Maps yield {Key, Value} pairs, a String its Chars, a Range its
+%% items.
 items(M) when is_map(M) -> maps:to_list(M);
+items(S) when is_binary(S) -> kex_intrinsic_string:chars(S);
 items(L) -> kex_intrinsic_list:as_list(L).

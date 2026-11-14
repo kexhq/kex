@@ -3,12 +3,13 @@
 # Writing +5.second+ or +90.minute+ gives you a +Measure+: a number, the unit it
 # was written in, and the same quantity in that dimension's base unit. Adding,
 # subtracting and converting all go through the canonical value, so the
-# arithmetic is right regardless of which units the operands were written in,
-# and mixing dimensions is an +Error+ rather than a silently wrong number.
+# arithmetic is right regardless of which units the operands were written in.
+# The dimension is part of the type (+Measure<Quantity.Time>+), so mixing
+# dimensions does not type-check rather than giving a silently wrong number.
 #
 #   5.second.to(String)                     # => Just("5.0 s")
 #   1.5.hour.to(String)                  # => Just("1.5 h")
-#   (1.hour + 30.minute).map(~to(String))  # => Ok("1.5 h")
+#   (1.hour + 30.minute).to(String)        # => Just("1.5 h")
 #   90.minute.convert(Hour)              # => Ok(1.5 h)
 #
 # The time units (+nanosecond+ through +week+) are in the prelude. Other
@@ -108,12 +109,48 @@ make UnitDefinition, implement: Unit do
   let symbol = @notation
 end
 
-# A quantity with a unit.
+# What a measure measures, as a type: the +D+ of +Measure<D>+. Every unit's
+# constructor says its dimension (+1.second+ is a +Measure<Quantity.Time>+,
+# +1.meter+ a +Measure<Quantity.Length>+), so adding, comparing or ordering
+# measures of different dimensions is a type error. These types have no
+# values; they only tell measures apart. A measure made by unit arithmetic
+# (+1.watt * 1.hour+) is a plain +Measure+: its dimension is known only when
+# it runs.
+module Quantity do
+  record Time do
+  end
+  record Data do
+  end
+  record Length do
+  end
+  record Mass do
+  end
+  record Volume do
+  end
+  record Temperature do
+  end
+  record Force do
+  end
+  record Energy do
+  end
+  record Power do
+  end
+  record Voltage do
+  end
+  record Current do
+  end
+  record Resistance do
+  end
+  record Charge do
+  end
+end
+
+# A quantity with a unit, of dimension +D+ (a +Quantity+ type).
 #
 # A Measure is shared by every unit module. `canonical` stores the value in
 # that dimension's base unit; its Unit controls its display. That split is what
 # makes +1.hour + 30.minute+ correct and still print in hours.
-record Measure do
+record Measure<D> do
   # The quantity in the dimension's base unit: seconds, for time. Arithmetic
   # and conversion go through this.
   canonical : Float
@@ -125,14 +162,9 @@ record Measure do
   unit : UnitDefinition
 end
 
-# An elapsed span of time, in seconds.
-#
-# Duration is an elapsed span used by Time, Date, and DateTime. A time Measure
-# is deliberately not a Duration: `5.second` describes a measurement.
-record Duration do
-  # The length of the span, in seconds.
-  seconds : Float
-end
+# An elapsed span of time: a measure of time. +5.second+ is a Duration, and
+# Time, Date and DateTime take one: +Date.today + 3.day+.
+type Duration = Measure<Quantity.Time>
 
 # The time units, from nanoseconds to weeks. The base unit is the second.
 type TimeUnit = Nanosecond | Microsecond | Millisecond
@@ -171,7 +203,7 @@ make Integer do
   #
   # @example
   #   100.nanosecond.to(String)   # => Just("100.0 ns")
-  let nanosecond -> Measure = this.timeMeasure(Nanosecond)
+  let nanosecond -> Measure<Quantity.Time> = this.timeMeasure(Nanosecond)
 
   # This many microseconds, as a +Measure+.
   #
@@ -179,7 +211,7 @@ make Integer do
   #
   # @example
   #   250.microsecond.to(String)   # => Just("250.0 μs")
-  let microsecond -> Measure = this.timeMeasure(Microsecond)
+  let microsecond -> Measure<Quantity.Time> = this.timeMeasure(Microsecond)
 
   # This many milliseconds, as a +Measure+.
   #
@@ -187,7 +219,7 @@ make Integer do
   #
   # @example
   #   500.millisecond.to(String)   # => Just("500.0 ms")
-  let millisecond -> Measure = this.timeMeasure(Millisecond)
+  let millisecond -> Measure<Quantity.Time> = this.timeMeasure(Millisecond)
 
   # This many seconds, as a +Measure+. Seconds are the base unit of time, so
   # this is the one everything else converts through.
@@ -196,7 +228,7 @@ make Integer do
   #
   # @example
   #   5.second.to(String)   # => Just("5.0 s")
-  let second -> Measure = this.timeMeasure(Second)
+  let second -> Measure<Quantity.Time> = this.timeMeasure(Second)
 
   # This many minutes, as a +Measure+.
   #
@@ -204,15 +236,15 @@ make Integer do
   #
   # @example
   #   90.minute.convert(Hour)   # => Ok(1.5 h)
-  let minute -> Measure = this.timeMeasure(Minute)
+  let minute -> Measure<Quantity.Time> = this.timeMeasure(Minute)
 
   # This many hours, as a +Measure+.
   #
   # @return [Measure] the quantity, displayed in hours
   #
   # @example
-  #   (1.hour + 30.minute).map { |m| m.showValue }   # => Ok("1.5 h")
-  let hour -> Measure = this.timeMeasure(Hour)
+  #   (1.hour + 30.minute).showValue   # => "1.5 h"
+  let hour -> Measure<Quantity.Time> = this.timeMeasure(Hour)
 
   # This many days, as a +Measure+.
   #
@@ -220,7 +252,7 @@ make Integer do
   #
   # @example
   #   1.day.convertTo(Hour).map { |m| m.showValue }   # => Ok("24.0 h")
-  let day -> Measure = this.timeMeasure(Day)
+  let day -> Measure<Quantity.Time> = this.timeMeasure(Day)
 
   # This many weeks, as a +Measure+.
   #
@@ -228,10 +260,10 @@ make Integer do
   #
   # @example
   #   2.week.to(String)   # => Just("2.0 wk")
-  let week -> Measure = this.timeMeasure(Week)
+  let week -> Measure<Quantity.Time> = this.timeMeasure(Week)
 
   private do
-    let timeMeasure(unit: TimeUnit) -> Measure do
+    let timeMeasure(unit: TimeUnit) -> Measure<Quantity.Time> do
       let value = Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0)
       return Measure {
         canonical: value * unit.factor,
@@ -252,12 +284,12 @@ make Float do
   # This many nanoseconds, as a +Measure+.
   #
   # @return [Measure] the quantity, displayed in nanoseconds
-  let nanosecond -> Measure = this.timeMeasure(Nanosecond)
+  let nanosecond -> Measure<Quantity.Time> = this.timeMeasure(Nanosecond)
 
   # This many microseconds, as a +Measure+.
   #
   # @return [Measure] the quantity, displayed in microseconds
-  let microsecond -> Measure = this.timeMeasure(Microsecond)
+  let microsecond -> Measure<Quantity.Time> = this.timeMeasure(Microsecond)
 
   # This many milliseconds, as a +Measure+.
   #
@@ -265,7 +297,7 @@ make Float do
   #
   # @example
   #   2.5.millisecond.to(String)   # => Just("2.5 ms")
-  let millisecond -> Measure = this.timeMeasure(Millisecond)
+  let millisecond -> Measure<Quantity.Time> = this.timeMeasure(Millisecond)
 
   # This many seconds, as a +Measure+.
   #
@@ -273,12 +305,12 @@ make Float do
   #
   # @example
   #   0.25.second.to(String)   # => Just("0.25 s")
-  let second -> Measure = this.timeMeasure(Second)
+  let second -> Measure<Quantity.Time> = this.timeMeasure(Second)
 
   # This many minutes, as a +Measure+.
   #
   # @return [Measure] the quantity, displayed in minutes
-  let minute -> Measure = this.timeMeasure(Minute)
+  let minute -> Measure<Quantity.Time> = this.timeMeasure(Minute)
 
   # This many hours, as a +Measure+.
   #
@@ -286,20 +318,20 @@ make Float do
   #
   # @example
   #   1.5.hour.to(String)   # => Just("1.5 h")
-  let hour -> Measure = this.timeMeasure(Hour)
+  let hour -> Measure<Quantity.Time> = this.timeMeasure(Hour)
 
   # This many days, as a +Measure+.
   #
   # @return [Measure] the quantity, displayed in days
-  let day -> Measure = this.timeMeasure(Day)
+  let day -> Measure<Quantity.Time> = this.timeMeasure(Day)
 
   # This many weeks, as a +Measure+.
   #
   # @return [Measure] the quantity, displayed in weeks
-  let week -> Measure = this.timeMeasure(Week)
+  let week -> Measure<Quantity.Time> = this.timeMeasure(Week)
 
   private do
-    let timeMeasure(unit: TimeUnit) -> Measure = Measure {
+    let timeMeasure(unit: TimeUnit) -> Measure<Quantity.Time> = Measure {
       canonical: this * unit.factor,
       value: this,
       unit: UnitDefinition {
@@ -311,7 +343,7 @@ make Float do
   end
 end
 
-make Measure, implement: Showable do
+make Measure<D>, implement: Showable do
   let factor -> Float = this.unit.factor
   let kind -> Atom = this.unit.kind
   let symbol -> String = this.unit.symbol
@@ -392,7 +424,7 @@ make Measure, implement: Showable do
     let magnitude = Math.abs(@canonical)
     let selected = magnitude == 0.0 then base else
       family.filter { |unit| unit.conversionFactor <= magnitude }
-        .last.or(family.first.try)
+        .last.or(family.first.or(base))
     return Measure {
       canonical: @canonical,
       value: scaledValue(@canonical, selected.conversionFactor),
@@ -499,52 +531,34 @@ make Measure, implement: Showable do
   # Adds two measures of the same dimension.
   #
   # The units need not match: the sum goes through the canonical values, and
-  # comes back displayed in the LEFT operand's unit. Adding measures of
-  # different dimensions is an +Error+.
+  # comes back displayed in the LEFT operand's unit. The dimension is the
+  # type's (+Measure<D>+), so adding measures of different dimensions does not
+  # type-check.
   #
-  # @param other [Measure] the measure to add
-  # @return [Result<Measure, String>] the sum, or why they could not be added
+  # @param other [Measure] a measure of the same dimension
+  # @return [Measure] the sum, in this measure's unit
   #
   # @example
-  #   (1.hour + 30.minute).map { |m| m.showValue }   # => Ok("1.5 h")
-  #   (30.minute + 1.hour).map { |m| m.showValue }   # => Ok("90.0 min")
-  let +(other: Measure) -> Result<Measure, String> do
-    match this.unit.kind == other.unit.kind do
-      true => do
-        let total = this.canonical + other.canonical
-        return Ok(Measure {
-          canonical: total,
-          value: total / this.unit.factor,
-          unit: this.unit
-        })
-      end
-      false => return Error("Cannot add measures of different kinds")
-    end
-  end
+  #   (1.hour + 30.minute).showValue   # => "1.5 h"
+  #   (30.minute + 1.hour).showValue   # => "90.0 min"
+  + :> Measure<D> -> Measure<D>
+  let +(other) = this.inOwnUnit(this.canonical + other.canonical)
 
   # Subtracts a measure of the same dimension.
   #
-  # Like +++, the result is displayed in the left operand's unit, and mixing
-  # dimensions is an +Error+.
+  # Like +++, the result is displayed in the left operand's unit.
   #
-  # @param other [Measure] the measure to subtract
-  # @return [Result<Measure, String>] the difference, or why they could not be subtracted
+  # @param other [Measure] a measure of the same dimension
+  # @return [Measure] the difference, in this measure's unit
   #
   # @example
-  #   (1.hour - 30.minute).map { |m| m.showValue }   # => Ok("0.5 h")
-  let -(other: Measure) -> Result<Measure, String> do
-    match this.unit.kind == other.unit.kind do
-      true => do
-        let total = this.canonical - other.canonical
-        return Ok(Measure {
-          canonical: total,
-          value: total / this.unit.factor,
-          unit: this.unit
-        })
-      end
-      false => return Error("Cannot subtract measures of different kinds")
-    end
-  end
+  #   (1.hour - 30.minute).showValue   # => "0.5 h"
+  - :> Measure<D> -> Measure<D>
+  let -(other) = this.inOwnUnit(this.canonical - other.canonical)
+
+  # The canonical quantity +total+, displayed in this measure's unit.
+  inOwnUnit :> Float -> Measure<D>
+  let inOwnUnit(total) = Measure { canonical: total, value: total / this.unit.factor, unit: this.unit }
 
   private do
     # Divides a canonical value by a unit factor. The conversion is exact in
@@ -611,7 +625,7 @@ make Measure, implement: Showable do
           UnitDefinition {
             conversionFactor: Math.pow(radix, power),
             dimension: :data,
-            notation: symbols[power].try
+            notation: symbols[power].or("")
           }
         end
       end
@@ -633,6 +647,49 @@ make Measure, implement: Showable do
       end
     end
   end
+end
+
+# A measure is its quantity: +1.minute == 60.second+, +1.kilometer ==
+# 1000.meter+. Equality and ordering compare the canonical value, in the
+# dimension's base unit, whatever unit each was written in. Measures of
+# different dimensions are never equal, and ordering them is a type error
+# (+1.second < 1.meter+). A measure whose dimension is known only at run time
+# (one made by unit arithmetic) is compared by its canonical value alone.
+make Measure<D>, implement: Comparable do
+  # Whether +other+ is the same quantity of the same dimension.
+  #
+  # @param other [Measure] the measure to compare with
+  # @return [Bool] true when both measure the same amount of the same thing
+  #
+  # @example
+  #   1.minute == 60.second   # => true
+  #   1.hour == 59.minute     # => false
+  == :> Measure<D> -> Bool
+  let ==(other) do
+    return this.unit.kind == other.unit.kind && this.canonical == other.canonical
+  end
+
+  # How this quantity orders against +other+, of the same dimension.
+  #
+  # @param other [Measure] a measure of the same dimension
+  # @return [Ordering] +Less+, +Equal+ or +Greater+
+  #
+  # @example
+  #   90.second.compare(1.minute)   # => Greater
+  #   1.minute < 1.hour             # => true
+  compare :> Measure<D> -> Ordering
+  let compare(other) = this.canonical.compare(other.canonical)
+
+  # Ordering, as +Comparable+ defines it, for measures of one dimension: the
+  # trait's own operators take any value, so these say +Measure<D>+.
+  < :> Measure<D> -> Bool
+  let <(other) = this.compare(other) == Less
+  > :> Measure<D> -> Bool
+  let >(other) = this.compare(other) == Greater
+  <= :> Measure<D> -> Bool
+  let <=(other) = this.compare(other) != Greater
+  >= :> Measure<D> -> Bool
+  let >=(other) = this.compare(other) != Less
 end
 
 # Time-unit constructors, also available directly from the prelude.

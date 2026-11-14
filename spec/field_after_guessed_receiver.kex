@@ -11,6 +11,7 @@ end
 let urlOf(releases, wanted: String) -> String do
   let current = releases.find { |item| item.name == wanted }
   current.try.url
+rescue return ""
 end
 
 main do

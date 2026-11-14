@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # Offline loopback coverage for bounded stream reads and datagram limits.
 
@@ -18,7 +18,7 @@ main do
   end
   let connection = TCP.connect(
     TCP.Endpoint.loopback(tcpPort),
-    TCP.ConnectOptions { connectTimeout: 2.seconds, keepAlive?: true }
+    TCP.ConnectOptions { connectTimeout: 2.second, keepAlive?: true }
   ).try
   assert(connection.receiveChunk(2).try.to(String).try == "ab")
   assert(connection.receiveChunk(2).try.to(String).try == "cd")
@@ -31,19 +31,19 @@ main do
   listener.close
 
   let idleListener = TCP.listen(TCP.Endpoint.loopback(Net.Port.from(0).try)).try
-  match idleListener.accept(0.seconds) do
-    Error(error) => assert(error.kind == Timeout)
+  match idleListener.accept(0.second) do
+    Error(error) => assert(error.kind == Net.Timeout)
     Ok(_) => assert(false, "zero-timeout accept must not block")
   end
   let idlePort = idleListener.localAddress.try.port
   let idleServer = Task.start do
     let idlePeer = idleListener.accept.try
-    Task.sleep(100.milliseconds)
+    Task.sleep(100.millisecond)
     idlePeer.close
   end
   let idleClient = TCP.connect(TCP.Endpoint.loopback(idlePort)).try
-  match idleClient.receiveChunk(1, 0.seconds) do
-    Error(error) => assert(error.kind == Timeout)
+  match idleClient.receiveChunk(1, 0.second) do
+    Error(error) => assert(error.kind == Net.Timeout)
     Ok(_) => assert(false, "zero-timeout receive must not block")
   end
   idleClient.close
@@ -64,12 +64,12 @@ main do
       broadcast?: true,
       multicastTtl: 4,
       multicastLoopback?: true,
-      receiveTimeout: 0.seconds
+      receiveTimeout: 0.second
     }
   ).try
   let timedOut = configured.receiveFrom(1)
   match timedOut do
-    Error(error) => assert(error.kind == Timeout, "receive timeout must retain its typed kind")
+    Error(error) => assert(error.kind == Net.Timeout, "receive timeout must retain its typed kind")
     Ok(_) => assert(false, "configured zero receive timeout must not block")
   end
   let group = Address.parse("239.255.0.1").try
@@ -78,7 +78,7 @@ main do
   configured.leaveMulticast(group, multicastInterface).try
   let unicast = configured.joinMulticast(Address.parse("127.0.0.1").try, multicastInterface)
   match unicast do
-    Error(error) => assert(error.kind == UnsupportedOption)
+    Error(error) => assert(error.kind == Net.UnsupportedOption)
     Ok(_) => assert(false, "joining a unicast address must fail")
   end
   configured.close

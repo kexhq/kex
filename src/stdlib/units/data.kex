@@ -98,7 +98,7 @@ end
 # @example
 #   size(4096, B).to(String)     # => Just("4096.0 B")
 #   size(1.5, MB).to(String)     # => Just("1.5 MB")
-let size(value: Number, unit: DataUnit) -> Measure do
+let size(value: Number, unit: DataUnit) -> Measure<Quantity.Data> do
   let converted = amount(value)
   return Measure {
     canonical: converted * unit.factor,
@@ -181,7 +181,7 @@ end
 #
 # @example Reporting a file's size
 #   FS.File.size("report.pdf").map { |n| n.byte.showValue }
-let byteSize(value: Number) -> Measure = byte(value)
+let byteSize(value: Number) -> Measure<Quantity.Data> = byte(value)
 
 # +value+ bytes, as a +Measure+.
 #
@@ -193,7 +193,7 @@ let byteSize(value: Number) -> Measure = byte(value)
 # @example A binary payload's size
 #   let payload = Binary.fromBytes([104, 105])
 #   payload.length.byte.to(String)   # => Just("2.0 B")
-let byte(value: Number) -> Measure = size(value, B)
+let byte(value: Number) -> Measure<Quantity.Data> = size(value, B)
 # +value+ kilobytes, 1000 bytes each.
 #
 # @param value [Number] the quantity
@@ -201,7 +201,7 @@ let byte(value: Number) -> Measure = size(value, B)
 #
 # @example
 #   5.kilobyte.to(String)   # => Just("5.0 KB")
-let kilobyte(value: Number) -> Measure = size(value, KB)
+let kilobyte(value: Number) -> Measure<Quantity.Data> = size(value, KB)
 # +value+ megabytes, 1000000 bytes each.
 #
 # @param value [Number] the quantity
@@ -209,7 +209,7 @@ let kilobyte(value: Number) -> Measure = size(value, KB)
 #
 # @example
 #   1500.megabyte.to(String)   # => Just("1500.0 MB")
-let megabyte(value: Number) -> Measure = size(value, MB)
+let megabyte(value: Number) -> Measure<Quantity.Data> = size(value, MB)
 # +value+ gigabytes, 10^9 bytes each.
 #
 # @param value [Number] the quantity
@@ -217,7 +217,7 @@ let megabyte(value: Number) -> Measure = size(value, MB)
 #
 # @example
 #   2.gigabyte.convertTo(MB).map { |m| m.showValue }   # => Ok("2000.0 MB")
-let gigabyte(value: Number) -> Measure = size(value, GB)
+let gigabyte(value: Number) -> Measure<Quantity.Data> = size(value, GB)
 # +value+ terabytes, 10^12 bytes each.
 #
 # @param value [Number] the quantity
@@ -225,7 +225,7 @@ let gigabyte(value: Number) -> Measure = size(value, GB)
 #
 # @example
 #   2.terabyte.to(String)   # => Just("2.0 TB")
-let terabyte(value: Number) -> Measure = size(value, TB)
+let terabyte(value: Number) -> Measure<Quantity.Data> = size(value, TB)
 # +value+ kibibytes, 1024 bytes each.
 #
 # @param value [Number] the quantity
@@ -233,7 +233,7 @@ let terabyte(value: Number) -> Measure = size(value, TB)
 #
 # @example
 #   1024.kibibyte.to(String)   # => Just("1024.0 KiB")
-let kibibyte(value: Number) -> Measure = size(value, KiB)
+let kibibyte(value: Number) -> Measure<Quantity.Data> = size(value, KiB)
 # +value+ mebibytes, 1024^2 bytes each.
 #
 # @param value [Number] the quantity
@@ -241,7 +241,7 @@ let kibibyte(value: Number) -> Measure = size(value, KiB)
 #
 # @example
 #   3.mebibyte.to(String)   # => Just("3.0 MiB")
-let mebibyte(value: Number) -> Measure = size(value, MiB)
+let mebibyte(value: Number) -> Measure<Quantity.Data> = size(value, MiB)
 # +value+ gibibytes, 1024^3 bytes each.
 #
 # @param value [Number] the quantity
@@ -249,7 +249,7 @@ let mebibyte(value: Number) -> Measure = size(value, MiB)
 #
 # @example
 #   1.gibibyte.convertTo(MiB).map { |m| m.showValue }   # => Ok("1024.0 MiB")
-let gibibyte(value: Number) -> Measure = size(value, GiB)
+let gibibyte(value: Number) -> Measure<Quantity.Data> = size(value, GiB)
 # +value+ tebibytes, 1024^4 bytes each.
 #
 # @param value [Number] the quantity
@@ -257,7 +257,7 @@ let gibibyte(value: Number) -> Measure = size(value, GiB)
 #
 # @example
 #   1.tebibyte.to(String)   # => Just("1.0 TiB")
-let tebibyte(value: Number) -> Measure = size(value, TiB)
+let tebibyte(value: Number) -> Measure<Quantity.Data> = size(value, TiB)
 
 # Compares an integer byte count with a data-size threshold.
 #

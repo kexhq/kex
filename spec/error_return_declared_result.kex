@@ -1,0 +1,23 @@
+# kex: check-only
+# A `return` leaves with its value as the function's result, so the value is
+# checked against the declared result like the body's last value is. Only
+# the last value was, so an early `return` of the wrong type passed.
+
+let firstWords(lines: [String], early: Bool) -> [String] do
+  if early
+    return lines.map { |line| line.first.try }
+  end
+  lines
+end
+
+let count(items: [Integer]) -> Integer do
+  if items.empty?
+    return "none"
+  end
+  items.first.or(0)
+end
+
+main do
+  IO.inspect(firstWords(["a b"], false))
+  IO.inspect(count([1]))
+end

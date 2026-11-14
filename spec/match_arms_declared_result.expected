@@ -1,0 +1,5 @@
+Ok("a") : Result<String, ?>
+Ok(Just(42)) : Result<Optional<Integer>, ?>
+Error("not an integer: x") : Result<?, String>
+Ok("yes") : Result<String, ?>
+Ok(Just(1)) : Result<Optional<Integer>, ?>

@@ -1,14 +1,9 @@
 #include "kexi.hxx"
+#include "etf.hxx"
 #include "beam_file.hxx"
+#include "../common/digest.hxx"
+#include <algorithm>
 #include <cstring>
-#ifdef __APPLE__
-#include <CommonCrypto/CommonDigest.h>
-#elif defined(__EMSCRIPTEN__)
-#include <emscripten.h>
-#include <stdexcept>
-#else
-#include <openssl/sha.h>
-#endif
 
 namespace kex::beam {
 
@@ -109,6 +104,9 @@ auto typeToTerm(const KexiTypePtr& type) -> TermPtr {
     case KexiType::Named: {
         std::vector<TermPtr> args;
         for (const auto& a : type->typeArgs) args.push_back(typeToTerm(a));
+        if (!type->variant.empty())
+            return Term::tuple({Term::atom("named"), Term::binary(type->name),
+                                Term::list(std::move(args)), Term::binary(type->variant)});
         return Term::tuple({Term::atom("named"), Term::binary(type->name),
                             Term::list(std::move(args))});
     }
@@ -175,7 +173,9 @@ auto termToType(const TermPtr& term) -> KexiTypePtr {
     if (tag == "named" && elems.size() >= 3) {
         std::vector<KexiTypePtr> args;
         for (const auto& a : elems[2]->asList()) args.push_back(termToType(a));
-        return kexiNamed(elems[1]->asBinaryStr(), std::move(args));
+        auto named = kexiNamed(elems[1]->asBinaryStr(), std::move(args));
+        if (elems.size() >= 4) named->variant = elems[3]->asBinaryStr();
+        return named;
     }
     if (tag == "func" && elems.size() >= 3) {
         std::vector<KexiTypePtr> params;
@@ -289,9 +289,10 @@ auto typeExportToTerm(const KexiTypeExport& te) -> TermPtr {
     return Term::tuple({Term::binary(te.name),
                         Term::list(std::move(gp)),
                         Term::list(std::move(cs)),
-                        Term::atom(te.isDistinct ? "true" : "false"),
+                        Term::boolean(te.isDistinct),
                         te.backingType ? typeToTerm(te.backingType)
-                                       : typeToTerm(kexiUnknown())});
+                                       : typeToTerm(kexiUnknown()),
+                        Term::binary(te.module)});
 }
 
 auto termToTypeExport(const TermPtr& term) -> KexiTypeExport {
@@ -306,6 +307,7 @@ auto termToTypeExport(const TermPtr& term) -> KexiTypeExport {
         // artifacts store a nil here, which termToType leaves null.
         te.backingType = termToType(t[4]);
     }
+    te.module = t[5]->asBinaryStr();
     return te;
 }
 
@@ -326,11 +328,13 @@ auto methodToTerm(const KexiMethod& m) -> TermPtr {
     for (const auto& n : m.paramNames) names.push_back(Term::binary(n));
     fields.push_back(Term::list(std::move(names)));
     fields.push_back(Term::integer(m.defaultedParams));
-    fields.push_back(Term::atom(m.isSlot ? "true" : "false"));
-    fields.push_back(Term::atom(m.moduleFunction ? "true" : "false"));
+    fields.push_back(Term::boolean(m.isSlot));
+    fields.push_back(Term::boolean(m.moduleFunction));
     std::vector<TermPtr> defaults;
     for (const auto& source : m.defaultSources) defaults.push_back(Term::binary(source));
     fields.push_back(Term::list(std::move(defaults)));
+    fields.push_back(Term::binary(m.implementation));
+    fields.push_back(Term::boolean(m.foreignTarget));
     return Term::tuple(std::move(fields));
 }
 
@@ -354,6 +358,8 @@ auto termToMethod(const TermPtr& term) -> KexiMethod {
     if (t.size() > 12)
         for (const auto& source : t[12]->asList())
             m.defaultSources.push_back(source->asBinaryStr());
+    if (t.size() > 13) m.implementation = t[13]->asBinaryStr();
+    if (t.size() > 14) m.foreignTarget = t[14]->isAtom("true");
     return m;
 }
 
@@ -377,7 +383,9 @@ auto recordToTerm(const KexiRecord& r) -> TermPtr {
                            Term::binary(f.defaultSource)}));
     return Term::tuple({Term::binary(r.name),
                         Term::binary(r.tagAtom.empty() ? r.name : r.tagAtom),
-                        Term::list(std::move(fields))});
+                        Term::list(std::move(fields)),
+                        Term::binary(!r.identity.empty() ? r.identity
+                                     : r.tagAtom.empty() ? r.name : r.tagAtom)});
 }
 
 auto termToRecord(const TermPtr& term) -> KexiRecord {
@@ -393,6 +401,8 @@ auto termToRecord(const TermPtr& term) -> KexiRecord {
         r.fields.push_back({fe[0]->asBinaryStr(), termToType(fe[1]),
                             fe.size() > 2 ? fe[2]->asBinaryStr() : std::string{}});
     }
+    // Written before the identity was recorded: on BEAM it was the tag.
+    r.identity = t.size() >= 4 ? t[3]->asBinaryStr() : r.tagAtom;
     return r;
 }
 
@@ -427,7 +437,8 @@ auto adtToTerm(const KexiADT& adt) -> TermPtr {
     for (const auto& c : adt.constructors) cs.push_back(constructorToTerm(c));
     return Term::tuple({Term::binary(adt.name),
                         Term::list(std::move(tps)),
-                        Term::list(std::move(cs))});
+                        Term::list(std::move(cs)),
+                        Term::binary(adt.module)});
 }
 
 auto termToADT(const TermPtr& term) -> KexiADT {
@@ -436,6 +447,7 @@ auto termToADT(const TermPtr& term) -> KexiADT {
     adt.name = t[0]->asBinaryStr();
     for (const auto& tp : t[1]->asList()) adt.typeParams.push_back(tp->asBinaryStr());
     for (const auto& c : t[2]->asList()) adt.constructors.push_back(termToConstructor(c));
+    adt.module = t[3]->asBinaryStr();
     return adt;
 }
 
@@ -465,7 +477,10 @@ auto traitDefToTerm(const KexiTraitDef& td) -> TermPtr {
         else
             methods.push_back(Term::binary(m.name));
     }
-    return Term::tuple({Term::binary(td.name), Term::list(std::move(methods))});
+    std::vector<TermPtr> bodies;
+    for (const auto& name : td.defaultBodies) bodies.push_back(Term::binary(name));
+    return Term::tuple({Term::binary(td.name), Term::list(std::move(methods)),
+                        Term::list(std::move(bodies))});
 }
 
 auto termToTraitDef(const TermPtr& term) -> KexiTraitDef {
@@ -479,6 +494,8 @@ auto termToTraitDef(const TermPtr& term) -> KexiTraitDef {
             td.requiredMethods.push_back({m->asBinaryStr(), false});
         }
     }
+    if (t.size() > 2)
+        for (const auto& name : t[2]->asList()) td.defaultBodies.push_back(name->asBinaryStr());
     return td;
 }
 
@@ -596,73 +613,19 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
 
 // ── Public API ───────────────────────────────────────────────────────
 
-#ifdef __EMSCRIPTEN__
-// Returns false when the host has no synchronous digest to offer, rather than
-// producing a wrong answer — a bad digest would surface far away, as an
-// unexplained "implementation digest mismatch" on a perfectly good artifact.
-EM_JS(bool, hostSha256, (const uint8_t* data, size_t len, uint8_t* out), {
-    try {
-        // `require` is absent when this module is loaded as an ES module, so
-        // its absence is a normal answer here, not an error.
-        if (typeof require !== "function") return false;
-        var digest = require("crypto")
-                         .createHash("sha256")
-                         .update(Buffer.from(HEAPU8.buffer, data, len))
-                         .digest();
-        HEAPU8.set(digest, out);
-        return true;
-    } catch (e) {
-        return false;
-    }
-});
-#endif
-
-namespace {
-void sha256(const uint8_t* data, size_t len, uint8_t out[32]) {
-#ifdef __APPLE__
-    CC_SHA256(data, static_cast<CC_LONG>(len), out);
-#elif defined(__EMSCRIPTEN__)
-    // Emscripten ships no crypto port, and these digests must agree bit for
-    // bit with the ones a NATIVE build wrote into the compiled stdlib unit —
-    // so hand the work to the host's own implementation rather than carrying
-    // one of our own. Node is where this matters: it is the only environment
-    // that loads compiled artifacts (the browser REPL ships no unit and takes
-    // the source-derived path), and node:crypto's hashing is synchronous,
-    // which the SubtleCrypto API in browsers is not.
-    if (!hostSha256(data, len, out))
-        throw std::runtime_error(
-            "cannot verify compiled artifacts here: this environment provides "
-            "no synchronous SHA-256");
-#else
-    SHA256(data, len, out);
-#endif
-}
-} // namespace
-
 auto computeInterfaceHash(const KexiChunk& chunk) -> Hash128 {
     auto term = chunkToTermWithoutHash(chunk);
     auto bytes = encodeEtf(term);
 
-    uint8_t digest[32];
-    sha256(bytes.data(), bytes.size(), digest);
-
-    Hash128 h{};
-    for (int i = 0; i < 16; i++) h[i] = digest[i];
-    return h;
+    return computeContentHash(bytes);
 }
 
+// The first 128 bits of the SHA-256 of `bytes`.
 auto computeContentHash(const std::vector<uint8_t>& bytes) -> Hash128 {
-    uint8_t digest[32];
-    sha256(bytes.data(), bytes.size(), digest);
+    const auto digest = kex::sha256(bytes);
     Hash128 hash{};
-    for (int i = 0; i < 16; i++) hash[i] = digest[i];
+    std::copy_n(digest.begin(), hash.size(), hash.begin());
     return hash;
-}
-
-auto computeSha256(const std::vector<uint8_t>& bytes) -> std::array<uint8_t, 32> {
-    std::array<uint8_t, 32> digest{};
-    sha256(bytes.data(), bytes.size(), digest.data());
-    return digest;
 }
 
 auto computeArtifactHash(const BeamFile& beam) -> Hash128 {
@@ -677,10 +640,7 @@ auto serializeKexi(const KexiChunk& chunk) -> std::vector<uint8_t> {
     auto hashless = chunkToTermWithoutHash(chunk);
     auto bytes = encodeEtf(hashless);
 
-    uint8_t digest[32];
-    sha256(bytes.data(), bytes.size(), digest);
-    Hash128 hash{};
-    for (int i = 0; i < 16; i++) hash[i] = digest[i];
+    const auto hash = computeContentHash(bytes);
 
     // Now build the full term with the hashes included.
     auto term = chunkToTermWithoutHash(chunk);

@@ -20,6 +20,9 @@ inline constexpr std::string_view kFileLevelPreludeModule = "Prelude";
 struct ImportedFunction {
     std::string sourceName;
     std::string backendFunction;
+    // The receiver type its module emitted a per-type implementation of this
+    // method for (`Date`, read from KexiMethod::implementation), or "".
+    std::string implementationHead;
     std::string backendModule;
     int backendArity = 0;
     // Source parameter names excluding the receiver for receiver functions.
@@ -36,14 +39,21 @@ struct ImportedFunction {
     // Declared in a `make T do` block, so this name is reached through a
     // typed receiver rather than as a bare call. `addReceiverSig` files such a
     // method under `exports` as well as `receiverFunctions`, and the import
-    // scope must not let it compete for the bare name — see ResolvePass's
-    // ambiguity check (kexhq/kex#272).
+    // scope must not let it compete for the bare name — see
+    // resolve_core::mergeImportOrigin (kexhq/kex#272).
     bool isReceiverMethod = false;
     // Reached through its receiver wherever that type is, whatever the
     // caller imports: the rule for a `make` function of a unit of the same
     // build, as it is in a program checked whole. The standard library's
     // stay behind their `using` (docs/plan_separate_compilation.md).
     bool visibleByReceiver = false;
+    // As KexiMethod::foreignTarget: a `make` for a type its module does not
+    // declare, so never visible by its receiver alone.
+    bool foreignTarget = false;
+    // A receiver method declared for a type alias (`FS.Path.join` over
+    // `FilePath`): no value has that type at run time, so only a static type
+    // reaches it, never the value's dispatch.
+    bool aliasReceiver = false;
     // ADT constructors are represented as ordinary module exports so
     // qualified access follows the same visibility and backend-routing rules
     // as constants and functions.
@@ -64,8 +74,8 @@ struct ImportedModuleInterface {
     // module boundary a stdlib capability is invisible to every consumer
     // (kexhq/kex#143).
     bool isCapability = false;
-    // One of this build's own modules, checked apart from its importers
-    // (KEX_SEPARATE): `using` it brings its functions in as a merged module
+    // One of this build's own modules, checked apart from its importers:
+    // `using` it brings its functions in as a merged module
     // of the program would, bare and by UFCS. The prelude's are reached
     // through its receiver functions instead.
     bool compiledApart = false;
@@ -74,6 +84,16 @@ struct ImportedModuleInterface {
 
 // Exact backend ownership selected by semantic analysis for an imported call.
 // The AST remains backend-neutral; lowering consumes this side table.
+// A provider a call may reach at run time instead of its target: a value of
+// `receiverType` goes to `backendModule:backendFunction`. With no type, the
+// provider is that module's own dispatcher, for a value whose registered
+// owner is the module.
+struct RuntimeAlternative {
+    std::string receiverType;
+    std::string backendModule;
+    std::string backendFunction;
+};
+
 struct ResolvedCallTarget {
     // Source owner selected by overload resolution (for example `Optional`
     // rather than an unrelated same-named `Bits` export). Tooling uses this
@@ -89,8 +109,8 @@ struct ResolvedCallTarget {
     // Source parameter names excluding the receiver when passesReceiver is
     // true; otherwise names all function parameters.
     std::vector<std::string> paramNames;
-    // Their defaults as source text, for a callee compiled apart: lowering
-    // fills a missing argument with the parsed default.
+    // Their defaults as source text, "" for none. A caller compiled apart reads
+    // only whether one exists: it passes the sentinel and the callee fills it.
     std::vector<std::string> defaultSources;
     // For a make-block winner compiled in the current unit, lowering chooses
     // the local implementation name. The full checked signature keeps
@@ -101,6 +121,15 @@ struct ResolvedCallTarget {
     // entry names the zero-based source argument whose concrete value chooses
     // the implementation and the trait contract the dictionary represents.
     std::vector<std::pair<std::size_t, std::string>> traitDictionaries;
+    // The receiver type an imported make-block method is proven to run its
+    // own implementation for (`resolve_core::staticReceiverHead`), empty to
+    // keep the dispatcher. The backend names that implementation, unless
+    // the receiver takes a trait dictionary (clause (10)).
+    std::string staticReceiverHead;
+    // Providers chosen by the value before this target, which takes every
+    // value none of them does: several modules answer the call, and only the
+    // receiver at run time says whose it is (`"${value}"` on a Showable).
+    std::vector<RuntimeAlternative> alternatives;
 };
 
 struct ImportedTraitConformance {
@@ -123,6 +152,9 @@ struct ImportedADT {
     // the generic-slot/arity information above as a faithful fallback.
     std::vector<std::string> typeParamNames;
     std::unordered_map<std::string, std::vector<TypePtr>> constructorParamTypes;
+    // The module that declares it, "" at top level (KexiADT::module). Last, so
+    // the aggregate initializers above keep their meaning.
+    std::string module;
 };
 
 struct ImportedDistinctType {
@@ -192,22 +224,32 @@ inline auto isExportFoul(const ImportedInterfaces& ifaces,
     return false;
 }
 
-// Gives every module ADT its qualified identity inside the signatures that
-// spell it. A signature is read from its spelling, so `BACKEND : Backend`
+// Gives every module ADT and record its qualified identity inside the
+// signatures that spell it. A signature is read from its spelling, so `BACKEND : Backend`
 // inside `module Kex` carries a bare `Backend`, while the ADT, and the
 // constructors it owns, are `Kex.Backend`. Left bare, that name could only be
 // matched by spelling, and NetErrorKind has a constructor spelled `Backend`
-// too. A bare name means the ADT declared by the innermost enclosing module
-// of the signature's own module that declares one; anything else is left as
-// written.
-inline auto qualifyModuleAdtNames(ImportedInterfaces& ifaces) -> void {
+// too. The same holds for records: `TCP.Endpoint.parse` spells its result
+// `Endpoint`, which UDP declares as well. A bare name means the type declared
+// by the innermost enclosing module of the signature's own module that
+// declares one; anything else is left as written.
+inline auto qualifyModuleTypeIdentities(ImportedInterfaces& ifaces) -> void {
     std::unordered_set<std::string> moduleAdts;
     for (const auto& adt : ifaces.adts)
         if (adt.name.find('.') != std::string::npos) moduleAdts.insert(adt.name);
-    if (moduleAdts.empty()) return;
+    // Records only in a module function's own signature: a receiver function
+    // of an opt-in module read from source has no backend of its own, and
+    // matching its receiver exactly would choose it over the type's `make`
+    // function (`cursor.peek` in template.kex, run at compile time).
+    std::unordered_set<std::string> moduleRecords;
+    for (const auto& [record, _] : ifaces.recordArities)
+        if (record.find('.') != std::string::npos) moduleRecords.insert(record);
+    if (moduleAdts.empty() && moduleRecords.empty()) return;
+    bool withRecords = false;
     auto adtIn = [&](std::string scope, const std::string& name) -> std::string {
         while (!scope.empty()) {
-            if (auto candidate = scope + "." + name; moduleAdts.count(candidate))
+            if (auto candidate = scope + "." + name;
+                moduleAdts.count(candidate) || (withRecords && moduleRecords.count(candidate)))
                 return candidate;
             const auto dot = scope.rfind('.');
             if (dot == std::string::npos) break;
@@ -215,44 +257,22 @@ inline auto qualifyModuleAdtNames(ImportedInterfaces& ifaces) -> void {
         }
         return "";
     };
-    // Types are shared between signatures, so every rewrite is of a copy.
-    std::function<void(TypePtr&, const std::string&)> qualify =
-        [&](TypePtr& type, const std::string& scope) {
-            if (!type) return;
-            auto copy = std::make_shared<Type>(*type);
-            bool changed = false;
-            std::visit([&](auto& kind) {
-                using K = std::decay_t<decltype(kind)>;
-                auto visit = [&](TypePtr& inner) {
-                    const auto before = inner;
-                    qualify(inner, scope);
-                    changed = changed || inner != before;
-                };
-                if constexpr (std::is_same_v<K, NamedType>) {
-                    if (kind.name.find('.') == std::string::npos)
-                        if (auto owned = adtIn(scope, kind.name); !owned.empty()) {
-                            kind.name = owned;
-                            changed = true;
-                        }
-                    for (auto& arg : kind.typeArgs) visit(arg);
-                } else if constexpr (std::is_same_v<K, ListType>) {
-                    visit(kind.element);
-                } else if constexpr (std::is_same_v<K, OptionalType>) {
-                    visit(kind.inner);
-                } else if constexpr (std::is_same_v<K, MapType>) {
-                    visit(kind.key);
-                    visit(kind.value);
-                } else if constexpr (std::is_same_v<K, TupleType>) {
-                    for (auto& element : kind.elements) visit(element);
-                } else if constexpr (std::is_same_v<K, FuncType>) {
-                    for (auto& param : kind.params) visit(param);
-                    visit(kind.result);
-                } else if constexpr (std::is_same_v<K, UnionType>) {
-                    for (auto& member : kind.members) visit(member);
-                }
-            }, copy->kind);
-            if (changed) type = copy;
+    // Rebuilt, never edited in place: types are shared between signatures.
+    std::function<TypePtr(const TypePtr&, const std::string&)> qualified =
+        [&](const TypePtr& type, const std::string& scope) -> TypePtr {
+            if (!type) return type;
+            auto rebuilt = mapTypeChildren(type, [&](const TypePtr& child) {
+                return qualified(child, scope);
+            });
+            if (const auto* named = std::get_if<NamedType>(&rebuilt->kind);
+                named && named->name.find('.') == std::string::npos)
+                if (auto owned = adtIn(scope, named->name); !owned.empty())
+                    return Type::named(owned, named->typeArgs);
+            return rebuilt;
         };
+    auto qualify = [&](TypePtr& type, const std::string& scope) {
+        type = qualified(type, scope);
+    };
     auto qualifySignature = [&](ImportedFunction& function) {
         if (function.sourceModule.empty()) return;
         for (auto& param : function.signature.params)
@@ -261,7 +281,11 @@ inline auto qualifyModuleAdtNames(ImportedInterfaces& ifaces) -> void {
     };
     for (auto& [_, module] : ifaces.modules)
         for (auto& [__, functions] : module.exports)
-            for (auto& function : functions) qualifySignature(function);
+            for (auto& function : functions) {
+                withRecords = !function.isReceiverMethod;
+                qualifySignature(function);
+            }
+    withRecords = false;
     for (auto& [_, functions] : ifaces.receiverFunctions)
         for (auto& function : functions) qualifySignature(function);
     // A record's field types are spelled in the record's own module:

@@ -1,4 +1,5 @@
 #include "value.hxx"
+#include "../common/well_known.hxx"
 #include "../common/color.hxx"
 #include "../common/utf8.hxx"
 #include <algorithm>
@@ -625,6 +626,31 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
         }
     }
 
+    // A measure is its quantity (units.kex): two compare by dimension and
+    // canonical value, whatever unit each displays in, wherever they are
+    // (a list of durations, a record holding one), as numbers compare across
+    // the numeric tower.
+    {
+        const auto quantity = [](const ValuePtr& value)
+            -> std::optional<std::pair<ValuePtr, ValuePtr>> {
+            const auto* record = std::get_if<RecordValue>(&value->data);
+            if (!record || record->typeName != names::kMeasureRecord) return std::nullopt;
+            const auto canonical = record->fields.find(names::kMeasureCanonical);
+            const auto unit = record->fields.find(names::kMeasureUnit);
+            if (canonical == record->fields.end() || unit == record->fields.end())
+                return std::nullopt;
+            const auto* definition = std::get_if<RecordValue>(&unit->second->data);
+            if (!definition) return std::nullopt;
+            const auto dimension = definition->fields.find(names::kUnitDimension);
+            if (dimension == definition->fields.end()) return std::nullopt;
+            return std::pair{canonical->second, dimension->second};
+        };
+        if (const auto left = quantity(a))
+            if (const auto right = quantity(b))
+                return valuesEqual(left->second, right->second) &&
+                       valuesEqual(left->first, right->first);
+    }
+
     // Comparing a placeholder cannot yield `false` — the running program's
     // value might well be equal — so it must not answer at all.
     for (const auto* side : {&a, &b})
@@ -846,7 +872,8 @@ auto dispatchTypeName(const ValuePtr& v) -> std::string {
         else if constexpr (std::is_same_v<T, ListValue>) return "List";
         else if constexpr (std::is_same_v<T, MapValue>) return "Map";
         else if constexpr (std::is_same_v<T, FileHandleValue>) return "FileHandle";
-        else if constexpr (std::is_same_v<T, ProcessValue>) return "Pid";
+        else if constexpr (std::is_same_v<T, ProcessValue>) return "Process";
+        else if constexpr (std::is_same_v<T, TaskValue>) return "Task";
         else if constexpr (std::is_same_v<T, ServerValue>) return "Server";
         else if constexpr (std::is_same_v<T, IntValue> || std::is_same_v<T, BigIntValue>) return "Integer";
         else if constexpr (std::is_same_v<T, FloatValue>) return "Float";
@@ -882,9 +909,9 @@ auto matchesTypeName(const std::string& name, const ValuePtr& v) -> bool {
         else if constexpr (std::is_same_v<T, BoolValue>) return name == "Bool";
         else if constexpr (std::is_same_v<T, AtomValue>) return name == "Atom";
         else if constexpr (std::is_same_v<T, CharValue>) return name == "Char";
-        else if constexpr (std::is_same_v<T, ListValue>) return name == "List";
+        else if constexpr (std::is_same_v<T, ListValue>) return name == kex::names::kListType;
         else if constexpr (std::is_same_v<T, TupleValue>) return name == "Tuple";
-        else if constexpr (std::is_same_v<T, MapValue>) return name == "Map";
+        else if constexpr (std::is_same_v<T, MapValue>) return name == kex::names::kMapType;
         else if constexpr (std::is_same_v<T, RangeValue>) return name == "Range";
         else if constexpr (std::is_same_v<T, StreamValue>) return name == "Stream";
         else if constexpr (std::is_same_v<T, FeedValue>) return name == "Feed";
@@ -892,17 +919,22 @@ auto matchesTypeName(const std::string& name, const ValuePtr& v) -> bool {
     }, v->data);
 }
 
-auto builtinTypeNames() -> const std::unordered_set<std::string>& {
-    static const std::unordered_set<std::string> names = {
-        "Integer", "Float", "Char", "Bool", "Number", "String",
-        "List", "Map", "Range", "Optional", "Result"};
-    return names;
-}
-
 auto defaultEvalAllowList() -> const std::vector<std::string>& {
     static const std::vector<std::string> allow = {
         "Math", "List", "String", "Integer", "Map", "Stream"};
     return allow;
+}
+
+} // namespace kex::interpreter
+
+namespace kex::interpreter {
+
+auto clampedCount(const ValuePtr& count, size_t size) -> size_t {
+    if (auto* n = std::get_if<IntValue>(&count->data))
+        return n->value <= 0 ? 0 : std::min(static_cast<size_t>(n->value), size);
+    if (auto* big = std::get_if<BigIntValue>(&count->data))
+        return sgn(big->value) <= 0 ? 0 : size;
+    return 0;
 }
 
 } // namespace kex::interpreter

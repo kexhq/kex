@@ -1,0 +1,43 @@
+# A record a module declares, served: its slots are filed under the record's
+# identity (`Ledger.Books.Account`), the tag its state carries, and a record
+# of the same name in another module is a different server. The replies are
+# typed: each slot's `Reply<A>` gives its call a `Result<A, CallError>`.
+module Ledger.Books do
+  record Account do
+    balance : Integer = 0
+  end
+
+  serving Account do
+    slot deposit(amount: Integer) -> Reply<Integer> do
+      new.balance = @balance + amount
+      return { new, reply: new.balance }
+    end
+
+    slot balance -> Reply<Integer> = { reply: @balance }
+
+    slot reset(to: Integer) -> Void do
+      new.balance = to
+      return new
+    end
+  end
+end
+
+module Arcade.Books do
+  record Account do
+    tokens : String = ""
+  end
+
+  serving Account do
+    slot balance -> Reply<String> = { reply: "tokens:${@tokens}" }
+  end
+end
+
+main do
+  let ledger = Process.spawn(Ledger.Books.Account { balance: 10 })
+  let arcade = Process.spawn(Arcade.Books.Account { tokens: "7" })
+  let after = ledger.deposit(5).try
+  IO.printLine("deposit=${after + 0}")
+  ledger.reset(100)
+  IO.printLine("balance=${ledger.balance().try * 2}")
+  IO.printLine("arcade=${arcade.balance().try.upperCase}")
+end

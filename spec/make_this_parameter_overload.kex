@@ -1,0 +1,17 @@
+# An overload whose parameter is written `This` takes a value of the `make`
+# target's type: the walker matched it against nothing, ran the `Number`
+# overload for a `Vec`, and failed where BEAM answered (kexhq/kex#639).
+
+record Vec do
+  x : Number
+end
+
+make Vec do
+  let +(other: This) -> Vec = Vec { x: @x + other.x }
+  let +(other: Number) -> Vec = Vec { x: @x + other }
+end
+
+main do
+  IO.printLine((Vec { x: 2 } + Vec { x: 3 }).x)
+  IO.printLine((Vec { x: 2 } + 1).x)
+end

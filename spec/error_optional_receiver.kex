@@ -1,0 +1,13 @@
+# kex: check-only
+# An Optional is not the value it may hold. `xs[i]` answers an Optional, so
+# `parsed[1].ok?` on a list of Results is Optional's business, not Result's:
+# the checker accepted it and the walker could not run it. Unwrap first.
+
+main do
+  let parsed = ["1", "x"].map { |text| Integer.parse(text) }
+  IO.inspect(parsed[1].ok?)
+  IO.inspect(parsed[1].map { |result| result.ok? })
+  let words = ["a", "b"]
+  IO.inspect(words[0].upperCase)
+  IO.inspect(words[0].or("").upperCase)
+end

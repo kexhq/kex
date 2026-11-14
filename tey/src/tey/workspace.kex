@@ -98,7 +98,7 @@ end
 private do
   let uniqueMembers(members: [Member], found: [Member]) -> [Member] do
     return found if members.empty?
-    let member = members.first.try
+    let Just(member) = members.first
     let duplicate = found.any? do |existing|
       existing.memberRoot == member.memberRoot
     end
@@ -129,7 +129,7 @@ private do
   let cycleWarnings(members: [Member]) -> [String] do
     let layers = Tey.Workspace.dependencyLayers(members)
     return [] if layers.empty?
-    let last = layers.last.try
+    let Just(last) = layers.last
     let lastNames = last.map { |member| Tey.Workspace.memberName(member) }
     let cyclic = last.filter do |member|
       Tey.Workspace.workspaceDependencies(member).any? do |dependency|
@@ -240,7 +240,7 @@ private do
 
   foul expandSegments(paths: [String], segments: [String]) -> [String] do
     return paths if segments.empty?
-    let segment = segments.first.try
+    let Just(segment) = segments.first
     let empty: [String] = []
     let expanded: [String] = if segment == "*"
       let groups: [[String]] = paths.map do |path|

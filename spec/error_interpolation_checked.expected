@@ -2,7 +2,7 @@ spec/error_interpolation_checked.kex:10:21: error: `length` expects argument 1 t
 
 length : Binary -> Integer
 
-length : Range -> Integer
+length : Range<A> -> Integer
 
 length : String -> Integer
 

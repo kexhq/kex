@@ -9,7 +9,6 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -246,7 +245,7 @@ struct LambdaValue {
     std::vector<std::string> params;
     // body is stored by reference to AST — evaluated at call time
     const void* body = nullptr; // points to vector<ExprPtr>
-    struct Environment* closure = nullptr;
+    class Environment* closure = nullptr;
 };
 
 struct Value {
@@ -322,7 +321,7 @@ struct Value {
 auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool;
 
 // The method-dispatch type name for a value — the name used for UFCS resolution
-// (e.g. "Integer" for both IntValue/BigIntValue, "Pid" for ProcessValue).
+// (e.g. "Integer" for both IntValue/BigIntValue, "Process" for ProcessValue).
 // Separate from typeName() which is for display.
 auto dispatchTypeName(const ValuePtr& v) -> std::string;
 
@@ -334,8 +333,6 @@ auto dispatchSupertypes(const std::string& typeName) -> std::vector<std::string>
 // runtime type (e.g. both "Int" and "Integer" match IntValue/BigIntValue).
 auto matchesTypeName(const std::string& name, const ValuePtr& v) -> bool;
 
-// The set of builtin type names that cannot have prelude methods overridden.
-auto builtinTypeNames() -> const std::unordered_set<std::string>&;
 
 // Default module allowlist for sandboxed Evaluator.run / .runExpression.
 auto defaultEvalAllowList() -> const std::vector<std::string>&;
@@ -375,5 +372,9 @@ auto parseIntegerInBase(const std::string& text, int base) -> std::optional<mpz_
 // interchangeable from the language user's standpoint; this is the shared
 // extraction point for that (see valuesEqual, toString(), `+`).
 auto textContent(const ValuePtr& v) -> std::optional<std::string>;
+
+// A take/drop count clamped to [0, size]: a negative count means none, and a
+// count too big for int64_t (a BigIntValue) means all of a positive one.
+auto clampedCount(const ValuePtr& count, size_t size) -> size_t;
 
 } // namespace kex::interpreter

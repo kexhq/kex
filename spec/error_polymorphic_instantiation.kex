@@ -17,7 +17,7 @@
 
 let id(x) = x
 
-let takesInteger(n: Integer) -> String = n.to(String)
+let takesInteger(n: Integer) -> String = "${n}"
 
 main do
   let n = id(5)

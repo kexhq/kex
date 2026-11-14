@@ -1,0 +1,58 @@
+# kex: check-only
+# A match is checked for the values its arms leave unmatched through nested
+# patterns too: a tuple's elements, a list's head and tail, a constructor's
+# arguments, literals and booleans (kexhq/kex#645). Only a top-level sum
+# type's constructors were, so each of these was accepted and failed at run
+# time with no matching clause. Complete ones stay accepted.
+
+let both(pair: (Integer?, Integer?)) -> Integer do
+  match pair do
+    (Just(a), Just(b)) => a + b
+    (None, None) => 0
+  end
+end
+
+let single(xs: [Integer]) -> Integer do
+  match xs do
+    [] => 0
+    [x] => x
+  end
+end
+
+let yes(flag: Bool) -> Integer do
+  match flag do
+    true => 1
+  end
+end
+
+let one(value: Integer?) -> Integer do
+  match value do
+    Just(1) => 1
+    None => 0
+  end
+end
+
+let named(n: Integer) -> String do
+  match n do
+    0 => "zero"
+    1 => "one"
+  end
+end
+
+let head(xs: [Integer]) -> Integer do
+  match xs do
+    [] => 0
+    [x | _] => x
+  end
+end
+
+let truth(flag: Bool) -> String do
+  match flag do
+    true => "yes"
+    false => "no"
+  end
+end
+
+main do
+  IO.printLine("${head([1])}")
+end

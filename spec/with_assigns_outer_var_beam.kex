@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A `var` reassigned inside a `with` block keeps its new value after it, as
 # it does after an `if`. On the BEAM the block's rebinding never left it:
 # `unbound variable '_ir_result6'` and erlc refused the module

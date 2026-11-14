@@ -1,0 +1,63 @@
+# A block that reassigns outer variables over a range written in place, or
+# over a count, is walked by counting on BEAM (no list is built for it). It
+# has to agree with the walker on every shape of range: ascending, a single
+# element, empty when the bounds are the wrong way round, bounds that are
+# values rather than literals, characters (which are not counted, and take
+# the general way), several variables at once, one loop inside another, and a count whose
+# block takes no index.
+
+let sumBetween(low: Integer, high: Integer) -> Integer do
+  var total = 0
+  (low..high).each { |n| total = total + n }
+  total
+end
+
+main do
+  var sum = 0
+  (1..5).each { |i| sum = sum + i }
+  IO.printLine(sum)
+
+  var single = 0
+  (7..7).each { |i| single = single + i }
+  IO.printLine(single)
+
+  var none = 0
+  (5..1).each { |i| none = none + i }
+  IO.printLine(none)
+
+  IO.printLine(sumBetween(-3, 3))
+  IO.printLine(sumBetween(10, 12))
+
+  var letters = ""
+  ('a'..'e').each { |c| letters = "${letters}${c}" }
+  IO.printLine(letters)
+
+  var count = 0
+  var last = 0
+  (1..4).each do |i|
+    count = count + 1
+    last = i
+  end
+  IO.printLine("${count} ${last}")
+
+  var grid = 0
+  (1..3).each do |row|
+    (1..3).each { |column| grid = grid + row * column }
+  end
+  IO.printLine(grid)
+
+  var ticks = 0
+  4.times { |k| ticks = ticks + k }
+  IO.printLine(ticks)
+
+  var never = 0
+  0.times { |k| never = never + 1 }
+  IO.printLine(never)
+
+  var plain = 0
+  3.times { plain = plain + 1 }
+  IO.printLine(plain)
+
+  let squares = (1..4).map { |n| n * n }
+  IO.printLine(squares)
+end

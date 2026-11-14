@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — calls Erlang through BEAM.*
 # An exception raised inside an Erlang call is rescuable, by `trying … rescue`
 # and by a function-level `rescue`, like any Kex failure (kexhq/kex#326). An
 # Erlang `throw` is too, as the thrown value (kexhq/kex#400).

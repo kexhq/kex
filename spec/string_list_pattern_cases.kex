@@ -1,0 +1,33 @@
+# A list pattern takes a String apart into its characters: pattern sugar the
+# checker decides (it knows the subject is a String), so both backends agree
+# without a String being a list. The elements bind Chars, the tail the rest of
+# the String; String literal arms sit beside list arms, a Char literal or a
+# String literal can stand in either place, and the pattern nests.
+let classify(s: String) -> String do
+  match s do
+    "" => "empty"
+    "hi" => "greeting"
+    ['x' | rest] => "x then ${rest}"
+    [c | "!"] => "shout ${c}"
+    [c | rest] when c == 'Á' => "accent ${c} rest=${rest} length=${rest.length}"
+    [a, b] => "pair ${a}${b}"
+    [c | _] => "other ${c}"
+  end
+end
+
+let firstOfPair(pair: (String, Integer)) -> String do
+  match pair do
+    ([c | _], n) => "${c}:${n}"
+    (_, n) => "none:${n}"
+  end
+end
+
+main do
+  ["", "hi", "xyz", "a!", "Ábc", "ab", "zzz", "é"].each do |s|
+    IO.printLine(classify(s))
+  end
+  IO.printLine(firstOfPair(("őr", 3)))
+  IO.printLine(firstOfPair(("", 4)))
+  let [h | t] = "héllo"
+  IO.printLine("${h} ${t}")
+end

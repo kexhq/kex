@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # Autoclose blocks: the block's value comes back, the handle is closed,
 # and a failure to open never runs the block.
@@ -23,25 +23,25 @@ main do
   listener.close
 
   match TCP.connectTo("noport") { |conn| assert(false, "must not run") } do
-    Error(error) => assert(error.kind == Parse)
+    Error(error) => assert(error.kind == Net.Parse)
     Ok(_) => assert(false, "bad address must fail")
   end
 
   let bound = TCP.bind("127.0.0.1:0") do |listener|
-    listener.localAddress.try.port.string
+    listener.localAddress.map { |address| address.port.string }.or("")
   end
   assert(bound.or("") != "")
   match TCP.bind("noport") { |listener| assert(false, "must not run") } do
-    Error(error) => assert(error.kind == Parse)
+    Error(error) => assert(error.kind == Net.Parse)
     Ok(_) => assert(false, "bad address must fail")
   end
 
   let udpPort = UDP.bindTo("127.0.0.1:0") do |socket|
-    socket.localAddress.try.port.string
+    socket.localAddress.map { |address| address.port.string }.or("")
   end
   assert(udpPort.or("") != "")
   match UDP.bindTo("noport") { |socket| assert(false, "must not run") } do
-    Error(error) => assert(error.kind == Parse)
+    Error(error) => assert(error.kind == Net.Parse)
     Ok(_) => assert(false, "bad address must fail")
   end
 
@@ -56,7 +56,7 @@ main do
   end
   assert(unixDone.or("") == "done")
   match Unix.connectTo("relative.sock") { |conn| assert(false, "must not run") } do
-    Error(error) => assert(error.kind == Parse)
+    Error(error) => assert(error.kind == Net.Parse)
     Ok(_) => assert(false, "bad path must fail")
   end
   FS.File.delete(sockPath)

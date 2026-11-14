@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../semantic/db.hxx"
+#include "../semantic/symbol_info.hxx"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -83,9 +83,26 @@ inline auto standardLibraryRootCandidates()
 }
 
 inline auto standardLibraryModuleRoots() -> std::vector<std::string> {
-    std::vector<std::string> roots;
-    for (const auto& root : standardLibraryRootCandidates())
-        roots.push_back(root.string());
+    static const std::vector<std::string> roots = [] {
+        std::vector<std::string> result;
+        for (const auto& root : standardLibraryRootCandidates())
+            result.push_back(root.string());
+        return result;
+    }();
+    return roots;
+}
+
+// `roots` without the standard library's: the project's own module roots.
+// A stdlib module is consulted through its compiled interface; merging its
+// SOURCE as well adds a second, unannotated candidate for every method it
+// defines (spec/typestate_survives_standin.kex). Merging is for the
+// project's modules, which have no interface yet.
+inline auto withoutStandardLibraryRoots(std::vector<std::string> roots)
+    -> std::vector<std::string> {
+    const auto stdlib = standardLibraryModuleRoots();
+    std::erase_if(roots, [&](const std::string& root) {
+        return std::find(stdlib.begin(), stdlib.end(), root) != stdlib.end();
+    });
     return roots;
 }
 
@@ -202,27 +219,46 @@ inline auto preludeSourceFiles() -> std::vector<std::string> {
 // Returns the first available opt-in standard-library source set. This mirrors
 // preludeSourceFiles(), excluding both the manifest and everything it imports.
 inline auto standardLibrarySourceFiles() -> std::vector<std::string> {
-    for (const auto& rootString : standardLibraryModuleRoots()) {
-        const auto root = std::filesystem::path(rootString);
-        if (!preludeManifestPath(root)) continue;
-        std::error_code ec;
-        std::vector<std::string> files;
-        std::unordered_set<std::string> automatic;
-        for (const auto& path : preludeFilesFromRoot(root))
-            automatic.insert(
-                std::filesystem::path(path).lexically_normal().string());
-        for (const auto& entry :
-             std::filesystem::recursive_directory_iterator(root, ec))
-            if (entry.path().extension() == ".kex" &&
-                entry.path().filename() != "prelude.kex" &&
-                !automatic.contains(entry.path().lexically_normal().string()))
-                files.push_back(entry.path().string());
-        if (!ec) {
-            std::sort(files.begin(), files.end());
-            return files;
+    // The stdlib does not change within a process; the manifest read and the
+    // recursive directory walk below are paid once per invocation instead of
+    // once per caller (preludeSourceHash, sourceSemanticInterfaces,
+    // toolchainFingerprint, ...).
+    static const std::vector<std::string> files = [] {
+        for (const auto& rootString : standardLibraryModuleRoots()) {
+            const auto root = std::filesystem::path(rootString);
+            if (!preludeManifestPath(root)) continue;
+            std::error_code ec;
+            std::vector<std::string> result;
+            std::unordered_set<std::string> automatic;
+            for (const auto& path : preludeFilesFromRoot(root))
+                automatic.insert(
+                    std::filesystem::path(path).lexically_normal().string());
+            for (const auto& entry :
+                 std::filesystem::recursive_directory_iterator(root, ec))
+                if (entry.path().extension() == ".kex" &&
+                    entry.path().filename() != "prelude.kex" &&
+                    !automatic.contains(entry.path().lexically_normal().string()))
+                    result.push_back(entry.path().string());
+            if (!ec) {
+                std::sort(result.begin(), result.end());
+                return result;
+            }
         }
-    }
-    return {};
+        return std::vector<std::string>{};
+    }();
+    return files;
+}
+
+// The opt-in stdlib modules beside the prelude sources in `root`: what one
+// checked stdlib program holds after the tier-ordered prelude. BEAM's prelude
+// build and the walker's prelude check both read it.
+inline auto optInStdlibSources(const std::filesystem::path& root)
+    -> std::vector<std::string> {
+    auto files = standardLibrarySourceFiles();
+    std::erase_if(files, [&](const auto& file) {
+        return std::filesystem::path(file).parent_path() != root;
+    });
+    return files;
 }
 
 // Sources compiled into the installed stdlib artifact: the manifest-selected
@@ -230,43 +266,16 @@ inline auto standardLibrarySourceFiles() -> std::vector<std::string> {
 // library modules remain independently loadable source dependencies.
 inline auto standardLibraryArtifactSourceFiles()
     -> std::vector<std::string> {
-    auto files = preludeSourceFiles();
-    if (files.empty()) return {};
-    const auto root =
-        std::filesystem::path(files.front()).parent_path();
-    for (const auto& source : standardLibrarySourceFiles())
-        if (std::filesystem::path(source).parent_path() == root)
-            files.push_back(source);
+    static const std::vector<std::string> files = [] {
+        auto result = preludeSourceFiles();
+        if (result.empty()) return result;
+        const auto root = std::filesystem::path(result.front()).parent_path();
+        for (const auto& source : standardLibrarySourceFiles())
+            if (std::filesystem::path(source).parent_path() == root)
+                result.push_back(source);
+        return result;
+    }();
     return files;
-}
-
-inline auto isPreludeSourceFile(const std::string& filePath) -> bool {
-    const auto candidate = std::filesystem::path(filePath).lexically_normal();
-    const auto files = preludeSourceFiles();
-    return std::any_of(files.begin(), files.end(), [&](const auto& source) {
-        return std::filesystem::path(source).lexically_normal() == candidate;
-    });
-}
-
-// Indexes the prelude selected by an explicit stdlib root into `db`.
-inline auto loadPrelude(kex::semantic::SemanticDB& db, const std::string& dir) -> void {
-    for (const auto& filePath : preludeFilesFromRoot(dir)) {
-        std::ifstream file(filePath);
-        if (!file.is_open()) continue;
-        std::ostringstream contents;
-        contents << file.rdbuf();
-        db.updateFile(filePath, contents.str());
-    }
-}
-
-inline auto loadDiscoveredPrelude(kex::semantic::SemanticDB& db) -> void {
-    for (const auto& filePath : preludeSourceFiles()) {
-        std::ifstream file(filePath);
-        if (!file.is_open()) continue;
-        std::ostringstream contents;
-        contents << file.rdbuf();
-        db.updateFile(filePath, contents.str());
-    }
 }
 
 } // namespace kex

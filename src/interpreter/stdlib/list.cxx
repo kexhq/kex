@@ -1,5 +1,4 @@
 #include "../evaluator.hxx"
-#include "../../common/utf8.hxx"
 #include "lazy.hxx"
 #include <algorithm>
 #include <functional>
@@ -7,19 +6,6 @@
 
 namespace kex::interpreter {
 
-namespace {
-
-// A take/drop count clamped to [0, size]: a negative count means none, and a
-// count too big for int64_t (a BigIntValue) means all of a positive one.
-auto clampedCount(const ValuePtr& count, size_t size) -> size_t {
-    if (auto* n = std::get_if<IntValue>(&count->data))
-        return n->value <= 0 ? 0 : std::min(static_cast<size_t>(n->value), size);
-    if (auto* big = std::get_if<BigIntValue>(&count->data))
-        return sgn(big->value) <= 0 ? 0 : size;
-    return 0;
-}
-
-} // namespace
 
 auto Evaluator::registerListBuiltins() -> void {
     defineModule("List");
@@ -27,7 +13,7 @@ auto Evaluator::registerListBuiltins() -> void {
     defineModule("Range");
 
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        defineIntrinsic("List::" + name, std::move(fn));
+        defineIntrinsic("List." + name, std::move(fn));
     };
 
     // Captured by value in every lambda below — rangeToList and getElements
@@ -46,30 +32,9 @@ auto Evaluator::registerListBuiltins() -> void {
     auto getElements = [rangeToList](const ValuePtr& val) -> std::vector<ValuePtr> {
         if (auto* list = std::get_if<ListValue>(&val->data)) return list->elements;
         if (auto* range = std::get_if<RangeValue>(&val->data)) return rangeToList(*range);
-        if (auto* str = std::get_if<StringValue>(&val->data)) {
-            std::vector<ValuePtr> chars;
-            for (auto cp : cachedCodepoints(*str))
-                chars.push_back(Value::character(cp));
-            return chars;
-        }
         return {};
     };
 
-    // If every element is a Char, collapse to String — preserves String identity
-    // through map/filter/etc. so `"hello".map(&.upperCase)` returns a String.
-    auto repackChars = [](std::vector<ValuePtr> elems) -> ValuePtr {
-        std::string s;
-        s.reserve(elems.size());
-        for (const auto& e : elems) {
-            if (auto* cv = std::get_if<CharValue>(&e->data)) { s += utf8::encode(cv->value); }
-            else return Value::list(std::move(elems));
-        }
-        return Value::string(std::move(s));
-    };
-
-    // getElements, not a ListValue cast: a String IS a [Char], so indexing
-    // one yields its Chars (`"hi".get(1)` is `Just('i')`), as it does on BEAM.
-    //
     // Two arities, two answers: `get(i)` is the partial form and wraps in
     // `Just` — it is what `xs[i]` desugars to, and what `Map.get` has always
     // done — while `get(i, default)` is the total one and hands the element
@@ -92,11 +57,28 @@ auto Evaluator::registerListBuiltins() -> void {
     // methods do not apply to one. `items` is the explicit conversion, and
     // the only way to walk a tuple generically without reaching for
     // `BEAM.erlang.tuple_to_list`.
-    defineIntrinsic("Tuple::items", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Tuple.items", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         if (auto* tuple = std::get_if<TupleValue>(&args[0]->data))
             return Value::list(tuple->elements);
         return Value::list({});
+    });
+
+    // `list.at(i)` — the element in `Just`, or `None` past either end.
+    reg("at", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::none();
+        auto* list = std::get_if<ListValue>(&args[0]->data);
+        auto* idx = std::get_if<IntValue>(&args[1]->data);
+        if (!list || !idx || idx->value < 0) return Value::none();
+        const auto i = static_cast<size_t>(idx->value);
+        return i < list->elements.size() ? Value::just(list->elements[i]) : Value::none();
+    });
+
+    reg("reverse", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::list({});
+        auto* list = std::get_if<ListValue>(&args[0]->data);
+        if (!list) return args[0];
+        return Value::list({list->elements.rbegin(), list->elements.rend()});
     });
 
     reg("push", [](std::vector<ValuePtr> args) -> ValuePtr {
@@ -109,7 +91,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return args[0];
     });
 
-    reg("map", [this, getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("map", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         // A stream reaching the generic `map` stays lazy — same implementation
         // the Stream domain registers, so the two cannot drift apart.
@@ -123,16 +105,15 @@ auto Evaluator::registerListBuiltins() -> void {
             if (!fn || !fn->native) return Value::list({});
             return lazy::mapFeed(feed->state, fn->native);
         }
-        bool srcIsStr = std::holds_alternative<StringValue>(args[0]->data);
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
         if (!fn || !fn->native) return Value::list({});
         std::vector<ValuePtr> result;
         for (const auto& elem : elems) result.push_back(fn->native({elem}));
-        return srcIsStr ? repackChars(std::move(result)) : Value::list(std::move(result));
+        return Value::list(std::move(result));
     });
 
-    reg("filter", [this, getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("filter", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         if (auto* stream = std::get_if<StreamValue>(&args[0]->data)) {
             auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -144,7 +125,6 @@ auto Evaluator::registerListBuiltins() -> void {
             if (!fn || !fn->native) return Value::list({});
             return lazy::filterFeed(feed->state, fn->native);
         }
-        bool srcIsStr = std::holds_alternative<StringValue>(args[0]->data);
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
         if (!fn || !fn->native) return Value::list({});
@@ -152,12 +132,11 @@ auto Evaluator::registerListBuiltins() -> void {
         for (const auto& elem : elems) {
             if (fn->native({elem})->isTrue()) result.push_back(elem);
         }
-        return srcIsStr ? repackChars(std::move(result)) : Value::list(std::move(result));
+        return Value::list(std::move(result));
     });
 
-    reg("reject", [this, getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("reject", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
-        bool srcIsStr = std::holds_alternative<StringValue>(args[0]->data);
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
         if (!fn || !fn->native) return Value::list({});
@@ -165,14 +144,14 @@ auto Evaluator::registerListBuiltins() -> void {
         for (const auto& elem : elems) {
             if (!fn->native({elem})->isTrue()) result.push_back(elem);
         }
-        return srcIsStr ? repackChars(std::move(result)) : Value::list(std::move(result));
+        return Value::list(std::move(result));
     });
 
     // foldLeft — the intrinsic backing for Enumerable.reduce (Kex.Intrinsic.List.
     // foldLeft). It uses an accumulator-first reducer, exposed under the
     // primitive name so the prelude's reduce is a thin intrinsic wrapper on
     // both backends.
-    reg("foldLeft", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("foldLeft", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 3) return Value::none();
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[2]->data);
@@ -182,7 +161,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return acc;
     });
 
-    defineIntrinsic("Range::bounds", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Range.bounds", [](std::vector<ValuePtr> args) -> ValuePtr {
         const auto& range = std::get<RangeValue>(args.at(0)->data);
         auto low = range.lower ? range.lower : range.isChar
             ? Value::character(static_cast<char32_t>(range.start))
@@ -195,7 +174,7 @@ auto Evaluator::registerListBuiltins() -> void {
 
     // Kex.Intrinsic.Range.items — the range's elements as a real list.
     // Backs the prelude's Range `items` (src/stdlib/range.kex).
-    defineIntrinsic("Range::items", [rangeToList](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Range.items", [rangeToList](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         if (auto* range = std::get_if<RangeValue>(&args[0]->data))
             return Value::list(rangeToList(*range));
@@ -203,7 +182,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::list({});
     });
 
-    reg("each", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("each", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
         if (!fn || !fn->native) return Value::none();
@@ -244,10 +223,6 @@ auto Evaluator::registerListBuiltins() -> void {
 
     reg("first", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
-        if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-            if (str->value.empty()) return Value::none();
-            return Value::just(Value::character(utf8::decode(str->value).front()));
-        }
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             if (list->elements.empty()) return Value::none();
             return Value::just(list->elements[0]);
@@ -259,10 +234,6 @@ auto Evaluator::registerListBuiltins() -> void {
 
     reg("last", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
-        if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-            if (str->value.empty()) return Value::none();
-            return Value::just(Value::character(utf8::decode(str->value).back()));
-        }
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             if (list->elements.empty()) return Value::none();
             return Value::just(list->elements.back());
@@ -273,14 +244,11 @@ auto Evaluator::registerListBuiltins() -> void {
     });
 
     // count([X]) -> Integer           — element count
-    // count(String) -> Integer        — character count
     // count(Map) -> Integer           — entry count
     // count(Range) -> Integer         — range size
     // count([X], X->Bool) -> Integer  — filtered count
-    reg("count", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("count", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
-        if (auto* str = std::get_if<StringValue>(&args[0]->data))
-            return Value::integer(static_cast<int64_t>(cachedCodepoints(*str).size()));
         if (auto* map = std::get_if<MapValue>(&args[0]->data))
             return Value::integer(static_cast<int64_t>(map->entries.size()));
         if (auto* range = std::get_if<RangeValue>(&args[0]->data))
@@ -297,13 +265,11 @@ auto Evaluator::registerListBuiltins() -> void {
     });
 
     // Kex.Intrinsic.List.length — the low-level length intrinsic backing
-    // the prelude's `count` wrapper. Works on lists, strings, and maps.
-    reg("length", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    // the prelude's `count` wrapper. Works on lists and maps.
+    reg("length", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto* list = std::get_if<ListValue>(&args[0]->data))
             return Value::integer(static_cast<int64_t>(list->elements.size()));
-        if (auto* str = std::get_if<StringValue>(&args[0]->data))
-            return Value::integer(static_cast<int64_t>(cachedCodepoints(*str).size()));
         if (auto* map = std::get_if<MapValue>(&args[0]->data))
             return Value::integer(static_cast<int64_t>(map->entries.size()));
         return Value::integer(0);
@@ -324,21 +290,11 @@ auto Evaluator::registerListBuiltins() -> void {
             for (const auto& e : elems)
                 if (valuesEqual(e, elem)) return Value::boolean(true);
         }
-        if (auto* str = std::get_if<StringValue>(&container->data)) {
-            for (auto cp : utf8::decode(str->value))
-                if (valuesEqual(Value::character(cp), elem))
-                    return Value::boolean(true);
-        }
         return Value::boolean(false);
     });
 
     reg("take", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
-        if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-            const auto& cps = cachedCodepoints(*str);
-            auto cnt = clampedCount(args[1], cps.size());
-            return Value::string(utf8::encodeAll({cps.begin(), cps.begin() + cnt}));
-        }
         auto* list = std::get_if<ListValue>(&args[0]->data);
         if (!list) return Value::list({});
         auto cnt = clampedCount(args[1], list->elements.size());
@@ -347,11 +303,6 @@ auto Evaluator::registerListBuiltins() -> void {
 
     reg("drop", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
-        if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-            const auto& cps = cachedCodepoints(*str);
-            auto skip = clampedCount(args[1], cps.size());
-            return Value::string(utf8::encodeAll({cps.begin() + skip, cps.end()}));
-        }
         auto* list = std::get_if<ListValue>(&args[0]->data);
         if (!list) return Value::list({});
         auto skip = clampedCount(args[1], list->elements.size());
@@ -383,7 +334,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::list(std::move(result));
     });
 
-    reg("uniq", [getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("uniq", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         auto elems = getElements(args[0]);
         std::vector<ValuePtr> result;
@@ -393,13 +344,11 @@ auto Evaluator::registerListBuiltins() -> void {
                 if (valuesEqual(seen, elem)) { found = true; break; }
             if (!found) result.push_back(elem);
         }
-        if (std::get_if<StringValue>(&args[0]->data)) return repackChars(result);
         return Value::list(std::move(result));
     });
 
-    reg("partition", [getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("partition", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::tuple({Value::list({}), Value::list({})});
-        const bool srcIsStr = std::holds_alternative<StringValue>(args[0]->data);
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
         if (!fn || !fn->native) return Value::tuple({Value::list({}), Value::list({})});
@@ -408,11 +357,7 @@ auto Evaluator::registerListBuiltins() -> void {
             if (fn->native({elem})->isTrue()) yes.push_back(elem);
             else no.push_back(elem);
         }
-        // Both halves keep the receiver's type — see `sort` above.
-        auto pack = [&](std::vector<ValuePtr> v) {
-            return srcIsStr ? repackChars(std::move(v)) : Value::list(std::move(v));
-        };
-        return Value::tuple({pack(std::move(yes)), pack(std::move(no))});
+        return Value::tuple({Value::list(std::move(yes)), Value::list(std::move(no))});
     });
 
     reg("indexOf", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
@@ -424,7 +369,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::none();
     });
 
-    reg("any?", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("any?", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -435,7 +380,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::boolean(false);
     });
 
-    reg("all?", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("all?", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(true);
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -507,7 +452,7 @@ auto Evaluator::registerListBuiltins() -> void {
                 return ac->value < bc->value ? "Less" : (ac->value > bc->value ? "Greater" : "Equal");
         auto dispatchCompare = [&](const std::string& typeName) -> std::string {
             try {
-                auto r = callFunction(typeName + "::compare", {a, b}, {}, {});
+                auto r = callFunction(typeName + ".compare", {a, b}, {}, {});
                 if (auto* var = std::get_if<VariantValue>(&r->data)) return var->tag;
             } catch (...) {}
             return "";
@@ -532,15 +477,10 @@ auto Evaluator::registerListBuiltins() -> void {
         return "Equal";
     };
 
-    reg("sort", [this, getElements, compareVia, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("sort", [getElements, compareVia](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
-        // String-preserving: an operation on a String answers with a String,
-        // as its declared signature says. A String and a [Char] are different
-        // types, so handing back the list would be a different type entirely.
-        const bool srcIsStr = std::holds_alternative<StringValue>(args[0]->data);
         auto elems = getElements(args[0]);
-        if (elems.empty())
-            return srcIsStr ? Value::string("") : Value::list({});
+        if (elems.empty()) return Value::list({});
 
         // 2-arg form: sort(list, comparator) where comparator(a,b) -> Bool
         if (args.size() >= 2) {
@@ -560,11 +500,10 @@ auto Evaluator::registerListBuiltins() -> void {
             [&compareVia](const ValuePtr& a, const ValuePtr& b) {
                 return compareVia(a, b) == "Less";
             });
-        return srcIsStr ? repackChars(std::move(elems))
-                        : Value::list(std::move(elems));
+        return Value::list(std::move(elems));
     });
 
-    reg("min", [this, getElements, compareVia](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("min", [getElements, compareVia](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto elems = getElements(args[0]);
         if (elems.empty()) return Value::none();
@@ -587,7 +526,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::just(result);
     });
 
-    reg("max", [this, getElements, compareVia](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("max", [getElements, compareVia](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto elems = getElements(args[0]);
         if (elems.empty()) return Value::none();
@@ -708,9 +647,6 @@ auto Evaluator::registerListBuiltins() -> void {
             auto mapped = fn->native({elem});
             if (auto* inner = std::get_if<ListValue>(&mapped->data))
                 for (const auto& e : inner->elements) result.push_back(e);
-            else if (auto* str = std::get_if<StringValue>(&mapped->data))
-                for (auto cp : utf8::decode(str->value))
-                    result.push_back(Value::character(cp));
             else
                 result.push_back(mapped);
         }

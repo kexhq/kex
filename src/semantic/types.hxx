@@ -1,8 +1,10 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -38,6 +40,11 @@ struct SizedFloatType {
 struct NamedType {
     std::string name;
     std::vector<TypePtr> typeArgs;
+    // A refinement to one nullary variant of the ADT `name` (`Write` of
+    // `FS.FileMode`): the type of that constructor's value, and of
+    // `FileMode.Write` written as a type. Empty for the ADT itself; code that
+    // ignores it sees the ADT, which every variant value is.
+    std::string variant;
 };
 
 struct FuncType {
@@ -128,13 +135,15 @@ struct Type {
 
     static auto integer() -> TypePtr;  // arbitrary precision
     static auto charT() -> TypePtr;
-    static auto string() -> TypePtr;   // alias for list(charT())
+    static auto string() -> TypePtr;
     static auto boolean() -> TypePtr;
     static auto atom(std::string atomName = "") -> TypePtr;
     static auto unit() -> TypePtr;
     static auto unknown() -> TypePtr;
     static auto voidType(std::string reason = {}) -> TypePtr;
     static auto named(const std::string& name, std::vector<TypePtr> args = {}) -> TypePtr;
+    // The type of the nullary variant `variant` of the ADT `adt` (NamedType::variant).
+    static auto variantOf(const std::string& adt, const std::string& variant) -> TypePtr;
     static auto func(std::vector<TypePtr> params, TypePtr result,
                      bool block = false) -> TypePtr;
     static auto list(TypePtr element) -> TypePtr;
@@ -168,6 +177,42 @@ struct Type {
 };
 
 auto typeToString(const TypePtr& type) -> std::string;
+// The name a primitive kind is written with in Kex and printed with by
+// typeToString (`Void` for the unit kind), and the kind a name is. One
+// table, which the interface cache reads too rather than keeping its own.
+auto primitiveKindName(PrimitiveType::Kind kind) -> std::string_view;
+auto primitiveKindNamed(std::string_view name) -> std::optional<PrimitiveType::Kind>;
+
+// Structural traversal: the one place that knows which alternatives nest other
+// types. Spell out only the kinds a walk treats specially; hand the rest here.
+//
+// Each type directly nested in `type`, in order (a child may be null).
+auto forEachTypeChild(const TypePtr& type,
+                      const std::function<void(const TypePtr&)>& visit) -> void;
+// `type` rebuilt with each directly nested type replaced by `map(child)`. A
+// leaf, or a type none of whose children changed, comes back as the same
+// object.
+auto mapTypeChildren(const TypePtr& type,
+                     const std::function<TypePtr(const TypePtr&)>& map)
+    -> TypePtr;
+// What a missing (null) type counts as, for walks that must decide.
+enum class NullType { Known, Unknown };
+// Whether `predicate` holds for `type` or any type nested in it, pre-order;
+// stops at the first hit. A null type is a hit only for NullType::Unknown.
+auto anyType(const TypePtr& type,
+             const std::function<bool(const TypePtr&)>& predicate,
+             NullType nullType = NullType::Known) -> bool;
+
+// Does a type contain an Unknown anywhere? On a signature PARAMETER this
+// marks a contract the checker never learned — the shape-only entries the
+// source-derived interface path records for un-annotated `make` methods,
+// where compiled artifacts would supply real types. Type variables are not
+// this: `[A]` is a known, genuinely generic contract.
+auto mentionsUnknown(const TypePtr& type, NullType nullType) -> bool;
+// The same for a signature parameter, where a missing type is a known one.
+inline auto mentionsUnknownParam(const TypePtr& type) -> bool {
+    return mentionsUnknown(type, NullType::Known);
+}
 
 // A type flattened to name + arguments, the shape `Type.of` hands back to Kex
 // code. Backend-neutral on purpose: the interpreter builds a record from it
@@ -201,6 +246,31 @@ auto structuredTypeOf(const TypePtr& type) -> std::optional<StructuredType>;
 // declaration. These are the type names that resolve without any `type`
 // declaration behind them; everything else must be declared.
 auto isPrimitiveTypeName(const std::string& name) -> bool;
+// An Integer or a Float of any width: the numeric tower, where `0` is `0.0`.
+auto isNumericType(const TypePtr& type) -> bool;
+// Not known yet: Unknown, or an inference variable nothing has bound.
+auto isUndetermined(const TypePtr& type) -> bool;
+// A type a failed `.try` can be the value of: a Result or an Optional, or one
+// not known yet.
+auto holdsFailure(const TypePtr& type) -> bool;
+
+// A trait's `This` left as written (`NamedType("This")`), which only a
+// receiver's type substitutes.
+auto isThisPlaceholder(const TypePtr& type) -> bool;
+
+// The type a built-in type NAME denotes, or null when the name is not one: the
+// one table every name-to-type lookup reads — the checker's globals, the
+// source-derived interfaces and the KexI reader. `Int` is `Integer`
+// (arbitrary precision); the fixed widths are spelled `Int8` … `UInt64` and
+// `Float32`/`Float64`. Copies of this list used to disagree: the KexI reader
+// read `Int` as Int64 while the checker read it as Integer.
+auto builtinType(std::string_view name) -> TypePtr;
+// Every name builtinType knows, in table order.
+auto builtinTypeNames() -> std::vector<std::string_view>;
+// The same, plus the names a SIGNATURE may use that are not concrete types:
+// the numeric traits `Number` and `Float` (constrained) and `Void` (unit).
+// Exactly the names compiled metadata writes as primitives.
+auto signatureBuiltinType(std::string_view name) -> TypePtr;
 
 // Whether two named-type identities denote the same type. Record and ADT
 // identity is module-qualified (`Tey.Manifest.Dependency`), so two qualified
@@ -220,15 +290,55 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool;
 //   - diagnostics, where a mismatch against a determined receiver is provable
 //     and one against a gradual receiver is not.
 auto isFullyConcrete(const TypePtr& type) -> bool;
+// The negation: a type variable, an unknown, a trait constraint or a missing
+// type somewhere inside. Checks that would otherwise report a mismatch use
+// this to stay quiet rather than invent an error from incomplete information.
+auto containsOpenType(const TypePtr& type) -> bool;
+// A type variable or a trait constraint somewhere inside: a generic type.
+// Unlike containsOpenType, an unknown (`Any`) does not count.
+auto containsTypeVariable(const TypePtr& type) -> bool;
+// The type of a value an expression actually answers: fully concrete, and
+// not Never (which answers nothing).
+auto isConcreteValue(const TypePtr& type) -> bool;
+// A type a contract holds a value to: a concrete one, or a bare trait bound
+// (`area :> Float` takes any Float, never a String).
+auto isConcreteOrBound(const TypePtr& type) -> bool;
+// The id of a type variable, or none for any other type.
+auto typeVariableId(const TypePtr& type) -> std::optional<int>;
+
+// How a name was bound: `var` (so `=` and `!` may rebind it) or not, and
+// whether the language bound it (`new`, `from`) rather than the program,
+// which an explicit binding then shadows instead of redeclaring.
+struct VarBinding {
+    bool isVar = false;
+    bool implicit = false;
+    // Where the name is bound (1-based; 0 when the binding was not written,
+    // as a parameter's), for tooling: a local is bound in the file it is
+    // used in.
+    int line = 0;
+    int column = 0;
+};
 
 class TypeEnv {
 public:
-    auto set(const std::string& name, TypePtr type) -> void;
+    using Binding = VarBinding;
+    auto set(const std::string& name, TypePtr type, Binding binding = {}) -> void;
     auto get(const std::string& name) const -> TypePtr;
-    auto has(const std::string& name) const -> bool;
+    // How `name` was bound here, or null when it is not bound here.
+    auto binding(const std::string& name) const -> const Binding*;
+    // Every name bound here, for a hint beside an undefined one.
+    auto names() const -> std::vector<std::string> {
+        std::vector<std::string> result;
+        for (const auto& [name, _] : m_entries) result.push_back(name);
+        return result;
+    }
 
 private:
-    std::unordered_map<std::string, TypePtr> m_types;
+    struct Entry {
+        TypePtr type;
+        Binding binding;
+    };
+    std::unordered_map<std::string, Entry> m_entries;
 };
 
 } // namespace kex::semantic

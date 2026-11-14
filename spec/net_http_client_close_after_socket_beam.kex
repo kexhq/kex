@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # `using Net.Socket` before `using Net.HTTP` merges the TCP module first, so
 # the bare name `close` belongs to TCP and Net.HTTP's `close` dispatcher for
