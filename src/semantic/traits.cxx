@@ -202,6 +202,18 @@ auto TraitRegistry::requiredMethod(const TypePtr& type, const std::string& metho
     return {nullptr, nullptr};
 }
 
+auto TraitRegistry::requiredOverloads(const TypePtr& type, const std::string& method) const
+    -> std::vector<const Signature*> {
+    std::vector<const Signature*> overloads;
+    auto implemented = m_implementations.find(implementorKey(type));
+    if (implemented == m_implementations.end()) return overloads;
+    for (const auto& traitName : implemented->second)
+        if (auto trait = m_traits.find(traitName); trait != m_traits.end())
+            for (const auto& required : trait->second.requiredMethods)
+                if (required.name == method) overloads.push_back(&required);
+    return overloads;
+}
+
 auto TraitRegistry::commonTrait(const TypePtr& a, const TypePtr& b) const -> std::string {
     auto keyA = implementorKey(a);
     auto keyB = implementorKey(b);

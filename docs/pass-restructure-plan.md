@@ -942,6 +942,9 @@ written in Kex down to recursion; and the reassigned-variable threading, so
        range pattern, leave it open. Two stdlib matches were incomplete by
        type (Data.Queue's `dequeue`, JSON's one-key unwrap) and say so now
        (`spec/error_match_nested_exhaustive`).
+     - #639: the walker reads a parameter written `This` in a `make` function
+       as its receiver's type when choosing an overload (BEAM already did)
+       (`spec/make_this_parameter_overload`).
      - #561: `Type.construct` takes a present value for an optional field
        as that value (`Just(3)` from JSON's `3`), on both backends
        (`spec/type_construct_optional_field`).
@@ -977,13 +980,28 @@ written in Kex down to recursion; and the reassigned-variable threading, so
        (`completion_at.cxx`).
    - The BEAM REPL and BEAM's `IO.inspect` printed a range as
      `(:Range, 1, 10)`; it is `1..10` now, as on the walker (`kex_io`).
+   - #635: a trait dictionary's slot named a local implementation at the
+     trait's arity, so a foul one (`foul emit(x)` answering `emit`) was
+     `emit/2` where only `emit/3` exists, and the IR verifier refused the
+     module. Local slots are local calls now and take the context of the
+     function building the dictionary; the source-arity wrapper hands its own
+     on (`spec/trait_foul_member_through_dictionary`).
+   - #623: a stand-in with same-arity overloads of a capability member. The
+     checker held each implementation to the first requirement of the name
+     (an imported capability registered one overload per name); it registers
+     all and matches by the annotations now. At run time the call site passes
+     the selected overload's parameter types to `kex_io:dispatch_method/4`,
+     which tries `take/FakeTake,String` first; a field-less stand-in (a bare
+     atom) finds its owner; and a type whose foul overloads all take the
+     context gets its `take/FakeTake` argument dispatcher at that arity
+     (`spec/capability_same_arity_overloads`).
    - Still open, checker bugs: #640 (a pure function capturing a foul one:
      refusing every capture broke the documented idiom of registering foul
      handlers from pure configuration, `command(run: ~addNote)`,
      `get("/", ~home)`; telling those from `xs.map(~shout)` needs effect
      types, #142), #644 for a signature written apart (`f :> A -> A`), which needs
      bounded type variables first (#651).
-     Backend bugs: #639, #635, #623, #614, #610, #654 (CLI), #575 (REPL).
+     Backend bugs: #614, #610, #654 (CLI), #575 (REPL).
 
 ## Why
 

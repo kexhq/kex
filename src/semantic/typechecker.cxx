@@ -1737,14 +1737,17 @@ auto TypeChecker::registerCapabilityTraits(const ast::Program& program) -> void 
             if (m_traits.get(name)) continue;
             TraitDef td;
             td.name = name;
-            for (const auto& [member, overloads] : interface.exports) {
-                if (overloads.empty()) continue;
-                // Foul members only — see the local branch above.
-                if (!overloads.front().signature.isFoul) continue;
-                Signature sig = overloads.front().signature;
-                sig.name = member;
-                td.requiredMethods.push_back(std::move(sig));
-            }
+            // Every foul overload: `take(text: String)` and `take(count:
+            // Integer)` are each required, and each implementation is held
+            // to its own (kexhq/kex#623).
+            for (const auto& [member, overloads] : interface.exports)
+                for (const auto& overload : overloads) {
+                    // Foul members only — see the local branch above.
+                    if (!overload.signature.isFoul) continue;
+                    Signature sig = overload.signature;
+                    sig.name = member;
+                    td.requiredMethods.push_back(std::move(sig));
+                }
             // `exports` is a hash map, so the loop above yields its members in
             // an order that differs between standard-library implementations.
             // A trait's required methods are its DICTIONARY LAYOUT — slot i
@@ -1753,7 +1756,7 @@ auto TypeChecker::registerCapabilityTraits(const ast::Program& program) -> void 
             // depend on the host's hash order. It built and passed on macOS
             // and died `badarg` on Linux, on both glibc and musl
             // (kexhq/kex#143).
-            std::sort(td.requiredMethods.begin(), td.requiredMethods.end(),
+            std::stable_sort(td.requiredMethods.begin(), td.requiredMethods.end(),
                       [](const Signature& a, const Signature& b) {
                           if (a.name != b.name) return a.name < b.name;
                           return a.params.size() < b.params.size();
@@ -4192,11 +4195,27 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     // (kexhq/kex#642).
     // Its parameters, where they are annotated, must take what the
     // requirement passes them.
+    // Of same-arity overloads (`take(text: String)` beside `take(count:
+    // Integer)`), the one this clause's annotations take answers it: held to
+    // the first, the Integer overload was "required to take String"
+    // (kexhq/kex#623).
     const Signature* requirement = nullptr;
-    if (!declared && m_inMakeBlock && m_currentMakeType && !def.clauses.empty())
-        if (const auto [trait, required] = m_traits.requiredMethod(m_currentMakeType, def.name);
-            required && required->params.size() == def.clauses.front().params.size())
-            requirement = required;
+    if (!declared && m_inMakeBlock && m_currentMakeType && !def.clauses.empty()) {
+        const auto& params = def.clauses.front().params;
+        auto genericVars = m_currentMakeTargetVars;
+        auto answers = [&](const Signature& required) {
+            for (size_t pi = 0; pi < params.size(); ++pi)
+                if (params[pi].type &&
+                    !argMatchesParam(resolve(bindThis(required.params[pi], m_currentMakeType)),
+                                     resolveTypeExpr(**params[pi].type, genericVars)))
+                    return false;
+            return true;
+        };
+        for (const auto* required : m_traits.requiredOverloads(m_currentMakeType, def.name))
+            if (required->params.size() == params.size() &&
+                (!requirement || (!answers(*requirement) && answers(*required))))
+                requirement = required;
+    }
     TypePtr requiredResult;
     if (requirement && !inlineReturnType)
         if (auto result = bindThis(requirement->result, m_currentMakeType);

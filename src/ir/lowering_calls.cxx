@@ -456,8 +456,14 @@ auto Lowering::makeTraitDictionaryFor(const std::string& trait,
             lambda.params.push_back(param);
             callArgs.push_back(var(param));
         }
-        lambda.body = callE(module, function, method.arity,
-                            std::move(callArgs));
+        // A local implementation can be foul (`foul emit(x)` answering the
+        // trait's `emit`), so it is reached as every local call is: with
+        // the context of the function building the dictionary appended.
+        // A bare `emit/2` named no function of the module, and the IR
+        // verifier refused it (kexhq/kex#635).
+        lambda.body = module.empty()
+            ? localCallExpr(function, std::move(callArgs))
+            : callE(module, function, method.arity, std::move(callArgs));
         auto slot = std::make_unique<Expr>();
         slot->node = std::move(lambda);
         slots.push_back(atomize_ir(std::move(slot), dictionaryBindings));
@@ -496,6 +502,14 @@ auto Lowering::makeDictionaryWrapper(const FunDef& def) -> std::optional<FunDef>
         params.push_back(fresh("Fwd"));
         args.push_back(var(params.back()));
     }
+    // The context stays LAST, after the dictionaries the wrapper builds,
+    // so the wrapped function receives (args..., dictionaries..., context)
+    // — the order its own parameters were emitted in. The wrapper takes
+    // the context as its own trailing parameter and passes it through, and
+    // a dictionary slot naming a foul implementation hands it on too.
+    const auto contextParam =
+        def.hasCapabilityContext ? fresh("FwdCtx") : std::string{};
+    const auto savedContext = std::exchange(currentContextVar, contextParam);
     std::vector<Binding> binds;
     for (const auto& trait : def.dictionaryTraits) {
         // A trait whose dictionary cannot be built without a concrete type
@@ -505,19 +519,17 @@ auto Lowering::makeDictionaryWrapper(const FunDef& def) -> std::optional<FunDef>
         try {
             dictionary = makeTraitDictionaryFor(trait, "");
         } catch (const LowerError&) {
+            currentContextVar = savedContext;
             return std::nullopt;
         }
         auto name = fresh("FwdDict");
         binds.push_back({name, std::move(dictionary)});
         args.push_back(var(name));
     }
-    // The context stays LAST, after the dictionaries the wrapper builds,
-    // so the wrapped function receives (args..., dictionaries..., context)
-    // — the order its own parameters were emitted in. The wrapper takes
-    // the context as its own trailing parameter and passes it through.
+    currentContextVar = savedContext;
     if (def.hasCapabilityContext) {
-        params.push_back(fresh("FwdCtx"));
-        args.push_back(var(params.back()));
+        params.push_back(contextParam);
+        args.push_back(var(contextParam));
     }
     FunDef wrapper;
     wrapper.name = def.name;

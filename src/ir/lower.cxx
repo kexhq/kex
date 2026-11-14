@@ -1032,18 +1032,31 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             // dictionaries takes those: call sites reach those by their
             // exact signature, and a dispatcher at the source arity would
             // name functions that do not exist.
-            const bool targetsExist = std::all_of(
-                overloads.begin(), overloads.end(), [&](const auto& overload) {
-                    return std::any_of(
-                        mod.functions.begin(), mod.functions.end(),
-                        [&](const FunDef& fn) {
-                            return fn.name == overload.first && fn.arity == arity;
-                        });
-                });
-            if (!targetsExist) continue;
-            namedArgumentDispatchers.emplace(name, owner, arity);
+            auto targetsExistAt = [&](int targetArity) {
+                return std::all_of(
+                    overloads.begin(), overloads.end(), [&](const auto& overload) {
+                        return std::any_of(
+                            mod.functions.begin(), mod.functions.end(),
+                            [&](const FunDef& fn) {
+                                return fn.name == overload.first && fn.arity == targetArity;
+                            });
+                    });
+            };
+            // Every overload foul: each takes the context last, so the
+            // dispatcher does too and passes it through unguarded. Without
+            // one, the receiver dispatcher armed `take/FakeTake/3` for a
+            // stand-in whose `take`s are all overloads, and named a function
+            // that did not exist (kexhq/kex#623).
+            auto dispatched = overloads;
+            int dispatchArity = arity;
+            if (!targetsExistAt(arity)) {
+                if (!targetsExistAt(arity + 1)) continue;
+                ++dispatchArity;
+                for (auto& [target, types] : dispatched) types.push_back("Any");
+            }
+            namedArgumentDispatchers.emplace(name, owner, dispatchArity);
             auto def = L.makeArgumentDispatcher(
-                mangleReceiverImplementation(name, owner), arity, overloads);
+                mangleReceiverImplementation(name, owner), dispatchArity, dispatched);
             mod.functions.push_back(std::move(def));
             continue;
         }

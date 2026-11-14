@@ -241,27 +241,31 @@ auto importedTrait(const KexiTraitDef& trait,
     kex::semantic::TraitDef result;
     result.name = trait.name;
     result.defaultBodies = trait.defaultBodies;
+    // Every overload the trait received under a required name: a capability
+    // can require `take(text: String)` beside `take(count: Integer)`, and
+    // keeping the first alone held the Integer implementation to the String
+    // one (kexhq/kex#623).
+    std::unordered_set<std::string> requiredNames;
     for (const auto& required : trait.requiredMethods) {
-        auto method = std::find_if(
-            interface.methods.begin(), interface.methods.end(),
-            [&](const KexiMethod& candidate) {
-                return candidate.name == required.name &&
-                       candidate.receiverType &&
-                       candidate.receiverType->kind == KexiType::Constrained &&
-                       candidate.receiverType->traitName == trait.name;
-            });
-        if (method == interface.methods.end()) {
+        if (!requiredNames.insert(required.name).second) continue;
+        bool found = false;
+        for (const auto& method : interface.methods) {
+            if (method.name != required.name || !method.receiverType ||
+                method.receiverType->kind != KexiType::Constrained ||
+                method.receiverType->traitName != trait.name)
+                continue;
+            found = true;
+            auto imported = importedReceiverFunction(method, {}, {});
+            auto params = std::move(imported.signature.params);
+            if (!params.empty()) params.erase(params.begin());
+            result.requiredMethods.push_back(kex::semantic::Signature{
+                required.name, std::move(params), imported.signature.result,
+                required.isFoul});
+        }
+        if (!found)
             result.requiredMethods.push_back(kex::semantic::Signature{
                 required.name, {}, kex::semantic::Type::unknown(),
                 required.isFoul});
-            continue;
-        }
-        auto imported = importedReceiverFunction(*method, {}, {});
-        auto params = std::move(imported.signature.params);
-        if (!params.empty()) params.erase(params.begin());
-        result.requiredMethods.push_back(kex::semantic::Signature{
-            required.name, std::move(params), imported.signature.result,
-            required.isFoul});
     }
     // The methods the trait defines a body for are in the interface too,
     // received by the trait itself. Without them a prebuilt trait had no

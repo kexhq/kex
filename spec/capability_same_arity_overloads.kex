@@ -1,0 +1,33 @@
+# kexhq/kex#623: a stand-in implementing two same-arity overloads of a
+# capability member answers each under `with`, whether the stand-in carries
+# fields or none (a record without fields is a bare atom on BEAM).
+using Takers
+
+record FakeTake do end
+
+record CountingTake do
+  prefix : String
+end
+
+make FakeTake, implement: Takers.Take do
+  foul take(text: String) -> String = "mock-string:${text}"
+  foul take(count: Integer) -> String = "mock-integer:${count}"
+end
+
+make CountingTake, implement: Takers.Take do
+  foul take(text: String) -> String = "${@prefix}-string:${text}"
+  foul take(count: Integer) -> String = "${@prefix}-integer:${count}"
+end
+
+main do
+  IO.printLine(Takers.Take.take("hi"))
+  IO.printLine(Takers.Take.take(3))
+  with Takers.Take = FakeTake {} do
+    IO.printLine(Takers.Take.take("hi"))
+    IO.printLine(Takers.Take.take(3))
+  end
+  with Takers.Take = CountingTake { prefix: "counted" } do
+    IO.printLine(Takers.Take.take("hi"))
+    IO.printLine(Takers.Take.take(3))
+  end
+end
