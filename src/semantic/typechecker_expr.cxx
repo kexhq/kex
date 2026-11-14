@@ -534,6 +534,14 @@ auto TypeChecker::resolvedCalls() const
 
 auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
     if (m_recordsNames) recordNames(expr);
+    // An assignment among this node's operands is an expression with the
+    // value assigned (`parent.send(total = total + i)`); one standing as a
+    // statement stays Void, so a branch ending in one joins as before
+    // (kexhq/kex#614).
+    ast::forEachOperand(expr, [this](const ast::ExprPtr& operand) {
+        if (std::holds_alternative<ast::AssignExpr>(operand->kind))
+            m_valueAssignments.insert(operand.get());
+    });
     auto result = std::visit([this, &expr](const auto& node) -> TypePtr {
         using T = std::decay_t<decltype(node)>;
 
@@ -893,7 +901,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                            !(node.value && literalCoercesTo(*node.value, field->second))) {
                     typeMismatch(expr.location, field->second, valueType);
                 }
-                return Type::unit();
+                // The updated record, as both backends answer it.
+                return m_valueAssignments.contains(&expr) ? varType : Type::unit();
             }
             if (varType && !std::holds_alternative<UnknownType>(varType->kind) &&
                 !std::holds_alternative<TypeVar>(varType->kind)) {
@@ -904,7 +913,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     typeMismatch(expr.location, varType, valueType);
                 }
             }
-            return Type::unit();
+            // The value assigned, as both backends answer it: `parent.send(total =
+            // total + i)` sends the Integer (kexhq/kex#614).
+            if (!m_valueAssignments.contains(&expr)) return Type::unit();
+            return varType && !std::holds_alternative<UnknownType>(varType->kind) ? varType : valueType;
         }
         else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
             auto leftType = node.left ? inferExpr(*node.left) : Type::unknown();

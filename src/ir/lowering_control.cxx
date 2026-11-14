@@ -1,5 +1,6 @@
 // Control flow methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../ast/walk.hxx"
 
 #include <algorithm>
 
@@ -254,6 +255,9 @@ void Lowering::collectMutated(const ast::ExprPtr& e, std::unordered_set<std::str
             for (auto& s : nn.body) collectMutated(s, out);
         }
     }, e->kind);
+    // An assignment nested in an argument or operand (`f(x = 1)`) is
+    // hoisted ahead of its statement, and reassigns as one does.
+    ast::forEachOperand(*e, [&](const ast::ExprPtr& child) { collectMutated(child, out); });
 }
 
 // A loop in expression position has no continuation to thread its state
@@ -578,8 +582,7 @@ auto Lowering::lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i
         ex->node = std::move(tc);
         return ex;
     }
-    auto val = lower(e);
-    return makeLet(fresh("S"), std::move(val), cont());
+    return lowerStatementThen(e, cont);
 }
 
 // A single match-arm body in loop context (a `do` block is a statement
@@ -618,8 +621,7 @@ auto Lowering::lowerLoopArmU(const ast::ExprPtr& arm, const std::string& loopFn,
             std::string nv = fresh(id->name); subst[id->name] = nv;
             return makeLet(nv, std::move(val), armEnd());
         }
-    auto val = lower(arm);
-    return makeLet(fresh("S"), std::move(val), armEnd());
+    return lowerStatementThen(arm, armEnd);
 }
 
 // Lower a mutating `x.method!(args)` as the VALUE it rebinds x to (the
@@ -644,6 +646,54 @@ auto Lowering::lowerAssignmentValue(const ast::AssignExpr& assignment) -> ExprPt
               lit(LitKind::Atom, assignment.path.front()),
               std::move(value)));
     return wrapLets(binds, std::move(updated));
+}
+
+// `IO.printLine(x = 41)`, `sender.send(total = total + i)`: an assignment is
+// an expression whose value is the one assigned, but a fresh SSA name bound
+// inside the call would be out of scope for every statement after it, so
+// lowering had no form for it at all ("unimplemented expr node AssignExpr",
+// kexhq/kex#614). One reached through operands only (ast::forEachOperand,
+// short-circuit operands excepted) is bound
+// ahead of its statement instead, its value seeing the assignments before
+// it; lowering the node itself then switches the variable to that name, so
+// what the statement evaluates after it sees the new value, and what before
+// it the old. One in a block, a branch or a short-circuit operand is not
+// hoisted: it may run any number of times.
+auto Lowering::hoistNestedAssignments(const ast::ExprPtr& statement, std::vector<Binding>& binds)
+    -> std::vector<std::pair<std::string, std::string>> {
+    std::vector<const ast::AssignExpr*> found;
+    std::function<void(const ast::ExprPtr&)> visit = [&](const ast::ExprPtr& e) {
+        ast::forEachOperand(*e, visit, /*shortCircuit=*/false);
+        if (const auto* assignment = std::get_if<ast::AssignExpr>(&e->kind))
+            found.push_back(assignment);
+    };
+    // The statement's own children: a statement that IS an assignment is
+    // lowered as one before it gets here.
+    ast::forEachOperand(*statement, visit, /*shortCircuit=*/false);
+    std::vector<std::pair<std::string, std::string>> assigned;
+    if (found.empty()) return assigned;
+    const auto before = subst;
+    for (const auto* assignment : found) {
+        auto value = lowerAssignmentValue(*assignment);
+        auto ssa = fresh(assignment->name);
+        binds.push_back({ssa, std::move(value)});
+        subst[assignment->name] = ssa;
+        hoistedAssignments[assignment] = ssa;
+        assigned.emplace_back(assignment->name, ssa);
+    }
+    subst = before;
+    return assigned;
+}
+
+auto Lowering::lowerStatementThen(const ast::ExprPtr& statement,
+                                  const std::function<ExprPtr()>& rest) -> ExprPtr {
+    std::vector<Binding> hoisted;
+    const auto assigned = hoistNestedAssignments(statement, hoisted);
+    auto value = lower(statement);
+    for (const auto& [name, ssa] : assigned) subst[name] = ssa;
+    if (!rest) return wrapLets(hoisted, std::move(value));
+    auto after = rest();
+    return wrapLets(hoisted, makeLet(fresh("S"), std::move(value), std::move(after)));
 }
 
 // Lower a `loop`/`while` to a LetRec threading its mutable state.

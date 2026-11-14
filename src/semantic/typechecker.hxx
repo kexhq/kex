@@ -1273,6 +1273,9 @@ private:
     // Populated by inferExpr; maps each visited Expr node to its inferred type.
     std::unordered_map<const ast::Expr*, TypePtr> m_typeMap;
     std::unordered_map<const ast::Expr*, TypePtr> m_assignmentTargetTypes;
+    // Assignments standing as operands (`send(total = total + i)`), typed as
+    // the value assigned; any other is a statement and Void (kexhq/kex#614).
+    std::unordered_set<const ast::Expr*> m_valueAssignments;
 
     // Unification substitution: TypeVar id → the concrete/constrained type it
     // was unified with during body inference. Never cleared between functions

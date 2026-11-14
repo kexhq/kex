@@ -198,7 +198,11 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
     // let PATTERN = value
     if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
         if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
+            // `let y = f(x = 1)`: the nested assignment is bound first.
+            std::vector<Binding> hoisted;
+            const auto assigned = hoistNestedAssignments(e, hoisted);
             auto val = lowerBindingValue(*le);
+            for (const auto& [name, renamed] : assigned) subst[name] = renamed;
             std::string ssa = subst.count(vp->name) ? fresh(vp->name) : vp->name;
             subst[vp->name] = ssa;
             immutableBindings.insert(vp->name);
@@ -209,7 +213,7 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
             else
                 curryOrigin.erase(vp->name);
             auto rest = isLast ? var(ssa) : lowerBodyFrom(body, i + 1);
-            return makeLet(ssa, std::move(val), std::move(rest));
+            return wrapLets(hoisted, makeLet(ssa, std::move(val), std::move(rest)));
         }
         // Record destructure `let { f, g: { h } } = value`: fields are read
         // by name, not structurally — bind the value then prepend accessors.
@@ -293,7 +297,11 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
                 rest = makeLet(it->first, std::move(it->second), std::move(rest));
             return makeLet(rv, lower(ve->value), std::move(rest));
         }
+        // `var y = f(x = 1)`: the nested assignment is bound first.
+        std::vector<Binding> hoisted;
+        const auto assigned = hoistNestedAssignments(e, hoisted);
         auto val = lower(ve->value);
+        for (const auto& [name, renamed] : assigned) subst[name] = renamed;
         auto pat = lowerPattern(ve->pattern);
         if (ve->pattern) {
             std::vector<std::string> names;
@@ -301,7 +309,7 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
             for (const auto& name : names) immutableBindings.erase(name);
         }
         auto rest = isLast ? lit(LitKind::Atom, "ok") : lowerBodyFrom(body, i + 1);
-        return makeMatch1(std::move(val), std::move(pat), std::move(rest));
+        return wrapLets(hoisted, makeMatch1(std::move(val), std::move(pat), std::move(rest)));
     }
     // name = value  (reassignment → fresh SSA name, value sees the OLD one)
     if (auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
@@ -525,10 +533,9 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
         return lowerBodyFrom(body, i + 1);
     }
 
-    if (isLast) return lower(e);
-    auto val = lower(e);
-    auto rest = lowerBodyFrom(body, i + 1);
-    return makeLet(fresh("S"), std::move(val), std::move(rest));
+    return lowerStatementThen(
+        e, isLast ? std::function<ExprPtr()>{}
+                  : std::function<ExprPtr()>([&] { return lowerBodyFrom(body, i + 1); }));
 }
 
 // `blockValue`: the rescue belongs to a block, where `rescue return X`

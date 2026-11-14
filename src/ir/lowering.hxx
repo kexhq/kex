@@ -632,6 +632,17 @@ struct Lowering {
 
     // ---- Loops ------------------------------------------------------------
     void collectMutated(const ast::ExprPtr& e, std::unordered_set<std::string>& out);
+    // Assignments nested in a statement's plainly evaluated positions (call
+    // arguments, operands, literals), bound ahead of it into `binds`; each
+    // node then lowers as its bound name. Returns the (name, SSA name) the
+    // statement leaves each assigned variable at, in assignment order.
+    auto hoistNestedAssignments(const ast::ExprPtr& statement, std::vector<Binding>& binds)
+        -> std::vector<std::pair<std::string, std::string>>;
+    // A statement with its nested assignments hoisted, followed by `rest`
+    // (null when it is the last statement, whose value it then is).
+    auto lowerStatementThen(const ast::ExprPtr& statement,
+                            const std::function<ExprPtr()>& rest) -> ExprPtr;
+    std::unordered_map<const ast::AssignExpr*, std::string> hoistedAssignments;
     auto iteratedBlock(const ast::MethodCall& call) const -> const ast::Lambda*;
     auto lowerIteration(const ast::MethodCall& call, const std::function<ExprPtr()>& rest)
         -> ExprPtr;

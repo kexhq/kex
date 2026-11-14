@@ -158,6 +158,43 @@ auto forEachChild(E& expr, Visit&& visit) -> void {
         expr.kind);
 }
 
+// The children of `expr` whose VALUE it uses, as opposed to statements it
+// runs: an assignment's value, a call's receiver and arguments (not its
+// block), operands, and the elements of a literal. An assignment among them
+// is an expression with the value assigned (`send(total = total + i)`); one
+// in a body is a statement. `shortCircuit` false leaves out the right
+// operand of `&&`/`||`, along with the left, for a caller that needs each
+// operand evaluated exactly once whenever `expr` is.
+template <typename Visit>
+auto forEachOperand(const Expr& expr, Visit&& visit, bool shortCircuit = true) -> void {
+    std::visit(
+        [&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, AssignExpr> || std::is_same_v<T, LetExpr> ||
+                          std::is_same_v<T, VarExpr>) {
+                if (node.value) visit(node.value);
+            } else if constexpr (std::is_same_v<T, MethodCall> ||
+                                 std::is_same_v<T, FunctionCall>) {
+                if constexpr (std::is_same_v<T, MethodCall>)
+                    if (node.receiver) visit(node.receiver);
+                for (const auto& argument : node.args)
+                    if (argument) visit(argument);
+                for (const auto& [_, value] : node.namedArgs)
+                    if (value) visit(value);
+            } else if constexpr (std::is_same_v<T, BinaryOp>) {
+                if (shortCircuit ||
+                    (node.op != TokenType::AmpAmp && node.op != TokenType::PipePipe))
+                    kex::ast::forEachChild(expr, visit);
+            } else if constexpr (std::is_same_v<T, UnaryOp> || std::is_same_v<T, TupleExpr> ||
+                                 std::is_same_v<T, ListExpr> ||
+                                 std::is_same_v<T, RecordConstruction> ||
+                                 std::is_same_v<T, StringLiteral>) {
+                kex::ast::forEachChild(expr, visit);
+            }
+        },
+        expr.kind);
+}
+
 // Whether `predicate` holds for `expr` or any expression nested in it,
 // pre-order; stops at the first hit.
 template <typename Predicate>

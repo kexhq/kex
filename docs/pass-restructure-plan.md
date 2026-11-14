@@ -995,13 +995,26 @@ written in Kex down to recursion; and the reassigned-variable threading, so
      atom) finds its owner; and a type whose foul overloads all take the
      context gets its `take/FakeTake` argument dispatcher at that arity
      (`spec/capability_same_arity_overloads`).
+   - #614: an assignment in an argument, an interpolation, a literal or an
+     operand (`IO.printLine(x = 41)`, `i => parent.send(total = total + i)`)
+     had no BEAM form ("unimplemented expr node AssignExpr"): a fresh SSA name
+     bound inside the call is out of scope for the statements after it. The
+     lowering binds such an assignment ahead of its statement now, and the
+     node lowers as that name, switching the variable at the point it is
+     evaluated, so `(y = y + 1, y, y = y * 2)` is `(6, 6, 12)` as on the
+     walker. `ast::forEachOperand` says which children are operands; the
+     checker uses it too, typing an assignment among them as the value
+     assigned (it was Void, so `send(total = ...)` was refused) while one
+     standing as a statement stays Void. One in a block, a branch or a
+     `&&`/`||` operand is refused with a message, since it may run any number
+     of times (`spec/assign_as_expression`).
    - Still open, checker bugs: #640 (a pure function capturing a foul one:
      refusing every capture broke the documented idiom of registering foul
      handlers from pure configuration, `command(run: ~addNote)`,
      `get("/", ~home)`; telling those from `xs.map(~shout)` needs effect
      types, #142), #644 for a signature written apart (`f :> A -> A`), which needs
      bounded type variables first (#651).
-     Backend bugs: #614, #610, #654 (CLI), #575 (REPL).
+     Backend bugs: #610, #654 (CLI), #575 (REPL).
 
 ## Why
 

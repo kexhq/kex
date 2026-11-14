@@ -1012,6 +1012,16 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 makeLet(extended,
                         callE("maps", "put", 3, std::move(putArgs)),
                         std::move(body)));
+        } else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
+            // Hoisted ahead of its statement (hoistNestedAssignments); one
+            // that was not is in a position that may run any number of times.
+            // What is evaluated after it sees the new value, as on the walker.
+            if (auto hoisted = hoistedAssignments.find(&n); hoisted != hoistedAssignments.end()) {
+                subst[n.name] = hoisted->second;
+                return var(hoisted->second);
+            }
+            throw LowerError("IR lower: an assignment inside a block, branch or `&&`/`||` "
+                             "operand is not supported here; assign in a statement of its own");
         } else {
             throw LowerError(std::string("IR lower: unimplemented expr node ")
                              + typeid(T).name());
