@@ -1,0 +1,2 @@
+spec/error_union_match_coverage.kex:29:44: error: Non-exhaustive match on Web.Reply: missing case(s) Redirect
+spec/error_union_match_coverage.kex:34:37: error: Non-exhaustive match on Place: missing case(s) Remote
