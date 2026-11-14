@@ -129,6 +129,13 @@ private:
   auto evaluate(const std::string &source, const ReplInput &shape,
                 const std::optional<ReplSessionWith> &pendingWith) -> ReplStep;
   auto define(const std::string &source) -> void;
+  // Each name a pattern binds, typed: `probeHead` is the checked program up
+  // to the input (definitions, `main do`, replayed bindings), `withClose` what
+  // closes it after (kexhq/kex#575).
+  auto typesOfPatternNames(const std::string &probeHead, const std::string &source,
+                           const std::string &withClose,
+                           const std::vector<std::string> &names)
+      -> std::map<std::string, std::string>;
   auto loadModules(const std::vector<kex::ir::EmitResult> &results) -> bool;
 };
 
@@ -329,6 +336,43 @@ auto BeamReplSession::define(const std::string &source) -> void {
 // wall time (kexhq/kex#318). Companion modules go first, in reverse: the
 // session entry can then call their functions the moment it is loaded
 // itself. False when one did not build, having said why.
+auto BeamReplSession::typesOfPatternNames(const std::string &probeHead,
+                                          const std::string &source,
+                                          const std::string &withClose,
+                                          const std::vector<std::string> &names)
+    -> std::map<std::string, std::string> {
+  std::map<std::string, std::string> types;
+  std::string probes;
+  for (const auto &name : names) probes += "  " + name + "\n";
+  const auto probeSource = probeHead + "  " + source + "\n" + probes + withClose + "end\n";
+  kex::Lexer probeLexer(probeSource, "<repl>");
+  kex::Parser probeParser(probeLexer.tokenizeAll(), "<repl>");
+  auto probeProgram = probeParser.parseProgram();
+  expandReplProgram(probeProgram);
+  mergeLoadedForCheck(probeProgram);
+  kex::semantic::Analyzer probeAnalyzer(&preludeSemanticInterfaces());
+  if (!probeAnalyzer.analyze(probeProgram)) return types;
+  for (auto item = probeProgram.items.rbegin(); item != probeProgram.items.rend(); ++item) {
+    auto *main = std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&*item);
+    if (!main || !*main) continue;
+    // The probes sit last, inside any `with` the session holds open.
+    const auto *body = &(*main)->body;
+    while (!body->empty())
+      if (const auto *with = std::get_if<kex::ast::WithExpr>(&body->back()->kind);
+          with && !with->body.empty())
+        body = &with->body;
+      else
+        break;
+    if (body->size() < names.size()) break;
+    const auto first = body->size() - names.size();
+    for (size_t i = 0; i < names.size(); ++i)
+      if (auto type = displayTypeOf(probeAnalyzer, (*body)[first + i].get()))
+        types[names[i]] = *type;
+    break;
+  }
+  return types;
+}
+
 auto BeamReplSession::loadModules(
     const std::vector<kex::ir::EmitResult> &results) -> bool {
   bool loaded = true;
@@ -476,6 +520,25 @@ auto BeamReplSession::evaluate(
     beamSemanticType = displayTypeOf(semanticAnalyzer, typedExpr);
     break;
   }
+  // A pattern binds several names, each with a type of its own, and the
+  // binding's type above is the whole matched value's. Without one each,
+  // `let Just(cart) = Shop.Cart.carts.first` replayed `cart` untyped, so
+  // the next input's `cart.id` was dispatched by name at run time, where
+  // nothing in the session module answered a field of a record no input had
+  // named ("Undefined method: id", kexhq/kex#575). The names are read back
+  // after the binding and checked once more.
+  // An annotation's probe is checked as every input is, with the modules
+  // loaded from source roots merged in: refused without them, a binding
+  // holding `Shop.Cart.Cart` replayed untyped for the same reason.
+  const auto prepareProbe = [this](kex::ast::Program &program) {
+    expandReplProgram(program);
+    mergeLoadedForCheck(program);
+  };
+  const auto patternNameTypes =
+      patternLetNames.empty()
+          ? std::map<std::string, std::string>{}
+          : typesOfPatternNames(topDefsStr() + "main do\n" + semanticBindSource + withOpen,
+                                source, withClose, patternLetNames);
   const auto inspectCall = [&](const std::string &expression) {
     if (!beamSemanticType)
       return "Kex.Intrinsic.IO.inspectRepl(" + expression + ")";
@@ -716,8 +779,12 @@ auto BeamReplSession::evaluate(
         // anything else (type variables, Unknown) replays untyped.
         std::string annotation;
         if (patternLetNames.empty() && beamSemanticType &&
-            replTypeAnnotates(topDefsStr(), *beamSemanticType))
+            replTypeAnnotates(topDefsStr(), *beamSemanticType, prepareProbe))
           annotation = " : " + *beamSemanticType;
+        else if (const auto typed = patternNameTypes.find(name);
+                 typed != patternNameTypes.end() &&
+                 replTypeAnnotates(topDefsStr(), typed->second, prepareProbe))
+          annotation = " : " + typed->second;
         // A `var` replays as `var`: replaying it as `let` would make
         // every later line see an immutable binding and reject both
         // `name = v` and `name.foo!(v)`.

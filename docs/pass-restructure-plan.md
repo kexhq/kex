@@ -1024,13 +1024,26 @@ written in Kex down to recursion; and the reassigned-variable threading, so
      differently on each backend; and a variable starting outside ASCII
      (`名前`) reached erlc with a raw lead byte no variable may start with
      (`spec/unicode_names`, `repl_cli_test`).
+   - #654: `kex` read its own options anywhere on the line, so a program
+     never saw `-n`, `-v` or `--limit` written after its file. Option parsing
+     stops at the file now (`getopt_long`'s leading `+`), as with `ruby` and
+     `python`, and the usage line says so. One `--` directly after the file still
+     only separates, as before: Tey runs every program as `kex app.kex --
+     args`, and an older toolchain it selects still needs it (`repl_cli_test`).
+   - #575: a record a REPL pattern bound (`let Just(cart) = ...`) replayed
+     untyped into the next input, so `cart.id` was dispatched by name at run
+     time, where nothing answered a field of a record no input had named.
+     Each name a pattern binds is typed by checking it once more after the
+     binding, and an annotation's probe is prepared as an input is (the
+     modules loaded from source roots merged in), so a plain binding holding
+     `Shop.Cart.Cart` keeps its type too (`repl_cli_test`).
    - Still open, checker bugs: #640 (a pure function capturing a foul one:
      refusing every capture broke the documented idiom of registering foul
      handlers from pure configuration, `command(run: ~addNote)`,
      `get("/", ~home)`; telling those from `xs.map(~shout)` needs effect
      types, #142), #644 for a signature written apart (`f :> A -> A`), which needs
      bounded type variables first (#651).
-     Backend bugs: #654 (CLI), #575 (REPL).
+     No backend bug from the list is open.
 
 ## Why
 
@@ -1142,7 +1155,7 @@ targeted, every expression typed (`--verify-hir`); `--dump-hir` prints it.
 | 2b | Intrinsic registry + `Type<T>` signatures | **Done** (2026-11-10): `Type<T>` and `to` in step 3; the registry decides `Process.spawn`, the checker decides the testing DSL and the prelude `each`/`times` fold, and the backends read those decisions (a program's own `assert` or `each` is its own). The Duration-as-Measure, singular-unit and quantity-equality items of step 9 stay **deferred** (by the user) |
 | 3 | Lowering only translates; IR passes | **Done** (2026-11-11): findings 3 and 4 resolved, the IR rewrites are passes and symbols are spelled from the checker's identities (step 4's state below). Open, not blocking: block specialization across units. Before that: **Done** (2026-11-09): lowering is checked-only (it throws without a HIR); the provider search and its run-time choices are the checker's (alternatives), with `dualProviderDispatch` and `importedFreeFunctionDispatch` deleted; no override of a checker target is left (`localBeatsTraitDefault`, `ownedMakeFunction`, the module-path search deleted); every call reaching the local fallback is a decided kind (dispatch, trait method, field read on a structural or conflicting record, a free function called UFCS). `lowerMethodCallImpl` is a switch on the target kind and a dispatch to handlers (80 lines, from ~1150); the IR passes are in `src/ir/passes/`. Lowering reads the checker only through `hir::Program`, and captures are decided too. |
 | 4 | Walker on the HIR | **Done** (2026-11-11): finding 3 resolved, the walker's visibility copies are gone. Known divergence, open: a block reassigning an outer `var` is threaded on BEAM only through the prelude's `each`/`times`. Before that: **Done** (2026-11-09): every program the walker runs is checked first: the entry (kex::driver, merged with the modules it uses), each module loaded at run time, and compile-time code (`compiled do`, collapse, template scans, tag validators), the checks cached across builds; the method call reads the decided target (conversion, runtime primitive, `Type.of`, trait dictionary, own method, the selected module function unless a `with` replaced its capability, value-or-namespace receivers). What goes by the value at run time is what BEAM leaves to its dispatchers too: `Dispatch` calls and the prelude's receiver functions |
-| 5 | LSP / SemanticDB on the same sema | **Partial**: SemanticDB deleted (2026-11-12); completion (member and bare), local and field definitions, and `let` hover answer from the checker (2026-11-14). Still by name: the rest of hover, references, record-literal field keys (step 4d). Before that: **Done** (2026-11-08): one resolver, the checker's name pass; the REPLs and `--complete` hold no SemanticDB; the language server's SemanticDB is a document store and query front end over the checker's index |
+| 5 | LSP / SemanticDB on the same sema | **Partial**: SemanticDB deleted (2026-11-12); completion (member and bare), local and field definitions, and `let` hover answer from the checker (2026-11-14); references to a local do too, its binding and the uses the checker bound to it (2026-11-15). Still by name: the rest of hover, references to a module function from a qualified call site (the server's index records no qualified call, so the declaration is found in the text and the call sites by their qualifier; from the second of two calls on one line only that line comes back), record-literal field keys (step 4d). Before that: **Done** (2026-11-08): one resolver, the checker's name pass; the REPLs and `--complete` hold no SemanticDB; the language server's SemanticDB is a document store and query front end over the checker's index |
 | 6 | Delete old paths, measure | **Not done**: CI (finding 1) is red on the last pushed commit, fixed in the working tree and gated locally (2026-11-14); the cleanup (step 5) waits for step 4d. Before that: **Done** (2026-11-09; the cold cost accepted by the user as the price of checking every program the walker runs; final slick table under Stage 6: every warm scenario 19–31% faster than `main`, cold +41%, the first checks of compile-time code). The merged program's `expand` pass is deleted. `docs/architecture.md`; measurements below. `src/`'s size against `main` is reported, not a gate (2026-11-08) |
 | — | Separate compilation as the default | **Done** (2026-11-06); the merged build path is deleted |
 | 7 | LLVM-style pass infrastructure (typed passes, analyses, adaptors, instrumentation, pass builder) | **Done** (2026-11-10): `src/pass/`; three levels (program, unit, module), every build step a typed pass or analysis; `driver::Pipeline`, `ir::PassManager`, `separate_build.cxx` and the `g_separate*` globals deleted |

@@ -109,7 +109,9 @@ auto nodeNameProblem(const std::string &name, bool shortName) -> std::string {
 
 auto printUsage(const char *progName) -> void {
   std::cerr
-      << "Usage: " << progName << " [options] <file.kex>\n"
+      << "Usage: " << progName << " [options] <file.kex> [program arguments...]\n"
+      << "\n"
+      << "Options go before the file; everything after it is the program's.\n"
       << "\n"
       << "AI agents and LLMs: run `" << progName << " --skill` before "
          "writing Kex. It looks like\n"
@@ -405,7 +407,11 @@ auto parseCommandLine(int argc, char *argv[]) -> Options {
   if (const char *noColor = std::getenv("NO_COLOR"); noColor && *noColor)
     kex::color::enabled = false;
 #endif
-  while ((opt = getopt_long(argc, argv, "rnlcCiRjspqEe:thvK:o:", longOptions,
+  // The leading `+` stops at the program's file: everything after it is the
+  // program's, as with `ruby` or `python`. Without it getopt_long permuted
+  // argv and kept reading options past the file, so `kex notes.kex list -n 3`
+  // took `-n` as `--no-check` and `--limit 3` aborted the run (kexhq/kex#654).
+  while ((opt = getopt_long(argc, argv, "+rnlcCiRjspqEe:thvK:o:", longOptions,
                             nullptr)) != -1) {
     switch (opt) {
     case Option::NoPrelude:
@@ -1071,6 +1077,13 @@ int main(int argc, char *argv[]) {
   if (mode == Mode::Repl) return runWalkerRepl(skipPrelude);
 
   std::string filepath = argv[optind];
+  // The program's arguments: everything after its file. One `--` directly
+  // after the file still only separates them, as it did while kex read
+  // options past the file (kexhq/kex#654): Tey and scripts written then pass
+  // `kex app.kex -- args`, and an older toolchain still needs it there.
+  const int firstProgramArg =
+      optind + 1 < argc && std::string_view(argv[optind + 1]) == "--" ? optind + 2
+                                                                     : optind + 1;
   kex::module::Resolver::setEntryFile(filepath);
 #ifndef __EMSCRIPTEN__
   // A spec says it is one to what it runs, the BEAM child included, so a
@@ -1097,7 +1110,7 @@ int main(int argc, char *argv[]) {
   // module.
   if (compiledInput)
     return runCompiledBeam(filepath, options,
-                           std::vector<std::string>(argv + optind + 1, argv + argc));
+                           std::vector<std::string>(argv + firstProgramArg, argv + argc));
 
   // Reject non-.kex files before trying to parse them.
   if (filepath.size() < 4 ||
@@ -1137,7 +1150,7 @@ int main(int argc, char *argv[]) {
   // Everything after the script path is the script's own argument list,
   // exposed to Kex code via `main(args) do ... end`.
   std::vector<std::string> scriptArgs;
-  for (int i = optind + 1; i < argc; i++) {
+  for (int i = firstProgramArg; i < argc; i++) {
     scriptArgs.push_back(argv[i]);
   }
 

@@ -74,7 +74,11 @@ auto replBlockDepth(const std::string &source) -> int;
 auto replClauseHead(const std::string &source) -> std::optional<std::string>;
 auto replDefinitionName(const std::string &source) -> std::string;
 auto replTrimLeadingIndent(std::string source) -> std::string;
-auto replTypeAnnotates(const std::string &definitions, const std::string &type) -> bool;
+// `prepare` readies the probe program as the session readies its own (expanding
+// it and merging the modules loaded from source roots), so a type one of
+// those declares (`Shop.Cart.Cart`) is known there too.
+auto replTypeAnnotates(const std::string &definitions, const std::string &type,
+                       const std::function<void(kex::ast::Program &)> &prepare = {}) -> bool;
 auto replBindingEqualsPos(const std::string &source, size_t from) -> size_t;
 auto replLastStatement(const kex::ast::MainBlock &main) -> const kex::ast::Expr *;
 auto collectPatternNames(const kex::ast::Pattern &pattern, std::vector<std::string> &names)

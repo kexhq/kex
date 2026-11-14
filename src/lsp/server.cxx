@@ -4608,11 +4608,6 @@ private:
                 },
             };
         };
-        auto sameLocation = [](const SourceLocation& left,
-                               const SourceLocation& right) {
-            return left.file == right.file && left.line == right.line &&
-                   left.column == right.column;
-        };
 
         const auto qualifier = moduleQualifierBeforeWord(
             document.text, params.position.line, word.byteColumn);
@@ -4677,14 +4672,44 @@ private:
             return offset + word.text.size() <= state->source.size() &&
                    state->source.compare(offset, word.text.size(), word.text) == 0;
         };
+        // A local, as the checker bound it: its binding and every use the
+        // checker bound to that binding. By name, every token spelling the
+        // word was matched against a text search for the definition nearest
+        // before it, which a shadowing `let`, a block parameter or a field of
+        // the same name led astray.
+        if (qualifier.empty()) {
+            const auto at = Document::receiverKey(params.position.line + 1, word.byteColumn);
+            std::optional<std::pair<int, int>> bound;
+            if (const auto use = document.localDefinitions.find(at);
+                use != document.localDefinitions.end())
+                bound = use->second;
+            else if (document.bindingSites.contains(at))
+                bound = std::pair{static_cast<int>(params.position.line + 1),
+                                  static_cast<int>(word.byteColumn)};
+            if (bound) {
+                if (params.context.includeDeclaration)
+                    append(SourceLocation{document.path, bound->first, bound->second});
+                std::vector<SourceLocation> uses;
+                for (const auto& [key, binding] : document.localDefinitions)
+                    if (binding == *bound)
+                        uses.push_back(SourceLocation{document.path,
+                                                      static_cast<int>(key >> 32),
+                                                      static_cast<int>(key & 0xFFFFFFFFu)});
+                std::sort(uses.begin(), uses.end(), [](const auto& a, const auto& b) {
+                    return std::pair{a.line, a.column} < std::pair{b.line, b.column};
+                });
+                for (const auto& use : uses) append(use);
+                return result;
+            }
+        }
         if (symbol) {
             if (params.context.includeDeclaration) append(symbol->definition);
             for (const auto& reference : symbol->references)
                 if (spellsWord(reference)) append(reference);
 
-            // A qualified call is no bare name, so the name index holds no
-            // reference for it: found in the open, unsaved documents by the
-            // exact module qualifier.
+            // A qualified call is not in the checker's index yet (step 4d): its
+            // call sites are found in the open documents by the exact module
+            // qualifier until the index records them.
             if (!qualifier.empty())
                 for (const auto& [_, open] : m_documents) {
                     Lexer lexer(open.text, open.path);
@@ -4744,6 +4769,12 @@ private:
             return result;
         }
 
+        // A name the checker bound to no symbol here (a module function at a
+        // qualified call site): its declaration is still found in the text
+        // until the index records qualified calls (step 4d).
+        const auto sameLocation = [](const SourceLocation& left, const SourceLocation& right) {
+            return left.file == right.file && left.line == right.line && left.column == right.column;
+        };
         size_t lineStart = 0;
         for (unsigned int current = 0; current < params.position.line;
              ++current) {

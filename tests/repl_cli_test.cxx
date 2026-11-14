@@ -1066,6 +1066,35 @@ int main() {
             std::remove(inputPath);
             assertTrue(out.find("true") != std::string::npos, out);
         });
+
+        // Everything after the program's file is the program's (kexhq/kex#654):
+        // kex's option parsing went on past the file, so `-n` was taken as
+        // `--no-check`, `-v` printed kex's version, and an option kex does not
+        // know (`--limit`) aborted the run before the program started.
+        it("hands options after the file to the program", []() {
+            const std::string program = "main(args) do\n  IO.printLine(args)\nend\n";
+            auto out = runBeamFile(program, "x -n 3 -v --limit 3 -- -q");
+            assertTrue(out.find("[x, -n, 3, -v, --limit, 3, --, -q]") != std::string::npos,
+                       "the program did not receive its options: " + out);
+            // One `--` directly after the file only separates, as before:
+            // Tey runs every program as `kex app.kex -- args`.
+            auto separated = runBeamFile(program, "-- -v --force");
+            assertTrue(separated.find("[-v, --force]") != std::string::npos,
+                       "a `--` after the file was not taken as the separator: " + separated);
+            char sourcePath[] = "/tmp/kex_walker_arg_test_XXXXXX.kex";
+            int fd = mkstemps(sourcePath, 4);
+            assertTrue(fd >= 0, "mkstemps should create a Kex source file");
+            {
+                std::ofstream f(sourcePath);
+                f << program;
+            }
+            close(fd);
+            auto walked = runCommand(std::string(KEX_BINARY_PATH) + " -R --no-colors " +
+                                     sourcePath + " x -n 3 --limit 3 2>&1");
+            std::remove(sourcePath);
+            assertTrue(walked.find("[x, -n, 3, --limit, 3]") != std::string::npos,
+                       "the walker's program did not receive its options: " + walked);
+        });
     });
 
     describe("BEAM REPL — serving", []() {
@@ -1924,6 +1953,29 @@ int main() {
             assertTrue(out.find("status=1") != std::string::npos &&
                            out.find("takes no file") != std::string::npos,
                        "expected --eval to refuse a file: " + out);
+        });
+
+        // A record a pattern binds from a module under a source root: the
+        // name replayed untyped into the next input, which then read its
+        // field by name at run time, where nothing answered it ("Undefined
+        // method: id for Shop.Cart.Cart", kexhq/kex#575).
+        it("reads a field of a record bound by a pattern in an earlier input", [kex]() {
+            const auto root = std::filesystem::temp_directory_path() /
+                              ("kex_repl_575_" + std::to_string(::getpid()));
+            std::filesystem::create_directories(root / "shop");
+            {
+                std::ofstream cart(root / "shop" / "cart.kex");
+                cart << "module Shop.Cart\n\nrecord Cart do\n  id : String\n"
+                        "  items : Integer\nend\n\n"
+                        "let carts() -> [Cart] do\n"
+                        "  return [Cart { id: \"c1\", items: 2 }]\nend\n";
+            }
+            auto out = runCommand("cd " + root.string() + " && echo 'cart.id' | " + kex +
+                                  " --source-root ." +
+                                  " -e 'let Just(cart) = Shop.Cart.carts.first' 2>&1");
+            std::filesystem::remove_all(root);
+            assertTrue(out.find("=> \"c1\" : String") != std::string::npos,
+                       "the field of the bound record was not read: " + out);
         });
 
         // Names outside ASCII: the BEAM REPL found a binding's name with an

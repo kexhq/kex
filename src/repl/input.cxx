@@ -365,8 +365,8 @@ auto replClauseHead(const std::string &source)
 // against the session's definitions. Displayed types are not always source
 // (`Unknown`, free type variables), and a replay line that failed to check
 // would break every later input, so anything doubtful is refused.
-auto replTypeAnnotates(const std::string &definitions,
-                              const std::string &type) -> bool {
+auto replTypeAnnotates(const std::string &definitions, const std::string &type,
+                       const std::function<void(kex::ast::Program &)> &prepare) -> bool {
   if (type.empty() || type.find("Unknown") != std::string::npos) return false;
   try {
     const auto source = definitions + "main do\n  let __replTyped : " + type +
@@ -376,6 +376,7 @@ auto replTypeAnnotates(const std::string &definitions,
     kex::Parser parser(lexer.tokenizeAll(), "<repl>");
     auto program = parser.parseProgram();
     if (!parser.diagnostics().empty()) return false;
+    if (prepare) prepare(program);
     kex::semantic::Analyzer analyzer(&preludeSemanticInterfaces());
     return analyzer.analyze(program);
   } catch (...) {
