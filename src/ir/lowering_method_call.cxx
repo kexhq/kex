@@ -970,7 +970,7 @@ auto Lowering::lowerResolvedCall(const ast::MethodCall& n,
                 return callE(module, function, arity,
                              std::move(direct));
             },
-            capabilityOverloadKey(hir->selectedSignatureOf(n)));
+            hir->selectedParameterSpellingOf(n));
     }
     // A resolved target with no backend module is a call into THIS
     // unit, and callE only appends the capability context for

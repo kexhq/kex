@@ -100,6 +100,10 @@ public:
     // The same, for the call node inside the expression (what lowering holds).
     auto selectedSignatureOf(const ast::FunctionCall& call) const -> const semantic::Signature*;
     auto selectedSignatureOf(const ast::MethodCall& call) const -> const semantic::Signature*;
+    // The parameter types of the overload the checker selected for `call`,
+    // spelled as a make block names its implementation of it (`String,Integer`
+    // in `take/FakeTake,String,Integer`); empty when none was selected.
+    auto selectedParameterSpellingOf(const ast::MethodCall& call) const -> std::string;
     // The distinct type whose `showValue` shows `call`'s argument at parameter
     // `index` (TypeChecker::shownThroughDistinct), or null.
     auto shownThroughOf(const ast::Expr& call, std::size_t index) const -> const std::string*;

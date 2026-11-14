@@ -170,22 +170,6 @@ auto Lowering::capabilityDispatchLowered(
     return wrapLets(binds, std::move(chosen));
 }
 
-// The parameter types of the overload a capability call selected, spelled as
-// a make block's implementation of it is named after them (`String` for
-// `take/FakeTake,String`). A stand-in with one implementation per name
-// still answers under its plain name, which the runtime tries next.
-auto Lowering::capabilityOverloadKey(const semantic::Signature* selected) const
-    -> std::string {
-    if (!selected || selected->params.empty()) return {};
-    std::vector<std::string> spelled;
-    for (const auto& param : selected->params) {
-        if (!param) return {};
-        spelled.push_back(semantic::typeToString(param));
-    }
-    auto key = mangleReceiverSignature("", spelled);
-    return key.substr(1);  // drop the leading "/" the empty name leaves
-}
-
 // Is this name a capability, declared here or imported?
 auto Lowering::isCapabilityModule(const std::string& name) const -> bool {
     return capabilityModules.count(name) > 0 ||
