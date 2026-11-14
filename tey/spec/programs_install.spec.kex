@@ -16,11 +16,11 @@ describe("Tey program receipts integration") do
 
   # Runs `tey <arguments>` from `directory` through Tey.Cli, with the Tey home
   # pointed at the scratch directory.
-  let tey(directory: String, arguments: String) -> ProcessResult do
+  let tey(directory: String, arguments: String) -> ProcessResult or! String do
     return Process.run("sh", ["-c",
       "cd \"$1\" && TEY_HOME=\"$5\" TEY_CACHE=\"$5/cache\" exec \"$2\" --no-colors --source-root \"$3\" \"$4\" -- ${arguments}",
       "tey-programs-spec", directory, compiler,
-      FS.Path.join(checkout, "tey/src"), "${root}/run-tey.kex", home]).try
+      FS.Path.join(checkout, "tey/src"), "${root}/run-tey.kex", home])
   end
 
   before do
@@ -40,7 +40,7 @@ describe("Tey program receipts integration") do
 
   it("records a receipt and lists the program outside any project") do
     writePackage("alpha", ["alpha"])
-    let installed = tey("${root}/alpha", "install")
+    let installed = tey("${root}/alpha", "install").try
     assert(installed.exitCode == 0, installed.stderr)
     assert(FS.File.file?("${home}/bin/alpha"))
     # A `main do` program compiles to main/0; the escript must still start it.
@@ -50,7 +50,7 @@ describe("Tey program receipts integration") do
     assert(receipt.targets == ["alpha"], "${receipt}")
     assert(receipt.sourcePath == "${root}/alpha", receipt.sourcePath)
 
-    let listed = tey(root, "list")
+    let listed = tey(root, "list").try
     assert(listed.exitCode == 0, listed.stderr)
     assert(listed.stdout.contains?("Installed programs"), listed.stdout)
     assert(listed.stdout.contains?("alpha 0.1.0 (alpha) from ${root}/alpha"), listed.stdout)
@@ -59,14 +59,14 @@ describe("Tey program receipts integration") do
   it("refuses another package's program unless forced, then transfers it") do
     writePackage("alpha", ["shared"])
     writePackage("beta", ["shared"])
-    assert(tey("${root}/alpha", "install").exitCode == 0)
+    assert(tey("${root}/alpha", "install").try.exitCode == 0)
 
-    let refused = tey("${root}/beta", "install")
+    let refused = tey("${root}/beta", "install").try
     assert(refused.exitCode != 0, "took over another package's program")
     assert(refused.stderr.contains?("already installed by `alpha`"), refused.stderr)
     assert(!FS.Directory.directory?("${home}/programs/beta"))
 
-    let forced = tey("${root}/beta", "install --force")
+    let forced = tey("${root}/beta", "install --force").try
     assert(forced.exitCode == 0, forced.stderr)
     assert(forced.stdout.contains?("Took over shared"), forced.stdout)
     assert(FS.File.file?("${home}/programs/beta/receipt.json"))
@@ -78,23 +78,23 @@ describe("Tey program receipts integration") do
     writePackage("alpha", ["alpha"])
     FS.Directory.create("${home}/bin")
     FS.File.write("${home}/bin/alpha", "#!/bin/sh\necho mine\n")
-    let refused = tey("${root}/alpha", "install")
+    let refused = tey("${root}/alpha", "install").try
     assert(refused.exitCode != 0, "replaced a file Tey did not write")
     assert(FS.File.read("${home}/bin/alpha").try.contains?("echo mine"))
 
     FS.File.write("${home}/bin/alpha", "#!/usr/bin/env escript\n%%!-escript main kex_main\n")
-    let adopted = tey("${root}/alpha", "install")
+    let adopted = tey("${root}/alpha", "install").try
     assert(adopted.exitCode == 0, adopted.stderr)
     assert(FS.File.file?("${home}/programs/alpha/receipt.json"))
   end
 
   it("removes a program the package no longer declares") do
     writePackage("alpha", ["alpha", "alpha-extra"])
-    assert(tey("${root}/alpha", "install").exitCode == 0)
+    assert(tey("${root}/alpha", "install").try.exitCode == 0)
     assert(FS.File.file?("${home}/bin/alpha-extra"))
 
     writePackage("alpha", ["alpha"])
-    let reinstalled = tey("${root}/alpha", "install")
+    let reinstalled = tey("${root}/alpha", "install").try
     assert(reinstalled.exitCode == 0, reinstalled.stderr)
     assert(!FS.File.file?("${home}/bin/alpha-extra"))
     let receipt = Tey.Programs.decode(FS.File.read("${home}/programs/alpha/receipt.json").try).try
@@ -103,7 +103,7 @@ describe("Tey program receipts integration") do
 
   it("installs a program from a path without touching its checkout") do
     writePackage("alpha", ["alpha"])
-    let installed = tey(root, "install ./alpha")
+    let installed = tey(root, "install ./alpha").try
     assert(installed.exitCode == 0, installed.stderr)
     assert(FS.File.file?("${home}/bin/alpha"))
     let ran = Process.run("${home}/bin/alpha", []).try
@@ -119,7 +119,7 @@ describe("Tey program receipts integration") do
 
   it("refuses a library with a pointer to `tey add`") do
     writePackage("helpers", [])
-    let refused = tey(root, "install ./helpers")
+    let refused = tey(root, "install ./helpers").try
     assert(refused.exitCode != 0, "installed a library")
     assert(refused.stderr.contains?("tey add"), refused.stderr)
     assert(!FS.Directory.directory?("${home}/programs/helpers"))
@@ -143,15 +143,15 @@ describe("Tey program receipts integration") do
     `)
     FS.File.write("${root}/ws/packages/cli/src/main.kex", "main do\n  IO.printLine(\"cli\")\nend\n")
 
-    let ambiguous = tey(root, "install ./ws")
+    let ambiguous = tey(root, "install ./ws").try
     assert(ambiguous.exitCode != 0, "picked a member without being told")
     assert(ambiguous.stderr.contains?("--package"), ambiguous.stderr)
 
-    let byPath = tey(root, "install ./ws/packages/cli")
+    let byPath = tey(root, "install ./ws/packages/cli").try
     assert(byPath.exitCode == 0, byPath.stderr)
     assert(FS.File.file?("${home}/bin/cli"))
 
-    let byName = tey(root, "install ./ws --package cli")
+    let byName = tey(root, "install ./ws --package cli").try
     assert(byName.exitCode == 0, byName.stderr)
   end
 
@@ -174,7 +174,7 @@ describe("Tey program receipts integration") do
     `)
     FS.File.write("${root}/hello/src/main.kex",
                   "using Greeting\n\nmain do\n  IO.printLine(Greeting.text)\nend\n")
-    let installed = tey(root, "install ./hello")
+    let installed = tey(root, "install ./hello").try
     assert(installed.exitCode == 0, installed.stdout + installed.stderr)
     let ran = Process.run("${home}/bin/hello", []).try
     assert(ran.stdout.trim == "hello from a path dependency", ran.stdout + ran.stderr)
@@ -183,7 +183,7 @@ describe("Tey program receipts integration") do
   # A Git repository at `${root}/<name>.git` with two commits: `v1.0.0`, whose
   # programs print "one", and `main` after it, printing "two". Answers the
   # file:// URL to install from.
-  let gitRepository(name: String, targets: [String]) -> String do
+  let gitRepository(name: String, targets: [String]) -> String or! String do
     let repo = "${root}/${name}.git"
     let declarations = targets.map { |target| "  target(\"${target}\", entrypoint: \"src/${target}.kex\")" }.join("\n")
     FS.Directory.create("${repo}/src")
@@ -201,12 +201,12 @@ describe("Tey program receipts integration") do
                        "spec", repo]).try
     write("two")
     Process.run("sh", ["-c", "cd \"$1\" && ${git} commit -q -am two", "spec", repo]).try
-    return "file://${repo}"
+    "file://${repo}"
   end
 
   it("installs from a Git URL at HEAD, or at a tag") do
-    let url = gitRepository("gitty", ["gitty"])
-    let head = tey(root, "install ${url}")
+    let url = gitRepository("gitty", ["gitty"]).try
+    let head = tey(root, "install ${url}").try
     assert(head.exitCode == 0, head.stdout + head.stderr)
     let ranTwo = Process.run("${home}/bin/gitty", []).try
     assert(ranTwo.stdout.trim == "two", "head: [${ranTwo.exitCode}] ${ranTwo.stdout}${ranTwo.stderr}")
@@ -216,48 +216,48 @@ describe("Tey program receipts integration") do
     assert(receipt.sourceRequested == "HEAD", receipt.sourceRequested)
     assert(Tey.Git.commitId?(receipt.sourceCommit), receipt.sourceCommit)
 
-    let tagged = tey(root, "install ${url} --tag v1.0.0")
+    let tagged = tey(root, "install ${url} --tag v1.0.0").try
     assert(tagged.exitCode == 0, tagged.stdout + tagged.stderr)
     let ranOne = Process.run("${home}/bin/gitty", []).try
     assert(ranOne.stdout.trim == "one", "tag: [${ranOne.exitCode}] ${ranOne.stdout}${ranOne.stderr}")
     let pinned = Tey.Programs.decode(FS.File.read("${home}/programs/gitty/receipt.json").try).try
     assert(pinned.sourceSelector == "tag" && pinned.sourceRequested == "v1.0.0", "${pinned}")
-    let listed = tey(root, "list")
+    let listed = tey(root, "list").try
     assert(listed.stdout.contains?("@ v1.0.0"), listed.stdout)
 
     # A full commit id is a pin of its own.
-    let exact = tey(root, "install ${url} --ref ${receipt.sourceCommit}")
+    let exact = tey(root, "install ${url} --ref ${receipt.sourceCommit}").try
     assert(exact.exitCode == 0, exact.stdout + exact.stderr)
     let ranExact = Process.run("${home}/bin/gitty", []).try
     assert(ranExact.stdout.trim == "two", "exact: [${ranExact.exitCode}] ${ranExact.stdout}${ranExact.stderr}")
   end
 
   it("installs only the targets --target names") do
-    let url = gitRepository("pair", ["first", "second"])
-    let unknown = tey(root, "install ${url} --target third")
+    let url = gitRepository("pair", ["first", "second"]).try
+    let unknown = tey(root, "install ${url} --target third").try
     assert(unknown.exitCode != 0, "installed an undeclared target")
     assert(unknown.stderr.contains?("no target third"), unknown.stderr)
 
-    let one = tey(root, "install ${url} --target second")
+    let one = tey(root, "install ${url} --target second").try
     assert(one.exitCode == 0, one.stdout + one.stderr)
     assert(FS.File.file?("${home}/bin/second"))
     assert(!FS.File.file?("${home}/bin/first"), "installed a target not asked for")
 
     # Resolving anew rather than from the program's lock installs the same.
-    let fresh = tey(root, "install ${url} --fresh")
+    let fresh = tey(root, "install ${url} --fresh").try
     assert(fresh.exitCode == 0, fresh.stdout + fresh.stderr)
     assert(FS.File.file?("${home}/bin/first") && FS.File.file?("${home}/bin/second"))
   end
 
   it("refuses more than one Git pin") do
-    let refused = tey(root, "install file:///nowhere.git --tag v1 --branch main")
+    let refused = tey(root, "install file:///nowhere.git --tag v1 --branch main").try
     assert(refused.exitCode != 0)
     assert(refused.stderr.contains?("only one of"), refused.stderr)
   end
 
   # Commits a new message for every target of the repository `gitRepository`
   # made, on `main`.
-  let commitMessage(name: String, targets: [String], text: String) -> Void do
+  let commitMessage(name: String, targets: [String], text: String) -> Void or! String do
     let repo = "${root}/${name}.git"
     targets.each do |target|
       FS.File.write("${repo}/src/${target}.kex", "main do\n  IO.printLine(\"${text}\")\nend\n")
@@ -273,68 +273,68 @@ describe("Tey program receipts integration") do
 
   it("updates a path install by name only when its source changed") do
     writePackage("alpha", ["alpha"])
-    assert(tey(root, "install ./alpha").exitCode == 0)
-    let unchanged = tey(root, "install alpha")
+    assert(tey(root, "install ./alpha").try.exitCode == 0)
+    let unchanged = tey(root, "install alpha").try
     assert(unchanged.exitCode == 0, unchanged.stderr)
     assert(unchanged.stdout.contains?("up to date"), unchanged.stdout)
 
     FS.File.write("${root}/alpha/src/main.kex", "main do\n  IO.printLine(\"alpha two\")\nend\n")
-    let changed = tey(root, "install alpha")
+    let changed = tey(root, "install alpha").try
     assert(changed.exitCode == 0, changed.stdout + changed.stderr)
     assert(output("alpha") == "alpha two", output("alpha"))
 
-    let rebuilt = tey(root, "install alpha --rebuild")
+    let rebuilt = tey(root, "install alpha --rebuild").try
     assert(rebuilt.exitCode == 0, rebuilt.stderr)
     assert(rebuilt.stdout.contains?("Installed alpha"), rebuilt.stdout)
   end
 
   it("updates a branch install, and keeps a tag pinned until told") do
-    let url = gitRepository("gitty", ["gitty"])
-    assert(tey(root, "install ${url}").exitCode == 0)
-    assert(tey(root, "install gitty").stdout.contains?("up to date"))
-    commitMessage("gitty", ["gitty"], "three")
-    let moved = tey(root, "install gitty")
+    let url = gitRepository("gitty", ["gitty"]).try
+    assert(tey(root, "install ${url}").try.exitCode == 0)
+    assert(tey(root, "install gitty").try.stdout.contains?("up to date"))
+    commitMessage("gitty", ["gitty"], "three").try
+    let moved = tey(root, "install gitty").try
     assert(moved.exitCode == 0, moved.stdout + moved.stderr)
     assert(output("gitty") == "three", output("gitty"))
 
-    assert(tey(root, "install ${url} --tag v1.0.0").exitCode == 0)
-    let pinned = tey(root, "install gitty")
+    assert(tey(root, "install ${url} --tag v1.0.0").try.exitCode == 0)
+    let pinned = tey(root, "install gitty").try
     assert(pinned.exitCode == 0, pinned.stderr)
     assert(pinned.stdout.contains?("pinned at v1.0.0"), pinned.stdout)
     assert(output("gitty") == "one", output("gitty"))
 
-    let repinned = tey(root, "install gitty --branch main")
+    let repinned = tey(root, "install gitty --branch main").try
     assert(repinned.exitCode == 0, repinned.stdout + repinned.stderr)
     assert(output("gitty") == "three", output("gitty"))
   end
 
   it("keeps a --target selection when updating, and updates several at once") do
-    let url = gitRepository("pair", ["first", "second"])
-    assert(tey(root, "install ${url} --target second").exitCode == 0)
+    let url = gitRepository("pair", ["first", "second"]).try
+    assert(tey(root, "install ${url} --target second").try.exitCode == 0)
     writePackage("alpha", ["alpha"])
-    assert(tey(root, "install ./alpha").exitCode == 0)
-    commitMessage("pair", ["first", "second"], "three")
-    let both = tey(root, "install pair alpha")
+    assert(tey(root, "install ./alpha").try.exitCode == 0)
+    commitMessage("pair", ["first", "second"], "three").try
+    let both = tey(root, "install pair alpha").try
     assert(both.exitCode == 0, both.stdout + both.stderr)
     assert(output("second") == "three", output("second"))
     assert(!FS.File.file?("${home}/bin/first"), "an update installed an unselected target")
 
-    let mixed = tey(root, "install pair ./alpha")
+    let mixed = tey(root, "install pair ./alpha").try
     assert(mixed.exitCode != 0, "accepted a source among names")
   end
 
   it("uninstalls what its receipt owns and leaves what it does not") do
     writePackage("alpha", ["alpha", "alpha-extra"])
-    assert(tey(root, "install ./alpha").exitCode == 0)
+    assert(tey(root, "install ./alpha").try.exitCode == 0)
     FS.File.write("${home}/bin/alpha-extra", "#!/bin/sh\necho mine\n")
-    let removed = tey(root, "uninstall alpha")
+    let removed = tey(root, "uninstall alpha").try
     assert(removed.exitCode == 0, removed.stderr)
     assert(!FS.File.file?("${home}/bin/alpha"))
     assert(FS.File.file?("${home}/bin/alpha-extra"), "removed a file Tey did not write")
     assert(removed.stderr.contains?("alpha-extra"), removed.stderr)
     assert(!FS.Directory.directory?("${home}/programs/alpha"))
 
-    let missing = tey(root, "uninstall alpha")
+    let missing = tey(root, "uninstall alpha").try
     assert(missing.exitCode != 0 && missing.stderr.contains?("not installed"), missing.stderr)
   end
 
@@ -365,30 +365,30 @@ describe("Tey program receipts integration") do
 
   it("asks for plugin approval, and takes --approve-plugins without asking") do
     writePluginProgram()
-    let refused = tey(root, "install ./app < /dev/null")
+    let refused = tey(root, "install ./app < /dev/null").try
     assert(refused.exitCode != 0, "installed without approving its plugin")
     assert(refused.stderr.contains?("github") && refused.stderr.contains?("--approve-plugins"),
            refused.stderr)
     assert(!FS.File.file?("${home}/bin/app"))
 
-    let approved = tey(root, "install ./app --approve-plugins < /dev/null")
+    let approved = tey(root, "install ./app --approve-plugins < /dev/null").try
     assert(approved.exitCode == 0, approved.stdout + approved.stderr)
     assert(approved.stdout.contains?("Approved plugin `github`"), approved.stdout)
     assert(output("app") == "app", output("app"))
 
     # What was approved for the previous install carries over.
-    let again = tey(root, "install app --rebuild < /dev/null")
+    let again = tey(root, "install app --rebuild < /dev/null").try
     assert(again.exitCode == 0, again.stdout + again.stderr)
   end
 
   it("does not take a program author's approvals as the installer's") do
     writePluginProgram()
     # The author approves inside the project, which records it in their lock.
-    let author = tey("${root}/app", "install --approve-plugins < /dev/null")
+    let author = tey("${root}/app", "install --approve-plugins < /dev/null").try
     assert(author.exitCode == 0, author.stdout + author.stderr)
     assert(FS.File.read("${root}/app/tey.lock").try.contains?("github"))
 
-    let installer = tey(root, "install ./app < /dev/null")
+    let installer = tey(root, "install ./app < /dev/null").try
     assert(installer.exitCode != 0, "took the author's approval as the installer's")
     assert(installer.stderr.contains?("--approve-plugins"), installer.stderr)
   end

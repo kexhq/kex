@@ -288,7 +288,7 @@ register_hook(Key, Scope, Fun) when is_function(Fun, 0),
         [] -> erlang:error(atom_to_list(Key) ++ " must be declared inside describe");
         [Current | Parents] ->
             case {Key, Scope} of
-                {before, all} -> Fun(), 'Kex.Unit';
+                {before, all} -> raise_on_error(Fun(), <<"before(:all) hook">>), 'Kex.Unit';
                 {'after', all} ->
                     Hooks = maps:get(after_all, Current),
                     put(kex_test_hook_scopes,
@@ -368,10 +368,18 @@ capture(Fun) ->
         exit:Reason -> {failed, lists:flatten(io_lib:format("~p", [Reason]))}
     end.
 
+%% A group's block: a `.try` failing at its level is its `Error` result, and
+%% the group fails with it, as a raised error does.
 capture_exception(Fun) ->
-    try Fun(), ok
+    try raise_on_error(Fun(), <<"describe body">>), ok
     catch Class:Reason:Stack -> {raised, Class, Reason, Stack}
     end.
+
+raise_on_error({'Error', Propagated}, Where) ->
+    erlang:error(iolist_to_binary(
+        [<<".try propagated out of the ">>, Where, <<": ">>,
+         kex_io:to_string_bin(kex_intrinsic_kex:show(Propagated))]));
+raise_on_error(_, _) -> ok.
 
 %% Prints the tally and, if anything failed, ENDS THE RUN NON-ZERO.
 %%

@@ -92,6 +92,20 @@ let validateAgainstLock(overrides: [Override], lock: Tey.Lockfile.LockState) -> 
 end
 
 private do
+  # The overrides a `package.local.kex` at `root` declares, each checked to
+  # be a package. The first that is not fails them all: a `.try` in a
+  # `map` block would be that element's result, not this function's.
+  foul overridesOf(entries: [Tey.Manifest.LocalOverride], root: String,
+                   file: String) -> [Override] or! String do
+    return Ok([]) if entries.empty?
+    let entry = entries.first.try
+    let absolute = Tey.Local.absolute(entry.localPath, root)
+    let manifest = Tey.Local.validatePackage(entry.localName, absolute).try
+    let rest = Tey.Local.overridesOf(entries.drop(1), root, file).try
+    [Override { overrideName: entry.localName, overridePath: absolute,
+                overrideFile: file, overrideManifest: manifest }, ...rest]
+  end
+
   foul loadRoots(roots: [String], workspaceRoot: String,
                  seen: [String]) -> [Override] or! String do
     return Ok([]) if roots.empty?
@@ -106,12 +120,7 @@ private do
           let relative = FS.Path.relativeTo(file, workspaceRoot)
           return Error("${relative} is tracked by Git; remove it from the index")
         end
-        Tey.Manifest.readLocal(text).try.map do |entry|
-          let absolute = Tey.Local.absolute(entry.localPath, root)
-          let manifest = Tey.Local.validatePackage(entry.localName, absolute).try
-          Override { overrideName: entry.localName, overridePath: absolute,
-                     overrideFile: file, overrideManifest: manifest }
-        end
+        Tey.Local.overridesOf(Tey.Manifest.readLocal(text).try, root, file).try
       end
     end
     let duplicates = here.filter do |override|

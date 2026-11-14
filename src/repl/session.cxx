@@ -992,7 +992,9 @@ auto BeamReplSession::run() -> int {
     }
   }
 
+#ifdef HAS_READLINE
   saveReplHistory(historyFile);
+#endif
 
   m_vm.close();
   std::filesystem::remove_all(m_beamDir);
@@ -1555,6 +1557,8 @@ auto WalkerReplSession::run() -> int {
       }
     }
   }
+#ifdef HAS_READLINE
   saveReplHistory(historyFile);
+#endif
   return g_replScriptFailed ? 1 : 0;
 }
