@@ -1,0 +1,2 @@
+spec/error_trait_implementation_types.kex:18:3: error: `area` is required to return Float but body returns String
+spec/error_trait_implementation_types.kex:19:17: error: `scale` is required to take Float for `by`, but takes String

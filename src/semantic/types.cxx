@@ -473,6 +473,10 @@ auto isConcreteValue(const TypePtr& type) -> bool {
     return !std::holds_alternative<VoidType>(type->kind) && isFullyConcrete(type);
 }
 
+auto isConcreteOrBound(const TypePtr& type) -> bool {
+    return isConcreteValue(type) || std::holds_alternative<ConstrainedType>(type->kind);
+}
+
 auto containsTypeVariable(const TypePtr& type) -> bool {
     return anyType(
         type,

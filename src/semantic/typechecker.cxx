@@ -3989,16 +3989,21 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     // A member that declares no result answers to the result a trait its
     // type claims requires of it: `foul getChar = "c"` implementing IO's
     // `getChar :> String?` was accepted, and failed at its caller's first
-    // `.or` (found by `make metamorphic-search`).
-    TypePtr requiredResult;
-    if (!declared && !inlineReturnType && m_inMakeBlock && m_currentMakeType &&
-        !def.clauses.empty())
+    // `.or` (found by `make metamorphic-search`). A result bounded by a trait
+    // binds too: `area :> Float` takes any Float, never a String
+    // (kexhq/kex#642).
+    // Its parameters, where they are annotated, must take what the
+    // requirement passes them.
+    const Signature* requirement = nullptr;
+    if (!declared && m_inMakeBlock && m_currentMakeType && !def.clauses.empty())
         if (const auto [trait, required] = m_traits.requiredMethod(m_currentMakeType, def.name);
             required && required->params.size() == def.clauses.front().params.size())
-            if (auto result = bindThis(required->result, m_currentMakeType);
-                result && isConcreteValue(resolve(result)) &&
-                !typesEqual(resolve(result), Type::unit()))
-                requiredResult = std::move(result);
+            requirement = required;
+    TypePtr requiredResult;
+    if (requirement && !inlineReturnType)
+        if (auto result = bindThis(requirement->result, m_currentMakeType);
+            result && !typesEqual(resolve(result), Type::unit()) && isConcreteOrBound(resolve(result)))
+            requiredResult = std::move(result);
 
     auto returnType = declared    ? declared->result
                     : inlineReturnType ? inlineReturnType
@@ -4144,6 +4149,14 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 paramType = m_currentMakeType;
             } else if (param.type) {
                 paramType = resolveTypeExpr(**param.type, genericVars);
+                if (requirement && pi < requirement->params.size())
+                    if (const auto passed = resolve(bindThis(requirement->params[pi], m_currentMakeType));
+                        passed && isConcreteOrBound(passed) && !isUndetermined(resolve(paramType)) &&
+                        !argMatchesParam(passed, paramType))
+                        error((*param.type)->location, "`" + def.name + "` is required to take " +
+                                                  typeToString(passed) + " for `" +
+                                                  param.name.value_or("_") + "`, but takes " +
+                                                  typeToString(paramType));
             } else if (auto selector = typeSelectorParameter(param)) {
                 paramType = std::move(selector);
             } else {
@@ -4825,9 +4838,7 @@ auto TypeChecker::checkTraitDef(const ast::TraitDef& def) -> void {
     // `This`, as the trait's own signatures leave it.
     m_currentMakeType = Type::named(names::kThisType);
     const auto* outerTrait = std::exchange(
-        m_currentTrait, m_currentModulePath.empty()
-                            ? m_traits.get(def.name)
-                            : m_traits.get(kex::mangle::qualify(m_currentModulePath, def.name)));
+        m_currentTrait, m_traits.get(kex::traitIdentity(m_currentModulePath, def.name)));
     for (const auto& item : def.body)
         if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item); fn && *fn)
             checkFunctionDef(**fn);

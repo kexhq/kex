@@ -853,6 +853,10 @@ written in Kex down to recursion; and the reassigned-variable threading, so
        no exhaustiveness check (`checkUnionCoverage`;
        `spec/error_union_match_coverage`). The general pattern-matrix check
        is still #645.
+     - #642: the same rule over a whole `make` block. A result bounded by a
+       trait binds too (`area :> Float` refuses a String), and an annotated
+       parameter must take what the requirement passes it
+       (`spec/error_trait_implementation_types`).
      A constructor spelling two imported types share (FS's and FileHandle's
      `InvalidUtf8`) can be looked up as the wrong one, so its arity check
      accepts a count either takes.
@@ -879,11 +883,11 @@ written in Kex down to recursion; and the reassigned-variable threading, so
      refusing every capture broke the documented idiom of registering foul
      handlers from pure configuration, `command(run: ~addNote)`,
      `get("/", ~home)`; telling those from `xs.map(~shout)` needs effect
-     types, #142), #644 (type variables not rigid inside a body; the result case is done), #642 (trait
-     implementations not checked against the trait), #643 (an untyped
-     argument guesses an overload), #645
-     (exhaustiveness for tuple, literal and list patterns), #647, #637. Backend bugs: #639, #635, #623, #618, #615, #614, #610, #613
-     (parser), #654 (CLI), #575 (REPL), #561.
+     types, #142), #644 (type variables not rigid inside a body; the result
+     case is done), #643 (an untyped argument guesses an overload), #645
+     (exhaustiveness for tuple, literal and list patterns), #647, #637.
+     Backend bugs: #639, #635, #623, #618, #615, #614, #610, #613 (parser),
+     #654 (CLI), #575 (REPL), #561.
 
 ## Why
 

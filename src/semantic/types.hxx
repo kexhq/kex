@@ -295,6 +295,9 @@ auto containsTypeVariable(const TypePtr& type) -> bool;
 // The type of a value an expression actually answers: fully concrete, and
 // not Never (which answers nothing).
 auto isConcreteValue(const TypePtr& type) -> bool;
+// A type a contract holds a value to: a concrete one, or a bare trait bound
+// (`area :> Float` takes any Float, never a String).
+auto isConcreteOrBound(const TypePtr& type) -> bool;
 
 // How a name was bound: `var` (so `=` and `!` may rebind it) or not, and
 // whether the language bound it (`new`, `from`) rather than the program,
