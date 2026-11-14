@@ -1,4 +1,5 @@
 #include "server.hxx"
+#include "../common/name_case.hxx"
 
 #include "../common/completion.hxx"
 #include "../common/prelude_interfaces.hxx"
@@ -764,7 +765,7 @@ auto sourceLocalReceiverQualifier(const std::string& source,
                     if (source[cursor] == '\'') return "Char";
                     if (std::isdigit(static_cast<unsigned char>(source[cursor])))
                         return "Integer";
-                    if (std::isupper(static_cast<unsigned char>(source[cursor]))) {
+                    if (kex::startsUppercase(std::string_view(source).substr(cursor))) {
                         auto end = cursor + 1;
                         while (end < source.size() &&
                                (std::isalnum(static_cast<unsigned char>(source[end])) ||
@@ -1115,7 +1116,7 @@ auto moduleQualifierBeforeWord(const std::string& source, unsigned int line,
     }
     auto qualifier = source.substr(begin, wordStart - begin - 1);
     if (qualifier.empty() ||
-        !std::isupper(static_cast<unsigned char>(qualifier.front())))
+        !kex::startsUppercase(qualifier))
         return {};
     return qualifier;
 }
@@ -1883,7 +1884,7 @@ auto literalRecordName(const std::string& source, unsigned int line,
     if (brace == nameEnd) return {};
     auto name = source.substr(brace, nameEnd - brace);
     // A record name is capitalised; anything else is not a record literal.
-    if (name.empty() || !std::isupper(static_cast<unsigned char>(name.front())))
+    if (name.empty() || !kex::startsUppercase(name))
         return {};
     return name;
 }
@@ -2328,14 +2329,14 @@ private:
         auto written = text.substr(receiver.start, receiver.dot - receiver.start);
         std::erase_if(written, [](char c) { return std::isspace(static_cast<unsigned char>(c)); });
         const bool namespacePath =
-            !written.empty() && std::isupper(static_cast<unsigned char>(written.front())) &&
+            !written.empty() && kex::startsUppercase(written) &&
             std::all_of(written.begin(), written.end(), [](char c) {
                 return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.';
             }) &&
             [&] {
                 for (size_t at = 0; at < written.size(); ++at)
                     if ((at == 0 || written[at - 1] == '.') &&
-                        !std::isupper(static_cast<unsigned char>(written[at])))
+                        !kex::startsUppercase(std::string_view(written).substr(at)))
                         return false;
                 return true;
             }();
@@ -3347,8 +3348,7 @@ private:
                         }
                     }
                 }
-                if (!record.empty() && std::isupper(
-                        static_cast<unsigned char>(record.front())))
+                if (!record.empty() && kex::startsUppercase(record))
                     if (const auto* declaration =
                             m_db.findSymbol(record, found->second.path);
                         declaration && declaration->kind ==
@@ -3621,7 +3621,7 @@ private:
                     : moduleCompletion
                     ? ::lsp::CompletionItemKind::Module
                     : !leaf.empty() &&
-                                std::isupper(static_cast<unsigned char>(leaf.front()))
+                                kex::startsUppercase(leaf)
                             ? ::lsp::CompletionItemKind::Class
                             : ::lsp::CompletionItemKind::Function,
                 .detail = capabilityCompletion
@@ -4034,8 +4034,7 @@ private:
         } else if (expressionHover &&
                    (expressionHover->completeDetail ||
                     (!selectedCallHover && moduleQualifier.empty()) ||
-                    (!word.text.empty() && std::isupper(
-                        static_cast<unsigned char>(word.text.front()))))) {
+                    (!word.text.empty() && kex::startsUppercase(word.text)))) {
             detail = expressionHover->completeDetail
                 ? expressionHover->detail
                 : word.text + " : " + expressionHover->detail;

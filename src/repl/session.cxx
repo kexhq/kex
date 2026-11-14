@@ -3,6 +3,7 @@
 // running it. Moved out of main.cxx; the build services they share with the
 // compile commands are declared in driver/build_support.hxx.
 #include "../beam/kexi_registry.hxx"
+#include "../common/name_case.hxx"
 #include "../common/color.hxx"
 #include "../interpreter/evaluator.hxx"
 #include "../hir/hir.hxx"
@@ -513,7 +514,7 @@ auto BeamReplSession::evaluate(
   if (!isLocalLet && !isFuncDef) {
     size_t i = 0;
     while (i < source.size() &&
-           (std::isalnum((unsigned char)source[i]) || source[i] == '_'))
+           (kex::isNameByte(source[i]) || source[i] == '_'))
       i++;
     const auto head = source.substr(0, i);
     const auto headRest = source.find_first_not_of(" \t", i);
@@ -526,11 +527,11 @@ auto BeamReplSession::evaluate(
       if (dot == std::string::npos || source[dot] != '.') break;
       auto k = source.find_first_not_of(" \t", dot + 1);
       if (k == std::string::npos ||
-          !(std::isalnum((unsigned char)source[k]) ||
+          !(kex::isNameByte(source[k]) ||
             source[k] == '_'))
         break;
       while (k < source.size() &&
-             (std::isalnum((unsigned char)source[k]) ||
+             (kex::isNameByte(source[k]) ||
               source[k] == '_'))
         k++;
       seg = k;

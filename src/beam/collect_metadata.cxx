@@ -1,4 +1,5 @@
 #include "../ast/function_groups.hxx"
+#include "../common/name_case.hxx"
 #include <algorithm>
 #include "collect_metadata.hxx"
 #include "../common/type_def_utils.hxx"
@@ -596,7 +597,7 @@ auto mentionsUnknown(const KexiTypePtr& type) -> bool {
 auto mentionsGeneric(const KexiTypePtr& type) -> bool {
     if (!type) return false;
     if (type->kind == KexiType::Named && type->typeArgs.empty() &&
-        type->name.size() == 1 && std::isupper(static_cast<unsigned char>(type->name[0])))
+        type->name.size() == 1 && kex::startsUppercase(type->name))
         return true;
     for (const auto& arg : type->typeArgs)
         if (mentionsGeneric(arg)) return true;

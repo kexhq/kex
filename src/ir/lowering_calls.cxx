@@ -1,5 +1,6 @@
 // Call lowering methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../common/name_case.hxx"
 #include "../common/named_arguments.hxx"
 #include <algorithm>
 
@@ -266,7 +267,7 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
          }() ||
          zeroArgFns.count(n.name) || topLevelConstants.count(n.name));
     // Capitalized name = ADT constructor with a payload → tagged tuple.
-    if (!n.name.empty() && std::isupper(static_cast<unsigned char>(n.name[0]))
+    if (!n.name.empty() && kex::startsUppercase(n.name)
         && !zeroArgThunk) {
         if (auto tag = qualifiedVariantTag(n.name); !tag.empty()) {
             ex->node = Construct{tag, std::move(args)};
@@ -558,7 +559,7 @@ auto Lowering::modulePath(const ast::Expr& e, std::vector<std::string>& out) -> 
     }
     if (auto* mc = std::get_if<ast::MethodCall>(&e.kind)) {
         if (!mc->args.empty() || !mc->namedArgs.empty() || mc->block) return false;
-        if (!mc->method.empty() && std::isupper(static_cast<unsigned char>(mc->method[0]))) {
+        if (!mc->method.empty() && kex::startsUppercase(mc->method)) {
             if (!modulePath(*mc->receiver, out)) return false;
             out.push_back(mc->method); return true;
         }
@@ -572,7 +573,7 @@ auto Lowering::lowerMethodCall(const ast::MethodCall& n) -> ExprPtr {
     // passes and `Type.of` reads. Sum types are registered by bare name.
     if (n.receiver && n.args.empty() && n.namedArgs.empty() && !n.block &&
         !n.mutating && !n.method.empty() &&
-        std::isupper(static_cast<unsigned char>(n.method[0]))) {
+        kex::startsUppercase(n.method)) {
         std::vector<std::string> path;
         if (modulePath(*n.receiver, path)) {
             std::string qualified;

@@ -246,7 +246,7 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
             // variants are TypeExprPtrs; each top-level TypeName is a constructor
             if (!variant) continue;
             if (const auto* tn = std::get_if<ast::TypeName>(&variant->kind)) {
-                if (!tn->parts.empty() && std::isupper(tn->parts[0][0])) {
+                if (!tn->parts.empty() && kex::startsUppercase(tn->parts[0])) {
                     SymbolInfo ctor;
                     ctor.name = tn->parts[0];
                     ctor.kind = SymbolKind::Type;

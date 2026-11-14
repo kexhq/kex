@@ -1,4 +1,5 @@
 #include "analyzer.hxx"
+#include "../common/name_case.hxx"
 #include "../ast/walk.hxx"
 #include "module_rules.hxx"
 #include "receiver_conflicts.hxx"
@@ -30,7 +31,7 @@ auto receiverModuleName(const ast::Expr& receiver) -> std::string {
     if (auto* call = std::get_if<ast::MethodCall>(&receiver.kind))
         if (call->args.empty() && call->namedArgs.empty() && !call->block
             && !call->method.empty()
-            && std::isupper(static_cast<unsigned char>(call->method[0]))
+            && kex::startsUppercase(call->method)
             && call->receiver) {
             auto parent = receiverModuleName(*call->receiver);
             if (!parent.empty()) return parent + "." + call->method;

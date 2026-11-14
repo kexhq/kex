@@ -1,6 +1,7 @@
 #include "value.hxx"
 #include "../common/well_known.hxx"
 #include "../common/color.hxx"
+#include "../common/name_case.hxx"
 #include "../common/utf8.hxx"
 #include <algorithm>
 #include <charconv>
@@ -319,11 +320,15 @@ auto Value::toString() const -> std::string {
         else if constexpr (std::is_same_v<T, BoolValue>) return v.value ? "true" : "false";
         else if constexpr (std::is_same_v<T, AtomValue>) {
             // Printed as written: bare when `:name` can spell it, else quoted.
-            const bool bare = !v.name.empty() && v.name[0] >= 'a' && v.name[0] <= 'z' &&
+            // A lowercase letter outside ASCII spells one too (`:árvíz`), as
+            // the lexer reads it.
+            const auto codepoints = utf8::decode(v.name);
+            const bool bare = kex::startsLowercase(v.name) && v.name[0] != '_' &&
                 v.name.back() != '@' && v.name.find("@@") == std::string::npos &&
-                std::all_of(v.name.begin(), v.name.end(), [](char c) {
-                    return std::isalnum(static_cast<unsigned char>(c)) || c == '_' ||
-                           c == '@';
+                std::all_of(codepoints.begin(), codepoints.end(), [](char32_t c) {
+                    if (c >= 0x80)
+                        return utf8::categories::inRanges(utf8::categories::letterRanges, c);
+                    return std::isalnum(static_cast<int>(c)) || c == '_' || c == '@';
                 });
             if (bare) return ":" + v.name;
             std::string quoted = ":\"";

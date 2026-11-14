@@ -1,4 +1,5 @@
 #include "evaluator.hxx"
+#include "../common/name_case.hxx"
 #include "../semantic/analyzer.hxx"
 #include "../common/utf8.hxx"
 #include "../common/mangle.hxx"
@@ -4317,7 +4318,7 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
         }
     }
     auto val = m_env->get(lookupName);
-    if (!val && !name.empty() && std::isupper(static_cast<unsigned char>(name[0]))) {
+    if (!val && !name.empty() && kex::startsUppercase(name)) {
         for (const auto& [modName, entry] : m_moduleRegistry) {
             auto eit = entry.exports.find(name);
             if (eit != entry.exports.end()) {
@@ -4667,7 +4668,7 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
                 return dispatchTypeName(value) == m_dispatchThisType;
             if (expected == "Any" ||
                 (expected.size() == 1 &&
-                 std::isupper(static_cast<unsigned char>(expected[0]))))
+                 kex::startsUppercase(expected)))
                 return true;
             auto actual = dispatchTypeName(value);
             if (matchesName(actual, expected)) return true;

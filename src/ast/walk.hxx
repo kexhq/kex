@@ -10,6 +10,7 @@
 // whatever the new kind contains).
 
 #include "ast.hxx"
+#include "../common/name_case.hxx"
 
 #include <type_traits>
 
@@ -310,7 +311,7 @@ inline auto writtenModulePath(const Expr& receiver) -> std::optional<std::string
     const auto* segment = std::get_if<MethodCall>(&receiver.kind);
     if (!segment || !segment->receiver || !segment->args.empty() ||
         !segment->namedArgs.empty() || segment->block || segment->method.empty() ||
-        !std::isupper(static_cast<unsigned char>(segment->method.front())))
+        !kex::startsUppercase(segment->method))
         return std::nullopt;
     auto parent = writtenModulePath(*segment->receiver);
     return parent ? std::optional<std::string>{*parent + "." + segment->method}

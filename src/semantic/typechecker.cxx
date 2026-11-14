@@ -1,4 +1,5 @@
 #include "../ast/function_groups.hxx"
+#include "../common/name_case.hxx"
 #include "../ast/walk.hxx"
 #include "../common/mangle.hxx"
 #include "typechecker.hxx"
@@ -1411,7 +1412,7 @@ auto TypeChecker::constructorInfo(const std::string& name, const std::string& sc
     // A constructor of a module of this program that a `using` brings in
     // bare (`WantStore(pid)` under `using Store`), where one module does.
     if (found == m_constructorResult.end() && !name.empty() &&
-        std::isupper(static_cast<unsigned char>(name.front()))) {
+        kex::startsUppercase(name)) {
         for (const auto& [module, constructors] : m_moduleConstructors) {
             if (!constructors.count(name) || !moduleMemberImported(module, name, true)) continue;
             const auto imported = m_constructorResult.find(kex::mangle::qualify(module, name));
@@ -5485,7 +5486,7 @@ auto TypeChecker::zeroArgBindingResult(const std::string& name) -> TypePtr {
         if (!type) return true;
         const auto resolved = resolve(type);
         if (const auto* named = std::get_if<NamedType>(&resolved->kind)) {
-            if (named->name.size() == 1 && std::isupper(static_cast<unsigned char>(named->name[0])))
+            if (named->name.size() == 1 && kex::startsUppercase(named->name))
                 return true;
             return std::any_of(named->typeArgs.begin(), named->typeArgs.end(),
                                mentionsTypeParameter);
@@ -6014,7 +6015,7 @@ auto TypeChecker::memberCompletions(const TypePtr& receiver, const ast::Expr& at
     std::map<std::string, std::vector<Signature>> candidates;
     const auto add = [&](const std::string& name, const Signature& signature) {
         if (name.empty() || kex::mangle::hasScope(name) || signature.params.empty() ||
-            std::isupper(static_cast<unsigned char>(name.front())))
+            kex::startsUppercase(name))
             return;
         candidates[name].push_back(signature);
     };
@@ -6338,7 +6339,7 @@ auto TypeChecker::bareNameDeclared(const std::string& name) const -> bool {
                 return true;
     // A type or a module, named as a value (`x.to(Binary)`), and a
     // constructor the prelude brings in.
-    if (name.empty() || !std::isupper(static_cast<unsigned char>(name.front()))) return false;
+    if (name.empty() || !kex::startsUppercase(name)) return false;
     if (namesKnownType(name) || namesDeclaredType(name, name) || m_constructorOwners.contains(name))
         return true;
     // A module's constructor, inside the module or under a `using` of it.

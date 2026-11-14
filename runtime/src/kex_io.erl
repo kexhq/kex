@@ -506,16 +506,16 @@ inspect_real('None') ->
               ++ " " ++ ?CYAN ++ "Optional" ++ ?RESET ++ "~n"), 'None';
 inspect_real(X) when is_atom(X) ->
     Name = atom_to_list(X),
-    case Name of
-        [C | _] when C >= $A, C =< $Z ->
+    case upper_initial(Name) of
+        true ->
             inspect_format("~ts"
                       ++ " " ++ ?GRAY ++ ":" ++ ?RESET
                       ++ " " ++ ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
                       [Name, nullary_type_name(X)]);
         _ ->
-            inspect_format(":~ts"
+            inspect_format("~ts"
                       ++ " " ++ ?GRAY ++ ":" ++ ?RESET
-                      ++ " " ++ ?CYAN ++ "Atom" ++ ?RESET ++ "~n", [Name])
+                      ++ " " ++ ?CYAN ++ "Atom" ++ ?RESET ++ "~n", [atom_literal(Name)])
     end,
     X;
 inspect_real(X) when is_binary(X) ->
@@ -785,9 +785,9 @@ to_string('false')              -> "false";
 % of `:database` (spec/optional_parens_do.kex).
 to_string(X) when is_atom(X) ->
     S = atom_to_list(X),
-    case S of
-        [C | _] when C >= $a, C =< $z -> atom_literal(S);
-        _ -> S
+    case lower_initial(S) of
+        true -> atom_literal(S);
+        false -> S
     end;
 to_string(X) when is_integer(X) -> integer_to_list(X);
 to_string(X) when is_float(X)   -> format_float(X);
@@ -942,11 +942,29 @@ split_env_entry(E) ->
 %% A Kex atom as it is written: `:name` (or `:b@localhost`) when a bare atom
 %% can spell it, and `:"b@host.example.com"` when it takes the quoted form (the lexer's
 %% lexAtom / lexQuotedAtom). Matches the walker's AtomValue display.
+
+%% Case as the lexer reads it (src/common/name_case.hxx): Unicode letter
+%% categories, not just ASCII, so `:árvíz` is an atom spelled bare and `Φ` a
+%% constructor's name, as they are in source.
+is_letter(C) ->
+    case unicode_util:category(C) of
+        {letter, _} -> true;
+        _ -> false
+    end.
+
+upper_initial([C | _]) when C < 128 -> C >= $A andalso C =< $Z;
+upper_initial([C | _]) -> unicode_util:category(C) =:= {letter, uppercase};
+upper_initial([]) -> false.
+
+lower_initial([C | _]) when C < 128 -> C >= $a andalso C =< $z;
+lower_initial([C | _] = S) -> is_letter(C) andalso not upper_initial(S);
+lower_initial([]) -> false.
 atom_literal(S) ->
     Bare = lists:all(fun(C) -> (C >= $a andalso C =< $z) orelse
                               (C >= $A andalso C =< $Z) orelse
                               (C >= $0 andalso C =< $9) orelse
-                              C =:= $_ orelse C =:= $@
+                              C =:= $_ orelse C =:= $@ orelse
+                              (C >= 128 andalso is_letter(C))
                      end, S)
            andalso lists:last(S) =/= $@
            andalso string:find(S, "@@") =:= nomatch,

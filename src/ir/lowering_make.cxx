@@ -1,5 +1,6 @@
 // Make blocks methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../common/name_case.hxx"
 
 #include <algorithm>
 
@@ -16,7 +17,7 @@ auto Lowering::lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
                     const std::string& typeName) -> FunDef {
     const auto& first = *group[0];
     bool isStaticCtor = !first.name.empty()
-                      && std::isupper(static_cast<unsigned char>(first.name[0]));
+                      && kex::startsUppercase(first.name);
     if (isStaticCtor)
         throw LowerError("IR lower: static constructor '" + first.name + "' not yet ported");
     // A receiver pattern is specifically the `@` sigil (ThisPattern), a

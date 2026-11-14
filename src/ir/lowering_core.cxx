@@ -1,5 +1,6 @@
 // core methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../common/name_case.hxx"
 #include "../common/source_name.hxx"
 #include "../common/type_def_utils.hxx"
 #include "../common/mangle.hxx"
@@ -76,7 +77,7 @@ auto Lowering::qualifiedVariantTag(const std::string& name) const -> std::string
     auto dot = name.rfind('.');
     if (dot == std::string::npos) return "";
     auto tag = name.substr(dot + 1);
-    if (tag.empty() || !std::isupper(static_cast<unsigned char>(tag[0])))
+    if (tag.empty() || !kex::startsUppercase(tag))
         return "";
     return (variantTagSet.count(tag) || variantOwner.count(tag)) ? tag : "";
 }

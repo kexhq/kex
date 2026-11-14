@@ -1,4 +1,5 @@
 #include "resolver.hxx"
+#include "../common/name_case.hxx"
 
 #include "../common/string_utils.hxx"
 
@@ -50,7 +51,7 @@ namespace {
 // leading capital kept; empty for a part that is not numbered.
 auto numberedSnakeCased(const std::string& part) -> std::string {
     if (part.size() < 2
-        || !std::isupper(static_cast<unsigned char>(part[0]))
+        || !kex::startsUppercase(part)
         || !std::isdigit(static_cast<unsigned char>(part[1])))
         return {};
     auto result = snakeCased(part);

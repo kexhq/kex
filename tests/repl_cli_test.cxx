@@ -1925,6 +1925,26 @@ int main() {
                            out.find("takes no file") != std::string::npos,
                        "expected --eval to refuse a file: " + out);
         });
+
+        // Names outside ASCII: the BEAM REPL found a binding's name with an
+        // ASCII-only scan, so `let árvíz = 2` lost its name ("Unexpected
+        // token: )"); `let Φ = 1.618` showed the constant's function on both;
+        // and `名前` reached erlc as a variable no name may start with.
+        it("binds and shows names written outside ASCII in both REPLs", [kex]() {
+            for (const std::string repl : {"", " -i"}) {
+                auto out = runCommand(
+                    "echo ':árvíz' | " + kex + repl +
+                    " -e 'let árvíztűrő = \"tükörfúrógép\"' -e 'var ő = 1'"
+                    " -e 'ő = ő + 1' -e 'let 名前 = ő + 1' -e 'let Φ = 1.618'"
+                    " -e 'IO.printLine(\"${árvíztűrő} ${ő} ${名前} ${Φ}\")' 2>&1");
+                assertTrue(out.find("tükörfúrógép 2 3 1.618") != std::string::npos,
+                           "the bindings did not hold their values (repl'" + repl +
+                               "'): " + out);
+                assertTrue(out.find("=> :árvíz : Atom") != std::string::npos,
+                           "the atom was not shown as written (repl'" + repl +
+                               "'): " + out);
+            }
+        });
     });
 
     // Compile-time expansion is what a file run gets before anything else

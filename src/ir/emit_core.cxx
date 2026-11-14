@@ -35,10 +35,23 @@ auto erlVar(const std::string& s) -> std::string {
     // but it CARRIES the Kex name it was derived from (`_ir_open?0`), so the
     // rest still needs escaping. Returning early here let a `var open?` reach
     // erlc verbatim and take the whole module down with a syntax error.
-    out += s[0] == '_'
-        ? '_'
-        : static_cast<char>(std::toupper(static_cast<unsigned char>(s[0])));
-    for (size_t i = 1; i < s.size(); i++) append(out, static_cast<unsigned char>(s[i]));
+    // A name starting outside ASCII (`名前`) has no letter to uppercase:
+    // its raw lead byte is a Latin-1 character to erlc, an uppercase one
+    // for `á` (0xC3, `Ã`) by luck and a lowercase one for `名` (0xE5, `å`),
+    // which no variable may start with. It takes `V@@` and escapes the
+    // byte instead; `@@` is never produced otherwise, so the name cannot
+    // meet another.
+    const auto lead = static_cast<unsigned char>(s[0]);
+    size_t from = 1;
+    if (lead == '_') {
+        out += '_';
+    } else if (lead < 0x80 && std::isalpha(lead)) {
+        out += static_cast<char>(std::toupper(lead));
+    } else {
+        out += "V@@";
+        from = 0;
+    }
+    for (size_t i = from; i < s.size(); i++) append(out, static_cast<unsigned char>(s[i]));
     return out;
 }
 

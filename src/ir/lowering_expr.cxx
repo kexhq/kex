@@ -1,5 +1,6 @@
 // Expression lowering methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../common/name_case.hxx"
 #include "../common/named_arguments.hxx"
 #include "../common/signature_params.hxx"
 #include "../common/utf8.hxx"
@@ -93,7 +94,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
             // constructor (matching the UpperIdentifier path). Without
             // this, uppercase names in expression context become unbound
             // variables in Core Erlang and erlc rejects them.
-            if (!n.name.empty() && std::isupper(static_cast<unsigned char>(n.name[0]))) {
+            if (!n.name.empty() && kex::startsUppercase(n.name)) {
                 auto ex = std::make_unique<Expr>();
                 ex->node = Construct{n.name, {}};
                 return ex;

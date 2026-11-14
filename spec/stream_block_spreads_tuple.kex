@@ -1,0 +1,10 @@
+# kexhq/kex#610: a block of two parameters over tuple elements spreads each
+# tuple across them through the Stream functions on BEAM, as through List's
+# and on the walker.
+main do
+  let fibonacci = Stream.Sequence(from: (0, 1)) { |a, b| (b, a + b) }
+  IO.printLine(fibonacci.take(5))
+  IO.printLine(fibonacci.map { |a, b| a * b }.take(4))
+  IO.printLine(fibonacci.filter { |a, _| a.even? }.take(3))
+  fibonacci.take(3).each { |a, b| IO.printLine("${a},${b}") }
+end

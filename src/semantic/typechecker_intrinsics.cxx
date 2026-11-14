@@ -1,6 +1,7 @@
 // Compile-time intrinsics (intrinsics.hxx): the registry, and the checker's
 // handler for each entry.
 #include "typechecker.hxx"
+#include "../common/name_case.hxx"
 #include "../common/well_known.hxx"
 #include "../ast/walk.hxx"
 #include "../common/mangle.hxx"
@@ -96,7 +97,7 @@ auto TypeChecker::checkTypeOf(const ast::Expr& expr, const ast::MethodCall& call
     const auto* constructor =
         std::get_if<ast::MethodCall>(&node.args[0]->kind);
     const bool constructorValue = constructor && !constructor->method.empty() &&
-        std::isupper(static_cast<unsigned char>(constructor->method.front()));
+        kex::startsUppercase(constructor->method);
     if (auto signature = constructorValue
                              ? nullptr
                              : namedFunctionSignature(*node.args[0])) {

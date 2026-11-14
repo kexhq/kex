@@ -180,8 +180,7 @@ inline auto preludeFilesFromRoot(const std::filesystem::path& root)
         std::string segment;
         while (std::getline(segments, segment, '.')) {
             if (segment.empty() ||
-                !std::isupper(
-                    static_cast<unsigned char>(segment.front())) ||
+                !kex::startsUppercase(segment) ||
                 !std::all_of(
                     segment.begin(), segment.end(),
                     [](unsigned char c) {

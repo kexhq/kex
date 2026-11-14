@@ -2,6 +2,7 @@
 // definition's name or a binding's pattern, line input (readline, history,
 // `--eval` scripts), Tab completion, and `/with` capability replacements.
 #include "../hir/hir.hxx"
+#include "../common/name_case.hxx"
 #include "../lexer/lexer.hxx"
 #include "../module/discovery.hxx"
 #include "../module/resolver.hxx"
@@ -45,7 +46,7 @@ auto replInputIsDeclaration(const std::string &input) -> bool {
   if (i == std::string::npos) return false;
   size_t end = i;
   while (end < input.size() &&
-         (std::isalnum((unsigned char)input[end]) || input[end] == '_'))
+         (kex::isNameByte(input[end]) || input[end] == '_'))
     ++end;
   const auto word = input.substr(i, end - i);
   for (const char *keyword : {"module", "capability", "type", "distinct",
@@ -55,10 +56,10 @@ auto replInputIsDeclaration(const std::string &input) -> bool {
   if (word != "let" && word != "foul") return false;
   // `let f(x) = …` defines a function; `let x = …` binds a local.
   i = input.find_first_not_of(" \t", end);
-  if (i == std::string::npos || !std::islower((unsigned char)input[i]))
+  if (i == std::string::npos || !kex::startsLowercase(std::string_view(input).substr(i)))
     return false;
   while (i < input.size() &&
-         (std::isalnum((unsigned char)input[i]) || input[i] == '_' ||
+         (kex::isNameByte(input[i]) || input[i] == '_' ||
           input[i] == '?' || input[i] == '!'))
     ++i;
   i = input.find_first_not_of(" \t", i);
@@ -154,7 +155,7 @@ auto replCompleteAt(const std::string &line, size_t point)
   // `Conf` — may be a module under a source root the index has not loaded.
   if (completion.qualifier.empty()) {
     const auto isWord = [](unsigned char c) {
-      return std::isalnum(c) || c == '_' || c == '?' || c == '!';
+      return kex::isNameByte(static_cast<char>(c)) || c == '?' || c == '!';
     };
     const auto end = std::min(point, line.size());
     size_t wordStart = end;
@@ -170,8 +171,8 @@ auto replCompleteAt(const std::string &line, size_t point)
     // Only a module path: a lower-case part before the word (`users.`) is a
     // value, which the analyzer has already answered for.
     const bool modulePath = qualified.empty()
-        ? !word.empty() && std::isupper(static_cast<unsigned char>(word[0]))
-        : std::isupper(static_cast<unsigned char>(qualified[0]));
+        ? !word.empty() && kex::startsUppercase(word)
+        : kex::startsUppercase(qualified);
     if (modulePath) {
       for (auto &match : replRootCompletions(qualified, word))
         completion.matches.push_back(std::move(match));
@@ -311,11 +312,11 @@ auto replClauseHead(const std::string &source)
   else return std::nullopt;
   while (offset < source.size() &&
          std::isspace((unsigned char)source[offset])) offset++;
-  if (offset < source.size() && std::isupper((unsigned char)source[offset]))
+  if (offset < source.size() && kex::startsUppercase(std::string_view(source).substr(offset)))
     return std::nullopt;
   size_t i = offset;
   while (i < source.size() &&
-         (std::isalnum((unsigned char)source[i]) || source[i] == '_')) i++;
+         (kex::isNameByte(source[i]) || source[i] == '_')) i++;
   if (i == offset) return std::nullopt;
   if (i < source.size() && (source[i] == '?' || source[i] == '!')) i++;
   if (i >= source.size() || source[i] != '(') return std::nullopt;
@@ -329,14 +330,14 @@ auto replClauseHead(const std::string &source)
     // A bare lowercase identifier is a binding, so any name stands for the
     // same set of inputs; a literal or constructor is matched as written.
     const bool binding =
-        !word.empty() && (std::islower((unsigned char)word[0]) || word[0] == '_');
+        kex::startsLowercase(word);
     head += binding ? "_" : word;
     word.clear();
     inWord = false;
   };
   for (; i < source.size(); i++) {
     const char c = source[i];
-    if (std::isalnum((unsigned char)c) || c == '_') {
+    if (kex::isNameByte(c) || c == '_') {
       word += c;
       inWord = true;
       continue;
@@ -390,7 +391,7 @@ auto isReplCompiledBlock(const std::string &source) -> bool {
   return after != 8 && after != std::string::npos &&
          source.compare(after, 2, "do") == 0 &&
          (after + 2 == source.size() ||
-          !std::isalnum(static_cast<unsigned char>(source[after + 2])));
+          !kex::isNameByte(source[after + 2]));
 }
 
 auto replDefinitionName(const std::string &source) -> std::string {
@@ -417,7 +418,7 @@ auto replDefinitionName(const std::string &source) -> std::string {
     while (off < source.size() && std::isspace((unsigned char)source[off])) off++;
     size_t end = off;
     while (end < source.size() &&
-           (std::isalnum((unsigned char)source[end]) || source[end] == '_' ||
+           (kex::isNameByte(source[end]) || source[end] == '_' ||
             source[end] == '.'))
       end++;
     return "serving " + source.substr(off, end - off);
@@ -429,7 +430,7 @@ auto replDefinitionName(const std::string &source) -> std::string {
   }
   size_t end = off;
   while (end < source.size() &&
-         (std::isalnum((unsigned char)source[end]) || source[end] == '_' ||
+         (kex::isNameByte(source[end]) || source[end] == '_' ||
           source[end] == '.' || source[end] == '?' || source[end] == '!'))
     end++;
   return source.substr(off, end - off);
@@ -445,10 +446,10 @@ auto replDefinitionName(const std::string &source) -> std::string {
 auto replIsUpperConstantBinding(const std::string &source, size_t off)
     -> bool {
   if (off == std::string::npos || off >= source.size()) return false;
-  if (!std::isupper((unsigned char)source[off])) return false;
+  if (!kex::startsUppercase(std::string_view(source).substr(off))) return false;
   size_t end = off;
   while (end < source.size() &&
-         (std::isalnum((unsigned char)source[end]) || source[end] == '_'))
+         (kex::isNameByte(source[end]) || source[end] == '_'))
     end++;
   const auto next = source.find_first_not_of(" \t", end);
   if (next == std::string::npos) return false;
@@ -473,7 +474,7 @@ auto replTrimLeadingIndent(std::string source) -> std::string {
 auto replWholeWordAt(const std::string &source, size_t at,
                             size_t length) -> bool {
   const auto wordChar = [](char c) {
-    return std::isalnum(static_cast<unsigned char>(c)) != 0;
+    return kex::isNameByte(c);
   };
   return (at == 0 || !wordChar(source[at - 1])) &&
          (at + length >= source.size() || !wordChar(source[at + length]));
@@ -668,13 +669,14 @@ auto replWithBindingName(const std::string &capability) -> std::string {
 auto isReplCapabilityName(const std::string &name) -> bool {
   if (name.empty()) return false;
   bool partStart = true;
-  for (char c : name) {
+  for (size_t i = 0; i < name.size(); ++i) {
+    const char c = name[i];
     if (partStart) {
-      if (!std::isupper((unsigned char)c)) return false;
+      if (!kex::startsUppercase(std::string_view(name).substr(i))) return false;
       partStart = false;
     } else if (c == '.') {
       partStart = true;
-    } else if (!std::isalnum((unsigned char)c) && c != '_') {
+    } else if (!kex::isNameByte(c)) {
       return false;
     }
   }
@@ -922,7 +924,7 @@ auto classifyReplInput(const std::string &source) -> ReplInput {
     const bool upperConstant = replIsUpperConstantBinding(source, off);
     const bool destructuringPattern =
         !upperConstant &&
-        (std::isupper((unsigned char)patternLead) || patternLead == '(' ||
+        ((patternLead != '\0' && kex::startsUppercase(std::string_view(source).substr(off))) || patternLead == '(' ||
          patternLead == '[' || patternLead == '{');
     if (upperConstant) {
       isFuncDef = true;
@@ -940,7 +942,7 @@ auto classifyReplInput(const std::string &source) -> ReplInput {
       auto eqPos = replBindingEqualsPos(source, off);
       size_t nameEnd = off;
       while (nameEnd < source.size() &&
-             (std::isalnum((unsigned char)source[nameEnd]) ||
+             (kex::isNameByte(source[nameEnd]) ||
               source[nameEnd] == '_' || source[nameEnd] == '?' ||
               source[nameEnd] == '!'))
         nameEnd++;
@@ -948,7 +950,7 @@ auto classifyReplInput(const std::string &source) -> ReplInput {
       const bool doBody = afterName != std::string::npos &&
                           source.compare(afterName, 2, "do") == 0 &&
                           (afterName + 2 == source.size() ||
-                           !std::isalnum((unsigned char)source[afterName + 2]));
+                           !kex::isNameByte(source[afterName + 2]));
       if (doBody) eqPos = std::string::npos;
       bool hasParenBeforeEq =
           parenPos != std::string::npos &&
@@ -959,7 +961,7 @@ auto classifyReplInput(const std::string &source) -> ReplInput {
         isLocalLet = true;
         size_t i = off;
         while (i < source.size() &&
-               (std::isalnum((unsigned char)source[i]) || source[i] == '_'))
+               (kex::isNameByte(source[i]) || source[i] == '_'))
           i++;
         letVarName = source.substr(off, i - off);
       } else {
@@ -970,7 +972,7 @@ auto classifyReplInput(const std::string &source) -> ReplInput {
       const char lead = 4 < source.size() ? source[4] : '\0';
       const bool patternForm =
           lead == '(' || lead == '[' || lead == '{' ||
-          std::isupper((unsigned char)lead);
+          (lead != '\0' && kex::startsUppercase(std::string_view(source).substr(4)));
       if (patternForm) {
         // `var (i, j) = ...` binds through its pattern like `let` does;
         // replayed per-name as `var` below (kexhq/kex#602).
@@ -979,7 +981,7 @@ auto classifyReplInput(const std::string &source) -> ReplInput {
       } else {
         size_t i = 4;
         while (i < source.size() &&
-               (std::isalnum((unsigned char)source[i]) || source[i] == '_'))
+               (kex::isNameByte(source[i]) || source[i] == '_'))
           i++;
         letVarName = source.substr(4, i - 4);
         isLocalLet = !letVarName.empty() &&

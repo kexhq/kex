@@ -1008,13 +1008,29 @@ written in Kex down to recursion; and the reassigned-variable threading, so
      standing as a statement stays Void. One in a block, a branch or a
      `&&`/`||` operand is refused with a message, since it may run any number
      of times (`spec/assign_as_expression`).
+   - #610: a two-parameter block over tuple elements (`Stream.Sequence(from:
+     (0, 1)) { |a, b| (b, a + b) }`) died `badarity` on BEAM: the Stream
+     intrinsics applied blocks directly, where List's spread a tuple across
+     the parameters. They apply through `kex_intrinsic_fun:applyItem` now
+     (`spec/stream_block_spreads_tuple`).
+   - Names outside ASCII (reported by the user, 2026-11-14): the lexer reads
+     case from Unicode, so `Φ` is an uppercase name as `PHI` is, but about 25
+     later checks read only the first byte (`std::isupper(name[0])`), and
+     `let Φ = 1.618` printed the constant's function. `kex::startsUppercase`
+     and `kex::startsLowercase` (`src/common/name_case.hxx`) decide as the
+     lexer does and replace them. The BEAM REPL scanned binding names
+     byte by byte (`kex::isNameByte` now), so `let árvíz = 2` lost its name;
+     atoms took only ASCII letters (`:árvíz` was a syntax error) and printed
+     differently on each backend; and a variable starting outside ASCII
+     (`名前`) reached erlc with a raw lead byte no variable may start with
+     (`spec/unicode_names`, `repl_cli_test`).
    - Still open, checker bugs: #640 (a pure function capturing a foul one:
      refusing every capture broke the documented idiom of registering foul
      handlers from pure configuration, `command(run: ~addNote)`,
      `get("/", ~home)`; telling those from `xs.map(~shout)` needs effect
      types, #142), #644 for a signature written apart (`f :> A -> A`), which needs
      bounded type variables first (#651).
-     Backend bugs: #610, #654 (CLI), #575 (REPL).
+     Backend bugs: #654 (CLI), #575 (REPL).
 
 ## Why
 

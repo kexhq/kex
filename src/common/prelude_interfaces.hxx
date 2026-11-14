@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ast/clone.hxx"
+#include "name_case.hxx"
 #include "well_known.hxx"
 #include "../ast/function_groups.hxx"
 #include "file_io.hxx"
@@ -108,7 +109,7 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
             if (auto builtin = kex::semantic::signatureBuiltinType(name))
                 return builtin;
             if (name == "Any") return Type::unknown();
-            if (name.size() == 1 && std::isupper(static_cast<unsigned char>(name[0]))) {
+            if (name.size() == 1 && kex::startsUppercase(name)) {
                 auto it = vars.find(name);
                 if (it != vars.end()) return it->second;
                 auto tv = Type::typeVar(-(static_cast<int>(vars.size()) + 1));

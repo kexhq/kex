@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../lexer/token.hxx"
+#include "../common/name_case.hxx"
 #include "../common/string_utils.hxx"
 #include <cctype>
 #include <memory>
@@ -868,7 +869,7 @@ inline auto isLocalConstantBind(const PatternPtr& pattern, const ExprPtr& value)
     if (!pattern || !value) return false;
     const auto* varPat = std::get_if<VarPattern>(&pattern->kind);
     if (!varPat || varPat->name.empty() ||
-        !std::isupper(static_cast<unsigned char>(varPat->name.front())))
+        !kex::startsUppercase(varPat->name))
         return false;
     const auto* lambda = std::get_if<Lambda>(&value->kind);
     return lambda && lambda->namedFunction && lambda->params.empty();

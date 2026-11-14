@@ -1,4 +1,5 @@
 #include "../ast/function_groups.hxx"
+#include "../common/name_case.hxx"
 #include "../ast/type_text.hxx"
 #include "../common/type_def_utils.hxx"
 #include "../common/mangle.hxx"
@@ -1265,7 +1266,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // An imported constructor a `using` brings in (`ReadFailed(path)`
             // under `using FS`): checked as its module's own spelling is.
             if (m_importedInterfaces && !lookupVar(node.name) &&
-                !node.name.empty() && std::isupper(static_cast<unsigned char>(node.name.front())))
+                !node.name.empty() && kex::startsUppercase(node.name))
                 for (const auto& [path, module] : m_importedInterfaces->modules) {
                     const auto exports = module.exports.find(node.name);
                     if (exports == module.exports.end()) continue;
@@ -1553,7 +1554,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // of `select(as: Type<T>)`) is a `Type<X>`, as a bare one is.
             if (writtenPath && node.args.empty() && node.namedArgs.empty() && !node.block &&
                 !node.method.empty() &&
-                std::isupper(static_cast<unsigned char>(node.method.front())))
+                kex::startsUppercase(node.method))
                 if (const auto full = *writtenPath + "." + node.method; namesType(full)) {
                     m_decidedCalls[&expr] = {CallKind::TypeReference, full};
                     return Type::named(kex::names::kTypeRecord,
@@ -2003,7 +2004,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // path (`Model.RecordDecl(entry)`): the module's ADT builds it.
             if (isNamespaceCall && importedPath && m_localModules.contains(*importedPath) &&
                 !node.method.empty() &&
-                std::isupper(static_cast<unsigned char>(node.method.front())))
+                kex::startsUppercase(node.method))
                 if (auto constructed =
                         constructorResultType(node.method, argTypes, *importedPath)) {
                     checkConstructorPayloads(node.method, argTypes, expr.location, *importedPath);
@@ -3219,7 +3220,7 @@ auto TypeChecker::namespaceCallProblem(const std::string& written,
         // An uppercase module CONSTANT (`Console.RED`, which string
         // interpolation calls a method on) is held like a nested module.
         const bool held =
-            !std::isupper(static_cast<unsigned char>(next.front())) ||
+            !kex::startsUppercase(next) ||
             m_userSignatures.count(kex::mangle::qualify(deepest, next)) ||
             m_scopedDeclaredSignatures.count(deepest + "\n" + next) ||
             m_recordFields.count(resolveRecordName(next)) ||
@@ -5117,7 +5118,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         }();
         if (isMethodCall && concreteReceiver && !name.empty() &&
             !kex::mangle::hasScope(name) &&
-            !std::isupper(static_cast<unsigned char>(name.front()))) {
+            !kex::startsUppercase(name)) {
             // `Kex.BACKEND.major` checked clean because `major` is a field
             // of Kex.Version, then died at runtime with badarg. The field
             // lookup above already searched a known record receiver, and a
