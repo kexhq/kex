@@ -3996,7 +3996,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         if (const auto [trait, required] = m_traits.requiredMethod(m_currentMakeType, def.name);
             required && required->params.size() == def.clauses.front().params.size())
             if (auto result = bindThis(required->result, m_currentMakeType);
-                isConcreteValue(resolve(result)) &&
+                result && isConcreteValue(resolve(result)) &&
                 !typesEqual(resolve(result), Type::unit()))
                 requiredResult = std::move(result);
 
