@@ -1,0 +1,29 @@
+# kex: check-only
+# A member that declares no result answers to the result the trait it
+# implements requires: a fake `getChar` answering "c" for IO's `String?` was
+# accepted, and failed at its caller's first `.or` (found by
+# `make metamorphic-search`). A requirement with no result to give, such as
+# `printLine`, leaves the member's own alone.
+
+record Canned do
+  stdin : String
+end
+
+make Canned, implement: IO do
+  foul printLine(msg) = @stdin
+  foul printLine = @stdin
+  foul print(msg) = @stdin
+  foul print = @stdin
+  foul printError(msg) = @stdin
+  foul printError = @stdin
+  foul getLine = Just(@stdin)
+  foul readLine = Ok(Just(@stdin))
+  foul getChar = "c"
+end
+
+main do
+  let ch = with IO = Canned { stdin: "x" } do
+    IO.getChar.or("(none)")
+  end
+  IO.printLine(ch)
+end

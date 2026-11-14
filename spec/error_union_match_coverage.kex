@@ -1,0 +1,49 @@
+# kex: check-only
+# A match over a union of types takes each member: a record pattern binding
+# its fields, or a type pattern. Dropping one was accepted, and failed at run
+# time with no matching clause (found by `make metamorphic-search`). A guarded
+# arm takes nothing for certain; a catch-all takes the rest.
+
+module Web do
+  record Safe do
+    html : String
+  end
+
+  record Redirect do
+    status : Integer
+  end
+
+  type Reply = String | Safe | Redirect
+end
+
+record Local do
+  count : Integer
+end
+
+record Remote do
+  host : String
+end
+
+type Place = String | Local | Remote
+
+let describe(reply: Web.Reply) -> String = match reply do
+  Web.Safe { html } => html
+  text : String => text
+end
+
+let where(place: Place) -> String = match place do
+  Local { count } => "${count}"
+  Remote { host } when host.empty? => "nowhere"
+  text : String => text
+end
+
+let anywhere(place: Place) -> String = match place do
+  Local { count } => "${count}"
+  _ => "elsewhere"
+end
+
+main do
+  IO.printLine(describe("x"))
+  IO.printLine(where("y"))
+  IO.printLine(anywhere("z"))
+end

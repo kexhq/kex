@@ -1451,7 +1451,22 @@ auto TypeChecker::checkConstructorPayloads(const std::string& name,
     }
     if (!declaredArity) return;
     const auto arity = *declaredArity;
-    if (argTypes.size() != arity) {
+    // A spelling two imported types share (FS's and FileHandle's
+    // `InvalidUtf8`) may have been looked up as the other one: any of them
+    // taking this many values answers.
+    const auto anySameNamedTakes = [&](std::size_t given) {
+        if (info->declaredHere) return false;
+        if (const auto bare = m_constructorArity.find(name);
+            bare != m_constructorArity.end() && bare->second == given)
+            return true;
+        return std::any_of(m_moduleConstructors.begin(), m_moduleConstructors.end(),
+                           [&](const auto& module) {
+                               const auto found = module.second.find(name);
+                               return found != module.second.end() &&
+                                      found->second.arity == given;
+                           });
+    };
+    if (argTypes.size() != arity && !anySameNamedTakes(argTypes.size())) {
         error(loc, "`" + name + "` takes " + std::to_string(arity) +
                        (arity == 1 ? " value" : " values") + ", but got " +
                        std::to_string(argTypes.size()));
@@ -2869,6 +2884,72 @@ auto TypeChecker::checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLoc
     error(loc, "Non-exhaustive match on " + adtName + ": missing case(s) " + list);
 }
 
+// A match over a union of types (`type Reply = String | Safe | Redirect`)
+// must take each member: a record pattern binding every field it names
+// (`Safe { html }`) or a type pattern (`s : String`) takes one whole. Any
+// other kind of arm leaves the question to checkMatchExhaustiveness (see
+// kexhq/kex#645). Dropping the `Redirect` arm was accepted, and failed at run
+// time with no matching clause (found by `make metamorphic-search`).
+auto TypeChecker::checkUnionCoverage(const ast::MatchExpr& node, const TypePtr& subject,
+                                     SourceLocation loc) -> void {
+    const auto nameOf = [](const TypePtr& type) {
+        const auto* named = std::get_if<NamedType>(&type->kind);
+        return named && named->typeArgs.empty() ? named->name : typeToString(type);
+    };
+    // A union of bare names is registered as a sum type whose variants are
+    // those names; a union with a qualified or compound member as an alias.
+    std::vector<std::string> members;
+    const auto shape = expandTypeAliases(resolve(subject));
+    if (const auto* either = std::get_if<UnionType>(&shape->kind))
+        for (const auto& member : either->members) members.push_back(nameOf(resolve(member)));
+    else if (const auto* named = std::get_if<NamedType>(&shape->kind))
+        if (const auto variants = m_adtVariants.find(named->name); variants != m_adtVariants.end())
+            members = variants->second;
+    if (members.size() < 2) return;
+    const auto takesWhole = [](const ast::FieldPattern& field) {
+        if (!field.pattern || !*field.pattern) return true;
+        const auto& kind = (**field.pattern).kind;
+        return std::holds_alternative<ast::VarPattern>(kind) ||
+               std::holds_alternative<ast::WildcardPattern>(kind);
+    };
+    std::vector<bool> covered(members.size(), false);
+    const auto cover = [&](const std::string& written) {
+        for (std::size_t i = 0; i < members.size(); ++i)
+            if (members[i] == written || members[i].ends_with("." + written) ||
+                written.ends_with("." + members[i]))
+                covered[i] = true;
+    };
+    for (const auto& clause : node.clauses) {
+        if (clause.guard && *clause.guard) continue;
+        for (const auto& pattern : clause.patterns) {
+            if (!pattern) continue;
+            const auto& kind = pattern->kind;
+            if (std::holds_alternative<ast::WildcardPattern>(kind) ||
+                std::holds_alternative<ast::VarPattern>(kind))
+                return;
+            if (const auto* typed = std::get_if<ast::TypePattern>(&kind); typed && typed->type) {
+                std::unordered_map<std::string, TypePtr> noGenerics;
+                cover(nameOf(resolve(resolveTypeExpr(*typed->type, noGenerics))));
+            } else if (const auto* record = std::get_if<ast::RecordPattern>(&kind);
+                       record && !record->typeName.empty()) {
+                if (std::all_of(record->fields.begin(), record->fields.end(), takesWhole))
+                    cover(record->typeName);
+            } else if (!std::holds_alternative<ast::LiteralPattern>(kind) ||
+                       std::get<ast::LiteralPattern>(kind).literal.type == TokenType::None) {
+                // A constructor, a structural record, a list, a tuple: this
+                // check does not know which members it takes.
+                return;
+            }
+        }
+    }
+    std::string missing;
+    for (std::size_t i = 0; i < members.size(); ++i)
+        if (!covered[i]) missing += (missing.empty() ? "" : ", ") + members[i];
+    if (!missing.empty())
+        error(loc, "Non-exhaustive match on " + typeToString(subject) + ": missing case(s) " +
+                       missing);
+}
+
 auto TypeChecker::expandTypeAliases(const TypePtr& type, int depth) const
     -> TypePtr {
     if (!type || depth > 8) return type;
@@ -3905,6 +3986,20 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                   typeToString(resolve(declared->result)));
     }
 
+    // A member that declares no result answers to the result a trait its
+    // type claims requires of it: `foul getChar = "c"` implementing IO's
+    // `getChar :> String?` was accepted, and failed at its caller's first
+    // `.or` (found by `make metamorphic-search`).
+    TypePtr requiredResult;
+    if (!declared && !inlineReturnType && m_inMakeBlock && m_currentMakeType &&
+        !def.clauses.empty())
+        if (const auto [trait, required] = m_traits.requiredMethod(m_currentMakeType, def.name);
+            required && required->params.size() == def.clauses.front().params.size())
+            if (auto result = bindThis(required->result, m_currentMakeType);
+                isConcreteValue(resolve(result)) &&
+                !typesEqual(resolve(result), Type::unit()))
+                requiredResult = std::move(result);
+
     auto returnType = declared    ? declared->result
                     : inlineReturnType ? inlineReturnType
                     : freshTypeVar();
@@ -4106,7 +4201,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         auto effectiveReturnType = contract ? contract->result
             : clause.returnAnnotation
                 ? resolveTypeExpr(**clause.returnAnnotation, genericVars)
-                : inlineReturnType;
+                : inlineReturnType ? inlineReturnType : requiredResult;
         // The declared result is what a `match` or `if` ending the body must
         // produce, as a `let` annotation is for its value: each arm fits it,
         // not the first arm's type. Not a generic result, which every arm
@@ -4281,9 +4376,10 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                     result = returned->value.get();
                 return result && literalCoercesTo(*result, effectiveReturnType);
             }()) {
+            const bool required = effectiveReturnType == requiredResult;
             error(def.location,
-                  "`" + def.name + "` declared to return " + typeToString(effectiveReturnType) +
-                  " but body returns " + typeToString(bodyType));
+                  "`" + def.name + (required ? "` is required to return " : "` declared to return ") +
+                  typeToString(effectiveReturnType) + " but body returns " + typeToString(bodyType));
         }
         // A result written as a type variable promises any type the caller
         // asks for: a body that answers one concrete type, which the
@@ -4728,9 +4824,14 @@ auto TypeChecker::checkTraitDef(const ast::TraitDef& def) -> void {
     m_currentMakeModule = m_currentModulePath;
     // `This`, as the trait's own signatures leave it.
     m_currentMakeType = Type::named(names::kThisType);
+    const auto* outerTrait = std::exchange(
+        m_currentTrait, m_currentModulePath.empty()
+                            ? m_traits.get(def.name)
+                            : m_traits.get(kex::mangle::qualify(m_currentModulePath, def.name)));
     for (const auto& item : def.body)
         if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item); fn && *fn)
             checkFunctionDef(**fn);
+    m_currentTrait = outerTrait;
     m_inMakeBlock = wasInMakeBlock;
     m_currentMakeType = std::move(prevMakeType);
     m_currentMakeModule = std::move(prevMakeModule);

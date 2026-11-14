@@ -836,6 +836,26 @@ written in Kex down to recursion; and the reassigned-variable threading, so
      takes a fresh seed each run. #617's own fix rides along: `if let` in a
      loop body lost its bindings on BEAM (`lowerIfLet`, shared with the
      plain `if let`; `spec/if_let_loop`).
+     Run against the build from before these fixes (120 cases from seed
+     1000), the search found the `if let` loop bug and `Just()` unaided, and
+     three more the checker let through, each refused now:
+     - A call to a trait requirement with the wrong count of values
+       (`word.combine()` for `combine : This -> This`, and `this.combine()`
+       in a default): the routes that answer from a claimed trait skipped
+       the count (`missesRequiredArity`;
+       `spec/error_trait_requirement_arity`).
+     - A member implementing a requirement with no result of its own
+       answered whatever its body gave (`foul getChar = "c"` for IO's
+       `String?`): it is held to the requirement's result now
+       (`spec/error_requirement_result`).
+     - A match over a union of types missing a member (`String | Safe |
+       Redirect` without `Redirect`): record and type patterns took part in
+       no exhaustiveness check (`checkUnionCoverage`;
+       `spec/error_union_match_coverage`). The general pattern-matrix check
+       is still #645.
+     A constructor spelling two imported types share (FS's and FileHandle's
+     `InvalidUtf8`) can be looked up as the wrong one, so its arity check
+     accepts a count either takes.
    - Language server, reported by the user (2026-11-13), each now a test in
      `tests/lsp_test.cxx` (`askAt` opens a document and asks one request):
      - Hover on `let name = ...` (or `let list`) attached the documentation of
