@@ -1,0 +1,6 @@
+string:hi
+integer:3
+mock-string:hi
+mock-integer:3
+counted-string:hi
+counted-integer:3

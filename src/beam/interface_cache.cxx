@@ -26,9 +26,10 @@ using kex::semantic::TypePtr;
 using namespace kex::semantic;
 
 constexpr int kMagic = 0x4b584946;      // "KXIF"
-// Bump with ANY shape change below: old files must read as bad-version,
-// never misparse.
-constexpr int kVersion = 5;
+// Bump with ANY shape change below, or a change to what an entry holds
+// (6: an imported trait keeps every overload of a required name): old
+// files must read as bad-version, never misparse.
+constexpr int kVersion = 6;
 
 // Every tuple shape in the format, named once and shared by the encoder
 // and the decoder. Named shapes (ifaces, fn, signature, ...) go through

@@ -123,6 +123,11 @@ public:
     // that trait; nulls when no claimed trait requires one.
     auto requiredMethod(const TypePtr& type, const std::string& method) const
         -> std::pair<const TraitDef*, const Signature*>;
+    // Every method the traits `type` claims require under `method`'s name:
+    // a capability can require same-arity overloads (`take(text: String)`
+    // beside `take(count: Integer)`), and each implementation answers one.
+    auto requiredOverloads(const TypePtr& type, const std::string& method) const
+        -> std::vector<const Signature*>;
 
     // A registry with Number/Integer/Float/Equatable/Comparable/Showable
     // pre-registered, plus implementations for built-in primitive/sized types.

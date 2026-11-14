@@ -5,7 +5,8 @@
            to_string_bin/1, env_map/0, register_display/2,
            mock_start/0, mock_input/1, mock_output/0, mock_clear/0,
            mock_stop/0, value_type_name/1, call_field_or_fail/4,
-           register_method_owners/1, dispatch_method/3, method_owner/1]).
+           register_method_owners/1, dispatch_method/3, dispatch_method/4,
+           method_owner/1]).
 
 %% register_method_owners/1 — each compiled unit reports which BEAM module
 %% owns the methods of the record tags it defines. Capability substitution
@@ -29,42 +30,70 @@ method_owner(_) ->
 %% dispatch_method/3 — apply a method to a value whose implementing module is
 %% only known at runtime. The failure message matches the one every other
 %% dispatch path raises, so the two backends stay identical.
-dispatch_method(Receiver, Method, Args)
-  when is_tuple(Receiver), tuple_size(Receiver) > 0 ->
-    Tag = element(1, Receiver),
-    case maps:get(Tag, persistent_term:get(kex_method_owners, #{}), undefined) of
+dispatch_method(Receiver, Method, Args) ->
+    dispatch_method(Receiver, Method, Args, <<>>).
+
+%% dispatch_method/4 — the same, for a call the checker resolved to one of
+%% several same-arity overloads: `Key` spells that overload's parameter types
+%% (`String`), and the stand-in's implementation of it is named after its type
+%% and those (`take/FakeTake,String`). Without it two such overloads had no
+%% runtime name to tell them apart, and the call died `undef`
+%% (kexhq/kex#623).
+dispatch_method(Receiver, Method, Args, Key) ->
+    case receiver_tag(Receiver) of
         undefined -> undefined_method(Receiver, Method, <<>>);
-        Module ->
-            Arity = length(Args) + 1,
-            Plain = binary_to_atom(Method, utf8),
-            %% A method name several record types share is compiled once per
-            %% type (`size/Files`), behind one dispatcher that lives in just
-            %% ONE of their modules, not necessarily this record's: adding
-            %% `FS.FileInfo`'s `size` field moved `size`'s dispatcher into
-            %% `Kex.FS`, and a `with FS.File = Mock.Files {...}` call died
-            %% `undef` in `Kex.Mock`. The type's own implementation is always
-            %% in its module, so use it when the plain name is not there.
-            %%
-            %% That implementation is named after the type's qualified
-            %% identity, which is the record's tag (`size/Mock.Files`): two
-            %% modules may each declare a `Files`, and the short name alone
-            %% would not say whose `size` this is (kexhq/kex#476). A type
-            %% that is still named by its last segment alone is looked for
-            %% under that name next.
-            _ = code:ensure_loaded(Module),
-            Qualified = atom_to_binary(Tag, utf8),
-            Short = lists:last(binary:split(Qualified, <<".">>, [global])),
-            Candidates = [Plain | [binary_to_atom(<<Method/binary, "/", Type/binary>>, utf8)
-                                   || Type <- [Qualified, Short]]],
-            Name = case [Candidate || Candidate <- Candidates,
-                                      erlang:function_exported(Module, Candidate, Arity)] of
-                [Found | _] -> Found;
-                [] -> Plain
-            end,
-            erlang:apply(Module, Name, [Receiver | Args])
-    end;
-dispatch_method(Receiver, Method, _Args) ->
-    undefined_method(Receiver, Method, <<>>).
+        Tag ->
+            case maps:get(Tag, persistent_term:get(kex_method_owners, #{}), undefined) of
+                undefined -> undefined_method(Receiver, Method, <<>>);
+                Module -> apply_owned(Module, Tag, Receiver, Method, Args, Key)
+            end
+    end.
+
+%% A record's tag: its first element, or the atom itself for a record with
+%% no fields (`FakeTake {}` is just `'FakeTake'`).
+receiver_tag(Receiver) when is_tuple(Receiver), tuple_size(Receiver) > 0 ->
+    element(1, Receiver);
+receiver_tag(Receiver) when is_atom(Receiver), Receiver =/= true,
+                            Receiver =/= false, Receiver =/= undefined ->
+    Receiver;
+receiver_tag(_) ->
+    undefined.
+
+apply_owned(Module, Tag, Receiver, Method, Args, Key) ->
+    Arity = length(Args) + 1,
+    Plain = binary_to_atom(Method, utf8),
+    %% A method name several record types share is compiled once per
+    %% type (`size/Files`), behind one dispatcher that lives in just
+    %% ONE of their modules, not necessarily this record's: adding
+    %% `FS.FileInfo`'s `size` field moved `size`'s dispatcher into
+    %% `Kex.FS`, and a `with FS.File = Mock.Files {...}` call died
+    %% `undef` in `Kex.Mock`. The type's own implementation is always
+    %% in its module, so use it when the plain name is not there.
+    %%
+    %% That implementation is named after the type's qualified
+    %% identity, which is the record's tag (`size/Mock.Files`): two
+    %% modules may each declare a `Files`, and the short name alone
+    %% would not say whose `size` this is (kexhq/kex#476). A type
+    %% that is still named by its last segment alone is looked for
+    %% under that name next. The selected overload's own
+    %% implementation, when the call names one, comes first.
+    _ = code:ensure_loaded(Module),
+    Qualified = atom_to_binary(Tag, utf8),
+    Short = lists:last(binary:split(Qualified, <<".">>, [global])),
+    Overloads = case Key of
+        <<>> -> [];
+        _ -> [binary_to_atom(<<Method/binary, "/", Type/binary, ",", Key/binary>>, utf8)
+              || Type <- [Qualified, Short]]
+    end,
+    Candidates = Overloads ++
+        [Plain | [binary_to_atom(<<Method/binary, "/", Type/binary>>, utf8)
+                  || Type <- [Qualified, Short]]],
+    Name = case [Candidate || Candidate <- Candidates,
+                              erlang:function_exported(Module, Candidate, Arity)] of
+        [Found | _] -> Found;
+        [] -> Plain
+    end,
+    erlang:apply(Module, Name, [Receiver | Args]).
 
 %% call_field_or_fail/4 — the receiver dispatcher's last resort. A record field
 %% may hold a function, and `d.fetch(url)` should call it; the method keeps

@@ -300,11 +300,16 @@ struct Lowering {
 
     auto runtimeError(const std::string& msg) -> ExprPtr;
 
+    // `overloadKey` spells the parameter types of the overload the checker
+    // selected (`String`), so a stand-in's same-arity overloads each have a
+    // runtime name (kexhq/kex#623); empty when the call names none.
     auto capabilityDispatchLowered(
         const std::string& capability, const std::string& method,
         std::vector<ExprPtr> loweredArgs, std::vector<Binding>& binds,
-        const std::function<ExprPtr(std::vector<ExprPtr>)>& directCall)
+        const std::function<ExprPtr(std::vector<ExprPtr>)>& directCall,
+        const std::string& overloadKey = {})
         -> ExprPtr;
+    auto capabilityOverloadKey(const semantic::Signature* selected) const -> std::string;
 
     auto isCapabilityModule(const std::string& name) const -> bool;
     auto checkedCallModule(const ast::MethodCall& n) const -> std::string;
