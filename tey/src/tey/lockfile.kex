@@ -162,12 +162,10 @@ private do
 
   let lockMap(None) -> {String: String} = {}
   let lockMap(Just(values)) -> {String: String} do
-    var decoded: {String: String} = {}
-    values.entries.each do |key, value|
-      decoded.put!("${key}", "${value}")
-      ()
+    values.entries.reduce({}) do |decoded, entry|
+      let (key, value) = entry
+      decoded.put("${key}", "${value}")
     end
-    return decoded
   end
 
   let complete?(dep: Dependency) -> Bool do
