@@ -193,6 +193,7 @@ auto TypeChecker::unifyVar(int id, TypePtr concrete) -> void {
         if (it == m_subst.end()) break;
         t = it->second;
     }
+    if (m_substJournal && !m_subst.contains(id)) m_substJournal->push_back(id);
     m_subst[id] = std::move(concrete);
 }
 

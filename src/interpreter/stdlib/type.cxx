@@ -323,6 +323,16 @@ auto Evaluator::registerTypeBuiltins() -> void {
                 ? semantic::structuredTypeOfDeclared(*field.type, m_declaredAliases)
                 : semantic::StructuredType{"Any", {}};
             if (auto found = given.find(field.name); found != given.end()) {
+                // A present value for an optional field is that value: decoded
+                // JSON has no `Just` to write (kexhq/kex#561).
+                if (const auto* optional =
+                        field.type ? std::get_if<ast::OptionalType>(&field.type->kind) : nullptr;
+                    optional && optional->inner &&
+                    !matchesDeeply(found->second, *field.type, matches) &&
+                    matchesDeeply(found->second, *optional->inner, matches)) {
+                    fields[field.name] = Value::just(found->second);
+                    continue;
+                }
                 if (field.type && !matchesDeeply(found->second, *field.type, matches))
                     return Value::error(Value::string(
                         "Field \"" + field.name + "\" of " + name + " expects " +

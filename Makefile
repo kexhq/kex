@@ -67,6 +67,7 @@ help:
 	@echo "  make test-fuzz    Test the fuzzer generator and failure handling"
 	@echo "  make test-metamorphic  Gate the metamorphic relations that pass"
 	@echo "  make metamorphic-search  Relations and type-breaking spec mutations, fresh seed"
+	@echo "  make lsp-sweep           Language-server answers checked against the checker's"
 	@echo "  make metamorphic-coverage  The search with LLVM compiler coverage"
 	@echo "  make fuzz         Differential-fuzz walker vs BEAM on generated"
 	@echo "                    programs (tools/fuzz.kex). Override with"
@@ -196,6 +197,18 @@ metamorphic-coverage:
 	@JOBS="$(JOBS)" METAMORPHIC_SEED="$(METAMORPHIC_SEED)" \
 		METAMORPHIC_CASES="$(METAMORPHIC_CASES)" \
 		bash tools/metamorphic_coverage.sh
+
+# Language-server sweep (tests/lsp_sweep.cxx): asks `kex --lsp` about the
+# identifiers of each file and reports where its answer contradicts the
+# checker's — a hover type, a name completion should offer or must not, the
+# diagnostics, a definition target. A search, not a gate; one finding per
+# line, so two runs diff. LSP_SWEEP_FILES picks the files.
+.PHONY: lsp-sweep
+LSP_SWEEP_FILES ?= $(wildcard examples/*.kex)
+LSP_SWEEP_OUTDIR ?= /tmp/kex-lsp-sweep
+LSP_SWEEP_SEED ?= 1
+lsp-sweep: build
+	@"$(BUILD_DIR)/lsp_sweep" --kex "$(KEX)" --out "$(LSP_SWEEP_OUTDIR)" --seed "$(LSP_SWEEP_SEED)" $(LSP_SWEEP_FILES)
 
 # Informational benchmark harness (see tools/bench.sh and the plan's
 # measurement methodology). Not a gate: reports median + IQR, exits 0.

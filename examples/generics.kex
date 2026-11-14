@@ -18,8 +18,8 @@ make Option<A> do
 end
 
 make Result<A, E> do
-  let mapError(@Ok(x), _) = Ok(x)
-  let mapError(@Error(e), f: E -> F) = Error(f(e))
+  let mapFailure(@Ok(x), _) = Ok(x)
+  let mapFailure(@Error(e), f: E -> F) = Error(f(e))
 end
 
 # Type hierarchy with generics

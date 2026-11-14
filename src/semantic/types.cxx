@@ -477,6 +477,11 @@ auto isConcreteOrBound(const TypePtr& type) -> bool {
     return isConcreteValue(type) || std::holds_alternative<ConstrainedType>(type->kind);
 }
 
+auto typeVariableId(const TypePtr& type) -> std::optional<int> {
+    if (const auto* variable = type ? std::get_if<TypeVar>(&type->kind) : nullptr) return variable->id;
+    return std::nullopt;
+}
+
 auto containsTypeVariable(const TypePtr& type) -> bool {
     return anyType(
         type,

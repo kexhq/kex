@@ -1,0 +1,14 @@
+# A union argument reaches an overloaded function that has a clause for each
+# of its members: the value picks the clause when the call runs, and the
+# result is the one every overload gives (kexhq/kex#647). It was refused,
+# each overload being tried against the whole union.
+
+let describe(n: Integer) -> String = "integer ${n}"
+let describe(s: String) -> String = "string ${s}"
+
+let label(id: Integer | String) -> String = describe(id)
+
+main do
+  IO.printLine(label(3))
+  IO.printLine(label("x"))
+end

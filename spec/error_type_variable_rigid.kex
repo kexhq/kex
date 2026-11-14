@@ -1,0 +1,19 @@
+# kex: check-only
+# A type variable a signature writes stands for every type while the body is
+# checked: the body may not use it as one in particular, by an operator, a
+# function of some type, or a result of another type (kexhq/kex#644). Each
+# of these was accepted, and broke the promise its signature made. Equality,
+# interpolation and a generic function's own variables still apply.
+
+let increment(a: A) -> Integer = a + 1
+let shout(a: A) -> String = a.upperCase
+let count(a: A) -> Integer = a
+let swap(a: A, b: B) -> A = b
+
+let same(a: A, b: A) -> Bool = a == b
+let shown(a: A) -> String = "${a}"
+let firstOf(xs: [A]) -> A? = xs.first
+
+main do
+  IO.printLine(shown(1))
+end

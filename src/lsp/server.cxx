@@ -90,11 +90,36 @@ struct Document {
     std::vector<HoverEntry> selectedCallEntries;
     std::unordered_map<std::string, std::string> localReceiverTypes;
     std::unordered_map<uint64_t, std::string> receiverSpans;
+    // From the last good check: where the local a name use means is bound
+    // (use -> binding, both at the name), and where locals are bound.
+    std::unordered_map<uint64_t, std::pair<int, int>> localDefinitions;
+    std::unordered_set<uint64_t> bindingSites;
+    // Field reads (`point.x`, ``), at the field name: the record the
+    // checker read the field of.
+    std::unordered_map<uint64_t, std::string> fieldReads;
     // Receivers that needed the full re-analysis, by start offset. A call
     // result (`Date.of(2026, 7, 30).weekday`) has no recorded span, and an
     // editor asks about the same site repeatedly — once per keystroke during
     // completion. Dropped whenever the text changes, so it cannot go stale.
     mutable std::unordered_map<size_t, std::string> recoveredReceivers;
+    // The checker's member completions for the buffer last asked about, as
+    // re-checked (the member being typed removed): an editor asks again at
+    // every keystroke of the member's name, and that buffer is the same each
+    // time. Only the prefix filter differs.
+    struct MemberAnswer {
+        std::string checkedText;
+        size_t receiverStart = 0;
+        std::vector<::lsp::CompletionItem> items;
+    };
+    mutable std::optional<MemberAnswer> memberAnswer;
+    // The same for a bare name: the checker's names in reach where the
+    // word being typed starts, for the buffer without that word.
+    struct BareAnswer {
+        std::string checkedText;
+        size_t wordStart = 0;
+        std::vector<std::string> names;
+    };
+    mutable std::optional<BareAnswer> bareAnswer;
     std::unordered_map<std::string, std::vector<std::string>> documentation;
 };
 
@@ -877,6 +902,42 @@ auto definitionLocation(const Document& document, SourceLocation location,
 // `location` moved onto `name` when it points at the keyword before it: a
 // function is recorded at its `let`/`foul` in some declaration shapes, so a
 // definition range of the name's length covered `let ` instead of the name.
+// Where the record declared at `record` declares `field` (`  name : Type`):
+// the field's own line, up to the record's `end`.
+auto fieldDeclaration(const std::string& source, SourceLocation record, const std::string& field)
+    -> std::optional<SourceLocation> {
+    if (record.line < 1) return std::nullopt;
+    size_t lineStart = 0;
+    for (int line = 1; line < record.line; ++line) {
+        const auto newline = source.find('\n', lineStart);
+        if (newline == std::string::npos) return std::nullopt;
+        lineStart = newline + 1;
+    }
+    // Past the `record` line itself.
+    if (const auto newline = source.find('\n', lineStart); newline != std::string::npos)
+        lineStart = newline + 1;
+    else
+        return std::nullopt;
+    for (int line = record.line + 1; lineStart < source.size(); ++line) {
+        const auto newline = source.find('\n', lineStart);
+        const auto end = newline == std::string::npos ? source.size() : newline;
+        auto text = std::string_view(source).substr(lineStart, end - lineStart);
+        const auto indent = text.find_first_not_of(" \t");
+        if (indent != std::string_view::npos) {
+            const auto rest = text.substr(indent);
+            if (rest == "end" || rest.starts_with("end ")) return std::nullopt;
+            if (rest.starts_with(field)) {
+                const auto after = rest.substr(field.size()).find_first_not_of(" \t");
+                if (after != std::string_view::npos && rest[field.size() + after] == ':')
+                    return SourceLocation{record.file, line, static_cast<int>(indent) + 1};
+            }
+        }
+        if (newline == std::string::npos) break;
+        lineStart = newline + 1;
+    }
+    return std::nullopt;
+}
+
 auto atDeclaredName(const std::string& source, SourceLocation location,
                     const std::string& name) -> SourceLocation {
     if (location.line < 1 || location.column < 1 || name.empty()) return location;
@@ -1950,11 +2011,18 @@ auto receiverQualifier(const Document& document, const DotReceiver& receiver,
     // The call's `(` first: for a chain that is where the OUTERMOST expression
     // is recorded, and its type is the one being completed against. The
     // receiver's start answers the plain `identifier.` case.
-    if (receiver.callOpen)
+    if (receiver.callOpen) {
         if (auto qualifier = spanAt(receiver.callOpen); !qualifier.empty())
             return qualifier;
-    if (auto qualifier = spanAt(receiver.start); !qualifier.empty())
+        // A bare call (`words()`) is recorded where its name is.
+        if (semantic::bareCallReceiver(document.text, receiver))
+            if (auto qualifier = spanAt(receiver.start); !qualifier.empty()) return qualifier;
+    } else if (auto qualifier = receiver.member ? std::string{} : spanAt(receiver.start);
+               !qualifier.empty()) {
+        // Only a receiver that is ONE expression is recorded at its start:
+        // a chain's start is its root's, whose type is not the chain's.
         return qualifier;
+    }
 
 
     const auto text = document.text.substr(receiver.start,
@@ -2071,6 +2139,56 @@ void enrichRecordSymbols(FileState& state,
     });
 }
 
+// What navigation reads of a checked document, from the checker: where the
+// local each name use means is bound, the places locals and fields are
+// declared, and the record each field read reads. `replace` when the
+// analysis is a good one; a buffer that did not parse keeps the last.
+void recordNavigation(Document& document, const semantic::Analyzer& analyzer,
+                      const ast::Program& program, bool replace) {
+    // Locals, as the checker bound them: a use to its binding, and the
+    // bindings themselves, each at the name as written.
+    if (replace) {
+        document.localDefinitions.clear();
+        document.bindingSites.clear();
+        document.fieldReads.clear();
+    }
+    for (const auto& [use, bound] : analyzer.checker().localDefinitions()) {
+        const auto* identifier = use ? std::get_if<ast::Identifier>(&use->kind) : nullptr;
+        if (!identifier || use->location.file != document.path) continue;
+        const auto declared = atDeclaredName(document.text, bound, identifier->name);
+        document.localDefinitions.insert_or_assign(
+            Document::receiverKey(static_cast<unsigned int>(use->location.line),
+                                  static_cast<unsigned int>(use->location.column)),
+            std::pair{declared.line, declared.column});
+    }
+    // A record's field declarations are their own definitions.
+    ast::forEachDeclared<ast::RecordDef>(program, [&](const ast::RecordDef& record) {
+        if (record.location.file != document.path) return;
+        for (const auto& field : record.fields)
+            if (const auto at = fieldDeclaration(document.text, record.location, field.name))
+                document.bindingSites.insert(
+                    Document::receiverKey(static_cast<unsigned int>(at->line),
+                                          static_cast<unsigned int>(at->column)));
+    });
+    for (const auto& [expression, decided] : analyzer.decidedCalls()) {
+        const auto* call = expression ? std::get_if<ast::MethodCall>(&expression->kind) : nullptr;
+        if (!call || decided.kind != semantic::CallKind::FieldRead ||
+            call->methodLocation.line == 0 || expression->location.file != document.path)
+            continue;
+        document.fieldReads.insert_or_assign(
+            Document::receiverKey(static_cast<unsigned int>(call->methodLocation.line),
+                                  static_cast<unsigned int>(call->methodLocation.column)),
+            decided.owner);
+    }
+    for (const auto& [name, where] : analyzer.checker().bindingSites()) {
+        if (where.file != document.path) continue;
+        const auto declared = atDeclaredName(document.text, where, name);
+        document.bindingSites.insert(
+            Document::receiverKey(static_cast<unsigned int>(declared.line),
+                                  static_cast<unsigned int>(declared.column)));
+    }
+}
+
 class Server {
 public:
     Server(std::istream& input, std::ostream& output,
@@ -2156,6 +2274,172 @@ private:
     auto projectModuleRoots(const std::string& path) const
         -> std::vector<std::string> {
         return withoutStandardLibraryRoots(documentModuleRoots(path));
+    }
+
+    // `text`, read as `file`, checked the way the document itself is
+    // (publishDiagnostics): with its companions, the project's modules merged
+    // in, and its names recorded. What completion asks about a buffer the
+    // editor holds mid-edit, so that its answer is the build's.
+    auto checkAsDocument(const Document& document, const std::string& file,
+                         const std::string& text) -> std::optional<semantic::CheckedSource> {
+        m_recoveryDb.setImportedInterfaces(&m_interfaces);
+        m_recoveryDb.setModuleRoots(documentModuleRoots(document.path));
+        m_recoveryDb.updateFile(file, text, document.companions);
+        auto* state = m_recoveryDb.fileState(file);
+        if (!state) return std::nullopt;
+        auto retained = std::make_shared<ProjectModules>();
+        mergeProjectModules(state->ast, file, projectModuleRoots(file), &m_interfaces, *retained);
+        auto analyzer = std::make_shared<semantic::Analyzer>(&m_interfaces);
+        std::vector<std::string> entryFiles{file};
+        entryFiles.insert(entryFiles.end(), document.companions.begin(),
+                          document.companions.end());
+        analyzer->setEntryFiles(std::move(entryFiles));
+        analyzer->setIndexesNames(true);
+        analyzer->analyze(state->ast);
+        // The program is the workspace's, which outlives the answer.
+        return semantic::CheckedSource{
+            std::shared_ptr<ast::Program>(std::shared_ptr<void>{}, &state->ast), analyzer,
+            std::move(retained)};
+    }
+
+    // Member completion at `position` when it follows `receiver.`: the
+    // checker's own answer (Analyzer::memberCompletions) for the receiver's
+    // type where it is written. Nothing is matched by name: a function is
+    // offered exactly when a check of the call there would accept it, so an
+    // out-of-scope module's function (`"s".sha256` without `using Digest`)
+    // and another link's members (`layer.biases.` offering Layer's fields)
+    // are not. Empty when the position is not after a value's dot.
+    auto memberCompletionsAt(const Document& document, const ::lsp::Position& position)
+        -> std::optional<::lsp::Array<::lsp::CompletionItem>> {
+        const auto& text = document.text;
+        size_t lineStart = 0;
+        for (unsigned int line = 0; line < position.line; ++line) {
+            const auto newline = text.find('\n', lineStart);
+            if (newline == std::string::npos) return std::nullopt;
+            lineStart = newline + 1;
+        }
+        const auto lineEndPosition = text.find('\n', lineStart);
+        const auto lineEnd = lineEndPosition == std::string::npos ? text.size() : lineEndPosition;
+        const auto cursor = byteOffsetForUtf16Column(text, lineStart, lineEnd, position.character);
+        const auto receiver = scanDotReceiver(text, cursor);
+        if (!receiver.valid) return std::nullopt;
+        // A path of capitalized names is a namespace (`IO.`, `Web.Server.`).
+        // Spaced as written: a chain may continue across lines.
+        auto written = text.substr(receiver.start, receiver.dot - receiver.start);
+        std::erase_if(written, [](char c) { return std::isspace(static_cast<unsigned char>(c)); });
+        const bool namespacePath =
+            !written.empty() && std::isupper(static_cast<unsigned char>(written.front())) &&
+            std::all_of(written.begin(), written.end(), [](char c) {
+                return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.';
+            }) &&
+            [&] {
+                for (size_t at = 0; at < written.size(); ++at)
+                    if ((at == 0 || written[at - 1] == '.') &&
+                        !std::isupper(static_cast<unsigned char>(written[at])))
+                        return false;
+                return true;
+            }();
+        if (namespacePath) return std::nullopt;
+        auto typed = text.substr(receiver.dot + 1, cursor - receiver.dot - 1);
+        typed.erase(0, typed.find_first_not_of(" \t\r\n"));
+        if (typed.find_first_of(" \t\r\n") != std::string::npos) typed.clear();
+        // `xs.push!|`: the bang rebinds the receiver; the name is `push`.
+        if (!typed.empty() && typed.back() == '!') typed.pop_back();
+        const auto withPrefix = [&](const std::vector<::lsp::CompletionItem>& all) {
+            ::lsp::Array<::lsp::CompletionItem> items;
+            for (const auto& item : all)
+                if (item.filterText.value_or(item.label).starts_with(typed)) items.push_back(item);
+            return items;
+        };
+        auto checkedText = text;
+        checkedText.erase(receiver.dot, cursor - receiver.dot);
+        if (const auto& cached = document.memberAnswer;
+            cached && cached->receiverStart == receiver.start &&
+            cached->checkedText == checkedText)
+            return withPrefix(cached->items);
+
+        const semantic::CompletionChecker check =
+            [&](const std::string& file, const std::string& source) {
+                return checkAsDocument(document, file, source);
+            };
+        const auto checked =
+            semantic::checkedReceiver(check, text, document.path, receiver, cursor);
+        if (!checked) return std::nullopt;
+        std::vector<::lsp::CompletionItem> all;
+        if (checked->expression) {
+            auto& analyzer = *checked->checked.analyzer;
+            const auto receiverType = semantic::receiverTypeOf(analyzer, checked->expression);
+            for (auto& member : analyzer.memberCompletions(receiverType, *checked->expression)) {
+                const auto& signature = member.signature;
+                const auto owner = !signature.makeModule.empty() ? signature.makeModule
+                                                                 : signature.declaringModule;
+                auto detail = member.field
+                    ? member.name + " : " + semantic::typeToString(member.result)
+                    : analyzer.checker().displaySignature(member.name, signature);
+                // Labelled as the declaration reads: `foul slot later`.
+                const auto label = (signature.isFoul && !member.field ? "foul " : std::string{}) +
+                                   (member.slot ? "slot " : "") + member.name;
+                all.push_back(::lsp::CompletionItem{
+                    .label = label,
+                    .labelDetails = ::lsp::CompletionItemLabelDetails{
+                        .detail = " : " + semantic::typeToString(member.result),
+                        .description = owner.empty() ? std::optional<::lsp::String>{}
+                                                     : std::optional<::lsp::String>{owner},
+                    },
+                    .kind = member.field ? ::lsp::CompletionItemKind::Field
+                                         : ::lsp::CompletionItemKind::Method,
+                    .detail = std::move(detail),
+                    .sortText = (member.field ? "0" : "1") + member.name,
+                    .filterText = member.name,
+                    .insertText = member.name,
+                });
+            }
+        }
+        document.memberAnswer = Document::MemberAnswer{std::move(checkedText), receiver.start,
+                                                       std::move(all)};
+        return withPrefix(document.memberAnswer->items);
+    }
+
+    // The names a bare word at `cursor` may complete to: the checker's answer
+    // (Analyzer::bareCompletions) where the word starts, for the buffer as it
+    // is. Null when the buffer could not be checked.
+    auto bareCompletionsAt(const Document& document, size_t cursor)
+        -> std::optional<std::vector<std::string>> {
+        const auto& text = document.text;
+        size_t wordStart = std::min(cursor, text.size());
+        while (wordStart > 0 && (std::isalnum(static_cast<unsigned char>(text[wordStart - 1])) ||
+                                 text[wordStart - 1] == '_' || text[wordStart - 1] == '?' ||
+                                 text[wordStart - 1] == '!'))
+            --wordStart;
+        auto checkedText = text;
+        checkedText.erase(wordStart, cursor - wordStart);
+        if (const auto& cached = document.bareAnswer;
+            cached && cached->wordStart == wordStart && cached->checkedText == checkedText)
+            return cached->names;
+
+        auto checked = checkAsDocument(document, document.path, text);
+        if (!checked) return std::nullopt;
+        int line = 1;
+        size_t lineStart = 0;
+        for (size_t i = 0; i < wordStart; ++i)
+            if (text[i] == '\n') { ++line; lineStart = i + 1; }
+        const int column = static_cast<int>(wordStart - lineStart) + 1;
+        // The expression the word is, or else the nearest one before it: the
+        // scope there is the one the word is written in.
+        const ast::Expr* at = nullptr;
+        for (const auto& [expression, _] : checked->analyzer->checker().scopeNames()) {
+            if (!expression || expression->location.file != document.path) continue;
+            const auto& location = expression->location;
+            if (location.line > line || (location.line == line && location.column > column))
+                continue;
+            if (!at || location.line > at->location.line ||
+                (location.line == at->location.line && location.column > at->location.column))
+                at = expression;
+        }
+        if (!at) return std::nullopt;
+        auto names = checked->analyzer->bareCompletions(*at);
+        document.bareAnswer = Document::BareAnswer{std::move(checkedText), wordStart, names};
+        return names;
     }
 
     void verifyInitialized() const {
@@ -2422,6 +2706,7 @@ private:
             for (const auto& module : analyzer.referencedModules()) m_db.ensureModule(module);
             enrichFunctionSymbols(*state, analyzer);
             enrichRecordSymbols(*state, analyzer);
+            recordNavigation(document, analyzer, state->ast, analyzed);
             document.hoverEntries.clear();
             document.selectedCallEntries.clear();
             if (analyzed) {
@@ -2501,6 +2786,10 @@ private:
                                 .detail = analyzer.displaySignature(
                                     variable->name, display),
                                 .completeDetail = true,
+                                // A `let` in a body binds a local: what it is
+                                // is this, not a same-named declaration's
+                                // (`let name` took Culture's prose).
+                                .localBinding = true,
                             });
                         }
                     }
@@ -2801,6 +3090,13 @@ private:
                                            params.position.character))
             return capabilityCompletions(m_db, m_interfaces,
                                          found->second.path, *target);
+
+        // After `receiver.`, what the checker accepts on the receiver's type
+        // there. A module or type path (`IO.`, `Web.Server.`) names a
+        // namespace, not a value, and is completed from its declarations
+        // below.
+        if (auto members = memberCompletionsAt(found->second, params.position))
+            return std::move(*members);
 
         // Inside a typed record literal only fields are legal. Generic lexical
         // completion here floods `New { ... }` with every function, module and
@@ -3144,13 +3440,36 @@ private:
                 query.rewriteTo = receiver;
             }
         }
-        auto matches = rewriteCompletions(
-            m_db.completionsAt(found->second.path, params.position.line + 1,
-                               completionByteColumn(found->second.text,
-                                                    params.position.line,
-                                                    params.position.character),
-                               query.dbQuery),
-            query.rewriteFrom, query.rewriteTo);
+        // A bare name: what the checker says a use of one reaches here.
+        std::optional<std::vector<std::string>> bare;
+        if (query.dbQuery.find('.') == std::string::npos) {
+            const auto& text = found->second.text;
+            size_t lineStart = 0;
+            for (unsigned int line = 0; line < params.position.line; ++line) {
+                const auto newline = text.find('\n', lineStart);
+                if (newline == std::string::npos) break;
+                lineStart = newline + 1;
+            }
+            const auto lineEndPosition = text.find('\n', lineStart);
+            const auto lineEnd =
+                lineEndPosition == std::string::npos ? text.size() : lineEndPosition;
+            if (auto names = bareCompletionsAt(
+                    found->second,
+                    byteOffsetForUtf16Column(text, lineStart, lineEnd, params.position.character))) {
+                std::erase_if(*names, [&](const std::string& name) {
+                    return !name.starts_with(query.dbQuery);
+                });
+                bare = std::move(names);
+            }
+        }
+        auto matches = bare ? std::move(*bare)
+                            : rewriteCompletions(
+                                  m_db.completionsAt(found->second.path, params.position.line + 1,
+                                                     completionByteColumn(found->second.text,
+                                                                          params.position.line,
+                                                                          params.position.character),
+                                                     query.dbQuery),
+                                  query.rewriteFrom, query.rewriteTo);
         ::lsp::Array<::lsp::CompletionItem> result;
         for (auto& match : matches) {
             const auto separator = match.rfind('.');
@@ -4146,6 +4465,43 @@ private:
         if (word.text.empty()) return {};
         const auto qualifier = moduleQualifierBeforeWord(
             document.text, params.position.line, word.byteColumn);
+        // A local, as the checker bound it: a use leads to its binding, and a
+        // binding is its own definition. By name a `let offset` led to some
+        // stdlib record's `offset` field.
+        if (qualifier.empty()) {
+            const auto at = Document::receiverKey(params.position.line + 1, word.byteColumn);
+            std::optional<std::pair<int, int>> bound;
+            if (const auto use = document.localDefinitions.find(at);
+                use != document.localDefinitions.end())
+                bound = use->second;
+            else if (document.bindingSites.contains(at))
+                bound = std::pair{static_cast<int>(params.position.line + 1),
+                                  static_cast<int>(word.byteColumn)};
+            if (bound) {
+                SourceLocation binding{document.path, bound->first, bound->second};
+                if (auto location = definitionLocation(document, binding, word.text.size(),
+                                                       &document.text))
+                    return ::lsp::Definition{std::move(*location)};
+                return {};
+            }
+            // A field read: the field's line in the record the checker read
+            // it of.
+            if (const auto read = document.fieldReads.find(at); read != document.fieldReads.end()) {
+                const auto dot = read->second.rfind('.');
+                const auto* record = dot == std::string::npos
+                    ? m_db.findSymbol(read->second, document.path)
+                    : m_db.symbolInModule(read->second.substr(0, dot), read->second.substr(dot + 1));
+                if (record && record->kind == semantic::SymbolKind::Record &&
+                    !record->definition.file.empty()) {
+                    const auto* state = m_db.fileState(std::string(record->definition.file));
+                    if (state)
+                        if (auto field = fieldDeclaration(state->source, record->definition, word.text))
+                            if (auto location = definitionLocation(document, *field, word.text.size(),
+                                                                   &state->source))
+                                return ::lsp::Definition{std::move(*location)};
+                }
+            }
+        }
         const semantic::SymbolInfo* symbol = m_db.symbolAt(
             document.path, params.position.line + 1, word.byteColumn);
         // The checker's answer for this name, when the index has one; the
@@ -4209,6 +4565,14 @@ private:
         const auto* state = m_db.fileState(
             std::string(symbol->definition.file));
         const std::string* source = state ? &state->source : nullptr;
+        // A record answers for its fields: the field's own line, in that
+        // record's declaration.
+        if (symbol->kind == semantic::SymbolKind::Record && symbol->name != word.text && source &&
+            std::any_of(symbol->fields.begin(), symbol->fields.end(),
+                        [&](const auto& field) { return field.first == word.text; }))
+            if (auto field = fieldDeclaration(*source, symbol->definition, word.text))
+                if (auto location = definitionLocation(document, *field, word.text.size(), source))
+                    return ::lsp::Definition{std::move(*location)};
         const auto declared = source
             ? atDeclaredName(*source, symbol->definition, symbol->name)
             : symbol->definition;
@@ -4494,6 +4858,9 @@ private:
         m_standardParameterNames;
     Workspace m_db;
     Workspace m_referenceDb;
+    // Where a buffer mid-edit is checked for completion (checkAsDocument),
+    // apart from the document's own last good check.
+    Workspace m_recoveryDb;
     std::unordered_map<std::string, Document> m_documents;
     // The sibling modules merged into each document's AST. Keyed by document
     // because the merged items borrow their `location.file` from these

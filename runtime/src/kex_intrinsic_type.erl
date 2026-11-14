@@ -242,10 +242,16 @@ construct_fields(Tag, Name, [{Field, Type, Optional, _HasDefault, Default} | Res
         {ok, Value} ->
             case accepts(Type, Value) of
                 true -> construct_fields(Tag, Name, Rest, Values, [Value | Acc]);
-                false ->
-                    {'Error', <<"Field ", (quoted(Field))/binary, " of ", Name/binary,
-                                " expects ", (type_name(Type))/binary, ", got ",
-                                (type_name(type_of(Value)))/binary>>}
+                %% A present value for an optional field is that value: decoded
+                %% JSON has no `Just` to write (kexhq/kex#561).
+                false when Optional, element(2, Type) =:= <<"Option">>,
+                           element(3, Type) =/= [] ->
+                    [Inner | _] = element(3, Type),
+                    case accepts(Inner, Value) of
+                        true -> construct_fields(Tag, Name, Rest, Values, [{'Just', Value} | Acc]);
+                        false -> field_mismatch(Field, Name, Type, Value)
+                    end;
+                false -> field_mismatch(Field, Name, Type, Value)
             end;
         error when is_function(Default, 0) ->
             construct_fields(Tag, Name, Rest, Values, [Default() | Acc]);
@@ -255,6 +261,11 @@ construct_fields(Tag, Name, [{Field, Type, Optional, _HasDefault, Default} | Res
             {'Error', <<"Missing field ", (quoted(Field))/binary, " for ",
                         Name/binary>>}
     end.
+
+field_mismatch(Field, Name, Type, Value) ->
+    {'Error', <<"Field ", (quoted(Field))/binary, " of ", Name/binary,
+                " expects ", (type_name(Type))/binary, ", got ",
+                (type_name(type_of(Value)))/binary>>}.
 
 %% constructVariant/3 — the constructor Ctor of the sum type named Name,
 %% applied to Args (kexhq/kex#509). Variant tags are bare at run time.

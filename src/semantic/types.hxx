@@ -298,6 +298,8 @@ auto isConcreteValue(const TypePtr& type) -> bool;
 // A type a contract holds a value to: a concrete one, or a bare trait bound
 // (`area :> Float` takes any Float, never a String).
 auto isConcreteOrBound(const TypePtr& type) -> bool;
+// The id of a type variable, or none for any other type.
+auto typeVariableId(const TypePtr& type) -> std::optional<int>;
 
 // How a name was bound: `var` (so `=` and `!` may rebind it) or not, and
 // whether the language bound it (`new`, `from`) rather than the program,
@@ -305,6 +307,11 @@ auto isConcreteOrBound(const TypePtr& type) -> bool;
 struct VarBinding {
     bool isVar = false;
     bool implicit = false;
+    // Where the name is bound (1-based; 0 when the binding was not written,
+    // as a parameter's), for tooling: a local is bound in the file it is
+    // used in.
+    int line = 0;
+    int column = 0;
 };
 
 class TypeEnv {

@@ -4594,8 +4594,13 @@ auto Parser::hasDoBeforeNewline() const -> bool {
     case TokenType::RParen:
     case TokenType::RBracket:
     case TokenType::RBrace:
-      if (depth > 0)
-        depth--;
+      // Closing a bracket opened before this point ends the expression the
+      // call would be in: a `do` past it is some outer call's. In `[("C", k
+      // - 1)].each do`, the `do` is `each`'s, and `k - 1` is no call `k(-1)`
+      // taking it (kexhq/kex#613).
+      if (depth == 0)
+        return false;
+      depth--;
       break;
     case TokenType::Do:
       if (depth == 0)

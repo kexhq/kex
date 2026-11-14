@@ -26,6 +26,10 @@ inline auto moduleAtom(const std::string& path) -> std::string { return kRuntime
 inline const std::string kEachFunction = "each";
 inline const std::string kTimesFunction = "times";
 
+// `value.try`: a postfix keyword, not a function, offered after a dot where
+// it applies (TypeChecker::memberCompletions).
+inline const std::string kTryKeyword = "try";
+
 // `Kex.embed("file")`: the file's contents, read while compiling
 // (compiled/expand.cxx folds it before checking).
 inline const std::string kEmbedFunction = "embed";

@@ -1,0 +1,16 @@
+# kex: check-only
+# A function whose receiver is known, and is not this value's type, is not
+# the one called, whatever it left unannotated. Mock's `read : Mock.Files ->
+# ? -> ...` made `layer.read(1)` on a record check clean, and fail at run
+# time (found by completion offering `read` on any value once it asked the
+# checker).
+
+record Layer do
+  biases : [Float]
+end
+
+main do
+  let layer = Layer { biases: [0.5] }
+  IO.printLine(layer.read(1))
+  IO.printLine(layer.min(2))
+end

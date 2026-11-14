@@ -38,6 +38,17 @@ public:
     // The checker whose answers the analysis holds, read directly rather than
     // through a forward per answer.
     auto checker() const -> const TypeChecker& { return m_checker; }
+    // What completion may offer after `receiver` at `at` (TypeChecker::
+    // memberCompletions): probes the checker, so not const.
+    auto memberCompletions(const TypePtr& receiver, const ast::Expr& at)
+        -> std::vector<TypeChecker::MemberCompletion> {
+        return m_checker.memberCompletions(receiver, at);
+    }
+    // What completion may offer for a bare name at `at` (TypeChecker::
+    // bareCompletions).
+    auto bareCompletions(const ast::Expr& at) -> std::vector<std::string> {
+        return m_checker.bareCompletions(at);
+    }
 
     // The program's own files, the entry first (then a spec's base), as
     // opposed to the dependencies merged into it: a `using` of a module
