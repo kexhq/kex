@@ -461,7 +461,8 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
             auto declared = resolveTypeExpr(**lam->returnAnnotation, genericVars);
             if (!std::holds_alternative<UnknownType>(resultType->kind) &&
                 !std::holds_alternative<TypeVar>(resultType->kind) &&
-                !argMatchesParam(resultType, declared))
+                !argMatchesParam(resultType, declared) &&
+                !wrapsDeclaredSuccess(lam->body, declared, resultType))
                 typeMismatch(blockExpr.location, declared, resultType);
             resultType = declared;
         }
@@ -2200,6 +2201,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // agree on: `if a ... x = 1 elif b ... opt.map(f) end`.
                 if (auto joined = siblingConstructorJoin(rt, elifType)) {
                     branchType = joined;
+                } else if (auto known = moreKnownBranch(rt, elifType)) {
+                    branchType = known;
                 } else if (!rtPermissive && !rePermissive && bothFit(rt, elifType)) {
                     fittedExpected = true;
                 } else if (node.elseBody && !rtPermissive && !rePermissive &&
@@ -2220,6 +2223,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                       std::holds_alternative<VoidType>(elseType->kind);
                 if (auto joined = siblingConstructorJoin(rt, elseType)) {
                     branchType = joined;
+                } else if (auto known = moreKnownBranch(rt, elseType)) {
+                    branchType = known;
                 } else if (!thenPermissive && !elsePermissive &&
                            bothFit(rt, elseType)) {
                     fittedExpected = true;
@@ -2270,6 +2275,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                             std::holds_alternative<UnknownType>(t->kind);
                         if (auto joined = siblingConstructorJoin(rt, t)) {
                             resultType = joined;
+                        } else if (auto known = moreKnownBranch(rt, t)) {
+                            resultType = known;
                         } else if (!armPermissive && expected &&
                                    argMatchesParam(t, expected) &&
                                    argMatchesParam(rt, expected)) {
@@ -2368,7 +2375,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     resolveTypeExpr(**node.returnAnnotation, genericVars);
                 if (!std::holds_alternative<UnknownType>(resultType->kind) &&
                     !std::holds_alternative<TypeVar>(resultType->kind) &&
-                    !argMatchesParam(resultType, declared))
+                    !argMatchesParam(resultType, declared) &&
+                    !wrapsDeclaredSuccess(node.body, declared, resultType))
                     typeMismatch(expr.location, declared, resultType);
                 resultType = declared;
             }
@@ -7423,6 +7431,17 @@ auto TypeChecker::unionArgumentCovered(const std::vector<const Signature*>& cand
         return oneResult ? results.front() : Type::unknown();
     }
     return std::nullopt;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::moreKnownBranch(const TypePtr& held, const TypePtr& next) const -> TypePtr {
+    const auto heldType = resolvedThroughout(held);
+    const auto nextType = resolvedThroughout(next);
+    if (!containsOpenType(heldType) || containsOpenType(nextType)) return nullptr;
+    return argMatchesParam(nextType, heldType) ? nextType : nullptr;
 }
 
 } // namespace kex::semantic

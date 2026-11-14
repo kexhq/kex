@@ -938,6 +938,14 @@ written in Kex down to recursion; and the reassigned-variable threading, so
        range pattern, leave it open. Two stdlib matches were incomplete by
        type (Data.Queue's `dequeue`, JSON's one-key unwrap) and say so now
        (`spec/error_match_nested_exhaustive`).
+     - #561: `Type.construct` takes a present value for an optional field
+       as that value (`Just(3)` from JSON's `3`), on both backends
+       (`spec/type_construct_optional_field`).
+     - #613: `[("C", k - 273.15)].each do` parses: a `do` past a bracket
+       the expression is inside belongs to an outer call, so `k - 1` is no
+       command call `k(-1)` taking it (`spec/do_block_receiver_with_subtraction`).
+     - #618, #615 (an `if let` binding inside a loop on BEAM) were fixed by
+       the loop lowering above; checked again on both backends.
      - #647: a union argument reaches overloads that cover it member by
        member; the value picks the clause, the result is the one they share
        (`spec/overload_union_argument`).
@@ -970,8 +978,7 @@ written in Kex down to recursion; and the reassigned-variable threading, so
      handlers from pure configuration, `command(run: ~addNote)`,
      `get("/", ~home)`; telling those from `xs.map(~shout)` needs effect
      types, #142), #644 for a signature written apart (`f :> A -> A`).
-     Backend bugs: #639, #635, #623, #618, #615, #614, #610, #613 (parser),
-     #654 (CLI), #575 (REPL), #561.
+     Backend bugs: #639, #635, #623, #614, #610, #654 (CLI), #575 (REPL).
 
 ## Why
 

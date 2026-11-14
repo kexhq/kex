@@ -2,7 +2,7 @@ using Tey.Manifest, only: [Plugin]
 using Tey.Plugin, only: [Binding]
 
 describe("Tey.Plugin approvals") do
-  let provider(programName: String) -> Plugin do
+  let provider(programName: String) -> Plugin? do
     let text = `
       package "provider" do
         plugin namespace: "github", tey: ">= 0.6" do
@@ -13,11 +13,14 @@ describe("Tey.Plugin approvals") do
         end
       end
     `.substitute({"$PROGRAM$": programName})
-    return Tey.Manifest.read(text).try.plugins.first.try
+    return match Tey.Manifest.read(text) do
+      Ok(manifest) => manifest.plugins.first
+      Error(_) => None
+    end
   end
 
   it("accepts exactly the approved interface fingerprint") do
-    let plugin = provider("git")
+    let plugin = provider("git").try
     assert(plugin.pluginCapabilities.first.try.capabilityValues == ["git"])
     let approvals: {String: String} = {}.put("github", Tey.Plugin.fingerprint(plugin))
     assert(Tey.Plugin.approved?(plugin, approvals))
@@ -25,8 +28,8 @@ describe("Tey.Plugin approvals") do
   end
 
   it("invalidates approval when requested resources change") do
-    let old = provider("git")
-    let changed = provider("curl")
+    let old = provider("git").try
+    let changed = provider("curl").try
     let approvals: {String: String} = {}.put("github", Tey.Plugin.fingerprint(old))
     assert(!Tey.Plugin.approved?(changed, approvals))
     assert(Tey.Plugin.missingApprovals([changed], approvals).count == 1)

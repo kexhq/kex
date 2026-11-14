@@ -4598,6 +4598,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             !std::holds_alternative<UnknownType>(bodyType->kind) &&
             !std::holds_alternative<TypeVar>(bodyType->kind) &&
             !argMatchesParam(bodyType, effectiveReturnType) &&
+            !wrapsDeclaredSuccess(clause.body, effectiveReturnType, bodyType) &&
             !servingTransitionMatches && !servingCastTransitionMatches &&
             // `foul first() -> BookId = 1`: a literal result enters the
             // distinct type it is declared to return.
@@ -6508,6 +6509,44 @@ auto TypeChecker::recordFieldType(const std::string& record, const std::string& 
     std::vector<TypePtr> named;
     for (const auto& param : typeParams) named.push_back(Type::named(param));
     return substituteInterfaceGenerics(recordFieldType(record, field), named);
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// A function declared to return a Result or an Optional answers its success
+// by the value its body ends in: `-> Integer or! String` ending in
+// `parsed + 1` is `Ok(parsed + 1)`, `-> String?` ending in a String is
+// `Just` of it, as a function whose result is inferred from its `.try`s is.
+// A failure leaves through a `.try`, so a body need not spell the success
+// it did not fail at.
+auto TypeChecker::wrapsDeclaredSuccess(const std::vector<ast::ExprPtr>& exprs,
+                                       const TypePtr& declared, const TypePtr& body) -> bool {
+    if (!declared || !body || exprs.empty() || !exprs.back()) return false;
+    const auto* last = exprs.back().get();
+    // A `return` says what it returns; it is not the value the body ends in.
+    if (std::holds_alternative<ast::ReturnExpr>(last->kind)) return false;
+    // What the declared result holds on success, and its constructor: a
+    // Result's `Ok`, an Optional's `Just`.
+    const auto promised = resolve(declared);
+    TypePtr success;
+    std::string wrapper;
+    if (const auto* result = std::get_if<NamedType>(&promised->kind);
+        result && result->name == names::kResultType && result->typeArgs.size() == 2) {
+        success = result->typeArgs[0];
+        wrapper = "Ok";
+    } else if (const auto* optional = std::get_if<OptionalType>(&promised->kind)) {
+        success = optional->inner;
+        wrapper = "Just";
+    } else {
+        return false;
+    }
+    // A body ending in the holder itself answers as it is.
+    const auto produced = resolve(body);
+    if (holdsFailure(produced) || !argMatchesParam(produced, resolve(success))) return false;
+    m_successWrappers[last] = wrapper;
+    return true;
 }
 
 } // namespace kex::semantic

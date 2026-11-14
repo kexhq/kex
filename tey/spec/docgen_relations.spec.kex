@@ -267,20 +267,20 @@ foul longModuleSource() -> String do
   return "module Long do\n${functions.join("\n\n")}\nend"
 end
 
-foul bodyOf(file: String, source: String) -> String do
+foul bodyOf(file: String, source: String) -> String? do
   let model = modelOf([parsePage(file, source)])
-  return pageBodyHtml(model.pages.first.try, model, true)
+  pageBodyHtml(model.pages.first.try, model, true)
 end
 
 describe("Tey.Docgen.Html member index") do
   it("opens a long member list with one line per member") do
-    let page = bodyOf("long.kex", longModuleSource())
+    let page = bodyOf("long.kex", longModuleSource()).try
     assert(page.contains?("<section class=\"summary\">"))
     assert(page.contains?("<a class=\"xref\" href=\"#function-long-three\"><code>three</code></a></dt><dd>Answers with three.</dd>"))
   end
 
   it("leaves a short member list as its own index") do
-    let page = bodyOf("short.kex", "module Short do\n  # Answers with one.\n  let one() -> Integer = 1\nend")
+    let page = bodyOf("short.kex", "module Short do\n  # Answers with one.\n  let one() -> Integer = 1\nend").try
     assert(!page.contains?("class=\"summary\""))
   end
 end
@@ -305,13 +305,13 @@ end
 
 describe("Tey.Docgen.Html namespaced pages") do
   it("reads the namespace module as the page introduction, not a section") do
-    let page = bodyOf("data/bag.kex", namespacedSource())
+    let page = bodyOf("data/bag.kex", namespacedSource()).try
     assert(page.contains?("<div class=\"intro\" id=\"module-data\">"))
     assert(!page.contains?("kind-module\">module</span> <code>Data</code>"))
   end
 
   it("lists the functions of the module that shares the type name first") do
-    let page = bodyOf("data/bag.kex", namespacedSource())
+    let page = bodyOf("data/bag.kex", namespacedSource()).try
     assert(page.contains?("On the <code>Bag</code> module"))
     assert(page.contains?("<code>Bag.from</code></a></dt><dd>Builds a bag.</dd>"))
   end
@@ -326,7 +326,7 @@ end
 
 describe("Tey.Docgen.Html signatures") do
   it("marks the opening name as the name, even one spelled like a keyword") do
-    let page = bodyOf("bag.kex", "module Bag do\n  # Builds a bag.\n  let from(items: [Integer]) -> Integer = 1\n\n  # Nothing.\n  let empty: Integer = 0\nend")
+    let page = bodyOf("bag.kex", "module Bag do\n  # Builds a bag.\n  let from(items: [Integer]) -> Integer = 1\n\n  # Nothing.\n  let empty: Integer = 0\nend").try
     assert(page.contains?("<span class=\"sig-line\"><span class=\"tok-fn\">from</span>"))
     assert(page.contains?("<span class=\"sig-line\"><span class=\"tok-fn\">empty</span>"))
   end
@@ -368,7 +368,7 @@ end
 describe("Tey.Docgen.Html foul functions") do
   it("says a function is foul on its card and in the index") do
     let names = ["one", "two", "three", "four", "five"].map { |n| "  # Answers with ${n}.\n  let ${n}() -> Integer = 1" }
-    let page = bodyOf("out.kex", "module Out do\n  # Writes a line.\n  foul write(text: String) -> Integer = 1\n\n${names.join("\n\n")}\nend")
+    let page = bodyOf("out.kex", "module Out do\n  # Writes a line.\n  foul write(text: String) -> Integer = 1\n\n${names.join("\n\n")}\nend").try
     assert(page.contains?("<code>write</code></a> <span class=\"tag-foul\""))
     assert(page.contains?("<a class=\"xref\" href=\"#function-out-write\"><code>write</code></a> <span class=\"tag-foul\""))
     assert(!page.contains?("<code>one</code></a> <span class=\"tag-foul\""))

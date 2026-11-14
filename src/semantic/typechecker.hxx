@@ -144,6 +144,11 @@ public:
     // What `candidates` take between them at argument `position`: the union
     // of their parameter types there, or null when one of them is open
     // (generic) there and so takes anything (kexhq/kex#643).
+    // The branch type a conditional takes when one branch is known only in
+    // part (`[]`, a list of unknown elements) and the next one fully, and
+    // fits it: the known one. Null otherwise. Kept as `[Unknown]`, `if c
+    // then [] else xs.map {..}` let every later use of the list through.
+    auto moreKnownBranch(const TypePtr& held, const TypePtr& next) const -> TypePtr;
     auto overloadsTake(const std::vector<const Signature*>& candidates,
                        std::size_t position) const -> TypePtr;
     // The result of a call none of `candidates` takes whole, when an argument
@@ -510,6 +515,10 @@ private:
     // A make function redefining what an import already gives its target
     // type at that arity (kexhq/kex#637).
     auto rejectRedefinedImports(const ast::MakeDef& def) -> void;
+    // Whether a clause declared to return a Result ends in its success value,
+    // which is then wrapped in `Ok` (recorded as the clause's success wrapper).
+    auto wrapsDeclaredSuccess(const std::vector<ast::ExprPtr>& exprs, const TypePtr& declared,
+                              const TypePtr& body) -> bool;
     auto checkTraitDef(const ast::TraitDef& def) -> void;
     auto checkTraitImplementation(const ast::MakeDef& def) -> void;
     auto checkMainBlock(const ast::MainBlock& block) -> void;

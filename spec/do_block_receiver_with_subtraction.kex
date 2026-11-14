@@ -1,0 +1,13 @@
+# A subtraction inside brackets before a `do` block: `k - 1` is no call
+# `k(-1)` taking the `do`, which belongs to the call the brackets end before
+# (kexhq/kex#613). It failed to parse with "Unexpected token: )".
+
+main do
+  let k = 21.0
+  [("C", k - 273.15)].each do |label, value|
+    IO.printLine("${label} ${value < 0.0}")
+  end
+  [(k - 1.0)].each do |value|
+    IO.printLine(value)
+  end
+end

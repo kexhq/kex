@@ -75,6 +75,20 @@ auto jsonNumber(double value) -> std::string {
     return out.str();
 }
 
+// A test body, a hook and a group are blocks, and an unrescued `.try`
+// failure inside a block does not unwind: a lambda IS a function, so it
+// RETURNS `Error(e)` (see the LambdaExpr TryException handler, which HOFs
+// depend on). The test library declares their result a Result, and an
+// `Error` is the case or group failing. Left unread, `assert(f().try == x)`
+// on a failing `f()` reported green.
+auto failOnErrorResult(const kex::interpreter::ValuePtr& outcome, const std::string& where) -> void {
+    const auto* variant = outcome ? std::get_if<kex::interpreter::VariantValue>(&outcome->data) : nullptr;
+    if (variant && variant->tag == "Error" && variant->parentType == "Result")
+        throw std::runtime_error(".try propagated out of the " + where + ": " +
+                                 (variant->args.empty() ? std::string("Error")
+                                                        : variant->args[0]->toString()));
+}
+
 } // namespace
 
 // One record per line on stdout. A line, not a document: a spec prints its own
@@ -184,7 +198,7 @@ auto Evaluator::registerTestBuiltins() -> void {
             m_testHookScopes.emplace_back();
             std::exception_ptr failure;
             try {
-                fn->native({});
+                failOnErrorResult(fn->native({}), "describe body");
             } catch (...) {
                 failure = std::current_exception();
             }
@@ -194,7 +208,7 @@ auto Evaluator::registerTestBuiltins() -> void {
                     auto* hookFn = std::get_if<FunctionValue>(&(*hook)->data);
                     if (!hookFn || !hookFn->native)
                         throw std::runtime_error("after(:all) requires a block");
-                    hookFn->native({});
+                    failOnErrorResult(hookFn->native({}), "after(:all) hook");
                 } catch (...) {
                     if (!failure) failure = std::current_exception();
                 }
@@ -229,7 +243,7 @@ auto Evaluator::registerTestBuiltins() -> void {
         if (scope == "all" && !isAfter) {
             auto* fn = std::get_if<FunctionValue>(&args[blockIndex]->data);
             if (!fn || !fn->native) throw std::runtime_error("before(:all) requires a block");
-            fn->native({});
+            failOnErrorResult(fn->native({}), "before(:all) hook");
             return Value::unit();
         }
         if (scope == "all") {
@@ -299,30 +313,12 @@ auto Evaluator::registerTestBuiltins() -> void {
                 auto* hookFn = std::get_if<FunctionValue>(&hook->data);
                 if (!hookFn || !hookFn->native)
                     throw std::runtime_error("test hook requires a block");
-                hookFn->native({});
+                failOnErrorResult(hookFn->native({}), "test hook");
             };
             try {
                 for (const auto& scope : m_testHookScopes)
                     for (const auto& hook : scope.before) run(hook);
-                auto outcome = fn->native({});
-                // An unrescued `.try` failure inside a block does not unwind
-                // — a lambda IS a function, so it RETURNS `Error(e)` (see the
-                // LambdaExpr TryException handler, which HOFs depend on). A
-                // test body is a block, so `assert(f().try == x)` on a failing
-                // `f()` left the assert unevaluated and the case reported
-                // green. Every spec assertion whose expression propagated was
-                // silently passing on both backends.
-                if (outcome) {
-                    if (const auto* variant =
-                            std::get_if<VariantValue>(&outcome->data);
-                        variant && variant->tag == "Error" &&
-                        variant->parentType == "Result")
-                        throw std::runtime_error(
-                            ".try propagated out of the test body: " +
-                            (variant->args.empty()
-                                 ? std::string("Error")
-                                 : variant->args[0]->toString()));
-                }
+                failOnErrorResult(fn->native({}), "test body");
             } catch (...) {
                 failure = std::current_exception();
             }
