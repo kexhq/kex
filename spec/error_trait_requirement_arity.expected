@@ -1,0 +1,4 @@
+spec/error_trait_requirement_arity.kex:11:35: error: `combine` expects 2 argument(s), got 1
+spec/error_trait_requirement_arity.kex:26:28: error: `combine` expects 2 argument(s), got 1
+spec/error_trait_requirement_arity.kex:27:28: error: `combine` expects 2 argument(s), got 3
+spec/error_trait_requirement_arity.kex:28:26: error: `label` expects 1 argument(s), got 2

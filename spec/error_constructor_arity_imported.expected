@@ -1,0 +1,4 @@
+spec/error_constructor_arity_imported.kex:10:11: error: `Just` takes 1 value, but got 0
+spec/error_constructor_arity_imported.kex:11:11: error: `Ok` takes 1 value, but got 2
+spec/error_constructor_arity_imported.kex:12:11: error: `Error` takes 1 value, but got 0
+spec/error_constructor_arity_imported.kex:13:11: error: `Circle` takes 1 value, but got 0
