@@ -131,13 +131,12 @@ end
 # Channel precedence, lowest first: prealpha < alpha < beta < rc < release.
 # Plain semver would order these alphabetically — putting `beta` BEFORE
 # `prealpha` — which is not what the words mean, so the ranking is explicit.
-let channelRank(channel: String) -> Integer do
-  return 1 if channel == "prealpha"
-  return 2 if channel == "alpha"
-  return 3 if channel == "beta"
-  return 4 if channel == "rc"
-  return 0
-end
+channelRank : String -> Integer
+let channelRank("prealpha") = 1
+let channelRank("alpha")    = 2
+let channelRank("beta")     = 3
+let channelRank("rc")       = 4
+let channelRank(_)          = 0
 
 # Whether a requested tag is a RANGE rather than one exact tag. `v1.2.0` is a
 # name to look up; `~> 1.2` is a question to answer against everything the

@@ -4598,7 +4598,9 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             !std::holds_alternative<UnknownType>(bodyType->kind) &&
             !std::holds_alternative<TypeVar>(bodyType->kind) &&
             !argMatchesParam(bodyType, effectiveReturnType) &&
-            !wrapsDeclaredSuccess(clause.body, effectiveReturnType, bodyType) &&
+            // Only a result the function writes: a requirement's is the trait's.
+            !(effectiveReturnType != requiredResult &&
+              wrapsDeclaredSuccess(clause.body, effectiveReturnType, bodyType)) &&
             !servingTransitionMatches && !servingCastTransitionMatches &&
             // `foul first() -> BookId = 1`: a literal result enters the
             // distinct type it is declared to return.
