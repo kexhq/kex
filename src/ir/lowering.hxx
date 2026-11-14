@@ -309,7 +309,6 @@ struct Lowering {
         const std::function<ExprPtr(std::vector<ExprPtr>)>& directCall,
         const std::string& overloadKey = {})
         -> ExprPtr;
-    auto capabilityOverloadKey(const semantic::Signature* selected) const -> std::string;
 
     auto isCapabilityModule(const std::string& name) const -> bool;
     auto checkedCallModule(const ast::MethodCall& n) const -> std::string;

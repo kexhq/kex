@@ -318,6 +318,19 @@ auto Program::selectedSignatureOf(const ast::MethodCall& call) const
     return found == m_selectedByNode.end() ? nullptr : found->second;
 }
 
+auto Program::selectedParameterSpellingOf(const ast::MethodCall& call) const
+    -> std::string {
+    const auto* selected = selectedSignatureOf(call);
+    if (!selected || selected->params.empty()) return {};
+    std::string spelled;
+    for (const auto& param : selected->params) {
+        if (!param) return {};
+        if (!spelled.empty()) spelled += ",";
+        spelled += semantic::typeToString(param);
+    }
+    return spelled;
+}
+
 namespace {
 
 // The answer of the newest program that answers for `node` (ProgramSet::push
