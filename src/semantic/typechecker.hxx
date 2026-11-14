@@ -434,6 +434,8 @@ private:
     auto preRegisterFunctionSigs(const ast::Program& program) -> void;
     auto preRegisterFunctionDef(const ast::FunctionDef& def) -> void;
     auto checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLocation loc) -> void;
+    auto checkUnionCoverage(const ast::MatchExpr& node, const TypePtr& subject,
+                            SourceLocation loc) -> void;
 
     // Defines every variable a pattern introduces (VarPattern, shorthand
     // record fields, nested constructor/list/tuple args) in the current
@@ -607,15 +609,19 @@ private:
     // in: TimeUnit)`), or null for any other parameter.
     auto namesKnownType(const std::string& name) const -> bool;
     auto typeSelectorParameter(const ast::Param& param) -> TypePtr;
-    // The result of `name` on a receiver whose type claims a trait requiring
-    // it, recorded as dispatched through that trait; null when none does.
     // A `rescue` block's arms, each in its own scope; `onArm` gets the type of
     // every arm that does not leave the enclosing function.
     auto checkRescue(const ast::RescueBlock& rescue,
                      const std::function<void(const TypePtr&)>& onArm = {}) -> void;
+    // The result of `name` on a receiver whose type claims a trait requiring
+    // it, recorded as dispatched through that trait; null when none does.
     auto claimedTraitAnswers(const std::vector<TypePtr>& argTypes,
                              const std::string& name, const ast::Expr* callExpr)
         -> TypePtr;
+    // Reports a call to a trait requirement with a count of values the
+    // requirement does not take, receiver included; true when it did.
+    auto missesRequiredArity(const Signature& required, std::size_t given,
+                             const std::string& name, SourceLocation loc) -> bool;
     // Compile-time intrinsic handlers (intrinsics.hxx; typechecker_intrinsics.cxx).
     friend auto findCompileTimeIntrinsic(std::string_view, std::size_t)
         -> const CompileTimeIntrinsic*;
@@ -1188,6 +1194,9 @@ private:
     // The complete receiver type of the current `make X do` block, used for
     // `this`, `This`, and receiver-aware body inference.
     TypePtr m_currentMakeType;
+    // The trait whose default bodies are being checked: what `this` there
+    // must answer to.
+    const TraitDef* m_currentTrait = nullptr;
     // The make target's type variables by name (the `D` of `make Qty<D>`), for the
     // length of the block: its methods' annotations name the same `D`.
     std::unordered_map<std::string, TypePtr> m_currentMakeTargetVars;

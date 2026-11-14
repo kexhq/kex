@@ -1,0 +1,16 @@
+# kex: check-only
+# A constructor takes as many values as it declares, wherever it is
+# declared: the prelude's `Just` and `Ok` too, not only a type of this
+# program. `Just()` was accepted, and failed on BEAM with a pattern mismatch
+# (found by `make metamorphic-search`).
+
+type Shape = Circle(Float) | Dot
+
+main do
+  let a = Just()
+  let b = Ok(1, 2)
+  let c = Error()
+  let d = Circle()
+  let e = Just(1)
+  IO.inspect((a, b, c, d, e))
+end

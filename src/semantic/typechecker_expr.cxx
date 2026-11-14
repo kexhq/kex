@@ -2283,6 +2283,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 popScope();
             }
             checkMatchExhaustiveness(node, expr.location);
+            checkUnionCoverage(node, subjectType, expr.location);
             if (fittedExpected) return expected;
             return resultType;
         }
@@ -4143,6 +4144,12 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // The same for a list of mixed implementers, whose element type is
         // joined to the trait as a plain name (`[Circle {..}, Rectangle {..}]`
         // is `[Shape]`).
+        // `this` in a trait's default answers to that trait's requirements.
+        if (m_currentTrait && isThisPlaceholder(receiver))
+            for (const auto& required : m_currentTrait->requiredMethods)
+                if (required.name == name &&
+                    missesRequiredArity(required, argTypes.size(), name, loc))
+                    return required.result;
         std::string receiverTrait;
         if (auto* constrained = std::get_if<ConstrainedType>(&receiver->kind))
             receiverTrait = constrained->traitName;
@@ -4171,6 +4178,10 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     viaTrait(receiverTrait);
                     return Type::unknown();
                 }
+                for (const auto& required : trait->requiredMethods)
+                    if (required.name == name &&
+                        missesRequiredArity(required, argTypes.size(), name, loc))
+                        return required.result;
             }
         if (auto* intersection =
                 std::get_if<IntersectionType>(&receiver->kind)) {
@@ -5405,6 +5416,10 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // if any (`shout : Player -> String` while `Bot` inherits it).
         const bool traitProvides = m_traits.declaresMethod(
             m_traits.implementorKey(argTypes[0]), name);
+        if (!anyFirstParamPlausible && traitProvides)
+            if (const auto [trait, required] = m_traits.requiredMethod(argTypes[0], name);
+                required && missesRequiredArity(*required, argTypes.size(), name, loc))
+                return required->result;
         const bool provableMismatch =
             !m_inMakeBlock && isFullyConcrete(headShapeOf(argTypes[0])) &&
             !receiverIsField && !traitProvides && !anyUnknownParamCandidate;
@@ -6669,6 +6684,23 @@ auto TypeChecker::claimedTraitAnswers(const std::vector<TypePtr>& argTypes,
     if (!trait || argTypes.size() != required->params.size() + 1) return nullptr;
     if (callExpr) m_decidedCalls[callExpr] = {CallKind::TraitMethod, trait->name};
     return required->result;
+}
+
+// A requirement fixes how many values its call takes, whichever type answers
+// it: `w.combine()` for `combine : This -> This` lacks its argument, and was
+// waved through to fail at run time (found by `make metamorphic-search`).
+auto TypeChecker::missesRequiredArity(const Signature& required, std::size_t given,
+                                      const std::string& name, SourceLocation loc) -> bool {
+    // `describe : () -> String` takes nothing but its receiver.
+    const bool none = required.params.size() == 1 &&
+                      typesEqual(resolve(required.params.front()), Type::unit());
+    const auto most = (none ? 0 : required.params.size()) + 1;
+    const auto least =
+        (none ? 0 : required.requiredParams.value_or(required.params.size())) + 1;
+    if (given >= least && given <= most) return false;
+    error(loc, "`" + sourceName(name) + "` expects " + std::to_string(most) +
+                   " argument(s), got " + std::to_string(given));
+    return true;
 }
 
 } // namespace kex::semantic
