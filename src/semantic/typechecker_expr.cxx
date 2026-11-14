@@ -2317,7 +2317,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
                 popScope();
             }
-            if (node.timeout && *node.timeout) inferExpr(**node.timeout);
+            // `after timeout:` waits a number of milliseconds: anything else
+            // (`Just(70)`, `"kex"`) checked clean, then BEAM raised
+            // `timeout_value` and the walker never woke.
+            if (node.timeout && *node.timeout)
+                if (const auto waited = resolve(inferExpr(**node.timeout));
+                    isConcreteValue(waited) && !argMatchesParam(waited, Type::integer()))
+                    error((*node.timeout)->location,
+                          "`after timeout:` takes milliseconds, an Integer, but got " +
+                              typeToString(waited));
             if (node.afterBody && *node.afterBody) {
                 auto after = resolve(inferExpr(**node.afterBody));
                 if (std::holds_alternative<UnknownType>(
