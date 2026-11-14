@@ -177,6 +177,11 @@ struct Type {
 };
 
 auto typeToString(const TypePtr& type) -> std::string;
+// The name a primitive kind is written with in Kex and printed with by
+// typeToString (`Void` for the unit kind), and the kind a name is. One
+// table, which the interface cache reads too rather than keeping its own.
+auto primitiveKindName(PrimitiveType::Kind kind) -> std::string_view;
+auto primitiveKindNamed(std::string_view name) -> std::optional<PrimitiveType::Kind>;
 
 // Structural traversal: the one place that knows which alternatives nest other
 // types. Spell out only the kinds a walk treats specially; hand the rest here.

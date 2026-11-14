@@ -760,6 +760,10 @@ private:
     // The `it`/`describe` call currently being dispatched — the DSL's natives
     // receive only their arguments, so the call site is handed to them here.
     SourceLocation m_lastCallLocation;
+    // While a `make` function's clauses are tried: its receiver's runtime
+    // type, which a parameter declared `This` means (kexhq/kex#639).
+    // Empty otherwise.
+    mutable std::string m_dispatchThisType;
     // While an `it` body runs: whether we are inside one at all, and where the
     // most recent `assert` was written. That assert is where a failure happened
     // as far as the file's reader is concerned — but only if it is in the spec

@@ -28,7 +28,7 @@ using namespace kex::semantic;
 constexpr int kMagic = 0x4b584946;      // "KXIF"
 // Bump with ANY shape change below: old files must read as bad-version,
 // never misparse.
-constexpr int kVersion = 4;
+constexpr int kVersion = 5;
 
 // Every tuple shape in the format, named once and shared by the encoder
 // and the decoder. Named shapes (ifaces, fn, signature, ...) go through
@@ -126,22 +126,13 @@ auto typeTuple(TypeTag tag, std::vector<TermPtr> fields) -> TermPtr {
     return checkedTuple(std::move(fields), shape.arity, shape.atom.data());
 }
 
-// The primitive kinds by wire name, for both directions.
-constexpr std::pair<PrimitiveType::Kind, std::string_view> kPrimitiveKinds[] = {
-    {PrimitiveType::Integer, "Integer"}, {PrimitiveType::Char, "Char"},
-    {PrimitiveType::String, "String"},   {PrimitiveType::Bool, "Bool"},
-    {PrimitiveType::Atom, "Atom"},       {PrimitiveType::Unit, "Unit"},
-};
-
+// A primitive kind goes on the wire by the name Kex writes it with.
 auto primitiveKindAtom(PrimitiveType::Kind kind) -> std::string {
-    for (const auto& [k, name] : kPrimitiveKinds)
-        if (k == kind) return std::string(name);
-    return "Unit";
+    return std::string(kex::semantic::primitiveKindName(kind));
 }
 
 auto primitiveKindOf(std::string_view name) -> PrimitiveType::Kind {
-    for (const auto& [kind, n] : kPrimitiveKinds)
-        if (n == name) return kind;
+    if (const auto kind = kex::semantic::primitiveKindNamed(name)) return *kind;
     throw EtfError("primitive: bad kind");
 }
 
@@ -308,9 +299,9 @@ auto typeFromSax(SaxReader& sax) -> TypePtr {
 auto signatureToTerm(const kex::semantic::Signature& sig) -> TermPtr {
     std::vector<TermPtr> params;
     for (const auto& p : sig.params) params.push_back(typeToTerm(p));
+    // How many parameters a call must pass, or `none` where none was recorded.
     TermPtr required = sig.requiredParams
-        ? Term::tuple({Term::atom("some"),
-                       Term::integer(static_cast<int64_t>(*sig.requiredParams))})
+        ? Term::integer(static_cast<int64_t>(*sig.requiredParams))
         : Term::atom("none");
     std::vector<TermPtr> names;
     for (const auto& n : sig.paramNames) names.push_back(Term::binary(n));
@@ -335,13 +326,10 @@ auto signatureFromSax(SaxReader& sax) -> kex::semantic::Signature {
     sax.endList();
     sig.result = typeFromSax(sax);
     sig.isFoul = sax.readBool();
-    if (sax.nextIsTuple()) {
-        sax.beginTuple();
+    if (sax.nextIsAtom())
         sax.readAtom();
+    else
         sig.requiredParams = static_cast<size_t>(sax.readInt());
-    } else {
-        sax.readAtom();
-    }
     const auto nameCount = sax.beginList();
     sig.paramNames.reserve(nameCount);
     for (size_t i = 0; i < nameCount; ++i)
