@@ -2066,18 +2066,26 @@ int main() {
     });
 
     describe("Semantic — Stdlib call checking", []() {
-        it("accepts min/max/sum lambdas for lists of non-numeric values", []() {
-            assertTrue(noErrors(
+        it("accepts minBy/maxBy/sum lambdas for lists of non-numeric values", []() {
+            const std::string shapes =
                 "record Shape do\n"
                 "  area : Float\n"
                 "end\n"
                 "main do\n"
-                "  let shapes = [Shape { area: 4.0 }, Shape { area: 12.5 }]\n"
-                "  let smallest = shapes.min { |shape| shape.area }\n"
-                "  let largest = shapes.max { |shape| shape.area }\n"
+                "  let shapes = [Shape { area: 4.0 }, Shape { area: 12.5 }]\n";
+            assertTrue(noErrors(shapes +
+                "  let smallest = shapes.minBy { |shape| shape.area }\n"
+                "  let largest = shapes.maxBy { |shape| shape.area }\n"
                 "  let total = shapes.sum { |shape| shape.area }\n"
                 "end\n"
             ));
+            // A list has no `min` taking a key: `min(other)` is Comparable's,
+            // whose unannotated `other` let this check clean and fail at
+            // run time on both backends.
+            assertTrue(hasError(shapes +
+                "  let smallest = shapes.min { |shape| shape.area }\n"
+                "end\n",
+                "`min` expects argument 1 to be Comparable"));
         });
 
         it("types Monoid repeat for strings, lists, and integers", []() {

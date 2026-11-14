@@ -3,6 +3,7 @@
 #include "prelude_interfaces.hxx"
 #include "prelude_loader.hxx"
 
+#include <algorithm>
 #include <filesystem>
 #include <vector>
 
@@ -34,6 +35,26 @@ auto prebuiltRuntimeBeamDir() -> std::string {
 
 auto defaultPreludeInterfaces() -> const semantic::ImportedInterfaces& {
     return preludeSemanticInterfaces(prebuiltRuntimeBeamDir());
+}
+
+auto isStandardLibrarySource(std::string_view file) -> bool {
+    static const std::vector<std::filesystem::path> roots = [] {
+        std::vector<std::filesystem::path> paths;
+        for (const auto& root : standardLibraryModuleRoots()) {
+            std::error_code ec;
+            if (auto canonical = std::filesystem::weakly_canonical(root, ec); !ec)
+                paths.push_back(std::move(canonical));
+        }
+        return paths;
+    }();
+    std::error_code ec;
+    const auto canonical = std::filesystem::weakly_canonical(std::filesystem::path(file), ec);
+    if (ec) return false;
+    return std::any_of(roots.begin(), roots.end(), [&](const std::filesystem::path& root) {
+        const auto [rootEnd, _] =
+            std::mismatch(root.begin(), root.end(), canonical.begin(), canonical.end());
+        return rootEnd == root.end();
+    });
 }
 
 } // namespace kex

@@ -106,6 +106,52 @@ public:
         return m_scopeNames;
     }
     auto scopeContexts() const -> const std::vector<ScopeContext>& { return m_scopeContexts; }
+    // Where the local each name use (an Identifier) means is bound, and the
+    // places locals are bound: what go-to-definition answers a local with.
+    auto localDefinitions() const -> const std::unordered_map<const ast::Expr*, SourceLocation>& {
+        return m_localDefinitions;
+    }
+    auto bindingSites() const -> const std::vector<std::pair<std::string, SourceLocation>>& {
+        return m_bindingSites;
+    }
+    // What a member completion may offer after a value of `receiver` written
+    // where `at` is (an expression whose names were recorded): each name the
+    // checker's tables hold for which a call there — `receiver.name(...)`,
+    // checked by checkCall under the module and `using`s in force at `at` —
+    // is accepted, with the signature it was probed at and the result the
+    // call would have. The checker's own answer, not a second lookup by name:
+    // an offer is exactly what a check of the call would accept. Runs after
+    // the check and leaves no trace of the probes (diagnostics, deferred
+    // method reports, bindings).
+    struct MemberCompletion {
+        std::string name;
+        Signature signature;
+        TypePtr result;
+        bool field = false;
+        // A serving slot, called on the Server<State> that runs it.
+        bool slot = false;
+    };
+    auto memberCompletions(const TypePtr& receiver, const ast::Expr& at)
+        -> std::vector<MemberCompletion>;
+    // What a completion of a bare name may offer where `at` is: the names
+    // bound around it and every name the checker's tables hold that a bare
+    // use there reaches (bareNameDeclared, under the module and `using`s in
+    // force at `at`). Lowercase locals first is the caller's to decide.
+    auto bareCompletions(const ast::Expr& at) -> std::vector<std::string>;
+    // What `.try` on a value of `operand` yields: an Optional's or a Result's
+    // success payload; null when `.try` does not apply.
+    auto tryPayload(const TypePtr& operand) const -> TypePtr;
+    // What `candidates` take between them at argument `position`: the union
+    // of their parameter types there, or null when one of them is open
+    // (generic) there and so takes anything (kexhq/kex#643).
+    auto overloadsTake(const std::vector<const Signature*>& candidates,
+                       std::size_t position) const -> TypePtr;
+    // The result of a call none of `candidates` takes whole, when an argument
+    // is a union each of whose members one of them takes; none otherwise
+    // (kexhq/kex#647).
+    auto unionArgumentCovered(const std::vector<const Signature*>& candidates,
+                              const std::vector<TypePtr>& argTypes) const
+        -> std::optional<TypePtr>;
     // The list patterns that take a String apart into its characters
     // (`[c | rest]` against a String): the elements bind Chars, the tail the
     // rest of the String. Pattern sugar, decided here; a String is no list.
@@ -433,8 +479,12 @@ private:
     // defined after `a`, finds a signature in m_userSignatures.
     auto preRegisterFunctionSigs(const ast::Program& program) -> void;
     auto preRegisterFunctionDef(const ast::FunctionDef& def) -> void;
-    auto checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLocation loc) -> void;
+    // Each answers whether it reached a verdict on the match (reported, or
+    // proved it whole); what neither decides is the pattern matrix's.
+    auto checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLocation loc) -> bool;
     auto checkUnionCoverage(const ast::MatchExpr& node, const TypePtr& subject,
+                            SourceLocation loc) -> bool;
+    auto checkPatternMatrix(const ast::MatchExpr& node, const TypePtr& subject,
                             SourceLocation loc) -> void;
 
     // Defines every variable a pattern introduces (VarPattern, shorthand
@@ -457,6 +507,9 @@ private:
     auto registerLocalConformances(const ast::Program& program) -> void;
     auto checkFunctionDef(const ast::FunctionDef& def) -> void;
     auto checkMakeDef(const ast::MakeDef& def) -> void;
+    // A make function redefining what an import already gives its target
+    // type at that arity (kexhq/kex#637).
+    auto rejectRedefinedImports(const ast::MakeDef& def) -> void;
     auto checkTraitDef(const ast::TraitDef& def) -> void;
     auto checkTraitImplementation(const ast::MakeDef& def) -> void;
     auto checkMainBlock(const ast::MainBlock& block) -> void;
@@ -770,6 +823,10 @@ private:
                                   const SourceLocation& at) -> bool;
     // What recordNames keeps (setRecordsNames).
     bool m_recordsNames = false;
+    // For tooling (setRecordsNames): where each local a name uses is bound,
+    // and every place one is bound.
+    std::unordered_map<const ast::Expr*, SourceLocation> m_localDefinitions;
+    std::vector<std::pair<std::string, SourceLocation>> m_bindingSites;
     std::unordered_map<const ast::Expr*, std::size_t> m_nameUses;
     std::unordered_map<const ast::Expr*, ScopeNames> m_scopeNames;
     std::vector<ScopeContext> m_scopeContexts;
@@ -1212,6 +1269,13 @@ private:
     // was unified with during body inference. Never cleared between functions
     // because TypeVar IDs are globally unique (monotonically incrementing).
     std::unordered_map<int, TypePtr> m_subst;
+    // While a function's body is checked: the type variables its signature
+    // writes, by id, with the names written. They stand for every type, so
+    // the body may not use them as one (kexhq/kex#644).
+    std::unordered_map<int, std::string> m_rigidVars;
+    // While set, every binding unifyVar adds is noted here, so a probe
+    // (memberCompletions) can take its bindings back.
+    std::vector<int>* m_substJournal = nullptr;
 
     // The result variable the pre-pass gives a make-block method with no
     // return annotation, per clause, until that clause's body is checked.

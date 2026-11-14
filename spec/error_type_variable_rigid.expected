@@ -1,0 +1,4 @@
+spec/error_type_variable_rigid.kex:8:38: error: `+` is not defined for every `A`, which stands for any type
+spec/error_type_variable_rigid.kex:9:40: error: `upperCase` is not defined for every `A`, which stands for any type
+spec/error_type_variable_rigid.kex:10:1: error: `count` declared to return Integer but body returns `A`, which stands for any type
+spec/error_type_variable_rigid.kex:11:1: error: `swap` declared to return A but body returns `B`, which stands for any type

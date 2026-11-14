@@ -1,0 +1,10 @@
+spec/error_candidate_receiver_refuses.kex:14:26: error: `read` expects argument 1 to be Mock.Files, but got Layer
+
+read : FileHandle<CanRead, A> -> Result<String, ReadError>
+
+read : Mock.Files -> Any -> Result<String, Unknown>
+spec/error_candidate_receiver_refuses.kex:15:25: error: `min` expects argument 1 to be Comparable, but got Layer
+
+min : Range<A> -> A?
+
+min : [A] -> A?

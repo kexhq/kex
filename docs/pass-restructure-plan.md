@@ -471,6 +471,51 @@ other (it does here); both must check against the same interfaces.
       an annotation, not only a record (`annotatedTypes`; `annotatedRecords`
       stays the records lowering guards on): `-> Shade` inside B had led to
       A's.
+      Member completion is the checker's answer (2026-11-14). After
+      `value.`, the server re-checks the buffer as it checks the document
+      (`checkAsDocument`: companions, project modules, names recorded),
+      finds the receiver's outermost expression, and asks
+      `TypeChecker::memberCompletions` what a call there accepts: each name
+      its tables hold is put to `checkCall` itself, under the module and
+      `using`s recorded at that expression, and leaves no trace (probe
+      diagnostics, deferred method reports and its bindings are taken back).
+      What it found, reported by the user:
+      - `layer.biases.` offered Layer's fields. A receiver's type was read
+        where the expression STARTS, and a chain starts where its root does;
+        a member link is found by its name now (`DotReceiver::member`,
+        `MethodCall::methodLocation`).
+      - `"hello".sha256` was offered without `using Digest`: the type was
+        reduced to a name and matched against `make` targets, scope unseen.
+      - Functions taking nothing like the receiver were offered (`read`,
+        `min` on a record). Asking the checker showed it accepted those
+        calls: see the receiver rule below.
+      A bare name completes the same way: the names bound around the word,
+      and each name the checker's tables hold that a use there reaches
+      (`TypeChecker::bareCompletions`: `bareNameDeclared` for a reference,
+      or a function a bare call reaches). Every top-level declaration of
+      every prelude source had been offered, private helpers included.
+      `value.try` is offered where `.try` applies (`tryPayload`, shared with
+      the check of `.try`). Go-to-definition answers a local from the
+      checker too: a use leads to the binding it resolved to, a binding to
+      itself (`localDefinitions`, `bindingSites`), and a field read to the
+      field in the record the checker read it of (`CallKind::FieldRead`).
+      Before, a text scan answered, and where it found nothing, the lookup
+      by name: `let offset` led to a stdlib record's `offset` field.
+      Measured with `make lsp-sweep` over examples/ against HEAD (e03ab0fc),
+      the same sampling and oracle: offers the checker refuses 216 -> 65,
+      names a program calls but completion missed 301 -> 147, crashes 1 -> 0.
+      Its first run also found the server crashing on opening two examples
+      (`json_parser`, `real_world`): `typeNamed` resolved a type name it
+      built on the stack through `resolveTypeExpr`, which records the
+      annotation by address (`annotatedTypes`, `annotatedRecords`) for
+      lowering and tooling. The key outlived the node, the name index read
+      a freed location, and lowering could have met a later node at the
+      same address. It resolves without recording now.
+      `make lsp-sweep` (`tests/lsp_sweep.cxx`) finds such answers
+      systematically: one `kex --lsp` session per file, each answer held to
+      the checker's (`kex -C -t` types for hover, the name the program calls
+      for completion recall, substituted offers re-checked for soundness,
+      `kex -C` diagnostics, definition targets).
 5. **Clean up last** (only once 1–4 are done; the benchmarks stay until
    then): `make bench`, `test-bench`, `bench-slick` (needs `../slick`,
    which nobody else has), `dup-audit` and their `tools/` scripts; the
@@ -860,6 +905,47 @@ written in Kex down to recursion; and the reassigned-variable threading, so
      A constructor spelling two imported types share (FS's and FileHandle's
      `InvalidUtf8`) can be looked up as the wrong one, so its arity check
      accepts a count either takes.
+     - #637: a `make` giving a type a function the prelude already gives it,
+       with arguments the two cannot tell apart, is refused as the prelude's
+       own duplicates are (`rejectRedefinedImports`;
+       `spec/error_make_redefines_prelude`). An overload on another argument
+       type stays. The compiled interface labels every stdlib function the
+       prelude's, so the stdlib's own sources are left out by where they
+       are. Two examples redefined prelude functions (`dividesBy?`,
+       `mapError`) and now use names of their own.
+     - #643: a parameter written without a type, passed where overloads
+       part ways, takes what they take between them (`overloadsTake`):
+       `let show(x) = describe(x)` over Integer and String overloads makes
+       `x` an `Integer | String`, so `show(2.5)` is refused. Both backends
+       had also run a clause for a value no overload takes: BEAM left the
+       last clause of a type-overloaded group unguarded as a fallback (the
+       String overload took the Float), and the walker answered `None`. The
+       last clause is guarded now, and the walker reports the missing
+       clause (`spec/error_overload_untyped_argument`).
+     - #644, the rest: while a function's body is checked, the type
+       variables its own annotations write stand for every type
+       (`m_rigidVars`): an operator other than equality on one, a function
+       of some particular type called on one, and a body giving one where
+       the signature promises another or a concrete type are errors
+       (`spec/error_type_variable_rigid`). A trait bound (Showable, so
+       interpolation) still takes one. A signature written apart (`f :> A
+       -> A`) is not covered yet.
+     - #645: a match is checked through nested patterns (tuples, lists,
+       constructor arguments, literals, booleans, named records) by the
+       usefulness algorithm over a pattern matrix (`exhaustiveness.cxx`,
+       `checkPatternMatrix`), which names the missing cases: `(Just(_),
+       None), (None, Just(_))`. A subject of unknown type, and a type or
+       range pattern, leave it open. Two stdlib matches were incomplete by
+       type (Data.Queue's `dequeue`, JSON's one-key unwrap) and say so now
+       (`spec/error_match_nested_exhaustive`).
+     - #647: a union argument reaches overloads that cover it member by
+       member; the value picks the clause, the result is the one they share
+       (`spec/overload_union_argument`).
+     - A candidate with an unannotated parameter switched off the mismatch
+       report for every receiver: Mock's `read : Mock.Files -> ? -> ...`
+       let `layer.read(1)` on a record check clean. Only an unknown
+       RECEIVER parameter leaves a candidate's reach unknown now
+       (`spec/error_candidate_receiver_refuses`).
    - Language server, reported by the user (2026-11-13), each now a test in
      `tests/lsp_test.cxx` (`askAt` opens a document and asks one request):
      - Hover on `let name = ...` (or `let list`) attached the documentation of
@@ -883,9 +969,7 @@ written in Kex down to recursion; and the reassigned-variable threading, so
      refusing every capture broke the documented idiom of registering foul
      handlers from pure configuration, `command(run: ~addNote)`,
      `get("/", ~home)`; telling those from `xs.map(~shout)` needs effect
-     types, #142), #644 (type variables not rigid inside a body; the result
-     case is done), #643 (an untyped argument guesses an overload), #645
-     (exhaustiveness for tuple, literal and list patterns), #647, #637.
+     types, #142), #644 for a signature written apart (`f :> A -> A`).
      Backend bugs: #639, #635, #623, #618, #615, #614, #610, #613 (parser),
      #654 (CLI), #575 (REPL), #561.
 

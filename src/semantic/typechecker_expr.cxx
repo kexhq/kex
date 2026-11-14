@@ -578,6 +578,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                       "`from` is not available in a cast — no caller is waiting for a reply");
                 return Type::unknown();
             }
+            if (m_recordsNames && boundLocally)
+                if (const auto* binding = bindingOf(node.name); binding && binding->line > 0)
+                    m_localDefinitions[&expr] = {expr.location.file, binding->line, binding->column};
             auto type = lookupVar(node.name);
             if (!boundLocally &&
                 (!type || std::holds_alternative<UnknownType>(resolve(type)->kind))) {
@@ -705,13 +708,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             if (m_clauseTries && m_blockDepth == m_clauseTriesDepth &&
                 m_tryingBlockDepth != m_blockDepth)
                 m_clauseTries->push_back({expr.location, operand});
-            if (auto* optional = std::get_if<OptionalType>(&operand->kind))
-                return optional->inner;
-            if (auto* named = std::get_if<NamedType>(&operand->kind);
-                named && !named->typeArgs.empty()) {
-                if (named->name == "Optional" || named->name == "Result")
-                    return named->typeArgs[0];
-            }
+            if (auto payload = tryPayload(operand)) return payload;
             if (isUndetermined(operand))
                 return Type::unknown();
             error(expr.location, "`.try` expects Result or Optional, got " +
@@ -861,6 +858,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             auto valueType = node.value ? inferExpr(*node.value) : Type::unknown();
             auto varType = lookupVar(node.name);
             if (varType) m_assignmentTargetTypes[&expr] = varType;
+            // `new.age = ...` in a make block writes the value being built.
+            else if (node.name == "new" && m_inMakeBlock && m_currentMakeType)
+                m_assignmentTargetTypes[&expr] = m_currentMakeType;
             else if (node.name != "new" && !m_topLevelValueNames.contains(node.name))
                 reportUndefined("variable", node.name, expr.location);
             if (const auto* binding = varType ? bindingOf(node.name) : nullptr;
@@ -2282,8 +2282,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
                 popScope();
             }
-            checkMatchExhaustiveness(node, expr.location);
-            checkUnionCoverage(node, subjectType, expr.location);
+            if (!checkMatchExhaustiveness(node, expr.location) &&
+                !checkUnionCoverage(node, subjectType, expr.location))
+                checkPatternMatrix(node, subjectType, expr.location);
             if (fittedExpected) return expected;
             return resultType;
         }
@@ -2815,6 +2816,17 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
     auto lhs = resolve(left);
     auto rhs = resolve(right);
 
+    // A type variable the function's own signature writes stands for every
+    // type, and no operator but equality is defined for every type: `a + 1`
+    // on `a: A` decided that `A` is a number (kexhq/kex#644).
+    if (op != TokenType::EqEq && op != TokenType::NotEq)
+        for (const auto& operand : {lhs, rhs})
+            if (const auto id = typeVariableId(operand); id && m_rigidVars.contains(*id)) {
+                error(loc, "`" + std::string(tokenTypeName(op)) + "` is not defined for every `" +
+                               m_rigidVars.at(*id) + "`, which stands for any type");
+                return Type::unknown();
+            }
+
     {
         auto lhsIsVar = std::holds_alternative<TypeVar>(lhs->kind);
         auto rhsIsVar = std::holds_alternative<TypeVar>(rhs->kind);
@@ -3003,7 +3015,11 @@ auto TypeChecker::typeNamed(const std::string& name, SourceLocation location)
     asType.location = location;
     asType.kind = std::move(typeName);
     std::unordered_map<std::string, TypePtr> generics;
-    return resolveTypeExpr(asType, generics);
+    // Not resolveTypeExpr: that records the annotation BY ADDRESS for
+    // lowering and tooling, and this one is a temporary. Its key outlived
+    // it, and the name index read a freed location (a language-server
+    // crash on examples/json_parser.kex).
+    return resolveTypeExprNode(asType, generics);
 }
 
 // A parameter written as a bare type name selects that type: the conversion
@@ -4040,6 +4056,34 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                             const ast::Expr* callExpr,
                             const std::vector<const ast::Expr*>* argumentExprs) -> TypePtr {
     auto argTypes = suppliedArgTypes;
+    // A receiver whose type is a variable the function's signature writes is
+    // any type: only a function taking any receiver applies (`a.showValue`),
+    // not String's `upperCase` on `a: A` (kexhq/kex#644).
+    if (isMethodCall && !argTypes.empty())
+        if (const auto* var = std::get_if<TypeVar>(&resolve(argTypes.front())->kind);
+            var && m_rigidVars.contains(var->id)) {
+            const auto takesAny = [&](const Signature& signature) {
+                if (signature.params.empty()) return false;
+                const auto first = resolve(signature.params.front());
+                const auto* open = std::get_if<TypeVar>(&first->kind);
+                // A trait bound takes it too: Showable and Inspectable hold of
+                // every value (`"${a}"`, `a.inspected`). `Any` is Unknown.
+                return std::holds_alternative<UnknownType>(first->kind) ||
+                       std::holds_alternative<ConstrainedType>(first->kind) ||
+                       (open && (open->id < 0 || open->id == var->id));
+            };
+            bool anyTakes = false;
+            for (const auto* imported : importedCandidates(name))
+                anyTakes = anyTakes || takesAny(imported->signature);
+            for (const auto* table : {&m_methodSignatures, &m_userSignatures})
+                if (const auto found = table->find(name); found != table->end())
+                    anyTakes = anyTakes || std::any_of(found->second.begin(), found->second.end(), takesAny);
+            if (!anyTakes) {
+                error(loc, "`" + sourceName(name) + "` is not defined for every `" +
+                               m_rigidVars.at(var->id) + "`, which stands for any type");
+                return Type::unknown();
+            }
+        }
     // A field of a structural record answers a call on it before any
     // method of the same name another type has (`r.name`).
     if (isMethodCall && argTypes.size() == 1 && !kex::mangle::hasScope(name))
@@ -5364,11 +5408,17 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (!sig.params.empty()) {
                 if (std::holds_alternative<ConstrainedType>(sig.params[0]->kind))
                     anyConstrainedFirstParam = true;
-                for (const auto& param : sig.params)
-                    if (mentionsUnknownParam(param)) {
-                        anyUnknownParamCandidate = true;
-                        break;
-                    }
+                // Only an unknown RECEIVER leaves the candidate's reach
+                // unknown. One whose receiver is known and refuses this one
+                // is not the function called, whatever else it left
+                // unannotated: Mock's `read : Mock.Files -> ? -> ...` made
+                // `layer.read(1)` on a record check clean.
+                if (mentionsUnknownParam(sig.params[0]) || fits(0, sig.params[0]))
+                    for (const auto& param : sig.params)
+                        if (mentionsUnknownParam(param)) {
+                            anyUnknownParamCandidate = true;
+                            break;
+                        }
                 if (fits(0, sig.params[0])) {
                     anyFirstParamPlausible = true;
                     break;
@@ -5694,6 +5744,25 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // method chain or a call site supplies a concrete receiver.
         if (distinct.size() > 1 && !concreteArguments) {
             if (callExpr) decideDispatch(callExpr, name);
+            // A parameter of the function being checked, written without a
+            // type and passed where the overloads part ways, takes what they
+            // take between them: `let show(x) = describe(x)` with `describe`
+            // on Integer and on String makes `x` an `Integer | String`, so
+            // `show(2.5)` is refused where it is written rather than reaching
+            // no clause at run time (kexhq/kex#643).
+            if (!isMethodCall)
+                for (size_t i = 0; i < argTypes.size(); ++i)
+                    if (const auto* var = std::get_if<TypeVar>(&resolve(argTypes[i])->kind);
+                        var && var->id >= 0 && var->id >= m_clauseVarMark)
+                        if (auto taken = overloadsTake(distinct, i))
+                            unifyVar(var->id, taken);
+            // One result whichever runs is that result.
+            const auto result = resolve(distinct.front()->result);
+            if (isConcreteValue(result) &&
+                std::all_of(distinct.begin(), distinct.end(), [&](const Signature* candidate) {
+                    return typesEqual(resolve(candidate->result), result);
+                }))
+                return result;
             return Type::unknown();
         }
         if (best) {
@@ -6340,6 +6409,15 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         return (*sigs)[0].result;
     }
 
+    // A union argument the overloads cover member by member: each member
+    // has one that takes it, so the value picks the clause when the call
+    // runs. No single overload takes the whole union, which is why nothing
+    // matched above (kexhq/kex#647).
+    if (const auto covered = unionArgumentCovered(arityMatches, argTypes)) {
+        if (callExpr) decideDispatch(callExpr, name);
+        return *covered;
+    }
+
     // Zero matches with at least one arity match: find the first
     // mismatching argument against the first arity-matching candidate for
     // the headline message, then list every candidate signature tried,
@@ -6445,9 +6523,14 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // follows from it. `"42".to(Integer)` reaches here seeing only Measure's
     // `to` from units.kex, because String's `to` is a native builtin that
     // appears in no signature table. The runtime still catches a real mistake.
+    // A method candidate whose receiver is known and refuses this one is not
+    // the function called: its other unknowns say nothing (as above).
     const bool unreliableCandidates =
         std::all_of(arityMatches.begin(), arityMatches.end(),
-                    [](const Signature* sig) {
+                    [&](const Signature* sig) {
+                        if (isMethodCall && !sig->params.empty() && !argTypes.empty() &&
+                            !mentionsUnknownParam(sig->params[0]) && !fits(0, sig->params[0]))
+                            return false;
                         return std::any_of(sig->params.begin(), sig->params.end(),
                                            mentionsUnknownParam);
                     });
@@ -7271,6 +7354,75 @@ auto TypeChecker::atomOutsideSet(const ast::Expr& value, const TypePtr& expected
         return false;
     }
     return std::find(admitted.begin(), admitted.end(), bare(literal->name)) == admitted.end();
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::tryPayload(const TypePtr& operand) const -> TypePtr {
+    const auto resolved = resolve(operand);
+    if (const auto* optional = std::get_if<OptionalType>(&resolved->kind)) return optional->inner;
+    if (const auto* named = std::get_if<NamedType>(&resolved->kind);
+        named && !named->typeArgs.empty() &&
+        (named->name == "Optional" || named->name == "Result"))
+        return named->typeArgs[0];
+    return nullptr;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::overloadsTake(const std::vector<const Signature*>& candidates,
+                                std::size_t position) const -> TypePtr {
+    std::vector<TypePtr> taken;
+    for (const auto* candidate : candidates) {
+        if (position >= candidate->params.size()) return nullptr;
+        const auto param = resolve(candidate->params[position]);
+        // A generic or open parameter takes anything: no union says it.
+        if (!isConcreteValue(param)) return nullptr;
+        if (std::none_of(taken.begin(), taken.end(),
+                         [&](const TypePtr& held) { return typesEqual(held, param); }))
+            taken.push_back(param);
+    }
+    if (taken.empty()) return nullptr;
+    if (taken.size() == 1) return taken.front();
+    return std::make_shared<Type>(Type{UnionType{std::move(taken)}});
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::unionArgumentCovered(const std::vector<const Signature*>& candidates,
+                                       const std::vector<TypePtr>& argTypes) const
+    -> std::optional<TypePtr> {
+    for (size_t i = 0; i < argTypes.size(); ++i) {
+        const auto* unionArg = std::get_if<UnionType>(&resolve(argTypes[i])->kind);
+        if (!unionArg) continue;
+        std::vector<TypePtr> results;
+        const bool covered = std::all_of(
+            unionArg->members.begin(), unionArg->members.end(), [&](const TypePtr& member) {
+                for (const auto* candidate : candidates) {
+                    bool takes = true;
+                    for (size_t j = 0; takes && j < argTypes.size() && j < candidate->params.size(); ++j)
+                        takes = argMatchesParam(j == i ? resolve(member) : resolve(argTypes[j]),
+                                                resolve(candidate->params[j]));
+                    if (takes) {
+                        results.push_back(resolve(candidate->result));
+                        return true;
+                    }
+                }
+                return false;
+            });
+        if (!covered) continue;
+        const bool oneResult = std::all_of(results.begin(), results.end(), [&](const TypePtr& r) {
+            return typesEqual(r, results.front());
+        });
+        return oneResult ? results.front() : Type::unknown();
+    }
+    return std::nullopt;
 }
 
 } // namespace kex::semantic

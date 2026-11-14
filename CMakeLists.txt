@@ -202,6 +202,7 @@ add_library(kex_lib
     src/semantic/traits.cxx
     src/semantic/typechecker.cxx
     src/semantic/typechecker_unify.cxx
+    src/semantic/exhaustiveness.cxx
     src/semantic/typechecker_expr.cxx
     src/semantic/typechecker_intrinsics.cxx
     src/lsp/workspace.cxx
@@ -791,6 +792,10 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     target_link_libraries(lsp_test PRIVATE kex_lib lsp)
     target_include_directories(lsp_test PRIVATE tests)
     add_test(NAME lsp_test COMMAND lsp_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+    # A search over the corpus, not a test: `make lsp-sweep`.
+    add_executable(lsp_sweep tests/lsp_sweep.cxx)
+    target_link_libraries(lsp_sweep PRIVATE lsp)
 endif()
 
 add_executable(ket_template_test tests/ket_template_test.cxx src/lsp/ket_template.cxx)

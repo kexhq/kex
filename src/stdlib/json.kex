@@ -91,6 +91,7 @@ private do
   # answer `Just(key)`, and there is no atom literal to `or` it with.
   let allowCommentsKey = match Kex.Intrinsic.Map.keys({ allowComments: false }) do
     [key] => key
+    _ => die("a one-field map has one key")
   end
 
   let parseWithOptions(text: String, options: {Atom: Bool}) -> Result<Any, JSONError> do

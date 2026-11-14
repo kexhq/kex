@@ -7,12 +7,15 @@
 #include "declaration_validator.hxx"
 #include "module_rules.hxx"
 #include "../common/type_def_utils.hxx"
+#include "../common/runtime_dir.hxx"
 #include "../common/well_known.hxx"
 #include "typechecker_internal.hxx"
+#include "exhaustiveness.hxx"
 #include "resolve_core.hxx"
 #include <cctype>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <set>
 #include <unordered_set>
 #include <utility>
@@ -53,6 +56,8 @@ auto TypeChecker::check(const ast::Program& program, std::vector<Diagnostic>& di
     m_makeTargetIdentities.clear();
     m_nameUses.clear();
     m_scopeNames.clear();
+    m_localDefinitions.clear();
+    m_bindingSites.clear();
     m_scopeContexts.clear();
     m_scopeContextIds.clear();
     m_namespaceRoots.clear();
@@ -2829,7 +2834,7 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
     m_declarationImports = previousImports;
 }
 
-auto TypeChecker::checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLocation loc) -> void {
+auto TypeChecker::checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLocation loc) -> bool {
     bool hasUnguardedCatchAll = false;
     std::set<std::string> covered;
     std::string adtName;
@@ -2868,13 +2873,15 @@ auto TypeChecker::checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLoc
         }
     }
 
-    if (hasUnguardedCatchAll || inconclusive || adtName.empty()) return;
+    if (hasUnguardedCatchAll || inconclusive || adtName.empty()) return false;
 
     std::vector<std::string> missing;
     for (const auto& ctorName : m_adtVariants[adtName]) {
         if (!covered.count(ctorName)) missing.push_back(ctorName);
     }
-    if (missing.empty()) return;
+    // Every constructor taken at the top; what their arguments take is
+    // the matrix's to say (`Just(1)` beside `None` leaves `Just(2)`).
+    if (missing.empty()) return false;
 
     std::string list;
     for (size_t i = 0; i < missing.size(); i++) {
@@ -2882,6 +2889,7 @@ auto TypeChecker::checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLoc
         list += missing[i];
     }
     error(loc, "Non-exhaustive match on " + adtName + ": missing case(s) " + list);
+    return true;
 }
 
 // A match over a union of types (`type Reply = String | Safe | Redirect`)
@@ -2891,7 +2899,7 @@ auto TypeChecker::checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLoc
 // kexhq/kex#645). Dropping the `Redirect` arm was accepted, and failed at run
 // time with no matching clause (found by `make metamorphic-search`).
 auto TypeChecker::checkUnionCoverage(const ast::MatchExpr& node, const TypePtr& subject,
-                                     SourceLocation loc) -> void {
+                                     SourceLocation loc) -> bool {
     const auto nameOf = [](const TypePtr& type) {
         const auto* named = std::get_if<NamedType>(&type->kind);
         return named && named->typeArgs.empty() ? named->name : typeToString(type);
@@ -2905,7 +2913,7 @@ auto TypeChecker::checkUnionCoverage(const ast::MatchExpr& node, const TypePtr& 
     else if (const auto* named = std::get_if<NamedType>(&shape->kind))
         if (const auto variants = m_adtVariants.find(named->name); variants != m_adtVariants.end())
             members = variants->second;
-    if (members.size() < 2) return;
+    if (members.size() < 2) return false;
     const auto takesWhole = [](const ast::FieldPattern& field) {
         if (!field.pattern || !*field.pattern) return true;
         const auto& kind = (**field.pattern).kind;
@@ -2926,7 +2934,7 @@ auto TypeChecker::checkUnionCoverage(const ast::MatchExpr& node, const TypePtr& 
             const auto& kind = pattern->kind;
             if (std::holds_alternative<ast::WildcardPattern>(kind) ||
                 std::holds_alternative<ast::VarPattern>(kind))
-                return;
+                return false;
             if (const auto* typed = std::get_if<ast::TypePattern>(&kind); typed && typed->type) {
                 std::unordered_map<std::string, TypePtr> noGenerics;
                 cover(nameOf(resolve(resolveTypeExpr(*typed->type, noGenerics))));
@@ -2938,7 +2946,7 @@ auto TypeChecker::checkUnionCoverage(const ast::MatchExpr& node, const TypePtr& 
                        std::get<ast::LiteralPattern>(kind).literal.type == TokenType::None) {
                 // A constructor, a structural record, a list, a tuple: this
                 // check does not know which members it takes.
-                return;
+                return false;
             }
         }
     }
@@ -2948,6 +2956,196 @@ auto TypeChecker::checkUnionCoverage(const ast::MatchExpr& node, const TypePtr& 
     if (!missing.empty())
         error(loc, "Non-exhaustive match on " + typeToString(subject) + ": missing case(s) " +
                        missing);
+    return true;
+}
+
+// The values a match's unguarded arms leave unmatched, through nested
+// patterns: a tuple's, a list's, a constructor's arguments, a literal, a
+// named record (exhaustiveness.hxx). checkMatchExhaustiveness answers for
+// the top-level constructors of one sum type; this one for everything it
+// had no verdict on (kexhq/kex#645). A type or range pattern leaves the
+// question open, as does a constructor the checker has no siblings for.
+auto TypeChecker::checkPatternMatrix(const ast::MatchExpr& node, const TypePtr& subject,
+                                     SourceLocation loc) -> void {
+    using exhaustiveness::Space;
+    // A value the checker knows nothing of proves nothing missing: its arms
+    // may be the cases it can take (`(:updated, n)`, `(:error, reason)`).
+    if (!subject || isUndetermined(resolve(subject))) return;
+    // A String matched by list patterns is its characters: `""` is the empty
+    // list there, and `"hi"` two characters.
+    const bool characterLists = std::any_of(
+        node.clauses.begin(), node.clauses.end(), [](const auto& clause) {
+            return std::any_of(clause.patterns.begin(), clause.patterns.end(), [](const auto& pattern) {
+                return pattern && std::holds_alternative<ast::ListPattern>(pattern->kind);
+            });
+        });
+    const std::string tuple = "(,";
+    const std::string empty = "[]";
+    const std::string cons = "::";
+    const std::string record = "rec:";
+    const std::string literal = "lit:";
+    const std::string yes = "true";
+    const std::string no = "false";
+    // A named record's fields, in one order for every pattern of it.
+    const auto fieldsOf = [&](const std::string& name) -> std::optional<std::vector<std::string>> {
+        const auto found = m_recordFields.find(resolveRecordName(name));
+        if (found == m_recordFields.end()) return std::nullopt;
+        std::vector<std::string> fields;
+        for (const auto& [field, _] : found->second) fields.push_back(field);
+        std::sort(fields.begin(), fields.end());
+        return fields;
+    };
+    std::function<std::optional<Space>(const ast::Pattern&)> spaceOf =
+        [&](const ast::Pattern& pattern) -> std::optional<Space> {
+        return std::visit(
+            [&](const auto& kind) -> std::optional<Space> {
+                using T = std::decay_t<decltype(kind)>;
+                if constexpr (std::is_same_v<T, ast::WildcardPattern> ||
+                              std::is_same_v<T, ast::VarPattern>) {
+                    return Space{};
+                } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
+                    return kind.inner ? spaceOf(*kind.inner) : std::optional<Space>{Space{}};
+                } else if constexpr (std::is_same_v<T, ast::LiteralPattern>) {
+                    const auto& token = kind.literal;
+                    if (token.type == TokenType::None) return Space{"None", {}};
+                    if (token.type == TokenType::True) return Space{yes, {}};
+                    if (token.type == TokenType::False) return Space{no, {}};
+                    if (characterLists && token.type == TokenType::String) {
+                        Space chars{empty, {}};
+                        for (auto c = token.value.rbegin(); c != token.value.rend(); ++c)
+                            chars = Space{cons, {Space{literal + std::string(1, *c), {}}, std::move(chars)}};
+                        return chars;
+                    }
+                    return Space{literal + token.value, {}};
+                } else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
+                    const auto arity = m_constructorArity.find(kind.name);
+                    if (!m_adtOfConstructor.contains(kind.name) ||
+                        (arity != m_constructorArity.end() && arity->second != kind.args.size()))
+                        return std::nullopt;
+                    Space space{kind.name, {}};
+                    for (const auto& argument : kind.args) {
+                        auto inner = argument ? spaceOf(*argument) : std::optional<Space>{Space{}};
+                        if (!inner) return std::nullopt;
+                        space.arguments.push_back(std::move(*inner));
+                    }
+                    return space;
+                } else if constexpr (std::is_same_v<T, ast::TuplePattern>) {
+                    Space space{tuple + std::to_string(kind.elements.size()), {}};
+                    for (const auto& element : kind.elements) {
+                        auto inner = element ? spaceOf(*element) : std::optional<Space>{Space{}};
+                        if (!inner) return std::nullopt;
+                        space.arguments.push_back(std::move(*inner));
+                    }
+                    return space;
+                } else if constexpr (std::is_same_v<T, ast::ListPattern>) {
+                    // `[a, b | t]` is a head and a tail twice over; `[a, b]`
+                    // ends in the empty list.
+                    std::optional<Space> tail = Space{empty, {}};
+                    if (kind.rest) tail = *kind.rest ? spaceOf(**kind.rest) : std::optional<Space>{Space{}};
+                    if (!tail) return std::nullopt;
+                    for (auto element = kind.elements.rbegin(); element != kind.elements.rend(); ++element) {
+                        auto head = *element ? spaceOf(**element) : std::optional<Space>{Space{}};
+                        if (!head) return std::nullopt;
+                        tail = Space{cons, {std::move(*head), std::move(*tail)}};
+                    }
+                    return tail;
+                } else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
+                    const auto fields = kind.typeName.empty() ? std::nullopt : fieldsOf(kind.typeName);
+                    if (!fields) return std::nullopt;
+                    Space space{record + kind.typeName, std::vector<Space>(fields->size())};
+                    for (const auto& field : kind.fields) {
+                        const auto at = std::find(fields->begin(), fields->end(), field.name);
+                        if (at == fields->end()) return std::nullopt;
+                        if (!field.pattern || !*field.pattern) continue;
+                        auto inner = spaceOf(**field.pattern);
+                        if (!inner) return std::nullopt;
+                        space.arguments[static_cast<std::size_t>(at - fields->begin())] = std::move(*inner);
+                    }
+                    return space;
+                } else {
+                    return std::nullopt;
+                }
+            },
+            pattern.kind);
+    };
+
+    std::vector<std::vector<Space>> rows;
+    for (const auto& clause : node.clauses) {
+        if (clause.guard && *clause.guard) continue;
+        for (const auto& pattern : clause.patterns) {
+            if (!pattern) continue;
+            auto space = spaceOf(*pattern);
+            if (!space) return;
+            rows.push_back({std::move(*space)});
+        }
+    }
+    if (rows.empty()) return;
+
+    const exhaustiveness::Siblings siblings =
+        [&](const std::string& constructor)
+        -> std::optional<std::vector<std::pair<std::string, std::size_t>>> {
+        if (constructor == yes || constructor == no)
+            return std::vector<std::pair<std::string, std::size_t>>{{yes, 0}, {no, 0}};
+        if (constructor == empty || constructor == cons)
+            return std::vector<std::pair<std::string, std::size_t>>{{empty, 0}, {cons, 2}};
+        if (constructor.starts_with(tuple))
+            return std::vector<std::pair<std::string, std::size_t>>{
+                {constructor, std::stoul(constructor.substr(tuple.size()))}};
+        if (constructor.starts_with(record)) {
+            const auto fields = fieldsOf(constructor.substr(record.size()));
+            if (!fields) return std::nullopt;
+            return std::vector<std::pair<std::string, std::size_t>>{{constructor, fields->size()}};
+        }
+        if (constructor.starts_with(literal)) return std::nullopt;
+        const auto adt = m_adtOfConstructor.find(constructor);
+        if (adt == m_adtOfConstructor.end()) return std::nullopt;
+        const auto variants = m_adtVariants.find(adt->second);
+        if (variants == m_adtVariants.end()) return std::nullopt;
+        std::vector<std::pair<std::string, std::size_t>> all;
+        for (const auto& variant : variants->second) {
+            const auto arity = m_constructorArity.find(variant);
+            all.emplace_back(variant, arity == m_constructorArity.end() ? 0 : arity->second);
+        }
+        return all;
+    };
+    const auto missing = exhaustiveness::uncovered(rows, 1, siblings, 4);
+    if (missing.empty()) return;
+
+    std::function<std::string(const Space&)> shown = [&](const Space& space) -> std::string {
+        const auto joined = [&](const std::vector<Space>& parts) {
+            std::string out;
+            for (const auto& part : parts) out += (out.empty() ? "" : ", ") + shown(part);
+            return out;
+        };
+        if (space.constructor.empty()) return "_";
+        if (space.constructor.starts_with(tuple)) return "(" + joined(space.arguments) + ")";
+        if (space.constructor == empty) return "[]";
+        if (space.constructor == cons) {
+            // A run of heads, then the tail it ends in.
+            std::vector<Space> heads;
+            const Space* tail = &space;
+            while (tail->constructor == cons) {
+                heads.push_back(tail->arguments[0]);
+                tail = &tail->arguments[1];
+            }
+            if (tail->constructor == empty) return "[" + joined(heads) + "]";
+            return "[" + joined(heads) + " | " + shown(*tail) + "]";
+        }
+        if (space.constructor.starts_with(record)) {
+            const auto name = space.constructor.substr(record.size());
+            const auto fields = fieldsOf(name).value_or(std::vector<std::string>{});
+            std::string out;
+            for (std::size_t i = 0; i < space.arguments.size() && i < fields.size(); ++i)
+                if (!space.arguments[i].constructor.empty())
+                    out += (out.empty() ? "" : ", ") + fields[i] + ": " + shown(space.arguments[i]);
+            return name + " { " + out + (out.empty() ? "" : " ") + "}";
+        }
+        if (space.arguments.empty()) return space.constructor;
+        return space.constructor + "(" + joined(space.arguments) + ")";
+    };
+    std::string list;
+    for (const auto& row : missing) list += (list.empty() ? "" : ", ") + shown(row.front());
+    error(loc, "Non-exhaustive match: missing case(s) " + list);
 }
 
 auto TypeChecker::expandTypeAliases(const TypePtr& type, int depth) const
@@ -4221,7 +4419,28 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         // would fit.
         const bool expectsResult =
             effectiveReturnType && !containsTypeVariable(effectiveReturnType);
+        // The variables this clause's own annotations write stand for every
+        // type while its body is checked.
+        const auto outerRigid = m_rigidVars;
+        if (!contract)
+            for (const auto& [written, variable] : genericVars)
+                if (const auto id = typeVariableId(variable);
+                    id && *id >= 0 && !m_currentMakeTargetVars.contains(written))
+                    m_rigidVars.emplace(*id, written);
         auto bodyType = inferBody(clause.body, expectsResult ? effectiveReturnType : nullptr);
+        // A body ending in one of them gives that variable, not the declared
+        // result: `-> Integer = a` for `a: A`, `-> A = b` for `b: B`.
+        if (const auto produced = typeVariableId(resolve(bodyType));
+            produced && m_rigidVars.contains(*produced) && effectiveReturnType) {
+            const auto declared = resolve(effectiveReturnType);
+            const auto declaredVar = typeVariableId(declared);
+            if ((isConcreteValue(declared) && !containsTypeVariable(declared)) ||
+                (declaredVar && *declaredVar != *produced && m_rigidVars.contains(*declaredVar)))
+                error(def.location, "`" + def.name + "` declared to return " +
+                                        typeToString(effectiveReturnType) + " but body returns `" +
+                                        m_rigidVars.at(*produced) + "`, which stands for any type");
+        }
+        m_rigidVars = outerRigid;
         m_clauseTries = outerTries;
         m_clauseReturns = outerReturns;
         m_clauseTriesDepth = outerTriesDepth;
@@ -4777,6 +4996,68 @@ auto TypeChecker::freeFunctionVisible(const std::string& module,
                        admits);
 }
 
+// A `make` giving a type a function the prelude already gives it — same name,
+// arguments the two cannot tell apart — defines it twice, which the prelude
+// itself may not do (receiver_conflicts). The backends disagreed on which
+// one runs: the walker ran the prelude's `abs` and BEAM the program's own
+// (kexhq/kex#637). An overload on another argument type (`<(other:
+// Integer)` beside the prelude's `<` on two Measures) is a different function.
+auto TypeChecker::rejectRedefinedImports(const ast::MakeDef& def) -> void {
+    if (!m_currentMakeType || !m_importedInterfaces) return;
+    const auto head = typeToString(headShapeOf(resolve(m_currentMakeType)));
+    // Whether some value could be passed to both.
+    const auto overlaps = [&](const TypePtr& left, const TypePtr& right) {
+        const auto a = resolve(left);
+        const auto b = resolve(right);
+        return !isConcreteValue(a) || !isConcreteValue(b) || argMatchesParam(a, b) ||
+               argMatchesParam(b, a);
+    };
+    const auto check = [&](const ast::FunctionDef& function) {
+        if (function.clauses.empty()) return;
+        // The standard library's own: there the declaration IS the import.
+        if (kex::isStandardLibrarySource(function.location.file)) return;
+        // The receiver, written as an `@`-pattern first or left implicit.
+        const auto& params = function.clauses.front().params;
+        const bool receiverWritten = !params.empty() && params.front().pattern &&
+            std::holds_alternative<ast::ThisPattern>((*params.front().pattern)->kind);
+        const auto arity = params.size() + (receiverWritten ? 0 : 1);
+        // This function as the checker registered it, when it has.
+        const Signature* own = nullptr;
+        if (const auto registered = m_methodSignatures.find(function.name);
+            registered != m_methodSignatures.end())
+            for (const auto& signature : registered->second)
+                if (signature.params.size() == arity &&
+                    signature.makeModule == m_currentModulePath &&
+                    typeToString(headShapeOf(resolve(signature.params.front()))) == head)
+                    own = &signature;
+        for (const auto* imported : importedCandidates(function.name)) {
+            const auto& signature = imported->signature;
+            if (imported->backendModule != names::kPreludeModule || signature.params.empty())
+                continue;
+            const auto least = signature.requiredParams.value_or(signature.params.size());
+            if (arity < least || arity > signature.params.size()) continue;
+            if (typeToString(headShapeOf(resolve(signature.params.front()))) != head) continue;
+            bool indistinct = true;
+            for (std::size_t i = 1; own && indistinct && i < arity; ++i)
+                indistinct = overlaps(own->params[i], signature.params[i]);
+            if (!indistinct) continue;
+            error(function.location, "`" + function.name + "` is defined twice for receiver `" +
+                                         head + "`: here and in the prelude");
+            return;
+        }
+    };
+    for (const auto& item : def.body) {
+        if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item); fn && *fn)
+            check(**fn);
+        else if (const auto* block = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item);
+                 block && *block)
+            for (const auto& inner : (*block)->items)
+                if (const auto* innerFn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&inner);
+                    innerFn && *innerFn)
+                    check(**innerFn);
+    }
+}
+
 auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
     auto savedDeclarationImports = m_declarationImports;
     if (auto imports = m_makeImports.find(&def); imports != m_makeImports.end())
@@ -4798,6 +5079,7 @@ auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
         m_currentMakeType = resolveTypeExpr(*def.target, m_currentMakeTargetVars);
         m_makeTargetIdentities[&def] = makeOwnerNames(def.target, resolve(m_currentMakeType));
     }
+    rejectRedefinedImports(def);
     for (const auto& item : def.body) {
         std::visit([this](const auto& node) {
             using T = std::decay_t<decltype(node)>;
@@ -5143,7 +5425,8 @@ auto TypeChecker::declareVar(const std::string& name, TypePtr type, bool isVar,
         defineVar(name, std::move(type), first);
         return;
     }
-    defineVar(name, std::move(type), {isVar, false});
+    defineVar(name, std::move(type), {isVar, false, where.line, where.column});
+    if (m_recordsNames) m_bindingSites.emplace_back(name, where);
 }
 
 auto TypeChecker::lookupVar(const std::string& name) const -> TypePtr {
@@ -5692,6 +5975,191 @@ auto TypeChecker::scopeContext() -> std::size_t {
     const auto [found, added] = m_scopeContextIds.try_emplace(std::move(key), m_scopeContexts.size());
     if (added) m_scopeContexts.push_back(std::move(context));
     return found->second;
+}
+
+auto TypeChecker::memberCompletions(const TypePtr& receiver, const ast::Expr& at)
+    -> std::vector<MemberCompletion> {
+    std::vector<MemberCompletion> offered;
+    if (!receiver) return offered;
+    const auto names = m_scopeNames.find(&at);
+    if (names == m_scopeNames.end() || names->second.context >= m_scopeContexts.size())
+        return offered;
+    const auto& context = m_scopeContexts[names->second.context];
+
+    // Every name a method call could reach, with the signatures that say at
+    // which arities to ask. Which of them a call here takes is checkCall's
+    // to say; the tables only bound the question.
+    std::map<std::string, std::vector<Signature>> candidates;
+    const auto add = [&](const std::string& name, const Signature& signature) {
+        if (name.empty() || kex::mangle::hasScope(name) || signature.params.empty() ||
+            std::isupper(static_cast<unsigned char>(name.front())))
+            return;
+        candidates[name].push_back(signature);
+    };
+    for (const auto& [name, signatures] : m_methodSignatures)
+        for (const auto& signature : signatures) add(name, signature);
+    for (const auto& [name, signatures] : m_userSignatures)
+        for (const auto& signature : signatures) add(name, signature);
+    if (m_importedInterfaces) {
+        for (const auto& [name, functions] : m_importedInterfaces->receiverFunctions)
+            for (const auto& function : functions) add(name, function.signature);
+        for (const auto& [_, module] : m_importedInterfaces->modules)
+            for (const auto& [name, functions] : module.exports)
+                for (const auto& function : functions) add(name, function.signature);
+    }
+    std::set<std::string> fields;
+    if (const auto* named = std::get_if<NamedType>(&resolve(receiver)->kind))
+        if (const auto record = m_recordFields.find(resolveRecordName(named->name));
+            record != m_recordFields.end())
+            for (const auto& [field, _] : record->second) fields.insert(field);
+
+    const bool servingReceiver = [&] {
+        const auto* named = std::get_if<NamedType>(&resolve(receiver)->kind);
+        return named && named->name == "Server";
+    }();
+    // The probe runs where `at` was checked, and takes nothing with it.
+    auto savedModule = std::exchange(m_currentModulePath, context.module);
+    auto savedImports = std::exchange(m_declarationImports, context.imports);
+    auto savedImportStack = std::exchange(m_importScopeStack, {});
+    const auto savedInMake = std::exchange(m_inMakeBlock, false);
+    auto savedMakeType = std::exchange(m_currentMakeType, nullptr);
+    std::vector<Diagnostic> probeDiagnostics;
+    auto* savedDiagnostics = std::exchange(m_diagnostics, &probeDiagnostics);
+    std::vector<int> journal;
+    auto* savedJournal = std::exchange(m_substJournal, &journal);
+    const auto unresolvedMark = m_unresolvedMethods.size();
+    const auto unresolvedImportsMark = m_unresolvedMethodImports.size();
+
+    const auto probe = [&](const std::string& name, std::size_t arity) -> TypePtr {
+        std::vector<TypePtr> arguments{receiver};
+        while (arguments.size() < arity) arguments.push_back(freshTypeVar());
+        probeDiagnostics.clear();
+        auto result = checkCall(name, arguments, at.location, true);
+        const bool accepted = probeDiagnostics.empty() &&
+                              m_unresolvedMethods.size() == unresolvedMark;
+        if (accepted && result) result = resolvedThroughout(result);
+        m_unresolvedMethods.resize(unresolvedMark);
+        m_unresolvedMethodImports.resize(unresolvedImportsMark);
+        for (const int id : journal) m_subst.erase(id);
+        journal.clear();
+        return accepted ? result : nullptr;
+    };
+    // `.try` is syntax, not a function, and applies where its rule does.
+    if (auto payload = tryPayload(receiver)) {
+        Signature signature;
+        signature.name = names::kTryKeyword;
+        signature.params = {receiver};
+        signature.result = payload;
+        offered.push_back({signature.name, signature, payload, false});
+    }
+    for (const auto& field : fields)
+        if (auto result = probe(field, 1)) {
+            Signature signature;
+            signature.name = field;
+            signature.params = {receiver};
+            signature.result = result;
+            offered.push_back({field, std::move(signature), std::move(result), true});
+        }
+    for (const auto& [name, signatures] : candidates) {
+        if (fields.contains(name)) continue;
+        std::set<std::size_t> arities;
+        for (const auto& signature : signatures) {
+            arities.insert(signature.params.size());
+            if (signature.requiredParams) arities.insert(*signature.requiredParams);
+        }
+        for (const auto arity : arities) {
+            if (arity == 0) continue;
+            if (auto result = probe(name, arity)) {
+                const auto chosen = std::find_if(
+                    signatures.begin(), signatures.end(),
+                    [&](const Signature& signature) { return signature.params.size() == arity; });
+                offered.push_back({name, chosen != signatures.end() ? *chosen : signatures.front(),
+                                   std::move(result), false,
+                                   servingReceiver && m_slotMethodNames.contains(name)});
+                break;
+            }
+        }
+    }
+
+    m_currentModulePath = std::move(savedModule);
+    m_declarationImports = std::move(savedImports);
+    m_importScopeStack = std::move(savedImportStack);
+    m_inMakeBlock = savedInMake;
+    m_currentMakeType = std::move(savedMakeType);
+    m_diagnostics = savedDiagnostics;
+    m_substJournal = savedJournal;
+    return offered;
+}
+
+auto TypeChecker::bareCompletions(const ast::Expr& at) -> std::vector<std::string> {
+    const auto names = m_scopeNames.find(&at);
+    if (names == m_scopeNames.end() || names->second.context >= m_scopeContexts.size())
+        return {};
+    const auto& context = m_scopeContexts[names->second.context];
+
+    // Every name a bare use could mean; which of them one here reaches is
+    // bareNameDeclared's to say.
+    std::set<std::string> candidates;
+    const auto addPath = [&](const std::string& path) {
+        // A module is named by its first segment (`Net` of `Net.HTTP`).
+        if (!path.empty()) candidates.insert(path.substr(0, path.find('.')));
+    };
+    for (const auto& [name, _] : m_userSignatures)
+        if (!kex::mangle::hasScope(name)) candidates.insert(name);
+    candidates.insert(m_topLevelValueNames.begin(), m_topLevelValueNames.end());
+    for (const auto& [name, _] : m_declaredTypeArity)
+        if (!kex::mangle::hasScope(name)) candidates.insert(name);
+    for (const auto& [name, _] : m_constructorOwners) candidates.insert(name);
+    for (const auto& [_, constructors] : m_moduleConstructors)
+        for (const auto& [name, _constructor] : constructors) candidates.insert(name);
+    for (const auto& module : m_localModules) addPath(module);
+    if (m_importedInterfaces) {
+        for (const auto& [path, module] : m_importedInterfaces->modules) {
+            addPath(path);
+            for (const auto& [name, _] : module.exports) candidates.insert(name);
+        }
+        for (const auto& adt : m_importedInterfaces->adts)
+            candidates.insert(adt.constructors.begin(), adt.constructors.end());
+    }
+
+    // What a bare CALL reaches that a bare reference does not: a module's
+    // function brought in by the prelude or a `using` (`die("x")`, `sqrt(2)`
+    // under `using Math`). A receiver function reached by UFCS needs its
+    // argument, and is offered after a dot.
+    const auto bareCallReaches = [&](const std::string& name) {
+        if (bareFunctionReachable(name)) return true;
+        if (!m_importedInterfaces) return false;
+        for (const auto& [path, module] : m_importedInterfaces->modules) {
+            const auto found = module.exports.find(name);
+            if (found == module.exports.end() || found->second.empty()) continue;
+            if (module.automaticImport || withinModule(path) ||
+                moduleMemberImported(path, name, true))
+                return true;
+        }
+        return false;
+    };
+    auto savedModule = std::exchange(m_currentModulePath, context.module);
+    auto savedImports = std::exchange(m_declarationImports, context.imports);
+    auto savedImportStack = std::exchange(m_importScopeStack, {});
+    const auto savedInMake = std::exchange(m_inMakeBlock, false);
+    // Every declaration is registered by now; a later pass (the names of a
+    // merged dependency) can leave the flag down, and with it down every
+    // name counts as declared.
+    const auto savedRegistered = std::exchange(m_declarationsRegistered, true);
+    std::set<std::string> offered(names->second.bound.begin(), names->second.bound.end());
+    for (const auto& name : candidates)
+        // A dotted path is a qualified name (`Assert.equal`), not a bare one.
+        if (!name.empty() && name.find('.') == std::string::npos &&
+            (bareNameDeclared(name) || bareCallReaches(name)))
+            offered.insert(name);
+    m_currentModulePath = std::move(savedModule);
+    m_declarationImports = std::move(savedImports);
+    m_importScopeStack = std::move(savedImportStack);
+    m_declarationsRegistered = savedRegistered;
+    m_inMakeBlock = savedInMake;
+    // `new` is bound in every make block's scope, `_` is no name.
+    offered.erase("_");
+    return {offered.begin(), offered.end()};
 }
 
 auto TypeChecker::recordNames(const ast::Expr& expr) -> void {

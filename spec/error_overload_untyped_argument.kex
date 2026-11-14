@@ -1,0 +1,16 @@
+# kex: check-only
+# A parameter written without a type, passed where overloads part ways,
+# takes what they take between them: `x` is `Integer | String` here, so
+# `show(2.5)` is refused where it is written. It was accepted, and the Float
+# ran the String overload on BEAM and nothing on the walker (kexhq/kex#643).
+
+let describe(n: Integer) -> String = "integer ${n}"
+let describe(s: String) -> String = "string ${s}"
+
+let show(x) = describe(x)
+
+main do
+  IO.printLine(show(1))
+  IO.printLine(show("one"))
+  IO.printLine(show(2.5))
+end

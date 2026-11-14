@@ -157,6 +157,9 @@ make fuzz         # 400 generated programs + targeted ones, walker vs BEAM
 make test-metamorphic   # program changes that must keep behaviour, or be refused
 make metamorphic-search # those, plus spec programs broken the way a type error
                         # would: refused, or run alike without crashing (fresh seed)
+make lsp-sweep     # the language server asked about every name of examples/;
+                  # each answer held to the checker's (hover type, completion,
+                  # diagnostics, definition)
 make test-devirt  # devirtualized names exist in the emitted modules
 make dup-audit    # duplication and re-derivation counts may only fall
 make bench-slick  # performance on ../slick, a real application

@@ -31,6 +31,11 @@ struct DotReceiver {
     // off: in a builder chain `Web.Server.new(0)\n  .get("/", ~h)` the last
     // `.get(…)` call sits at that `(`. Zero when the receiver ends in no call.
     size_t callOpen = 0;
+    // The first byte of the receiver's last name when it ends in a member of
+    // something before it (`layer.biases`): that member call is the
+    // outermost expression, found by its name (MethodCall::methodLocation).
+    // Zero otherwise.
+    size_t member = 0;
     bool valid = false;
 };
 
@@ -50,6 +55,23 @@ struct CheckedSource {
 // interfaces: what completion asks of the REPLs and the language server.
 using CompletionChecker =
     std::function<std::optional<CheckedSource>(const std::string& path, const std::string& source)>;
+
+// A dot receiver as the checker sees it: `source` re-checked with the
+// half-typed member removed, and the receiver's outermost expression in that
+// analysis (null when nothing typed is recorded there).
+struct CheckedReceiver {
+    CheckedSource checked;
+    const ast::Expr* expression = nullptr;
+};
+auto checkedReceiver(const CompletionChecker& check, const std::string& source,
+                     const std::string& path, const DotReceiver& receiver,
+                     size_t cursor) -> std::optional<CheckedReceiver>;
+// Whether the receiver ends in a call by a bare name (`words()`), which is
+// recorded where the name is, not at the call's `(`.
+auto bareCallReceiver(const std::string& source, const DotReceiver& receiver) -> bool;
+// The type a member after `expression` is completed against: the value an
+// assignment writes (`new.age = ...`), otherwise the expression's own.
+auto receiverTypeOf(const Analyzer& analyzer, const ast::Expr* expression) -> TypePtr;
 
 // The type of an arbitrary receiver expression, by re-checking `source` with
 // the half-typed member removed and asking the analyzer.

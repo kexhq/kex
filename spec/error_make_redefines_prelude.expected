@@ -1,0 +1,2 @@
+spec/error_make_redefines_prelude.kex:13:3: error: `or` is defined twice for receiver `Result`: here and in the prelude
+spec/error_make_redefines_prelude.kex:18:3: error: `abs` is defined twice for receiver `Integer`: here and in the prelude

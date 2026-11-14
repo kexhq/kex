@@ -2033,6 +2033,18 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
             }
         }
 
+        // A free function overloaded by declared type that no overload of
+        // takes these arguments: a missing clause, as on BEAM. `None` was
+        // answered instead, and `describe(2.5)` printed an empty line
+        // (kexhq/kex#643). A `make` function keeps the `None`: a `to` that
+        // no conversion answers is an empty Optional.
+        if (dispatchByParamType && !isMethod) {
+            std::string shown;
+            for (const auto& arg : args)
+                shown += (shown.empty() ? "" : ", ") + (arg ? arg->inspect() : std::string("?"));
+            throw RuntimeError("no matching clause for " + regName + "(" + shown + ")",
+                               m_lastCallLocation);
+        }
         return Value::none();
     }};
 

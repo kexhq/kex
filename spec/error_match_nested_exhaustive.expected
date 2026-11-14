@@ -1,0 +1,5 @@
+spec/error_match_nested_exhaustive.kex:9:3: error: Non-exhaustive match: missing case(s) (Just(_), None), (None, Just(_))
+spec/error_match_nested_exhaustive.kex:16:3: error: Non-exhaustive match: missing case(s) [_, _ | _]
+spec/error_match_nested_exhaustive.kex:23:3: error: Non-exhaustive match: missing case(s) false
+spec/error_match_nested_exhaustive.kex:29:3: error: Non-exhaustive match: missing case(s) Just(_)
+spec/error_match_nested_exhaustive.kex:36:3: error: Non-exhaustive match: missing case(s) _

@@ -168,12 +168,8 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
             }
         return differs;
     }();
-    std::size_t clauseCount = 0;
-    for (const auto* fn : group) clauseCount += fn->clauses.size();
-    std::size_t clauseIndex = 0;
     for (const auto* fn : group) {
         for (const auto& clause : fn->clauses) {
-            const bool isLastInGroup = ++clauseIndex == clauseCount;
             subst.clear(); // fresh scope per clause
             traitDictionaries = savedTraitDictionaries;
             FunClause fc;
@@ -272,11 +268,11 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
             // "Alpha" for both on BEAM while the walker dispatched
             // correctly, and moving Net.Socket's `close`/`closed?`
             // overloads inside `module TCP` made a listener reach the
-            // connection clause (kexhq/kex#230). The LAST clause of a
-            // group stays unguarded so it remains the fallback, which is
-            // the behaviour every existing single-clause group already
-            // has.
-            if (overloadedByParamType && !isLastInGroup) {
+            // connection clause (kexhq/kex#230). The last clause is guarded
+            // too: left as a fallback it took whatever no other clause did, so
+            // `describe(2.5)` ran the String overload (kexhq/kex#643). A value
+            // no overload takes is a missing clause, not the last one's.
+            if (overloadedByParamType) {
                 ExprPtr guard;
                 auto addGuardTest = [&](const std::string& written, ExprPtr subject) {
                     if (!discriminatingType(written)) return;

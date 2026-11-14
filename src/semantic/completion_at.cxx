@@ -77,8 +77,16 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
     // receiver (recoveredReceiverQualifier types it).
     if (dot > 0 && source[dot - 1] == '&')
         return {.start = dot - 1, .dot = dot, .callOpen = 0, .valid = true};
+    // Where the outermost expression is recorded is decided by how the
+    // receiver ENDS: a call or a block at its `(` / `{`, a member of
+    // something by its name (MethodCall::methodLocation). Only the last link says
+    // this — `a.f(x).g` is the member `g`, not the call `f(x)` met first
+    // going back; taking that call, or the chain's start, completed against
+    // the wrong link (`layer.biases.` offered Layer's fields).
     size_t callOpen = 0;
     i = skipSpaceBack(dot);
+    size_t member = 0;
+    bool atEnd = true;
     while (i > 0) {
         const char c = source[i - 1];
         // A group is never the whole receiver: `makeBox(3)` continues into the
@@ -86,7 +94,8 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
         if (c == ')' || c == ']') {
             const size_t open = matchOpen(i, c, c == ')' ? '(' : '[');
             if (open == std::string::npos) return {};
-            if (c == ')' && callOpen == 0) callOpen = open;
+            if (c == ')' && atEnd) callOpen = open;
+            atEnd = false;
             i = open;
             continue;
         }
@@ -96,7 +105,8 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
         if (c == '}') {
             const size_t open = matchOpen(i, '}', '{');
             if (open == std::string::npos) return {};
-            if (callOpen == 0) callOpen = open;
+            if (atEnd) callOpen = open;
+            atEnd = false;
             const size_t before = skipSpaceBack(open);
             if (before > 0 &&
                 (isWord(static_cast<unsigned char>(source[before - 1])) ||
@@ -129,19 +139,73 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
         // A dot here means the chain continues leftwards: `Web.Server.new(0)`.
         const size_t before = skipSpaceBack(i);
         if (before == 0 || source[before - 1] != '.') break;
+        // Lowercase: a capitalized name after a dot is a namespace or a
+        // constructor (`FS.File`), not a member call.
+        if (atEnd && std::islower(static_cast<unsigned char>(source[i]))) member = i;
+        atEnd = false;
         i = skipSpaceBack(before - 1);
     }
     if (i >= dot) return {};
-    return {.start = i, .dot = dot, .callOpen = callOpen, .valid = true};
+    return {.start = i, .dot = dot, .callOpen = callOpen, .member = member, .valid = true};
 }
 
-auto recoveredReceiverQualifier(const CompletionChecker& check,
-                                const std::string& source,
-                                const std::string& path,
-                                const DotReceiver& receiver, size_t cursor,
-                                const ImportedInterfaces* interfaces)
-    -> std::string {
-    if (!receiver.valid || cursor < receiver.dot) return {};
+auto bareCallReceiver(const std::string& source, const DotReceiver& receiver) -> bool {
+    if (!receiver.valid || !receiver.callOpen || receiver.callOpen <= receiver.start) return false;
+    return std::all_of(source.begin() + static_cast<std::ptrdiff_t>(receiver.start),
+                       source.begin() + static_cast<std::ptrdiff_t>(receiver.callOpen),
+                       [](char c) {
+                           return std::isalnum(static_cast<unsigned char>(c)) || c == '_' ||
+                                  c == '?' || c == '!';
+                       });
+}
+
+auto receiverTypeOf(const Analyzer& analyzer, const ast::Expr* expression) -> TypePtr {
+    if (!expression) return nullptr;
+    // `new.age = ...`: the value written, not the assignment's own Unit.
+    if (const auto* assignment = std::get_if<ast::AssignExpr>(&expression->kind);
+        assignment && !assignment->path.empty())
+        return analyzer.assignmentTargetTypeOf(expression);
+    return analyzer.displayTypeOf(expression);
+}
+
+auto checkedReceiver(const CompletionChecker& check, const std::string& source,
+                     const std::string& path, const DotReceiver& receiver,
+                     size_t cursor) -> std::optional<CheckedReceiver> {
+    if (!receiver.valid || cursor < receiver.dot) return std::nullopt;
+    // The 1-based line and column of `offset` in `text`.
+    const auto positionOf = [](const std::string& text, size_t offset) {
+        int line = 1;
+        size_t lineStart = 0;
+        for (size_t i = 0; i < offset; ++i)
+            if (text[i] == '\n') { ++line; lineStart = i + 1; }
+        return std::pair<int, int>{line, static_cast<int>(offset - lineStart) + 1};
+    };
+    // The typed expression the analysis records at a position. Several can
+    // share one — `makeBox` the identifier and `makeBox(3)` the call both
+    // start at `m` — and only one has a type to complete against.
+    const auto typedAt = [](const Analyzer& analyzer, std::pair<int, int> position)
+        -> const ast::Expr* {
+        // One that names a type to complete members of first (a namespace
+        // path's `FS.File`), then any typed one (a `Number`).
+        const ast::Expr* qualified = nullptr;
+        const ast::Expr* typed = nullptr;
+        const auto better = [](const ast::Expr* held, const ast::Expr& candidate) {
+            // A call over the identifier it starts with.
+            return !held || std::holds_alternative<ast::MethodCall>(candidate.kind) ||
+                   std::holds_alternative<ast::FunctionCall>(candidate.kind);
+        };
+        for (const auto& [expression, _] : analyzer.typeMap()) {
+            if (!expression || expression->location.line != position.first ||
+                expression->location.column != position.second)
+                continue;
+            const auto type = receiverTypeOf(analyzer, expression);
+            if (!type || std::holds_alternative<UnknownType>(type->kind)) continue;
+            if (better(typed, *expression)) typed = expression;
+            if (!completionQualifierForType(type).empty() && better(qualified, *expression))
+                qualified = expression;
+        }
+        return qualified ? qualified : typed;
+    };
     // The shorthand `&.`: its parameter is a block's, typed by the call the
     // block is passed to. Written out as `{ |kexItem| kexItem }`, the
     // checker types it, and the body's `kexItem` is the receiver.
@@ -149,68 +213,69 @@ auto recoveredReceiverQualifier(const CompletionChecker& check,
         const std::string opening = "{ |kexItem| ";
         auto rewritten = source.substr(0, receiver.start) + opening + "kexItem }" +
                          source.substr(cursor);
-        const auto checked = check(path, rewritten);
-        if (!checked) return {};
-        const auto bodyAt = receiver.start + opening.size();
-        int line = 1;
-        size_t lineStart = 0;
-        for (size_t i = 0; i < bodyAt; ++i)
-            if (rewritten[i] == '\n') { ++line; lineStart = i + 1; }
-        const int column = static_cast<int>(bodyAt - lineStart) + 1;
-        for (const auto& [expression, _] : checked->analyzer->typeMap())
-            if (expression && expression->location.line == line &&
-                expression->location.column == column)
-                if (auto qualifier = completionQualifierForType(
-                        checked->analyzer->displayTypeOf(expression));
-                    !qualifier.empty())
-                    return qualifier;
-        return {};
+        auto checked = check(path, rewritten);
+        if (!checked) return std::nullopt;
+        const auto* expression =
+            typedAt(*checked->analyzer, positionOf(rewritten, receiver.start + opening.size()));
+        return CheckedReceiver{std::move(*checked), expression};
     }
     // Deleting through the cursor rather than just the dot is what makes
-    // `makeBox(3).g` parse again.
+    // `makeBox(3).g` parse again. Checked as a build checks it, not a bare
+    // parse: `using Web` is resolved by loading that module's source, and
+    // without it every type from an opt-in module came back `unknown`.
+    // A name already after the cursor (asking at `c.|area()`) is a member the
+    // buffer has: it parses as it is, and deleting only the dot would fuse
+    // the two (`carea()`).
+    // So does a name already typed (`scores.fi|nd { ... }`, `"s".sh|`): an
+    // unknown one is a type error, not a parse error, and deleting it would
+    // hand a following block to the receiver (`scores { ... }`). Only a bare
+    // trailing dot is removed.
     auto recovered = source;
-    recovered.erase(receiver.dot, cursor - receiver.dot);
-    // Checked as a build checks it, not a bare parse: `using Web` is resolved
-    // by loading that module's source, and without it every type from an
-    // opt-in module came back `unknown` — so a builder chain on `Web.Server`
-    // completed to nothing while the same shape on a local record worked.
-    (void)interfaces;
-    const auto checked = check(path, recovered);
-    if (!checked) return {};
-    const auto& analyzer = *checked->analyzer;
+    const bool memberFollows =
+        cursor < source.size() &&
+        (std::isalnum(static_cast<unsigned char>(source[cursor])) || source[cursor] == '_');
+    const bool memberTyped = std::any_of(
+        source.begin() + static_cast<std::ptrdiff_t>(receiver.dot) + 1,
+        source.begin() + static_cast<std::ptrdiff_t>(cursor),
+        [](char c) { return !std::isspace(static_cast<unsigned char>(c)); });
+    if (!memberFollows && !memberTyped) recovered.erase(receiver.dot, cursor - receiver.dot);
+    auto checked = check(path, recovered);
+    if (!checked) return std::nullopt;
+    // Everything before the deletion keeps its position. The receiver is
+    // recorded where its outermost expression is: a member by its name, a
+    // call at its `(`. A chain's start is its root's (`layer` in
+    // `layer.biases`), never the chain's own, so only a receiver that is one
+    // expression is asked there.
+    if (receiver.member) {
+        const auto [line, column] = positionOf(source, receiver.member);
+        for (const auto& [expression, _] : checked->analyzer->typeMap())
+            if (const auto* call = expression
+                    ? std::get_if<ast::MethodCall>(&expression->kind) : nullptr;
+                call && call->methodLocation.line == line &&
+                call->methodLocation.column == column &&
+                expression->location.file == path)
+                return CheckedReceiver{std::move(*checked), expression};
+        return CheckedReceiver{std::move(*checked), nullptr};
+    }
+    const auto* expression = typedAt(
+        *checked->analyzer,
+        positionOf(source, receiver.callOpen ? receiver.callOpen : receiver.start));
+    // A bare call (`words()`) is recorded where its name is, not at its `(`:
+    // there the receiver's start is the call itself.
+    if (!expression && receiver.callOpen && bareCallReceiver(source, receiver))
+        expression = typedAt(*checked->analyzer, positionOf(source, receiver.start));
+    return CheckedReceiver{std::move(*checked), expression};
+}
 
-    // Everything before the deletion keeps its position, so the receiver's
-    // line/column are the ones it had in the original buffer. A CALL is
-    // recorded at its argument list's `(`, so a builder chain
-    // (`Web.Server.new(0).get(…).post(…)`) has nothing at all at the start of
-    // the receiver — that position is where `Web` is, and the chain's own type
-    // lives at the last call's paren.
-    const auto positionOf = [&](size_t offset) {
-        int line = 1;
-        size_t lineStart = 0;
-        for (size_t i = 0; i < offset; ++i)
-            if (source[i] == '\n') { ++line; lineStart = i + 1; }
-        return std::pair<int, int>{
-            line, static_cast<int>(offset - lineStart) + 1};
-    };
-    std::vector<std::pair<int, int>> candidates;
-    if (receiver.callOpen) candidates.push_back(positionOf(receiver.callOpen));
-    candidates.push_back(positionOf(receiver.start));
-
-    // Several expressions can start at one column — `makeBox` the identifier
-    // and `makeBox(3)` the call both start at `m`. Only the call has a type
-    // worth completing against, so take the first that yields a qualifier.
-    for (const auto& [candidateLine, candidateColumn] : candidates)
-        for (const auto& [expression, _] : analyzer.typeMap()) {
-            if (!expression || expression->location.line != candidateLine ||
-                expression->location.column != candidateColumn)
-                continue;
-            if (auto qualifier =
-                    completionQualifierForType(analyzer.displayTypeOf(expression));
-                !qualifier.empty())
-                return qualifier;
-        }
-    return {};
+auto recoveredReceiverQualifier(const CompletionChecker& check,
+                                const std::string& source,
+                                const std::string& path,
+                                const DotReceiver& receiver, size_t cursor,
+                                const ImportedInterfaces*)
+    -> std::string {
+    const auto found = checkedReceiver(check, source, path, receiver, cursor);
+    if (!found || !found->expression) return {};
+    return completionQualifierForType(receiverTypeOf(*found->checked.analyzer, found->expression));
 }
 
 auto completionClosers(const std::string& text) -> std::string {

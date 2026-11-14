@@ -399,6 +399,92 @@ int main() {
                            std::string("missing ") + member + ": " + reply);
         });
 
+        it("completes a chain against its last link, not its root", []() {
+            // `layer.biases.` is a [Float]: Layer's fields came back, read
+            // from where the chain STARTS, which is `layer`'s position.
+            const std::string text =
+                "record Layer do\n  weights : [[Float]]\n  biases  : [Float]\nend\n\n"
+                "main do\n  let layer = Layer { weights: [[0.1]], biases: [0.5] }\n"
+                "  layer.biases.\nend\n";
+            const auto reply = askAt("file:///tmp/kex-lsp-chain.kex", text, "completion", 7, 15);
+            assertTrue(reply.find("\"label\":\"biases\"") == std::string::npos &&
+                           reply.find("\"label\":\"weights\"") == std::string::npos,
+                       "a list offered the record's fields: " + reply);
+            for (const auto* member : {"map", "first", "count"})
+                assertTrue(reply.find(std::string("\"label\":\"") + member + "\"") != std::string::npos,
+                           std::string("missing ") + member + ": " + reply);
+            // And only what the receiver takes: nothing named `read` or
+            // `write` accepts a Layer.
+            const auto own = askAt("file:///tmp/kex-lsp-chain.kex",
+                                   "record Layer do\n  biases : [Float]\nend\n\n"
+                                   "main do\n  let layer = Layer { biases: [0.5] }\n  layer.\nend\n",
+                                   "completion", 6, 8);
+            assertTrue(own.find("\"label\":\"biases\"") != std::string::npos, "missing field: " + own);
+            for (const auto* foreign : {"read", "write", "open", "min", "rename"})
+                assertTrue(own.find(std::string("\"label\":\"") + foreign + "\"") == std::string::npos,
+                           std::string("offered ") + foreign + " on a record: " + own);
+        });
+
+        it("offers a module's functions only where a `using` brings it in", []() {
+            // `"hello".sha256` without `using Digest` is an error; it was
+            // offered all the same.
+            const auto without = askAt("file:///tmp/kex-lsp-scope.kex",
+                                       "main do\n  \"hello\".sh\nend\n", "completion", 1, 12);
+            assertTrue(without.find("\"label\":\"sha256\"") == std::string::npos,
+                       "offered Digest's sha256 without `using Digest`: " + without);
+            const auto with = askAt("file:///tmp/kex-lsp-scope.kex",
+                                    "using Digest\n\nmain do\n  \"hello\".sh\nend\n",
+                                    "completion", 3, 12);
+            assertTrue(with.find("\"label\":\"sha256\"") != std::string::npos,
+                       "did not offer sha256 under `using Digest`: " + with);
+        });
+
+        it("completes a bare name to what a use of it there reaches", []() {
+            // Every top-level declaration of every prelude source was
+            // offered, private helpers and opt-in modules' functions included.
+            const auto reply = askAt("file:///tmp/kex-lsp-bare.kex",
+                                     "main do\n  let rate = 2\n  IO.inspect(ra)\n  IO.inspect(me)\n"
+                                     "  IO.inspect(sh)\nend\n",
+                                     "completion", 2, 15);
+            assertTrue(reply.find("\"label\":\"rate\"") != std::string::npos,
+                       "the local was not offered: " + reply);
+            const auto helper = askAt("file:///tmp/kex-lsp-bare.kex",
+                                      "main do\n  IO.inspect(me)\nend\n", "completion", 1, 15);
+            assertTrue(helper.find("\"label\":\"measureKind\"") == std::string::npos,
+                       "offered a name a bare use cannot reach: " + helper);
+            const auto optIn = askAt("file:///tmp/kex-lsp-bare.kex",
+                                     "main do\n  IO.inspect(sh)\nend\n", "completion", 1, 15);
+            assertTrue(optIn.find("\"label\":\"sha256\"") == std::string::npos,
+                       "offered Digest's sha256 without `using Digest`: " + optIn);
+        });
+
+        it("goes to a local's binding and a field's declaration, as the checker resolved them", []() {
+            // By name, `let offset` led to a stdlib record's `offset` field and
+            // `p.x` to the `record` line.
+            const std::string text =
+                "record Point do\n  x : Float\n  y : Float\nend\n\n"
+                "main do\n  let offset = Point { x: 1.0, y: 2.0 }\n  IO.inspect(offset.x)\nend\n";
+            const auto binding = askAt("file:///tmp/kex-lsp-definition.kex", text, "definition", 6, 7);
+            assertTrue(binding.find(R"("start":{"character":6,"line":6})") != std::string::npos,
+                       "the binding did not lead to itself: " + binding);
+            const auto use = askAt("file:///tmp/kex-lsp-definition.kex", text, "definition", 7, 14);
+            assertTrue(use.find(R"("start":{"character":6,"line":6})") != std::string::npos,
+                       "the use did not lead to its binding: " + use);
+            const auto field = askAt("file:///tmp/kex-lsp-definition.kex", text, "definition", 7, 21);
+            assertTrue(field.find(R"("start":{"character":2,"line":1})") != std::string::npos,
+                       "the field read did not lead to the field: " + field);
+        });
+
+        it("hovers a local `let` as its binding, without a same-named declaration's prose", []() {
+            const auto reply = askAt("file:///tmp/kex-lsp-let-name.kex",
+                                     "main do\n  let name = \"x\"\n  IO.printLine(name)\nend\n",
+                                     "hover", 1, 7);
+            assertTrue(reply.find("name : String") != std::string::npos, "not the binding: " + reply);
+            assertTrue(reply.find("ISO tag") == std::string::npos &&
+                           reply.find("Display name") == std::string::npos,
+                       "the binding hovered with Culture's prose: " + reply);
+        });
+
         it("completes after the `&.` shorthand from the block's element type", []() {
             // The shorthand's receiver is the block's parameter, typed by the
             // call the block is passed to.
