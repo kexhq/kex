@@ -946,14 +946,26 @@ split_env_entry(E) ->
 %% Case as the lexer reads it (src/common/name_case.hxx): Unicode letter
 %% categories, not just ASCII, so `:árvíz` is an atom spelled bare and `Φ` a
 %% constructor's name, as they are in source.
+%% `unicode_util:category/1` is newer than OTP 27, which Kex supports; where it
+%% is missing, case mapping says whether a letter is uppercase (`Φ` lowercases
+%% to `φ`), and any character outside ASCII counts as a letter, as the lexer
+%% takes one in a name.
 is_letter(C) ->
-    case unicode_util:category(C) of
-        {letter, _} -> true;
-        _ -> false
+    case has_categories() of
+        true -> element(1, unicode_util:category(C)) =:= letter;
+        false -> C >= 128
     end.
 
+has_categories() ->
+    _ = code:ensure_loaded(unicode_util),
+    erlang:function_exported(unicode_util, category, 1).
+
 upper_initial([C | _]) when C < 128 -> C >= $A andalso C =< $Z;
-upper_initial([C | _]) -> unicode_util:category(C) =:= {letter, uppercase};
+upper_initial([C | _]) ->
+    case has_categories() of
+        true -> unicode_util:category(C) =:= {letter, uppercase};
+        false -> string:lowercase([C]) =/= [C]
+    end;
 upper_initial([]) -> false.
 
 lower_initial([C | _]) when C < 128 -> C >= $a andalso C =< $z;
