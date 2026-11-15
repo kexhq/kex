@@ -766,9 +766,11 @@ private:
                    TypeEnv::Binding binding = {}) -> void;
     // A binding the program writes (`let`, `var`, a pattern's name): a name
     // the current scope already binds is a redeclaration, reported at
-    // `where`; the first binding's kind is kept.
+    // `where`; the first binding's kind is kept. `named` is where the name
+    // itself is written (`p` in `var p = ...`), which tooling records; it
+    // defaults to `where`.
     auto declareVar(const std::string& name, TypePtr type, bool isVar,
-                    SourceLocation where) -> void;
+                    SourceLocation where, SourceLocation named = {}) -> void;
     auto lookupVar(const std::string& name) const -> TypePtr;
     // How the nearest binding of `name` was made, or null.
     auto bindingOf(const std::string& name) const -> const TypeEnv::Binding*;

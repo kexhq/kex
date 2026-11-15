@@ -5436,7 +5436,8 @@ auto TypeChecker::defineVar(const std::string& name, TypePtr type,
 }
 
 auto TypeChecker::declareVar(const std::string& name, TypePtr type, bool isVar,
-                             SourceLocation where) -> void {
+                             SourceLocation where, SourceLocation named) -> void {
+    if (named.line == 0) named = where;
     const auto& env = m_scopeStack.empty() ? m_globals : m_scopeStack.back();
     if (const auto* existing = env.binding(name); existing && !existing->implicit) {
         const auto first = *existing;
@@ -5448,8 +5449,8 @@ auto TypeChecker::declareVar(const std::string& name, TypePtr type, bool isVar,
         defineVar(name, std::move(type), first);
         return;
     }
-    defineVar(name, std::move(type), {isVar, false, where.line, where.column});
-    if (m_recordsNames) m_bindingSites.emplace_back(name, where);
+    defineVar(name, std::move(type), {isVar, false, named.line, named.column});
+    if (m_recordsNames) m_bindingSites.emplace_back(name, named);
 }
 
 auto TypeChecker::lookupVar(const std::string& name) const -> TypePtr {

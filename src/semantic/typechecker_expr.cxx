@@ -809,8 +809,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (!declared && m_inSyntheticMain)
                     declared = declaredConstantType(varPat->name, valueType,
                                                     expr.location);
+                // At the name as written (`let total`), not the statement's start.
                 declareVar(varPat->name, declared ? declared : valueType,
-                           /*isVar=*/false, expr.location);
+                           /*isVar=*/false,
+                           expr.location, node.pattern->location);
                 // For tooling, as a pattern's names are: hover on the name answers
                 // for the binding, not for some same-named function.
                 m_patternBindings.push_back(
@@ -840,8 +842,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             if (auto* varPat = node.pattern
                     ? std::get_if<ast::VarPattern>(&node.pattern->kind)
                     : nullptr) {
+                // At the name as written (`var p`): the statement starts at `var`,
+                // and definition led there (`make lsp-sweep`).
                 declareVar(varPat->name, declared ? declared : valueType,
-                           /*isVar=*/true, expr.location);
+                           /*isVar=*/true,
+                           expr.location, node.pattern->location);
                 // For tooling, as a pattern's names are: hover on the name answers
                 // for the binding, not for some same-named function.
                 m_patternBindings.push_back(
