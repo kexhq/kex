@@ -382,8 +382,10 @@ let join(first, second) = "${first}:${second}"
                     std::filesystem::weakly_canonical(
                         root / "lib" / "path_user.kex").string()) != std::string::npos,
                    "a dependent unit with unchanged interfaces was rebuilt: " + changedBuild);
-        assertTrue(runAs("actual").find("\na:b\n") != std::string::npos,
-                   "the changed unit's body was not rebuilt: " + changedBuild);
+        const auto changedRun = runAs("actual");
+        assertTrue(changedRun.find("\na:b\n") != std::string::npos,
+                   "the changed unit's body was not rebuilt: " + changedRun + "\n---\n" +
+                       changedBuild);
         assertTrue(runAs("actual").find("\nx:y\n") != std::string::npos,
                    "a cached dependent called the old implementation: " + changedBuild);
         return {std::move(actual), std::move(separate)};

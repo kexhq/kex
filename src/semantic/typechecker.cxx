@@ -889,6 +889,41 @@ auto TypeChecker::qualifiedNominalType(const std::string& qualified) const
     if (nominal(qualified)) return qualified;
     auto resolved = resolveRecordName(qualified);
     if (nominal(resolved)) return resolved;
+    // A path relative to where it is written: an enclosing module's
+    // (`Inner.Box` inside `module Outer`), or one a `using` reaches
+    // (`Server.Running` under `using Net.HTTP`, `H.Server.Running` under
+    // `using Net.HTTP, as: H`). An opaque `type` is a type here as much as a
+    // record. Exactly one meaning, or none.
+    const auto declared = [&](const std::string& candidate) {
+        return nominal(candidate) || m_moduleTypeIdentities.count(candidate) ||
+               m_declaredTypeNames.count(candidate) ||
+               (m_importedInterfaces && m_importedInterfaces->typeNames.count(candidate));
+    };
+    std::set<std::string> found;
+    for (auto scope = m_currentModulePath; !scope.empty();) {
+        if (const auto candidate = scope + "." + qualified; declared(candidate)) {
+            found.insert(candidate);
+            break;
+        }
+        const auto dot = scope.rfind('.');
+        if (dot == std::string::npos) break;
+        scope.resize(dot);
+    }
+    const auto through = [&](const ImportSelection& import) {
+        if (import.alias) {
+            if (qualified.starts_with(*import.alias + "."))
+                if (const auto candidate = import.module + qualified.substr(import.alias->size());
+                    declared(candidate))
+                    found.insert(candidate);
+            return;
+        }
+        if (const auto candidate = import.module + "." + qualified; declared(candidate))
+            found.insert(candidate);
+    };
+    for (const auto& import : m_declarationImports) through(import);
+    for (const auto& scope : m_importScopeStack)
+        for (const auto& import : scope) through(import);
+    if (found.size() == 1) return *found.begin();
     return std::nullopt;
 }
 
@@ -3349,7 +3384,14 @@ auto TypeChecker::resolveTypeExprNode(const ast::TypeExpr& typeExpr,
                     (m_importedInterfaces &&
                      m_importedInterfaces->recordArities.count(qualified));
                 if (!namesDeclaredType(qualified, last)) reportUnknownType(node, typeExpr.location);
-                return Type::named(isNominal ? qualified : last);
+                // Not known here, a qualified name still names the type it
+                // spells. Cut to its last segment, `Net.Socket.TCP.Endpoint`
+                // in Net.HTTP's interface became a bare `Endpoint` (Net.Socket
+                // is not loaded where Net.HTTP is checked), which no user of
+                // `Server.localAddress` could resolve: `.port` on it was
+                // Unknown, and an undefined method passed the check.
+                (void)isNominal;
+                return Type::named(qualified);
             }
             if (!namesDeclaredType(qualified, last)) reportUnknownType(node, typeExpr.location);
             return Type::named(resolveRecordName(last));

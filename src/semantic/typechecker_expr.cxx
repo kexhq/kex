@@ -2113,6 +2113,17 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
             auto result = checkCall(callName, argTypes, expr.location,
                                     /*isMethodCall=*/true, &node, &expr);
+            // An imported module's payload constructor through its path
+            // (`Units.SI.Kilo(Units.SI.Watt)`) is called as the module's
+            // exported function, and is a value of its ADT: typed as that
+            // function's result it was a bare `Kilo` nothing resolves.
+            if (isNamespaceCall && importedPath && !argTypes.empty() &&
+                !m_localModules.contains(*importedPath) && kex::startsUppercase(node.method))
+                if (const auto module = m_moduleConstructors.find(*importedPath);
+                    module != m_moduleConstructors.end() && module->second.contains(node.method))
+                    if (auto constructed =
+                            constructorResultType(node.method, argTypes, *importedPath))
+                        result = constructed;
             // An imported module's nullary constructor, reached as the
             // module's exported function: its value is that variant of its ADT,
             // the type its bare name has where it is in scope.
@@ -6547,6 +6558,19 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             auto receiver = resolve(argTypes.front());
             if (isUndetermined(receiver))
                 return Type::unknown();
+            // No candidate takes this receiver at any arity: the method is
+            // undefined for it, as the check of the whole program says. Its
+            // argument count was blamed instead, against an unrelated
+            // same-named function (`running.localAddress` with Net.HTTP's
+            // out of scope: a mock's two-argument one).
+            if (std::none_of(sigs->begin(), sigs->end(), [&](const Signature& signature) {
+                    return !signature.params.empty() &&
+                           argMatchesParam(receiver, signature.params.front());
+                })) {
+                error(loc, "Undefined method `" + sourceName(name) + "` for `" +
+                               typeToString(receiver) + "`");
+                return Type::unknown();
+            }
         }
         error(loc, "`" + sourceName(name) + "` expects " + std::to_string((*sigs)[0].params.size()) +
               " argument(s), got " + std::to_string(argTypes.size()));

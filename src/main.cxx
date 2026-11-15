@@ -889,7 +889,13 @@ auto runOnWalker(const Options &options, const std::string &filepath,
   // typechecked only by accident, breaking outright the moment a
   // same-named prelude function also existed (docs/known-gaps.md,
   // "Cross-file `using` imports are barely type-checked").
-  resolveBeamDeps(program, moduleRootsFor(filepath),
+  // PROJECT roots only, as `-C` merges: a stdlib module has its compiled
+  // interface, and the evaluator loads its source when the program reaches it
+  // (each such module checked as it loads). Merged here as source, the stdlib
+  // was checked as the program's own modules, so a `using Net.HTTP, only:
+  // [Router]` still reached `Server.localAddress` on the walker while `-C`
+  // and BEAM refused it: one program, two languages.
+  resolveBeamDeps(program, kex::withoutStandardLibraryRoots(moduleRootsFor(filepath)),
                   &preludeSemanticInterfaces(),
                   sourceModulesNamedBy(program));
 

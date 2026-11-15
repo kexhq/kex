@@ -88,6 +88,32 @@ inline auto preludeRegistry(const std::string& runtimeDir)
     return cached;
 }
 
+// Where a source signature is written, for a qualified type name in it: the
+// type identities the sources declare (`Net.Socket.TCP.Endpoint`) and the
+// module being collected, whose enclosing modules a relative spelling
+// (`TCP.Endpoint` inside `Net.Socket`) is read against.
+struct SourceTypeScope {
+    const std::unordered_set<std::string>* identities = nullptr;
+    std::string module;
+};
+inline thread_local const SourceTypeScope* g_sourceTypeScope = nullptr;
+
+// The identity a qualified type name spells where the scope is, when it
+// spells one: as written, or relative to an enclosing module.
+inline auto qualifiedSourceType(const std::string& dotted) -> std::optional<std::string> {
+    const auto* scope = g_sourceTypeScope;
+    if (!scope || !scope->identities) return std::nullopt;
+    for (auto module = scope->module; !module.empty();) {
+        if (const auto candidate = module + "." + dotted; scope->identities->count(candidate))
+            return candidate;
+        const auto dot = module.rfind('.');
+        if (dot == std::string::npos) break;
+        module.resize(dot);
+    }
+    if (scope->identities->count(dotted)) return dotted;
+    return std::nullopt;
+}
+
 // Simplified AST→Type converter for the source fallback below.
 // Handles the subset of types used in prelude annotations.
 inline auto resolveSourceType(const ast::TypeExpr& expr,
@@ -100,6 +126,14 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, ast::TypeName>) {
             if (node.parts.empty()) return Type::unknown();
+            // A qualified name keeps the identity it spells: cut to its last
+            // segment, Net.HTTP's `-> Net.Socket.TCP.Endpoint` became a bare
+            // `Endpoint` no program could resolve, and `.port` on it was
+            // Unknown. One that names no declared type (a variant,
+            // `Quantity.Time`) is read as before.
+            if (node.parts.size() > 1)
+                if (auto identity = qualifiedSourceType(node.dotted()))
+                    return Type::named(*identity);
             const auto& name = node.parts.back();
             // The checker's own table: a signature spelled `Atom` (or a sized
             // numeric) that came back as NamedType while the typechecker
@@ -459,6 +493,37 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         for (const auto& item : program.items)
             collectTraitNames(item, traitNames);
 
+    // Every type the sources declare, by its identity, for qualified names in
+    // signatures (qualifiedSourceType).
+    std::unordered_set<std::string> typeIdentities;
+    {
+        const auto collect = [&](const auto& self, const auto& items,
+                                 const std::string& module) -> void {
+            const auto qualified = [&](const std::string& name) {
+                return module.empty() ? name : module + "." + name;
+            };
+            for (const auto& item : items)
+                std::visit([&](const auto& node) {
+                    using T = std::decay_t<decltype(node)>;
+                    if (!node) return;
+                    if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>> ||
+                                  std::is_same_v<T, std::unique_ptr<ast::TypeDef>>)
+                        typeIdentities.insert(qualified(node->name));
+                    else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>)
+                        self(self, node->body, ast::nestedModulePath(module, node->name));
+                    else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>)
+                        self(self, node->items, module);
+                }, item);
+        };
+        for (const auto& program : programs) collect(collect, program.items, {});
+    }
+    SourceTypeScope topLevelScope{&typeIdentities, {}};
+    const auto* savedScope = std::exchange(g_sourceTypeScope, &topLevelScope);
+    struct RestoreScope {
+        const SourceTypeScope* saved;
+        ~RestoreScope() { g_sourceTypeScope = saved; }
+    } restoreScope{savedScope};
+
     // Every function declared anywhere in the parsed sources, PRIVATE ones
     // included: `type Handler = Type.of(handlerType)` (net/http.kex) names a
     // `private do ... end` helper that exists only to give the alias a shape,
@@ -580,15 +645,26 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         sig.name = fn.name;
         sig.isFoul = fn.isFoul;
         if (selfType) sig.params.push_back(selfType);
-        for (const auto& param : clause.params)
+        // `let *(@Watt, @Hour)`: a first parameter written `@Pattern` is the
+        // receiver matched against a pattern, which selfType already is. As
+        // a parameter of its own, `Watt * Hour` met a three-argument `*` and
+        // was "not defined" wherever Units.SI was known by its interface.
+        const bool receiverPattern =
+            selfType && !clause.params.empty() && clause.params.front().pattern &&
+            *clause.params.front().pattern &&
+            std::holds_alternative<ast::ThisPattern>((*clause.params.front().pattern)->kind);
+        const auto first = receiverPattern ? std::size_t{1} : std::size_t{0};
+        for (auto i = first; i < clause.params.size(); ++i) {
+            const auto& param = clause.params[i];
             sig.params.push_back(
                 param.type && *param.type
                     ? resolveSourceType(**param.type, vars, &typeAliases, &traitNames)
                     : kex::semantic::Type::unknown());
+        }
         auto required = clause.params.size();
-        while (required > 0 && clause.params[required - 1].defaultValue)
+        while (required > first && clause.params[required - 1].defaultValue)
             --required;
-        sig.requiredParams = required + (selfType ? 1 : 0);
+        sig.requiredParams = required - first + (selfType ? 1 : 0);
         sig.result = clause.returnAnnotation && *clause.returnAnnotation
             ? resolveSourceType(**clause.returnAnnotation, vars, &typeAliases, &traitNames)
             : kex::semantic::Type::unknown();
@@ -749,10 +825,19 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                                      ast::signatureClauses(**fn)) {
                                     auto sig = inlineSignature(**fn, *clause, selfType);
                                     if (!sig) continue;
+                                    // Aligned with the signature, which a
+                                    // receiver written `@Pattern` is not a
+                                    // parameter of (inlineSignature).
                                     std::vector<std::string> paramNames;
-                                    for (const auto& param : clause->params)
+                                    for (const auto& param : clause->params) {
+                                        if (&param == &clause->params.front() && selfType &&
+                                            param.pattern && *param.pattern &&
+                                            std::holds_alternative<ast::ThisPattern>(
+                                                (*param.pattern)->kind))
+                                            continue;
                                         paramNames.push_back(
                                             param.name ? *param.name : "");
+                                    }
                                     addReceiverSig(sourceModule, *sig,
                                                    std::move(paramNames), foreignTarget);
                                 }
@@ -970,6 +1055,13 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             collectAnnotatedNames =
             [&](const ast::ModuleDef& mod, const std::string& parent) {
             const auto moduleName = ast::nestedModulePath(parent, mod.name);
+            // Qualified type names in this module's signatures read against it.
+            SourceTypeScope moduleScope{&typeIdentities, moduleName};
+            const auto* outerScope = std::exchange(g_sourceTypeScope, &moduleScope);
+            struct RestoreModuleScope {
+                const SourceTypeScope* saved;
+                ~RestoreModuleScope() { g_sourceTypeScope = saved; }
+            } restoreModuleScope{outerScope};
             for (const auto& item : mod.body) {
                 if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item))
                     if (*ann) moduleAnnotated.insert(kex::mangle::qualify(moduleName, (*ann)->name));
