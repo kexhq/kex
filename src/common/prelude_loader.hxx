@@ -1,4 +1,5 @@
 #pragma once
+#include "string_utils.hxx"
 
 #include "../semantic/symbol_info.hxx"
 #include <algorithm>
@@ -187,11 +188,9 @@ inline auto preludeFilesFromRoot(const std::filesystem::path& root)
                         return std::isalnum(c) || c == '_';
                     }))
                 fail("invalid module name: " + module);
-            std::transform(segment.begin(), segment.end(), segment.begin(),
-                           [](unsigned char c) {
-                               return static_cast<char>(std::tolower(c));
-                           });
-            relative /= segment;
+            // The file the module resolver finds it in: snake_case
+            // (`FileHandle` → `file_handle.kex`), as STYLE.md names files.
+            relative /= kex::snakeCased(segment);
         }
         relative += ".kex";
         auto source = root / relative;

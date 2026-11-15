@@ -137,9 +137,23 @@ auto BelowAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
     return below;
 }
 
-auto AvailableInterfacesAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
-    const auto* interfaces = unit.program().settings().interfaces;
-    auto below = analyses.result<BelowAnalysis>(unit).registry.buildSemanticInterfaces();
+// Units described apart (`below`) as the units above them see them, over the
+// interfaces the build was given (`view`, none for a bare build): each
+// compiled apart, a `make` function travelling with its receiver unless
+// declared for a type its module does not declare, and a module described
+// here replacing the view's description of it.
+auto overlayDescribedInterfaces(const semantic::ImportedInterfaces* view,
+                                semantic::ImportedInterfaces below, bool reached)
+    -> semantic::ImportedInterfaces {
+    // Only units a program reached are compiled apart for it and bring their
+    // `make` functions with them: the opt-in library described for every
+    // program is none of them until one imports a module of it.
+    if (reached) markReachedUnits(below);
+    if (!view) return below;
+    return overlayOnView(*view, std::move(below));
+}
+
+auto markReachedUnits(semantic::ImportedInterfaces& below) -> void {
     for (auto& [_, module] : below.modules) module.compiledApart = true;
     // A `make` function travels with its receiver unless it was declared for
     // a type its module does not declare (KexiMethod::foreignTarget).
@@ -153,13 +167,16 @@ auto AvailableInterfacesAnalysis::run(Unit& unit, UnitAnalysisManager& analyses)
         for (auto& [__, functions] : module.exports)
             for (auto& function : functions)
                 if (travelsWithReceiver(function)) function.visibleByReceiver = true;
-    if (!interfaces) return below;
+}
+
+auto overlayOnView(const semantic::ImportedInterfaces& view, semantic::ImportedInterfaces below)
+    -> semantic::ImportedInterfaces {
     // A module this build compiles is described by its own interface, not by
     // the one the prelude derives from the standard library's source for an
     // opt-in module: that one names where the module's functions would be in
     // a merged program (`make Router` in `Net.HTTP`, filed under
     // `Kex.Net.HTTP.Router`), and the merge keeps the first description.
-    auto view = *interfaces;
+    auto given = view;
     // A type's `make` functions are filed under the type (`Regex.Match`),
     // inside the module this build compiles (`Regex`).
     const auto builtHere = [&](std::string module) {
@@ -170,7 +187,7 @@ auto AvailableInterfacesAnalysis::run(Unit& unit, UnitAnalysisManager& analyses)
             module.resize(dot);
         }
     };
-    std::erase_if(view.modules, [&](const auto& module) { return builtHere(module.first); });
+    std::erase_if(given.modules, [&](const auto& module) { return builtHere(module.first); });
     // The prelude files its own copies under `Prelude`; a receiver of a type
     // declared in such a module (`Regex.Match`) gives them away.
     const auto onBuiltType = [&](const semantic::ImportedFunction& function) {
@@ -179,11 +196,22 @@ auto AvailableInterfacesAnalysis::run(Unit& unit, UnitAnalysisManager& analyses)
             std::get_if<semantic::NamedType>(&function.signature.params.front()->kind);
         return named && named->name.find('.') != std::string::npos && builtHere(named->name);
     };
-    for (auto& [__, functions] : view.receiverFunctions)
+    for (auto& [__, functions] : given.receiverFunctions)
         std::erase_if(functions, [&](const auto& function) {
             return builtHere(function.sourceModule) || onBuiltType(function);
         });
-    return mergeSemanticInterfaces(std::move(view), std::move(below));
+    // An alias the units describe is theirs: the prebuilt runtime's copy of
+    // an opt-in module spells `Handler`'s body with bare names
+    // (`Response<Binary>`), which no value of the built module's
+    // `Net.HTTP.Response` matches, and the merge keeps the first.
+    for (const auto& [name, _] : below.typeAliases) given.typeAliases.erase(name);
+    return mergeSemanticInterfaces(std::move(given), std::move(below));
+}
+
+auto AvailableInterfacesAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
+    return overlayDescribedInterfaces(
+        unit.program().settings().interfaces,
+        analyses.result<BelowAnalysis>(unit).registry.buildSemanticInterfaces(), true);
 }
 
 auto unitExternalModules(const beam::KexiRegistry& registry) -> ir::ExternalModules {

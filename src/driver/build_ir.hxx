@@ -374,6 +374,17 @@ struct MergeDependenciesPass : pass::PassInfoMixin<MergeDependenciesPass> {
 auto unitPassRegistry() -> const pass::PassRegistry<Unit>&;
 auto programPassRegistry() -> const pass::PassRegistry<Program>&;
 auto defaultProgramPipeline() -> std::string;
+
+// Units described apart, as the units above them see them, over the
+// interfaces a build was given (AvailableInterfacesAnalysis).
+// `reached`: units the program reached, compiled apart for it, whose `make`
+// functions travel with their receivers.
+auto overlayDescribedInterfaces(const semantic::ImportedInterfaces* view,
+                                semantic::ImportedInterfaces below, bool reached)
+    -> semantic::ImportedInterfaces;
+auto markReachedUnits(semantic::ImportedInterfaces& below) -> void;
+auto overlayOnView(const semantic::ImportedInterfaces& view, semantic::ImportedInterfaces below)
+    -> semantic::ImportedInterfaces;
 // The program pipeline to run: the user's (`--passes`), or the default.
 auto buildProgramPipeline() -> ProgramPassManager;
 // Every pass of every level, with what it does, and the default pipeline.

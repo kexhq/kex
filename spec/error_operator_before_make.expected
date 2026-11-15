@@ -7,10 +7,6 @@ spec/error_operator_before_make.kex:12:25: error: `+` expects argument 2 to be V
 
 + : Binary -> Binary -> Binary
 
-+ : Complex.Complex -> Complex.Complex -> Complex.Complex
-
-+ : Complex.Complex -> Number -> Complex.Complex
-
 + : Date -> Measure<Quantity.Time> -> Date
 
 + : Date -> Period -> Date

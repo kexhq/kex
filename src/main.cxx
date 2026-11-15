@@ -20,6 +20,7 @@
 #include "driver/build_support.hxx"
 #include "repl/session.hxx"
 #include "driver/compile.hxx"
+#include "driver/stdlib_interfaces.hxx"
 #include "driver/build_ir.hxx"
 #include "pass/options.hxx"
 #include "driver/options.hxx"
@@ -966,6 +967,9 @@ auto firstProgramArgument(int argc, char *argv[], int file) -> int {
 int main(int argc, char *argv[]) {
   auto options = parseCommandLine(argc, argv);
   if (options.exitNow) return *options.exitNow;
+  // The opt-in standard library is described by the checker, as a build of a
+  // program using it describes it, for every check, run and the editor alike.
+  kex::driver::registerCheckedStdlibInterfaces();
   // A pipeline the user wrote is checked before anything runs.
   if (const auto problem = checkPassPipeline()) {
     std::cerr << "kex: " << *problem << "\n";

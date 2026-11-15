@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <optional>
 #include <iterator>
 #include <stdexcept>
 #include <string>
@@ -88,32 +89,6 @@ inline auto preludeRegistry(const std::string& runtimeDir)
     return cached;
 }
 
-// Where a source signature is written, for a qualified type name in it: the
-// type identities the sources declare (`Net.Socket.TCP.Endpoint`) and the
-// module being collected, whose enclosing modules a relative spelling
-// (`TCP.Endpoint` inside `Net.Socket`) is read against.
-struct SourceTypeScope {
-    const std::unordered_set<std::string>* identities = nullptr;
-    std::string module;
-};
-inline thread_local const SourceTypeScope* g_sourceTypeScope = nullptr;
-
-// The identity a qualified type name spells where the scope is, when it
-// spells one: as written, or relative to an enclosing module.
-inline auto qualifiedSourceType(const std::string& dotted) -> std::optional<std::string> {
-    const auto* scope = g_sourceTypeScope;
-    if (!scope || !scope->identities) return std::nullopt;
-    for (auto module = scope->module; !module.empty();) {
-        if (const auto candidate = module + "." + dotted; scope->identities->count(candidate))
-            return candidate;
-        const auto dot = module.rfind('.');
-        if (dot == std::string::npos) break;
-        module.resize(dot);
-    }
-    if (scope->identities->count(dotted)) return dotted;
-    return std::nullopt;
-}
-
 // Simplified AST→Type converter for the source fallback below.
 // Handles the subset of types used in prelude annotations.
 inline auto resolveSourceType(const ast::TypeExpr& expr,
@@ -126,14 +101,6 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, ast::TypeName>) {
             if (node.parts.empty()) return Type::unknown();
-            // A qualified name keeps the identity it spells: cut to its last
-            // segment, Net.HTTP's `-> Net.Socket.TCP.Endpoint` became a bare
-            // `Endpoint` no program could resolve, and `.port` on it was
-            // Unknown. One that names no declared type (a variant,
-            // `Quantity.Time`) is read as before.
-            if (node.parts.size() > 1)
-                if (auto identity = qualifiedSourceType(node.dotted()))
-                    return Type::named(*identity);
             const auto& name = node.parts.back();
             // The checker's own table: a signature spelled `Atom` (or a sized
             // numeric) that came back as NamedType while the typechecker
@@ -493,36 +460,6 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         for (const auto& item : program.items)
             collectTraitNames(item, traitNames);
 
-    // Every type the sources declare, by its identity, for qualified names in
-    // signatures (qualifiedSourceType).
-    std::unordered_set<std::string> typeIdentities;
-    {
-        const auto collect = [&](const auto& self, const auto& items,
-                                 const std::string& module) -> void {
-            const auto qualified = [&](const std::string& name) {
-                return module.empty() ? name : module + "." + name;
-            };
-            for (const auto& item : items)
-                std::visit([&](const auto& node) {
-                    using T = std::decay_t<decltype(node)>;
-                    if (!node) return;
-                    if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>> ||
-                                  std::is_same_v<T, std::unique_ptr<ast::TypeDef>>)
-                        typeIdentities.insert(qualified(node->name));
-                    else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>)
-                        self(self, node->body, ast::nestedModulePath(module, node->name));
-                    else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>)
-                        self(self, node->items, module);
-                }, item);
-        };
-        for (const auto& program : programs) collect(collect, program.items, {});
-    }
-    SourceTypeScope topLevelScope{&typeIdentities, {}};
-    const auto* savedScope = std::exchange(g_sourceTypeScope, &topLevelScope);
-    struct RestoreScope {
-        const SourceTypeScope* saved;
-        ~RestoreScope() { g_sourceTypeScope = saved; }
-    } restoreScope{savedScope};
 
     // Every function declared anywhere in the parsed sources, PRIVATE ones
     // included: `type Handler = Type.of(handlerType)` (net/http.kex) names a
@@ -1055,13 +992,6 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             collectAnnotatedNames =
             [&](const ast::ModuleDef& mod, const std::string& parent) {
             const auto moduleName = ast::nestedModulePath(parent, mod.name);
-            // Qualified type names in this module's signatures read against it.
-            SourceTypeScope moduleScope{&typeIdentities, moduleName};
-            const auto* outerScope = std::exchange(g_sourceTypeScope, &moduleScope);
-            struct RestoreModuleScope {
-                const SourceTypeScope* saved;
-                ~RestoreModuleScope() { g_sourceTypeScope = saved; }
-            } restoreModuleScope{outerScope};
             for (const auto& item : mod.body) {
                 if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item))
                     if (*ann) moduleAnnotated.insert(kex::mangle::qualify(moduleName, (*ann)->name));
@@ -1515,78 +1445,121 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
     return base;
 }
 
+// Where the opt-in standard library's interfaces come from when the build
+// can check it: the driver's (kex::driver::checkedStdlibInterfaces), given the
+// prelude's, answering the prelude's with the checked modules over it. Unset,
+// or answering nothing, they are read from the source.
+using CheckedStdlibInterfaces = std::function<std::optional<kex::semantic::ImportedInterfaces>(
+    const kex::semantic::ImportedInterfaces& prelude)>;
+inline auto checkedStdlibInterfacesHook() -> CheckedStdlibInterfaces& {
+    static CheckedStdlibInterfaces hook;
+    return hook;
+}
+
 // Build the ImportedInterfaces snapshot from the prebuilt prelude beam in
 // `runtimeDir`. Cached per process; safe to call from any thread after
 // first construction. Falls back to source-based extraction when no
 // prebuilt BEAM artifacts are available (e.g. the wasm build).
+// One snapshot of the prelude's and the opt-in library's interfaces:
+// `checked`, the opt-in modules as the checker describes them
+// (checkedStdlibInterfacesHook), or read from their source.
+inline auto preludeInterfaceSnapshot(const std::string& runtimeDir, bool checked)
+    -> kex::semantic::ImportedInterfaces {
+    // KEX_TIMINGS=1 splits this one-time load (kexhq/kex#323).
+    const bool timed = kex::timings::enabled();
+    kex::timings::PhaseTimer loadTimer(4, false);
+    auto phase = [&](const char* name) { loadTimer.mark(name); };
+
+    // The snapshot is a pure function of the stdlib sources AND the
+    // compiler that derives it, so it is cached keyed by the toolchain
+    // fingerprint, which covers both: every stdlib source (prelude and
+    // opt-in, subdirectories included) and the compiler binary. A
+    // same-version rebuild never serves the previous build's interfaces
+    // (risk #2, the #372 class), and an edited opt-in module never
+    // serves its old signature. The two kinds have a directory each: one
+    // keeps a single snapshot (pruneInterfaceCacheDirectory).
+    std::optional<std::filesystem::path> cachePath;
+    if (!runtimeDir.empty()) {
+        if (const auto dir = kex::cache::directory(checked ? "prelude-interface-checked"
+                                                           : "prelude-interface"))
+            cachePath = *dir / (kex::sha256Hex(
+                                    std::string(checked ? "kex-prelude-interface-checked-v1\n"
+                                                        : "kex-prelude-interface-v1\n") +
+                                    kex::cache::toolchainFingerprint()) +
+                                ".bin");
+    }
+    const auto noteMiss = [&](const char* why) {
+        if (timed) std::fprintf(stderr, "      [cache] miss: %s\n", why);
+    };
+    if (cachePath) {
+        const auto bytes = readFileBytes(cachePath->string());
+        if (!bytes) {
+            noteMiss("absent");
+        } else {
+            // The key (stats of the stdlib files, see
+            // toolchainFingerprint) plus this read, apart from the
+            // deserialize below.
+            phase("cache key + read");
+            kex::beam::CacheMissReason reason = kex::beam::CacheMissReason::Corrupt;
+            if (auto loaded = kex::beam::deserializeImportedInterfaces(*bytes, &reason)) {
+                phase("cache deserialize");
+                return std::move(*loaded);
+            }
+            noteMiss(kex::beam::cacheMissReasonName(reason));
+        }
+    }
+
+    auto interfaces = [&]() -> kex::semantic::ImportedInterfaces {
+        if (runtimeDir.empty()) return sourcePreludeSemanticInterfaces();
+        const auto& registry = preludeRegistry(runtimeDir);
+        return registry.buildSemanticInterfaces();
+    }();
+    phase("prebuilt KexI interfaces");
+    // The opt-in modules as the checker describes them, checked against the
+    // prelude alone; read from their source otherwise.
+    std::optional<kex::semantic::ImportedInterfaces> checkedStdlib;
+    if (checked) checkedStdlib = checkedStdlibInterfacesHook()(interfaces);
+    if (checked && !checkedStdlib) return preludeInterfaceSnapshot(runtimeDir, false);
+    auto merged = checkedStdlib
+        ? std::move(*checkedStdlib)
+        : mergeSemanticInterfaces(std::move(interfaces),
+                                  sourceSemanticInterfaces(standardLibrarySourceFiles(), false, true));
+    phase(checkedStdlib ? "opt-in stdlib checked" : "opt-in stdlib from source");
+
+    if (cachePath) {
+        auto bytes = kex::beam::serializeImportedInterfaces(merged);
+        if (kex::cache::atomicWrite(
+                *cachePath,
+                std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size())))
+            kex::beam::pruneInterfaceCacheDirectory(cachePath->parent_path(), *cachePath);
+    }
+    return merged;
+}
+
+// Build the ImportedInterfaces snapshot from the prebuilt prelude beam in
+// `runtimeDir`. Cached per process; safe to call from any thread after
+// first construction. Falls back to source-based extraction when no
+// prebuilt BEAM artifacts are available (e.g. the wasm build).
+//
+// With the driver's hook, the opt-in modules are the checker's. Building
+// those runs the build pipeline, whose discovery helpers ask for these
+// interfaces too: they get the source-read snapshot meanwhile, as everything
+// did before.
 inline auto preludeSemanticInterfaces(const std::string& runtimeDir)
     -> const kex::semantic::ImportedInterfaces& {
-    static const auto cached = [&]() -> kex::semantic::ImportedInterfaces {
-        // KEX_TIMINGS=1 splits this one-time load (kexhq/kex#323).
-        const bool timed = kex::timings::enabled();
-        kex::timings::PhaseTimer loadTimer(4, false);
-        auto phase = [&](const char* name) { loadTimer.mark(name); };
-
-        // The snapshot is a pure function of the stdlib sources AND the
-        // compiler that derives it, so it is cached keyed by the toolchain
-        // fingerprint, which covers both: every stdlib source (prelude and
-        // opt-in, subdirectories included) and the compiler binary. A
-        // same-version rebuild never serves the previous build's interfaces
-        // (risk #2, the #372 class), and an edited opt-in module never
-        // serves its old signature.
-        std::optional<std::filesystem::path> cachePath;
-        if (!runtimeDir.empty()) {
-            if (const auto dir = kex::cache::directory("prelude-interface"))
-                cachePath = *dir / (kex::sha256Hex(
-                                        "kex-prelude-interface-v1\n" +
-                                        kex::cache::toolchainFingerprint()) +
-                                    ".bin");
-        }
-        const auto noteMiss = [&](const char* why) {
-            if (timed) std::fprintf(stderr, "      [cache] miss: %s\n", why);
-        };
-        if (cachePath) {
-            const auto bytes = readFileBytes(cachePath->string());
-            if (!bytes) {
-                noteMiss("absent");
-            } else {
-                // The key (stats of the stdlib files, see
-                // toolchainFingerprint) plus this read, apart from the
-                // deserialize below.
-                phase("cache key + read");
-                kex::beam::CacheMissReason reason =
-                    kex::beam::CacheMissReason::Corrupt;
-                if (auto loaded = kex::beam::deserializeImportedInterfaces(
-                        *bytes, &reason)) {
-                    phase("cache deserialize");
-                    return std::move(*loaded);
-                }
-                noteMiss(kex::beam::cacheMissReasonName(reason));
-            }
-        }
-
-        auto interfaces = [&]() -> kex::semantic::ImportedInterfaces {
-            if (runtimeDir.empty()) return sourcePreludeSemanticInterfaces();
-            const auto& registry = preludeRegistry(runtimeDir);
-            return registry.buildSemanticInterfaces();
-        }();
-        phase("prebuilt KexI interfaces");
-        auto stdlib = sourceSemanticInterfaces(
-            standardLibrarySourceFiles(), false, true);
-        phase("opt-in stdlib from source");
-        auto merged =
-            mergeSemanticInterfaces(std::move(interfaces), std::move(stdlib));
-
-        if (cachePath) {
-            auto bytes = kex::beam::serializeImportedInterfaces(merged);
-            if (kex::cache::atomicWrite(
-                    *cachePath,
-                    std::string_view(reinterpret_cast<const char*>(bytes.data()),
-                                     bytes.size())))
-                kex::beam::pruneInterfaceCacheDirectory(
-                    cachePath->parent_path(), *cachePath);
-        }
-        return merged;
+    static thread_local bool buildingChecked = false;
+    const auto fromSource = [&]() -> const kex::semantic::ImportedInterfaces& {
+        static const auto cached = preludeInterfaceSnapshot(runtimeDir, false);
+        return cached;
+    };
+    if (buildingChecked || runtimeDir.empty() || !checkedStdlibInterfacesHook())
+        return fromSource();
+    static const auto cached = [&] {
+        buildingChecked = true;
+        struct Done {
+            ~Done() { buildingChecked = false; }
+        } done;
+        return preludeInterfaceSnapshot(runtimeDir, true);
     }();
     return cached;
 }

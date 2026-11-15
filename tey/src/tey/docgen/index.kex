@@ -5,7 +5,7 @@
 module Tey.Docgen.Index do
   using Tey.Docgen.Model, only: [PackageModel, SourcePage, VersionEntry, LinkEntry, kindOf, nameOf, lineOf]
 
-  foul buildCommand(parsed: OptionParser.ParsedOptions) -> Integer do
+  foul buildCommand(parsed: ParsedOptions) -> Integer do
     let out = optString(parsed.values.get("out"))
     if out.empty?
       IO.printError("${Console.RED}error:${Console.RESET} --out is required")

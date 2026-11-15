@@ -112,7 +112,7 @@ module Tey.Docgen.Extract do
       return primaries.first.or("")
     end
     # Several declarations, so nothing is obviously THE one — but a file named
-    # filehandle.kex that declares `FileHandle` is about FileHandle, and the
+    # file_handle.kex that declares `FileHandle` is about FileHandle, and the
     # source's own spelling beats a title-cased file name ("Filehandle").
     let stem = stripExt(source)
     let named = entities.map { |e| baseSpelling(nameOf(e)) }.filter { |name|

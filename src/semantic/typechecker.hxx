@@ -79,6 +79,16 @@ public:
         TypePtr type;
     };
     auto recordKeys() const -> const std::vector<RecordKey>& { return m_recordKeys; }
+    // The alias `name` is, as the check resolved it: by its identity
+    // (`Net.HTTP.Handler`), else as written. Null when it is none.
+    auto declaredTypeAlias(const std::string& name) const -> TypePtr {
+        if (const auto alias = m_typeAliases.find(name); alias != m_typeAliases.end())
+            return alias->second;
+        const auto dot = name.rfind('.');
+        if (dot == std::string::npos) return nullptr;
+        const auto bare = m_typeAliases.find(name.substr(dot + 1));
+        return bare == m_typeAliases.end() ? nullptr : bare->second;
+    }
 
     // One `using`: its module as written, and what it brings in.
     struct ImportSelection {
@@ -759,7 +769,14 @@ private:
     std::vector<Signature> m_importedSignatureCache;
     // `type X = Type.returnedBy(f)` declarations, held until the builtin type
     // names exist.
-    std::vector<std::pair<std::string, const ast::TypeQuery*>> m_computedAliases;
+    // Each with the module it is declared in, whose names its query reads
+    // (`Type.of(handlerType)`, a private function of `Net.HTTP`).
+    struct ComputedAlias {
+        std::string name;
+        const ast::TypeQuery* query;
+        std::string module;
+    };
+    std::vector<ComputedAlias> m_computedAliases;
     // Declared functions by name, so `type X = Type.returnedBy(f)` can read a
     // return annotation before signature registration has run.
     std::unordered_multimap<std::string, const ast::FunctionDef*>
@@ -1148,6 +1165,12 @@ private:
     // A dotted type name's nominal identity — the record or ADT it spells,
     // through an alias or a `using`-relative path if need be — or nullopt
     // when it names no declared type.
+    // The type a function declared `name` has by its written annotations,
+    // where the name is written; null when it is not fully annotated.
+    auto declaredFunctionType(const std::string& name) -> TypePtr;
+    // The imported alias `written` names through a `using` or an enclosing
+    // module, when exactly one.
+    auto aliasReachedAs(const std::string& written) const -> std::optional<TypePtr>;
     auto qualifiedNominalType(const std::string& qualified) const
         -> std::optional<std::string>;
     auto resolveRecordName(const std::string& name) const -> std::string;

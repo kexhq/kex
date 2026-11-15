@@ -3422,10 +3422,47 @@ auto TypeChecker::namedFunctionSignature(const ast::Expr& expr)
     return nullptr;
 }
 
+auto TypeChecker::declaredFunctionType(const std::string& name) -> TypePtr {
+    // The function this name means where it is written: in the current module
+    // or one enclosing it, else at the top level. One declaration, one clause,
+    // every parameter and the result annotated.
+    const ast::FunctionDef* function = nullptr;
+    const auto unique = [&](const std::string& key) -> bool {
+        const auto [first, last] = m_functionDeclarations.equal_range(key);
+        if (first == last) return false;
+        if (std::next(first) == last) function = first->second;
+        return true;
+    };
+    bool found = false;
+    for (auto scope = m_currentModulePath; !scope.empty() && !found;) {
+        found = unique(kex::mangle::qualify(scope, name));
+        const auto dot = scope.rfind('.');
+        if (dot == std::string::npos) break;
+        scope.resize(dot);
+    }
+    if (!found) unique(name);
+    if (!function || ast::signatureClauses(*function).size() != 1) return nullptr;
+    const auto& clause = *ast::signatureClauses(*function).front();
+    if (!clause.returnAnnotation || !*clause.returnAnnotation) return nullptr;
+    std::unordered_map<std::string, TypePtr> generics;
+    std::vector<TypePtr> params;
+    for (const auto& param : clause.params) {
+        if (!param.type || !*param.type) return nullptr;
+        params.push_back(resolveTypeExpr(**param.type, generics));
+    }
+    if (params.empty()) return nullptr;
+    return Type::func(std::move(params), resolveTypeExpr(**clause.returnAnnotation, generics));
+}
+
 auto TypeChecker::resolveTypeQuery(const ast::TypeQuery& query) -> TypePtr {
     if (!query.argument) return Type::unknown();
     if (query.query == "of") {
         if (auto referenced = typeNameReference(*query.argument)) return referenced;
+        // A function named here (`Type.of(handlerType)`) before its signature
+        // is registered, as a computed alias is resolved: its written
+        // annotations are its type. Inferred, it was Unknown.
+        if (const auto* identifier = std::get_if<ast::Identifier>(&query.argument->kind))
+            if (auto declared = declaredFunctionType(identifier->name)) return declared;
         return resolve(inferExpr(*query.argument));
     }
 

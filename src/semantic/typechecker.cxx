@@ -384,6 +384,28 @@ auto TypeChecker::check(const ast::Program& program, std::vector<Diagnostic>& di
                 std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
             function && *function)
             m_functionDeclarations.emplace((*function)->name, function->get());
+    // A module's functions too, private ones included, by their qualified
+    // names: `type Handler = Type.of(handlerType)` inside `module Net.HTTP`
+    // names `Net.HTTP.handlerType`.
+    {
+        const auto collect = [&](const auto& self, const auto& items, const std::string& module) -> void {
+            for (const auto& item : items)
+                std::visit([&](const auto& node) {
+                    using T = std::decay_t<decltype(node)>;
+                    if (!node) return;
+                    if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                        if (!module.empty())
+                            m_functionDeclarations.emplace(kex::mangle::qualify(module, node->name),
+                                                           node.get());
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                        self(self, node->body, ast::nestedModulePath(module, node->name));
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                        self(self, node->items, module);
+                    }
+                }, item);
+        };
+        collect(collect, program.items, {});
+    }
     registerRecordFields(program, /*namesOnly=*/true);
 
     // Register built-in types
@@ -445,8 +467,14 @@ auto TypeChecker::check(const ast::Program& program, std::vector<Diagnostic>& di
             m_traits.registerImplementation(
                 c.typeName, resolveTraitReference(c.traitName, "", nullptr));
     registerRecordFields(program);
-    for (const auto& [name, query] : m_computedAliases)
-        m_typeAliases[name] = resolveTypeQuery(*query);
+    // Each in its own module: resolved at the top level, `Type.of(handlerType)`
+    // named no function, and Net.HTTP's `Handler` was Unknown to every
+    // program that imported it.
+    for (const auto& alias : m_computedAliases) {
+        const auto outer = std::exchange(m_currentModulePath, alias.module);
+        m_typeAliases[alias.name] = resolveTypeQuery(*alias.query);
+        m_currentModulePath = outer;
+    }
     m_computedAliases.clear();
     validateDeclarations(program, m_traits, diagnostics);
     reportPendingUnknownTypes();
@@ -874,6 +902,38 @@ auto TypeChecker::registerRecordFields(const ast::Program& program,
                 if (node) registerModule(*node);
             }
         }, item);
+}
+
+auto TypeChecker::aliasReachedAs(const std::string& written) const -> std::optional<TypePtr> {
+    std::set<std::string> found;
+    for (auto scope = m_currentModulePath; !scope.empty();) {
+        if (const auto candidate = scope + "." + written; m_typeAliases.contains(candidate)) {
+            found.insert(candidate);
+            break;
+        }
+        const auto dot = scope.rfind('.');
+        if (dot == std::string::npos) break;
+        scope.resize(dot);
+    }
+    const auto through = [&](const ImportSelection& import) {
+        if (import.alias) {
+            if (written.starts_with(*import.alias + "."))
+                if (const auto candidate = import.module + written.substr(import.alias->size());
+                    m_typeAliases.contains(candidate))
+                    found.insert(candidate);
+            return;
+        }
+        if (!resolve_core::usingSelectsName(written.substr(0, written.find('.')),
+                                            import.onlyNames, import.exceptNames))
+            return;
+        if (const auto candidate = import.module + "." + written; m_typeAliases.contains(candidate))
+            found.insert(candidate);
+    };
+    for (const auto& import : m_declarationImports) through(import);
+    for (const auto& scope : m_importScopeStack)
+        for (const auto& import : scope) through(import);
+    if (found.size() != 1) return std::nullopt;
+    return m_typeAliases.at(*found.begin());
 }
 
 auto TypeChecker::qualifiedNominalType(const std::string& qualified) const
@@ -1962,7 +2022,7 @@ auto TypeChecker::registerTypeAliases(const ast::Program& program) -> void {
                         // registered — before them, `String` is just a name
                         // and the alias would bind NamedType("String")
                         // instead of the real string type.
-                        m_computedAliases.push_back({node->name, query});
+                        m_computedAliases.push_back({node->name, query, m_currentModulePath});
                         return;
                     }
                 }
@@ -2046,7 +2106,7 @@ auto TypeChecker::registerTypeAliasesInModule(const ast::ModuleDef& mod) -> void
                         // registered — before them, `String` is just a name
                         // and the alias would bind NamedType("String")
                         // instead of the real string type.
-                        m_computedAliases.push_back({node->name, query});
+                        m_computedAliases.push_back({node->name, query, m_currentModulePath});
                         return;
                     }
                 }
@@ -3372,6 +3432,10 @@ auto TypeChecker::resolveTypeExprNode(const ast::TypeExpr& typeExpr,
             // User type alias (e.g. `type Level = :debug | :info | ...`)
             auto aliasIt = m_typeAliases.find(last);
             if (aliasIt != m_typeAliases.end()) return aliasIt->second;
+            // An imported alias is keyed by its identity (`Net.HTTP.Handler`):
+            // written as a `using` or an enclosing module reaches it
+            // (`Handler` under `using Net.HTTP`).
+            if (const auto alias = aliasReachedAs(qualified)) return *alias;
             // Bare `List` is the erased form of `[X]`, the way `type
             // List<X> = [X]` declares it. Left nominal, a `to(List)` result
             // matched no `[A]` receiver and every list method on it reported
@@ -3383,7 +3447,12 @@ auto TypeChecker::resolveTypeExprNode(const ast::TypeExpr& typeExpr,
                     m_adtVariants.count(qualified) ||
                     (m_importedInterfaces &&
                      m_importedInterfaces->recordArities.count(qualified));
-                if (!namesDeclaredType(qualified, last)) reportUnknownType(node, typeExpr.location);
+                // A qualified name means the type it spells or none: its last
+                // segment naming some type somewhere is not that type.
+                // `OptionParser.ParsedOptions`, for a record declared outside
+                // `module OptionParser`, was accepted, and the first field read
+                // on it chose Mock.Env's `values` instead.
+                if (!namesDeclaredType(qualified, qualified)) reportUnknownType(node, typeExpr.location);
                 // Not known here, a qualified name still names the type it
                 // spells. Cut to its last segment, `Net.Socket.TCP.Endpoint`
                 // in Net.HTTP's interface became a bare `Endpoint` (Net.Socket

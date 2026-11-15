@@ -22,7 +22,7 @@ module Tey.Docgen.Cli do
   # The three subcommands are declared here, the way Tey declares its own, so
   # `tey docs` help is generated from the same definitions that parse the
   # line and reads like `tey help` does.
-  foul options() -> OptionParser.OptionConfig do
+  foul options() -> OptionConfig do
     return OptionParser.define("tey docs", "Generate and serve Kex documentation")
       .flag("help", Just('h'), "Show this help")
       .string("source", None, "Source directory: .kex files for build (default: this package's src/), .md files for prose", None, false)
@@ -60,7 +60,7 @@ module Tey.Docgen.Cli do
   # These three have none beyond the options above, so one left over is a
   # typo — and `--sorce src` silently documenting the wrong directory is
   # worse than an error.
-  foul strict(parsed: OptionParser.ParsedOptions) -> Bool do
+  foul strict(parsed: ParsedOptions) -> Bool do
     match parsed.arguments.find { |argument| argument.startsWith?("-") } do
       None => true
       Just(option) => do

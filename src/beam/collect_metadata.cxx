@@ -968,6 +968,13 @@ void collectFromTypeDef(const kex::ast::TypeDef& td, KexiTypeInterface& iface,
     te.module = owner;
     te.genericParams = td.typeParams;
     te.isDistinct = td.isDistinct;
+    // A computed alias (`type Handler = Type.of(handlerType)`) has no body
+    // written: the check resolves it, and collectMetadata carries that.
+    if (td.variants && td.variants->size() == 1 && td.variants->front() &&
+        std::holds_alternative<kex::ast::TypeQuery>(td.variants->front()->kind)) {
+        iface.types.push_back(std::move(te));
+        return;
+    }
     // Transparent aliases carry their body too: without it an importing
     // module saw `FS.FilePath` as an opaque nominal name and a `{String:
     // String}` literal failed to match a `Map<FS.FilePath, String>` field.
@@ -1603,6 +1610,17 @@ auto collectMetadata(const kex::ast::Program& program,
         }
     }
 
+    // An alias whose body is computed (`type Handler = Type.of(handlerType)`)
+    // has no body written to carry: the check resolved it, and its importers
+    // read it as that. Without it they saw an opaque `Handler` no handler
+    // matched, or a stale copy spelled with bare names.
+    if (opts.analysis)
+        for (auto& type : chunk.typeInterface.types) {
+            if (type.backingType || type.isDistinct || !type.constructors.empty()) continue;
+            const auto identity = type.module.empty() ? type.name : type.module + "." + type.name;
+            if (const auto alias = opts.analysis->checker().declaredTypeAlias(identity))
+                type.backingType = convertSemanticType(alias, true);
+        }
     chunk.interfaceHash = computeInterfaceHash(chunk);
     return chunk;
 }

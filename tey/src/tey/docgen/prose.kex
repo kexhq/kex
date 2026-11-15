@@ -14,7 +14,7 @@
 module Tey.Docgen.Prose do
   using Tey.Docgen.Model, only: [PackageModel, SourcePage]
 
-  foul proseCommand(parsed: OptionParser.ParsedOptions) -> Integer do
+  foul proseCommand(parsed: ParsedOptions) -> Integer do
     let out = Tey.Docgen.Index.optString(parsed.values.get("out"))
     if out.empty?
       IO.printError("${Console.RED}error:${Console.RESET} --out is required")

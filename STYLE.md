@@ -24,10 +24,11 @@ alignment are spaces.
 **[F]** No form feeds, no vertical tabs, no non-breaking spaces outside string
 literals.
 
-**[L]** File names are lowercase, no separators: `optionparser.kex`,
-`taggedvalidation.kex`, `filehandle.kex`. Directories group a family:
-`net/socket.kex`, `data/queue.kex`, `control/retry.kex`. A file that defines
-one module is named after it, lowercased and de-punctuated (`URI` → `uri.kex`,
+**[L]** File names are snake_case, the way the module resolver finds a module
+by its name: `option_parser.kex` for `OptionParser`, `tagged_validation.kex`,
+`file_handle.kex` for the file that declares `FileHandle`. Each dotted segment is
+a directory: `Net.HTTP.WebSocket` → `net/http/web_socket.kex`,
+`Control.Retry` → `control/retry.kex`. An acronym is one word (`URI` → `uri.kex`,
 `Kex.AST` → `kex/ast.kex`).
 
 **[L]** Tests live beside the code as `<name>.spec.kex`, which auto-loads
