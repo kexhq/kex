@@ -1,0 +1,20 @@
+# kex: check-only
+# Two values of unrelated types have no order. `i > "kex"` checked clean, in
+# a guard and out of one, and both backends then failed with "Cannot compare
+# Integer and String"; a stream's `take` with no count checked clean too,
+# because `Stream.from` had no signature to give the stream a type (found by
+# `make metamorphic-search`).
+
+main do
+  let i = 5
+  IO.printLine(i > "kex")
+  let label = match i do
+    n : Integer when n > "a" => "big"
+    _ => "small"
+  end
+  IO.printLine(label)
+  IO.printLine(1 < 2.5)
+  IO.printLine("a" < "b")
+  let naturals = Stream.from(0) { |n| n + 1 }
+  IO.printLine(naturals.take())
+end

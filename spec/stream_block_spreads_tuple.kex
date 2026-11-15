@@ -2,7 +2,7 @@
 # tuple across them through the Stream functions on BEAM, as through List's
 # and on the walker.
 main do
-  let fibonacci = Stream.Sequence(from: (0, 1)) { |a, b| (b, a + b) }
+  let fibonacci = Stream.from((0, 1)) { |a, b| (b, a + b) }
   IO.printLine(fibonacci.take(5))
   IO.printLine(fibonacci.map { |a, b| a * b }.take(4))
   IO.printLine(fibonacci.filter { |a, _| a.even? }.take(3))

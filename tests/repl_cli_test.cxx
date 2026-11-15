@@ -604,7 +604,7 @@ int main() {
             const auto program = root / "installed.kex";
             std::ofstream(program)
                 << "main do\n"
-                   "  IO.printLine(Stream.Sequence(from: 1) { |n| n + 1 }.take(2))\n"
+                   "  IO.printLine(Stream.from(1) { |n| n + 1 }.take(2))\n"
                    "end\n";
 
             const auto interpreterOutput = runCommand(

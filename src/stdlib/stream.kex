@@ -4,7 +4,7 @@
 # an infinite one is an ordinary value. Nothing is computed until you ask for
 # elements with +take+.
 #
-#   let naturals = Stream.Sequence(from: 0) { |n| n + 1 }
+#   let naturals = Stream.from(0) { |n| n + 1 }
 #   naturals.take(5)                              # => [0, 1, 2, 3, 4]
 #   naturals.map { |n| n * n }.take(4)            # => [0, 1, 4, 9]
 #   naturals.filter { |n| n.even? }.take(3)       # => [0, 2, 4]
@@ -22,25 +22,26 @@ type Stream<A>
 module Stream do
   # Builds an infinite stream from a first element and a step function.
   #
-  # The stream is +from+, then +step(from)+, then +step(step(from))+, and so
+  # The stream is +start+, then +step(start)+, then +step(step(start))+, and so
   # on: nothing is computed until you take from it.
   #
-  # @param from [A] the first element
+  # @param start [A] the first element
   # @param step [A -> A] produces the next element from the current one
   # @return [Stream<A>] the generated stream
   #
   # @example Counting up
-  #   let naturals = Stream.Sequence(from: 0) { |n| n + 1 }
+  #   let naturals = Stream.from(0) { |n| n + 1 }
   #   naturals.take(5)   # => [0, 1, 2, 3, 4]
   #
   # @example Powers of two
-  #   let powers = Stream.Sequence(from: 1) { |n| n * 2 }
+  #   let powers = Stream.from(1) { |n| n * 2 }
   #   powers.take(6)     # => [1, 2, 4, 8, 16, 32]
   #
   # @example A geometric decay
-  #   Stream.Sequence(from: 1.0) { |x| x / 2.0 }.take(4)
+  #   Stream.from(1.0) { |x| x / 2.0 }.take(4)
   #   # => [1.0, 0.5, 0.25, 0.125]
-  let Sequence(from, step) = Kex.Intrinsic.Stream.generate(from, step)
+  from :> A -> (A -> A) -> Stream<A>
+  let from(start, step) = Kex.Intrinsic.Stream.generate(start, step)
 
   # The stream with no elements.
   #
@@ -48,6 +49,7 @@ module Stream do
   #
   # @example
   #   Stream.empty.take(3)   # => []
+  empty :> Stream<A>
   let empty = Kex.Intrinsic.Stream.empty()
 end
 
@@ -61,15 +63,15 @@ make Stream<A> do
   # @return [[A]] the first +n+ elements
   #
   # @example
-  #   Stream.Sequence(from: 1) { |n| n + 1 }.take(3)   # => [1, 2, 3]
+  #   Stream.from(1) { |n| n + 1 }.take(3)   # => [1, 2, 3]
   #
   # @example The first ten squares
-  #   Stream.Sequence(from: 1) { |n| n + 1 }
+  #   Stream.from(1) { |n| n + 1 }
   #     .map { |n| n * n }
   #     .take(10)
   #
   # @example Generating retry delays without building an unbounded list
-  #   let delays = Stream.Sequence(from: 1.second) { |d| d * 2 }
+  #   let delays = Stream.from(1.second) { |d| d * 2 }
   #   delays.take(4)   # => four Durations: 1, 2, 4 and 8 seconds
   take :> Integer -> [A]
   let take(n) = Kex.Intrinsic.Stream.take(this, n)
@@ -83,7 +85,7 @@ make Stream<A> do
   # @return [Stream<A>] the stream, offset by +n+
   #
   # @example
-  #   Stream.Sequence(from: 0) { |n| n + 1 }.drop(3).take(3)   # => [3, 4, 5]
+  #   Stream.from(0) { |n| n + 1 }.drop(3).take(3)   # => [3, 4, 5]
   #
   # @example Paging through a generated sequence
   #   let page(n: Integer) = source.drop(n * 20).take(20)
@@ -99,11 +101,11 @@ make Stream<A> do
   # @return [Stream<B>] the mapped stream
   #
   # @example
-  #   Stream.Sequence(from: 1) { |n| n + 1 }.map { |n| n * n }.take(4)
+  #   Stream.from(1) { |n| n + 1 }.map { |n| n * n }.take(4)
   #   # => [1, 4, 9, 16]
   #
   # @example Formatting as it goes
-  #   Stream.Sequence(from: 1) { |n| n + 1 }
+  #   Stream.from(1) { |n| n + 1 }
   #     .map { |n| "item ${n}" }
   #     .take(3)
   #   # => ["item 1", "item 2", "item 3"]
@@ -120,11 +122,11 @@ make Stream<A> do
   # @return [Stream<A>] the filtered stream
   #
   # @example
-  #   let evens = Stream.Sequence(from: 0) { |n| n + 1 }.filter { |n| n.even? }
+  #   let evens = Stream.from(0) { |n| n + 1 }.filter { |n| n.even? }
   #   evens.take(4)   # => [0, 2, 4, 6]
   #
   # @example Multiples of three, formatted
-  #   Stream.Sequence(from: 1) { |n| n + 1 }
+  #   Stream.from(1) { |n| n + 1 }
   #     .filter { |n| n.modulo(3) == 0 }
   #     .map { |n| "#${n}" }
   #     .take(3)
@@ -135,14 +137,14 @@ make Stream<A> do
   # Applies +f+ to every element.
   #
   # Only ever finishes on a stream that ends: a file's lines converted with
-  # +Feed.toStream+, or anything +take+ has bounded. On +Stream.Sequence+ this
+  # +Feed.toStream+, or anything +take+ has bounded. On +Stream.from+ this
   # runs forever, exactly as writing the same loop by hand would.
   #
   # @param f [A -> Void] applied to each element
   # @return [Void]
   #
   # @example
-  #   Stream.Sequence(from: 1) { |n| n + 1 }
+  #   Stream.from(1) { |n| n + 1 }
   #     .map { |n| n * n }
   #     .toFeed
   #     .take(3)
@@ -160,7 +162,7 @@ make Stream<A> do
   # @return [Feed<A>] a one-shot cursor over the stream
   #
   # @example Summing a long generated sequence without holding it
-  #   let total = Stream.Sequence(from: 1) { |n| n + 1 }
+  #   let total = Stream.from(1) { |n| n + 1 }
   #     .toFeed
   #     .take(1000000)
   #     .sum

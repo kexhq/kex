@@ -23,12 +23,12 @@ is read.
 
 ## Streams: lazy and reusable
 
-`Stream.Sequence` creates an infinite sequence from a starting value and a
+`Stream.from` creates an infinite sequence from a starting value and a
 step function. `map`, `filter`, and `drop` return streams; `take` produces a
 list with at most the requested number of elements.
 
 ```kex
-let naturals = Stream.Sequence(from: 0) { |n| n + 1 }
+let naturals = Stream.from(0) { |n| n + 1 }
 naturals.take(5)                         # => [0, 1, 2, 3, 4]
 naturals.map { |n| n * n }.take(4)       # => [0, 1, 4, 9]
 naturals.filter(~even?).take(3)          # => [0, 2, 4]

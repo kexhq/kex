@@ -1672,14 +1672,14 @@ int main() {
     });
 
     describe("Interpreter — Namespace dispatch", []() {
-        it("Stream.Sequence works without corrupting the call (regression)", []() {
+        it("Stream.from works without corrupting the call (regression)", []() {
             // Regression test: Stream isn't pre-registered as a namespace, so
             // the receiver used to fall back to an Atom that got silently
             // smuggled in as the step function's first argument, corrupting
             // the stream ("Cannot add Atom and Int" on .take()).
             auto result = run(
                 "main do\n"
-                "  let naturals = Stream.Sequence(from: 0) { |n| n + 1 }\n"
+                "  let naturals = Stream.from(0) { |n| n + 1 }\n"
                 "  naturals.take(3)\n"
                 "end\n"
             );
@@ -1996,7 +1996,7 @@ int main() {
             auto result = run(
                 "main do\n"
                 "  let tail = Kex.Intrinsic.List.drop([1, 2, 3], 1)\n"
-                "  let stream = Sequence(from: 1) { |n| n + 1 }\n"
+                "  let stream = Stream.from(1) { |n| n + 1 }\n"
                 "  let shifted = Kex.Intrinsic.Stream.drop(stream, 2)\n"
                 "  let values = Kex.Intrinsic.Stream.take(shifted, 2)\n"
                 "  (tail, values)\n"
@@ -2008,7 +2008,7 @@ int main() {
         it("creates sequence and takes elements", []() {
             auto result = run(
                 "main do\n"
-                "  let naturals = Sequence(from: 0) { |n| n + 1 }\n"
+                "  let naturals = Stream.from(0) { |n| n + 1 }\n"
                 "  naturals.take(5)\n"
                 "end\n"
             );
@@ -2021,7 +2021,7 @@ int main() {
         it("drops elements from stream", []() {
             auto result = run(
                 "main do\n"
-                "  let naturals = Sequence(from: 0) { |n| n + 1 }\n"
+                "  let naturals = Stream.from(0) { |n| n + 1 }\n"
                 "  naturals.drop(5).take(3)\n"
                 "end\n"
             );
@@ -2034,7 +2034,7 @@ int main() {
         it("lazily maps a stream", []() {
             auto result = run(
                 "main do\n"
-                "  let squares = Sequence(from: 1) { |n| n + 1 }\n"
+                "  let squares = Stream.from(1) { |n| n + 1 }\n"
                 "    .map { |n| n * n }\n"
                 "  squares.take(5)\n"
                 "end\n"
@@ -2051,7 +2051,7 @@ int main() {
             auto result = run(
                 "let even?(n: Int) = n.modulo(2) == 0\n"
                 "main do\n"
-                "  let evens = Sequence(from: 1) { |n| n + 1 }\n"
+                "  let evens = Stream.from(1) { |n| n + 1 }\n"
                 "    .filter(~even?)\n"
                 "  evens.take(5)\n"
                 "end\n"
@@ -2068,7 +2068,7 @@ int main() {
             auto result = run(
                 "let even?(n: Int) = n.modulo(2) == 0\n"
                 "main do\n"
-                "  let evenSquares = Sequence(from: 1) { |n| n + 1 }\n"
+                "  let evenSquares = Stream.from(1) { |n| n + 1 }\n"
                 "    .map { |n| n * n }\n"
                 "    .filter(~even?)\n"
                 "  evenSquares.take(4)\n"
@@ -2090,7 +2090,7 @@ int main() {
                 "  return (2..n - 1).all? { |d| n.modulo(d) != 0 }\n"
                 "end\n"
                 "main do\n"
-                "  let primes = Sequence(from: 2) { |n| n + 1 }\n"
+                "  let primes = Stream.from(2) { |n| n + 1 }\n"
                 "    .filter(~isPrime?)\n"
                 "  primes.take(10)\n"
                 "end\n"
@@ -2111,7 +2111,7 @@ int main() {
             // merely sparse as ENDED — `take(5)` here answered three elements.
             auto result = run(
                 "main do\n"
-                "  Sequence(from: 0) { |n| n + 1 }\n"
+                "  Stream.from(0) { |n| n + 1 }\n"
                 "    .filter { |n| n.modulo(1000) == 0 }\n"
                 "    .take(5)\n"
                 "end\n"
@@ -2128,7 +2128,7 @@ int main() {
             auto result = run(
                 "main do\n"
                 "  var steps = 0\n"
-                "  let s = Sequence(from: 0) do |n|\n"
+                "  let s = Stream.from(0) do |n|\n"
                 "    steps = steps + 1\n"
                 "    n + 1\n"
                 "  end\n"
@@ -2144,7 +2144,7 @@ int main() {
         it("shares forced elements between a stream and its drop", []() {
             auto result = run(
                 "main do\n"
-                "  let s = Sequence(from: 0) { |n| n + 1 }\n"
+                "  let s = Stream.from(0) { |n| n + 1 }\n"
                 "  let rest = s.drop(3)\n"
                 "  s.take(2) + rest.take(2)\n"
                 "end\n"
@@ -2161,7 +2161,7 @@ int main() {
             // would die on a stream of any real length.
             auto result = run(
                 "main do\n"
-                "  Sequence(from: 0) { |n| n + 1 }.take(50000).count\n"
+                "  Stream.from(0) { |n| n + 1 }.take(50000).count\n"
                 "end\n"
             );
             assertEqual(std::get<IntValue>(result->data).value, int64_t(50000));
@@ -2227,7 +2227,7 @@ int main() {
         it("walks a stream once without holding its start", []() {
             auto result = run(
                 "main do\n"
-                "  let f = Sequence(from: 1) { |n| n + 1 }.toFeed\n"
+                "  let f = Stream.from(1) { |n| n + 1 }.toFeed\n"
                 "  f.take(2) + f.take(2)\n"
                 "end\n"
             );

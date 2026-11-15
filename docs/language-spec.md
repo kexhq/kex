@@ -1673,10 +1673,10 @@ Lazy, potentially infinite sequences. Unlike ranges (which are bounded),
 streams evaluate elements on demand:
 
 ```kex
-let naturals = Stream.Sequence(from: 0) { |n| n + 1 }
+let naturals = Stream.from(0) { |n| n + 1 }
 let firstTen = naturals.take(10)        # [0, 1, 2, ..., 9]
 
-let primes = Stream.Sequence(from: 2) { |n| n + 1 }
+let primes = Stream.from(2) { |n| n + 1 }
   .filter do |n|
     (2..n - 1).all? { |d| n.modulo(d) != 0 }
   end
@@ -2036,7 +2036,7 @@ Implementing Enumerable provides its default functions (`map`, `filter`,
 
 | Constructor / Function | Description |
 |---|---|
-| `Stream.Sequence(from, step)` | Infinite stream from `from` |
+| `Stream.from(start, step)` | Infinite stream from `start`, each next element `step` of the one before |
 | `take(n)` | First `n` elements as a list |
 | `drop(n)` | New stream offset by `n` |
 | `map(f)` | Lazy map |

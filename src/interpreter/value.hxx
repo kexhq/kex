@@ -138,7 +138,7 @@ struct RangeValue {
 // end-of-file with `None`, which is a perfectly good element of a
 // `Stream<String?>`, so `take` could not tell a real element from the end and
 // padded its answer with Nones (issue #215). Genuinely infinite streams
-// (`Stream.Sequence`) never produce a null tail, and stay infinite.
+// (`Stream.from`) never produce a null tail, and stay infinite.
 struct StreamCell;
 using StreamCellPtr = std::shared_ptr<StreamCell>;
 

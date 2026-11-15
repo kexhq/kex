@@ -942,7 +942,7 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/stream.spec.kex","languageId":"kex","version":1,"text":"# kex: no-check\nmain do\n  let s = Stream.Sequence(from: 0) { |n| n + 1 }\n  s.drop(3).map { |n| n }.filter { |n| n.even? }\nend\n"}}})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/stream.spec.kex","languageId":"kex","version":1,"text":"# kex: no-check\nmain do\n  let s = Stream.from(0) { |n| n + 1 }\n  s.drop(3).map { |n| n }.filter { |n| n.even? }\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/stream.spec.kex"},"position":{"line":3,"character":5}}})");
             messages += frame(

@@ -77,7 +77,7 @@ module Demo do
 
     # A chain hangs one level under its head, and a block hung off a step
     # keeps its own body one level further in.
-    let primes = Stream.Sequence(from: 2) { |n| n + 1 }
+    let primes = Stream.from(2) { |n| n + 1 }
       .filter do |n|
         (2..n - 1).all? { |d| n.modulo(d) != 0 }
       end

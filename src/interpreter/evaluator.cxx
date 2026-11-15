@@ -2917,7 +2917,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 }
             }
             if (isNamespaceCall) {
-                // Namespace call: Stream.Sequence(...), Math.PI, File.read(...), etc.
+                // Namespace call: Stream.from(...), Math.PI, File.read(...), etc.
                 std::vector<ValuePtr> args;
                 for (const auto& arg : node.args)
                     args.push_back(showErasedArgument(
@@ -2933,7 +2933,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 // Prefer the mangled "Namespace.method" name (e.g. "IO.putLine")
                 // so namespaced builtins can't collide with unrelated plain-name
                 // globals. Falls back to the plain name for namespaces that were
-                // registered without a mangled prefix (e.g. Stream.Sequence).
+                // registered without a mangled prefix (e.g. Stream.from).
                 // The module function the checker selected, whatever name the
                 // namespace is written by (`Roles.describe` for `Grants.Roles`,
                 // where a record `Roles` also exists).

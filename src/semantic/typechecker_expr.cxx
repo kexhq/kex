@@ -3005,6 +3005,14 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
         case TokenType::GreaterEq:
             if (isBool(lhs)) {
                 error(loc, "Cannot compare Bool values with '<', '>', '<=', '>='");
+            } else if (!isNumeric(lhs) || !isNumeric(rhs)) {
+                // Two values of unrelated types have no order: `i > "kex"` was
+                // accepted and failed on both backends with the message
+                // reported here (found by `make metamorphic-search`).
+                if (!containsOpenType(lhs) && !containsOpenType(rhs) &&
+                    !argMatchesParam(lhs, rhs) && !argMatchesParam(rhs, lhs))
+                    error(loc, "Cannot compare " + typeToString(lhs) + " and " +
+                                   typeToString(rhs));
             }
             return Type::boolean();
 

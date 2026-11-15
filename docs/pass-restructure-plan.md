@@ -1008,7 +1008,7 @@ written in Kex down to recursion; and the reassigned-variable threading, so
      standing as a statement stays Void. One in a block, a branch or a
      `&&`/`||` operand is refused with a message, since it may run any number
      of times (`spec/assign_as_expression`).
-   - #610: a two-parameter block over tuple elements (`Stream.Sequence(from:
+   - #610: a two-parameter block over tuple elements (`Stream.from(from:
      (0, 1)) { |a, b| (b, a + b) }`) died `badarity` on BEAM: the Stream
      intrinsics applied blocks directly, where List's spread a tuple across
      the parameters. They apply through `kex_intrinsic_fun:applyItem` now
@@ -1037,6 +1037,18 @@ written in Kex down to recursion; and the reassigned-variable threading, so
      binding, and an annotation's probe is prepared as an input is (the
      modules loaded from source roots merged in), so a plain binding holding
      `Shop.Cart.Cart` keeps its type too (`repl_cli_test`).
+   - CI's metamorphic search (seed 43659060061, 2026-11-15): `i > "kex"`
+     checked clean and failed on both backends; an ordering of two concrete
+     types neither numeric nor related is refused now. `naturals.take()`
+     checked clean because the stream constructor had no signature, so every
+     pipeline built on it was unchecked: it is `Stream.from(start) { |n| ... }`
+     now, renamed from `Stream.Sequence(from:)` at the user's request, with
+     `from :> A -> (A -> A) -> Stream<A>` and `empty :> Stream<A>`
+     (`spec/error_compare_unrelated`).
+   - `make lsp-sweep` over every example (612 findings): a `var` binding was
+     recorded at the statement, so definition led to the `var` keyword. The
+     checker records a binding where its name is written; errors about it stay
+     at the statement.
    - Still open, checker bugs: #640 (a pure function capturing a foul one:
      refusing every capture broke the documented idiom of registering foul
      handlers from pure configuration, `command(run: ~addNote)`,

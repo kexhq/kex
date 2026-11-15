@@ -82,7 +82,7 @@ auto Evaluator::registerStreamBuiltins() -> void {
     });
 
     // Stream.each(f) — forces the whole chain. Only ever finite for a stream
-    // that ends (a file's lines); on `Stream.Sequence` it deliberately runs
+    // that ends (a file's lines); on `Stream.from` it deliberately runs
     // forever, exactly as writing the same loop by hand would.
     defineIntrinsic("Stream.each", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::unit();

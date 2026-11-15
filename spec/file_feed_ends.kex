@@ -1,5 +1,5 @@
 # A file has an end, so its feed stops there instead of yielding None forever
-# (issue #215). `Stream.Sequence` stays deliberately infinite.
+# (issue #215). `Stream.from` stays deliberately infinite.
 #
 # A file feed is a `Feed`, not a `Stream`: reading it consumes, so taking twice
 # walks forward rather than answering the same lines again.
@@ -39,11 +39,11 @@ main do
   IO.printLine(lines.take(2))
 
   # An infinite stream is still infinite, and reusable.
-  IO.printLine(Stream.Sequence(from: 0) { |n| n + 1 }.take(5))
-  IO.printLine(Stream.Sequence(from: 0) { |n| n + 1 }.drop(2).take(3))
+  IO.printLine(Stream.from(0) { |n| n + 1 }.take(5))
+  IO.printLine(Stream.from(0) { |n| n + 1 }.drop(2).take(3))
 
   # A filter whose matches are far apart is not silently cut short.
-  IO.printLine(Stream.Sequence(from: 0) { |n| n + 1 }
+  IO.printLine(Stream.from(0) { |n| n + 1 }
     .filter { |n| n.modulo(1000) == 0 }
     .take(3))
 

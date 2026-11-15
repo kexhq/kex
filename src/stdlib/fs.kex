@@ -488,7 +488,7 @@ module FS do
     # replay, +toStream+ buys that back.
     #
     # The feed ends at the last line, so asking for more lines than the file
-    # has answers just the lines there are: unlike +Stream.Sequence+, which is
+    # has answers just the lines there are: unlike +Stream.from+, which is
     # deliberately infinite.
     #
     #   FS.File.feed("two-lines.txt").map { |lines| lines.take(5) }.or([])
