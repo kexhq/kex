@@ -174,7 +174,8 @@ auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
     m_currentModule = savedModule;
 }
 
-auto CollectPass::collectFunction(const ast::FunctionDef& def, const std::string& module) -> void {
+auto CollectPass::collectFunction(const ast::FunctionDef& def, const std::string& module,
+                                  const std::string& makeTarget) -> void {
     // The parser already folds an adjacent same-name/arity declaration into
     // ONE FunctionDef's own `clauses` when it safely can (kexhq/kex#262), so
     // a single call here can now represent several clauses at once — a bare
@@ -185,7 +186,10 @@ auto CollectPass::collectFunction(const ast::FunctionDef& def, const std::string
     const auto clauseCount = static_cast<int>(
         def.clauses.empty() ? 1 : def.clauses.size());
     for (auto& sym : *m_symbols) {
-        if (sym.name == def.name && sym.module == module && sym.kind == SymbolKind::Function) {
+        // The same type's function only: merged by name alone, `Box`'s `render`
+        // became `Tag`'s, and navigation to it fell back to the text.
+        if (sym.name == def.name && sym.module == module && sym.kind == SymbolKind::Function &&
+            sym.makeTarget == makeTarget) {
             sym.clauseCount += clauseCount;
             return;
         }
@@ -194,8 +198,12 @@ auto CollectPass::collectFunction(const ast::FunctionDef& def, const std::string
     SymbolInfo info;
     info.name = def.name;
     info.kind = SymbolKind::Function;
-    info.definition = def.location;
+    // At the name as written, which is where `symbolAt` looks for it: at the
+    // `let`, a function declared in a module was found at neither its
+    // declaration nor its call sites, and references fell back to text.
+    info.definition = def.nameLocation.line > 0 ? def.nameLocation : def.location;
     info.module = module;
+    info.makeTarget = makeTarget;
     info.isFoul = def.isFoul;
     info.type = Type::unknown();
     info.clauseCount = clauseCount;
@@ -340,7 +348,8 @@ auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module
     auto tagTarget = [&](const std::string& funcName, bool isServingSlot) {
         if (target.empty()) return;
         for (auto& sym : *m_symbols) {
-            if (sym.name == funcName && sym.module == module && sym.makeTarget.empty()) {
+            if (sym.name == funcName && sym.module == module &&
+                (sym.makeTarget.empty() || sym.makeTarget == target)) {
                 sym.makeTarget = target;
                 sym.isServingSlot = isServingSlot;
             }
@@ -368,7 +377,7 @@ auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module
         std::visit([&](const auto& ptr) {
             using T = std::decay_t<decltype(*ptr)>;
             if constexpr (std::is_same_v<T, ast::FunctionDef>) {
-                collectFunction(*ptr, module);
+                collectFunction(*ptr, module, target);
                 tagTarget(ptr->name, def.isServing && ptr->isSlot);
             } else if constexpr (std::is_same_v<T, ast::TypeAnnotation>) {
                 collectMakeAnnotation(*ptr);
@@ -378,7 +387,7 @@ auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module
                     std::visit([&](const auto& vptr) {
                         using VT = std::decay_t<decltype(*vptr)>;
                         if constexpr (std::is_same_v<VT, ast::FunctionDef>) {
-                            collectFunction(*vptr, module);
+                            collectFunction(*vptr, module, target);
                             tagTarget(vptr->name,
                                       def.isServing && vptr->isSlot);
                         } else if constexpr (std::is_same_v<VT, ast::TypeAnnotation>) {

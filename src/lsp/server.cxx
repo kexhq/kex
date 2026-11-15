@@ -98,6 +98,16 @@ struct Document {
     // Field reads (`point.x`, ``), at the field name: the record the
     // checker read the field of.
     std::unordered_map<uint64_t, std::string> fieldReads;
+    // Calls the checker decided are a type's own `make` function (`box.render`),
+    // at the function name: that type, as the checker names it.
+    std::unordered_map<uint64_t, std::string> ownMethodCalls;
+    // The first name of a module path (`URL` in `URL.parse` under `using
+    // URI`), at that name: the module the checker resolved it to.
+    std::unordered_map<uint64_t, std::string> moduleReferences;
+    // Whether the last analysis checked the buffer: while it does not (an
+    // unfinished `lines.`), what navigation the checker last gave is kept, and
+    // a name it has no answer for is looked for in the text.
+    bool checked = true;
     // Receivers that needed the full re-analysis, by start offset. A call
     // result (`Date.of(2026, 7, 30).weekday`) has no recorded span, and an
     // editor asks about the same site repeatedly — once per keystroke during
@@ -2101,10 +2111,13 @@ void enrichFunctionSymbols(FileState& state,
     auto enrich = [&](const ast::FunctionDef& function) {
         const auto* signatures = analyzer.functionSignatures(&function);
         if (!signatures || signatures->empty()) return;
+        // The symbol is declared at the name, where collectSymbols puts it.
+        const auto& declared =
+            function.nameLocation.line > 0 ? function.nameLocation : function.location;
         for (auto& symbol : state.symbols) {
             if (symbol.name != function.name ||
-                symbol.definition.line != function.location.line ||
-                symbol.definition.column != function.location.column)
+                symbol.definition.line != declared.line ||
+                symbol.definition.column != declared.column)
                 continue;
             symbol.detail = functionDetail(function, *signatures, analyzer);
             symbol.type = semantic::Type::func(signatures->front().params,
@@ -2146,12 +2159,15 @@ void enrichRecordSymbols(FileState& state,
 // analysis is a good one; a buffer that did not parse keeps the last.
 void recordNavigation(Document& document, const semantic::Analyzer& analyzer,
                       const ast::Program& program, bool replace) {
+    document.checked = replace;
     // Locals, as the checker bound them: a use to its binding, and the
     // bindings themselves, each at the name as written.
     if (replace) {
         document.localDefinitions.clear();
         document.bindingSites.clear();
         document.fieldReads.clear();
+        document.ownMethodCalls.clear();
+        document.moduleReferences.clear();
     }
     for (const auto& [use, bound] : analyzer.checker().localDefinitions()) {
         const auto* identifier = use ? std::get_if<ast::Identifier>(&use->kind) : nullptr;
@@ -2172,14 +2188,24 @@ void recordNavigation(Document& document, const semantic::Analyzer& analyzer,
                                           static_cast<unsigned int>(at->column)));
     });
     for (const auto& [expression, decided] : analyzer.decidedCalls()) {
+        if (expression && decided.kind == semantic::CallKind::ModuleReference &&
+            std::holds_alternative<ast::UpperIdentifier>(expression->kind) &&
+            expression->location.file == document.path)
+            document.moduleReferences.insert_or_assign(
+                Document::receiverKey(static_cast<unsigned int>(expression->location.line),
+                                      static_cast<unsigned int>(expression->location.column)),
+                decided.owner);
         const auto* call = expression ? std::get_if<ast::MethodCall>(&expression->kind) : nullptr;
-        if (!call || decided.kind != semantic::CallKind::FieldRead ||
-            call->methodLocation.line == 0 || expression->location.file != document.path)
+        if (!call || call->methodLocation.line == 0 ||
+            expression->location.file != document.path)
             continue;
-        document.fieldReads.insert_or_assign(
+        const auto at =
             Document::receiverKey(static_cast<unsigned int>(call->methodLocation.line),
-                                  static_cast<unsigned int>(call->methodLocation.column)),
-            decided.owner);
+                                  static_cast<unsigned int>(call->methodLocation.column));
+        if (decided.kind == semantic::CallKind::FieldRead)
+            document.fieldReads.insert_or_assign(at, decided.owner);
+        else if (decided.kind == semantic::CallKind::OwnMethod)
+            document.ownMethodCalls.insert_or_assign(at, decided.owner);
     }
     for (const auto& [name, where] : analyzer.checker().bindingSites()) {
         if (where.file != document.path) continue;
@@ -2714,6 +2740,24 @@ private:
                 document.localReceiverTypes.clear();
                 document.receiverSpans.clear();
             }
+            // Of the expressions starting at one place, the receiver written
+            // there is the innermost: `tree` in `"s" + tree.inOrder.to(String)`,
+            // not the String chain that starts with it, nor the `+` recorded at
+            // its right operand. The map's order decided it before.
+            std::unordered_map<uint64_t, int> spanRanks;
+            const auto recordSpan = [&](const ast::Expr& expression, std::string qualifier) {
+                if (std::holds_alternative<ast::BinaryOp>(expression.kind)) return;
+                const int rank = std::holds_alternative<ast::MethodCall>(expression.kind) ||
+                                         std::holds_alternative<ast::FunctionCall>(expression.kind)
+                                     ? 1 : 0;
+                const auto key = Document::receiverKey(
+                    static_cast<unsigned int>(expression.location.line),
+                    static_cast<unsigned int>(expression.location.column));
+                const auto [held, fresh] = spanRanks.try_emplace(key, rank);
+                if (!fresh && held->second < rank) return;
+                held->second = rank;
+                document.receiverSpans.insert_or_assign(key, std::move(qualifier));
+            };
             for (const auto& [expression, _] : analyzer.typeMap()) {
                 if (!expression || expression->location.file != document.path)
                     continue;
@@ -2726,13 +2770,7 @@ private:
                         if (auto qualifier = completionQualifierForType(target);
                             !qualifier.empty()) {
                             document.localReceiverTypes[assignment->name] = qualifier;
-                            document.receiverSpans.insert_or_assign(
-                                Document::receiverKey(
-                                    static_cast<unsigned int>(
-                                        expression->location.line),
-                                    static_cast<unsigned int>(
-                                        expression->location.column)),
-                                std::move(qualifier));
+                            recordSpan(*expression, std::move(qualifier));
                         }
                         document.hoverEntries.push_back({
                             .line = static_cast<unsigned int>(
@@ -2756,11 +2794,7 @@ private:
                         : completionQualifierForType(
                               analyzer.displayTypeOf(expression));
                     !spanQualifier.empty())
-                    document.receiverSpans.insert_or_assign(
-                        Document::receiverKey(
-                            static_cast<unsigned int>(expression->location.line),
-                            static_cast<unsigned int>(expression->location.column)),
-                        std::move(spanQualifier));
+                    recordSpan(*expression, std::move(spanQualifier));
                 if (const auto* binding =
                         std::get_if<ast::LetExpr>(&expression->kind);
                     binding && binding->pattern && binding->value) {
@@ -2801,6 +2835,9 @@ private:
                 const auto type = analyzer.displayTypeOf(expression);
                 if (!type || std::holds_alternative<semantic::UnknownType>(type->kind))
                     continue;
+                // An operator is recorded at its right operand: `"s" + tree` hovered
+                // `tree` as the String the sum is.
+                if (std::holds_alternative<ast::BinaryOp>(expression->kind)) continue;
                 if (const auto* identifier =
                         std::get_if<ast::Identifier>(&expression->kind))
                     if (auto qualifier = completionQualifierForType(type);
@@ -3190,6 +3227,23 @@ private:
                        text[atName - 1] == '_')) --atName;
             if (atName > 0 && text[atName - 1] == '@') {
                 std::string receiver;
+                // The `make` block the cursor is in, from the parsed program: the
+                // last one starting before it. `localReceiverTypes` holds one
+                // `new` for the whole file, so `@` in `make Vector` offered the
+                // fields of a `make Config` further down (`make lsp-sweep`).
+                if (const auto* parsed = m_db.fileState(found->second.path)) {
+                    int nearest = 0;
+                    const auto cursorLine = static_cast<int>(params.position.line + 1);
+                    for (const auto& item : parsed->ast.items)
+                        if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item);
+                            make && *make && (*make)->location.line <= cursorLine &&
+                            (*make)->location.line > nearest)
+                            if (const auto target = writtenMakeTarget((*make)->target)) {
+                                receiver = target->dotted();
+                                nearest = (*make)->location.line;
+                            }
+                }
+                if (receiver.empty())
                 if (auto known = found->second.localReceiverTypes.find("new");
                     known != found->second.localReceiverTypes.end())
                     receiver = known->second;
@@ -3394,8 +3448,39 @@ private:
                     ? text.size() : lineEndPosition;
                 const auto cursor = byteOffsetForUtf16Column(
                     text, lineStart, lineEnd, params.position.character);
-                if (const auto receiver = scanDotReceiver(text, cursor);
-                    receiver.valid) {
+                const auto receiver = scanDotReceiver(text, cursor);
+                // A module path is completed from the module the checker
+                // resolved its first name to: `URL.` under `using URI` is
+                // `URI.URL`, which no spelling of `URL` finds.
+                if (receiver.valid) {
+                    auto written = text.substr(receiver.start, receiver.dot - receiver.start);
+                    std::erase_if(written, [](char c) {
+                        return std::isspace(static_cast<unsigned char>(c));
+                    });
+                    const auto startLine = static_cast<unsigned int>(
+                        1 + std::count(text.begin(), text.begin() +
+                                                         static_cast<std::ptrdiff_t>(receiver.start),
+                                       '\n'));
+                    const auto startLineBegin = text.rfind('\n', receiver.start == 0
+                                                                     ? 0 : receiver.start - 1);
+                    const auto startColumn = static_cast<unsigned int>(
+                        receiver.start -
+                        (startLineBegin == std::string::npos || receiver.start == 0
+                             ? 0 : startLineBegin + 1) + 1);
+                    if (const auto module = found->second.moduleReferences.find(
+                            Document::receiverKey(startLine, startColumn));
+                        module != found->second.moduleReferences.end() &&
+                        kex::startsUppercase(written)) {
+                        const auto firstEnd = std::min(written.find('.'), written.size());
+                        const auto resolved = module->second + written.substr(firstEnd);
+                        query.dbQuery = resolved + "." +
+                            text.substr(receiver.dot + 1, cursor - receiver.dot - 1);
+                        query.rewriteFrom = resolved;
+                        query.rewriteTo = written;
+                        resolvedByAnalyzer = true;
+                    }
+                }
+                if (receiver.valid && !resolvedByAnalyzer) {
                     if (auto qualifier = receiverQualifier(
                             found->second, receiver, cursor, &m_interfaces,
                             documentModuleRoots(found->second.path));
@@ -3779,12 +3864,22 @@ private:
                 }
             }
         }
-        const auto localDefinition =
-            (!resolvedSymbolAtPosition && moduleQualifier.empty())
-                ? sourceLocalDefinition(
-                      document.text, document.path, word.text,
-                      hoverWordOffset ? hoverWordOffset - 1 : 0)
-                : std::nullopt;
+        // A local, as the checker bound it: a use names its binding, and a binding
+        // is its own. By name, a text search for the nearest definition before
+        // the word stood in, which a shadowing `let` or a field of the same name
+        // led astray.
+        std::optional<SourceLocation> localDefinition;
+        if (!resolvedSymbolAtPosition && moduleQualifier.empty()) {
+            const auto at = Document::receiverKey(params.position.line + 1, word.byteColumn);
+            if (const auto use = document.localDefinitions.find(at);
+                use != document.localDefinitions.end())
+                localDefinition = SourceLocation{document.path, use->second.first,
+                                                 use->second.second};
+            else if (document.bindingSites.contains(at))
+                localDefinition = SourceLocation{document.path,
+                                                 static_cast<int>(params.position.line + 1),
+                                                 static_cast<int>(word.byteColumn)};
+        }
         const bool lexicalReference = localDefinition.has_value();
         const bool symbolDefinitionAtPosition = symbol &&
             symbol->definition.file == document.path &&
@@ -4505,6 +4600,17 @@ private:
             document.path, params.position.line + 1, word.byteColumn);
         // The checker's answer for this name, when the index has one; the
         // lookups below by name only stand in where it has none.
+        // A call the checker decided is a type's own `make` function: that type's.
+        // By name, the text search took the nearest `let render` above the call,
+        // which is some other type's whenever theirs is declared later.
+        if (!symbol && qualifier.empty())
+            if (const auto own = document.ownMethodCalls.find(Document::receiverKey(
+                    params.position.line + 1, word.byteColumn));
+                own != document.ownMethodCalls.end()) {
+                symbol = m_db.receiverSymbol(own->second, word.text);
+                if (const auto dot = own->second.rfind('.'); !symbol && dot != std::string::npos)
+                    symbol = m_db.receiverSymbol(own->second.substr(dot + 1), word.text);
+            }
         if (!symbol && !qualifier.empty()) {
             symbol = m_db.symbolInModule(qualifier, word.text);
             // Source collection currently stores a nested module under its
@@ -4548,7 +4654,13 @@ private:
                 }
             }
         }
-        if (!symbol && qualifier.empty()) {
+        // A buffer the checker could not check, or that does not parse (an
+        // unfinished `lines.`), has no answer for a name it binds anew: found
+        // in the text until it parses and checks again.
+        const auto* parsed = m_db.fileState(document.path);
+        const bool unfinished = !document.checked ||
+                                (parsed && !parsed->sourceDiagnostics.empty());
+        if (!symbol && qualifier.empty() && unfinished) {
             const auto referenceOffset = lineStart + word.byteColumn - 1;
             if (auto local = sourceLocalDefinition(
                     document.text, document.path, word.text,
@@ -4558,7 +4670,6 @@ private:
                     return ::lsp::Definition{std::move(*location)};
                 return {};
             }
-            symbol = m_db.findSymbol(word.text, document.path);
         }
         if (!symbol || symbol->definition.file.empty()) return {};
         const auto* state = m_db.fileState(
@@ -4707,25 +4818,6 @@ private:
             for (const auto& reference : symbol->references)
                 if (spellsWord(reference)) append(reference);
 
-            // A qualified call is not in the checker's index yet (step 4d): its
-            // call sites are found in the open documents by the exact module
-            // qualifier until the index records them.
-            if (!qualifier.empty())
-                for (const auto& [_, open] : m_documents) {
-                    Lexer lexer(open.text, open.path);
-                    for (const auto& token : lexer.tokenizeAll()) {
-                        if ((token.type != TokenType::LowerIdent &&
-                             token.type != TokenType::UpperIdent) ||
-                            token.value != word.text)
-                            continue;
-                        if (moduleQualifierBeforeWord(
-                                open.text,
-                                static_cast<unsigned int>(token.location.line - 1),
-                                static_cast<uint32_t>(token.location.column)) ==
-                            qualifier)
-                            append(token.location);
-                    }
-                }
             if (!qualifier.empty()) {
                 const auto ownerKey = qualifier + "." + word.text;
                 for (const auto& reference : m_indexedCallReferences)
@@ -4769,41 +4861,7 @@ private:
             return result;
         }
 
-        // A name the checker bound to no symbol here (a module function at a
-        // qualified call site): its declaration is still found in the text
-        // until the index records qualified calls (step 4d).
-        const auto sameLocation = [](const SourceLocation& left, const SourceLocation& right) {
-            return left.file == right.file && left.line == right.line && left.column == right.column;
-        };
-        size_t lineStart = 0;
-        for (unsigned int current = 0; current < params.position.line;
-             ++current) {
-            const auto newline = document.text.find('\n', lineStart);
-            if (newline == std::string::npos) break;
-            lineStart = newline + 1;
-        }
-        const auto wordOffset = lineStart + word.byteColumn - 1;
-        auto declaration = sourceLocalDefinition(
-            document.text, document.path, word.text,
-            std::min(document.text.size() - 1,
-                     wordOffset + word.text.size()));
-        if (!declaration) return result;
-        if (params.context.includeDeclaration) append(*declaration);
-
-        Lexer lexer(document.text, document.path);
-        for (const auto& token : lexer.tokenizeAll()) {
-            if ((token.type != TokenType::LowerIdent &&
-                 token.type != TokenType::UpperIdent) ||
-                token.value != word.text || token.startOffset < 0)
-                continue;
-            if (sameLocation(token.location, *declaration)) continue;
-            const auto before = token.startOffset == 0
-                ? 0 : static_cast<size_t>(token.startOffset - 1);
-            if (auto owner = sourceLocalDefinition(
-                    document.text, document.path, word.text, before);
-                owner && sameLocation(*owner, *declaration))
-                append(token.location);
-        }
+        // A name no declaration answers: nothing the checker bound it to.
         return result;
     }
 

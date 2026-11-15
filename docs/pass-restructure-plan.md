@@ -1049,6 +1049,45 @@ written in Kex down to recursion; and the reassigned-variable threading, so
      recorded at the statement, so definition led to the `var` keyword. The
      checker records a binding where its name is written; errors about it stay
      at the statement.
+   - The same sweep, recall (146 → 109): Enumerable's `mapIndexed`,
+     `filter`, `flatMap` and `collect` defaults apply their block through an
+     intrinsic, so nothing was inferred from their bodies and each call was
+     `Any` on a Range or a String. Their types are written on the
+     definitions (`let collect(f: T -> B?) -> [B]`; a `name :>` line in a
+     trait declares a required function). The trait's own copy, its element
+     type still unbound, is no candidate in a mismatch's listing; each
+     implementing type has its own copy. Completion after `n != args.`
+     completed a Bool: an operator is recorded at its right operand, and it
+     is never the receiver now. A comment ending in a period (`# ... a
+     note.`) read as a chain continued onto the next line, so nothing was
+     offered on that line. A receiver written as a plain name took the type
+     of the chain or the operator starting at its position (`"s" +
+     tree.inOrder.to(String)` completed and hovered `tree` as a String); the
+     name's own expression answers now, and an operator has no hover entry.
+     A module path reached through a `using` (`URL.parse` under `using URI`)
+     completed nothing: the checker expanded `URL` to `URI.URL` only by the
+     function after the dot, so a half-typed `URL.pa` named no module. A name
+     whose member selects none is the one module a `using` brings in under it
+     (`only:`/`except:` honoured), the checker records it for the path's first
+     name, and completion asks that module. So found, a module is refused a
+     function it lacks, as one written in full is: `URL.zz(1)` checked clean
+     and failed at run time (`spec/error_module_function_through_using`).
+     Under `using FS`, a bare `separator` (of `FS.Path`) checked and ran on
+     BEAM while the walker refused it: a module nested in the one brought in
+     is one of its names, and its members are reached through it
+     (`Path.separator`; `spec/error_using_nested_member_bare`).
+   - The same sweep, 255 → 262 on a different sample. The conditional of
+     `cond then a else b` is recorded at the condition's right operand too,
+     so `@minor < other.minor then Less else Greater` completed `other.` as
+     the conditional or as `other` by the checker map's order; a receiver
+     written as a plain name is now that name's own record. A block's
+     parameter had no position (`LambdaParam` carried none), so one bound by a
+     block passed to a generic parameter (`ask(:db) { |me| Orders(me) }`)
+     led nowhere and the name index answered instead: it records a
+     constructor as a reference to its type at the constructor, and took the
+     type's name's length from there, which covered `me`. Parameters carry
+     their position and are bound at it; a constructor's reference spans what
+     is written.
    - Still open, checker bugs: #640 (a pure function capturing a foul one:
      refusing every capture broke the documented idiom of registering foul
      handlers from pure configuration, `command(run: ~addNote)`,
@@ -1167,7 +1206,7 @@ targeted, every expression typed (`--verify-hir`); `--dump-hir` prints it.
 | 2b | Intrinsic registry + `Type<T>` signatures | **Done** (2026-11-10): `Type<T>` and `to` in step 3; the registry decides `Process.spawn`, the checker decides the testing DSL and the prelude `each`/`times` fold, and the backends read those decisions (a program's own `assert` or `each` is its own). The Duration-as-Measure, singular-unit and quantity-equality items of step 9 stay **deferred** (by the user) |
 | 3 | Lowering only translates; IR passes | **Done** (2026-11-11): findings 3 and 4 resolved, the IR rewrites are passes and symbols are spelled from the checker's identities (step 4's state below). Open, not blocking: block specialization across units. Before that: **Done** (2026-11-09): lowering is checked-only (it throws without a HIR); the provider search and its run-time choices are the checker's (alternatives), with `dualProviderDispatch` and `importedFreeFunctionDispatch` deleted; no override of a checker target is left (`localBeatsTraitDefault`, `ownedMakeFunction`, the module-path search deleted); every call reaching the local fallback is a decided kind (dispatch, trait method, field read on a structural or conflicting record, a free function called UFCS). `lowerMethodCallImpl` is a switch on the target kind and a dispatch to handlers (80 lines, from ~1150); the IR passes are in `src/ir/passes/`. Lowering reads the checker only through `hir::Program`, and captures are decided too. |
 | 4 | Walker on the HIR | **Done** (2026-11-11): finding 3 resolved, the walker's visibility copies are gone. Known divergence, open: a block reassigning an outer `var` is threaded on BEAM only through the prelude's `each`/`times`. Before that: **Done** (2026-11-09): every program the walker runs is checked first: the entry (kex::driver, merged with the modules it uses), each module loaded at run time, and compile-time code (`compiled do`, collapse, template scans, tag validators), the checks cached across builds; the method call reads the decided target (conversion, runtime primitive, `Type.of`, trait dictionary, own method, the selected module function unless a `with` replaced its capability, value-or-namespace receivers). What goes by the value at run time is what BEAM leaves to its dispatchers too: `Dispatch` calls and the prelude's receiver functions |
-| 5 | LSP / SemanticDB on the same sema | **Partial**: SemanticDB deleted (2026-11-12); completion (member and bare), local and field definitions, and `let` hover answer from the checker (2026-11-14); references to a local do too, its binding and the uses the checker bound to it (2026-11-15). Still by name: the rest of hover, references to a function declared in a module (the open document's index holds no symbol for one: `symbolAt` finds nothing even at its declaration, so the declaration is found in the text, the call sites by their qualifier, and from a call site `symbolInModule` answers with a copy that has no references; from the second of two calls on one line only that line comes back. Recording qualified calls in `indexNames` is not enough while the symbol itself is missing), record-literal field keys (step 4d). Before that: **Done** (2026-11-08): one resolver, the checker's name pass; the REPLs and `--complete` hold no SemanticDB; the language server's SemanticDB is a document store and query front end over the checker's index |
+| 5 | LSP / SemanticDB on the same sema | **Partial**: SemanticDB deleted (2026-11-12); completion (member and bare), local and field definitions, and `let` hover answer from the checker (2026-11-14); references to a local do too, its binding and the uses the checker bound to it, and references to a function declared in a module: a function's symbol sits at its name (`FunctionDef::nameLocation`), and a qualified call (`Geo.area(2)`) is a reference through the module the checker resolved its first segment to; hover tells a local by the checker's bindings (2026-11-15). Definition answers from the checker in a buffer that checks: two types' same-named `make` functions are two symbols now (they were merged by name, so `box.render` led to `Tag`'s), and only a buffer that does not parse or check yet (an unfinished `lines.`) falls back to the text. Still by name: the rest of hover, record-literal field keys (step 4d). Before that: **Done** (2026-11-08): one resolver, the checker's name pass; the REPLs and `--complete` hold no SemanticDB; the language server's SemanticDB is a document store and query front end over the checker's index |
 | 6 | Delete old paths, measure | **Not done**: CI (finding 1) is red on the last pushed commit, fixed in the working tree and gated locally (2026-11-14); the cleanup (step 5) waits for step 4d. Before that: **Done** (2026-11-09; the cold cost accepted by the user as the price of checking every program the walker runs; final slick table under Stage 6: every warm scenario 19–31% faster than `main`, cold +41%, the first checks of compile-time code). The merged program's `expand` pass is deleted. `docs/architecture.md`; measurements below. `src/`'s size against `main` is reported, not a gate (2026-11-08) |
 | — | Separate compilation as the default | **Done** (2026-11-06); the merged build path is deleted |
 | 7 | LLVM-style pass infrastructure (typed passes, analyses, adaptors, instrumentation, pass builder) | **Done** (2026-11-10): `src/pass/`; three levels (program, unit, module), every build step a typed pass or analysis; `driver::Pipeline`, `ir::PassManager`, `separate_build.cxx` and the `g_separate*` globals deleted |

@@ -75,6 +75,7 @@ auto indexNames(const ast::Program& program, const std::string& path,
     };
 
     std::vector<std::pair<SourceLocation, SymbolInfo*>> references;
+    std::vector<std::tuple<SourceLocation, SymbolInfo*, uint32_t>> constructorReferences;
     for (const auto& [expr, context] : checker.nameUses()) {
         const auto* name = usedName(*expr);
         if (!name) continue;
@@ -133,6 +134,21 @@ auto indexNames(const ast::Program& program, const std::string& path,
         }
         if (symbol) references.emplace_back(call->methodLocation, symbol);
     }
+    // A qualified call (`Geo.area(2)`) is a reference to the function of the
+    // module its receiver names, as the checker resolved that receiver. The
+    // language server found these by spelling instead: the qualifier before
+    // every token of the name in the open documents.
+    for (const auto& [expr, signature] : checker.selectedCallSignatures()) {
+        (void)signature;
+        const auto* call = std::get_if<ast::MethodCall>(&expr->kind);
+        if (!call || !call->receiver || call->methodLocation.line == 0) continue;
+        const auto receiver = checker.decidedCalls().find(call->receiver.get());
+        if (receiver == checker.decidedCalls().end() ||
+            receiver->second.kind != CallKind::ModuleReference)
+            continue;
+        if (auto* symbol = modules.referenced(receiver->second.owner, call->method, path))
+            references.emplace_back(call->methodLocation, symbol);
+    }
     // A type named in an annotation, or a record constructed, is a reference
     // to the type the checker resolved the name to.
     const auto recordNamed = [&](const std::string& identity) {
@@ -161,8 +177,13 @@ auto indexNames(const ast::Program& program, const std::string& path,
             (std::holds_alternative<ast::FunctionCall>(expr.kind) ||
              std::holds_alternative<ast::UpperIdentifier>(expr.kind)))
             if (auto* symbol = recordNamed(decided->second.owner);
-                symbol && symbol->kind == SymbolKind::Type)
-                references.emplace_back(expr.location, symbol);
+                symbol && symbol->kind == SymbolKind::Type) {
+                const auto* call = std::get_if<ast::FunctionCall>(&expr.kind);
+                const auto& written =
+                    call ? call->name : std::get<ast::UpperIdentifier>(expr.kind).name;
+                constructorReferences.emplace_back(expr.location, symbol,
+                                                   static_cast<uint32_t>(written.size()));
+            }
         ast::forEachChild(expr, [&](const ast::ExprPtr& child) {
             if (child) self(self, *child);
         });
@@ -198,7 +219,14 @@ auto indexNames(const ast::Program& program, const std::string& path,
                                             !before(right.first, left.first);
                                  }),
                      references.end());
-    for (const auto& [location, symbol] : references) symbol->references.push_back(location);
+    for (const auto& [location, symbol] : references) {
+        symbol->references.push_back(location);
+        symbol->referenceLengths.push_back(0);
+    }
+    for (const auto& [location, symbol, length] : constructorReferences) {
+        symbol->references.push_back(location);
+        symbol->referenceLengths.push_back(length);
+    }
 
     std::vector<ScopeSnapshot> scopes;
     for (const auto& [expr, bound] : checker.scopeNames()) {

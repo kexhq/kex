@@ -5375,6 +5375,11 @@ auto TypeChecker::moduleMemberImported(const std::string& module, const std::str
             return false;
         const bool prefixMatch = module == import.module ||
             module.rfind(import.module + ".", 0) == 0;
+        // A module nested in the one brought in is one of its names
+        // (`Path` under `using FS`), reached by it: its members are not
+        // bare names (`separator`), which the checker and BEAM took and
+        // the walker refused (`make lsp-sweep`).
+        if (bare && prefixMatch && module != import.module) return false;
         if (!prefixMatch) {
             // A `make X<A> do ... end` sitting directly in a file-header
             // module (`module Data`) attributes its receivers to the
@@ -6341,8 +6346,18 @@ auto TypeChecker::bareNameDeclared(const std::string& name) const -> bool {
     // A type or a module, named as a value (`x.to(Binary)`), and a
     // constructor the prelude brings in.
     if (name.empty() || !kex::startsUppercase(name)) return false;
-    if (namesKnownType(name) || namesDeclaredType(name, name) || m_constructorOwners.contains(name))
-        return true;
+    // A constructor declared in a module is reached inside it or under a
+    // `using` of it, as a use of it is resolved: counted anywhere, completion
+    // offered `Template`'s `UndefinedVariable` in every file, and the use was
+    // then refused (reportConstructorOutOfScope).
+    const auto owners = m_constructorOwners.find(name);
+    const bool ownerVisible =
+        owners != m_constructorOwners.end() &&
+        std::any_of(owners->second.begin(), owners->second.end(), [&](const auto& owner) {
+            return owner.module.empty() || withinModule(owner.module) ||
+                   moduleMemberImported(owner.module, name, true);
+        });
+    if (namesKnownType(name) || namesDeclaredType(name, name) || ownerVisible) return true;
     // A module's constructor, inside the module or under a `using` of it.
     for (const auto& [module, constructors] : m_moduleConstructors)
         if (constructors.count(name) &&
@@ -6352,7 +6367,8 @@ auto TypeChecker::bareNameDeclared(const std::string& name) const -> bool {
     if (m_importedInterfaces->modules.count(name)) return true;
     for (const auto& adt : m_importedInterfaces->adts)
         if (std::find(adt.constructors.begin(), adt.constructors.end(), name) !=
-            adt.constructors.end())
+                adt.constructors.end() &&
+            owners == m_constructorOwners.end())
             return true;
     return std::any_of(m_importedInterfaces->modules.begin(), m_importedInterfaces->modules.end(),
                        [&](const auto& module) {

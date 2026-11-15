@@ -19,6 +19,10 @@ struct SymbolInfo {
     TypePtr type;                   // resolved type (Unknown until checked)
     SourceLocation definition;
     std::vector<SourceLocation> references;
+    // How much of the source each reference spans, aligned with `references`;
+    // 0 when it is the name itself. A constructor (`Orders(me)`) is a
+    // reference to its type, and the type's name is not what is written there.
+    std::vector<uint32_t> referenceLengths;
     std::string module;             // owning module, "" for top-level
     bool isFoul = false;
     bool isCapability = false;

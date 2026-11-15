@@ -153,6 +153,7 @@ auto clone(const FunctionDef& function) -> std::unique_ptr<FunctionDef> {
     auto out = std::make_unique<FunctionDef>();
     out->location = function.location;
     out->name = function.name;
+    out->nameLocation = function.nameLocation;
     out->isFoul = function.isFoul;
     out->isSlot = function.isSlot;
     out->isPredicate = function.isPredicate;
@@ -335,7 +336,7 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
                 Lambda copy;
                 for (const auto& param : node.params)
                     copy.params.push_back(
-                        LambdaParam{param.name, cloneOpt(param.type)});
+                        LambdaParam{param.name, cloneOpt(param.type), param.location});
                 copy.body = cloneVec(node.body);
                 copy.returnAnnotation = cloneOpt(node.returnAnnotation);
                 copy.rescue = cloneOpt(node.rescue);

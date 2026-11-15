@@ -399,14 +399,19 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
             }
             paramTypes.push_back(pt);
             if (lam->params[i].name != "_") {
-                defineVar(lam->params[i].name, pt);
+                defineVar(lam->params[i].name, pt,
+                          {false, false, lam->params[i].location.line,
+                           lam->params[i].location.column});
+                if (m_recordsNames && lam->params[i].location.line > 0)
+                    m_bindingSites.emplace_back(lam->params[i].name, lam->params[i].location);
                 // Recorded for tooling like any other binding. A LambdaParam
                 // carries no location of its own, so the block's own position
                 // is the anchor and the name is found from there — without
                 // this, hovering `x` in `{ |x| … }` answered nothing while a
                 // use of it answered fine.
                 m_patternBindings.push_back(
-                    {lam->params[i].name, blockExpr.location, pt});
+                    {lam->params[i].name,
+                     lam->params[i].location.line > 0 ? lam->params[i].location : blockExpr.location, pt});
             }
         }
         m_blockDepth++;
@@ -1512,8 +1517,47 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // brought it into scope unqualified — expand it before the
             // dependency/namespace checks below, which key everything off
             // `*importedPath` (kexhq/kex#229).
-            if (importedPath)
-                importedPath = resolveModulePath(*importedPath, node.method);
+            // Whether the module was found by its name alone (below): no other
+            // means reaches the function then, so a missing one is an error.
+            bool broughtByName = false;
+            if (importedPath) {
+                const auto written = *importedPath;
+                importedPath = resolveModulePath(written, node.method);
+                // A name a member selects no module for (`URL.pa`, half typed,
+                // under `using URI`) is still the module a `using` brings in
+                // under it, when exactly one does (`URI.URL`): completion and
+                // navigation ask which module that is.
+                if (*importedPath == written && m_importedInterfaces &&
+                    !m_localModules.contains(written)) {
+                    std::set<std::string> brought;
+                    const auto consider = [&](const ImportSelection& import) {
+                        const auto root = written.substr(0, written.find('.'));
+                        if (!import.alias &&
+                            ((!import.onlyNames.empty() &&
+                              std::find(import.onlyNames.begin(), import.onlyNames.end(), root) ==
+                                  import.onlyNames.end()) ||
+                             std::find(import.exceptNames.begin(), import.exceptNames.end(), root) !=
+                                 import.exceptNames.end()))
+                            return;
+                        const auto child = import.alias
+                            ? (*import.alias == written ? import.module : std::string())
+                            : import.module + "." + written;
+                        if (const auto found = m_importedInterfaces->modules.find(child);
+                            !child.empty() && found != m_importedInterfaces->modules.end() &&
+                            !found->second.exports.empty())
+                            brought.insert(child);
+                    };
+                    for (const auto& import : m_declarationImports) consider(import);
+                    for (const auto& scope : m_importScopeStack)
+                        for (const auto& import : scope) consider(import);
+                    if (brought.size() == 1) {
+                        importedPath = *brought.begin();
+                        broughtByName = true;
+                    }
+                }
+            }
+            // And as a `using` expands it, before a re-export renames it.
+            const auto expandedPath = importedPath;
             // A module re-exported under another's path (`export Numbers` in
             // `module Toolkit`) is that module: `Toolkit.Numbers.double`.
             if (importedPath)
@@ -1543,15 +1587,31 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             };
             if (writtenPath) {
                 auto path = *writtenPath;
+                // The same path as `using` expanded it (`URI.URL` for `URL`),
+                // while its tail is still the written one.
+                auto expanded = expandedPath && expandedPath->ends_with(
+                                                      writtenPath->substr(std::min(
+                                                          writtenPath->find('.'), writtenPath->size())))
+                                    ? *expandedPath : *writtenPath;
                 for (const ast::Expr* segment = node.receiver.get(); segment;) {
                     const auto* call = std::get_if<ast::MethodCall>(&segment->kind);
-                    if (!call) break;
+                    if (!call) {
+                        // The first segment, a bare name (`Geo` in
+                        // `Geo.area(2)`): the module it names is what the
+                        // name index attaches the call to.
+                        if (std::holds_alternative<ast::UpperIdentifier>(segment->kind) &&
+                            namesModule(expanded))
+                            m_decidedCalls[segment] = {CallKind::ModuleReference, expanded};
+                        break;
+                    }
                     if (namesModule(path))
                         m_decidedCalls[segment] = {CallKind::ModuleReference, path};
                     else if (namesType(path))
                         m_decidedCalls[segment] = {CallKind::TypeReference, path};
                     const auto dot = path.rfind('.');
                     path.resize(dot == std::string::npos ? 0 : dot);
+                    const auto expandedDot = expanded.rfind('.');
+                    expanded.resize(expandedDot == std::string::npos ? 0 : expandedDot);
                     segment = call->receiver.get();
                 }
             }
@@ -1666,7 +1726,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // are found by other means), and with no module of the program
             // that the same last segment could mean instead.
             const auto unambiguousImport = [&] {
-                if (!writtenPath || *writtenPath != *importedPath) return false;
+                if (!writtenPath || (*writtenPath != *importedPath && !broughtByName)) return false;
                 const auto dot = writtenPath->rfind('.');
                 const auto last = dot == std::string::npos
                     ? *writtenPath : writtenPath->substr(dot + 1);
@@ -2381,13 +2441,16 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     : freshTypeVar();
                 paramTypes.push_back(pt);
                 if (param.name != "_") {
-                    defineVar(param.name, pt);
+                    defineVar(param.name, pt,
+                              {false, false, param.location.line, param.location.column});
+                    if (m_recordsNames && param.location.line > 0)
+                        m_bindingSites.emplace_back(param.name, param.location);
                     // Value-position lambdas need the same tooling binding as
                     // contextual/trailing blocks. Without it `{ |name| ... }`
                     // had no local hover entry and the LSP fell through to an
                     // unrelated exported symbol with the same name.
                     m_patternBindings.push_back(
-                        {param.name, expr.location, pt});
+                        {param.name, param.location.line > 0 ? param.location : expr.location, pt});
                 }
             }
             m_blockDepth++;
@@ -6505,7 +6568,23 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                         return Type::unknown();
         }
     }
-    auto isVacuousSig = [](const Signature* sig) {
+    // A trait default as the trait itself declares it (`Enumerable -> (T ->
+    // Bool) -> [T]`, from the prelude's interface or the trait's own check)
+    // whose element type is still unbound (`Unknown`) is the template each
+    // implementing type gets its own copy of, not a candidate. One whose
+    // types are all written (`Showable -> Type<String> -> String?`) is.
+    auto isVacuousSig = [&](const Signature* sig) {
+        if (!sig->params.empty()) {
+            const auto receiver = resolve(sig->params.front());
+            if (isThisPlaceholder(receiver)) return true;
+            const bool unbound = std::any_of(sig->params.begin() + 1, sig->params.end(),
+                                             mentionsUnknownParam);
+            if (const auto* bound = std::get_if<ConstrainedType>(&receiver->kind); unbound && bound)
+                if (const auto* trait = m_traits.get(bound->traitName);
+                    trait && std::find(trait->defaultMethods.begin(), trait->defaultMethods.end(),
+                                       name) != trait->defaultMethods.end())
+                    return true;
+        }
         for (const auto& p : sig->params)
             if (!std::holds_alternative<TypeVar>(p->kind) &&
                 !std::holds_alternative<UnknownType>(p->kind) &&

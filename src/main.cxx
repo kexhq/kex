@@ -948,6 +948,15 @@ auto runOnWalker(const Options &options, const std::string &filepath,
   return 0;
 }
 
+// The index of the program's first argument: everything after its file, at
+// `file`. One `--` directly after the file still only separates them, as it
+// did while kex read options past the file (kexhq/kex#654): Tey and scripts
+// written then pass `kex app.kex -- args`, and an older toolchain still needs
+// it there.
+auto firstProgramArgument(int argc, char *argv[], int file) -> int {
+  return file + 1 < argc && std::string_view(argv[file + 1]) == "--" ? file + 2 : file + 1;
+}
+
 int main(int argc, char *argv[]) {
   auto options = parseCommandLine(argc, argv);
   if (options.exitNow) return *options.exitNow;
@@ -1077,13 +1086,7 @@ int main(int argc, char *argv[]) {
   if (mode == Mode::Repl) return runWalkerRepl(skipPrelude);
 
   std::string filepath = argv[optind];
-  // The program's arguments: everything after its file. One `--` directly
-  // after the file still only separates them, as it did while kex read
-  // options past the file (kexhq/kex#654): Tey and scripts written then pass
-  // `kex app.kex -- args`, and an older toolchain still needs it there.
-  const int firstProgramArg =
-      optind + 1 < argc && std::string_view(argv[optind + 1]) == "--" ? optind + 2
-                                                                     : optind + 1;
+  const int firstProgramArg = firstProgramArgument(argc, argv, optind);
   kex::module::Resolver::setEntryFile(filepath);
 #ifndef __EMSCRIPTEN__
   // A spec says it is one to what it runs, the BEAM child included, so a

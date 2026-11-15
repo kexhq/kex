@@ -18,7 +18,10 @@ public:
 private:
     auto collectTopLevel(const ast::TopLevelItem& item) -> void;
     auto collectModule(const ast::ModuleDef& mod) -> void;
-    auto collectFunction(const ast::FunctionDef& def, const std::string& module) -> void;
+    // `makeTarget`: the type whose `make` block declares it, "" for a free
+    // function. Two types' same-named functions are two symbols.
+    auto collectFunction(const ast::FunctionDef& def, const std::string& module,
+                         const std::string& makeTarget = std::string()) -> void;
     auto collectType(const ast::TypeDef& def, const std::string& module) -> void;
     auto collectRecord(const ast::RecordDef& def, const std::string& module) -> void;
     auto collectMake(const ast::MakeDef& def, const std::string& module) -> void;

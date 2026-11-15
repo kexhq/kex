@@ -429,6 +429,9 @@ struct RescueBlock {
 struct LambdaParam {
     std::string name;
     std::optional<TypeExprPtr> type;
+    // The name as written in `|name|`; unset for a parameter the compiler
+    // made (`&.name`, a named function's).
+    SourceLocation location;
 };
 
 struct Lambda {
@@ -645,6 +648,9 @@ struct FunctionClause {
 struct FunctionDef {
     SourceLocation location;
     std::string name;
+    // Where the name itself is written (`area` in `let area(r) = ...`), which
+    // tooling points at; `location` is the declaration's first token.
+    SourceLocation nameLocation;
     // Set only while parsing `let %{expr}(...)`: the compile-time expression
     // that computes this declaration's name. Transient — parseLetExpr moves it
     // into a GeneratedDecl and clears it, so it never reaches a real

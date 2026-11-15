@@ -47,10 +47,39 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
     const auto isWord = [](unsigned char c) {
         return std::isalnum(c) || c == '_' || c == '?' || c == '!';
     };
+    // Where the comment on the line ending at `end` starts, if it has one: a
+    // `#` outside a string.
+    const auto commentStart = [&](size_t end) -> size_t {
+        size_t lineStart = end;
+        while (lineStart > 0 && source[lineStart - 1] != '\n') --lineStart;
+        char quote = 0;
+        for (size_t j = lineStart; j < end; ++j) {
+            const char c = source[j];
+            if (quote) {
+                if (c == '\\') ++j;
+                else if (c == quote) quote = 0;
+            } else if (c == '"' || c == '\'') {
+                quote = c;
+            } else if (c == '#') {
+                return j;
+            }
+        }
+        return std::string::npos;
+    };
+    // Back over white space, and over the comment ending a line above: a
+    // `.` that ends `# ... a note.` continues no chain (`make lsp-sweep`).
     const auto skipSpaceBack = [&](size_t i) {
-        while (i > 0 && std::isspace(static_cast<unsigned char>(source[i - 1])))
-            --i;
-        return i;
+        for (;;) {
+            bool crossedLine = false;
+            while (i > 0 && std::isspace(static_cast<unsigned char>(source[i - 1]))) {
+                crossedLine = crossedLine || source[i - 1] == '\n';
+                --i;
+            }
+            if (!crossedLine) return i;
+            const auto comment = commentStart(i);
+            if (comment == std::string::npos) return i;
+            i = comment;
+        }
     };
     // Offset of the delimiter opening the group that ends just before `end`.
     const auto matchOpen = [&](size_t end, char close, char open) -> size_t {
@@ -183,13 +212,34 @@ auto checkedReceiver(const CompletionChecker& check, const std::string& source,
     // The typed expression the analysis records at a position. Several can
     // share one — `makeBox` the identifier and `makeBox(3)` the call both
     // start at `m` — and only one has a type to complete against.
-    const auto typedAt = [](const Analyzer& analyzer, std::pair<int, int> position)
-        -> const ast::Expr* {
+    const auto typedAt = [](const Analyzer& analyzer, std::pair<int, int> position,
+                            bool plainName = false) -> const ast::Expr* {
         // One that names a type to complete members of first (a namespace
         // path's `FS.File`), then any typed one (a `Number`).
         const ast::Expr* qualified = nullptr;
         const ast::Expr* typed = nullptr;
-        const auto better = [](const ast::Expr* held, const ast::Expr& candidate) {
+        const auto better = [plainName](const ast::Expr* held, const ast::Expr& candidate) {
+            // An operator is recorded where its right operand is: in `n !=
+            // args.` the comparison shared `args`'s position, and when it came
+            // first the receiver was a Bool (`make lsp-sweep`). It is never the
+            // receiver.
+            const bool candidateOperator = std::holds_alternative<ast::BinaryOp>(candidate.kind);
+            if (held && std::holds_alternative<ast::BinaryOp>(held->kind))
+                return !candidateOperator;
+            if (candidateOperator) return !held;
+            const bool candidateCall = std::holds_alternative<ast::MethodCall>(candidate.kind) ||
+                                       std::holds_alternative<ast::FunctionCall>(candidate.kind);
+            // A receiver written as a plain name is that name, not a chain
+            // starting with it: in `"in-order: " + tree.inOrder.to(String)`
+            // the chain shares `tree`'s position and is a String.
+            // The name itself wins outright: `@minor < other.minor then Less
+            // else Greater` records the conditional at `other`'s position too,
+            // and which of the two came first was the map's order.
+            if (plainName) {
+                if (std::holds_alternative<ast::Identifier>(candidate.kind)) return true;
+                if (held && std::holds_alternative<ast::Identifier>(held->kind)) return false;
+                return !held || !candidateCall;
+            }
             // A call over the identifier it starts with.
             return !held || std::holds_alternative<ast::MethodCall>(candidate.kind) ||
                    std::holds_alternative<ast::FunctionCall>(candidate.kind);
@@ -259,7 +309,8 @@ auto checkedReceiver(const CompletionChecker& check, const std::string& source,
     }
     const auto* expression = typedAt(
         *checked->analyzer,
-        positionOf(source, receiver.callOpen ? receiver.callOpen : receiver.start));
+        positionOf(source, receiver.callOpen ? receiver.callOpen : receiver.start),
+        !receiver.callOpen);
     // A bare call (`words()`) is recorded where its name is, not at its `(`:
     // there the receiver's start is the call itself.
     if (!expression && receiver.callOpen && bareCallReceiver(source, receiver))

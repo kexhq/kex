@@ -361,6 +361,44 @@ int main() {
                        "the annotation did not lead to B's Shade: " + annotation);
         });
 
+        it("navigates from a constructor's argument to the argument, not the type", []() {
+            // `Orders(me)` is a reference to `Msg` where `Orders` is written;
+            // the index took it as `Msg`'s name's length from there, which
+            // covered `me` (examples/supervision_tree.kex). And `me`, bound by
+            // a block passed to a generic parameter, had no binding position.
+            const std::string text =
+                "type Msg = Ping(String) | Orders(Process<(Atom, [String])>)\n\n"
+                "foul ask(name: Atom, build: Process<A> -> X) do\n"
+                "  build(Process.self)\nend\n\n"
+                "foul status do\n  let a = ask(:x) { |me| Orders(me) }\n  a\nend\n";
+            const auto definition = askAt("file:///tmp/kex-lsp-constructor-argument.kex", text,
+                                          "definition", 7, 32);
+            assertTrue(definition.find("\"line\":7") != std::string::npos &&
+                           definition.find("\"character\":21") != std::string::npos,
+                       "`me` did not lead to its block parameter: " + definition);
+            const auto hover = askAt("file:///tmp/kex-lsp-constructor-argument.kex", text,
+                                     "hover", 7, 32);
+            assertTrue(hover.find("me : ") != std::string::npos,
+                       "`me` hovered as something else: " + hover);
+        });
+
+        it("completes a name the condition of a `then … else` shares a position with", []() {
+            // The conditional is recorded at `other` too; the receiver is
+            // `other`, whichever the checker's map gives first
+            // (examples/more_traits.kex).
+            const std::string text =
+                "record Version do\n  major : Integer\n  minor : Integer\nend\n\n"
+                "let cmp(a: Version, other: Version) -> Integer do\n"
+                "  if true\n    a.major < other.major then 1 else 2\n"
+                "  else\n    a.minor < other.minor then 1 else 2\n  end\nend\n";
+            for (const auto& [line, field] : {std::pair{7u, "major"}, std::pair{9u, "minor"}}) {
+                const auto reply = askAt("file:///tmp/kex-lsp-then-receiver.kex", text,
+                                         "completion", line, 25);
+                assertTrue(reply.find(std::string("\"filterText\":\"") + field + "\"") != std::string::npos,
+                           "`other.` did not complete Version's fields: " + reply);
+            }
+        });
+
         it("hovers a binding of unknown type as the binding", []() {
             // `json` is a Map of Any, so `name` is of a type nothing knows:
             // it is still the binding, not Weekday's `name`

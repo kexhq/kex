@@ -41,22 +41,25 @@ auto findSymbol(const IndexedFiles& files, const std::string& name,
 auto symbolAt(const IndexedFiles& files, const std::string& file,
               uint32_t line, uint32_t col) -> const SymbolInfo* {
     auto contains = [line, col](const SourceLocation& location,
-                                std::string_view name) {
+                                size_t length) {
         return location.line == static_cast<int>(line) &&
                col >= static_cast<uint32_t>(location.column) &&
-               col < static_cast<uint32_t>(location.column) + name.size();
+               col < static_cast<uint32_t>(location.column) + length;
     };
     for (const auto& indexed : files) {
         for (const auto& sym : *indexed.symbols) {
             // Check definition site
-            if (sym.definition.file == file && contains(sym.definition, sym.name)) {
+            if (sym.definition.file == file && contains(sym.definition, sym.name.size())) {
                 return &sym;
             }
             // Check reference sites
-            for (const auto& ref : sym.references) {
-                if (ref.file == file && contains(ref, sym.name)) {
+            for (size_t i = 0; i < sym.references.size(); ++i) {
+                const auto& ref = sym.references[i];
+                const auto written = i < sym.referenceLengths.size() && sym.referenceLengths[i]
+                                         ? sym.referenceLengths[i]
+                                         : sym.name.size();
+                if (ref.file == file && contains(ref, written))
                     return &sym;
-                }
             }
         }
     }

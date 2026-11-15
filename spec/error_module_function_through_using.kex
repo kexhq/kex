@@ -1,0 +1,10 @@
+# kex: check-only
+# A module a `using` brings in under a short name (`URL` for `URI.URL`) is
+# that module even where the function named is not one of its own: the call
+# is refused here, not left to fail at run time.
+using URI
+
+main do
+  IO.printLine(URL.parse("https://example.test/").map(&.scheme).or(""))
+  IO.printLine(URL.parze("https://example.test/"))
+end

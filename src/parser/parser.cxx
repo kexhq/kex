@@ -969,6 +969,7 @@ auto Parser::parseFunctionDef(bool isFoul)
     // is computed at compile time) from an ordinary `let name(...)`. The
     // lexer strips the sigil, so it is restored here.
     const bool spliced = check(TokenType::SpliceIdent);
+    def->nameLocation = peek().location;
     def->name = (spliced ? "%" : "") + advance().value;
   } else if (check(TokenType::Plus) || check(TokenType::Minus) ||
              check(TokenType::Star) || check(TokenType::Slash) ||
@@ -977,6 +978,7 @@ auto Parser::parseFunctionDef(bool isFoul)
              check(TokenType::LessThan) || check(TokenType::GreaterThan) ||
              check(TokenType::LessEq) || check(TokenType::GreaterEq) ||
              check(TokenType::AmpAmp) || check(TokenType::PipePipe)) {
+    def->nameLocation = peek().location;
     def->name = std::string(tokenTypeName(advance().type));
   } else {
     rejectReservedName("function");
@@ -3700,6 +3702,7 @@ auto Parser::parseLambda() -> ast::ExprPtr {
     if (match(TokenType::Pipe)) {
       while (!check(TokenType::Pipe) && !atEnd()) {
         ast::LambdaParam param;
+        param.location = peek().location;
         if (check(TokenType::Underscore)) {
           param.name = "_";
           advance();
@@ -3748,6 +3751,7 @@ auto Parser::parseLambda() -> ast::ExprPtr {
     if (match(TokenType::Pipe)) {
       while (!check(TokenType::Pipe) && !atEnd()) {
         ast::LambdaParam param;
+        param.location = peek().location;
         if (check(TokenType::Underscore)) {
           param.name = "_";
           advance();
@@ -3961,6 +3965,7 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
     advance(); // |
     while (!check(TokenType::Pipe) && !atEnd()) {
       ast::LambdaParam param;
+      param.location = peek().location;
       if (check(TokenType::Underscore)) {
         param.name = "_";
         advance();
