@@ -444,6 +444,31 @@ auto completionLabels(const json::Value& answer) -> std::vector<std::string> {
     return labels;
 }
 
+// The first parameter of each offered item's signature, by the name it
+// inserts: `min : [A] -> A?` offers `min` for a `[A]`.
+auto offeredReceivers(const json::Value& answer) -> std::map<std::string, std::string> {
+    const json::Array* items = nullptr;
+    if (answer.isArray()) items = &answer.array();
+    else if (answer.isObject())
+        if (const auto* list = answer.object().find("items"); list && list->isArray())
+            items = &list->array();
+    std::map<std::string, std::string> receivers;
+    if (!items) return receivers;
+    for (const auto& item : *items) {
+        if (!item.isObject()) continue;
+        const auto& object = item.object();
+        const auto* name = object.find("filterText");
+        const auto* detail = object.find("detail");
+        if (!name || !name->isString() || !detail || !detail->isString()) continue;
+        const auto& text = detail->string();
+        const auto colon = text.find(" : ");
+        if (colon == std::string::npos) continue;
+        const auto from = colon + 3;
+        receivers[name->string()] = text.substr(from, text.find(" -> ", from) - from);
+    }
+    return receivers;
+}
+
 // Whether a checker error on a substituted name says the name should never
 // have been offered: unknown, not in scope, or — after a dot — not for this
 // receiver (its first argument refused). Arity errors and later arguments'
@@ -452,6 +477,9 @@ auto rejectsOffer(const std::string& message, const std::string& label, bool aft
     -> bool {
     if (afterDot && message.rfind("`" + label + "` expects argument 1 to be", 0) == 0)
         return true;
+    // About another name first (`+` is not defined for Type<Type> and
+    // String): the offered one is only its operand.
+    if (message.starts_with("`") && !message.starts_with("`" + label + "`")) return false;
     if (message.find("`" + label + "`") == std::string::npos &&
         message.find("'" + label + "'") == std::string::npos &&
         message.find(" " + label) == std::string::npos)
@@ -487,7 +515,14 @@ auto sweepFile(const Options& options, const std::string& path, std::mt19937& rn
     for (const auto& token : tokens) {
         if (isKeyword(token.text)) continue;
         const bool lower = std::islower(static_cast<unsigned char>(token.text[0]));
-        if (lower && checker.types.count({token.line + 1, token.column + 1}))
+        // An assignment's target (`sql = sql + ...`) is where the checker
+        // records the assignment, a Void, and not the name: it is no site.
+        const auto rest = lines[token.line].substr(token.column + token.text.size());
+        const auto next = rest.find_first_not_of(' ');
+        const bool assigned = next != std::string::npos && rest[next] == '=' &&
+                              (next + 1 >= rest.size() ||
+                               (rest[next + 1] != '=' && rest[next + 1] != '>'));
+        if (lower && !assigned && checker.types.count({token.line + 1, token.column + 1}))
             hoverSites.push_back(token);
         if (token.afterDot && lower) dotSites.push_back(token);
         else if (lower) bareSites.push_back(token);
@@ -532,6 +567,7 @@ auto sweepFile(const Options& options, const std::string& path, std::mt19937& rn
         Token token;
         std::string label;
         std::string purpose;
+        std::string receiver;  // the offered signature's first parameter
     };
     std::vector<Substitution> substitutions;
 
@@ -555,8 +591,27 @@ auto sweepFile(const Options& options, const std::string& path, std::mt19937& rn
             }
             const auto type = hoverType(shown, token.text);
             if (!type) continue;
+            // `(Integer -> Integer)` is `Integer -> Integer`: the parentheses a
+            // function type is shown in say nothing about it.
+            const auto unwrapped = [](std::string text) {
+                while (text.size() > 2 && text.front() == '(' && text.back() == ')') {
+                    int depth = 0;
+                    bool wraps = true;
+                    for (std::size_t i = 0; i < text.size(); ++i) {
+                        if (text[i] == '(') ++depth;
+                        else if (text[i] == ')' && --depth == 0 && i + 1 < text.size()) {
+                            wraps = false;
+                            break;
+                        }
+                    }
+                    if (!wraps) break;
+                    text = text.substr(1, text.size() - 2);
+                }
+                return text;
+            };
             const auto same = [&](const std::string& checked) {
-                return withVariablesRenamed(checked) == withVariablesRenamed(*type);
+                return withVariablesRenamed(unwrapped(checked)) ==
+                       withVariablesRenamed(unwrapped(*type));
             };
             if (std::none_of(inferred.begin(), inferred.end(), same)) {
                 std::string known;
@@ -605,15 +660,22 @@ auto sweepFile(const Options& options, const std::string& path, std::mt19937& rn
             auto labels = completionLabels(answer);
             labels.erase(std::remove_if(labels.begin(), labels.end(),
                                         [&](const std::string& label) {
+                                            // `after` is the testing DSL's hook and
+                                            // a keyword: `after()` is no call of it.
                                             return label == token.text || label.empty() ||
+                                                   isKeyword(label) ||
                                                    !isIdentStart(label[0]) ||
                                                    label.find_first_of(" (<") != std::string::npos;
                                         }),
                          labels.end());
             std::shuffle(labels.begin(), labels.end(), rng);
             if (labels.size() > options.sample) labels.resize(options.sample);
-            for (const auto& label : labels)
-                substitutions.push_back({token, label, purpose});
+            const auto receivers = offeredReceivers(answer);
+            for (const auto& label : labels) {
+                const auto receiver = receivers.find(label);
+                substitutions.push_back({token, label, purpose,
+                                         receiver == receivers.end() ? "" : receiver->second});
+            }
         }
     }
 
@@ -657,8 +719,23 @@ auto sweepFile(const Options& options, const std::string& path, std::mt19937& rn
         std::string mutatedText;
         for (std::size_t i = 0; i < mutated.size(); ++i)
             mutatedText += mutated[i] + (i + 1 < mutated.size() ? "\n" : "");
-        const auto casePath = workDir + "/" + fs::path(path).stem().string() + "_" +
-                              std::to_string(caseNumber++) + ".kex";
+        // A spec keeps its name and has its companion beside it, or
+        // `wc.spec_3.kex` loads no `wc.kex` and every name of it is undefined.
+        const auto fileName = fs::path(path).filename().string();
+        const bool spec = fileName.ends_with(".spec.kex");
+        const auto caseDir = spec ? workDir + "/case_" + std::to_string(caseNumber) : workDir;
+        const auto casePath = spec ? caseDir + "/" + fileName
+                                   : workDir + "/" + fs::path(path).stem().string() + "_" +
+                                         std::to_string(caseNumber) + ".kex";
+        ++caseNumber;
+        if (spec) {
+            fs::create_directories(caseDir);
+            const auto companion = fs::path(path).parent_path() /
+                                   (fileName.substr(0, fileName.size() - 9) + ".kex");
+            std::error_code ignored;
+            fs::copy_file(companion, fs::path(caseDir) / companion.filename(),
+                          fs::copy_options::overwrite_existing, ignored);
+        }
         writeFile(casePath, mutatedText);
         const auto view = checkerView(options, casePath, sourceRoot);
         for (const auto& error : view.errors) {
@@ -669,13 +746,25 @@ auto sweepFile(const Options& options, const std::string& path, std::mt19937& rn
             if (!rejectsOffer(message, substitution.label,
                               substitution.purpose == "sound-dot"))
                 continue;
+            // The original call's arguments can select another overload (`xs.map
+            // { ... }` made `xs.min { ... }`, Comparable's `min(other)`): its
+            // first parameter refusing the receiver says nothing of the one
+            // offered, unless that is the one refusing.
+            const auto expected = "`" + substitution.label + "` expects argument 1 to be ";
+            if (substitution.purpose == "sound-dot" && message.rfind(expected, 0) == 0 &&
+                !substitution.receiver.empty()) {
+                const auto refused = message.substr(expected.size(),
+                                                    message.find(", but got") - expected.size());
+                if (refused != substitution.receiver) continue;
+            }
             report("soundness", path, token.line, token.column,
                    (substitution.purpose == "sound-dot" ? "after `.`" : "bare") +
                        std::string(" offered `") + substitution.label + "` in place of `" +
                        token.text + "`, checker: " + message);
             break;
         }
-        fs::remove(casePath);
+        if (spec) fs::remove_all(caseDir);
+        else fs::remove(casePath);
     }
 }
 

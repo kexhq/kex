@@ -270,7 +270,8 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
                 copy.typeName = node.typeName;
                 for (const auto& field : node.fields)
                     copy.fields.push_back(
-                        RecordEntry{field.name, clone(field.value), field.spread});
+                        RecordEntry{field.name, clone(field.value), field.spread,
+                                    field.keyLocation});
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, BinaryOp>) {
                 out->kind = BinaryOp{clone(node.left), node.op, clone(node.right)};

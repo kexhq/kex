@@ -437,6 +437,28 @@ int main() {
                        "`(a + b).to` completed nothing: " + sum);
         });
 
+        it("answers a record literal's key as the field the checker resolved", []() {
+            // By name, the record was the capitalised word before the `{`:
+            // `Shapes.Box { size: 3 }` and `Label { size: 1.5 }` are two
+            // records' `size`, and a qualified one was found by its last segment.
+            const std::string text =
+                "module Shapes do\n  record Box do\n    size : Integer\n    name : String\n  end\nend\n\n"
+                "record Label do\n  size : Float\nend\n\n"
+                "main do\n  let b = Shapes.Box { size: 3, name: \"b\" }\n"
+                "  let l = Label { size: 1.5 }\n  IO.printLine(b.size + l.size.round)\nend\n";
+            const std::string uri = "file:///tmp/kex-lsp-record-keys.kex";
+            const auto boxSize = askAt(uri, text, "hover", 12, 24);
+            assertTrue(boxSize.find("size : Integer") != std::string::npos,
+                       "Box's `size`: " + boxSize);
+            const auto labelSize = askAt(uri, text, "hover", 13, 18);
+            assertTrue(labelSize.find("size : Float") != std::string::npos,
+                       "Label's `size`: " + labelSize);
+            const auto definition = askAt(uri, text, "definition", 13, 18);
+            assertTrue(definition.find("\"start\":{\"character\":2,\"line\":8}") !=
+                           std::string::npos,
+                       "Label's `size` declaration: " + definition);
+        });
+
         describe("rename", []() {
             // The edits of a rename answer, as `line:character` of each start.
             const auto starts = [](const std::string& answer) {

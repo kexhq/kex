@@ -98,6 +98,10 @@ struct Document {
     // Field reads (`point.x`, ``), at the field name: the record the
     // checker read the field of.
     std::unordered_map<uint64_t, std::string> fieldReads;
+    // Keys of record constructions (`x` in `Point { x: 1 }`), at the key: the
+    // field as hover shows it (`x : Integer`). Their records are in
+    // fieldReads, which navigation reads alike.
+    std::unordered_map<uint64_t, std::string> recordKeys;
     // Calls the checker decided are a type's own `make` function (`box.render`),
     // at the function name: that type, as the checker names it.
     std::unordered_map<uint64_t, std::string> ownMethodCalls;
@@ -2166,6 +2170,7 @@ void recordNavigation(Document& document, const semantic::Analyzer& analyzer,
         document.localDefinitions.clear();
         document.bindingSites.clear();
         document.fieldReads.clear();
+        document.recordKeys.clear();
         document.ownMethodCalls.clear();
         document.moduleReferences.clear();
     }
@@ -2206,6 +2211,14 @@ void recordNavigation(Document& document, const semantic::Analyzer& analyzer,
             document.fieldReads.insert_or_assign(at, decided.owner);
         else if (decided.kind == semantic::CallKind::OwnMethod)
             document.ownMethodCalls.insert_or_assign(at, decided.owner);
+    }
+    for (const auto& key : analyzer.checker().recordKeys()) {
+        if (key.location.file != document.path) continue;
+        const auto at = Document::receiverKey(static_cast<unsigned int>(key.location.line),
+                                              static_cast<unsigned int>(key.location.column));
+        document.fieldReads.insert_or_assign(at, key.record);
+        document.recordKeys.insert_or_assign(
+            at, key.field + " : " + semantic::typeToString(key.type));
     }
     for (const auto& [name, where] : analyzer.checker().bindingSites()) {
         if (where.file != document.path) continue;
@@ -2406,7 +2419,7 @@ private:
                     ? member.name + " : " + semantic::typeToString(member.result)
                     : analyzer.checker().displaySignature(member.name, signature);
                 // Labelled as the declaration reads: `foul slot later`.
-                const auto label = (signature.isFoul && !member.field ? "foul " : std::string{}) +
+                const auto label = (member.declaredFoul && !member.field ? "foul " : std::string{}) +
                                    (member.slot ? "slot " : "") + member.name;
                 all.push_back(::lsp::CompletionItem{
                     .label = label,
@@ -4070,7 +4083,16 @@ private:
             ? std::string{}
             : declaredFieldType(document.text, params.position.line + 1,
                                 word.byteColumn, word.byteLength);
-        if (mapKey) {
+        const auto recordKey = document.recordKeys.find(
+            Document::receiverKey(params.position.line + 1, word.byteColumn));
+        if (recordKey != document.recordKeys.end()) {
+            // A record literal's key, as the checker resolved it: the field of
+            // the record constructed. By name, the record was the capitalised
+            // word before the `{` and the field looked up in a symbol of that
+            // name.
+            detail = recordKey->second;
+            symbol = nullptr;
+        } else if (mapKey) {
             // In a RECORD literal the key is that record's field, so it has a
             // declared type; in a map literal it is genuinely an atom.
             detail.clear();
@@ -4319,7 +4341,12 @@ private:
                     if (!documentation.empty()) documentation += "\n\n";
                     documentation += entry;
                 }
-        if (documentation.empty() && !lexicalReference && !recordField &&
+        // A declaration of the program's own is not the standard library's
+        // same-named one: `let add(a, b)` was shown with `Set.add`'s prose.
+        const bool ownDeclaration =
+            symbol && !symbol->definition.file.empty() &&
+            inWorkspace(std::string(symbol->definition.file));
+        if (documentation.empty() && !lexicalReference && !recordField && !ownDeclaration &&
             !mapKey && fieldDeclaration.empty() && !detailFromExpression) {
             const auto standardName = moduleQualifier.empty()
                 ? lookupName : moduleQualifier + "." + lookupName;

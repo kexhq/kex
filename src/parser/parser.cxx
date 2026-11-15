@@ -2595,6 +2595,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
             continue;
           }
           std::string fieldName;
+          const auto keyLocation = peek().location;
           if (check(TokenType::LowerIdent) || check(TokenType::End) ||
               check(TokenType::Type) || check(TokenType::Match) ||
               check(TokenType::Loop) || check(TokenType::Timeout) ||
@@ -2615,7 +2616,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
             value->kind = ast::Identifier{fieldName};
           }
           fields.push_back(
-              ast::RecordEntry{fieldName, std::move(value), false});
+              ast::RecordEntry{fieldName, std::move(value), false, keyLocation});
           skipNewlines();
         } while (match(TokenType::Comma));
       }

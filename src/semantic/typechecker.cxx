@@ -63,6 +63,7 @@ auto TypeChecker::check(const ast::Program& program, std::vector<Diagnostic>& di
     m_scopeContextIds.clear();
     m_namespaceRoots.clear();
     m_patternBindings.clear();
+    m_recordKeys.clear();
     m_stringPatterns.clear();
     m_successWrappers.clear();
     m_functionSignatures.clear();
@@ -6119,12 +6120,31 @@ auto TypeChecker::memberCompletions(const TypePtr& receiver, const ast::Expr& at
         for (const auto arity : arities) {
             if (arity == 0) continue;
             if (auto result = probe(name, arity)) {
-                const auto chosen = std::find_if(
-                    signatures.begin(), signatures.end(),
-                    [&](const Signature& signature) { return signature.params.size() == arity; });
-                offered.push_back({name, chosen != signatures.end() ? *chosen : signatures.front(),
-                                   std::move(result), false,
-                                   servingReceiver && m_slotMethodNames.contains(name)});
+                // The signature this receiver takes at this arity: `min` on a
+                // list is the list's, not the first `min` of one argument the
+                // tables hold (Range's), which completion then showed.
+                auto chosen = std::find_if(
+                    signatures.begin(), signatures.end(), [&](const Signature& signature) {
+                        return signature.params.size() == arity &&
+                               argMatchesParam(receiver, signature.params.front());
+                    });
+                if (chosen == signatures.end())
+                    chosen = std::find_if(
+                        signatures.begin(), signatures.end(),
+                        [&](const Signature& signature) { return signature.params.size() == arity; });
+                const auto& signature = chosen != signatures.end() ? *chosen : signatures.front();
+                const bool slot = servingReceiver && m_slotMethodNames.contains(name);
+                // A slot is declared on the state: its handler's signature
+                // (the state first) says whether it was written `foul`.
+                bool declaredFoul = signature.isFoul;
+                if (slot)
+                    for (const auto& handler : signatures)
+                        if (handler.params.size() == arity &&
+                            !argMatchesParam(receiver, handler.params.front())) {
+                            declaredFoul = handler.isFoul;
+                            break;
+                        }
+                offered.push_back({name, signature, std::move(result), false, slot, declaredFoul});
                 break;
             }
         }

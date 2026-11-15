@@ -2600,6 +2600,12 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 supplied.insert(fieldName);
                 if (record == m_recordFields.end()) continue;
                 auto declared = record->second.find(fieldName);
+                // For tooling: the field this key names, of the record the
+                // checker resolved the construction to.
+                if (m_recordsNames && entry.keyLocation.line > 0 &&
+                    declared != record->second.end())
+                    m_recordKeys.push_back({entry.keyLocation, recordName, fieldName,
+                                            declared->second});
                 // An unknown field name used to be skipped, which made a
                 // renamed field silently absorb the old spelling: the
                 // interpreter stored `zebra:` on a record with no such field

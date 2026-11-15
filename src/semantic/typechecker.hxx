@@ -70,6 +70,15 @@ public:
     auto patternBindings() const -> const std::vector<PatternBinding>& {
         return m_patternBindings;
     }
+    // Each key of a record construction, `x` in `Point { x: 1 }`: the record
+    // the checker resolved the construction to and the field it names.
+    struct RecordKey {
+        SourceLocation location;
+        std::string record;
+        std::string field;
+        TypePtr type;
+    };
+    auto recordKeys() const -> const std::vector<RecordKey>& { return m_recordKeys; }
 
     // One `using`: its module as written, and what it brings in.
     struct ImportSelection {
@@ -130,6 +139,9 @@ public:
         bool field = false;
         // A serving slot, called on the Server<State> that runs it.
         bool slot = false;
+        // Whether it is declared `foul`. A slot's call is always foul (it
+        // sends), so its signature says foul whatever the slot declares.
+        bool declaredFoul = false;
     };
     auto memberCompletions(const TypePtr& receiver, const ast::Expr& at)
         -> std::vector<MemberCompletion>;
@@ -1039,6 +1051,7 @@ private:
     // reject a pattern that destructures the wrong number of values.
     std::unordered_map<std::string, size_t> m_constructorArity;
     std::vector<PatternBinding> m_patternBindings;
+    std::vector<RecordKey> m_recordKeys;
     std::unordered_set<const ast::Pattern*> m_stringPatterns;
     // Make-block methods that carry a `:>` declaration. That declaration is
     // authoritative, so the inferred signature of its `let` must not be

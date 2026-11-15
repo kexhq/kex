@@ -283,6 +283,8 @@ struct RecordEntry {
     // `Point { ...p, x: 1 }`. Entries remain ordered because later fields and
     // spreads override earlier ones.
     bool spread = false;
+    // Where the key is written (`x` in `x: 1`); line 0 for a spread.
+    SourceLocation keyLocation;
 };
 
 struct RecordConstruction {
