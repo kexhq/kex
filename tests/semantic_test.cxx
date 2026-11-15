@@ -2254,6 +2254,24 @@ int main() {
             ));
         });
 
+        it("says a payload constructor named bare is no value", []() {
+            // `xs.map(Wrap)` was "Undefined constructor or type: `Wrap`"
+            assertTrue(hasError(
+                "type Thing = Wrap(Integer) | Empty\n"
+                "main do\n"
+                "  IO.inspect([1, 2].map(Wrap))\n"
+                "end\n",
+                "`Wrap` is a constructor taking 1 value, not a value"
+            ));
+            assertTrue(noErrors(
+                "type Thing = Wrap(Integer) | Empty\n"
+                "main do\n"
+                "  IO.inspect([1, 2].map { |n| Wrap(n) })\n"
+                "  IO.inspect(Empty)\n"
+                "end\n"
+            ));
+        });
+
         it("accepts a fully-covered user sum type match", []() {
             assertTrue(noErrors(
                 "type Shape = Circle(Float) | Rectangle(Float, Float)\n"

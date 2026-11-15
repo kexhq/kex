@@ -3,6 +3,7 @@
 #include "symbol_queries.hxx"
 #include "collect_pass.hxx"
 #include "../compiled/expand.hxx"
+#include "../ast/walk.hxx"
 #include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
 #include <fstream>
@@ -13,6 +14,7 @@
 #include <cctype>
 #include <string_view>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 
@@ -306,6 +308,43 @@ auto checkedReceiver(const CompletionChecker& check, const std::string& source,
                 expression->location.file == path)
                 return CheckedReceiver{std::move(*checked), expression};
         return CheckedReceiver{std::move(*checked), nullptr};
+    }
+    // A parenthesized receiver, `(1..10).` or `(a + b).`: the group is no
+    // node, so nothing is recorded at its `(`, and an operator is recorded at
+    // its right operand. The receiver is the outermost expression recorded
+    // inside it: the one no other one there contains.
+    if (receiver.callOpen && receiver.callOpen == receiver.start && source[receiver.start] == '(') {
+        int depth = 0;
+        size_t close = receiver.start;
+        for (; close < receiver.dot; ++close) {
+            if (source[close] == '(') ++depth;
+            else if (source[close] == ')' && --depth == 0) break;
+        }
+        const auto from = positionOf(source, receiver.start + 1);
+        const auto to = positionOf(source, close);
+        std::vector<const ast::Expr*> inside;
+        for (const auto& [expression, _] : checked->analyzer->typeMap()) {
+            if (!expression || expression->location.file != path) continue;
+            const std::pair<int, int> at{expression->location.line, expression->location.column};
+            if (from <= at && at < to) inside.push_back(expression);
+        }
+        std::unordered_set<const ast::Expr*> nested;
+        const auto markNested = [&](const auto& self, const ast::Expr& parent) -> void {
+            ast::forEachChild(parent, [&](const ast::ExprPtr& child) {
+                if (child && nested.insert(child.get()).second) self(self, *child);
+            });
+        };
+        for (const auto* expression : inside) markNested(markNested, *expression);
+        const ast::Expr* outermost = nullptr;
+        for (const auto* expression : inside)
+            if (!nested.contains(expression)) {
+                if (outermost) {
+                    outermost = nullptr;
+                    break;
+                }
+                outermost = expression;
+            }
+        return CheckedReceiver{std::move(*checked), outermost};
     }
     const auto* expression = typedAt(
         *checked->analyzer,

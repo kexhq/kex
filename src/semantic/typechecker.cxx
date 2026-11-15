@@ -5639,6 +5639,18 @@ auto TypeChecker::constantType(const std::string& name) const -> TypePtr {
 
 namespace kex::semantic {
 
+auto TypeChecker::constructorArityInScope(const std::string& name) -> std::optional<size_t> {
+    for (const auto& [module, constructors] : m_moduleConstructors)
+        if (const auto constructor = constructors.find(name);
+            constructor != constructors.end() &&
+            (withinModule(module) || moduleMemberImported(module, name)))
+            return constructor->second.arity;
+    if (m_adtOfConstructor.contains(name))
+        if (const auto arity = m_constructorArity.find(name); arity != m_constructorArity.end())
+            return arity->second;
+    return std::nullopt;
+}
+
 auto TypeChecker::nullaryConstructorType(const std::string& name) -> TypePtr {
     if (auto constructed = constructorResultType(name, {});
         constructed && m_nullaryConstructors.contains(name))

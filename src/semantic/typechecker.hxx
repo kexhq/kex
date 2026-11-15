@@ -385,6 +385,8 @@ private:
     auto constantDeclaration(const std::string& name) const -> std::string;
     // The type of the nullary constructor `name` names here, or null.
     auto nullaryConstructorType(const std::string& name) -> TypePtr;
+    // How many payloads the constructor `name` in scope here takes, when one is.
+    auto constructorArityInScope(const std::string& name) -> std::optional<size_t>;
     auto reportConstructorOutOfScope(const std::string& name, const SourceLocation& at) -> bool;
     // The module declaring constructor `name` when only a module does and
     // its bare name is out of scope here (not inside it, no `using` brings

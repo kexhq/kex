@@ -658,6 +658,17 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                    {named ? named : Type::named(node.name)});
             }
             if (auto constant = constantType(node.name)) return constant;
+            // A constructor with payloads is no value of its own: named bare
+            // (`xs.map(Wrap)`), it was "undefined", or, under the `using`
+            // that brings it in, to be brought in with that `using`.
+            if (const auto arity = constructorArityInScope(node.name); arity && *arity > 0) {
+                error(expr.location,
+                      "`" + node.name + "` is a constructor taking " + std::to_string(*arity) +
+                          (*arity == 1 ? " value" : " values") + ", not a value: call it (`" +
+                          node.name + "(…)`), or pass a block (`{ |x| " + node.name +
+                          (*arity == 1 ? "(x) }`)" : "(x, …) }`)"));
+                return Type::unknown();
+            }
             if (!reportConstructorOutOfScope(node.name, expr.location) &&
                 !bareNameDeclared(node.name))
                 reportUndefined("constructor or type", node.name, expr.location);

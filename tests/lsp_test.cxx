@@ -399,6 +399,20 @@ int main() {
             }
         });
 
+        it("completes a parenthesized receiver as the expression inside", []() {
+            // A group is no node: nothing was recorded at its `(`, and an
+            // operator is recorded at its right operand.
+            const std::string text =
+                "let f(a: Integer, b: Integer) -> String do\n"
+                "  let xs = (1..10).map { |x| x }\n  (a + b).to(String)\nend\n";
+            const auto range = askAt("file:///tmp/kex-lsp-group.kex", text, "completion", 1, 22);
+            assertTrue(range.find("\"filterText\":\"map\"") != std::string::npos,
+                       "`(1..10).map` completed nothing: " + range);
+            const auto sum = askAt("file:///tmp/kex-lsp-group.kex", text, "completion", 2, 12);
+            assertTrue(sum.find("\"filterText\":\"to\"") != std::string::npos,
+                       "`(a + b).to` completed nothing: " + sum);
+        });
+
         it("hovers a binding of unknown type as the binding", []() {
             // `json` is a Map of Any, so `name` is of a type nothing knows:
             // it is still the binding, not Weekday's `name`
