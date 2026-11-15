@@ -92,7 +92,8 @@ using ModuleLocator =
 auto findModuleRuleViolations(const ast::Program& program,
                               const ImportedInterfaces* interfaces,
                               const ModuleLocator* locate = nullptr,
-                              const std::vector<std::string>& warnedFiles = {})
+                              const std::vector<std::string>& warnedFiles = {},
+                              bool missingModuleIsError = true)
     -> std::vector<Diagnostic>;
 
 // What `using written` (in module `within`) brings in bare, from a module of

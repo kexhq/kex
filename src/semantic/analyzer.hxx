@@ -56,6 +56,9 @@ public:
     auto setEntryFiles(std::vector<std::string> files) -> void {
         m_entryFiles = std::move(files);
     }
+    // Whether such a `using` is an error (a build) or a warning (an editor,
+    // where a dependency may not be fetched yet).
+    auto setMissingModuleIsError(bool error) -> void { m_missingModuleIsError = error; }
     // Keeps what tooling reads of the names (nameIndex), for the entry file.
     // A build does not ask.
     auto setIndexesNames(bool indexes) -> void {
@@ -275,6 +278,7 @@ private:
     const ImportedInterfaces* m_importedInterfaces = nullptr;
     std::function<bool(const std::string&, const std::string&)> m_moduleLocator;
     std::vector<std::string> m_entryFiles;
+    bool m_missingModuleIsError = true;
     bool m_indexesNames = false;
     NameIndex m_nameIndex;
     bool m_inFoulContext = false;

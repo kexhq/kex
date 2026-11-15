@@ -181,7 +181,8 @@ auto forEachUsing(const ast::Program& program,
 auto findModuleRuleViolations(const ast::Program& program,
                               const ImportedInterfaces* interfaces,
                               const ModuleLocator* locate,
-                              const std::vector<std::string>& warnedFiles)
+                              const std::vector<std::string>& warnedFiles,
+                              bool missingModuleIsError)
     -> std::vector<Diagnostic> {
     const ProgramModules modules(collectSymbols(program));
     std::vector<Diagnostic> found;
@@ -207,10 +208,15 @@ auto findModuleRuleViolations(const ast::Program& program,
             checkUsing(modules, module, written.onlyNames, written.exceptNames, report);
         else if (const auto* interface = interfaceOf(requested))
             checkUsing(*interfaces, *interface, requested, written.onlyNames, report);
-        // A module nothing here describes is the build's to find.
+        // A module nothing here describes and no source root holds. A build
+        // refuses it: it used to warn, and every call through the module then
+        // passed the check and died at run time ("Undefined function"). An
+        // editor only warns, for a dependency `tey install` has not fetched.
         else if (std::find(warnedFiles.begin(), warnedFiles.end(), written.location.file) !=
                  warnedFiles.end())
-            found.push_back({Diagnostic::Level::Warning, written.location,
+            found.push_back({missingModuleIsError ? Diagnostic::Level::Error
+                                                  : Diagnostic::Level::Warning,
+                             written.location,
                              "module not found in source roots: " + requested});
     });
     const auto export_ = [&](const ast::ExportDecl& decl, const std::string& current) {

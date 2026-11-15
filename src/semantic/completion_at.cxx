@@ -220,6 +220,7 @@ auto checkedReceiver(const CompletionChecker& check, const std::string& source,
         // path's `FS.File`), then any typed one (a `Number`).
         const ast::Expr* qualified = nullptr;
         const ast::Expr* typed = nullptr;
+        const ast::Expr* name = nullptr;
         const auto better = [plainName](const ast::Expr* held, const ast::Expr& candidate) {
             // An operator is recorded where its right operand is: in `n !=
             // args.` the comparison shared `args`'s position, and when it came
@@ -250,12 +251,17 @@ auto checkedReceiver(const CompletionChecker& check, const std::string& source,
             if (!expression || expression->location.line != position.first ||
                 expression->location.column != position.second)
                 continue;
+            if (std::holds_alternative<ast::Identifier>(expression->kind)) name = expression;
             const auto type = receiverTypeOf(analyzer, expression);
             if (!type || std::holds_alternative<UnknownType>(type->kind)) continue;
             if (better(typed, *expression)) typed = expression;
             if (!completionQualifierForType(type).empty() && better(qualified, *expression))
                 qualified = expression;
         }
+        // A plain name is the receiver even when the checker could not type
+        // it: otherwise the chain sharing its position, a String in
+        // `"in-order: " + tree.inOrder`, was completed instead.
+        if (plainName && name) return name;
         return qualified ? qualified : typed;
     };
     // The shorthand `&.`: its parameter is a block's, typed by the call the

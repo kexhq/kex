@@ -195,6 +195,21 @@ auto identifiers(const std::string& text) -> std::vector<Token> {
                     (isIdentChar(line[i - 2]) || line[i - 2] == ')' ||
                      line[i - 2] == ']' || line[i - 2] == '}'))
                     token.afterDot = true;
+                // `BEAM.lists.reverse` names an Erlang module and function:
+                // no Kex declaration lists them, so nothing can be offered or
+                // checked there.
+                if (token.afterDot) {
+                    std::size_t root = i;
+                    while (root >= 2 && line[root - 1] == '.' && isIdentChar(line[root - 2])) {
+                        root -= 1;
+                        while (root > 0 && isIdentChar(line[root - 1])) --root;
+                    }
+                    if (line.compare(root, 5, "BEAM.") == 0 &&
+                        (root == 0 || !isIdentChar(line[root - 1]))) {
+                        i = end;
+                        continue;
+                    }
+                }
                 tokens.push_back(std::move(token));
                 i = end;
                 continue;

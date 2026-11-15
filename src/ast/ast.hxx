@@ -614,6 +614,9 @@ struct Param {
     std::optional<std::string> name;
     std::optional<TypeExprPtr> type;
     std::optional<ExprPtr> defaultValue;
+    // Where the name is written (`width` in `let area(width: Integer)`); line
+    // 0 for a pattern. Tooling reads the binding there.
+    SourceLocation location;
     // The type this parameter gets from a preceding standalone signature line
     // (`speak : Cat -> String` above `let speak(c) = ...`), when the parameter
     // itself is unannotated. NON-OWNING: the `TypeAnnotation` item in the same

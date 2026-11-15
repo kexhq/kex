@@ -2275,6 +2275,7 @@ private:
                 },
                 .definitionProvider = true,
                 .referencesProvider = true,
+                .renameProvider = ::lsp::RenameOptions{.prepareProvider = true},
             },
             .serverInfo = ::lsp::ServerInfo{
                 .name = "kex",
@@ -2321,6 +2322,7 @@ private:
         entryFiles.insert(entryFiles.end(), document.companions.begin(),
                           document.companions.end());
         analyzer->setEntryFiles(std::move(entryFiles));
+        analyzer->setMissingModuleIsError(false);
         analyzer->setIndexesNames(true);
         analyzer->analyze(state->ast);
         // The program is the workspace's, which outlives the answer.
@@ -2430,6 +2432,23 @@ private:
     // The names a bare word at `cursor` may complete to: the checker's answer
     // (Analyzer::bareCompletions) where the word starts, for the buffer as it
     // is. Null when the buffer could not be checked.
+    // The expression a word at `line`:`column` of `path` is, or else the
+    // nearest one before it: the scope there is the one the word is written in.
+    static auto scopeAt(const semantic::CheckedSource& checked, const std::string& path,
+                        int line, int column) -> const ast::Expr* {
+        const ast::Expr* at = nullptr;
+        for (const auto& [expression, _] : checked.analyzer->checker().scopeNames()) {
+            if (!expression || expression->location.file != path) continue;
+            const auto& location = expression->location;
+            if (location.line > line || (location.line == line && location.column > column))
+                continue;
+            if (!at || location.line > at->location.line ||
+                (location.line == at->location.line && location.column > at->location.column))
+                at = expression;
+        }
+        return at;
+    }
+
     auto bareCompletionsAt(const Document& document, size_t cursor)
         -> std::optional<std::vector<std::string>> {
         const auto& text = document.text;
@@ -2451,18 +2470,7 @@ private:
         for (size_t i = 0; i < wordStart; ++i)
             if (text[i] == '\n') { ++line; lineStart = i + 1; }
         const int column = static_cast<int>(wordStart - lineStart) + 1;
-        // The expression the word is, or else the nearest one before it: the
-        // scope there is the one the word is written in.
-        const ast::Expr* at = nullptr;
-        for (const auto& [expression, _] : checked->analyzer->checker().scopeNames()) {
-            if (!expression || expression->location.file != document.path) continue;
-            const auto& location = expression->location;
-            if (location.line > line || (location.line == line && location.column > column))
-                continue;
-            if (!at || location.line > at->location.line ||
-                (location.line == at->location.line && location.column > at->location.column))
-                at = expression;
-        }
+        const auto* at = scopeAt(*checked, document.path, line, column);
         if (!at) return std::nullopt;
         auto names = checked->analyzer->bareCompletions(*at);
         document.bareAnswer = Document::BareAnswer{std::move(checkedText), wordStart, names};
@@ -2485,6 +2493,7 @@ private:
         for (const auto& path : m_referenceIndexedPaths)
             m_referenceDb.removeFile(path);
         m_referenceIndexedPaths.clear();
+        m_referenceProjectModules.clear();
         m_indexedCallReferences.clear();
         m_referenceIndexWord = std::string(requestedName);
         std::vector<std::string> moduleRoots;
@@ -2589,6 +2598,7 @@ private:
                 return leftModule != rightModule ? leftModule :
                     left.first < right.first;
             });
+        m_referenceIndexPartial = sources.size() > 64;
         if (sources.size() > 64) {
             sources.erase(std::remove_if(
                 sources.begin(), sources.end(), [&](const auto& candidate) {
@@ -2610,6 +2620,14 @@ private:
         for (const auto& [path, _] : sources) {
             auto* state = m_referenceDb.fileState(path);
             if (!state) continue;
+            // Checked as an open document is: with the project modules it
+            // uses merged in. Checked alone, `Geo.area(2)` in main.kex named
+            // an unknown module (geo.kex is another file), and the qualified
+            // call was no reference to `area`, so a rename missed it.
+            auto& retained = *m_referenceProjectModules.emplace_back(
+                std::make_shared<ProjectModules>());
+            mergeProjectModules(state->ast, path, projectModuleRoots(path), &m_interfaces,
+                                retained);
             auto& analyzer = *analyses.emplace_back(
                 std::make_unique<semantic::Analyzer>(&m_interfaces));
             analyzer.setIndexesNames(true);
@@ -2717,6 +2735,7 @@ private:
             entryFiles.insert(entryFiles.end(), document.companions.begin(),
                               document.companions.end());
             analyzer.setEntryFiles(std::move(entryFiles));
+            analyzer.setMissingModuleIsError(false);
             analyzer.setIndexesNames(true);
             analyzer.setModuleLocator(
                 [resolver = module::Resolver(documentModuleRoots(document.path))](
@@ -4692,38 +4711,33 @@ private:
         return {};
     }
 
-    auto references(::lsp::ReferenceParams&& params)
-        -> ::lsp::requests::TextDocument_References::Result {
-        verifyInitialized();
-        const auto key = params.textDocument.uri.toString();
-        const auto found = m_documents.find(key);
-        if (found == m_documents.end()) return ::lsp::Array<::lsp::Location>{};
-        const auto& document = found->second;
-        const auto word = wordAt(document.text, params.position.line,
-                                 params.position.character);
-        if (word.text.empty()) return ::lsp::Array<::lsp::Location>{};
-
-        auto locationFor = [&](const SourceLocation& location,
-                               std::string_view name) -> ::lsp::Location {
-            const auto* state = m_db.fileState(std::string(location.file));
-            if (!state)
-                state = m_referenceDb.fileState(std::string(location.file));
-            const std::string* source = state ? &state->source : nullptr;
-            auto end = location;
-            end.column += static_cast<int>(name.size());
-            return {
-                .uri = ::lsp::Uri::fileUriFromPath(location.file),
-                .range = {
-                    .start = protocolPosition(location, source),
-                    .end = protocolPosition(end, source),
-                },
-            };
+    // What a name at `position` refers to, and every place that refers to the
+    // same: the declaration (when asked for) and the uses. How it was found
+    // says what rename may do with it.
+    struct ReferenceAnswer {
+        enum class Kind {
+            None,      // nothing the checker bound the name to
+            Local,     // a local, as the checker bound it
+            Declared,  // a declaration the name index holds
+            Imported,  // a receiver function of an imported module
         };
+        Kind kind = Kind::None;
+        std::string word;
+        const semantic::SymbolInfo* symbol = nullptr;
+        std::vector<SourceLocation> locations;
+    };
+
+    auto referenceAnswer(const Document& document, const ::lsp::Position& position,
+                         bool includeDeclaration) -> ReferenceAnswer {
+        ReferenceAnswer answer;
+        const auto word = wordAt(document.text, position.line, position.character);
+        if (word.text.empty()) return answer;
+        answer.word = word.text;
 
         const auto qualifier = moduleQualifierBeforeWord(
-            document.text, params.position.line, word.byteColumn);
+            document.text, position.line, word.byteColumn);
         const semantic::SymbolInfo* symbol = m_db.symbolAt(
-            document.path, params.position.line + 1, word.byteColumn);
+            document.path, position.line + 1, word.byteColumn);
         // The checker's answer for this name, when the index has one; the
         // lookups below by name only stand in where it has none.
         if (!symbol && !qualifier.empty()) {
@@ -4759,14 +4773,12 @@ private:
             if (indexed) symbol = indexed;
         }
 
-        ::lsp::Array<::lsp::Location> result;
         std::unordered_set<std::string> seen;
         auto append = [&](const SourceLocation& location) {
             const auto identity = std::string(location.file) + ":" +
                 std::to_string(location.line) + ":" +
                 std::to_string(location.column);
-            if (seen.insert(identity).second)
-                result.push_back(locationFor(location, word.text));
+            if (seen.insert(identity).second) answer.locations.push_back(location);
         };
         auto spellsWord = [&](const SourceLocation& location) {
             const auto* state = m_db.fileState(std::string(location.file));
@@ -4789,16 +4801,16 @@ private:
         // before it, which a shadowing `let`, a block parameter or a field of
         // the same name led astray.
         if (qualifier.empty()) {
-            const auto at = Document::receiverKey(params.position.line + 1, word.byteColumn);
+            const auto at = Document::receiverKey(position.line + 1, word.byteColumn);
             std::optional<std::pair<int, int>> bound;
             if (const auto use = document.localDefinitions.find(at);
                 use != document.localDefinitions.end())
                 bound = use->second;
             else if (document.bindingSites.contains(at))
-                bound = std::pair{static_cast<int>(params.position.line + 1),
+                bound = std::pair{static_cast<int>(position.line + 1),
                                   static_cast<int>(word.byteColumn)};
             if (bound) {
-                if (params.context.includeDeclaration)
+                if (includeDeclaration)
                     append(SourceLocation{document.path, bound->first, bound->second});
                 std::vector<SourceLocation> uses;
                 for (const auto& [key, binding] : document.localDefinitions)
@@ -4810,11 +4822,12 @@ private:
                     return std::pair{a.line, a.column} < std::pair{b.line, b.column};
                 });
                 for (const auto& use : uses) append(use);
-                return result;
+                answer.kind = ReferenceAnswer::Kind::Local;
+                return answer;
             }
         }
         if (symbol) {
-            if (params.context.includeDeclaration) append(symbol->definition);
+            if (includeDeclaration) append(symbol->definition);
             for (const auto& reference : symbol->references)
                 if (spellsWord(reference)) append(reference);
 
@@ -4824,7 +4837,9 @@ private:
                     if (reference.ownerKey == ownerKey)
                         append(reference.location);
             }
-            return result;
+            answer.kind = ReferenceAnswer::Kind::Declared;
+            answer.symbol = symbol;
+            return answer;
         }
 
 
@@ -4834,7 +4849,7 @@ private:
         // Optional.or and Bits.or separate.
         const Document::HoverEntry* selectedCall = nullptr;
         for (const auto& entry : document.selectedCallEntries)
-            if (entry.line == params.position.line + 1 &&
+            if (entry.line == position.line + 1 &&
                 word.byteColumn >= entry.byteColumn &&
                 word.byteColumn < entry.byteColumn + entry.byteLength) {
                 selectedCall = &entry;
@@ -4842,7 +4857,7 @@ private:
             }
         if (selectedCall && !selectedCall->documentationKey.empty()) {
             const auto separator = selectedCall->documentationKey.rfind('.');
-            if (params.context.includeDeclaration &&
+            if (includeDeclaration &&
                 separator != std::string::npos)
                 if (const auto* declaration = m_db.receiverSymbol(
                         selectedCall->documentationKey.substr(0, separator),
@@ -4858,11 +4873,244 @@ private:
             for (const auto& reference : m_indexedCallReferences)
                 if (reference.ownerKey == selectedCall->documentationKey)
                     append(reference.location);
-            return result;
+            answer.kind = ReferenceAnswer::Kind::Imported;
+            return answer;
         }
 
         // A name no declaration answers: nothing the checker bound it to.
+        return answer;
+    }
+
+    auto references(::lsp::ReferenceParams&& params)
+        -> ::lsp::requests::TextDocument_References::Result {
+        verifyInitialized();
+        const auto found = m_documents.find(params.textDocument.uri.toString());
+        if (found == m_documents.end()) return ::lsp::Array<::lsp::Location>{};
+        const auto answer = referenceAnswer(found->second, params.position,
+                                            params.context.includeDeclaration);
+        ::lsp::Array<::lsp::Location> result;
+        for (const auto& location : answer.locations)
+            result.push_back(protocolLocation(location, answer.word));
         return result;
+    }
+
+    // `name` where `location` starts, as a protocol location.
+    auto protocolLocation(const SourceLocation& location, std::string_view name)
+        -> ::lsp::Location {
+        const auto* state = m_db.fileState(std::string(location.file));
+        if (!state) state = m_referenceDb.fileState(std::string(location.file));
+        const std::string* source = state ? &state->source : nullptr;
+        auto end = location;
+        end.column += static_cast<int>(name.size());
+        return {
+            .uri = ::lsp::Uri::fileUriFromPath(location.file),
+            .range = {
+                .start = protocolPosition(location, source),
+                .end = protocolPosition(end, source),
+            },
+        };
+    }
+
+    // Why the name at `position` cannot be renamed, or nothing when it can.
+    // Renamed is only what the checker bound: a local, or a declaration in
+    // this workspace with the uses the name index found for it. Nothing is
+    // renamed by its spelling.
+    auto renameRefusal(const Document& document, const ReferenceAnswer& answer) const
+        -> std::optional<std::string> {
+        if (answer.word.empty()) return "There is no name here to rename.";
+        if (!document.ketSegments.empty())
+            return "Renaming is not supported in `.ket` templates yet.";
+        const auto& word = answer.word;
+        if (kex::startsUppercase(word))
+            return "Renaming types, modules and constants is not supported yet: `" + word +
+                   "`'s uses in annotations are not all known to the checker's index.";
+        switch (answer.kind) {
+        case ReferenceAnswer::Kind::None:
+            return "`" + word + "` is nothing the checker resolved here.";
+        case ReferenceAnswer::Kind::Imported:
+            return "`" + word + "` is declared outside this workspace.";
+        case ReferenceAnswer::Kind::Local:
+            break;
+        case ReferenceAnswer::Kind::Declared:
+            if (!answer.symbol || answer.symbol->kind != semantic::SymbolKind::Function)
+                return "Only functions and locals can be renamed yet.";
+            if (!answer.symbol->makeTarget.empty())
+                return "Renaming a `make` function is not supported yet: a call through "
+                       "another receiver type may pick it at run time.";
+            // Its uses in other files are found through the workspace index.
+            if (m_workspaceRoots.empty())
+                return "Open a workspace folder to rename `" + word +
+                       "`: its uses in other files are found through it.";
+            if (m_referenceIndexPartial)
+                return "Too many files spell `" + word +
+                       "` for the workspace index to read them all, so a rename could miss "
+                       "uses; open the files that use it.";
+            break;
+        }
+        if (answer.locations.empty()) return "`" + word + "` has no declaration to rename.";
+        for (const auto& location : answer.locations)
+            if (!inWorkspace(std::string(location.file)))
+                return "`" + word + "` is declared or used outside this workspace (" +
+                       std::string(location.file) + ").";
+        return std::nullopt;
+    }
+
+    // Whether `path` is a file of this workspace (and not the standard
+    // library's, wherever that is installed).
+    auto inWorkspace(const std::string& path) const -> bool {
+        const auto within = [](const std::string& file, const std::string& root) {
+            std::error_code error;
+            const auto relative = std::filesystem::weakly_canonical(file, error)
+                                      .lexically_relative(
+                                          std::filesystem::weakly_canonical(root, error));
+            return !relative.empty() && *relative.begin() != "..";
+        };
+        for (const auto& root : standardLibraryModuleRoots())
+            if (within(path, root)) return false;
+        if (m_workspaceRoots.empty()) return m_documents.contains(
+                                          ::lsp::Uri::fileUriFromPath(path).toString());
+        return std::any_of(m_workspaceRoots.begin(), m_workspaceRoots.end(),
+                           [&](const std::string& root) { return within(path, root); });
+    }
+
+    auto prepareRename(::lsp::PrepareRenameParams&& params)
+        -> ::lsp::requests::TextDocument_PrepareRename::Result {
+        verifyInitialized();
+        const auto found = m_documents.find(params.textDocument.uri.toString());
+        if (found == m_documents.end()) return nullptr;
+        const auto& document = found->second;
+        const auto answer = referenceAnswer(document, params.position, true);
+        if (const auto refusal = renameRefusal(document, answer))
+            throw ::lsp::RequestError(::lsp::MessageError::InvalidRequest, *refusal);
+        const auto word = wordAt(document.text, params.position.line, params.position.character);
+        const auto name = renamedSpelling(answer.word);
+        auto start = SourceLocation{document.path, static_cast<int>(params.position.line + 1),
+                                    static_cast<int>(word.byteColumn)};
+        return ::lsp::PrepareRenameResult{protocolLocation(start, name).range};
+    }
+
+    // The name a word spells: `push!` is `push` with the rebinding bang.
+    static auto renamedSpelling(const std::string& word) -> std::string {
+        return word.size() > 1 && word.back() == '!' ? word.substr(0, word.size() - 1) : word;
+    }
+
+    auto rename(::lsp::RenameParams&& params)
+        -> ::lsp::requests::TextDocument_Rename::Result {
+        verifyInitialized();
+        const auto found = m_documents.find(params.textDocument.uri.toString());
+        if (found == m_documents.end()) return nullptr;
+        const auto& document = found->second;
+        const auto answer = referenceAnswer(document, params.position, true);
+        if (const auto refusal = renameRefusal(document, answer))
+            throw ::lsp::RequestError(::lsp::MessageError::InvalidRequest, *refusal);
+        const auto refuse = [](const std::string& why) {
+            throw ::lsp::RequestError(::lsp::MessageError::InvalidRequest, why);
+        };
+        const auto oldName = renamedSpelling(answer.word);
+        const auto& newName = params.newName;
+        if (newName == oldName) return ::lsp::WorkspaceEdit{};
+        // The new name is one lowercase name as the lexer reads it, so not a
+        // keyword, and no `!`, which is the call's, not the name's.
+        {
+            Lexer lexer(newName, "<rename>");
+            const auto tokens = lexer.tokenizeAll();
+            if (tokens.size() != 2 || tokens[0].type != TokenType::LowerIdent ||
+                tokens[0].value != newName)
+                refuse("`" + newName + "` is not a name a function or local can have.");
+        }
+
+        // The text of each file an edit lands in, and the edits by file.
+        std::map<std::string, std::vector<SourceLocation>> byFile;
+        for (const auto& location : answer.locations)
+            byFile[std::string(location.file)].push_back(location);
+        const auto textOf = [&](const std::string& path) -> std::optional<std::string> {
+            if (const auto open = m_documents.find(::lsp::Uri::fileUriFromPath(path).toString());
+                open != m_documents.end())
+                return open->second.text;
+            if (const auto* state = m_db.fileState(path)) return state->source;
+            if (const auto* state = m_referenceDb.fileState(path)) return state->source;
+            return std::nullopt;
+        };
+
+        ::lsp::Map<::lsp::DocumentUri, ::lsp::Array<::lsp::TextEdit>> changes;
+        for (auto& [path, locations] : byFile) {
+            const auto text = textOf(path);
+            if (!text) refuse("Could not read " + path + ".");
+            // Each edit replaces the old name exactly where it is written.
+            for (const auto& location : locations) {
+                const auto offset = offsetOfLocation(*text, location);
+                if (offset == std::string::npos ||
+                    text->compare(offset, oldName.size(), oldName) != 0)
+                    refuse("`" + oldName + "` is not written where the checker recorded it, " +
+                           path + ":" + std::to_string(location.line) + ":" +
+                           std::to_string(location.column) + ".");
+            }
+            // The checker's scope at each one: the new name already meaning
+            // something there would be shadowed, or would capture the uses.
+            Document probe;
+            const Document* scoped = &document;
+            if (path != document.path) {
+                if (const auto open =
+                        m_documents.find(::lsp::Uri::fileUriFromPath(path).toString());
+                    open != m_documents.end())
+                    scoped = &open->second;
+                else {
+                    probe.path = path;
+                    probe.text = *text;
+                    scoped = &probe;
+                }
+            }
+            if (const auto checked = checkAsDocument(*scoped, path, *text))
+                for (const auto& location : locations)
+                    if (const auto* at = scopeAt(*checked, path, location.line, location.column)) {
+                        const auto names = checked->analyzer->bareCompletions(*at);
+                        if (std::find(names.begin(), names.end(), newName) != names.end())
+                            refuse("`" + newName + "` already names something at " + path +
+                                   ":" + std::to_string(location.line) + ":" +
+                                   std::to_string(location.column) + ".");
+                    }
+            auto& edits = changes[::lsp::Uri::fileUriFromPath(path)];
+            for (const auto& location : locations)
+                edits.push_back(::lsp::TextEdit{
+                    .range = protocolLocation(location, oldName).range,
+                    .newText = newName,
+                });
+        }
+
+        // Renamed within one file, the file is checked as it would read: a
+        // rename that changes what it means (a new error) is refused.
+        if (byFile.size() == 1) {
+            const auto& [path, locations] = *byFile.begin();
+            auto text = *textOf(path);
+            auto ordered = locations;
+            std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) {
+                return std::pair{a.line, a.column} > std::pair{b.line, b.column};
+            });
+            const auto errors = [&](const std::string& source) -> std::vector<std::string> {
+                Document probe;
+                probe.path = path;
+                probe.text = source;
+                if (path == document.path) probe.companions = document.companions;
+                std::vector<std::string> messages;
+                if (const auto checked = checkAsDocument(probe, path, source))
+                    for (const auto& diagnostic : checked->analyzer->diagnostics())
+                        if (diagnostic.level == semantic::Diagnostic::Level::Error)
+                            messages.push_back(diagnostic.message);
+                return messages;
+            };
+            const auto before = errors(text);
+            for (const auto& location : ordered)
+                text.replace(offsetOfLocation(text, location), oldName.size(), newName);
+            const auto after = errors(text);
+            if (after.size() > before.size())
+                for (const auto& message : after)
+                    if (std::find(before.begin(), before.end(), message) == before.end())
+                        refuse("Renaming `" + oldName + "` to `" + newName +
+                               "` would not check: " + message);
+            // Back to the buffer as it is, for the answers that follow.
+            (void)checkAsDocument(document, document.path, document.text);
+        }
+        return ::lsp::WorkspaceEdit{.changes = std::move(changes)};
     }
 
     void registerHandlers() {
@@ -4933,6 +5181,14 @@ private:
             .add<::lsp::requests::TextDocument_References>(
                 [this](::lsp::ReferenceParams&& params) {
                     return references(std::move(params));
+                })
+            .add<::lsp::requests::TextDocument_PrepareRename>(
+                [this](::lsp::PrepareRenameParams&& params) {
+                    return prepareRename(std::move(params));
+                })
+            .add<::lsp::requests::TextDocument_Rename>(
+                [this](::lsp::RenameParams&& params) {
+                    return rename(std::move(params));
                 });
     }
 
@@ -4958,6 +5214,12 @@ private:
     std::vector<std::string> m_configuredSourceRoots;
     std::vector<IndexedCallReference> m_indexedCallReferences;
     std::vector<std::string> m_referenceIndexedPaths;
+    // What the indexed files' merged modules are read from, as long as the
+    // index holds them.
+    std::vector<std::shared_ptr<ProjectModules>> m_referenceProjectModules;
+    // Whether the index left files out (too many spell the word): their uses
+    // are not among its references.
+    bool m_referenceIndexPartial = false;
     bool m_referenceIndexReady = false;
     std::string m_referenceIndexWord;
     bool m_running = true;

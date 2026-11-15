@@ -1153,6 +1153,7 @@ auto Parser::parseParam() -> ast::Param {
       (check(TokenType::Type) && peekNext().type == TokenType::Colon)) {
     auto &nameToken = advance();
     param.name = nameToken.value;
+    param.location = nameToken.location;
 
     if (match(TokenType::Colon)) {
       param.type = parseTypeExpr();

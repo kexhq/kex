@@ -1538,8 +1538,30 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // under `using URI`) is still the module a `using` brings in
                 // under it, when exactly one does (`URI.URL`): completion and
                 // navigation ask which module that is.
+                // Not when the name is that module itself: under `using
+                // Complex`, `Complex.from` is the module's `from`, not a
+                // member of `Complex.Complex` (the record's `make` block),
+                // and was left undecided, so typed as anything.
+                const auto namesImportedModule = [&] {
+                    const auto exportsMethod = [&](const std::string& module) {
+                        const auto found = m_importedInterfaces->modules.find(module);
+                        return found != m_importedInterfaces->modules.end() &&
+                               found->second.exports.contains(node.method);
+                    };
+                    if (exportsMethod(written) || exportsMethod(names::moduleAtom(written)))
+                        return true;
+                    const auto names = [&](const ImportSelection& import) {
+                        return !import.alias && import.module == written;
+                    };
+                    return std::any_of(m_declarationImports.begin(), m_declarationImports.end(),
+                                       names) ||
+                           std::any_of(m_importScopeStack.begin(), m_importScopeStack.end(),
+                                       [&](const auto& scope) {
+                                           return std::any_of(scope.begin(), scope.end(), names);
+                                       });
+                };
                 if (*importedPath == written && m_importedInterfaces &&
-                    !m_localModules.contains(written)) {
+                    !m_localModules.contains(written) && !namesImportedModule()) {
                     std::set<std::string> brought;
                     const auto consider = [&](const ImportSelection& import) {
                         const auto root = written.substr(0, written.find('.'));

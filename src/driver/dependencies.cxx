@@ -562,6 +562,10 @@ auto mergeDependencies(kex::ast::Program &program, Dependencies &dependencies,
       if (loaded.contains(found->file.string())) continue;
       const auto byPath =
           moduleNameForPath(found->file.lexically_relative(found->root));
+      // The file is where the module belongs: it was not found because the
+      // file did not yield it (a syntax error dropped it), which its own
+      // diagnostics say. This one said "name it `module Main`" of `module Main`.
+      if (byPath == name) continue;
       auto expected = found->root;
       std::stringstream parts(name);
       for (std::string part; std::getline(parts, part, '.');)

@@ -136,6 +136,7 @@ auto clone(const Param& param) -> Param {
     out.name = param.name;
     out.type = cloneOpt(param.type);
     out.defaultValue = cloneOpt(param.defaultValue);
+    out.location = param.location;
     return out;
 }
 

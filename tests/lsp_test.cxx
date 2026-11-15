@@ -7,6 +7,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <unistd.h>
@@ -72,6 +73,29 @@ auto askAt(const std::string& uri, const std::string& text, const std::string& m
                       R"(","params":{"textDocument":{"uri":")" + uri +
                       R"("},"position":{"line":)" + std::to_string(line) +
                       R"(,"character":)" + std::to_string(character) + "}}}");
+    messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+    messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+    std::istringstream input(messages);
+    std::ostringstream output;
+    kex::lsp::run(input, output, testRuntimeBeamDir());
+    return responseForId(output.str(), 2);
+}
+
+// `textDocument/rename` at a position of `uri`, opened with `text`, in the
+// workspace `rootUri` ("null" for none).
+auto renameAt(const std::string& rootUri, const std::string& uri, const std::string& text,
+              int line, int character, const std::string& newName) -> std::string {
+    std::string messages;
+    messages += frame(R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":)" +
+                      rootUri + R"(,"capabilities":{}}})");
+    messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+    messages += frame(R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":")" +
+                      uri + R"(","languageId":"kex","version":1,"text":")" + jsonText(text) +
+                      R"("}}})");
+    messages += frame(R"({"jsonrpc":"2.0","id":2,"method":"textDocument/rename","params":{"textDocument":{"uri":")" +
+                      uri + R"("},"position":{"line":)" + std::to_string(line) +
+                      R"(,"character":)" + std::to_string(character) + R"(},"newName":")" +
+                      newName + R"("}})");
     messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
     messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
     std::istringstream input(messages);
@@ -411,6 +435,88 @@ int main() {
             const auto sum = askAt("file:///tmp/kex-lsp-group.kex", text, "completion", 2, 12);
             assertTrue(sum.find("\"filterText\":\"to\"") != std::string::npos,
                        "`(a + b).to` completed nothing: " + sum);
+        });
+
+        describe("rename", []() {
+            // The edits of a rename answer, as `line:character` of each start.
+            const auto starts = [](const std::string& answer) {
+                std::vector<std::string> found;
+                for (size_t at = answer.find("\"start\":{"); at != std::string::npos;
+                     at = answer.find("\"start\":{", at + 1)) {
+                    const auto character = answer.find("\"character\":", at);
+                    const auto line = answer.find("\"line\":", at);
+                    found.push_back(
+                        std::to_string(std::stoi(answer.substr(line + 7))) + ":" +
+                        std::to_string(std::stoi(answer.substr(character + 12))));
+                }
+                std::sort(found.begin(), found.end());
+                return found;
+            };
+            const std::string shapes =
+                "let area(width: Integer, height: Integer) -> Integer = width * height\n"
+                "\n"
+                "let total(sizes: [Integer]) -> Integer do\n"
+                "  let doubled = sizes.map { |size| size * 2 }\n"
+                "  let count = doubled.length\n"
+                "  count + area(count, 2)\n"
+                "end\n";
+            const std::string uri = "file:///tmp/kex-lsp-rename.kex";
+
+            it("renames a local where the checker bound it", [=]() {
+                const auto answer = renameAt("null", uri, shapes, 4, 7, "n");
+                assertTrue(starts(answer) == std::vector<std::string>{"4:6", "5:15", "5:2"},
+                           "`count`'s binding and its two uses: " + answer);
+            });
+
+            it("renames a parameter from its declaration", [=]() {
+                // A function's parameter had no position, so nothing was
+                // bound there: no references, no rename, and hover showed
+                // the stdlib's `Bits.width`.
+                const auto answer = renameAt("null", uri, shapes, 0, 11, "w");
+                assertTrue(starts(answer) == std::vector<std::string>{"0:55", "0:9"},
+                           "`width`'s declaration and its use: " + answer);
+                const auto hover = askAt(uri, shapes, "hover", 0, 11);
+                assertTrue(hover.find("width : Integer") != std::string::npos,
+                           "the parameter hovered as something else: " + hover);
+            });
+
+            it("refuses a name the scope already has", [=]() {
+                const auto answer = renameAt("null", uri, shapes, 4, 7, "doubled");
+                assertTrue(answer.find("`doubled` already names something") != std::string::npos,
+                           "renamed `count` over `doubled`: " + answer);
+            });
+
+            it("refuses a keyword, and a function declared outside the workspace", [=]() {
+                const auto keyword = renameAt("null", uri, shapes, 4, 7, "end");
+                assertTrue(keyword.find("is not a name") != std::string::npos,
+                           "renamed to a keyword: " + keyword);
+                const auto stdlib = renameAt("null", uri, shapes, 3, 23, "mapped");
+                assertTrue(stdlib.find("\"error\"") != std::string::npos &&
+                               stdlib.find("\"changes\"") == std::string::npos,
+                           "renamed the standard library's `map`: " + stdlib);
+            });
+
+            it("renames a function across the workspace, qualified calls too", [=]() {
+                namespace fs = std::filesystem;
+                const fs::path root = "/tmp/kex-lsp-rename-ws";
+                fs::remove_all(root);
+                fs::create_directories(root);
+                std::ofstream(root / "geo.kex")
+                    << "module Geo\n\nlet area(side: Integer) -> Integer = side * side\n";
+                const std::string main =
+                    "using Geo\n\nmain do\n  IO.printLine(Geo.area(2))\n  IO.printLine(area(3))\nend\n";
+                std::ofstream(root / "main.kex") << main;
+                const auto answer = renameAt("\"file://" + root.string() + "\"",
+                                             "file://" + (root / "main.kex").string(), main, 3,
+                                             20, "surface");
+                // `Geo.area(2)` was missed: the index checked main.kex without
+                // geo.kex, so `Geo` was no module there.
+                assertTrue(starts(answer) == std::vector<std::string>{"2:4", "3:19", "4:15"},
+                           "the declaration and both calls: " + answer);
+                assertTrue(answer.find("geo.kex") != std::string::npos,
+                           "the declaration in geo.kex was not renamed: " + answer);
+                fs::remove_all(root);
+            });
         });
 
         it("hovers a binding of unknown type as the binding", []() {

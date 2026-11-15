@@ -1,0 +1,8 @@
+# A `using` of a module no source root holds is refused. It was a warning,
+# the call through the module passed the check, and the run died with
+# "Undefined function: Nonexistent.foo".
+using Nonexistent
+
+main do
+  IO.printLine(Nonexistent.foo(1))
+end

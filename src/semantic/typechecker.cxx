@@ -4384,7 +4384,12 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             }
             paramTypes.push_back(paramType);
             if (param.name.has_value() && *param.name != "_") {
-                defineVar(*param.name, paramType);
+                defineVar(*param.name, paramType,
+                          {false, false, param.location.line, param.location.column});
+                if (m_recordsNames && param.location.line > 0) {
+                    m_bindingSites.emplace_back(*param.name, param.location);
+                    m_patternBindings.push_back({*param.name, param.location, paramType});
+                }
             }
             if (param.pattern) {
                 bindPatternVars(**param.pattern, paramType);
@@ -5238,7 +5243,10 @@ auto TypeChecker::checkMainBlock(const ast::MainBlock& block) -> void {
             TypePtr type = (i == 0) ? Type::list(Type::string())
                          : (i == 1) ? Type::map(Type::string(), Type::string())
                                     : freshTypeVar();
-            defineVar(*param.name, std::move(type));
+            defineVar(*param.name, std::move(type),
+                      {false, false, param.location.line, param.location.column});
+            if (m_recordsNames && param.location.line > 0)
+                m_bindingSites.emplace_back(*param.name, param.location);
         }
         if (param.pattern) {
             bindPatternVars(**param.pattern);

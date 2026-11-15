@@ -1,0 +1,11 @@
+# `using Complex` brings in the module's record `Complex` bare, and the
+# module's own functions are still the module's: `Complex.from(3, 4)` is a
+# `Complex.Complex`. It was left undecided under the `using` (taken for a
+# member of the record's `make` block), so typed as anything, and the
+# misspelled member below passed the check.
+using Complex
+
+main do
+  let z = Complex.from(3, 4)
+  IO.printLine(z.conjugat)
+end

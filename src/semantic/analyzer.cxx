@@ -45,7 +45,8 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
     // Which names one module may take from another (`using`, `export`).
     for (auto& violation : findModuleRuleViolations(
              program, m_importedInterfaces,
-             m_moduleLocator ? &m_moduleLocator : nullptr, m_entryFiles))
+             m_moduleLocator ? &m_moduleLocator : nullptr, m_entryFiles,
+             m_missingModuleIsError))
         m_diagnostics.push_back(std::move(violation));
 
     // Type checking: the checker decides what every name and call means.
