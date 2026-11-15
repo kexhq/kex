@@ -459,6 +459,24 @@ int main() {
                        "Label's `size` declaration: " + definition);
         });
 
+        it("completes a field shorthand and a `.try` as the value they are", []() {
+            // `@timeout.` shares its position with the implicit `this`, which
+            // was completed instead (Throttle's members); `.try` is no call, and a
+            // chain ending in it completed nothing.
+            const std::string text =
+                "record Throttle do\n  timeout : Integer\nend\n\n"
+                "make Throttle do\n  let capped -> Integer = @timeout.abs\nend\n\n"
+                "main do\n  let n = \"4\".to(Integer).try.abs\n"
+                "  IO.printLine(Throttle { timeout: n }.capped.to(String).or(\"\"))\nend\n";
+            const std::string uri = "file:///tmp/kex-lsp-shorthand.kex";
+            const auto field = askAt(uri, text, "completion", 5, 38);
+            assertTrue(field.find("\"filterText\":\"abs\"") != std::string::npos,
+                       "`@timeout.abs` completed nothing: " + field);
+            const auto tried = askAt(uri, text, "completion", 9, 36);
+            assertTrue(tried.find("\"filterText\":\"abs\"") != std::string::npos,
+                       "`.try.abs` completed nothing: " + tried);
+        });
+
         describe("rename", []() {
             // The edits of a rename answer, as `line:character` of each start.
             const auto starts = [](const std::string& answer) {

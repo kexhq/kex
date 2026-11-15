@@ -313,6 +313,20 @@ auto checkedReceiver(const CompletionChecker& check, const std::string& source,
                 call->methodLocation.column == column &&
                 expression->location.file == path)
                 return CheckedReceiver{std::move(*checked), expression};
+        // `listener.localAddress.try.`: the `.try` is no call. The parser
+        // records it at the token after the keyword, up to the dot asked at.
+        if (source.compare(receiver.member, 3, "try") == 0) {
+            const auto from = positionOf(source, receiver.member);
+            const auto to = positionOf(source, receiver.dot);
+            for (const auto& [expression, _] : checked->analyzer->typeMap())
+                if (expression && std::holds_alternative<ast::TryExpr>(expression->kind) &&
+                    expression->location.file == path) {
+                    const std::pair<int, int> at{expression->location.line,
+                                                 expression->location.column};
+                    if (from <= at && at <= to)
+                        return CheckedReceiver{std::move(*checked), expression};
+                }
+        }
         return CheckedReceiver{std::move(*checked), nullptr};
     }
     // A parenthesized receiver, `(1..10).` or `(a + b).`: the group is no
@@ -352,10 +366,14 @@ auto checkedReceiver(const CompletionChecker& check, const std::string& source,
             }
         return CheckedReceiver{std::move(*checked), outermost};
     }
+    // `@timeout.` is the field read, which shares the `@` with the implicit
+    // `this`: the receiver is the read (a call), not the plain `this`, which
+    // completed Conf's members instead of Integer's.
+    const bool fieldShorthand = source[receiver.start] == '@';
     const auto* expression = typedAt(
         *checked->analyzer,
         positionOf(source, receiver.callOpen ? receiver.callOpen : receiver.start),
-        !receiver.callOpen);
+        !receiver.callOpen && !fieldShorthand);
     // A bare call (`words()`) is recorded where its name is, not at its `(`:
     // there the receiver's start is the call itself.
     if (!expression && receiver.callOpen && bareCallReceiver(source, receiver))
