@@ -647,6 +647,9 @@ map_key_string(K) when is_atom(K), K =/= true, K =/= false, K =/= 'None' ->
     ?GREEN ++ atom_to_list(K) ++ ?RESET;
 map_key_string(K) -> inspect_string(K).
 
+%% `()`, the value a `Void` function answers (Map's `each`), has no tag to look
+%% up: it is the empty tuple, written as such.
+inspect_tuple_string({}) -> "()";
 inspect_tuple_string(X) ->
     Tag = element(1, X),
     Arity = tuple_size(X) - 1,
@@ -711,6 +714,8 @@ value_type_name({'Just', V}) -> "Optional<" ++ value_type_name(V) ++ ">";
 value_type_name({'Some', V}) -> "Optional<" ++ value_type_name(V) ++ ">";
 value_type_name({'Ok', V}) -> "Result<" ++ value_type_name(V) ++ ", ?>";
 value_type_name({'Error', V}) -> "Result<?, " ++ value_type_name(V) ++ ">";
+%% `()`: no tag to look up (the interpreter names it the same).
+value_type_name({}) -> "Tuple";
 value_type_name(X) when is_tuple(X) ->
     Tag = element(1, X),
     Arity = tuple_size(X) - 1,

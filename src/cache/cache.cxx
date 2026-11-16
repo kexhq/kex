@@ -1,6 +1,7 @@
 #include "cache.hxx"
 
 #include "../common/prelude_loader.hxx"
+#include "../common/runtime_dir.hxx"
 #include "../common/version.hxx"
 #include "../pass/options.hxx"
 
@@ -55,6 +56,10 @@ auto toolchainFingerprint() -> const std::string& {
             text += fileStamp(file) + "\n";
         for (const auto& file : kex::standardLibrarySourceFiles())
             text += fileStamp(file) + "\n";
+        // A compiled program may hold copies of the standard library's
+        // functions (ir/passes/specialize), taken from its build.
+        if (const auto runtime = kex::prebuiltRuntimeBeamDir(); !runtime.empty())
+            text += fileStamp(fs::path(runtime) / "kex_prelude.beam") + "\n";
         // A pipeline other than the default makes different code: what one
         // caches is not another's.
         for (const auto& [level, pipeline] : kex::pass::passOptions().pipelines)

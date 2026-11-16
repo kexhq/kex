@@ -48,6 +48,7 @@ struct KexiType {
     std::vector<KexiTypePtr> typeArgs;
     std::vector<std::string> fieldNames; // for Record, parallel to typeArgs
     KexiTypePtr result; // for Func
+    bool foul = false;  // for Func: FuncType::foul
 };
 
 auto kexiPrimitive(const std::string& name) -> KexiTypePtr;

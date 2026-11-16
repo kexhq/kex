@@ -500,6 +500,19 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
         auto resultType = checkCall(ce->name, paramTypes, blockExpr.location,
                                     /*isMethodCall=*/false);
         decideCapture(blockExpr, *ce);
+        // The function it names, as the capture case below records it: the
+        // one reached with this many parameters (#640).
+        {
+            std::vector<Signature> visible;
+            std::set<std::string> hidden;
+            const auto* reached = reachableFreeFunctions(ce->name, false, visible, hidden);
+            const auto candidates = reached ? *reached : importedCandidateSignatures(ce->name);
+            for (const auto& signature : candidates)
+                if (signature.params.size() == paramTypes.size()) {
+                    m_captureSignatures[&blockExpr] = signature;
+                    break;
+                }
+        }
         return Type::func(std::move(paramTypes), resolve(resultType));
     }
     // `&.method(args)`: the lambda it means.
@@ -2610,6 +2623,19 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     continue;
                 }
                 supplied.insert(fieldName);
+                // A capture given to a field of a foul function type (`Route`'s
+                // `handler : Handler`) may name a foul function (#640).
+                if (record != m_recordFields.end()) {
+                    if (const auto field = record->second.find(fieldName);
+                        field != record->second.end())
+                        noteCaptureFlow(val.get(), field->second);
+                } else if (m_importedInterfaces) {
+                    if (const auto imported = m_importedInterfaces->recordFields.find(recordName);
+                        imported != m_importedInterfaces->recordFields.end())
+                        if (const auto field = imported->second.find(fieldName);
+                            field != imported->second.end())
+                            noteCaptureFlow(val.get(), field->second);
+                }
                 if (record == m_recordFields.end()) continue;
                 auto declared = record->second.find(fieldName);
                 // For tooling: the field this key names, of the record the
@@ -2821,6 +2847,35 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     candidates = user->second;
                 if (candidates.empty())
                     candidates = importedCandidateSignatures(key);
+                // As a call of it would say: `~String.nope` names no function of
+                // `String`, and both backends failed when it ran. A `make`
+                // function of the type the module names counts
+                // (`~String.upperCase`): its receiver is the first argument.
+                const auto modulePath = resolveModulePath(node.module, node.name);
+                const bool knownModule =
+                    m_localModules.contains(modulePath) ||
+                    m_moduleReexports.contains(modulePath) ||
+                    m_importedModulePaths.contains(modulePath) ||
+                    (m_importedInterfaces &&
+                     (m_importedInterfaces->modules.contains(modulePath) ||
+                      m_importedInterfaces->modules.contains(names::moduleAtom(modulePath))));
+                const auto onType = [&](const Signature& signature) {
+                    return !signature.params.empty() &&
+                           typeToString(resolve(signature.params.front())) == modulePath;
+                };
+                bool typeHasIt = false;
+                if (const auto own = m_methodSignatures.find(node.name);
+                    own != m_methodSignatures.end())
+                    typeHasIt = std::any_of(own->second.begin(), own->second.end(), onType);
+                if (!typeHasIt && m_importedInterfaces)
+                    if (const auto imported = m_importedInterfaces->receiverFunctions.find(node.name);
+                        imported != m_importedInterfaces->receiverFunctions.end())
+                        typeHasIt = std::any_of(
+                            imported->second.begin(), imported->second.end(),
+                            [&](const ImportedFunction& function) { return onType(function.signature); });
+                if (candidates.empty() && knownModule && !typeHasIt)
+                    error(expr.location,
+                          "`" + node.module + "` has no function `" + node.name + "`");
             }
 
             if (candidates.empty()) {
@@ -2884,6 +2939,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 };
 
             const auto& selected = candidates.front();
+            if (!node.isOperator) m_captureSignatures[&expr] = selected;
             std::vector<TypePtr> params;
             for (const auto& param : selected.params)
                 params.push_back(instantiate(param));
@@ -3452,7 +3508,11 @@ auto TypeChecker::declaredFunctionType(const std::string& name) -> TypePtr {
         params.push_back(resolveTypeExpr(**param.type, generics));
     }
     if (params.empty()) return nullptr;
-    return Type::func(std::move(params), resolveTypeExpr(**clause.returnAnnotation, generics));
+    auto type = Type::func(std::move(params), resolveTypeExpr(**clause.returnAnnotation, generics));
+    // A foul function's type says so: what is passed where it is expected
+    // may perform effects (#640).
+    std::get<FuncType>(type->kind).foul = function->isFoul;
+    return type;
 }
 
 auto TypeChecker::resolveTypeQuery(const ast::TypeQuery& query) -> TypePtr {
@@ -3544,6 +3604,8 @@ auto TypeChecker::declaredBindingType(const std::optional<ast::TypeExprPtr>& ann
     auto declared = resolveTypeExpr(**annotation, generics);
     if (!declared) return nullptr;
     auto actual = resolve(valueType);
+    // `let handler: Handler = ~home` may name a foul function (#640).
+    noteCaptureFlow(value, declared);
     // A gradual initializer (`?`, a type variable) is accepted: pinning it
     // down is exactly what the annotation is for. `This` — the trait
     // placeholder — has no substitution mechanism yet and leaks out of trait
@@ -4179,6 +4241,19 @@ auto TypeChecker::captureModule(const ast::CurryExpr& capture) const -> std::str
 // A capture of a function, decided: the function named, not called
 // (`FunctionReference`, owner its qualified name). A local binding captured
 // is the value it holds, nothing to decide.
+auto TypeChecker::noteCaptureFlow(const ast::Expr* value, const TypePtr& expected) -> void {
+    if (!value || !expected) return;
+    const auto type = expandTypeAliases(resolve(expected));
+    if (std::holds_alternative<ast::CurryExpr>(value->kind)) {
+        if (const auto* function = std::get_if<FuncType>(&type->kind); function && function->foul)
+            m_capturesIntoFoul.insert(value);
+        return;
+    }
+    if (const auto* list = std::get_if<ast::ListExpr>(&value->kind))
+        if (const auto* elements = std::get_if<ListType>(&type->kind))
+            for (const auto& element : list->elements) noteCaptureFlow(element.get(), elements->element);
+}
+
 auto TypeChecker::decideCapture(const ast::Expr& expr, const ast::CurryExpr& capture) -> void {
     if (capture.isOperator || lookupVar(capture.name)) return;
     m_decidedCalls[&expr] = {CallKind::FunctionReference,
@@ -5295,13 +5370,22 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             // `find` and `.try` and no inference variable is left to see.
             const auto receiver = resolve(argTypes[0]);
             const auto* named = std::get_if<NamedType>(&receiver->kind);
+            // Nor does a list, map, tuple or function: some record in the
+            // prelude having a `size` field let `xs.size` check clean on a
+            // list, and fail at run time.
+            // An optional's field is its value's, which the field-on-optional
+            // check above reports with its own advice.
+            const bool structural = std::holds_alternative<RecordType>(receiver->kind) ||
+                                    std::holds_alternative<OptionalType>(receiver->kind) ||
+                                    std::holds_alternative<IntersectionType>(receiver->kind) ||
+                                    std::holds_alternative<UnionType>(receiver->kind) ||
+                                    std::holds_alternative<ConstrainedType>(receiver->kind);
             const bool fieldMayExist =
-                std::holds_alternative<TypeVar>(argTypes[0]->kind) ||
-                (!std::holds_alternative<PrimitiveType>(receiver->kind) &&
-                 !(named && (isPrimitiveTypeName(named->name) ||
-                             m_adtVariants.count(named->name) ||
-                             constructorOwner(*named) ||
-                             m_recordFields.count(resolveRecordName(named->name)))));
+                std::holds_alternative<TypeVar>(argTypes[0]->kind) || structural ||
+                (named && !(isPrimitiveTypeName(named->name) ||
+                            m_adtVariants.count(named->name) ||
+                            constructorOwner(*named) ||
+                            m_recordFields.count(resolveRecordName(named->name))));
             m_unresolvedMethods.push_back(
                 {name, loc, typeToString(receiver), fieldMayExist});
             auto& imports = m_unresolvedMethodImports.emplace_back(
@@ -6073,6 +6157,11 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // provider could answer it, so nothing here may be treated as
         // evidence about the receiver — not the backend target, and not the
         // receiver's type.
+        if (!methodCall && callExpr && sigs == &merged) {
+            const auto selected = static_cast<size_t>(fullMatches[0] - merged.data());
+            if (selected >= localSigCount && selected - localSigCount < importedFunctions.size())
+                m_calledModules[callExpr] = importedFunctions[selected - localSigCount]->sourceModule;
+        }
         bool ambiguousReceiver = false;
         if (methodCall) {
             bool isReceiver = !kex::mangle::hasScope(name);
@@ -6539,6 +6628,36 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             normalizeIntersection(applyGenerics(matched.result));
         for (std::size_t i = 0; i < argExprs.size() && i < matched.params.size(); ++i)
             if (argExprs[i]) checkByteLiterals(*argExprs[i], applyGenerics(resolve(matched.params[i])));
+        // A capture passed where a foul function is expected (a route's
+        // `Handler`) may name a foul one, even from pure code (#640).
+        // Positional arguments line up with the parameters; a named one goes
+        // to the parameter of its name.
+        {
+            const std::vector<std::pair<std::string, ast::ExprPtr>>* namedArgs = nullptr;
+            if (methodCall) namedArgs = &methodCall->namedArgs;
+            else if (callExpr)
+                if (const auto* function = std::get_if<ast::FunctionCall>(&callExpr->kind))
+                    namedArgs = &function->namedArgs;
+            const auto isNamed = [&](const ast::Expr* expression) {
+                return namedArgs && std::any_of(namedArgs->begin(), namedArgs->end(),
+                                                 [&](const auto& entry) {
+                                                     return entry.second.get() == expression;
+                                                 });
+            };
+            for (std::size_t i = 0; i < argExprs.size() && i < matched.params.size(); ++i)
+                if (!isNamed(argExprs[i])) noteCaptureFlow(argExprs[i], matched.params[i]);
+            if (namedArgs)
+                for (const auto& [label, arg] : *namedArgs)
+                    if (const auto at = std::find(matched.paramNames.begin(),
+                                                  matched.paramNames.end(), label);
+                        at != matched.paramNames.end()) {
+                        // A receiver prepended to `params` has no name (Signature).
+                        const auto index = static_cast<std::size_t>(at - matched.paramNames.begin()) +
+                                           (matched.params.size() - matched.paramNames.size());
+                        if (index < matched.params.size())
+                            noteCaptureFlow(arg.get(), matched.params[index]);
+                    }
+        }
         if (callExpr) {
             Signature selected = matched;
             selected.name = name;

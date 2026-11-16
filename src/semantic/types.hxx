@@ -53,6 +53,11 @@ struct FuncType {
     // True only for source-level Block<T>; ordinary function types remain
     // false even when they have the same parameters and result.
     bool block = false;
+    // A function that may perform effects: what `Type.of` gives for a `foul`
+    // one (`type Handler = Type.of(handlerType)`). A foul function captured
+    // in pure code may be passed only where one is expected (#640). Not part
+    // of the type's identity: two types differing only here unify.
+    bool foul = false;
 };
 
 struct TupleType {
@@ -145,7 +150,7 @@ struct Type {
     // The type of the nullary variant `variant` of the ADT `adt` (NamedType::variant).
     static auto variantOf(const std::string& adt, const std::string& variant) -> TypePtr;
     static auto func(std::vector<TypePtr> params, TypePtr result,
-                     bool block = false) -> TypePtr;
+                     bool block = false, bool foul = false) -> TypePtr;
     static auto list(TypePtr element) -> TypePtr;
     static auto tuple(std::vector<TypePtr> elements) -> TypePtr;
     static auto map(TypePtr key, TypePtr value) -> TypePtr;

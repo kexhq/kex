@@ -199,6 +199,7 @@ auto clone(const MakeDef& make) -> std::unique_ptr<MakeDef> {
     out->isFinal = make.isFinal;
     out->isServing = make.isServing;
     out->implements = make.implements;
+    out->implementLocations = make.implementLocations;
     for (const auto& item : make.body) {
         std::visit(
             [&](const auto& node) {

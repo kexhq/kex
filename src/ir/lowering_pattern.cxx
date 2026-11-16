@@ -188,10 +188,13 @@ auto Lowering::anonymousRecordTest(const std::string& subject,
     m.clauses.push_back(std::move(miss));
     auto tagTest = std::make_unique<Expr>();
     tagTest->node = std::move(m);
-    // `element/1` would raise on a non-tuple, so the tuple test has to
-    // guard it rather than sit beside it in a conjunction.
+    // `element/1` would raise on a non-tuple, or on `()`, so the tuple tests
+    // have to guard it rather than sit beside it in a conjunction.
+    auto hasTag = matchBool(
+        intrin(Op::Gt, two(callE("erlang", "tuple_size", 1, one(var(subject))), litInt(0))),
+        std::move(tagTest), litBool(false));
     return matchBool(callE("erlang", "is_tuple", 1, one(var(subject))),
-                     std::move(tagTest), litBool(false));
+                     std::move(hasTag), litBool(false));
 }
 
 // Read `field` off a subject known to be one of `tags`. The by-name

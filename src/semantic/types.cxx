@@ -46,9 +46,9 @@ auto Type::variantOf(const std::string& adt, const std::string& variant) -> Type
     return std::make_shared<Type>(Type{NamedType{adt, {}, variant}});
 }
 
-auto Type::func(std::vector<TypePtr> params, TypePtr result, bool block) -> TypePtr {
+auto Type::func(std::vector<TypePtr> params, TypePtr result, bool block, bool foul) -> TypePtr {
     return std::make_shared<Type>(
-        Type{FuncType{std::move(params), std::move(result), block}});
+        Type{FuncType{std::move(params), std::move(result), block, foul}});
 }
 
 auto Type::list(TypePtr element) -> TypePtr {
@@ -751,7 +751,7 @@ auto mapTypeChildren(const TypePtr& type,
             auto result = mapped(part.result);
             return same ? type
                         : Type::func(std::move(params), std::move(result),
-                                     part.block);
+                                     part.block, part.foul);
         } else if constexpr (std::is_same_v<Part, NamedType>) {
             auto args = mappedAll(part.typeArgs);
             if (same) return type;

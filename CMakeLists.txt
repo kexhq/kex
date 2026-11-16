@@ -192,6 +192,7 @@ add_library(kex_lib
     src/ir/passes/upgrade.cxx
     src/ir/passes/specialize.cxx
     src/ir/clone.cxx
+    src/ir/serialize.cxx
     src/lexer/token.cxx
     src/lexer/lexer.cxx
     src/parser/parser.cxx

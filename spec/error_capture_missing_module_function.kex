@@ -1,0 +1,7 @@
+# `~Module.fn` must name a function of that module, or a `make` function of
+# the type it names (`~String.upperCase`). `upcase` is neither: the capture
+# passed the check and failed when it ran ("`String.upcase` is not a
+# function" on the walker, `badarg` on BEAM).
+main do
+  IO.printLine("${["ab"].map(~String.upcase)}")
+end

@@ -253,7 +253,9 @@ auto convertSemanticType(const kex::semantic::TypePtr& type, bool generics = fal
             std::vector<KexiTypePtr> params;
             for (const auto& param : node.params)
                 params.push_back(convertSemanticType(param, generics));
-            return kexiFunc(std::move(params), convertSemanticType(node.result, generics));
+            auto func = kexiFunc(std::move(params), convertSemanticType(node.result, generics));
+            func->foul = node.foul;
+            return func;
         } else if constexpr (std::is_same_v<T, kex::semantic::TupleType>) {
             std::vector<KexiTypePtr> elements;
             for (const auto& element : node.elements)

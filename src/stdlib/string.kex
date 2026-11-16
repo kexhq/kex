@@ -39,6 +39,16 @@ make String, implement: Enumerable, Foldable do
   reduce :> A -> (A -> Char -> A) -> A
   let reduce(acc, f) = Kex.Intrinsic.List.foldLeft(this.chars, acc, f)
 
+  # Calls +f+ with each character, for its side effects.
+  #
+  # @param f [Char -> Void] called once per character
+  # @return [Void]
+  #
+  # @example
+  #   "ab".each { |c| IO.printLine(c) }
+  each :> (Char -> Void) -> Void
+  let each(f) = this.chars.each(f)
+
   # Applies +f+ to every character and joins the results back into a +String+.
   #
   # This is the string-preserving counterpart of +map+. +map+ comes from

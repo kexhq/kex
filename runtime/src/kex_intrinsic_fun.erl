@@ -11,7 +11,37 @@
 -module(kex_intrinsic_fun).
 -export([applyFlexible/2, applyItem/2, applyIndexed/3, applyPredicate/2, truthy/1,
          patternMismatch/2,
-         convertTo/2, convertTo/3, items/1]).
+         convertTo/2, convertTo/3, items/1, threadState/3]).
+
+%% A statement passing a block that reassigns variables of the code it is
+%% written in, for a callee the compiler did not copy (ir/passes/specialize):
+%% `Block` takes those variables' values after its own arguments and answers
+%% {Value, State}; `Statement` runs the call, given the block as the callee
+%% calls it. The state lives in this process's dictionary for the call.
+%% Answers {StatementValue, FinalState}.
+threadState(Block, Initial, Statement) ->
+    Key = make_ref(),
+    put(Key, Initial),
+    {arity, Arity} = erlang:fun_info(Block, arity),
+    Step = fun(Args) ->
+        {Value, State} = apply(Block, Args ++ [get(Key)]),
+        put(Key, State),
+        Value
+    end,
+    Called = case Arity - 1 of
+        0 -> fun() -> Step([]) end;
+        1 -> fun(A) -> Step([A]) end;
+        2 -> fun(A, B) -> Step([A, B]) end;
+        3 -> fun(A, B, C) -> Step([A, B, C]) end;
+        4 -> fun(A, B, C, D) -> Step([A, B, C, D]) end;
+        5 -> fun(A, B, C, D, E) -> Step([A, B, C, D, E]) end;
+        6 -> fun(A, B, C, D, E, F) -> Step([A, B, C, D, E, F]) end
+    end,
+    try Statement(Called) of
+        Value -> {Value, get(Key)}
+    after
+        erase(Key)
+    end.
 
 %% A `Type` VALUE names its target too: `x.to(Type.of(y))`. Its name is a
 %% binary, so it routes back through the atom-keyed clauses below.
@@ -113,6 +143,13 @@ applyFlexible(F, Args) when is_function(F) ->
             case spreadable(Only, N) of
                 true -> erlang:apply(F, tuple_to_list(Only));
                 false -> partial(F, Args, N - Count)
+            end;
+        %% A block of no parameters ignores what it is handed (`3.times { … }`),
+        %% unless what it answers is a function to feed the arguments to.
+        N =:= 0 ->
+            case F() of
+                G when is_function(G) -> applyFlexible(G, Args);
+                Value -> Value
             end;
         Count > N ->
             {Now, Rest} = lists:split(N, Args),

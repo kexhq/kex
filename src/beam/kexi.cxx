@@ -113,6 +113,9 @@ auto typeToTerm(const KexiTypePtr& type) -> TermPtr {
     case KexiType::Func: {
         std::vector<TermPtr> params;
         for (const auto& p : type->typeArgs) params.push_back(typeToTerm(p));
+        if (type->foul)
+            return Term::tuple({Term::atom("func"), Term::list(std::move(params)),
+                                typeToTerm(type->result), Term::atom("foul")});
         return Term::tuple({Term::atom("func"), Term::list(std::move(params)),
                             typeToTerm(type->result)});
     }
@@ -180,7 +183,9 @@ auto termToType(const TermPtr& term) -> KexiTypePtr {
     if (tag == "func" && elems.size() >= 3) {
         std::vector<KexiTypePtr> params;
         for (const auto& p : elems[1]->asList()) params.push_back(termToType(p));
-        return kexiFunc(std::move(params), termToType(elems[2]));
+        auto func = kexiFunc(std::move(params), termToType(elems[2]));
+        func->foul = elems.size() >= 4 && elems[3]->isAtom("foul");
+        return func;
     }
     if (tag == "tuple" && elems.size() >= 2) {
         std::vector<KexiTypePtr> es;

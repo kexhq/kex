@@ -1,6 +1,8 @@
 // Body lowering methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
 
+#include "../ast/walk.hxx"
+
 #include <algorithm>
 
 namespace kex::ir {
@@ -13,187 +15,229 @@ auto Lowering::lowerBody(const std::vector<ast::ExprPtr>& body) -> ExprPtr {
     return lowerBodyFrom(body, 0);
 }
 
-// A closure captures the walker's mutable bindings by reference, but
-// BEAM closures only capture values. For the prelude's finite iterations
-// (`each` and `times`, as the checker decided the call: a type's own
-// `each` is its own) whose callback reassigns an outer variable, lower
-// the iteration to lists:foldl and use the accumulator as explicit
-// mutable state. Once the callback completes, rebind that state in the
-// enclosing SSA scope.
-// `rest` lowers what follows the iteration, once the state is rebound. Null
-// when `call` is no such iteration or its block reassigns nothing outside.
-auto Lowering::lowerIteration(const ast::MethodCall& call,
-                              const std::function<ExprPtr()>& rest) -> ExprPtr {
-    const auto* mc = &call;
-    const auto* lam = iteratedBlock(call);
-    if (!lam) return nullptr;
-    const bool times = hir->targetOf(*mc).function == names::kTimesFunction;
-    std::unordered_set<std::string> muts;
-    for (const auto& stmt : lam->body) collectMutated(stmt, muts);
-    std::vector<std::string> mutVars;
-    for (const auto& v : muts) if (subst.count(v)) mutVars.push_back(v);
-    std::sort(mutVars.begin(), mutVars.end());
-    if (!mutVars.empty()) {
-        std::vector<Binding> binds;
-        // A range written in place (`(a..b).each`) is walked from its
-        // bounds; any other receiver is evaluated to its items.
-        const auto* range = times || lam->params.size() != 1
-            ? nullptr : std::get_if<ast::RangeExpr>(&mc->receiver->kind);
-        ExprPtr receiver, first, last;
-        if (range && range->start && range->end) {
-            first = atomize(range->start, binds);
-            last = atomize(range->end, binds);
-        } else {
-            range = nullptr;
-            receiver = atomize_ir(lower(mc->receiver), binds);
+// The block passed to a call in `e` (outside any other block) whose body
+// reassigns variables of the code around it, and those variables, sorted;
+// null when there is none, or more than one.
+auto Lowering::reassigningBlock(const ast::Expr& e, std::vector<std::string>& vars)
+    -> const ast::Lambda* {
+    const ast::Lambda* found = nullptr;
+    bool several = false;
+    std::function<void(const ast::Expr&)> visit = [&](const ast::Expr& x) {
+        std::vector<const ast::ExprPtr*> passed;
+        if (const auto* mc = std::get_if<ast::MethodCall>(&x.kind)) {
+            for (const auto& a : mc->args) passed.push_back(&a);
+            if (mc->block) passed.push_back(&*mc->block);
+        } else if (const auto* fc = std::get_if<ast::FunctionCall>(&x.kind)) {
+            for (const auto& a : fc->args) passed.push_back(&a);
+            if (fc->block) passed.push_back(&*fc->block);
         }
-        auto snap = subst;
-        std::string item = lam->params.size() == 1 ? lam->params[0].name : fresh("EachItem");
-        std::string state = fresh("EachState");
-        Lambda fold;
-        fold.params = {item, state};
-        if (lam->params.size() == 1) {
-            subst[lam->params[0].name] = item;
-        } else if (lam->params.size() == 2) {
-            subst[lam->params[0].name] = lam->params[0].name;
-            subst[lam->params[1].name] = lam->params[1].name;
+        for (const auto* p : passed) {
+            const auto* lambda = *p ? std::get_if<ast::Lambda>(&(**p).kind) : nullptr;
+            if (!lambda || lambda->collection) continue;
+            std::unordered_set<std::string> mutated;
+            for (const auto& s : lambda->body) collectMutated(s, mutated);
+            for (const auto& param : lambda->params) mutated.erase(param.name);
+            std::vector<std::string> outer;
+            for (const auto& v : mutated)
+                if (subst.count(v)) outer.push_back(v);
+            if (outer.empty()) continue;
+            several = several || found;
+            found = lambda;
+            std::sort(outer.begin(), outer.end());
+            vars = std::move(outer);
         }
-        auto bindItem = [&](ExprPtr callback) -> ExprPtr {
-            if (lam->params.size() != 2) return callback;
-            auto pair = std::make_unique<Pattern>();
-            pair->kind = PatKind::Tuple;
-            for (const auto& p : lam->params) {
-                auto name = std::make_unique<Pattern>();
-                name->kind = PatKind::Var; name->name = p.name;
-                pair->args.push_back(std::move(name));
-            }
-            return makeMatch1(var(item), std::move(pair), std::move(callback));
-        };
+        ast::forEachOperand(x, [&](const ast::ExprPtr& child) {
+            if (child) visit(*child);
+        });
+    };
+    visit(e);
+    return several ? nullptr : found;
+}
 
-        if (mutVars.size() == 1) {
-            subst[mutVars[0]] = state;
-            fold.body = bindItem(lowerLoopBodyFrom(lam->body, 0, "", mutVars,
-                [&] { return stateExpr(mutVars); }));
-        } else {
-            auto statePat = std::make_unique<Pattern>();
-            statePat->kind = PatKind::Tuple;
-            for (const auto& v : mutVars) {
-                std::string sv = fresh(v);
-                subst[v] = sv;
-                auto p = std::make_unique<Pattern>();
-                p->kind = PatKind::Var; p->name = sv;
-                statePat->args.push_back(std::move(p));
-            }
-            auto body = lowerLoopBodyFrom(lam->body, 0, "", mutVars,
-                [&] { return stateExpr(mutVars); });
-            fold.body = makeMatch1(var(state), std::move(statePat), bindItem(std::move(body)));
+// `block` taking the values of `vars` after its own parameters, answering
+// {Value, State}: its reassignments thread through as a loop body's do.
+auto Lowering::lowerStatefulBlock(const ast::Lambda& block, const std::vector<std::string>& vars)
+    -> ExprPtr {
+    auto snap = subst;
+    Lambda lam;
+    for (const auto& p : block.params) {
+        if (names::isWildcard(p.name)) {
+            lam.params.push_back(fresh("Ignored"));
+            continue;
         }
-        subst = snap;
-
-        auto foldExpr = std::make_unique<Expr>();
-        foldExpr->node = std::move(fold);
-        auto foldFn = atomize_ir(std::move(foldExpr), binds);
-        auto initial = atomize_ir(stateExpr(mutVars), binds);
-        const auto again = [](const ExprPtr& atom) {
-            auto copy = std::make_unique<Expr>();
-            if (const auto* name = std::get_if<Var>(&atom->node)) copy->node = Var{name->name};
-            else copy->node = std::get<Lit>(atom->node);
-            return copy;
-        };
-        const auto boolCase = [](ExprPtr test, ExprPtr yes, ExprPtr no) {
-            Match match;
-            match.subjects.push_back(std::move(test));
-            for (const bool value : {true, false}) {
-                auto pattern = std::make_unique<Pattern>();
-                pattern->kind = PatKind::Lit;
-                pattern->litKind = LitKind::Bool;
-                pattern->litBool = value;
-                MatchClause clause;
-                clause.patterns.push_back(std::move(pattern));
-                clause.body = std::move(value ? yes : no);
-                match.clauses.push_back(std::move(clause));
-            }
-            auto expr = std::make_unique<Expr>();
-            expr->node = std::move(match);
-            return expr;
-        };
-        // A count and a range of integers are walked by counting: the
-        // callback applied to each index in turn, no list built for them.
-        // `from` up to `to`, which `inclusive` says is reached.
-        const auto counted = [&](ExprPtr from, const ExprPtr& to, bool inclusive) {
-            const std::string loop = "__each" + std::to_string(counter++);
-            const auto index = fresh("EachIndex"), acc = fresh("EachAcc");
-            const auto next = fresh("EachIndex"), stepped = fresh("EachAcc");
-            auto apply = std::make_unique<Expr>();
-            apply->node = CallIndirect{again(foldFn), two(var(index), var(acc)), false};
-            auto recur = std::make_unique<Expr>();
-            recur->node = Call{"", loop, 2, two(var(next), var(stepped)), false};
-            LetRec walk;
-            walk.name = loop;
-            walk.params = {index, acc};
-            walk.funBody = boolCase(
-                callE("erlang", inclusive ? "=<" : "<", 2, two(var(index), again(to))),
-                makeLet(stepped, std::move(apply),
-                        makeLet(next, callE("erlang", "+", 2, two(var(index), litInt(1))),
-                                std::move(recur))),
-                var(acc));
-            auto enter = std::make_unique<Expr>();
-            enter->node = Call{"", loop, 2, two(std::move(from), again(initial)), false};
-            walk.contBody = std::move(enter);
-            auto expr = std::make_unique<Expr>();
-            expr->node = std::move(walk);
-            return expr;
-        };
-        const auto folded = [&](ExprPtr items) {
-            return callE("lists", "foldl", 3,
-                         three(again(foldFn), again(initial), std::move(items)));
-        };
-        ExprPtr iteration;
-        if (times) {
-            iteration = counted(litInt(0), receiver, false);
-        } else if (range) {
-            // Whether the bounds are integers is the values' to say: a
-            // range of characters, or one that cannot be enumerated,
-            // goes the general way.
-            const auto firstIs = fresh("EachIs"), lastIs = fresh("EachIs");
-            const auto both = fresh("EachIs");
-            iteration = makeLet(firstIs, callE("erlang", "is_integer", 1, one(again(first))),
-                makeLet(lastIs, callE("erlang", "is_integer", 1, one(again(last))),
-                    makeLet(both, callE("erlang", "and", 2, two(var(firstIs), var(lastIs))),
-                        boolCase(var(both), counted(again(first), last, true),
-                                 folded(callE("kex_intrinsic_fun", "items", 1,
-                                     one(callE("kex_intrinsic_range", "make", 2,
-                                               two(again(first), again(last))))))))));
-        } else {
-            iteration = folded(callE("kex_intrinsic_fun", "items", 1, one(std::move(receiver))));
-        }
-        auto result = wrapLets(binds, std::move(iteration));
-
-        if (mutVars.size() == 1) {
-            std::string nv = fresh(mutVars[0]);
-            subst[mutVars[0]] = nv;
-            auto following = rest();
-            return makeLet(nv, std::move(result), std::move(following));
-        }
-        auto resultPat = std::make_unique<Pattern>();
-        resultPat->kind = PatKind::Tuple;
-        for (const auto& v : mutVars) {
-            std::string nv = fresh(v);
-            subst[v] = nv;
-            auto p = std::make_unique<Pattern>();
-            p->kind = PatKind::Var; p->name = nv;
-            resultPat->args.push_back(std::move(p));
-        }
-        auto following = rest();
-        return makeMatch1(std::move(result), std::move(resultPat), std::move(following));
+        lam.params.push_back(p.name);
+        subst[p.name] = p.name;
     }
-    return nullptr;
+    const auto state = fresh("BlockState");
+    lam.params.push_back(state);
+    PatternPtr statePattern;
+    if (vars.size() == 1) {
+        subst[vars[0]] = state;
+    } else {
+        statePattern = std::make_unique<Pattern>();
+        statePattern->kind = PatKind::Tuple;
+        for (const auto& v : vars) {
+            const auto name = fresh(v);
+            subst[v] = name;
+            auto p = std::make_unique<Pattern>();
+            p->kind = PatKind::Var;
+            p->name = name;
+            statePattern->args.push_back(std::move(p));
+        }
+    }
+    const auto& body = block.body;
+    // The block's value is its last statement's: lowered as a value when it
+    // reassigns nothing, else after it runs (an assignment's value is the
+    // one assigned).
+    const ast::Expr* last = body.empty() ? nullptr : body.back().get();
+    bool lastIsValue = false;
+    if (last) {
+        std::unordered_set<std::string> mutated;
+        collectMutated(body.back(), mutated);
+        lastIsValue = mutated.empty() && !std::holds_alternative<ast::LetExpr>(last->kind) &&
+                      !std::holds_alternative<ast::VarExpr>(last->kind) &&
+                      !std::holds_alternative<ast::ReturnExpr>(last->kind) &&
+                      !std::holds_alternative<ast::BreakExpr>(last->kind) &&
+                      !std::holds_alternative<ast::NextExpr>(last->kind);
+    }
+    const auto answer = [&](ExprPtr value) {
+        const auto t = fresh("BlockValue");
+        std::vector<ExprPtr> pair;
+        pair.push_back(var(t));
+        pair.push_back(stateExpr(vars));
+        auto tuple = std::make_unique<Expr>();
+        tuple->node = MakeTuple{std::move(pair)};
+        return makeLet(t, std::move(value), std::move(tuple));
+    };
+    auto lowered = lowerLoopBodyFrom(body, 0, "", vars, [&]() -> ExprPtr {
+        if (lastIsValue) return answer(lower(body.back()));
+        if (const auto* assign = last ? std::get_if<ast::AssignExpr>(&last->kind) : nullptr)
+            return answer(var(currentName(assign->name)));
+        auto unit = std::make_unique<Expr>();
+        unit->node = MakeTuple{};
+        return answer(std::move(unit));
+    }, lastIsValue ? body.size() - 1 : body.size());
+    lam.body = statePattern ? makeMatch1(var(state), std::move(statePattern), std::move(lowered))
+                            : std::move(lowered);
+    subst = snap;
+    auto e = std::make_unique<Expr>();
+    e->node = std::move(lam);
+    return e;
+}
+
+// A statement passing a block that reassigns variables of the code around
+// it: `let doubled = xs.map { |x| seen += 1; x * 2 }`. A BEAM closure
+// captures values, so the block takes those variables' values after its own
+// arguments and answers {Value, State} (lowerStatefulBlock), and the
+// statement runs through `kex_intrinsic_fun:threadState(Block, Initial,
+// fun(Placeholder) -> Statement)`, which keeps the state for the call and
+// answers {Value, FinalState}. The variables are rebound to that state.
+// specialize-blocks replaces the whole with a copy of the callee carrying the
+// state, where it can. `rest` lowers what follows, given the statement's
+// value. Null when `e` passes no such block.
+auto Lowering::lowerThreadedStatement(const ast::ExprPtr& e,
+                                      const std::function<ExprPtr(ExprPtr)>& rest) -> ExprPtr {
+    const ast::ExprPtr* source = &e;
+    if (const auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
+        if (!std::holds_alternative<ast::VarPattern>(le->pattern->kind)) return nullptr;
+        source = &le->value;
+    } else if (const auto* ve = std::get_if<ast::VarExpr>(&e->kind)) {
+        if (!ve->pattern || !std::holds_alternative<ast::VarPattern>(ve->pattern->kind))
+            return nullptr;
+        source = &ve->value;
+    } else if (const auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
+        source = &ae->value;
+    } else if (!std::holds_alternative<ast::MethodCall>(e->kind) &&
+               !std::holds_alternative<ast::FunctionCall>(e->kind)) {
+        return nullptr;
+    }
+    if (!*source) return nullptr;
+    std::vector<std::string> vars;
+    const auto* block = reassigningBlock(**source, vars);
+    if (!block) return nullptr;
+
+    std::vector<Binding> binds;
+    auto blockFn = atomize_ir(lowerStatefulBlock(*block, vars), binds);
+    auto initial = atomize_ir(stateExpr(vars), binds);
+    const auto placeholder = fresh("Block");
+    const auto* outerBlock = threadedBlock;
+    const auto outerVar = threadedBlockVar;
+    threadedBlock = block;
+    threadedBlockVar = placeholder;
+    auto value = lower(*source);
+    threadedBlock = outerBlock;
+    threadedBlockVar = outerVar;
+    auto statement = std::make_unique<Expr>();
+    statement->node = Lambda{{placeholder}, std::move(value), false};
+    auto statementFn = atomize_ir(std::move(statement), binds);
+    auto call = callE("kex_intrinsic_fun", "threadState", 3,
+                      three(std::move(blockFn), std::move(initial), std::move(statementFn)));
+
+    const auto result = fresh("Threaded");
+    auto pattern = std::make_unique<Pattern>();
+    pattern->kind = PatKind::Tuple;
+    auto resultPattern = std::make_unique<Pattern>();
+    resultPattern->kind = PatKind::Var;
+    resultPattern->name = result;
+    pattern->args.push_back(std::move(resultPattern));
+    auto statePattern = std::make_unique<Pattern>();
+    if (vars.size() == 1) {
+        statePattern->kind = PatKind::Var;
+        statePattern->name = fresh(vars[0]);
+        subst[vars[0]] = statePattern->name;
+    } else {
+        statePattern->kind = PatKind::Tuple;
+        for (const auto& v : vars) {
+            auto p = std::make_unique<Pattern>();
+            p->kind = PatKind::Var;
+            p->name = fresh(v);
+            subst[v] = p->name;
+            statePattern->args.push_back(std::move(p));
+        }
+    }
+    pattern->args.push_back(std::move(statePattern));
+    auto following = rest(var(result));
+    return wrapLets(binds, makeMatch1(std::move(call), std::move(pattern), std::move(following)));
 }
 
 auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) -> ExprPtr {
     const auto& e = body[i];
     bool isLast = (i + 1 == body.size());
     currentLoc = &e->location;
+
+    // A statement passing a block that reassigns variables around it.
+    {
+        const auto next = [&](const std::string& name) {
+            return isLast ? var(name) : lowerBodyFrom(body, i + 1);
+        };
+        const auto bindValue = [&](ExprPtr value) -> ExprPtr {
+            if (const auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
+                const auto& name = std::get<ast::VarPattern>(le->pattern->kind).name;
+                const auto ssa = subst.count(name) ? fresh(name) : name;
+                subst[name] = ssa;
+                immutableBindings.insert(name);
+                curryOrigin.erase(name);
+                return makeLet(ssa, std::move(value), next(ssa));
+            }
+            if (const auto* ve = std::get_if<ast::VarExpr>(&e->kind)) {
+                const auto& name = std::get<ast::VarPattern>(ve->pattern->kind).name;
+                const auto ssa = fresh(name);
+                subst[name] = ssa;
+                immutableBindings.erase(name);
+                curryOrigin.erase(name);
+                return makeLet(ssa, std::move(value), next(ssa));
+            }
+            if (const auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
+                const auto ssa = fresh(ae->name);
+                subst[ae->name] = ssa;
+                return makeLet(ssa, std::move(value), next(ssa));
+            }
+            if (isLast) return value;
+            const auto discarded = fresh("Statement");
+            return makeLet(discarded, std::move(value), lowerBodyFrom(body, i + 1));
+        };
+        if (auto threaded = lowerThreadedStatement(e, bindValue)) return threaded;
+    }
 
     // let PATTERN = value
     if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
@@ -339,11 +383,6 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
             return makeLet(ssa, std::move(val), std::move(rest));
         }
     }
-    if (auto* mc = std::get_if<ast::MethodCall>(&e->kind))
-        if (auto iteration = lowerIteration(*mc, [&] {
-                return isLast ? lit(LitKind::Atom, "ok") : lowerBodyFrom(body, i + 1);
-            }))
-            return iteration;
     // Statement-position if/match whose branches REASSIGN outer vars —
     // thread the mutated state through, exactly like loops do: each
     // branch yields the (possibly reassigned) values, and the code after

@@ -4288,6 +4288,10 @@ auto Evaluator::makeCurriedCall(std::string fnName, int arity, bool isOp,
 auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args,
                              NamedArgs namedArgs, SourceLocation loc) -> ValuePtr {
     checkDeadline();
+    // Each Kex call is many C++ frames here: recursion deep enough to reach
+    // the end of the process's stack is an error, not a crash.
+    if (Fiber::stackExhausted()) [[unlikely]]
+        throw RuntimeError("stack overflow: recursion too deep in '" + name + "'", loc);
     // Every call is one level deeper until it returns or throws.
     struct DepthGuard {
         int64_t* depth;

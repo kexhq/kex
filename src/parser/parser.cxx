@@ -841,11 +841,14 @@ auto Parser::parseMakeImplements(ast::MakeDef &into) -> void {
       auto implementName = [&]() -> std::string {
         auto tok = expect(TokenType::UpperIdent, "Expected trait name");
         std::string name = tok.value;
+        def->implementLocations.push_back(tok.location);
         while (check(TokenType::Dot) &&
                peekNext().type == TokenType::UpperIdent) {
           advance(); // "."
-          name += "." + expect(TokenType::UpperIdent,
-                               "Expected trait name after '.'").value;
+          const auto& segment = expect(TokenType::UpperIdent,
+                                       "Expected trait name after '.'");
+          name += "." + segment.value;
+          def->implementLocations.back() = segment.location;
         }
         // The reserved-letter rule is about a bare name; a qualified path
         // whose last segment is one letter is not a type parameter.
@@ -3005,7 +3008,9 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
     if (check(TokenType::Pipe)) {
       advance(); // consume '|'
       if (check(TokenType::LowerIdent)) {
-        auto bindName = advance().value;
+        const auto& bindToken = advance();
+        auto bindName = bindToken.value;
+        const auto bindLocation = bindToken.location;
         if (match(TokenType::Pipe)) {
           skipNewlines();
           // Collect body
@@ -3030,7 +3035,9 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
 
           // Variable binding pattern
           auto varPat = std::make_unique<ast::Pattern>();
-          varPat->location = expr->location;
+          // At the name, where tooling finds the binding: `lim` in
+          // `if @limit do |lim|` led definition to the `if`.
+          varPat->location = bindLocation;
           varPat->kind = ast::VarPattern{bindName};
 
           // Build () unit for None clause

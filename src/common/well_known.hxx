@@ -21,11 +21,6 @@ inline const std::string kPreludeModule = "kex_prelude";
 inline const std::string kRuntimeRoot = "Kex";
 inline auto moduleAtom(const std::string& path) -> std::string { return kRuntimeRoot + "." + path; }
 
-// The prelude's finite iterations, whose callback lowering may turn into a
-// fold when it reassigns an outer variable (ir/lowering_body.cxx).
-inline const std::string kEachFunction = "each";
-inline const std::string kTimesFunction = "times";
-
 // `value.try`: a postfix keyword, not a function, offered after a dot where
 // it applies (TypeChecker::memberCompletions).
 inline const std::string kTryKeyword = "try";

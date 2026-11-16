@@ -970,6 +970,8 @@ int main(int argc, char *argv[]) {
   // The opt-in standard library is described by the checker, as a build of a
   // program using it describes it, for every check, run and the editor alike.
   kex::driver::registerCheckedStdlibInterfaces();
+  // A call that passes the standard library a block may copy the callee.
+  useStandardLibrarySpecializations();
   // A pipeline the user wrote is checked before anything runs.
   if (const auto problem = checkPassPipeline()) {
     std::cerr << "kex: " << *problem << "\n";

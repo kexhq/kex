@@ -25,6 +25,7 @@
 #include <lsp/messages.h>
 
 #include <algorithm>
+#include <tuple>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -98,10 +99,28 @@ struct Document {
     // Field reads (`point.x`, ``), at the field name: the record the
     // checker read the field of.
     std::unordered_map<uint64_t, std::string> fieldReads;
+    // The same reads as hover shows them, from the type the checker gave the
+    // read (`x : Integer`).
+    std::unordered_map<uint64_t, std::string> fieldReadTypes;
     // Keys of record constructions (`x` in `Point { x: 1 }`), at the key: the
     // field as hover shows it (`x : Integer`). Their records are in
     // fieldReads, which navigation reads alike.
     std::unordered_map<uint64_t, std::string> recordKeys;
+    // Type names written in annotations, at the name: the type the checker
+    // resolved each to (`This` in `make Box` is `Box`).
+    std::unordered_map<uint64_t, std::string> typeReferences;
+    // The same references' identities: the declared name a written one
+    // resolved to (`Shapes.Circle` for `Circle` under `using Shapes`).
+    std::unordered_map<uint64_t, std::string> typeIdentities;
+    // The names after `implement:`, at each: the trait the checker resolved.
+    std::unordered_map<uint64_t, std::string> implementedTraits;
+    // The modules the `using`s in force bring in, per scope the checker kept,
+    // and where each scope's expressions start: what a word is written under.
+    std::vector<std::unordered_set<std::string>> scopeModules;
+    std::vector<std::tuple<int, int, std::size_t>> scopePositions;
+    // A slot's `Reply<T>`, at `Reply`: its payload and the serving state its
+    // `new` installs, as the checker resolved them.
+    std::unordered_map<uint64_t, std::pair<std::string, std::string>> replyContracts;
     // Calls the checker decided are a type's own `make` function (`box.render`),
     // at the function name: that type, as the checker names it.
     std::unordered_map<uint64_t, std::string> ownMethodCalls;
@@ -1841,6 +1860,44 @@ auto fieldTypeOf(const semantic::SymbolInfo& record, const std::string& field)
     return {};
 }
 
+// The modules the `using`s in force at `line`:`column` bring in, as the
+// checker scoped the nearest expression there (the first after it, above
+// the first expression).
+auto modulesInScope(const Document& document, int line, int column)
+    -> std::unordered_set<std::string> {
+    const auto& positions = document.scopePositions;
+    if (positions.empty()) return {};
+    auto after = std::upper_bound(
+        positions.begin(), positions.end(),
+        std::tuple<int, int, std::size_t>{line, column, static_cast<std::size_t>(-1)});
+    const auto& [_, __, context] = after == positions.begin() ? *after : *std::prev(after);
+    return document.scopeModules[context];
+}
+
+// The type of the `serving` block declaring the slot `name` on `line`, by its
+// `let` or its `::>` line, as the program declares it; "" for none. By text it
+// was the word after the nearest `serving ` above, a nested block's or none.
+auto servingTargetDeclaring(const ast::Program& program, int line, const std::string& name)
+    -> std::string {
+    std::string target;
+    ast::forEachDeclared<ast::MakeDef>(program, [&](const ast::MakeDef& make) {
+        if (!target.empty() || !make.isServing) return;
+        for (const auto& item : make.body) {
+            bool declares = false;
+            if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
+                fn && *fn && (*fn)->isSlot && (*fn)->name == name)
+                declares = (*fn)->nameLocation.line == line || (*fn)->location.line == line;
+            else if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item);
+                     ann && *ann && (*ann)->name == name)
+                declares = (*ann)->location.line == line;
+            if (!declares) continue;
+            if (const auto written = writtenMakeTarget(make.target)) target = written->dotted();
+            return;
+        }
+    });
+    return target;
+}
+
 // Whether the word at this position is a KEY in a map literal (`{ name: "Ada" }`)
 // rather than a reference to anything. A key is an atom, and it declares
 // nothing — but a name-based lookup happily found a same-named export and
@@ -2170,7 +2227,14 @@ void recordNavigation(Document& document, const semantic::Analyzer& analyzer,
         document.localDefinitions.clear();
         document.bindingSites.clear();
         document.fieldReads.clear();
+        document.fieldReadTypes.clear();
         document.recordKeys.clear();
+        document.typeReferences.clear();
+        document.typeIdentities.clear();
+        document.implementedTraits.clear();
+        document.scopeModules.clear();
+        document.scopePositions.clear();
+        document.replyContracts.clear();
         document.ownMethodCalls.clear();
         document.moduleReferences.clear();
     }
@@ -2207,8 +2271,13 @@ void recordNavigation(Document& document, const semantic::Analyzer& analyzer,
         const auto at =
             Document::receiverKey(static_cast<unsigned int>(call->methodLocation.line),
                                   static_cast<unsigned int>(call->methodLocation.column));
-        if (decided.kind == semantic::CallKind::FieldRead)
+        if (decided.kind == semantic::CallKind::FieldRead) {
             document.fieldReads.insert_or_assign(at, decided.owner);
+            if (const auto read = analyzer.typeMap().find(expression);
+                read != analyzer.typeMap().end() && read->second)
+                document.fieldReadTypes.insert_or_assign(
+                    at, call->method + " : " + semantic::typeToString(read->second));
+        }
         else if (decided.kind == semantic::CallKind::OwnMethod)
             document.ownMethodCalls.insert_or_assign(at, decided.owner);
     }
@@ -2219,6 +2288,50 @@ void recordNavigation(Document& document, const semantic::Analyzer& analyzer,
         document.fieldReads.insert_or_assign(at, key.record);
         document.recordKeys.insert_or_assign(
             at, key.field + " : " + semantic::typeToString(key.type));
+    }
+    for (const auto& reference : analyzer.checker().typeReferences()) {
+        if (reference.location.file != document.path || !reference.type) continue;
+        const auto at =
+            Document::receiverKey(static_cast<unsigned int>(reference.location.line),
+                                  static_cast<unsigned int>(reference.location.column));
+        if (const auto* reply = std::get_if<semantic::NamedType>(&reference.type->kind);
+            reply && reply->name == "Reply" && reply->typeArgs.size() == 1 &&
+            (reference.makeType || !document.replyContracts.contains(at)))
+            document.replyContracts.insert_or_assign(
+                at, std::pair{semantic::typeToString(reply->typeArgs.front()),
+                              reference.makeType ? semantic::typeToString(reference.makeType)
+                                                 : std::string("State")});
+        // Resolved where no `make` block was in scope yet: not its meaning.
+        if (semantic::isThisPlaceholder(reference.type)) continue;
+        document.typeReferences.insert_or_assign(at, semantic::typeToString(reference.type));
+        if (const auto* named = std::get_if<semantic::NamedType>(&reference.type->kind))
+            document.typeIdentities.insert_or_assign(at, named->name);
+        else if (const auto* bound = std::get_if<semantic::ConstrainedType>(&reference.type->kind))
+            document.typeIdentities.insert_or_assign(at, bound->traitName);
+    }
+    if (replace) {
+        for (const auto& context : analyzer.checker().scopeContexts()) {
+            auto& modules = document.scopeModules.emplace_back();
+            for (const auto& selection : context.imports) modules.insert(selection.module);
+        }
+        for (const auto& [expression, names] : analyzer.checker().scopeNames())
+            if (expression && expression->location.file == document.path &&
+                names.context < document.scopeModules.size())
+                document.scopePositions.emplace_back(expression->location.line,
+                                                     expression->location.column, names.context);
+        std::sort(document.scopePositions.begin(), document.scopePositions.end());
+    }
+    // The traits a `make` block implements, at each name after `implement:`:
+    // the trait the checker resolved it to.
+    for (const auto& [make, traits] : analyzer.checker().resolvedTraits()) {
+        if (!make || make->location.file != document.path) continue;
+        for (std::size_t i = 0; i < traits.size() && i < make->implementLocations.size(); ++i)
+            if (!traits[i].empty())
+                document.implementedTraits.insert_or_assign(
+                    Document::receiverKey(
+                        static_cast<unsigned int>(make->implementLocations[i].line),
+                        static_cast<unsigned int>(make->implementLocations[i].column)),
+                    traits[i]);
     }
     for (const auto& [name, where] : analyzer.checker().bindingSites()) {
         if (where.file != document.path) continue;
@@ -3016,6 +3129,15 @@ private:
                         !resolved->second.sourceModule.empty())
                         documentationKey =
                             resolved->second.sourceModule + "." + name;
+                if (documentationKey.empty())
+                    if (const auto called = analyzer.checker().calledModules().find(expression);
+                        called != analyzer.checker().calledModules().end() &&
+                        !called->second.empty())
+                        documentationKey = called->second + "." + name;
+                // The prelude's file-level functions are documented bare.
+                if (const auto prelude = std::string(semantic::kFileLevelPreludeModule) + ".";
+                    documentationKey.starts_with(prelude))
+                    documentationKey.erase(0, prelude.size());
                 document.selectedCallEntries.push_back({
                     .line = static_cast<unsigned int>(location->line),
                     .byteColumn = static_cast<unsigned int>(location->column),
@@ -3840,19 +3962,19 @@ private:
             hoverLineStart = newline + 1;
         }
         const auto hoverWordOffset = hoverLineStart + word.byteColumn - 1;
-        const auto hoverLineEndPosition = document.text.find('\n', hoverLineStart);
-        const auto hoverLineEnd = hoverLineEndPosition == std::string::npos
-            ? document.text.size() : hoverLineEndPosition;
-        const auto hoverLine = document.text.substr(
-            hoverLineStart, hoverLineEnd - hoverLineStart);
-        const bool slotDeclarationPosition =
-            hoverLine.find("slot ") != std::string::npos ||
-            (hoverLine.find("::>") != std::string::npos &&
-             document.text.rfind("serving ", hoverWordOffset) !=
-                 std::string::npos);
         std::string replyContractDetail;
         std::string replyContractDocumentation;
-        if (lookupName == "Reply") {
+        // A slot's `Reply<T>`: its payload, and the serving state its `new`
+        // installs, as the checker resolved them. By text, the payload was the
+        // bracketed spelling and the state the word after the nearest
+        // `serving ` above; that is left for a buffer that does not check.
+        std::optional<std::pair<std::string, std::string>> replyContract;
+        if (lookupName == "Reply")
+            if (const auto checked = document.replyContracts.find(
+                    Document::receiverKey(params.position.line + 1, word.byteColumn));
+                checked != document.replyContracts.end())
+                replyContract = checked->second;
+        if (lookupName == "Reply" && !replyContract && !document.checked) {
             size_t open = hoverWordOffset + word.byteLength;
             while (open < document.text.size() && std::isspace(
                        static_cast<unsigned char>(document.text[open]))) ++open;
@@ -3882,19 +4004,23 @@ private:
                         if (end > start)
                             state = document.text.substr(start, end - start);
                     }
-                    replyContractDetail = "record Reply<" + payload + "> do\n" +
-                        "  reply : " + payload + "\n" +
-                        "  new : " + state + "?\n" +
-                        "  stop : ProcessExitReason?\n" +
-                        "end";
-                    replyContractDocumentation =
-                        "`reply` is required for an immediate call response. "
-                        "It may be omitted only when the slot sends a deferred "
-                        "response with `from.reply(...)`. `new` installs the "
-                        "updated serving state; `stop` terminates the server "
-                        "after the transition.";
+                    replyContract = std::pair{payload, state};
                 }
             }
+        }
+        if (replyContract) {
+            const auto& [payload, state] = *replyContract;
+            replyContractDetail = "record Reply<" + payload + "> do\n" +
+                "  reply : " + payload + "\n" +
+                "  new : " + state + "?\n" +
+                "  stop : ProcessExitReason?\n" +
+                "end";
+            replyContractDocumentation =
+                "`reply` is required for an immediate call response. "
+                "It may be omitted only when the slot sends a deferred "
+                "response with `from.reply(...)`. `new` installs the "
+                "updated serving state; `stop` terminates the server "
+                "after the transition.";
         }
         // A local, as the checker bound it: a use names its binding, and a binding
         // is its own. By name, a text search for the nearest definition before
@@ -3921,28 +4047,22 @@ private:
                                   symbol->name.size();
         if (!symbol && moduleQualifier.empty())
             symbol = m_db.findSymbol(lookupName, document.path);
+        // A slot's declaration: its own symbol at its name, or, on its `::>`
+        // line, the slot of the `serving` block declaring it.
         const semantic::SymbolInfo* slotDeclarationSymbol = nullptr;
-        if (slotDeclarationPosition && moduleQualifier.empty()) {
-            const auto serving = document.text.rfind("serving ", hoverWordOffset);
-            if (serving != std::string::npos) {
-                size_t target = serving + 8;
-                while (target < document.text.size() && std::isspace(
-                           static_cast<unsigned char>(document.text[target])))
-                    ++target;
-                size_t targetEnd = target;
-                while (targetEnd < document.text.size() && (std::isalnum(
-                           static_cast<unsigned char>(document.text[targetEnd])) ||
-                           document.text[targetEnd] == '_' ||
-                           document.text[targetEnd] == '.')) ++targetEnd;
-                slotDeclarationSymbol = m_db.receiverSymbol(
-                    document.text.substr(target, targetEnd - target), lookupName);
-                if (slotDeclarationSymbol &&
-                    slotDeclarationSymbol->isServingSlot)
-                    symbol = slotDeclarationSymbol;
-                else
-                    slotDeclarationSymbol = nullptr;
-            }
-        }
+        if (resolvedSymbolAtPosition && symbolDefinitionAtPosition && symbol &&
+            symbol->isServingSlot)
+            slotDeclarationSymbol = symbol;
+        else if (moduleQualifier.empty())
+            if (const auto* state = m_db.fileState(document.path))
+                if (const auto target = servingTargetDeclaring(
+                        state->ast, static_cast<int>(params.position.line + 1), lookupName);
+                    !target.empty())
+                    if (const auto* slot = m_db.receiverSymbol(target, lookupName);
+                        slot && slot->isServingSlot) {
+                        slotDeclarationSymbol = slot;
+                        symbol = slot;
+                    }
         // A source-recognized lexical binding always shadows global/module
         // symbols, even when inference could not produce a hover entry for
         // it. Returning no type is preferable to claiming that a lambda
@@ -3954,10 +4074,16 @@ private:
         std::string selectedCallDetail;
         std::string thisTypeDetail;
         // `This` is a compiler-owned type placeholder whose meaning is the
-        // target of the surrounding `make` block. It has no standalone type
-        // declaration for ordinary symbol lookup to find, but the method
-        // symbol on the same signature line records that make target.
+        // target of the surrounding `make` block, as the checker resolved it
+        // there. By position, it was the make target of a symbol declared on
+        // the same line, which only a signature line has; that is left for a
+        // buffer that does not check.
         if (lookupName == "This")
+            if (const auto resolved = document.typeReferences.find(
+                    Document::receiverKey(params.position.line + 1, word.byteColumn));
+                resolved != document.typeReferences.end())
+                thisTypeDetail = "This : " + resolved->second;
+        if (lookupName == "This" && thisTypeDetail.empty() && !document.checked)
             if (const auto* state = m_db.fileState(document.path))
                 for (const auto& candidate : state->symbols)
                     if (!candidate.makeTarget.empty() &&
@@ -3975,19 +4101,35 @@ private:
         // make it something else.
         const bool importLine =
             document.text.compare(hoverLineStart, 6, "using ") == 0;
+        // A type written in an annotation, as the checker resolved it there:
+        // the trait, capability or imported type it names is that one. By
+        // name, the bare word was looked up, which a same-named declaration
+        // elsewhere answered; that remains where no annotation is (the
+        // names after `implement:`).
+        std::string resolvedType;
+        if (const auto identity = document.typeIdentities.find(
+                Document::receiverKey(params.position.line + 1, word.byteColumn));
+            identity != document.typeIdentities.end())
+            resolvedType = identity->second;
+        const auto implemented = document.implementedTraits.find(
+            Document::receiverKey(params.position.line + 1, word.byteColumn));
+        if (implemented != document.implementedTraits.end()) resolvedType = implemented->second;
         semantic::TypeChecker traitLookup(&m_interfaces);
-        const bool traitName = traitLookup.isTrait(lookupName) ||
+        const bool traitName = implemented != document.implementedTraits.end() ||
+            traitLookup.isTrait(resolvedType.empty() ? lookupName : resolvedType) ||
             (symbol && symbol->kind == semantic::SymbolKind::Trait);
         const auto capabilityLookup = m_interfaces.modules.find(
-            moduleQualifier.empty() ? lookupName
+            !resolvedType.empty()   ? resolvedType
+            : moduleQualifier.empty() ? lookupName
                                     : moduleQualifier + "." + lookupName);
         const bool capabilityName =
             (symbol && symbol->kind == semantic::SymbolKind::Module &&
              symbol->isCapability) ||
             (capabilityLookup != m_interfaces.modules.end() &&
              capabilityLookup->second.isCapability);
-        const auto* importedAdt = moduleQualifier.empty()
-            ? importedAdtNamed(m_interfaces, lookupName) : nullptr;
+        const auto* importedAdt = !resolvedType.empty()
+            ? importedAdtNamed(m_interfaces, resolvedType)
+            : moduleQualifier.empty() ? importedAdtNamed(m_interfaces, lookupName) : nullptr;
         const auto* constructorAdt = moduleQualifier.empty()
             ? importedAdtWithConstructor(m_interfaces, lookupName) : nullptr;
         const Document::HoverEntry* expressionHover = nullptr;
@@ -4023,7 +4165,15 @@ private:
         // the same analyzer-backed receiver lookup completion uses, so it
         // works for `b.size`, `makeBox(3).size`, and a match binding alike.
         std::string fieldDetail;
-        if (moduleQualifier.empty() && !importLine) {
+        // A field read, as the checker typed it. By name, the receiver was
+        // scanned back from the dot and its record looked up by spelling;
+        // that is left for a buffer that does not check yet (`user.na`).
+        if (const auto read = document.fieldReadTypes.find(
+                Document::receiverKey(params.position.line + 1, word.byteColumn));
+            read != document.fieldReadTypes.end())
+            fieldDetail = read->second;
+        if (fieldDetail.empty() && !document.checked && moduleQualifier.empty() &&
+            !importLine) {
             const auto wordEnd = hoverLineStart + word.byteColumn - 1 +
                                  word.byteLength;
             const auto receiver = scanDotReceiver(document.text, wordEnd);
@@ -4147,8 +4297,8 @@ private:
         } else if (capabilityName) {
             detail = "capability " + (moduleQualifier.empty()
                 ? word.text : moduleQualifier + "." + word.text);
-        } else if (traitName && moduleQualifier.empty()) {
-            detail = "trait " + word.text;
+        } else if (traitName && (moduleQualifier.empty() || !resolvedType.empty())) {
+            detail = "trait " + (resolvedType.empty() ? word.text : resolvedType);
         } else if (symbol && symbol->kind == semantic::SymbolKind::Type &&
                    (symbol->detail.rfind("type ", 0) == 0 ||
                     symbol->detail.rfind("distinct type ", 0) == 0) &&
@@ -4223,7 +4373,13 @@ private:
                 // `100.meter` found nothing — `Units.SI` is opt-in, so its
                 // exports were skipped and the reply fell through to the
                 // bare string "function meter".
-                const auto opened = documentImports(found->second.text);
+                // As the checker scoped the word: the `using`s in force where it is
+                // written, a nested module's own included. By text, every `using`
+                // line of the file; that is left for a buffer that does not check.
+                auto opened = document.checked
+                    ? modulesInScope(document, static_cast<int>(params.position.line + 1),
+                                     static_cast<int>(word.byteColumn))
+                    : documentImports(found->second.text);
                 for (const auto& [moduleName, module] : m_interfaces.modules) {
                     if (!module.automaticImport && !opened.count(moduleName))
                         continue;
@@ -4310,6 +4466,7 @@ private:
             else if (symbol->kind == semantic::SymbolKind::Function) kind = "function";
             detail = std::string(kind) + " " + symbol->name;
         }
+        bool documentationDecided = false;
         if (selectedCallHover) {
             selectedCallDetail = selectedCallHover->detail;
             std::string remaining;
@@ -4322,10 +4479,13 @@ private:
                 remaining += overload;
             }
             detail = std::move(remaining);
+            // The function the checker chose is the one documented, where its
+            // prose is filed under it: not a same-named one found by the name.
             if (!selectedCallHover->documentationKey.empty())
                 if (auto docs = m_standardDocumentation.find(
                         selectedCallHover->documentationKey);
                     docs != m_standardDocumentation.end()) {
+                    documentationDecided = true;
                     documentation.clear();
                     for (const auto& entry : docs->second) {
                         if (!documentation.empty()) documentation += "\n\n";
@@ -4333,7 +4493,7 @@ private:
                     }
                 }
         }
-        if (documentation.empty() && !recordField && !mapKey &&
+        if (documentation.empty() && !documentationDecided && !recordField && !mapKey &&
             fieldDeclaration.empty() && !detailFromExpression)
             if (auto docs = document.documentation.find(lookupName);
                 docs != document.documentation.end())
@@ -4346,7 +4506,8 @@ private:
         const bool ownDeclaration =
             symbol && !symbol->definition.file.empty() &&
             inWorkspace(std::string(symbol->definition.file));
-        if (documentation.empty() && !lexicalReference && !recordField && !ownDeclaration &&
+        if (documentation.empty() && !documentationDecided && !lexicalReference &&
+            !recordField && !ownDeclaration &&
             !mapKey && fieldDeclaration.empty() && !detailFromExpression) {
             const auto standardName = moduleQualifier.empty()
                 ? lookupName : moduleQualifier + "." + lookupName;

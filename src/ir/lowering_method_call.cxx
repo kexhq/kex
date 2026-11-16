@@ -626,6 +626,11 @@ auto Lowering::lowerRuntimeCall(const ast::MethodCall& n, const std::string& pat
         // compiled it: `BEAM.beam_lib` is `beam_lib`.
         module = scope.substr(scope.find('.') + 1);
     }
+    // What this lowering compiles for is the BEAM: `Kex.Intrinsic.Kex.backend()`
+    // is that constant here, so a branch on it folds (`List.map` picks its
+    // compiled body by it, and the specialize-blocks pass must see only that).
+    if (module == "kex_intrinsic_kex" && n.method == "backend" && n.args.empty() && !n.block)
+        return lit(LitKind::Atom, "Beam");
     std::vector<Binding> binds;
     std::vector<ExprPtr> args;
     for (const auto& a : n.args) args.push_back(atomize(a, binds));

@@ -731,6 +731,8 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                                two(std::move(merged), std::move(segments[i])));
             return wrapLets(binds, std::move(merged));
         } else if constexpr (std::is_same_v<T, ast::Lambda>) {
+            // The block a threaded statement passes (lowerThreadedStatement).
+            if (&n == threadedBlock) return var(threadedBlockVar);
             // Params shadow outer bindings: resolve to themselves inside.
             auto snap = subst;
             Lambda lam;

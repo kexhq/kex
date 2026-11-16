@@ -102,8 +102,11 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
         if (type->name == "Any" && type->typeArgs.empty())
             return Type::unknown();
         return Type::named(type->name, convertAll(type->typeArgs));
-    case KexiType::Func:
-        return Type::func(convertAll(type->typeArgs), semanticType(type->result, vars));
+    case KexiType::Func: {
+        auto func = Type::func(convertAll(type->typeArgs), semanticType(type->result, vars));
+        std::get<kex::semantic::FuncType>(func->kind).foul = type->foul;
+        return func;
+    }
     case KexiType::Tuple:
         return Type::tuple(convertAll(type->typeArgs));
     case KexiType::List:

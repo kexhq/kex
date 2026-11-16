@@ -800,10 +800,79 @@ Found with it:
   below it (`let later = 21` after `main` was undefined there). BEAM and the
   checker take a binding as a declaration. The walker now runs the bindings
   first (`spec/top_level_binding_after_main`).
-Still open: across units (the standard library's `each`, `map`, `reduce`),
-which needs the callee's IR from another unit and the stdlib's iteration
-written in Kex down to recursion; and the reassigned-variable threading, so
-`lowerIteration`'s name test can go.
+Step 2 DONE (2026-11-16): across units, the standard library only.
+- `List.map`, `reduce` and `each` recurse in Kex when compiled. Measured on
+  2,000,000 integers, 60 rounds, against the Erlang intrinsics: unspecialised
+  they were as fast (map 10.5 s against 11.3 s, reduce 1.4 s against 1.45 s,
+  each 1.4 s against 1.8 s, startup and list building taken off), so no
+  Erlang version was kept for BEAM.
+- The walker keeps its native loops: the same recursion ran 9x slower there
+  (reduce 95 s against 10 s), and `map`, not tail recursive, overflowed its
+  stack at 200,000 elements. That was a segfault; the walker now checks its
+  fiber's stack at each call and reports "stack overflow: recursion too
+  deep" as a runtime error (`spec/walker_deep_recursion`). The prelude picks by `match Kex.Intrinsic.Kex.backend()`,
+  which lowering makes the constant `'Beam'`.
+- `--build-prelude` records the entry's functions a caller may copy
+  (`specializableFunctions`: a parameter only applied or passed to the
+  recursion, every other local call exported, a `match` on a constant
+  decided) as IR (`ir/serialize`, ETF terms) in a `KxIR` chunk of
+  `kex_prelude.beam`, inside its artifact hash. The companions copy from the
+  build's own record.
+- `specialize-blocks` reads that chunk the first time a call to another
+  module passes a block, and specialises such a call as it does a local
+  one. What else the copy calls goes to `kex_prelude`. `kex_prelude.beam` is
+  part of the toolchain fingerprint.
+- Measured, same run, with the copies: reduce 0.25 s, each 0.3 s, map
+  10 s. `spec/stdlib_block_specialization` covers captures, empty lists,
+  pairs spread (not copied), an early `return` (not copied), nesting, and
+  `each`'s answer.
+Found with it:
+- On BEAM, `IO.inspect(())` (and of `Map.each`'s answer) crashed with
+  `badarg`: the inspector and the dispatcher's tag test read `element(1, …)`
+  of the empty tuple, and on OTP < 28 a guard's `badarg` escapes. The tests
+  now check the size first (`taggedTuple`), and `()` inspects as `Tuple` on
+  both backends.
+- `List.each` answered `None` (an Optional) where its signature says `Void`;
+  it answers `()` now, as `Map.each` does.
+Step 3 DONE (2026-11-16): variables a block reassigns, threaded as state,
+and `lowerIteration` deleted with its name test (`kEachFunction`,
+`kTimesFunction`).
+- On BEAM a block that reassigned a variable of its caller was silently
+  wrong everywhere but `each` and `times`: `[1, 2, 3].map { |x| seen += 1 }`
+  left `seen` at 0, as did `reduce` and any function of the program. Now a
+  statement passing such a block (`lowerThreadedStatement`) lowers the block
+  to take those variables' values after its own arguments and answer
+  {Value, State}, and runs as `kex_intrinsic_fun:threadState(Block,
+  Initial, fun(Placeholder) -> Statement)`: the runtime keeps the state in
+  the process dictionary for the call, and the variables are rebound to
+  what it answers. That is correct for any callee, about 10x slower than a
+  fold.
+- `specialize-blocks` replaces it where the callee can be copied: the
+  statement in place, and a copy of the callee that takes the state last
+  and answers {Value, State}, every expression applying the block or
+  recursing with it threading the state in evaluation order (`thread`).
+- A copy may hand the block on to another function a copy can be made of
+  (`times` to its counting helper, `Range.each` to its counting helper or
+  `List.each`), and a block of several parameters applied to one value takes
+  it apart (a Map's entries); a block of none ignores its arguments, at run
+  time too (`applyFlexible`).
+- The prelude: `times` and `Range.each` count when compiled (no list built
+  for a range of integers); Map and String have an `each` of their own over
+  their entries and characters; Enumerable's default hands its items to
+  `List.each`. An opaque type (`Range`) is a head the checker devirtualises
+  a call to (`nominalHeadDeclared`), as a record is, when its route is
+  recorded.
+- Measured, 40M iterations of `total += x`: a list 0.2 s, `times` 0.16 s, a
+  range 0.20 s, every one a copied loop; a Map is dominated by sorting its
+  entries into canonical key order, which `Map.entries` now does by sorting
+  the keys alone (about 2x).
+- `spec/block_reassigns_caller_variables` covers map, reduce, a program's
+  own functions, two variables, every iteration, empty ones, nesting, and a
+  loop around it, on both backends.
+Found with it: the checker accepted `xs.size` on a list (and `.modified` on
+a tuple, any name some record declares as a field), which BEAM failed at run
+time with `badarg`. A list, map, tuple, optional or function has no fields
+(`spec/error_field_name_on_collection`).
 
 6. **At the very end, revisit the GitHub issues.** Go through the open
    kexhq/kex issues and check which this refactor fixed indirectly, by
@@ -1204,10 +1273,10 @@ targeted, every expression typed (`--verify-hir`); `--dump-hir` prints it.
 | 1 | Foundations (cache, enums, shared walkers, audit, `main()` split) | Done; the open items are in the order below |
 | 2 | One sema decides every call; HIR | **Done** (2026-11-12): finding 3 resolved, `ResolvePass` deleted and the checker the only resolver (step 4a–c below). Before that: **Done** (2026-11-09; `verify-hir-stdlib`: 0 undecided call sites; captures decided too): decisions recorded, `hir::Program` answers them, node identities and `hir::persist`; the HIR is the AST plus these answers (decided 2026-11-09, no separate node types) |
 | 2b | Intrinsic registry + `Type<T>` signatures | **Done** (2026-11-10): `Type<T>` and `to` in step 3; the registry decides `Process.spawn`, the checker decides the testing DSL and the prelude `each`/`times` fold, and the backends read those decisions (a program's own `assert` or `each` is its own). The Duration-as-Measure, singular-unit and quantity-equality items of step 9 stay **deferred** (by the user) |
-| 3 | Lowering only translates; IR passes | **Done** (2026-11-11): findings 3 and 4 resolved, the IR rewrites are passes and symbols are spelled from the checker's identities (step 4's state below). Open, not blocking: block specialization across units. Before that: **Done** (2026-11-09): lowering is checked-only (it throws without a HIR); the provider search and its run-time choices are the checker's (alternatives), with `dualProviderDispatch` and `importedFreeFunctionDispatch` deleted; no override of a checker target is left (`localBeatsTraitDefault`, `ownedMakeFunction`, the module-path search deleted); every call reaching the local fallback is a decided kind (dispatch, trait method, field read on a structural or conflicting record, a free function called UFCS). `lowerMethodCallImpl` is a switch on the target kind and a dispatch to handlers (80 lines, from ~1150); the IR passes are in `src/ir/passes/`. Lowering reads the checker only through `hir::Program`, and captures are decided too. |
+| 3 | Lowering only translates; IR passes | **Done** (2026-11-11): findings 3 and 4 resolved, the IR rewrites are passes and symbols are spelled from the checker's identities (step 4's state below). Block specialization across units: done for the standard library, and the reassigned-variable threading with `lowerIteration` deleted (2026-11-16). Before that: **Done** (2026-11-09): lowering is checked-only (it throws without a HIR); the provider search and its run-time choices are the checker's (alternatives), with `dualProviderDispatch` and `importedFreeFunctionDispatch` deleted; no override of a checker target is left (`localBeatsTraitDefault`, `ownedMakeFunction`, the module-path search deleted); every call reaching the local fallback is a decided kind (dispatch, trait method, field read on a structural or conflicting record, a free function called UFCS). `lowerMethodCallImpl` is a switch on the target kind and a dispatch to handlers (80 lines, from ~1150); the IR passes are in `src/ir/passes/`. Lowering reads the checker only through `hir::Program`, and captures are decided too. |
 | 4 | Walker on the HIR | **Done** (2026-11-11): finding 3 resolved, the walker's visibility copies are gone. Known divergence, open: a block reassigning an outer `var` is threaded on BEAM only through the prelude's `each`/`times`. Before that: **Done** (2026-11-09): every program the walker runs is checked first: the entry (kex::driver, merged with the modules it uses), each module loaded at run time, and compile-time code (`compiled do`, collapse, template scans, tag validators), the checks cached across builds; the method call reads the decided target (conversion, runtime primitive, `Type.of`, trait dictionary, own method, the selected module function unless a `with` replaced its capability, value-or-namespace receivers). What goes by the value at run time is what BEAM leaves to its dispatchers too: `Dispatch` calls and the prelude's receiver functions |
-| 5 | LSP / SemanticDB on the same sema | **Partial**: SemanticDB deleted (2026-11-12); completion (member and bare), local and field definitions, and `let` hover answer from the checker (2026-11-14); references to a local do too, its binding and the uses the checker bound to it, and references to a function declared in a module: a function's symbol sits at its name (`FunctionDef::nameLocation`), and a qualified call (`Geo.area(2)`) is a reference through the module the checker resolved its first segment to; hover tells a local by the checker's bindings (2026-11-15). Definition answers from the checker in a buffer that checks: two types' same-named `make` functions are two symbols now (they were merged by name, so `box.render` led to `Tag`'s), and only a buffer that does not parse or check yet (an unfinished `lines.`) falls back to the text. Rename (2026-11-15, asked for by the user): `textDocument/rename` and `prepareRename` rewrite exactly what references answer from the checker, a local or a function declared in the workspace, and refuse the rest (types, modules, fields, `make` functions, the stdlib's, an index that left files out); a new name the checker already has in scope at a use is refused, and a rename within one file is re-checked and refused when it adds an error. Found with it: a function's parameter had no position (`ast::Param::location`), so it was bound nowhere tooling could see, and hover on it showed `Bits.width`; the workspace reference index checked each file without the project modules it uses, so `Geo.area(2)` in another file was no reference. Record-literal keys answer from the checker too (2026-11-15): each key is the field of the record the checker resolved the construction to (`RecordEntry::keyLocation`, `TypeChecker::recordKeys`), for hover and definition. Done (2026-11-15, asked for by the user): the opt-in standard library's interfaces are the checker's. `kex::driver::checkedStdlibInterfaces` builds every opt-in module as the units of one program over the prelude, described from their check, and lays them over the prelude's interfaces as a build's units above them see them (`overlayDescribedInterfaces`, shared with `AvailableInterfacesAnalysis`); `preludeSemanticInterfaces` takes them through `checkedStdlibInterfacesHook`, registered by `main` for every check, run and the language server, cached per toolchain like the source-read snapshot, which remains for the wasm build, the in-process tests, and the build of the checked one itself. Found on the way: the source reader cut a qualified type to its last segment (Net.HTTP's `Server.localAddress` returned a bare `Endpoint`, `.port` on it Unknown) and read a `@Pattern` receiver as a parameter (`Watt * Hour` had no `*`); the checker cut an unresolved qualified type to its last segment too, and accepted a qualified name naming nothing by that segment (tey wrote `OptionParser.ParsedOptions` for a record declared outside the module); it now keeps the name, reports it unknown, and resolves one relative to an enclosing module or a `using` (`qualifiedNominalType`). Still by name: the rest of hover (step 4d). Before that: **Done** (2026-11-08): one resolver, the checker's name pass; the REPLs and `--complete` hold no SemanticDB; the language server's SemanticDB is a document store and query front end over the checker's index |
-| 6 | Delete old paths, measure | **Not done**: CI (finding 1) is red on the last pushed commit, fixed in the working tree and gated locally (2026-11-14); the cleanup (step 5) waits for step 4d. Before that: **Done** (2026-11-09; the cold cost accepted by the user as the price of checking every program the walker runs; final slick table under Stage 6: every warm scenario 19–31% faster than `main`, cold +41%, the first checks of compile-time code). The merged program's `expand` pass is deleted. `docs/architecture.md`; measurements below. `src/`'s size against `main` is reported, not a gate (2026-11-08) |
+| 5 | LSP / SemanticDB on the same sema | **Done** (2026-11-16, step 4d the last): SemanticDB deleted (2026-11-12); completion (member and bare), local and field definitions, and `let` hover answer from the checker (2026-11-14); references to a local do too, its binding and the uses the checker bound to it, and references to a function declared in a module: a function's symbol sits at its name (`FunctionDef::nameLocation`), and a qualified call (`Geo.area(2)`) is a reference through the module the checker resolved its first segment to; hover tells a local by the checker's bindings (2026-11-15). Definition answers from the checker in a buffer that checks: two types' same-named `make` functions are two symbols now (they were merged by name, so `box.render` led to `Tag`'s), and only a buffer that does not parse or check yet (an unfinished `lines.`) falls back to the text. Rename (2026-11-15, asked for by the user): `textDocument/rename` and `prepareRename` rewrite exactly what references answer from the checker, a local or a function declared in the workspace, and refuse the rest (types, modules, fields, `make` functions, the stdlib's, an index that left files out); a new name the checker already has in scope at a use is refused, and a rename within one file is re-checked and refused when it adds an error. Found with it: a function's parameter had no position (`ast::Param::location`), so it was bound nowhere tooling could see, and hover on it showed `Bits.width`; the workspace reference index checked each file without the project modules it uses, so `Geo.area(2)` in another file was no reference. Record-literal keys answer from the checker too (2026-11-15): each key is the field of the record the checker resolved the construction to (`RecordEntry::keyLocation`, `TypeChecker::recordKeys`), for hover and definition. Done (2026-11-15, asked for by the user): the opt-in standard library's interfaces are the checker's. `kex::driver::checkedStdlibInterfaces` builds every opt-in module as the units of one program over the prelude, described from their check, and lays them over the prelude's interfaces as a build's units above them see them (`overlayDescribedInterfaces`, shared with `AvailableInterfacesAnalysis`); `preludeSemanticInterfaces` takes them through `checkedStdlibInterfacesHook`, registered by `main` for every check, run and the language server, cached per toolchain like the source-read snapshot, which remains for the wasm build, the in-process tests, and the build of the checked one itself. Found on the way: the source reader cut a qualified type to its last segment (Net.HTTP's `Server.localAddress` returned a bare `Endpoint`, `.port` on it Unknown) and read a `@Pattern` receiver as a parameter (`Watt * Hour` had no `*`); the checker cut an unresolved qualified type to its last segment too, and accepted a qualified name naming nothing by that segment (tey wrote `OptionParser.ParsedOptions` for a record declared outside the module); it now keeps the name, reports it unknown, and resolves one relative to an enclosing module or a `using` (`qualifiedNominalType`). Hover answers from the checker for more (2026-11-16): a field read shows the type the checker gave the read; `This` and a slot's `Reply<T>` show what the checker resolved the written type to there (`TypeChecker::typeReferences`, with the `make` type in scope, so `This` in a body and the state a `Reply`'s `new` installs are known); a slot's `::>` line finds its `serving` block in the syntax tree, not by the nearest `serving ` above; a call by name is documented by the function the checker chose (`TypeChecker::calledModules`), not by every same-named one's prose. The text versions remain only for a buffer that does not check. Found on the way: `if x do |name|` put its binding at the `if` (definition on `name` led there). A trait, capability or imported type written in an annotation is the one the checker resolved the annotation to, and a name after `implement:` the trait the checker resolved it to (`MakeDef::implementLocations`, beside `resolvedTraits`): by name, `Pricing` in `implement: Shop.Pricing` was a top-level record of that name. The imported signatures hover lists when nothing else answers, and beside a chosen overload, are those of the modules the `using`s the checker had in force at the word bring in, a nested module's own included, not every `using` line of the file. Step 4d is done (2026-11-16): in a buffer that checks, every hover answer is the checker's; the text versions remain only for a buffer that does not parse or check yet. Before that: **Done** (2026-11-08): one resolver, the checker's name pass; the REPLs and `--complete` hold no SemanticDB; the language server's SemanticDB is a document store and query front end over the checker's index |
+| 6 | Delete old paths, measure | **Not done**: CI is green on a pushed commit, every job (2c5a6807, 2026-11-16); the cleanup (step 5) is next, step 4d being done. Before that: **Done** (2026-11-09; the cold cost accepted by the user as the price of checking every program the walker runs; final slick table under Stage 6: every warm scenario 19–31% faster than `main`, cold +41%, the first checks of compile-time code). The merged program's `expand` pass is deleted. `docs/architecture.md`; measurements below. `src/`'s size against `main` is reported, not a gate (2026-11-08) |
 | — | Separate compilation as the default | **Done** (2026-11-06); the merged build path is deleted |
 | 7 | LLVM-style pass infrastructure (typed passes, analyses, adaptors, instrumentation, pass builder) | **Done** (2026-11-10): `src/pass/`; three levels (program, unit, module), every build step a typed pass or analysis; `driver::Pipeline`, `ir::PassManager`, `separate_build.cxx` and the `g_separate*` globals deleted |
 

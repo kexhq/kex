@@ -1,0 +1,12 @@
+# kex: interpreter-only
+# kex: skip-beam
+# The tree-walker runs each process on a fixed stack: recursion deep enough
+# to reach its end is a runtime error, not a crash. (The BEAM grows its
+# process stacks, so this recursion simply finishes there.)
+
+let down(n: Integer) -> Integer = n == 0 then 0 else 1 + down(n - 1)
+
+main do
+  IO.printLine(down(1000))
+  IO.printLine(down(10_000_000))
+end

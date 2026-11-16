@@ -100,6 +100,13 @@ auto nominalHeadDeclared(const std::string& head,
         if (lastSegment(adt.name) == seg) return true;
     for (const auto& [key, _] : ifaces.distinctTypes)
         if (lastSegment(key) == seg) return true;
+    // An opaque type (`type Range<A>`): a declared name that is no alias.
+    // Its values are whatever its own functions make; the recorded route
+    // (implementationHead) says the dispatcher sends them to its own.
+    for (const auto& name : ifaces.typeNames)
+        if (lastSegment(name) == seg && !ifaces.typeAliases.count(name) &&
+            !ifaces.typeAliases.count(std::string(seg)))
+            return true;
     return false;
 }
 

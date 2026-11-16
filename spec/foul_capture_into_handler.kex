@@ -1,0 +1,27 @@
+# Pure code may hand a foul function to where a foul one is expected: a
+# `Handler` (`Type.of` a foul function), which the router stores and the server
+# runs in foul code. Only a plain function type (`map`'s block) refuses it
+# (spec/error_capture_foul_in_pure, #640).
+using Net.HTTP
+
+foul home(request: Request<Binary>, context: Context) -> Response<Binary> = Response.text(200, "home")
+
+let viaGet(label: String) -> Router = Router {}.get("/", ~home)
+let viaRecord(label: String) -> Route = Route { method: "GET", path: "/", handler: ~home }
+let viaBinding(label: String) -> Handler do
+  let handler: Handler = ~home
+  handler
+end
+let mounted(path: String, handler: Handler) -> Route = Route { method: "GET", path: path, handler: handler }
+let viaNamed(label: String) -> Route = mounted("/", handler: ~home)
+let viaList(label: String) -> Integer do
+  let handlers: [Handler] = [~home, ~home]
+  handlers.count
+end
+
+main do
+  IO.printLine(viaGet("a").routes.count)
+  IO.printLine(viaRecord("a").path)
+  IO.printLine(viaNamed("a").path)
+  IO.printLine(viaList("a"))
+end

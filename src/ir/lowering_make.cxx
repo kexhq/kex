@@ -427,13 +427,7 @@ auto Lowering::adtGuard(const std::vector<std::string>& tags, ExprPtr v) -> Expr
             // `element/2` is strict, so it may only run once the value is
             // known to be a tuple — see the note on typeGuard's tagged
             // fallback for why this is a `case` and not `erlang:and`.
-            test = matchBool(
-                callE("erlang", "is_tuple", 1, one(vRef.get())),
-                intrin(Op::Eq,
-                       two(callE("erlang", "element", 2,
-                                 two(litInt(1), vRef.get())),
-                           lit(LitKind::Atom, tag))),
-                litBool(false));
+            test = taggedTuple(vRef, tag);
         // `orelse`, spelled as a case for the same strictness reason.
         guard = guard ? matchBool(std::move(guard), litBool(true),
                                   std::move(test))
@@ -511,13 +505,8 @@ auto Lowering::typeGuard(const std::string& written, ExprPtr v) -> ExprPtr {
     // String crashed wherever Optional or Result were in scope, which is
     // most programs; OTP 28 merely masks it. `is_record/2` would say this
     // directly but is not a legal Core Erlang guard, unlike is_record/3.
-    auto vRef = snap(v);
-    return matchBool(
-        callE("erlang", "is_tuple", 1, one(vRef.get())),
-        intrin(Op::Eq, two(callE("erlang", "element", 2,
-                                 two(litInt(1), vRef.get())),
-                           lit(LitKind::Atom, test.identity))),
-        litBool(false));
+    // The empty tuple `()` has no tag: element/2 on it escapes the same way.
+    return taggedTuple(snap(v), test.identity);
 }
 
 auto Lowering::makeArgumentDispatcher(

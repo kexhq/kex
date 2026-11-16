@@ -167,7 +167,7 @@ list_product(List) -> lists:foldl(fun(E, A) -> A * E end, 1, List).
 %% the interpreter's block invocation.
 map(L, Fun)    -> [kex_intrinsic_fun:applyItem(Fun, I) || I <- as_list(L)].
 filter(L, Fun) -> lists:filter(fun(X) -> kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L)).
-each(L, Fun)   -> lists:foreach(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)), 'None'.
+each(L, Fun)   -> lists:foreach(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)), {}.
 flatMap(L, Fun) ->
     lists:flatmap(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)).
 reject(L, Fun) -> lists:filter(fun(X) -> not kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L)).

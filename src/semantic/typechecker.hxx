@@ -79,6 +79,17 @@ public:
         TypePtr type;
     };
     auto recordKeys() const -> const std::vector<RecordKey>& { return m_recordKeys; }
+    // Each type name written in an annotation, at the name: the type the
+    // checker resolved it to (`This` in a `make Box` block is `Box`).
+    struct TypeReference {
+        SourceLocation location;
+        std::string written;
+        TypePtr type;
+        // The type of the `make` block it is written in, if any: a slot's
+        // `Reply<T>` installs a new value of it.
+        TypePtr makeType = nullptr;
+    };
+    auto typeReferences() const -> const std::vector<TypeReference>& { return m_typeReferences; }
     // The alias `name` is, as the check resolved it: by its identity
     // (`Net.HTTP.Handler`), else as written. Null when it is none.
     auto declaredTypeAlias(const std::string& name) const -> TypePtr {
@@ -228,6 +239,11 @@ public:
                           const Signature& sig) const -> std::string;
     auto resolvedCalls() const
         -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
+    // The module of the imported function a call by name runs (`Math` for
+    // `sqrt(x)` under `using Math`), for tooling to document that one.
+    auto calledModules() const -> const std::unordered_map<const ast::Expr*, std::string>& {
+        return m_calledModules;
+    }
     auto resolvedTraits() const
         -> const std::unordered_map<const ast::MakeDef*,
                                     std::vector<std::string>>& {
@@ -236,6 +252,15 @@ public:
     auto selectedCallSignatures() const
         -> const std::unordered_map<const ast::Expr*, Signature>& {
         return m_selectedCallSignatures;
+    }
+    // The function each `~name` capture names, as settled: its effect too.
+    auto captureSignatures() const
+        -> const std::unordered_map<const ast::Expr*, Signature>& {
+        return m_captureSignatures;
+    }
+    // The captures passed where a foul function type is expected (#640).
+    auto capturesIntoFoul() const -> const std::unordered_set<const ast::Expr*>& {
+        return m_capturesIntoFoul;
     }
     // Arguments of a distinct type given for a `Showable` parameter, by call:
     // each one's parameter position and the type, whose own `showValue`
@@ -462,6 +487,9 @@ private:
     // What a `~name` capture names (see the definitions).
     auto captureModule(const ast::CurryExpr& capture) const -> std::string;
     auto decideCapture(const ast::Expr& expr, const ast::CurryExpr& capture) -> void;
+    // A `~name` capture in `value` (or a list literal's element) flowing where
+    // `expected` is: noted when that is a foul function type (#640).
+    auto noteCaptureFlow(const ast::Expr* value, const TypePtr& expected) -> void;
     auto reachableFreeFunctions(const std::string& name, bool isMethodCall,
                                 std::vector<Signature>& visible,
                                 std::set<std::string>& hidden) const
@@ -933,6 +961,8 @@ private:
     // nothing else claims (`String`, a type parameter) asked it on every use.
     mutable std::unordered_map<std::string, std::optional<std::string>> m_recordSuffixes;
     std::unordered_map<const ast::MethodCall*, ResolvedCallTarget> m_resolvedCalls;
+    // A call by name (`sqrt(x)`) that runs an imported function: its module.
+    std::unordered_map<const ast::Expr*, std::string> m_calledModules;
     // `implement:` identities per make block, in written order — the
     // lowerer's `inheritedDefaults` consumes these instead of
     // re-resolving from its pre-pass usings (whose import order,
@@ -957,6 +987,10 @@ private:
     // `describe`, both `This -> String`).
     auto sameMethod(const Signature& left, const Signature& right) const -> bool;
     std::unordered_map<const ast::Expr*, Signature> m_selectedCallSignatures;
+    // A `~name` capture of a function, as the checker settled it (#640).
+    std::unordered_map<const ast::Expr*, Signature> m_captureSignatures;
+    // Captures passed where a foul function type is expected.
+    std::unordered_set<const ast::Expr*> m_capturesIntoFoul;
     ShownThrough m_shownThroughDistinct;
     std::unordered_map<const ast::Expr*, DecidedCall> m_decidedCalls;
     std::unordered_set<const ast::Pattern*> m_typeSelectorPatterns;
@@ -1072,6 +1106,7 @@ private:
     std::unordered_map<std::string, size_t> m_constructorArity;
     std::vector<PatternBinding> m_patternBindings;
     std::vector<RecordKey> m_recordKeys;
+    std::vector<TypeReference> m_typeReferences;
     std::unordered_set<const ast::Pattern*> m_stringPatterns;
     // Make-block methods that carry a `:>` declaration. That declaration is
     // authoritative, so the inferred signature of its `let` must not be

@@ -10,6 +10,8 @@
 #include "../hir/hir.hxx"
 #include "../ir/emit_core.hxx"
 #include "../ir/module_passes.hxx"
+#include "../ir/passes/specialize.hxx"
+#include "../ir/serialize.hxx"
 #include "../pass/options.hxx"
 #include "../ir/lower.hxx"
 #include "../lexer/lexer.hxx"
@@ -58,6 +60,8 @@ auto preludeSemanticInterfaces()
 struct PreludeBuildModule {
   kex::ir::EmitResult emitted;
   kex::beam::KexiChunk interface;
+  // The entry only: its functions a caller may copy (ir::encodeFunctions).
+  std::vector<uint8_t> specializableIr;
 };
 
 // Build the stdlib entry plus ordinary Kex module companions. The entry keeps
@@ -142,6 +146,18 @@ auto compilePreludeCore(const std::string &dir,
     for (size_t i = 1; i < splitModules.size(); i++)
       modules.push_back(std::move(splitModules[i]));
 
+    std::vector<uint8_t> specializableIr;
+    // The entry's functions a caller may copy with its block in place, as
+    // lowered: written into kex_prelude.beam, and the companions below copy
+    // from this build's, not from the runtime being replaced.
+    specializableIr =
+        kex::ir::encodeFunctions(kex::ir::specializableFunctions(modules[0]));
+    kex::ir::setForeignFunctions(
+        [entry = modules[0].name, bytes = specializableIr] {
+          kex::ir::ForeignFunctions foreign;
+          foreign[entry] = kex::ir::decodeFunctions(bytes);
+          return foreign;
+        });
     auto pipeline = kex::ir::buildModulePipeline();
     kex::ir::ModuleAnalysisManager analyses(&kex::pass::standardCallbacks());
     builtModules->clear();
@@ -155,6 +171,7 @@ auto compilePreludeCore(const std::string &dir,
       out << built.emitted.source;
 
       if (i == 0) {
+        built.specializableIr = specializableIr;
         kex::beam::CollectOptions options;
         options.unitId = kex::names::kPreludeModule;
         options.moduleAtom = built.emitted.moduleName;
@@ -211,6 +228,25 @@ auto compilePreludeCore(const std::string &dir,
     return false;
   }
   return true;
+}
+
+namespace {
+// The chunk of kex_prelude.beam holding its specializable functions.
+constexpr const char *kSpecializableChunkId = "KxIR";
+} // namespace
+
+auto useStandardLibrarySpecializations() -> void {
+  kex::ir::setForeignFunctions([] {
+    kex::ir::ForeignFunctions foreign;
+    const auto runtimeDir = prebuiltRuntimeBeamDir();
+    if (runtimeDir.empty()) return foreign;
+    const auto path = runtimeDir + "/" + kex::names::kPreludeModule + ".beam";
+    if (!std::filesystem::exists(path)) return foreign;
+    const auto beam = kex::beam::readBeamFile(path);
+    if (const auto *chunk = beam.findChunk(kSpecializableChunkId))
+      foreign[kex::names::kPreludeModule] = kex::ir::decodeFunctions(chunk->data);
+    return foreign;
+  });
 }
 
 // Load stdlib record layouts from the embedded interface of the explicitly
@@ -350,6 +386,9 @@ auto buildPrelude(const std::string &dir, bool verifyHir) -> int {
     for (auto &module : modules) {
       auto beamPath = dir + "/" + module.emitted.moduleName + ".beam";
       auto beam = kex::beam::readBeamFile(beamPath);
+      // Part of the artifact: a copy made from it is code this build ships.
+      if (!module.specializableIr.empty())
+        beam.setChunk(kSpecializableChunkId, module.specializableIr);
       module.interface.artifactHash = kex::beam::computeArtifactHash(beam);
       beam.setChunk(kex::beam::KEXI_CHUNK_ID,
                     kex::beam::serializeKexi(module.interface));

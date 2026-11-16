@@ -1,0 +1,37 @@
+# The standard library's `map`, `reduce` and `each` over a list, called with a
+# block: the BEAM copies the callee into this module with the block in place
+# (specialize-blocks, across units), the interpreter runs its native loop.
+# Both must answer what the closure call did.
+
+let firstOver(items: [Integer], limit: Integer) -> Integer? do
+  items.each do |x|
+    return Just(x) if x > limit
+  end
+  None
+end
+
+let sumNested(rows: [[Integer]]) -> Integer do
+  rows.reduce(0) { |total, row| total + row.reduce(0) { |acc, x| acc + x } }
+end
+
+main do
+  let k = 3
+  IO.printLine([1, 2, 3].map { |x| x * k })
+  IO.printLine([1, 2, 3].reduce(10) { |acc, x| acc + x * k })
+  [4, 5].each { |x| IO.printLine(x + k) }
+  let empty: [Integer] = []
+  IO.printLine(empty.map { |x| x * k })
+  IO.printLine(empty.reduce(7) { |acc, x| acc + x })
+  IO.printLine([1].each { |x| x }.inspectValue(false))
+  # A block over pairs spreads each one: not copied, the closure call stays.
+  IO.printLine([(1, 2), (3, 4)].map { |a, b| a * b })
+  [(5, 6)].each { |a, b| IO.printLine(a + b) }
+  # An early `return` leaves the function the block is written in.
+  IO.printLine(firstOver([1, 5, 9], 4))
+  IO.printLine(sumNested([[1, 2], [3], []]))
+  # The same callee with two blocks, and a block read from a variable.
+  let double = { |x| x * 2 }
+  IO.printLine([1, 2].map(double))
+  IO.printLine([1, 2].map { |x| x - k })
+  IO.printLine((1..100_000).items.reduce(0) { |acc, x| acc + x })
+end

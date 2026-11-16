@@ -673,6 +673,63 @@ int main() {
                        "the field read did not lead to the field: " + field);
         });
 
+        it("goes to an `if … do |x|` binding at its name", []() {
+            // The parser's rewrite to a `match` put the binding at the `if`.
+            const std::string text =
+                "main do\n  let limit: Integer? = Just(3)\n  if limit do |lim|\n"
+                "    IO.inspect(lim)\n  end\nend\n";
+            const auto use = askAt("file:///tmp/kex-lsp-if-binding.kex", text, "definition", 3, 15);
+            assertTrue(use.find(R"("start":{"character":15,"line":2})") != std::string::npos,
+                       "the use did not lead to `|lim|`: " + use);
+        });
+
+        it("hovers `This` as the make block's type, inside a body too", []() {
+            // By line, only a signature line had a symbol to name the target.
+            const auto reply = askAt(
+                "file:///tmp/kex-lsp-this-hover.kex",
+                "record Box do\n  size : Integer\nend\n\nmake Box do\n  let grown -> Box do\n"
+                "    let copy: This = this\n    copy\n  end\nend\n\nmain do\n"
+                "  IO.inspect(Box { size: 2 }.grown)\nend\n",
+                "hover", 6, 15);
+            assertTrue(reply.find("This : Box") != std::string::npos,
+                       "`This` in a body was not the make target: " + reply);
+        });
+
+        it("documents a call by name with the function the checker chose", []() {
+            // By name, `sqrt` gathered Integer's and Float's `sqrt` prose too.
+            const auto reply = askAt("file:///tmp/kex-lsp-called-docs.kex",
+                                     "using Math\n\nmain do\n  IO.inspect(sqrt(9.0))\nend\n",
+                                     "hover", 3, 14);
+            assertTrue(reply.find("Raises for a negative") != std::string::npos,
+                       "not Math.sqrt's prose: " + reply);
+            assertTrue(reply.find("16.sqrt") == std::string::npos,
+                       "a same-named function's prose came along: " + reply);
+        });
+
+        it("hovers a name after `implement:` as the trait the checker resolved", []() {
+            // By name, `Pricing` was the top-level record of that name.
+            const auto reply = askAt(
+                "file:///tmp/kex-lsp-implement-hover.kex",
+                "record Pricing do\n  amount : Integer\nend\n\nmodule Shop do\n"
+                "  trait Pricing do\n    price :> Integer\n  end\nend\n\n"
+                "record Box do\n  size : Integer\nend\n\n"
+                "make Box, implement: Shop.Pricing do\n  let price = @size\nend\n\n"
+                "main do\n  IO.inspect(Box { size: 2 }.price)\nend\n",
+                "hover", 14, 28);
+            assertTrue(reply.find("trait Shop.Pricing") != std::string::npos,
+                       "not the trait the block implements: " + reply);
+        });
+
+        it("hovers a field read with the type the checker gave it", []() {
+            const auto reply = askAt(
+                "file:///tmp/kex-lsp-field-hover.kex",
+                "record Box do\n  size : Integer\nend\n\nmain do\n  let box = Box { size: 2 }\n"
+                "  IO.inspect(box.size)\nend\n",
+                "hover", 6, 18);
+            assertTrue(reply.find("size : Integer") != std::string::npos,
+                       "the field read was not typed: " + reply);
+        });
+
         it("hovers a local `let` as its binding, without a same-named declaration's prose", []() {
             const auto reply = askAt("file:///tmp/kex-lsp-let-name.kex",
                                      "main do\n  let name = \"x\"\n  IO.printLine(name)\nend\n",

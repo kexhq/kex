@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 
@@ -41,12 +42,20 @@ public:
     // whichever context called resume() on it.
     static auto yieldToScheduler() -> void;
 
+    // Whether the running fiber has less than a safety margin of stack left:
+    // deep Kex recursion is reported as an error before it overflows the
+    // stack. False outside a fiber.
+    static auto stackExhausted() -> bool;
+
     // Public only so the free-function trampoline shim in fiber.cxx (which
     // makecontext/emscripten_fiber_init require as a plain function
     // pointer, so it can't be a capturing lambda or member function
     // pointer) can call back into the entry closure. Not part of the
     // public API otherwise.
     auto trampolineBody() -> void;
+
+private:
+    auto markStackTop() -> void;
 
 private:
     struct Impl;
@@ -65,6 +74,10 @@ private:
     EntryFn m_entry;
     bool m_started = false;
     bool m_finished = false;
+    std::size_t m_stackSize = 0;
+    // The lowest address the fiber's code may reach, margin kept; set when
+    // its body starts.
+    std::uintptr_t m_stackLimit = 0;
     std::unique_ptr<Impl> m_impl;
 };
 

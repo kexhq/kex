@@ -200,38 +200,35 @@ auto Lowering::lowerRangeMatch(const ast::MatchExpr& n) -> ExprPtr {
 }
 
 // Collect the names a loop body reassigns — plain `x = ...` AND mutating
-// `x.push!(..)` calls — recursing through if/match/block/nested-loops but
-// not lambdas. These become the loop's threaded state.
-// The block of one of the prelude's finite iterations (`each`, `times`, as the
-// checker decided the call: a type's own `each` is its own), where it is
-// written in place and takes what the iteration hands it: `times` its index
-// or nothing, `each` an item or a pair's two halves. Null otherwise.
-auto Lowering::iteratedBlock(const ast::MethodCall& call) const -> const ast::Lambda* {
-    if (!call.receiver || !call.args.empty() || !call.namedArgs.empty() || !call.block ||
-        !*call.block)
-        return nullptr;
-    const auto& target = hir->targetOf(call);
-    if (target.kind != hir::TargetKind::Imported || target.module != names::kPreludeModule)
-        return nullptr;
-    const bool times = target.function == names::kTimesFunction;
-    if (!times && target.function != names::kEachFunction) return nullptr;
-    const auto* block = std::get_if<ast::Lambda>(&(*call.block)->kind);
-    if (!block) return nullptr;
-    const auto params = block->params.size();
-    return (times ? params <= 1 : params == 1 || params == 2) ? block : nullptr;
-}
+// `x.push!(..)` calls — recursing through if/match/block/nested-loops and the
+// blocks passed to calls, but no other lambda. These become the loop's
+// threaded state.
 
 void Lowering::collectMutated(const ast::ExprPtr& e, std::unordered_set<std::string>& out) {
     if (!e) return;
+    // A block passed to a call reassigns as its statement does: the
+    // statement threads it (lowerThreadedStatement).
+    const auto collectPassedBlocks = [&](const auto& call, std::unordered_set<std::string>& into) {
+        const auto block = [&](const ast::ExprPtr& passed) {
+            const auto* lambda = passed ? std::get_if<ast::Lambda>(&passed->kind) : nullptr;
+            if (!lambda || lambda->collection) return;
+            std::unordered_set<std::string> inner;
+            for (const auto& s : lambda->body) collectMutated(s, inner);
+            for (const auto& p : lambda->params) inner.erase(p.name);
+            into.insert(inner.begin(), inner.end());
+        };
+        for (const auto& a : call.args) block(a);
+        if (call.block) block(*call.block);
+    };
     std::visit([&](const auto& nn) {
         using T = std::decay_t<decltype(nn)>;
         if constexpr (std::is_same_v<T, ast::AssignExpr>) out.insert(nn.name);
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
             if (nn.mutating && nn.receiver)
                 if (auto* id = std::get_if<ast::Identifier>(&nn.receiver->kind)) out.insert(id->name);
-            // An iteration inside threads what its own block reassigns.
-            if (const auto* block = iteratedBlock(nn))
-                for (const auto& s : block->body) collectMutated(s, out);
+            collectPassedBlocks(nn, out);
+        } else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
+            collectPassedBlocks(nn, out);
         } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
             for (auto& s : nn.thenBody) collectMutated(s, out);
             if (nn.elseBody) for (auto& s : *nn.elseBody) collectMutated(s, out);
@@ -343,10 +340,30 @@ auto Lowering::loopControl(const ast::ExprPtr& e, const std::string& loopFn,
 auto Lowering::lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i,
                        const std::string& loopFn,
                        const std::vector<std::string>& mutVars,
-                       const std::function<ExprPtr()>& onEnd) -> ExprPtr {
-    if (i >= body.size()) return onEnd();
+                       const std::function<ExprPtr()>& onEnd,
+                       size_t end) -> ExprPtr {
+    if (i >= std::min(end, body.size())) return onEnd();
     const auto& e = body[i];
-    auto cont = [&]() -> ExprPtr { return lowerLoopBodyFrom(body, i + 1, loopFn, mutVars, onEnd); };
+    auto cont = [&]() -> ExprPtr { return lowerLoopBodyFrom(body, i + 1, loopFn, mutVars, onEnd, end); };
+    // A statement passing a block that reassigns variables around it.
+    if (auto threaded = lowerThreadedStatement(e, [&](ExprPtr value) -> ExprPtr {
+            std::string name;
+            if (const auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
+                name = std::get<ast::VarPattern>(le->pattern->kind).name;
+                immutableBindings.insert(name);
+            } else if (const auto* ve = std::get_if<ast::VarExpr>(&e->kind)) {
+                name = std::get<ast::VarPattern>(ve->pattern->kind).name;
+                immutableBindings.erase(name);
+            } else if (const auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
+                name = ae->name;
+            }
+            if (name.empty()) return makeLet(fresh("Statement"), std::move(value), cont());
+            curryOrigin.erase(name);
+            const auto ssa = fresh(name);
+            subst[name] = ssa;
+            return makeLet(ssa, std::move(value), cont());
+        }))
+        return threaded;
     if (std::holds_alternative<ast::BreakExpr>(e->kind)) return stateExpr(mutVars);
     if (std::holds_alternative<ast::NextExpr>(e->kind)) return tailCall(loopFn, mutVars);
     if (auto* ti = std::get_if<ast::TrailingIf>(&e->kind))
@@ -367,9 +384,6 @@ auto Lowering::lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i
         std::string nv = fresh(ae->name); subst[ae->name] = nv;
         return makeLet(nv, std::move(val), cont());
     }
-    // An iteration inside a loop threads its state on into the loop's.
-    if (auto* mc = std::get_if<ast::MethodCall>(&e->kind))
-        if (auto iteration = lowerIteration(*mc, cont)) return iteration;
     if (auto* ve = std::get_if<ast::VarExpr>(&e->kind)) {
         if (auto* vp = ve->pattern
                 ? std::get_if<ast::VarPattern>(&ve->pattern->kind)

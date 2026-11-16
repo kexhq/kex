@@ -423,4 +423,12 @@ auto Lowering::matchBool(ExprPtr cond, ExprPtr thenE, ExprPtr elseE) -> ExprPtr 
     return e;
 }
 
+auto Lowering::taggedTuple(const AtomicRef& v, const std::string& tag) -> ExprPtr {
+    auto tagged = intrin(Op::Eq, two(callE("erlang", "element", 2, two(litInt(1), v.get())),
+                                     lit(LitKind::Atom, tag)));
+    auto hasTag = matchBool(intrin(Op::Gt, two(callE("erlang", "tuple_size", 1, one(v.get())), litInt(0))),
+                            std::move(tagged), litBool(false));
+    return matchBool(callE("erlang", "is_tuple", 1, one(v.get())), std::move(hasTag), litBool(false));
+}
+
 } // namespace kex::ir

@@ -237,6 +237,19 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
         if (method->method != "inspect" && !module.empty() &&
             isQualifiedCallFoul(module, method->method))
             foulCall("function", module + "." + method->method);
+    } else if (const auto* capture = std::get_if<ast::CurryExpr>(&expr.kind)) {
+        // `~shout` names a foul function as a call of it would: pure code may
+        // hand it only where a foul function is expected (a route's
+        // `Handler`, stored and run by the server), not to `map`, which runs
+        // it there and then (#640).
+        if (const auto captured = m_checker.captureSignatures().find(&expr);
+            captured != m_checker.captureSignatures().end() && captured->second.isFoul &&
+            !m_inFoulContext && !m_checker.capturesIntoFoul().contains(&expr))
+            error(expr.location,
+                  "Cannot capture foul function '" +
+                      (capture->module.empty() ? capture->name
+                                               : capture->module + "." + capture->name) +
+                      "' from pure context");
     } else if (std::holds_alternative<ast::SpawnExpr>(expr.kind) ||
                std::holds_alternative<ast::ReceiveExpr>(expr.kind)) {
         if (!m_inFoulContext)

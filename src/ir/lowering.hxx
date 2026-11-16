@@ -570,6 +570,9 @@ struct Lowering {
     auto truthyTest(ExprPtr cond) -> ExprPtr;
 
     auto matchBool(ExprPtr cond, ExprPtr thenE, ExprPtr elseE) -> ExprPtr;
+    // Whether `v` is a tuple tagged `tag`, as a guard: each step runs once the
+    // one before holds (`()` is a tuple with no tag to read).
+    auto taggedTuple(const AtomicRef& v, const std::string& tag) -> ExprPtr;
 
     // ---- Patterns ---------------------------------------------------------
     auto wildPat() -> PatternPtr;
@@ -643,9 +646,17 @@ struct Lowering {
     auto lowerStatementThen(const ast::ExprPtr& statement,
                             const std::function<ExprPtr()>& rest) -> ExprPtr;
     std::unordered_map<const ast::AssignExpr*, std::string> hoistedAssignments;
-    auto iteratedBlock(const ast::MethodCall& call) const -> const ast::Lambda*;
-    auto lowerIteration(const ast::MethodCall& call, const std::function<ExprPtr()>& rest)
+    // A statement passing a block that reassigns variables of the code around
+    // it, threaded through `kex_intrinsic_fun:threadState` (lowering_body).
+    auto reassigningBlock(const ast::Expr& e, std::vector<std::string>& vars)
+        -> const ast::Lambda*;
+    auto lowerStatefulBlock(const ast::Lambda& block, const std::vector<std::string>& vars)
         -> ExprPtr;
+    auto lowerThreadedStatement(const ast::ExprPtr& e,
+                                const std::function<ExprPtr(ExprPtr)>& rest) -> ExprPtr;
+    // The block lowerThreadedStatement passes as `threadedBlockVar`.
+    const ast::Lambda* threadedBlock = nullptr;
+    std::string threadedBlockVar;
 
     auto requireNoOuterMutation(const std::vector<ast::ExprPtr>& body,
                                 const char* what) -> void;
@@ -661,7 +672,8 @@ struct Lowering {
     auto lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i,
                            const std::string& loopFn,
                            const std::vector<std::string>& mutVars,
-                           const std::function<ExprPtr()>& onEnd) -> ExprPtr;
+                           const std::function<ExprPtr()>& onEnd,
+                           size_t end = static_cast<size_t>(-1)) -> ExprPtr;
 
     auto lowerLoopArmU(const ast::ExprPtr& arm, const std::string& loopFn,
                        const std::vector<std::string>& mutVars,

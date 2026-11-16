@@ -40,11 +40,21 @@ trait Foldable do
   #     IO.printLine("${key} = ${value}")
   #   end
   let each(f) do
-    this.reduce(0) do |_, item|
-      Kex.Intrinsic.Fun.applyItem(f, item)
-      0
+    match Kex.Intrinsic.Kex.backend() do
+      Kex.Interpreter => do
+        this.reduce(0) do |_, item|
+          Kex.Intrinsic.Fun.applyItem(f, item)
+          0
+        end
+        ()
+      end
+      # Compiled, the items are a list, and the block goes to List.each:
+      # a loop the specialize-blocks pass copies into the caller.
+      _ => do
+        let items: [T] = Kex.Intrinsic.Fun.items(this)
+        items.each(f)
+      end
     end
-    return ()
   end
 
   # Calls +f+ with each item and its 0-based position, for its side effects.

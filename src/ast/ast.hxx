@@ -733,6 +733,9 @@ struct MakeDef {
     bool isFinal = false;
     bool isServing = false;
     std::vector<std::string> implements;  // trait names claimed by this block
+    // Where each of `implements` is written, at its last segment (`Pricing`
+    // in `Shop.Pricing`), where a reader points at it.
+    std::vector<SourceLocation> implementLocations;
     // ExprPtr is only ever produced for a GENERATED `make %name do ... end`,
     // where the body may hold a driver loop declaring methods
     // (`OPS.each do |op| let %op(...) ... end end`). Expansion evaluates those

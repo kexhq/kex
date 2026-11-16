@@ -13,8 +13,10 @@
 fromEntries(Pairs) -> maps:from_list(Pairs).
 
 keys(M)      -> lists:sort(maps:keys(M)).
-values(M)    -> [V || {_, V} <- lists:sort(maps:to_list(M))].
-entries(M)   -> lists:sort(maps:to_list(M)).
+%% Canonical key order is the keys' term order: keys are unique, so sorting
+%% them alone orders the entries, at about half the cost of sorting the pairs.
+values(M)    -> [maps:get(K, M) || K <- lists:sort(maps:keys(M))].
+entries(M)   -> [{K, maps:get(K, M)} || K <- lists:sort(maps:keys(M))].
 merge(M, O)  -> maps:merge(M, O).
 'has?'(M, K) -> maps:is_key(K, M).
 put(M, K, V) -> maps:put(K, V, M).

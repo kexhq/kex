@@ -95,7 +95,7 @@ constexpr TypeShape kTypeShapes[] = {
     {TypeTag::SizedInt, "sized_int", 3},
     {TypeTag::SizedFloat, "sized_float", 2},
     {TypeTag::Named, "named", 4},
-    {TypeTag::Func, "func", 4},
+    {TypeTag::Func, "func", 5},
     {TypeTag::Tuple, "tuple", 2},
     {TypeTag::List, "list", 2},
     {TypeTag::Map, "map", 3},
@@ -159,7 +159,7 @@ auto typeToTerm(const TypePtr& t) -> TermPtr {
         } else if constexpr (std::is_same_v<K, FuncType>) {
             return typeTuple(TypeTag::Func,
                              {listOf(node.params), typeToTerm(node.result),
-                              Term::boolean(node.block)});
+                              Term::boolean(node.block), Term::boolean(node.foul)});
         } else if constexpr (std::is_same_v<K, TupleType>) {
             return typeTuple(TypeTag::Tuple, {listOf(node.elements)});
         } else if constexpr (std::is_same_v<K, ListType>) {
@@ -242,6 +242,7 @@ auto typeFromSax(SaxReader& sax) -> TypePtr {
         readTypes(fn.params);
         fn.result = typeFromSax(sax);
         fn.block = sax.readBool();
+        fn.foul = sax.readBool();
         return make(std::move(fn));
     }
     case TypeTag::Tuple: {

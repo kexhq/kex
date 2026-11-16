@@ -64,11 +64,15 @@ auto TypeChecker::check(const ast::Program& program, std::vector<Diagnostic>& di
     m_namespaceRoots.clear();
     m_patternBindings.clear();
     m_recordKeys.clear();
+    m_typeReferences.clear();
     m_stringPatterns.clear();
     m_successWrappers.clear();
     m_functionSignatures.clear();
     m_resolvedCalls.clear();
+    m_calledModules.clear();
     m_selectedCallSignatures.clear();
+    m_captureSignatures.clear();
+    m_capturesIntoFoul.clear();
     m_traitDefaultClauses.clear();
     m_traitDefaults.clear();
     m_inheritedPendingResults.clear();
@@ -3298,7 +3302,7 @@ auto TypeChecker::expandTypeAliases(const TypePtr& type, int depth) const
     if (auto* fn = std::get_if<FuncType>(&type->kind)) {
         std::vector<TypePtr> params;
         for (const auto& param : fn->params) params.push_back(recur(param));
-        return Type::func(std::move(params), recur(fn->result), fn->block);
+        return Type::func(std::move(params), recur(fn->result), fn->block, fn->foul);
     }
     if (auto* intersection = std::get_if<IntersectionType>(&type->kind)) {
         std::vector<TypePtr> members;
@@ -3357,6 +3361,17 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             if (m_declaredTypeArity.count(named->name))
                 m_annotatedTypes[&typeExpr] = named->name;
         }
+    // Every written name with what it resolved to, for tooling's hover. An
+    // annotation is resolved more than once (registration, then the check);
+    // the last, made in its own scope, is the one kept.
+    if (resolved && typeExpr.location.line > 0) {
+        const auto* name = std::get_if<ast::TypeName>(&typeExpr.kind);
+        if (const auto* generic = std::get_if<ast::GenericType>(&typeExpr.kind))
+            name = &generic->name;
+        if (name && !name->parts.empty())
+            m_typeReferences.push_back({typeExpr.location, name->dotted(), resolved,
+                                        m_inMakeBlock ? m_currentMakeType : nullptr});
+    }
     return resolved;
 }
 
