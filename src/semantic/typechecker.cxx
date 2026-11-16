@@ -3169,11 +3169,20 @@ auto TypeChecker::checkPatternMatrix(const ast::MatchExpr& node, const TypePtr& 
             pattern.kind);
     };
 
+    // A map is never taken whole by `{ k }`: `match` does not destructure
+    // a map (spec/record_pattern_anonymous.kex), and one can lack the key.
+    // Such an arm covers what a literal does, so a fallback is still owed.
+    const bool mapSubject = std::holds_alternative<MapType>(resolve(subject)->kind);
     std::vector<std::vector<Space>> rows;
     for (const auto& clause : node.clauses) {
         if (clause.guard && *clause.guard) continue;
         for (const auto& pattern : clause.patterns) {
             if (!pattern) continue;
+            if (const auto* structural = std::get_if<ast::RecordPattern>(&pattern->kind);
+                mapSubject && structural && structural->typeName.empty()) {
+                rows.push_back({Space{literal + "{}", {}}});
+                continue;
+            }
             auto space = spaceOf(*pattern);
             if (!space) return;
             rows.push_back({std::move(*space)});

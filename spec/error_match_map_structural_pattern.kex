@@ -1,0 +1,10 @@
+# `match` does not take a map apart by `{ k }`, and a map may lack the key,
+# so an arm like that is no fallback. Without a `_` arm the check passed and
+# both backends died with "no matching clause" (the metamorphic search found
+# it by dropping the `_` arm from spec/record_pattern_anonymous.kex).
+main do
+  let entries = { "value": "mv", "rest": "mr" }
+  match entries do
+    { value, rest } => IO.printLine("${value}/${rest}")
+  end
+end
