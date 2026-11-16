@@ -24,8 +24,8 @@ module Math do
   # @example
   #   Math.PI   # => 3.141592653589793
   #
-  # @example Degrees to radians
-  #   let radians(deg: Float) -> Float = deg * Math.PI / 180.0
+  # @example The circumference of a circle
+  #   2.0 * Math.PI * radius
   let PI = 3.14159265358979323846
 
   # The base of the natural logarithm.
@@ -152,9 +152,39 @@ module Math do
   #   Math.atan2(1.0, -1.0)   # => 2.356194490192345     (135°)
   #
   # @example The bearing from one point to another, in degrees
-  #   Math.atan2(y2 - y1, x2 - x1) * 180.0 / Math.PI
+  #   Math.rad2Deg(Math.atan2(y2 - y1, x2 - x1))
   atan2 : Number -> Number -> Float
   let atan2(y, x) = Kex.Intrinsic.Math.atan2(y, x)
+
+  # Converts an angle from degrees to radians, the unit every trigonometric
+  # function here expects.
+  #
+  # @param degrees [Number] the angle in degrees
+  # @return [Float] the same angle in radians
+  #
+  # @example
+  #   Math.deg2Rad(180)    # => 3.141592653589793
+  #   Math.deg2Rad(90.0)   # => 1.5707963267948966
+  #
+  # @example The sine of an angle given in degrees
+  #   Math.sin(Math.deg2Rad(30.0))
+  deg2Rad : Number -> Float
+  let deg2Rad(degrees) = PI * degrees / 180.0
+
+  # Converts an angle from radians to degrees: the inverse of
+  # +deg2Rad+.
+  #
+  # @param radians [Number] the angle in radians
+  # @return [Float] the same angle in degrees
+  #
+  # @example
+  #   Math.rad2Deg(Math.PI)         # => 180.0
+  #   Math.rad2Deg(Math.PI / 2.0)   # => 90.0
+  #
+  # @example The bearing from one point to another, in degrees
+  #   Math.rad2Deg(Math.atan2(y2 - y1, x2 - x1))
+  rad2Deg : Number -> Float
+  let rad2Deg(radians) = 180.0 * radians / PI
 
   # Returns the hyperbolic sine of +x+.
   #

@@ -1,0 +1,48 @@
+# Great-circle distances between cities, as SI measures.
+using Units.SI
+
+module Haversine do
+  let EARTH_RADIUS = 6371.kilometer
+
+  type Coordinate = (Number, Number)
+
+  distanceBetween : Coordinate -> Coordinate -> Measure
+  let distanceBetween((lat1, lon1), (lat2, lon2)) do
+    let halfLat = Math.sin(Math.deg2Rad(lat2 - lat1) / 2.0)
+    let halfLon = Math.sin(Math.deg2Rad(lon2 - lon1) / 2.0)
+
+    let a = halfLat^2 + Math.cos(Math.deg2Rad(lat1)) * Math.cos(Math.deg2Rad(lat2)) * halfLon^2
+
+    return EARTH_RADIUS.scale(2.0 * Math.asin(Math.sqrt(a)))
+  end
+end
+
+record City do
+  name : String
+  latitude : Float
+  longitude : Float
+end
+
+make City do
+  # Great-circle distance to another city, by the haversine formula.
+  let distanceTo(other: This) -> Measure do
+    let p1 = (@latitude, @longitude)
+    let p2 = (other.latitude, other.longitude)
+    Haversine.distanceBetween(p1, p2)
+  end
+end
+
+main do
+  let bp = City { name: "Budapest", latitude: 47.4979, longitude: 19.0402 }
+  let cities = [
+    City { name: "Paris", latitude: 48.8566, longitude: 2.3522 },
+    City { name: "London", latitude: 51.5074, longitude: -0.1278 }
+  ]
+
+  let kmFormat = Number.format`#`
+  cities.each do |city|
+    let distance     = city.distanceTo(bp)
+    let distanceText = distance.to(String, in: Kilo(Meter), format: kmFormat).or("")
+    IO.printLine("${city.name} -> ${bp.name}: ${distanceText}")
+  end
+end

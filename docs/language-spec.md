@@ -1991,6 +1991,7 @@ All functions take `Number` (Integer or Float) and return `Float` unless noted.
 | `sin`, `cos`, `tan` | Circular trig (radians) |
 | `asin`, `acos`, `atan` | Inverse trig |
 | `atan2(y, x)` | Two-arg atan |
+| `deg2Rad(x)`, `rad2Deg(x)` | Angle unit conversion |
 | `sinh`, `cosh`, `tanh` | Hyperbolic trig |
 | `log(x)`, `log(x, base)` | Natural / base-N logarithm |
 | `log2`, `log10` | Base-2 / base-10 log |

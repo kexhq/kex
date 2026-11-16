@@ -1,0 +1,46 @@
+record Quadratic do
+  a : Number
+  b : Number
+  c : Number
+end
+
+type QuaraticSolution = (Number, Number)
+
+module Quadratic do
+  let from(a: Number, b: Number, c: Number) -> Quadratic do
+    Quadratic { a, b, c }
+  end
+end
+
+make Quadratic, implement: Showable do
+  let solve -> QuaraticSolution do
+    this.solveQuadratic(@a, @b, @c)
+  end
+
+  let showValue do
+    let sb = signOf(@b)
+    let sc = signOf(@c)
+
+    "${@a}x^2 ${sb} ${Math.abs(@b)}x ${sc} ${@c} = 0"
+  end
+
+  private do
+    let signOf(x: Number) = x < 0 then "-" else "+"
+
+    let solveQuadratic(a: Number, b: Number, c: Number) -> QuaraticSolution do
+      let root = Math.sqrt(b^2 - 4*a*c)
+      let pos = (-b + root) / (2*a)
+      let neg = (-b - root) / (2*a)
+      return (neg, pos)
+    end
+  end
+end
+
+main do
+  # 2x^2 - 5x + 3 = 0:
+  let q = Quadratic.from(2, -5, 3)
+  IO.printLine(q)
+  let (n, p) = q.solve
+  IO.printLine(n)
+  IO.printLine(p)
+end
