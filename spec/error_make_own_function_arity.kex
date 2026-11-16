@@ -1,0 +1,24 @@
+# kex: check-only
+# Inside a `make` block, a call to one of the block's own functions with the
+# wrong number of arguments: bare (on `this`), on `this` written out, or with
+# an extra argument. Every function of a block is known before any body is
+# checked, so the count is provably wrong. These checked clean and failed when
+# run: the walker passed `this` as `k`, and BEAM's IR verifier found no
+# `countdown/0` (found by CI's metamorphic search, dropping an argument from
+# spec/make_block_bare_sibling_call). The forms that fit still check.
+
+record Counter do
+  n : Integer
+end
+
+make Counter do
+  let countdown(k: Integer) = k <= 0 then "done ${@n}" else countdown(k - 1)
+  let dropped(k: Integer) = k <= 0 then "done" else countdown()
+  let extra(k: Integer) = countdown(k, 1)
+  let written(k: Integer) = this.countdown()
+  let fine(k: Integer) = this.countdown(k) + countdown(this, k)
+end
+
+main do
+  IO.printLine(Counter { n: 7 }.countdown(3))
+end

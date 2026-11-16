@@ -476,6 +476,7 @@ private:
                         const std::vector<TypePtr>& argTypes) -> TypePtr;
     auto ownFunctionOnThis(const ast::Expr& expr, const std::string& name,
                            const std::vector<TypePtr>& argTypes) -> TypePtr;
+    auto ownFunctionOfMake(const std::string& name) const -> bool;
     auto withinModule(const std::string& module) const -> bool;
     // Whether a bare call to `name` may reach a free function declared in
     // `module`: from inside it, or — unless it is private there — under a

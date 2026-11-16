@@ -5896,6 +5896,18 @@ auto TypeChecker::ownFunctionOnThis(const ast::Expr& expr, const std::string& na
     return result;
 }
 
+// Inside a `make` block, whether `name` is one of the functions the block's
+// own type defines (any block for it), all of which are known before any
+// body is checked (noteOwnMethods).
+auto TypeChecker::ownFunctionOfMake(const std::string& name) const -> bool {
+    if (!m_inMakeBlock || !m_currentMakeType) return false;
+    const auto own = m_ownMethodsByTarget.find(makeTargetKey(m_currentMakeType));
+    if (own == m_ownMethodsByTarget.end()) return false;
+    const auto prefix = name + "/";
+    const auto at = own->second.lower_bound(prefix);
+    return at != own->second.end() && at->starts_with(prefix);
+}
+
 // A bare call that only `make` methods answer is a method call, as both
 // backends run it (lowering's FunctionCall cascade): inside a make block,
 // written one argument short of the block's own method, `this` is the
@@ -5929,6 +5941,28 @@ auto TypeChecker::bareMethodCall(const ast::Expr& expr, const ast::FunctionCall&
             });
     };
     if (auto own = ownFunctionOnThis(expr, name, argTypes)) return own;
+    // One of the block's own functions, called with arguments no form of it
+    // takes: not on `this` (`countdown()` for `countdown(k)`), nor through a
+    // first argument it could be called on. Every function of a block is
+    // registered before any body is checked, so the count is provably wrong.
+    if (ownFunctionOfMake(name)) {
+        const bool throughFirst =
+            !argTypes.empty() &&
+            (methodAt(argTypes.size(), argTypes.front()) ||
+             (isUndetermined(resolve(argTypes.front())) && methodAt(argTypes.size(), nullptr)));
+        if (!throughFirst) {
+            std::set<std::size_t> arities;
+            for (const auto& method : methods->second)
+                if (!method.params.empty() && methodAt(method.params.size(), m_currentMakeType))
+                    arities.insert(method.params.size() - 1);
+            std::string expected;
+            for (const auto arity : arities)
+                expected += (expected.empty() ? "" : " or ") + std::to_string(arity);
+            error(expr.location, "`" + name + "` expects " + expected + " argument(s), got " +
+                                     std::to_string(argTypes.size()));
+            return Type::unknown();
+        }
+    }
     if (argTypes.empty() || !methodAt(argTypes.size(), nullptr)) return nullptr;
     auto result = checkCall(name, argTypes, expr.location, true, nullptr, &expr);
     if (!m_decidedCalls.contains(&expr)) {

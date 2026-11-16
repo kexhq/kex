@@ -5747,8 +5747,19 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (const auto [trait, required] = m_traits.requiredMethod(argTypes[0], name);
                 required && missesRequiredArity(*required, argTypes.size(), name, loc))
                 return required->result;
+        // Inside a `make` block, its own type calling one of its own functions
+        // is as provable as outside it: every function of the block is
+        // registered before any body is checked (`this.countdown()` for
+        // `countdown(k)`).
+        const bool ownBlockCall = [&] {
+            if (!m_inMakeBlock || !ownFunctionOfMake(name)) return false;
+            const auto* receiver = std::get_if<NamedType>(&resolve(argTypes[0])->kind);
+            const auto* own = std::get_if<NamedType>(&resolve(m_currentMakeType)->kind);
+            return receiver && own &&
+                   ownTypeIdentity(receiver->name) == ownTypeIdentity(own->name);
+        }();
         const bool provableMismatch =
-            !m_inMakeBlock && isFullyConcrete(headShapeOf(argTypes[0])) &&
+            (!m_inMakeBlock || ownBlockCall) && isFullyConcrete(headShapeOf(argTypes[0])) &&
             !receiverIsField && !traitProvides && !anyUnknownParamCandidate;
         // A receiver only an out-of-scope `make` takes (`d.number` on a `Day`
         // whose `make` is `Cal`'s, without `using Cal`) has no visible method,
