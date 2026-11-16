@@ -1,0 +1,11 @@
+# For spec/foul_capture_named_import.kex: a module whose function takes a foul
+# function type, by name.
+module Hooks do
+  type Hook = Type.of(hookType)
+
+  let register(path: String, hook: Hook) -> String = path
+
+  private do
+    foul hookType(_s: String) -> String = ""
+  end
+end

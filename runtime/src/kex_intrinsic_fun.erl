@@ -11,7 +11,7 @@
 -module(kex_intrinsic_fun).
 -export([applyFlexible/2, applyItem/2, applyIndexed/3, applyPredicate/2, truthy/1,
          patternMismatch/2,
-         convertTo/2, convertTo/3, items/1, threadState/3]).
+         convertTo/2, convertTo/3, items/1, threadState/3, threadStates/3]).
 
 %% A statement passing a block that reassigns variables of the code it is
 %% written in, for a callee the compiler did not copy (ir/passes/specialize):
@@ -20,15 +20,30 @@
 %% calls it. The state lives in this process's dictionary for the call.
 %% Answers {StatementValue, FinalState}.
 threadState(Block, Initial, Statement) ->
+    threadStates([Block], Initial, Statement).
+
+%% The same for a statement passing several such blocks (`xs.map { … }.each
+%% { … }`, each reassigning): every block takes the union of their variables
+%% and they share one state, so each sees what the one before it left, in the
+%% order the callees run them. `Statement` takes the blocks in `Blocks`' order.
+threadStates(Blocks, Initial, Statement) ->
     Key = make_ref(),
     put(Key, Initial),
+    Called = [stateStep(Block, Key) || Block <- Blocks],
+    try apply(Statement, Called) of
+        Value -> {Value, get(Key)}
+    after
+        erase(Key)
+    end.
+
+stateStep(Block, Key) ->
     {arity, Arity} = erlang:fun_info(Block, arity),
     Step = fun(Args) ->
         {Value, State} = apply(Block, Args ++ [get(Key)]),
         put(Key, State),
         Value
     end,
-    Called = case Arity - 1 of
+    case Arity - 1 of
         0 -> fun() -> Step([]) end;
         1 -> fun(A) -> Step([A]) end;
         2 -> fun(A, B) -> Step([A, B]) end;
@@ -36,11 +51,6 @@ threadState(Block, Initial, Statement) ->
         4 -> fun(A, B, C, D) -> Step([A, B, C, D]) end;
         5 -> fun(A, B, C, D, E) -> Step([A, B, C, D, E]) end;
         6 -> fun(A, B, C, D, E, F) -> Step([A, B, C, D, E, F]) end
-    end,
-    try Statement(Called) of
-        Value -> {Value, get(Key)}
-    after
-        erase(Key)
     end.
 
 %% A `Type` VALUE names its target too: `x.to(Type.of(y))`. Its name is a

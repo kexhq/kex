@@ -136,8 +136,9 @@ its own.
 
 - **BEAM** (`src/ir/`):
   - Lowering translates the AST into the IR by reading the HIR's decisions.
-  - The module passes (`guards`, `upgrade-points`, `verify`) rewrite each
-    lowered module (`src/ir/module_passes.hxx`).
+  - The module passes (`specialize-blocks`, `fuse-lists`, `guards`,
+    `upgrade-points`, `verify`) rewrite each lowered module
+    (`src/ir/module_passes.hxx`).
   - `emit_core` writes Core Erlang, and `erlc` compiles it.
   - The stdlib prelude is lowered with checker answers, as user code is.
 - **Walker** (`src/interpreter/`): evaluates the same AST with the same
@@ -148,7 +149,63 @@ its own.
   input (`keepChecked`, the wasm REPL too) and compile-time evaluation
   (`compiled do`). Only `--no-check` runs without one.
 
+## Iteration on the BEAM
+
+- A call that passes a block to a function that only applies it, recurses
+  with it or hands it on is sent to a copy of that function with the block
+  in place (`specialize-blocks`): a local loop with no closure call per
+  element. The callee may be another module's when the standard library
+  recorded it: `--build-prelude` writes the functions a copy may be made of
+  into a `KxIR` chunk of `kex_prelude.beam` (`ir/serialize`), and
+  `kex_prelude.beam` is part of the toolchain fingerprint. `List.map`,
+  `filter`, `reduce`, `each`, `Integer.times` and `Range.each` recurse in Kex
+  when compiled for this; the walker keeps its native loops, choosing by
+  `Kex.Intrinsic.Kex.backend()`, which lowering makes a constant.
+- A block that reassigns variables of the code around it takes their values
+  after its own arguments and answers `{Value, State}`; its statement runs
+  through `kex_intrinsic_fun:threadState`, which keeps the state for the
+  call, and the variables are rebound to what it answers. Where the callee
+  can be copied, the copy carries the state instead. No function is
+  special: `each` and `times` are threaded as any callee is.
+- A chain (`xs.map { … }.filter { … }.reduce(0) { … }`) walks its list once
+  where every block in it is pure (`fuse-lists`). A block with an effect
+  keeps the chain's order: every block of a stage before any of the next.
+  Purity is the analysis's (`Analyzer::recordPureBlocks`); a pass recognises
+  a copy by its shape, never by its name.
+
+## Decisions
+
+- The HIR is the AST plus the checker's answers: no separate node types.
+  Lowering and the walker walk the AST and read every decision through
+  `hir::Program`; no consumer re-derives one or reads a checker table
+  directly.
+- Every program the walker runs is checked first: the entry, each module
+  loaded at run time (against its dependencies' interfaces, as the BEAM
+  build checks it) and compile-time code.
+- Separate compilation is the build: each unit is checked and lowered
+  against the interfaces of the units below it, unchanged units come from
+  the unit cache.
+- Receiver devirtualization follows what the emitter recorded: a type's own
+  implementation of a receiver function and the dispatcher's routes
+  (`KexiMethod::implementation`), never a re-derivation from names.
+- Visibility is decided at the declaration (`KexiMethod::foreignTarget`) and
+  read by every consumer.
+- Pseudo-functions are one intrinsic registry plus `Type<T>` signatures, not
+  a `name == "..."` branch per subsystem. `Type<T>` is the reflection record:
+  a type name used as a value is that record on both backends.
+- One decision has one implementation: when a replacement serves the
+  corpus, the old path is deleted in the same change. The size of `src/` is
+  measured, not a gate.
+- Breaking changes are fine before stability.
+
 ## Checking it
+
+Every change: `cmake --build build` with no new warnings, `make test-all`
+(not bare `ctest`, which misses the spec suites), and `make spec-tey` when
+Tey or the standard library changes. A new spec at the top of `spec/` needs
+its `.expected` golden (`make spec-orphans`); a `describe`/`it` suite goes
+under `spec/stdlib/`. CI also runs `make test-wasm`, for the driver and the
+stdlib loader.
 
 ```
 make test-all     # unit tests, spec/, examples/, stdlib specs

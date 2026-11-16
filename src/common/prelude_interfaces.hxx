@@ -616,6 +616,9 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         ifn.signature = sig;
         ifn.sourceModule = mod;
         ifn.paramNames = std::move(paramNames);
+        // The checker places named arguments by the signature's names, as an
+        // interface read from a compiled module gives them (kexi_registry).
+        ifn.signature.paramNames = ifn.paramNames;
         if (directBackendOwnership) {
             ifn.backendModule = backendModuleFor(mod);
             ifn.backendFunction = sig.name;
@@ -665,6 +668,9 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         ifn.signature = sig;
         ifn.sourceModule = mod;
         ifn.paramNames = std::move(paramNames);
+        // The checker places named arguments by the signature's names, as an
+        // interface read from a compiled module gives them (kexi_registry).
+        ifn.signature.paramNames = ifn.paramNames;
         if (directBackendOwnership) {
             ifn.backendModule = backendModuleFor(mod);
             ifn.backendFunction = sig.name;
@@ -1366,6 +1372,8 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
                 } else {
                     // Keep the compiled ABI and enrich the source call shape.
                     // KexI does not currently store default-argument counts.
+                    if (duplicate->signature.paramNames.empty())
+                        duplicate->signature.paramNames = function.signature.paramNames;
                     if (duplicate->paramNames.empty() && !function.paramNames.empty())
                         duplicate->paramNames = std::move(function.paramNames);
                     // Only a compiled unit's interface writes its defaults

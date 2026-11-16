@@ -2851,6 +2851,8 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
                 while (required > 0 && clause.params[required - 1].defaultValue) required--;
                 Signature signature{def.name, std::move(paramTypes), freshTypeVar(), false, required};
                 signature.clause = &clause;
+                for (const auto& param : clause.params)
+                    signature.paramNames.push_back(param.name.value_or(""));
                 m_userSignatures[qualified].push_back(std::move(signature));
             }
         }
@@ -2897,6 +2899,10 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
         Signature signature{def.name, std::move(paramTypes), std::move(result), false, required};
         signature.declaringModule = m_currentModulePath;
         signature.clause = &clause;
+        // A caller checked before the definition places named arguments by
+        // these (#640: `register("/", hook: ~shout)`).
+        for (const auto& param : clause.params)
+            signature.paramNames.push_back(param.name.value_or(""));
         return signature;
     };
     // An arity already present is skipped: clauses of one definition share

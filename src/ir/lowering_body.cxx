@@ -15,13 +15,13 @@ auto Lowering::lowerBody(const std::vector<ast::ExprPtr>& body) -> ExprPtr {
     return lowerBodyFrom(body, 0);
 }
 
-// The block passed to a call in `e` (outside any other block) whose body
-// reassigns variables of the code around it, and those variables, sorted;
-// null when there is none, or more than one.
-auto Lowering::reassigningBlock(const ast::Expr& e, std::vector<std::string>& vars)
-    -> const ast::Lambda* {
-    const ast::Lambda* found = nullptr;
-    bool several = false;
+// The blocks passed to calls in `e` whose bodies reassign variables of the
+// code around them, in the order they are written, and the union of those
+// variables, sorted. Empty when there are none.
+auto Lowering::reassigningBlocks(const ast::Expr& e, std::vector<std::string>& vars)
+    -> std::vector<const ast::Lambda*> {
+    std::vector<const ast::Lambda*> found;
+    std::set<std::string> all;
     std::function<void(const ast::Expr&)> visit = [&](const ast::Expr& x) {
         std::vector<const ast::ExprPtr*> passed;
         if (const auto* mc = std::get_if<ast::MethodCall>(&x.kind)) {
@@ -37,21 +37,22 @@ auto Lowering::reassigningBlock(const ast::Expr& e, std::vector<std::string>& va
             std::unordered_set<std::string> mutated;
             for (const auto& s : lambda->body) collectMutated(s, mutated);
             for (const auto& param : lambda->params) mutated.erase(param.name);
-            std::vector<std::string> outer;
+            bool reassigns = false;
             for (const auto& v : mutated)
-                if (subst.count(v)) outer.push_back(v);
-            if (outer.empty()) continue;
-            several = several || found;
-            found = lambda;
-            std::sort(outer.begin(), outer.end());
-            vars = std::move(outer);
+                if (subst.count(v)) {
+                    all.insert(v);
+                    reassigns = true;
+                }
+            if (reassigns && std::find(found.begin(), found.end(), lambda) == found.end())
+                found.push_back(lambda);
         }
         ast::forEachOperand(x, [&](const ast::ExprPtr& child) {
             if (child) visit(*child);
         });
     };
     visit(e);
-    return several ? nullptr : found;
+    vars.assign(all.begin(), all.end());
+    return found;
 }
 
 // `block` taking the values of `vars` after its own parameters, answering
@@ -70,6 +71,9 @@ auto Lowering::lowerStatefulBlock(const ast::Lambda& block, const std::vector<st
     }
     const auto state = fresh("BlockState");
     lam.params.push_back(state);
+    // Its reassignments are its own statement's state, returned only when the
+    // call ends: pure as the analysis says, they let a fused loop run it.
+    lam.pure = hir->pureBlock(block);
     PatternPtr statePattern;
     if (vars.size() == 1) {
         subst[vars[0]] = state;
@@ -132,6 +136,9 @@ auto Lowering::lowerStatefulBlock(const ast::Lambda& block, const std::vector<st
 // statement runs through `kex_intrinsic_fun:threadState(Block, Initial,
 // fun(Placeholder) -> Statement)`, which keeps the state for the call and
 // answers {Value, FinalState}. The variables are rebound to that state.
+// Several such blocks in one statement (`xs.map { … }.each { … }`) each take
+// the union of their variables and go through `threadStates`, sharing one
+// state.
 // specialize-blocks replaces the whole with a copy of the callee carrying the
 // state, where it can. `rest` lowers what follows, given the statement's
 // value. Null when `e` passes no such block.
@@ -153,25 +160,36 @@ auto Lowering::lowerThreadedStatement(const ast::ExprPtr& e,
     }
     if (!*source) return nullptr;
     std::vector<std::string> vars;
-    const auto* block = reassigningBlock(**source, vars);
-    if (!block) return nullptr;
+    const auto blocks = reassigningBlocks(**source, vars);
+    if (blocks.empty()) return nullptr;
 
     std::vector<Binding> binds;
-    auto blockFn = atomize_ir(lowerStatefulBlock(*block, vars), binds);
+    std::vector<ExprPtr> blockFns;
+    for (const auto* block : blocks)
+        blockFns.push_back(atomize_ir(lowerStatefulBlock(*block, vars), binds));
     auto initial = atomize_ir(stateExpr(vars), binds);
-    const auto placeholder = fresh("Block");
-    const auto* outerBlock = threadedBlock;
-    const auto outerVar = threadedBlockVar;
-    threadedBlock = block;
-    threadedBlockVar = placeholder;
+    std::vector<std::string> placeholders;
+    const auto outer = threadedBlocks;
+    for (const auto* block : blocks) {
+        placeholders.push_back(fresh("Block"));
+        threadedBlocks[block] = placeholders.back();
+    }
     auto value = lower(*source);
-    threadedBlock = outerBlock;
-    threadedBlockVar = outerVar;
+    threadedBlocks = outer;
     auto statement = std::make_unique<Expr>();
-    statement->node = Lambda{{placeholder}, std::move(value), false};
+    statement->node = Lambda{std::move(placeholders), std::move(value), false};
     auto statementFn = atomize_ir(std::move(statement), binds);
-    auto call = callE("kex_intrinsic_fun", "threadState", 3,
-                      three(std::move(blockFn), std::move(initial), std::move(statementFn)));
+    // One block: the form specialize-blocks copies a callee for. Several
+    // share one state, each seeing what the one before it left.
+    ExprPtr blocksArg;
+    if (blockFns.size() == 1) {
+        blocksArg = std::move(blockFns.front());
+    } else {
+        blocksArg = std::make_unique<Expr>();
+        blocksArg->node = MakeList{std::move(blockFns), std::nullopt};
+    }
+    auto call = callE("kex_intrinsic_fun", blocks.size() == 1 ? "threadState" : "threadStates", 3,
+                      three(std::move(blocksArg), std::move(initial), std::move(statementFn)));
 
     const auto result = fresh("Threaded");
     auto pattern = std::make_unique<Pattern>();

@@ -60,4 +60,19 @@ main do
   var steps = 0
   steps = [1, 2].reduce(steps) { |acc, x| steps += 10; acc + x }
   IO.printLine(steps)
+  # Several such blocks in one statement share the variables: each sees what
+  # the one before it left, in the order the calls run them.
+  var trail = 0
+  let kept = [1, 2, 3].map do |x|
+    trail = trail * 10 + x
+    x
+  end.filter do |x|
+    trail = trail * 10 + 9
+    x > 1
+  end
+  IO.printLine("${kept} ${trail}")
+  var sum = 0
+  var latest = 0
+  [1, 2].map { |x| latest = x; x * 2 }.each { |x| sum += x + latest }
+  IO.printLine("${sum} ${latest}")
 end

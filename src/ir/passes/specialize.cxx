@@ -607,7 +607,7 @@ private:
         copy.exported = false;
         copy.isFreeFunction = callee.isFreeFunction;
         copy.declaringModule = home.empty() ? callee.declaringModule : std::string{};
-        copy.pureCopy = !threaded && lambda.pure && callsOnlyItselfAndErlang(callee);
+        copy.pureCopy = lambda.pure && callsOnlyItselfAndErlang(callee);
         for (std::size_t c = 0; c < callee.clauses.size(); ++c) {
             const auto& clause = callee.clauses[c];
             const auto& param = (*names)[c];

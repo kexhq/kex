@@ -296,8 +296,9 @@ struct FunDef {
     bool isFieldAccessor = false;
     // A copy specialize-blocks made with a pure block in place, of a callee that
     // calls nothing but itself and Erlang's BIFs: no effect a fused loop
-    // could reorder (passes/fuse). Never serialized: copies are made per
-    // module.
+    // could reorder (passes/fuse). A block that reassigns variables of its
+    // statement counts: that state is the statement's alone. Never
+    // serialized: copies are made per module.
     bool pureCopy = false;
 };
 

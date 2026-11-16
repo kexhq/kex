@@ -648,15 +648,14 @@ struct Lowering {
     std::unordered_map<const ast::AssignExpr*, std::string> hoistedAssignments;
     // A statement passing a block that reassigns variables of the code around
     // it, threaded through `kex_intrinsic_fun:threadState` (lowering_body).
-    auto reassigningBlock(const ast::Expr& e, std::vector<std::string>& vars)
-        -> const ast::Lambda*;
+    auto reassigningBlocks(const ast::Expr& e, std::vector<std::string>& vars)
+        -> std::vector<const ast::Lambda*>;
     auto lowerStatefulBlock(const ast::Lambda& block, const std::vector<std::string>& vars)
         -> ExprPtr;
     auto lowerThreadedStatement(const ast::ExprPtr& e,
                                 const std::function<ExprPtr(ExprPtr)>& rest) -> ExprPtr;
-    // The block lowerThreadedStatement passes as `threadedBlockVar`.
-    const ast::Lambda* threadedBlock = nullptr;
-    std::string threadedBlockVar;
+    // The blocks lowerThreadedStatement passes, each as the variable it names.
+    std::unordered_map<const ast::Lambda*, std::string> threadedBlocks;
 
     auto requireNoOuterMutation(const std::vector<ast::ExprPtr>& body,
                                 const char* what) -> void;
