@@ -3,14 +3,17 @@
 
 namespace kex::ir {
 
-auto Lowering::litInt(long v) -> ExprPtr { return lit(LitKind::Int, std::to_string(v)); }
+auto Lowering::litInt(long v) -> ExprPtr {
+    return lit(LitKind::Int, std::to_string(v));
+}
 
 // `{<<"file.kex">>, Line, Column}` for the expression being lowered, or the
 // atom `none` where the AST carries no location (generated code). Used by
 // the testing DSL — see the describe/it case in lowerFunctionCall.
 auto Lowering::sourceLocationTuple() -> ExprPtr {
-    if (!currentLoc || currentLoc->line <= 0)
+    if (!currentLoc || currentLoc->line <= 0) {
         return lit(LitKind::Atom, "none");
+    }
     std::vector<ExprPtr> parts;
     parts.push_back(lit(LitKind::String, std::string(currentLoc->file)));
     parts.push_back(litInt(currentLoc->line));
@@ -21,24 +24,32 @@ auto Lowering::sourceLocationTuple() -> ExprPtr {
 }
 
 auto Lowering::one(ExprPtr a) -> std::vector<ExprPtr> {
-    std::vector<ExprPtr> v; v.push_back(std::move(a)); return v;
+    std::vector<ExprPtr> v;
+    v.push_back(std::move(a));
+    return v;
 }
 
 auto Lowering::two(ExprPtr a, ExprPtr b) -> std::vector<ExprPtr> {
-    std::vector<ExprPtr> v; v.push_back(std::move(a)); v.push_back(std::move(b)); return v;
+    std::vector<ExprPtr> v;
+    v.push_back(std::move(a));
+    v.push_back(std::move(b));
+    return v;
 }
 
 auto Lowering::three(ExprPtr a, ExprPtr b, ExprPtr c) -> std::vector<ExprPtr> {
     std::vector<ExprPtr> v;
-    v.push_back(std::move(a)); v.push_back(std::move(b)); v.push_back(std::move(c));
+    v.push_back(std::move(a));
+    v.push_back(std::move(b));
+    v.push_back(std::move(c));
     return v;
 }
 
 // Atomize an already-lowered IR expr: bind to a fresh Let if it isn't a
 // Var/Lit, recording the binding.
 auto Lowering::atomize_ir(ExprPtr e, std::vector<Binding>& binds) -> ExprPtr {
-    if (std::holds_alternative<Var>(e->node) || std::holds_alternative<Lit>(e->node))
+    if (std::holds_alternative<Var>(e->node) || std::holds_alternative<Lit>(e->node)) {
         return e;
+    }
     auto name = fresh();
     binds.push_back({name, std::move(e)});
     return var(name);
@@ -56,9 +67,11 @@ auto Lowering::atomize_ir(ExprPtr e, std::vector<Binding>& binds) -> ExprPtr {
 // the context from `ENV.get(key)` while keeping it for `get(key, default)`.
 // Subtracting the arities that are positively known to be pure keeps every
 // call that was right before and fixes the collisions (kexhq/kex#143).
-auto Lowering::isFoulBackendTarget(const std::string& mod, const std::string& fn,
-                         int arity) -> bool {
-    if (!externalModules) return false;
+auto Lowering::isFoulBackendTarget(const std::string& mod, const std::string& fn, int arity)
+    -> bool {
+    if (!externalModules) {
+        return false;
+    }
 
     if (!foulBackendTargetsBuilt) {
         foulBackendTargetsBuilt = true;
@@ -66,51 +79,55 @@ auto Lowering::isFoulBackendTarget(const std::string& mod, const std::string& fn
         // name can be foul at some arities and pure at others.
         for (const auto& entry : externalModules->foulExports) {
             auto slash = entry.rfind('/');
-            if (slash == std::string::npos) continue;
+            if (slash == std::string::npos) {
+                continue;
+            }
             const auto qualKey = entry.substr(0, slash);
             // The member is after the LAST dot. Split at the first one, a
             // nested module's `Time.Clock.now` was filed as `Time`'s `now`,
             // and `Time.Clock.now()` went out without its context
             // (`undef` for 'Kex.Time.Clock':now/0).
             auto dot = qualKey.rfind('.');
-            if (dot == std::string::npos) continue;
+            if (dot == std::string::npos) {
+                continue;
+            }
             auto atom = externalModules->nameToAtom.find(qualKey.substr(0, dot));
             auto beamFn = externalModules->exportToBeamFn.find(qualKey);
             if (atom == externalModules->nameToAtom.end() ||
-                beamFn == externalModules->exportToBeamFn.end()) continue;
+                beamFn == externalModules->exportToBeamFn.end()) {
+                continue;
+            }
             foulBackendTargets.insert(foulKey(atom->second, beamFn->second));
         }
         // Receiver functions resolve through their own table, so their
         // foulness has to be folded in as well — `cli.run(...)` reaches
         // the prelude this way, not through exportToBeamFn.
-        for (const auto& [_, providers] : externalModules->receiverFunctions)
+        for (const auto& [_, providers] : externalModules->receiverFunctions) {
             for (const auto& provider : providers) {
-                if (provider.isFoul)
-                    foulBackendTargets.insert(
-                        foulKey(provider.moduleAtom, provider.beamFunction));
-                else
+                if (provider.isFoul) {
+                    foulBackendTargets.insert(foulKey(provider.moduleAtom, provider.beamFunction));
+                } else {
                     pureBackendTargets.insert(
-                        foulKey(provider.moduleAtom, provider.beamFunction,
-                                provider.beamArity));
+                        foulKey(provider.moduleAtom, provider.beamFunction, provider.beamArity));
+                }
             }
+        }
     }
     return foulBackendTargets.count(foulKey(mod, fn)) > 0 &&
            pureBackendTargets.count(foulKey(mod, fn, arity)) == 0;
 }
 
-auto Lowering::foulKey(const std::string& mod, const std::string& fn)
-    -> std::string {
+auto Lowering::foulKey(const std::string& mod, const std::string& fn) -> std::string {
     return mod + ":" + fn;
 }
 
-auto Lowering::foulKey(const std::string& mod, const std::string& fn, int arity)
-    -> std::string {
+auto Lowering::foulKey(const std::string& mod, const std::string& fn, int arity) -> std::string {
     return mod + ":" + fn + "/" + std::to_string(arity);
 }
 
-auto Lowering::callE(std::string mod, std::string fn, int arity, std::vector<ExprPtr> args) -> ExprPtr {
-    if (threadsCapabilities() && !mod.empty() &&
-        isFoulBackendTarget(mod, fn, arity)) {
+auto Lowering::callE(std::string mod, std::string fn, int arity, std::vector<ExprPtr> args)
+    -> ExprPtr {
+    if (threadsCapabilities() && !mod.empty() && isFoulBackendTarget(mod, fn, arity)) {
         args.push_back(currentContext());
         ++arity;
     }
@@ -130,7 +147,8 @@ auto Lowering::intrin(Op op, std::vector<ExprPtr> args) -> ExprPtr {
 // body's value. Wraps every main.
 auto Lowering::withTestSummary(ExprPtr body) -> ExprPtr {
     std::string r = fresh("R");
-    return makeLet(r, std::move(body),
+    return makeLet(
+        r, std::move(body),
         makeLet(fresh("Sum"), callE("kex_test", "maybe_print_summary", 0, {}), var(r)));
 }
 
@@ -138,10 +156,11 @@ auto Lowering::withTestSummary(ExprPtr body) -> ExprPtr {
 // layouts and variant arities — only the compiler knows which tuples are
 // records/variants, and the runtime needs that to render
 // `Name { field: value }` / `Tag(args)` instead of plain tuples.
-auto Lowering::withDisplayInfo(ExprPtr body, const std::string& moduleName )
-    -> ExprPtr {
+auto Lowering::withDisplayInfo(ExprPtr body, const std::string& moduleName) -> ExprPtr {
     bool anyVariant = !variantArity.empty();
-    if (records.empty() && !anyVariant && distinctTypes.empty()) return body;
+    if (records.empty() && !anyVariant && distinctTypes.empty()) {
+        return body;
+    }
     auto atomLit = [&](const std::string& s) { return lit(LitKind::Atom, s); };
     auto mapFrom = [&](std::vector<ExprPtr> pairs) {
         auto lst = std::make_unique<Expr>();
@@ -151,7 +170,9 @@ auto Lowering::withDisplayInfo(ExprPtr body, const std::string& moduleName )
     std::vector<ExprPtr> recPairs;
     for (const auto& [name, info] : records) {
         std::vector<ExprPtr> fields;
-        for (const auto& f : info.fields) fields.push_back(atomLit(f));
+        for (const auto& f : info.fields) {
+            fields.push_back(atomLit(f));
+        }
         auto fl = std::make_unique<Expr>();
         fl->node = MakeList{std::move(fields), std::nullopt};
         auto t = std::make_unique<Expr>();
@@ -180,20 +201,20 @@ auto Lowering::withDisplayInfo(ExprPtr body, const std::string& moduleName )
     // each make target by its identity, which is what `records` is keyed by.
     auto ownerModuleFor = [&](const std::string& name) {
         auto declaring = localTypeModules.find(name);
-        if (declaring == localTypeModules.end())
-            if (auto owner = externalMethodOwners.find(name);
-                owner != externalMethodOwners.end())
+        if (declaring == localTypeModules.end()) {
+            if (auto owner = externalMethodOwners.find(name); owner != externalMethodOwners.end()) {
                 return owner->second;
-        return declaring != localTypeModules.end()
-            ? names::moduleAtom(declaring->second) : moduleName;
+            }
+        }
+        return declaring != localTypeModules.end() ? names::moduleAtom(declaring->second)
+                                                   : moduleName;
     };
     if (!moduleName.empty() && (!records.empty() || anyVariant)) {
         std::vector<ExprPtr> ownerPairs;
         for (const auto& [name, info] : records) {
             (void)info;
             auto t = std::make_unique<Expr>();
-            t->node = MakeTuple{two(atomLit(name),
-                                    atomLit(ownerModuleFor(name)))};
+            t->node = MakeTuple{two(atomLit(name), atomLit(ownerModuleFor(name)))};
             ownerPairs.push_back(std::move(t));
         }
         // An ADT's methods hang off the TYPE, but a value carries the
@@ -203,24 +224,23 @@ auto Lowering::withDisplayInfo(ExprPtr body, const std::string& moduleName )
         // A tag that is also a record name keeps the record's entry.
         for (const auto& [tag, ar] : variantArity) {
             (void)ar;
-            if (records.count(tag)) continue;
+            if (records.count(tag)) {
+                continue;
+            }
             auto owner = variantOwner.find(tag);
             auto t = std::make_unique<Expr>();
             t->node = MakeTuple{
                 two(atomLit(tag),
-                    atomLit(ownerModuleFor(owner == variantOwner.end()
-                                               ? tag : owner->second)))};
+                    atomLit(ownerModuleFor(owner == variantOwner.end() ? tag : owner->second)))};
             ownerPairs.push_back(std::move(t));
         }
-        body = makeLet(fresh("Own"),
-                       callE("kex_io", "register_method_owners", 1,
-                             one(mapFrom(std::move(ownerPairs)))),
-                       std::move(body));
+        body = makeLet(
+            fresh("Own"),
+            callE("kex_io", "register_method_owners", 1, one(mapFrom(std::move(ownerPairs)))),
+            std::move(body));
     }
     if (!recordLayouts.empty() || !adtLayouts.empty()) {
-        auto binaryLit = [&](const std::string& text) {
-            return lit(LitKind::String, text);
-        };
+        auto binaryLit = [&](const std::string& text) { return lit(LitKind::String, text); };
         auto listOf = [](std::vector<ExprPtr> items) {
             auto list = std::make_unique<Expr>();
             list->node = MakeList{std::move(items), std::nullopt};
@@ -248,8 +268,7 @@ auto Lowering::withDisplayInfo(ExprPtr body, const std::string& moduleName )
                 if (info != records.end() && i < info->second.defaults.size() &&
                     info->second.defaults[i]) {
                     Lambda thunk;
-                    thunk.body = lowerFieldDefault(info->second,
-                                                   *info->second.defaults[i]);
+                    thunk.body = lowerFieldDefault(info->second, *info->second.defaults[i]);
                     auto fun = std::make_unique<Expr>();
                     fun->node = std::move(thunk);
                     parts.push_back(std::move(fun));
@@ -265,17 +284,19 @@ auto Lowering::withDisplayInfo(ExprPtr body, const std::string& moduleName )
             std::vector<ExprPtr> described;
             for (const auto& [tag, argTypes] : variants) {
                 std::vector<ExprPtr> types;
-                for (const auto& type : argTypes)
+                for (const auto& type : argTypes) {
                     types.push_back(structuredTypeLiteral(type));
+                }
                 described.push_back(tupleOf(two(binaryLit(tag), listOf(std::move(types)))));
             }
             adtEntries.push_back(tupleOf(two(atomLit(owner), listOf(std::move(described)))));
         }
-        body = makeLet(fresh("Layouts"),
-                       callE("kex_intrinsic_type", "register_layouts", 2,
-                             two(mapFrom(std::move(recordEntries)),
-                                 mapFrom(std::move(adtEntries)))),
-                       std::move(body));
+        body = makeLet(
+            fresh("Layouts"),
+            callE(
+                "kex_intrinsic_type", "register_layouts", 2,
+                two(mapFrom(std::move(recordEntries)), mapFrom(std::move(adtEntries)))),
+            std::move(body));
     }
     if (!distinctTypes.empty()) {
         // What each distinct type is erased to, for code that names one
@@ -286,20 +307,27 @@ auto Lowering::withDisplayInfo(ExprPtr body, const std::string& moduleName )
             semantic::StructuredType named;
             named.name = name;
             const auto backing = hir->expandDeclared(named);
-            if (backing.name == name) continue;
+            if (backing.name == name) {
+                continue;
+            }
             auto pair = std::make_unique<Expr>();
             pair->node = MakeTuple{two(atomLit(name), structuredTypeLiteral(backing))};
             backings.push_back(std::move(pair));
         }
-        if (!backings.empty())
-            body = makeLet(fresh("Distinct"),
-                           callE("kex_intrinsic_type", "register_distinct", 1,
-                                 one(mapFrom(std::move(backings)))),
-                           std::move(body));
+        if (!backings.empty()) {
+            body = makeLet(
+                fresh("Distinct"),
+                callE(
+                    "kex_intrinsic_type", "register_distinct", 1,
+                    one(mapFrom(std::move(backings)))),
+                std::move(body));
+        }
     }
-    return makeLet(fresh("Disp"),
-        callE("kex_io", "register_display", 2,
-              two(mapFrom(std::move(recPairs)), mapFrom(std::move(varPairs)))),
+    return makeLet(
+        fresh("Disp"),
+        callE(
+            "kex_io", "register_display", 2,
+            two(mapFrom(std::move(recPairs)), mapFrom(std::move(varPairs)))),
         std::move(body));
 }
 
@@ -334,11 +362,13 @@ auto Lowering::makeMatch1(ExprPtr subject, PatternPtr pattern, ExprPtr body) -> 
     any->name = unmatched;
     fallback.patterns.push_back(std::move(any));
     std::string where;
-    if (currentLoc)
+    if (currentLoc) {
         where = std::string(currentLoc->file) + ":" + std::to_string(currentLoc->line) + ":" +
                 std::to_string(currentLoc->column) + ": ";
-    fallback.body = callE("kex_intrinsic_fun", "patternMismatch", 2,
-                          two(lit(LitKind::String, where), var(unmatched)));
+    }
+    fallback.body = callE(
+        "kex_intrinsic_fun", "patternMismatch", 2,
+        two(lit(LitKind::String, where), var(unmatched)));
     m.clauses.push_back(std::move(fallback));
     auto e = std::make_unique<Expr>();
     e->node = std::move(m);
@@ -350,30 +380,39 @@ auto Lowering::makeMatch1(ExprPtr subject, PatternPtr pattern, ExprPtr body) -> 
 // anything else — every comparison and boolean BIF, and a literal. Missing
 // a case here costs three comparisons, not correctness.
 auto Lowering::irIsBoolean(const ExprPtr& e) -> bool {
-    if (!e) return false;
-    if (auto* l = std::get_if<Lit>(&e->node))
+    if (!e) {
+        return false;
+    }
+    if (auto* l = std::get_if<Lit>(&e->node)) {
         return l->kind == LitKind::Bool;
+    }
     // Comparisons and boolean connectives lower to an Intrinsic, not a
     // Call — `1 > 2` is `Intrinsic{Op::Gt}`, and only emit_core turns it
     // into `call 'erlang':'>'`.
     if (auto* i = std::get_if<Intrinsic>(&e->node)) {
         switch (i->op) {
-            case Op::Eq: case Op::Neq:
-            case Op::Lt: case Op::Gt: case Op::Lte: case Op::Gte:
-            case Op::And: case Op::Or: case Op::Not:
-                return true;
-            default:
-                return false;
+            case Op::Eq:
+            case Op::Neq:
+            case Op::Lt:
+            case Op::Gt:
+            case Op::Lte:
+            case Op::Gte:
+            case Op::And:
+            case Op::Or:
+            case Op::Not: return true;
+            default: return false;
         }
     }
     if (auto* c = std::get_if<Call>(&e->node)) {
-        if (c->module != "erlang") return false;
+        if (c->module != "erlang") {
+            return false;
+        }
         static const std::unordered_set<std::string> boolBifs = {
-            "==", "/=", "=:=", "=/=", "<", ">", "=<", ">=",
-            "not", "and", "or", "xor",
-            "is_atom", "is_binary", "is_boolean", "is_float", "is_function",
-            "is_integer", "is_list", "is_map", "is_number", "is_pid",
-            "is_reference", "is_tuple",
+            "==",        "/=",          "=:=",          "=/=",       "<",
+            ">",         "=<",          ">=",           "not",       "and",
+            "or",        "xor",         "is_atom",      "is_binary", "is_boolean",
+            "is_float",  "is_function", "is_integer",   "is_list",   "is_map",
+            "is_number", "is_pid",      "is_reference", "is_tuple",
         };
         return boolBifs.count(c->name) > 0;
     }
@@ -390,19 +429,18 @@ auto Lowering::irIsBoolean(const ExprPtr& e) -> bool {
 // must stay lazy — repeating it under three falsy patterns would either
 // duplicate its code or force it to be bound eagerly.
 auto Lowering::truthyTest(ExprPtr cond) -> ExprPtr {
-    if (irIsBoolean(cond)) return cond;
+    if (irIsBoolean(cond)) {
+        return cond;
+    }
     std::string cv = fresh("_Truthy");
     auto notEq = [&](const char* atom) {
-        return callE("erlang", "=/=", 2,
-                     two(var(cv), lit(LitKind::Atom, atom)));
+        return callE("erlang", "=/=", 2, two(var(cv), lit(LitKind::Atom, atom)));
     };
     // `and`, not `andalso`: the latter is a control-flow OPERATOR, so
     // `erlang:'andalso'/2` does not exist and every condition became
     // `undef`. Both operands are comparisons, so strictness costs nothing.
-    auto test = callE("erlang", "and", 2,
-                      two(notEq("false"), notEq("None")));
-    test = callE("erlang", "and", 2,
-                 two(std::move(test), notEq("Kex.Unit")));
+    auto test = callE("erlang", "and", 2, two(notEq("false"), notEq("None")));
+    test = callE("erlang", "and", 2, two(std::move(test), notEq("Kex.Unit")));
     return makeLet(cv, std::move(cond), std::move(test));
 }
 
@@ -411,11 +449,17 @@ auto Lowering::matchBool(ExprPtr cond, ExprPtr thenE, ExprPtr elseE) -> ExprPtr 
     m.subjects.push_back(truthyTest(std::move(cond)));
     auto boolPat = [](bool b) {
         auto p = std::make_unique<Pattern>();
-        p->kind = PatKind::Lit; p->litKind = LitKind::Bool; p->litBool = b;
+        p->kind = PatKind::Lit;
+        p->litKind = LitKind::Bool;
+        p->litBool = b;
         return p;
     };
-    MatchClause t; t.patterns.push_back(boolPat(true));  t.body = std::move(thenE);
-    MatchClause f; f.patterns.push_back(boolPat(false)); f.body = std::move(elseE);
+    MatchClause t;
+    t.patterns.push_back(boolPat(true));
+    t.body = std::move(thenE);
+    MatchClause f;
+    f.patterns.push_back(boolPat(false));
+    f.body = std::move(elseE);
     m.clauses.push_back(std::move(t));
     m.clauses.push_back(std::move(f));
     auto e = std::make_unique<Expr>();
@@ -424,11 +468,14 @@ auto Lowering::matchBool(ExprPtr cond, ExprPtr thenE, ExprPtr elseE) -> ExprPtr 
 }
 
 auto Lowering::taggedTuple(const AtomicRef& v, const std::string& tag) -> ExprPtr {
-    auto tagged = intrin(Op::Eq, two(callE("erlang", "element", 2, two(litInt(1), v.get())),
-                                     lit(LitKind::Atom, tag)));
-    auto hasTag = matchBool(intrin(Op::Gt, two(callE("erlang", "tuple_size", 1, one(v.get())), litInt(0))),
-                            std::move(tagged), litBool(false));
-    return matchBool(callE("erlang", "is_tuple", 1, one(v.get())), std::move(hasTag), litBool(false));
+    auto tagged = intrin(
+        Op::Eq,
+        two(callE("erlang", "element", 2, two(litInt(1), v.get())), lit(LitKind::Atom, tag)));
+    auto hasTag = matchBool(
+        intrin(Op::Gt, two(callE("erlang", "tuple_size", 1, one(v.get())), litInt(0))),
+        std::move(tagged), litBool(false));
+    return matchBool(
+        callE("erlang", "is_tuple", 1, one(v.get())), std::move(hasTag), litBool(false));
 }
 
 } // namespace kex::ir

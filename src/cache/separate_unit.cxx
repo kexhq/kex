@@ -11,8 +11,7 @@ namespace kex::cache {
 
 namespace {
 
-auto writeFile(const std::filesystem::path& path, const std::string& bytes)
-    -> bool {
+auto writeFile(const std::filesystem::path& path, const std::string& bytes) -> bool {
     std::ofstream output(path, std::ios::binary);
     output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
     output.close();
@@ -21,18 +20,18 @@ auto writeFile(const std::filesystem::path& path, const std::string& bytes)
 
 auto readCount(std::istream& input) -> std::optional<std::size_t> {
     std::size_t count = 0;
-    if (!(input >> count) || count > 1000) return std::nullopt;
+    if (!(input >> count) || count > 1000) {
+        return std::nullopt;
+    }
     input.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
     return count;
 }
 
 } // namespace
 
-SeparateUnitCache::SeparateUnitCache(std::filesystem::path root)
-    : m_root(std::move(root)) {}
+SeparateUnitCache::SeparateUnitCache(std::filesystem::path root) : m_root(std::move(root)) {}
 
-auto SeparateUnitCache::pathFor(const std::string& key) const
-    -> std::filesystem::path {
+auto SeparateUnitCache::pathFor(const std::string& key) const -> std::filesystem::path {
     return m_root / "units" / key.substr(0, 2) / key;
 }
 
@@ -44,73 +43,95 @@ auto SeparateUnitCache::interfaceDigest(const beam::LoadedUnit& unit) -> std::st
     std::string material;
     for (const auto& module : unit.modules) {
         const auto bytes = beam::serializeKexi(module.chunk);
-        material += module.beamAtom + ":" +
-                    digest(std::string(bytes.begin(), bytes.end())) + "\n";
+        material += module.beamAtom + ":" + digest(std::string(bytes.begin(), bytes.end())) + "\n";
     }
     return digest(material);
 }
 
 auto SeparateUnitCache::keyFor(
-    const std::string& toolchain, const std::string& runtimeStamp,
+    const std::string& toolchain,
+    const std::string& runtimeStamp,
     std::vector<Source> sources,
     const std::vector<std::string>& dependencyDigests) -> std::string {
     std::sort(sources.begin(), sources.end(), [](const auto& a, const auto& b) {
         return a.path < b.path;
     });
     std::string material = "kex-unit-v2\n" + toolchain + "\n" + runtimeStamp + "\n";
-    for (const auto& source : sources)
+    for (const auto& source : sources) {
         material += source.path + ":" + digest(std::string(source.text)) + "\n";
-    for (const auto& dependency : dependencyDigests) material += dependency + "\n";
+    }
+    for (const auto& dependency : dependencyDigests) {
+        material += dependency + "\n";
+    }
     return digest(material);
 }
 
-auto SeparateUnitCache::load(const std::string& key) const
-    -> std::optional<CachedSeparateUnit> {
+auto SeparateUnitCache::load(const std::string& key) const -> std::optional<CachedSeparateUnit> {
     const auto dir = pathFor(key);
     std::ifstream manifest(dir / "manifest.txt");
     std::string version;
-    if (!std::getline(manifest, version) || version != "kex-unit-v2")
+    if (!std::getline(manifest, version) || version != "kex-unit-v2") {
         return std::nullopt;
+    }
 
     CachedSeparateUnit cached;
-    if (!std::getline(manifest, cached.interface.entryBeamAtom))
+    if (!std::getline(manifest, cached.interface.entryBeamAtom)) {
         return std::nullopt;
+    }
     const auto interfaceCount = readCount(manifest);
-    if (!interfaceCount || *interfaceCount == 0) return std::nullopt;
+    if (!interfaceCount || *interfaceCount == 0) {
+        return std::nullopt;
+    }
     for (std::size_t i = 0; i < *interfaceCount; ++i) {
         std::string atom, expected;
-        if (!std::getline(manifest, atom) || !std::getline(manifest, expected))
+        if (!std::getline(manifest, atom) || !std::getline(manifest, expected)) {
             return std::nullopt;
+        }
         const auto bytes = readFileText(dir / (std::to_string(i) + ".kexi"));
-        if (!bytes || digest(*bytes) != expected) return std::nullopt;
+        if (!bytes || digest(*bytes) != expected) {
+            return std::nullopt;
+        }
         try {
-            cached.interface.modules.push_back({atom, "", beam::deserializeKexi(
-                std::vector<uint8_t>(bytes->begin(), bytes->end()))});
+            cached.interface.modules.push_back(
+                {atom, "",
+                 beam::deserializeKexi(std::vector<uint8_t>(bytes->begin(), bytes->end()))});
         } catch (...) {
             return std::nullopt;
         }
     }
-    if (cached.interface.entryBeamAtom != cached.interface.modules.front().beamAtom)
+    if (cached.interface.entryBeamAtom != cached.interface.modules.front().beamAtom) {
         return std::nullopt;
+    }
 
     const auto moduleCount = readCount(manifest);
-    if (!moduleCount || *moduleCount == 0) return std::nullopt;
+    if (!moduleCount || *moduleCount == 0) {
+        return std::nullopt;
+    }
     for (std::size_t i = 0; i < *moduleCount; ++i) {
         std::string name, expected;
         int arity = 0;
-        if (!std::getline(manifest, name) || !(manifest >> arity))
+        if (!std::getline(manifest, name) || !(manifest >> arity)) {
             return std::nullopt;
+        }
         manifest.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-        if (!std::getline(manifest, expected)) return std::nullopt;
+        if (!std::getline(manifest, expected)) {
+            return std::nullopt;
+        }
         auto source = readFileText(dir / (std::to_string(i) + ".core"));
-        if (!source || digest(*source) != expected) return std::nullopt;
+        if (!source || digest(*source) != expected) {
+            return std::nullopt;
+        }
         std::string attachExpected;
-        if (!std::getline(manifest, attachExpected)) return std::nullopt;
+        if (!std::getline(manifest, attachExpected)) {
+            return std::nullopt;
+        }
         const auto attach = readFileText(dir / (std::to_string(i) + ".attach.kexi"));
-        if (!attach || digest(*attach) != attachExpected) return std::nullopt;
+        if (!attach || digest(*attach) != attachExpected) {
+            return std::nullopt;
+        }
         try {
-            cached.attachChunks.push_back(beam::deserializeKexi(
-                std::vector<uint8_t>(attach->begin(), attach->end())));
+            cached.attachChunks.push_back(
+                beam::deserializeKexi(std::vector<uint8_t>(attach->begin(), attach->end())));
         } catch (...) {
             return std::nullopt;
         }
@@ -119,16 +140,20 @@ auto SeparateUnitCache::load(const std::string& key) const
     return cached;
 }
 
-auto SeparateUnitCache::store(const std::string& key,
-                              const CachedSeparateUnit& unit) const -> void {
+auto SeparateUnitCache::store(const std::string& key, const CachedSeparateUnit& unit) const
+    -> void {
     namespace fs = std::filesystem;
     const auto target = pathFor(key);
     std::error_code error;
-    if (fs::exists(target / "manifest.txt", error)) return;
+    if (fs::exists(target / "manifest.txt", error)) {
+        return;
+    }
     auto temporary = target;
     temporary += stagingSuffix();
     fs::create_directories(temporary, error);
-    if (error) return;
+    if (error) {
+        return;
+    }
 
     std::string manifest = "kex-unit-v2\n" + unit.interface.entryBeamAtom + "\n" +
                            std::to_string(unit.interface.modules.size()) + "\n";
@@ -159,8 +184,7 @@ auto SeparateUnitCache::store(const std::string& key,
             fs::remove_all(temporary, error);
             return;
         }
-        manifest += module.moduleName + "\n" +
-                    std::to_string(module.mainArity) + "\n" +
+        manifest += module.moduleName + "\n" + std::to_string(module.mainArity) + "\n" +
                     digest(module.source) + "\n" + digest(attach) + "\n";
     }
     if (!writeFile(temporary / "manifest.txt", manifest)) {
@@ -168,8 +192,12 @@ auto SeparateUnitCache::store(const std::string& key,
         return;
     }
     fs::create_directories(target.parent_path(), error);
-    if (!error) fs::rename(temporary, target, error);
-    if (error) fs::remove_all(temporary, error);
+    if (!error) {
+        fs::rename(temporary, target, error);
+    }
+    if (error) {
+        fs::remove_all(temporary, error);
+    }
 }
 
 } // namespace kex::cache

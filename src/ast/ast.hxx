@@ -26,7 +26,9 @@ struct TypeName {
     std::vector<std::string> parts; // e.g. ["Html", "Element"]
 
     // The name as written: `Html.Element`.
-    auto dotted() const -> std::string { return kex::join(parts, "."); }
+    auto dotted() const -> std::string {
+        return kex::join(parts, ".");
+    }
 };
 
 struct GenericType {
@@ -98,7 +100,7 @@ struct GenericVar {
 // a function name for `returnedBy`, any expression for `of` — resolved during
 // checking and erased afterwards, like every other type.
 struct TypeQuery {
-    std::string query;   // "of" | "returnedBy"
+    std::string query; // "of" | "returnedBy"
     ExprPtr argument;
 };
 
@@ -126,8 +128,8 @@ struct TypeExpr {
         BlockType,
         AtomType,
         GenericVar,
-        TypeQuery
-    > kind;
+        TypeQuery>
+        kind;
 };
 
 // ===== Patterns =====
@@ -205,14 +207,18 @@ struct Pattern {
         ListPattern,
         TuplePattern,
         RangePattern,
-        TypePattern
-    > kind;
+        TypePattern>
+        kind;
 };
 
 // ===== Expressions =====
 
-struct IntLiteral { std::string value; };
-struct FloatLiteral { std::string value; };
+struct IntLiteral {
+    std::string value;
+};
+struct FloatLiteral {
+    std::string value;
+};
 struct StringLiteral {
     std::string value;
     bool interpolating = true;
@@ -220,13 +226,23 @@ struct StringLiteral {
     std::vector<ExprPtr> values;
 };
 // A Unicode codepoint — `'é'` is one Char, not its two UTF-8 bytes.
-struct CharLiteral { char32_t value; };
-struct BoolLiteral { bool value; };
+struct CharLiteral {
+    char32_t value;
+};
+struct BoolLiteral {
+    bool value;
+};
 struct NoneLiteral {};
-struct AtomLiteral { std::string name; };
+struct AtomLiteral {
+    std::string name;
+};
 
-struct Identifier { std::string name; };
-struct UpperIdentifier { std::string name; };
+struct Identifier {
+    std::string name;
+};
+struct UpperIdentifier {
+    std::string name;
+};
 struct ThisExpr {};
 
 struct TaggedLiteral;
@@ -484,10 +500,10 @@ struct ThenElseExpr {
 struct CurryPlaceholder {};
 
 struct CurryExpr {
-    std::string name;       // function or operator name ("add", "+", etc.)
-    bool isOperator;        // true for ~(+), ~(*), etc.
+    std::string name;                            // function or operator name ("add", "+", etc.)
+    bool isOperator;                             // true for ~(+), ~(*), etc.
     std::vector<std::vector<ExprPtr>> argGroups; // each (args) paren group
-    std::string module;     // namespace for ~Mod.fn; empty when unqualified
+    std::string module;                          // namespace for ~Mod.fn; empty when unqualified
 };
 
 struct BlockExpr {
@@ -520,13 +536,14 @@ struct ErrorNode {
 // variant is what keeps that an invariant rather than a convention.
 // shared_ptr because one template yields N declarations, each an independent
 // ast::clone of it.
-using GeneratedTemplate = std::variant<std::shared_ptr<struct FunctionDef>,
-                                       std::shared_ptr<struct TypeDef>,
-                                       std::shared_ptr<struct RecordDef>,
-                                       std::shared_ptr<struct MakeDef>>;
+using GeneratedTemplate = std::variant<
+    std::shared_ptr<struct FunctionDef>,
+    std::shared_ptr<struct TypeDef>,
+    std::shared_ptr<struct RecordDef>,
+    std::shared_ptr<struct MakeDef>>;
 
 struct GeneratedDecl {
-    ExprPtr name;                           // `%n` -> Identifier{"n"}
+    ExprPtr name; // `%n` -> Identifier{"n"}
     GeneratedTemplate function;
 };
 
@@ -543,8 +560,8 @@ struct UsingExpr {
 // provide what the capability declares; every call reaching the capability
 // from inside the region, however deep, sees it (kexhq/kex#143).
 struct WithExpr {
-    TypeName capability;      // e.g. FS.File
-    ExprPtr value;            // the replacement implementation
+    TypeName capability; // e.g. FS.File
+    ExprPtr value;       // the replacement implementation
     std::vector<ExprPtr> body;
 };
 
@@ -596,8 +613,8 @@ struct Expr {
         ErrorNode,
         GeneratedDecl,
         UsingExpr,
-        WithExpr
-    > kind;
+        WithExpr>
+        kind;
 };
 
 // ===== Top-Level Declarations =====
@@ -606,7 +623,7 @@ struct TypeAnnotation {
     SourceLocation location;
     std::string name;
     TypeExprPtr type;
-    bool implicitThis; // :> vs :
+    bool implicitThis;         // :> vs :
     bool implicitFrom = false; // ::>
     bool isFoul = false;
 };
@@ -711,8 +728,8 @@ struct VisibilityBlock {
         std::unique_ptr<struct MakeDef>,
         std::unique_ptr<TypeDef>,
         std::unique_ptr<RecordDef>,
-        std::unique_ptr<UsingBlock>
-    >> items;
+        std::unique_ptr<UsingBlock>>>
+        items;
 };
 
 struct TraitDef {
@@ -721,10 +738,7 @@ struct TraitDef {
     std::vector<std::string> typeParams;
     // required method signatures (TypeAnnotation) and optional default
     // implementations (FunctionDef) — mixed order is allowed.
-    std::vector<std::variant<
-        std::unique_ptr<TypeAnnotation>,
-        std::unique_ptr<FunctionDef>
-    >> body;
+    std::vector<std::variant<std::unique_ptr<TypeAnnotation>, std::unique_ptr<FunctionDef>>> body;
 };
 
 struct MakeDef {
@@ -732,7 +746,7 @@ struct MakeDef {
     TypeExprPtr target;
     bool isFinal = false;
     bool isServing = false;
-    std::vector<std::string> implements;  // trait names claimed by this block
+    std::vector<std::string> implements; // trait names claimed by this block
     // Where each of `implements` is written, at its last segment (`Pricing`
     // in `Shop.Pricing`), where a reader points at it.
     std::vector<SourceLocation> implementLocations;
@@ -746,8 +760,8 @@ struct MakeDef {
         std::unique_ptr<FunctionDef>,
         std::unique_ptr<TypeAnnotation>,
         std::unique_ptr<VisibilityBlock>,
-        ExprPtr
-    >> body;
+        ExprPtr>>
+        body;
 };
 
 // Items that can appear inside a compiled do...end block.
@@ -757,8 +771,8 @@ using CompiledItem = std::variant<
     std::unique_ptr<MakeDef>,
     std::unique_ptr<RecordDef>,
     std::unique_ptr<TypeDef>,
-    ExprPtr  // constant assignments (NAME = value) and other expr stmts
->;
+    ExprPtr // constant assignments (NAME = value) and other expr stmts
+    >;
 
 struct CompiledBlock {
     SourceLocation location;
@@ -814,8 +828,7 @@ using ModuleItem = std::variant<
     std::unique_ptr<VisibilityBlock>,
     std::unique_ptr<UsingBlock>,
     std::unique_ptr<ExportDecl>,
-    std::unique_ptr<TypeAnnotation>
->;
+    std::unique_ptr<TypeAnnotation>>;
 
 struct ModuleDef {
     SourceLocation location;
@@ -832,10 +845,8 @@ struct ModuleDef {
 // The qualified path of a module written as `name` inside `parent` ("" at the
 // top): `module Inner` in `Outer` is `Outer.Inner`, and a name already
 // written under its parent (`module Outer.Inner`) stays as written.
-inline auto nestedModulePath(const std::string& parent, const std::string& name)
-    -> std::string {
-    return parent.empty() || name.starts_with(parent + ".") ? name
-                                                            : parent + "." + name;
+inline auto nestedModulePath(const std::string& parent, const std::string& name) -> std::string {
+    return parent.empty() || name.starts_with(parent + ".") ? name : parent + "." + name;
 }
 
 using TopLevelItem = std::variant<
@@ -849,8 +860,7 @@ using TopLevelItem = std::variant<
     std::unique_ptr<UsingBlock>,
     std::unique_ptr<MainBlock>,
     std::unique_ptr<Pragma>,
-    std::unique_ptr<TypeAnnotation>
->;
+    std::unique_ptr<TypeAnnotation>>;
 
 // The node a top-level or module item holds; null once it has been moved out.
 // What lends an item to another program finds it by (hir::checkReplInput,
@@ -880,11 +890,13 @@ inline auto isMergedDeclaration(const TopLevelItem& item) -> bool {
 // bound the same way are ordinary local functions, and single letters never
 // reach here — the parser rejects them as type-parameter names.
 inline auto isLocalConstantBind(const PatternPtr& pattern, const ExprPtr& value) -> bool {
-    if (!pattern || !value) return false;
-    const auto* varPat = std::get_if<VarPattern>(&pattern->kind);
-    if (!varPat || varPat->name.empty() ||
-        !kex::startsUppercase(varPat->name))
+    if (!pattern || !value) {
         return false;
+    }
+    const auto* varPat = std::get_if<VarPattern>(&pattern->kind);
+    if (!varPat || varPat->name.empty() || !kex::startsUppercase(varPat->name)) {
+        return false;
+    }
     const auto* lambda = std::get_if<Lambda>(&value->kind);
     return lambda && lambda->namedFunction && lambda->params.empty();
 }

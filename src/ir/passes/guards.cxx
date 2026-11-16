@@ -29,16 +29,22 @@ auto remoteCall(std::string module, std::string function, std::vector<ExprPtr> a
 }
 
 auto matchesAnything(const MatchClause& clause) -> bool {
-    for (const auto& p : clause.patterns)
-        if (p->kind != PatKind::Var && p->kind != PatKind::Wild) return false;
+    for (const auto& p : clause.patterns) {
+        if (p->kind != PatKind::Var && p->kind != PatKind::Wild) {
+            return false;
+        }
+    }
     return true;
 }
 
 // Does any unguarded clause match every value, making a trailing fallback
 // dead code (which erlc warns about)?
 auto anyMatchesAnything(const std::vector<MatchClause>& clauses) -> bool {
-    for (const auto& clause : clauses)
-        if (!clause.guard && matchesAnything(clause)) return true;
+    for (const auto& clause : clauses) {
+        if (!clause.guard && matchesAnything(clause)) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -53,10 +59,12 @@ public:
     auto expandMatch(Match match) -> ExprPtr {
         const bool rescue = match.guards == GuardExpansion::Rescue;
         auto noMatch = [&](const std::string& subject) -> ExprPtr {
-            if (rescue) return exprOf(TryThrow{var(subject)});
+            if (rescue) {
+                return exprOf(TryThrow{var(subject)});
+            }
             std::vector<ExprPtr> parts;
-            parts.push_back(lit(LitKind::String,
-                                match.unmatchedAt + "runtime error: no matching clause for "));
+            parts.push_back(
+                lit(LitKind::String, match.unmatchedAt + "runtime error: no matching clause for "));
             std::vector<ExprPtr> shown;
             shown.push_back(var(subject));
             parts.push_back(remoteCall("kex_io", "inspect_plain", std::move(shown)));
@@ -71,10 +79,15 @@ public:
 
 private:
     template <typename NoMatch>
-    auto expandFrom(std::vector<ExprPtr> subjects, std::vector<MatchClause> clauses,
-                    bool rescue, const NoMatch& noMatch) -> ExprPtr {
+    auto expandFrom(
+        std::vector<ExprPtr> subjects,
+        std::vector<MatchClause> clauses,
+        bool rescue,
+        const NoMatch& noMatch) -> ExprPtr {
         std::size_t guarded = 0;
-        while (guarded < clauses.size() && !clauses[guarded].guard) ++guarded;
+        while (guarded < clauses.size() && !clauses[guarded].guard) {
+            ++guarded;
+        }
         if (guarded == clauses.size()) {
             // A single-subject match ends in the walker's failure: without
             // it erlc cannot compile an inexhaustive `case` (its SSA pass
@@ -103,20 +116,24 @@ private:
         }
         const auto subjectVars = [&] {
             std::vector<ExprPtr> vars;
-            for (const auto& name : names) vars.push_back(var(name));
+            for (const auto& name : names) {
+                vars.push_back(var(name));
+            }
             return vars;
         };
-        std::vector<MatchClause> rest(std::make_move_iterator(clauses.begin() + guarded + 1),
-                                      std::make_move_iterator(clauses.end()));
-        auto contBody = rest.empty()
-            ? noMatch(names.front())
-            : expandFrom(subjectVars(), std::move(rest), rescue, noMatch);
+        std::vector<MatchClause> rest(
+            std::make_move_iterator(clauses.begin() + guarded + 1),
+            std::make_move_iterator(clauses.end()));
+        auto contBody = rest.empty() ? noMatch(names.front())
+                                     : expandFrom(subjectVars(), std::move(rest), rescue, noMatch);
         const auto contName = "__gcont_p" + std::to_string(m_counter++);
         const auto callCont = [&] { return exprOf(Call{"", contName, 0, {}, false}); };
 
         Match outer;
         outer.subjects = subjectVars();
-        for (std::size_t i = 0; i < guarded; ++i) outer.clauses.push_back(std::move(clauses[i]));
+        for (std::size_t i = 0; i < guarded; ++i) {
+            outer.clauses.push_back(std::move(clauses[i]));
+        }
         auto& clause = clauses[guarded];
         const bool coversAll = matchesAnything(clause);
         Match test;
@@ -140,8 +157,9 @@ private:
         // own `_ -> Cont()` arm covers failure, and a fallback would be dead.
         if (!coversAll) {
             MatchClause fallback;
-            for (std::size_t i = 0; i < outer.subjects.size(); ++i)
+            for (std::size_t i = 0; i < outer.subjects.size(); ++i) {
                 fallback.patterns.push_back(patternOf(PatKind::Wild));
+            }
             fallback.body = callCont();
             outer.clauses.push_back(std::move(fallback));
         }
@@ -150,8 +168,9 @@ private:
         letrec.funBody = std::move(contBody);
         letrec.contBody = exprOf(std::move(outer));
         auto e = exprOf(std::move(letrec));
-        for (auto it = binds.rbegin(); it != binds.rend(); ++it)
+        for (auto it = binds.rbegin(); it != binds.rend(); ++it) {
             e = exprOf(Let{it->first, std::move(it->second), std::move(e)});
+        }
         return e;
     }
 
@@ -163,11 +182,14 @@ private:
 
 public:
     auto expandUnder(ExprPtr& e) -> void {
-        if (!e) return;
+        if (!e) {
+            return;
+        }
         forEachChild(*e, [&](ExprPtr& child) { expandUnder(child); });
         if (auto* match = std::get_if<Match>(&e->node);
-            match && match->guards != GuardExpansion::Native)
+            match && match->guards != GuardExpansion::Native) {
             e = expandMatch(std::move(*match));
+        }
     }
 };
 
@@ -175,11 +197,14 @@ public:
 
 auto expandGuards(Module& module) -> void {
     Expander expander;
-    for (auto& function : module.functions)
+    for (auto& function : module.functions) {
         for (auto& clause : function.clauses) {
-            if (clause.guard) expander.expandUnder(*clause.guard);
+            if (clause.guard) {
+                expander.expandUnder(*clause.guard);
+            }
             expander.expandUnder(clause.body);
         }
+    }
 }
 
 } // namespace kex::ir

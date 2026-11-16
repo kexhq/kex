@@ -9,34 +9,27 @@ int main() {
     using namespace kex::diagnostics;
 
     describe("diagnostics::jsonEscape", []() {
-        it("escapes quotes and backslashes", []() {
-            assertEqual(jsonEscape("a\"b\\c"), std::string("a\\\"b\\\\c"));
-        });
-        it("escapes control characters", []() {
-            assertEqual(jsonEscape("a\nb\rc\td"), std::string("a\\nb\\rc\\td"));
-        });
-        it("leaves plain text unchanged", []() {
-            assertEqual(jsonEscape("hello"), std::string("hello"));
-        });
+        it("escapes quotes and backslashes",
+           []() { assertEqual(jsonEscape("a\"b\\c"), std::string("a\\\"b\\\\c")); });
+        it("escapes control characters",
+           []() { assertEqual(jsonEscape("a\nb\rc\td"), std::string("a\\nb\\rc\\td")); });
+        it("leaves plain text unchanged",
+           []() { assertEqual(jsonEscape("hello"), std::string("hello")); });
     });
 
     describe("diagnostics::extractHint", []() {
         it("extracts the did-you-mean suggestion", []() {
-            assertEqual(extractHint("Undefined `foo`; did you mean `bar`?"),
-                        std::string("bar"));
+            assertEqual(extractHint("Undefined `foo`; did you mean `bar`?"), std::string("bar"));
         });
-        it("returns empty when there is no hint", []() {
-            assertEqual(extractHint("Undefined `foo`"), std::string(""));
-        });
+        it("returns empty when there is no hint",
+           []() { assertEqual(extractHint("Undefined `foo`"), std::string("")); });
     });
 
     describe("diagnostics::errorCountPhrase", []() {
-        it("pluralizes", []() {
-            assertEqual(errorCountPhrase(3, "type"), std::string("3 type errors"));
-        });
-        it("singularizes", []() {
-            assertEqual(errorCountPhrase(1, "type"), std::string("1 type error"));
-        });
+        it("pluralizes",
+           []() { assertEqual(errorCountPhrase(3, "type"), std::string("3 type errors")); });
+        it("singularizes",
+           []() { assertEqual(errorCountPhrase(1, "type"), std::string("1 type error")); });
     });
 
     describe("ast::TypeName::dotted", []() {

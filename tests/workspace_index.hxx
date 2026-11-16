@@ -17,7 +17,9 @@ inline auto resolveTogether(kex::lsp::Workspace& db, const std::vector<std::stri
     std::vector<std::pair<std::string, const kex::semantic::TypeChecker*>> checked;
     for (const auto& path : paths) {
         auto* state = db.fileState(path);
-        if (!state) continue;
+        if (!state) {
+            continue;
+        }
         auto& analyzer = *analyses.emplace_back(std::make_unique<kex::semantic::Analyzer>());
         analyzer.setIndexesNames(true);
         analyzer.analyze(state->ast);

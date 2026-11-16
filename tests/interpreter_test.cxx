@@ -15,13 +15,13 @@ using namespace test;
 // Runs `source` as the walker runs a program: the modules it uses merged in,
 // expanded and checked first (kex::driver::prepareForWalker), the evaluator
 // reading the checked answers.
-auto runChecked(const std::string& source, Evaluator& evaluator,
-                const std::vector<std::string>& roots = {}) -> ValuePtr {
+auto runChecked(
+    const std::string& source, Evaluator& evaluator, const std::vector<std::string>& roots = {})
+    -> ValuePtr {
     Lexer lexer(source);
     Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
-    const auto checked =
-        driver::prepareForWalker(program, roots, &defaultPreludeInterfaces());
+    const auto checked = driver::prepareForWalker(program, roots, &defaultPreludeInterfaces());
     evaluator.setProgram(&*checked->program);
     return evaluator.execute(program);
 }
@@ -78,115 +78,103 @@ auto runWithModuleRoots(const std::string& source, std::vector<std::string> root
 int main() {
     describe("Interpreter — intersection and row annotations", []() {
         it("requires every open-row field and its declared runtime type", []() {
-            auto result = run(
-                "record Contact do\n"
-                "  name : String\n"
-                "  age : Integer\n"
-                "end\n"
-                "describe : { name: String, age: Integer } -> String\n"
-                "let describe(contact) = contact.name\n"
-                "main do describe(Contact { name: \"Ada\", age: 36 }) end\n");
-            assertEqual(std::get<StringValue>(result->data).value,
-                        std::string("Ada"));
+            auto result =
+                run("record Contact do\n"
+                    "  name : String\n"
+                    "  age : Integer\n"
+                    "end\n"
+                    "describe : { name: String, age: Integer } -> String\n"
+                    "let describe(contact) = contact.name\n"
+                    "main do describe(Contact { name: \"Ada\", age: 36 }) end\n");
+            assertEqual(std::get<StringValue>(result->data).value, std::string("Ada"));
         });
 
         it("does not let a map take an open-row overload", []() {
-            auto result = run(
-                "let describe(value: { name: String }) = \"record\"\n"
-                "let describe(value: { String: String }) = \"map\"\n"
-                "main do describe({ \"name\": \"Ada\" }) end\n");
-            assertEqual(std::get<StringValue>(result->data).value,
-                        std::string("map"));
+            auto result =
+                run("let describe(value: { name: String }) = \"record\"\n"
+                    "let describe(value: { String: String }) = \"map\"\n"
+                    "main do describe({ \"name\": \"Ada\" }) end\n");
+            assertEqual(std::get<StringValue>(result->data).value, std::string("map"));
         });
 
         it("requires both sides when dispatching an intersection overload", []() {
-            auto result = run(
-                "record Contact do\n"
-                "  name : String\n"
-                "  age : Integer\n"
-                "end\n"
-                "let describe(value: { name: String } & { age: Integer }) = \"both\"\n"
-                "let describe(value: { name: String }) = \"named\"\n"
-                "main do describe(Contact { name: \"Ada\", age: 36 }) end\n");
-            assertEqual(std::get<StringValue>(result->data).value,
-                        std::string("both"));
+            auto result =
+                run("record Contact do\n"
+                    "  name : String\n"
+                    "  age : Integer\n"
+                    "end\n"
+                    "let describe(value: { name: String } & { age: Integer }) = \"both\"\n"
+                    "let describe(value: { name: String }) = \"named\"\n"
+                    "main do describe(Contact { name: \"Ada\", age: 36 }) end\n");
+            assertEqual(std::get<StringValue>(result->data).value, std::string("both"));
         });
     });
 
     describe("Interpreter — Modules", []() {
         it("imports selected module exports with using", []() {
-            auto result = run(
-                "module Util do\n"
-                "  let twice(n) = n * 2\n"
-                "end\n"
-                "main do\n"
-                "  using Util, only: [twice]\n"
-                "  twice(21)\n"
-                "end\n"
-            );
+            auto result =
+                run("module Util do\n"
+                    "  let twice(n) = n * 2\n"
+                    "end\n"
+                    "main do\n"
+                    "  using Util, only: [twice]\n"
+                    "  twice(21)\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
         });
 
         it("calls a module function through its qualified name", []() {
-            auto result = run(
-                "module Util do\n"
-                "  let twice(n) = n * 2\n"
-                "end\n"
-                "main do\n"
-                "  Util.twice(21)\n"
-                "end\n"
-            );
+            auto result =
+                run("module Util do\n"
+                    "  let twice(n) = n * 2\n"
+                    "end\n"
+                    "main do\n"
+                    "  Util.twice(21)\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
         });
 
         it("keeps module ADT constructors qualified until using", []() {
-            auto qualified = run(
-                "module Modes do\n"
-                "  type OpenMode = Read | Write\n"
-                "end\n"
-                "main do Modes.Read end\n");
+            auto qualified =
+                run("module Modes do\n"
+                    "  type OpenMode = Read | Write\n"
+                    "end\n"
+                    "main do Modes.Read end\n");
             const auto& mode = std::get<VariantValue>(qualified->data);
             assertEqual(mode.tag, std::string("Read"));
             assertEqual(mode.parentType, std::string("OpenMode"));
 
             bool rejectedBare = false;
             try {
-                run(
-                    "module Modes do\n"
+                run("module Modes do\n"
                     "  type OpenMode = Read | Write\n"
                     "end\n"
                     "main do Read end\n");
             } catch (const RuntimeError& error) {
-                rejectedBare =
-                    std::string(error.what()).find("Undefined identifier: Read") !=
-                    std::string::npos;
+                rejectedBare = std::string(error.what()).find("Undefined identifier: Read") !=
+                               std::string::npos;
             }
-            assertTrue(rejectedBare,
-                       "module constructor leaked into the global scope");
+            assertTrue(rejectedBare, "module constructor leaked into the global scope");
 
-            auto imported = run(
-                "module Modes do\n"
-                "  type OpenMode = Read | Write\n"
-                "end\n"
-                "using Modes\n"
-                "main do Read end\n");
-            assertEqual(std::get<VariantValue>(imported->data).tag,
-                        std::string("Read"));
+            auto imported =
+                run("module Modes do\n"
+                    "  type OpenMode = Read | Write\n"
+                    "end\n"
+                    "using Modes\n"
+                    "main do Read end\n");
+            assertEqual(std::get<VariantValue>(imported->data).tag, std::string("Read"));
         });
 
         it("honors visibility for module ADT constructors", []() {
-            auto publicConstructor = run(
-                "module Modes do\n"
-                "  public do\n"
-                "    type OpenMode = Read | Write\n"
-                "  end\n"
-                "end\n"
-                "using Modes\n"
-                "main do Read end\n");
-            assertEqual(
-                std::get<VariantValue>(
-                    publicConstructor->data).tag,
-                std::string("Read"));
+            auto publicConstructor =
+                run("module Modes do\n"
+                    "  public do\n"
+                    "    type OpenMode = Read | Write\n"
+                    "  end\n"
+                    "end\n"
+                    "using Modes\n"
+                    "main do Read end\n");
+            assertEqual(std::get<VariantValue>(publicConstructor->data).tag, std::string("Read"));
 
             assertTrue(checkerReports(
                 "module Secrets do\n"
@@ -199,26 +187,24 @@ int main() {
         });
 
         it("does not export an alias target as a constructor", []() {
-            auto result = run(
-                "module Paths do\n"
-                "  type FilePath = String\n"
-                "end\n"
-                "using Paths\n"
-                "main do String end\n");
+            auto result =
+                run("module Paths do\n"
+                    "  type FilePath = String\n"
+                    "end\n"
+                    "using Paths\n"
+                    "main do String end\n");
             assertFalse(
-                std::holds_alternative<VariantValue>(
-                    result->data),
+                std::holds_alternative<VariantValue>(result->data),
                 "using a module alias must not replace String");
         });
 
         it("does not treat an extra module overload argument as a receiver", []() {
-            auto result = run(
-                "module Replies do\n"
-                "  let build(a, b) = a + b\n"
-                "  let build(a, b, c) = a + b + c\n"
-                "end\n"
-                "main do Replies.build(10, 20, 12) end\n"
-            );
+            auto result =
+                run("module Replies do\n"
+                    "  let build(a, b) = a + b\n"
+                    "  let build(a, b, c) = a + b + c\n"
+                    "end\n"
+                    "main do Replies.build(10, 20, 12) end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
         });
 
@@ -244,8 +230,7 @@ int main() {
 
         it("qualifies a leaf declaration by its source path", []() {
             namespace fs = std::filesystem;
-            const auto root =
-                fs::temp_directory_path() / "kex-qualified-leaf-load-test";
+            const auto root = fs::temp_directory_path() / "kex-qualified-leaf-load-test";
             fs::remove_all(root);
             fs::create_directories(root / "acme");
             {
@@ -311,18 +296,18 @@ int main() {
         });
 
         it("allows private module functions only from within their module", []() {
-            auto result = run(
-                "module Secrets do\n"
-                "  private do\n"
-                "    let hidden() = 42\n"
-                "  end\n"
-                "  public do\n"
-                "    let reveal() = hidden()\n"
-                "  end\n"
-                "end\n"
-                "main do\n"
-                "  Secrets.reveal()\n"
-                "end\n");
+            auto result =
+                run("module Secrets do\n"
+                    "  private do\n"
+                    "    let hidden() = 42\n"
+                    "  end\n"
+                    "  public do\n"
+                    "    let reveal() = hidden()\n"
+                    "  end\n"
+                    "end\n"
+                    "main do\n"
+                    "  Secrets.reveal()\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
 
             assertTrue(checkerReports(
@@ -351,17 +336,17 @@ int main() {
         });
 
         it("resolves a filtered forward re-export as a nested namespace", []() {
-            auto result = run(
-                "module App do\n"
-                "  export Http.Methods, as: Methods, only: [get]\n"
-                "end\n"
-                "module Http.Methods do\n"
-                "  let get() = 42\n"
-                "  let post() = 99\n"
-                "end\n"
-                "main do\n"
-                "  App.Methods.get()\n"
-                "end\n");
+            auto result =
+                run("module App do\n"
+                    "  export Http.Methods, as: Methods, only: [get]\n"
+                    "end\n"
+                    "module Http.Methods do\n"
+                    "  let get() = 42\n"
+                    "  let post() = 99\n"
+                    "end\n"
+                    "main do\n"
+                    "  App.Methods.get()\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
         });
 
@@ -381,34 +366,32 @@ int main() {
         it("rejects a module exporting itself", []() {
             bool rejected = false;
             try {
-                run(
-                    "module App do\n"
+                run("module App do\n"
                     "  export App\n"
                     "end\n");
             } catch (const RuntimeError& error) {
-                rejected = std::string(error.what()).find("module cannot export itself")
-                    != std::string::npos;
+                rejected = std::string(error.what()).find("module cannot export itself") !=
+                           std::string::npos;
             }
             assertTrue(rejected);
         });
 
         it("uses an import alias for qualified access", []() {
-            auto result = run(
-                "module Util do\n"
-                "  let twice(n) = n * 2\n"
-                "end\n"
-                "main do\n"
-                "  using Util, as: Tools\n"
-                "  Tools.twice(21)\n"
-                "end\n");
+            auto result =
+                run("module Util do\n"
+                    "  let twice(n) = n * 2\n"
+                    "end\n"
+                    "main do\n"
+                    "  using Util, as: Tools\n"
+                    "  Tools.twice(21)\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
         });
 
         it("does not leak names from a scoped using block", []() {
             bool rejected = false;
             try {
-                run(
-                    "module Util do\n"
+                run("module Util do\n"
                     "  let twice(n) = n * 2\n"
                     "end\n"
                     "main do\n"
@@ -418,33 +401,32 @@ int main() {
                     "  twice(21)\n"
                     "end\n");
             } catch (const RuntimeError& error) {
-                rejected = std::string(error.what()).find("Undefined function: twice")
-                    != std::string::npos;
+                rejected = std::string(error.what()).find("Undefined function: twice") !=
+                           std::string::npos;
             }
             assertTrue(rejected);
         });
 
         it("lets an explicit import override a wildcard import", []() {
-            auto result = run(
-                "module A do\n"
-                "  let value() = 1\n"
-                "end\n"
-                "module B do\n"
-                "  let value() = 2\n"
-                "end\n"
-                "main do\n"
-                "  using A\n"
-                "  using B, only: [value]\n"
-                "  value()\n"
-                "end\n");
+            auto result =
+                run("module A do\n"
+                    "  let value() = 1\n"
+                    "end\n"
+                    "module B do\n"
+                    "  let value() = 2\n"
+                    "end\n"
+                    "main do\n"
+                    "  using A\n"
+                    "  using B, only: [value]\n"
+                    "  value()\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(2));
         });
 
         it("rejects ambiguous wildcard imports", []() {
             bool rejected = false;
             try {
-                run(
-                    "module A do\n"
+                run("module A do\n"
                     "  let value() = 1\n"
                     "end\n"
                     "module B do\n"
@@ -455,8 +437,8 @@ int main() {
                     "  using B\n"
                     "end\n");
             } catch (const RuntimeError& error) {
-                rejected = std::string(error.what()).find("ambiguous name `value`")
-                    != std::string::npos;
+                rejected =
+                    std::string(error.what()).find("ambiguous name `value`") != std::string::npos;
             }
             assertTrue(rejected);
         });
@@ -468,47 +450,46 @@ int main() {
             // import made `using` the two modules together refuse the program
             // outright, whether or not it ever wrote a bare `get`
             // (kexhq/kex#272).
-            auto result = run(
-                "module Dsl do\n"
-                "  let get(path: String) = path\n"
-                "end\n"
-                "record Bag do\n"
-                "  n : Integer\n"
-                "end\n"
-                "module Headers do\n"
-                "  make Bag do\n"
-                "    let get(k: Integer) = @n + k\n"
-                "  end\n"
-                "end\n"
-                "main do\n"
-                "  using Dsl\n"
-                "  using Headers\n"
-                "  Bag { n: 1 }.get(2)\n"
-                "end\n");
+            auto result =
+                run("module Dsl do\n"
+                    "  let get(path: String) = path\n"
+                    "end\n"
+                    "record Bag do\n"
+                    "  n : Integer\n"
+                    "end\n"
+                    "module Headers do\n"
+                    "  make Bag do\n"
+                    "    let get(k: Integer) = @n + k\n"
+                    "  end\n"
+                    "end\n"
+                    "main do\n"
+                    "  using Dsl\n"
+                    "  using Headers\n"
+                    "  Bag { n: 1 }.get(2)\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(3));
         });
 
         it("keeps imports inside a visibility block positional and scoped", []() {
-            auto inside = run(
-                "module Util do\n"
-                "  let value() = 42\n"
-                "end\n"
-                "module App do\n"
-                "  private do\n"
-                "    using Util, only: [value]\n"
-                "    let inside() = value()\n"
-                "  end\n"
-                "  let reveal() = inside()\n"
-                "end\n"
-                "main do\n"
-                "  App.reveal()\n"
-                "end\n");
+            auto inside =
+                run("module Util do\n"
+                    "  let value() = 42\n"
+                    "end\n"
+                    "module App do\n"
+                    "  private do\n"
+                    "    using Util, only: [value]\n"
+                    "    let inside() = value()\n"
+                    "  end\n"
+                    "  let reveal() = inside()\n"
+                    "end\n"
+                    "main do\n"
+                    "  App.reveal()\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(inside->data).value, int64_t(42));
 
             bool outsideRejected = false;
             try {
-                run(
-                    "module Util do\n"
+                run("module Util do\n"
                     "  let value() = 42\n"
                     "end\n"
                     "module App do\n"
@@ -521,8 +502,8 @@ int main() {
                     "  App.outside()\n"
                     "end\n");
             } catch (const RuntimeError& error) {
-                outsideRejected = std::string(error.what()).find("Undefined function: value")
-                    != std::string::npos;
+                outsideRejected = std::string(error.what()).find("Undefined function: value") !=
+                                  std::string::npos;
             }
             assertTrue(outsideRejected);
         });
@@ -535,7 +516,9 @@ int main() {
         auto mapKeys = [](const ValuePtr& v) {
             std::string out;
             for (const auto& [k, val] : std::get<MapValue>(v->data).entries) {
-                if (!out.empty()) out += ",";
+                if (!out.empty()) {
+                    out += ",";
+                }
                 out += std::get<StringValue>(k->data).value + "=" +
                        std::to_string(std::get<IntValue>(val->data).value);
             }
@@ -543,43 +526,48 @@ int main() {
         };
 
         it("spreads a map and appends new keys", [mapKeys]() {
-            auto result = run("main do\n"
-                              "  let m = { \"a\": 1 }\n"
-                              "  { ...m, \"b\": 2 }\n"
-                              "end\n");
+            auto result =
+                run("main do\n"
+                    "  let m = { \"a\": 1 }\n"
+                    "  { ...m, \"b\": 2 }\n"
+                    "end\n");
             assertEqual(mapKeys(result), std::string("a=1,b=2"));
         });
 
         it("lets a later key override a spread", [mapKeys]() {
-            auto result = run("main do\n"
-                              "  let m = { \"a\": 1, \"b\": 2 }\n"
-                              "  { ...m, \"b\": 99 }\n"
-                              "end\n");
+            auto result =
+                run("main do\n"
+                    "  let m = { \"a\": 1, \"b\": 2 }\n"
+                    "  { ...m, \"b\": 99 }\n"
+                    "end\n");
             assertEqual(mapKeys(result), std::string("a=1,b=99"));
         });
 
         it("lets a later spread override an earlier key", [mapKeys]() {
-            auto result = run("main do\n"
-                              "  let m = { \"b\": 2 }\n"
-                              "  { \"b\": 99, ...m }\n"
-                              "end\n");
+            auto result =
+                run("main do\n"
+                    "  let m = { \"b\": 2 }\n"
+                    "  { \"b\": 99, ...m }\n"
+                    "end\n");
             assertEqual(mapKeys(result), std::string("b=2"));
         });
 
         it("merges two spreads with the later one winning", [mapKeys]() {
-            auto result = run("main do\n"
-                              "  let m = { \"a\": 1, \"b\": 2 }\n"
-                              "  let n = { \"b\": 20, \"c\": 30 }\n"
-                              "  { ...m, ...n }\n"
-                              "end\n");
+            auto result =
+                run("main do\n"
+                    "  let m = { \"a\": 1, \"b\": 2 }\n"
+                    "  let n = { \"b\": 20, \"c\": 30 }\n"
+                    "  { ...m, ...n }\n"
+                    "end\n");
             assertEqual(mapKeys(result), std::string("a=1,b=20,c=30"));
         });
 
         it("spreads a list into a list literal", []() {
-            auto result = run("main do\n"
-                              "  let xs = [1, 2]\n"
-                              "  [0, ...xs, 3].length()\n"
-                              "end\n");
+            auto result =
+                run("main do\n"
+                    "  let xs = [1, 2]\n"
+                    "  [0, ...xs, 3].length()\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(4));
         });
     });
@@ -688,18 +676,17 @@ int main() {
         });
 
         it("computes factorial(25), far beyond int64_t range", []() {
-            auto result = run(
-                "let factorial(n) do\n"
-                "  if n <= 1\n"
-                "    1\n"
-                "  else\n"
-                "    n * factorial(n - 1)\n"
-                "  end\n"
-                "end\n"
-                "main do\n"
-                "  factorial(25)\n"
-                "end\n"
-            );
+            auto result =
+                run("let factorial(n) do\n"
+                    "  if n <= 1\n"
+                    "    1\n"
+                    "  else\n"
+                    "    n * factorial(n - 1)\n"
+                    "  end\n"
+                    "end\n"
+                    "main do\n"
+                    "  factorial(25)\n"
+                    "end\n");
             assertEqual(result->toString(), std::string("15511210043330985984000000"));
         });
 
@@ -720,51 +707,48 @@ int main() {
         });
 
         it("equates a bignum with an equal-valued Int-shaped literal", []() {
-            auto result = run(
-                "main do\n  let big = 100000000000000000000\n  big == 100000000000000000000\nend\n"
-            );
+            auto result =
+                run("main do\n  let big = 100000000000000000000\n  big == "
+                    "100000000000000000000\nend\n");
             assertTrue(std::get<BoolValue>(result->data).value);
         });
 
         it("divides and computes modulo on a bignum", []() {
             assertEqual(
                 run("main do\n  100000000000000000000 / 3\nend\n")->toString(),
-                std::string("33333333333333333333")
-            );
+                std::string("33333333333333333333"));
             assertEqual(
-                run("main do\n  100000000000000000000 % 7\nend\n")->toString(),
-                std::string("2")
-            );
+                run("main do\n  100000000000000000000 % 7\nend\n")->toString(), std::string("2"));
         });
 
         it("matches a match clause against a big integer literal pattern", []() {
-            auto result = run(
-                "main do\n"
-                "  let big = 100000000000000000000\n"
-                "  match big do\n"
-                "    100000000000000000000 => \"matched\"\n"
-                "    _ => \"no match\"\n"
-                "  end\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let big = 100000000000000000000\n"
+                    "  match big do\n"
+                    "    100000000000000000000 => \"matched\"\n"
+                    "    _ => \"no match\"\n"
+                    "  end\n"
+                    "end\n");
             assertEqual(std::get<StringValue>(result->data).value, std::string("matched"));
         });
 
         it("even?/odd? work on a bignum", []() {
-            assertTrue(std::get<BoolValue>(
-                run("main do\n  100000000000000000000.even?\nend\n")->data).value);
-            assertTrue(std::get<BoolValue>(
-                run("main do\n  (100000000000000000000 + 1).odd?\nend\n")->data).value);
+            assertTrue(
+                std::get<BoolValue>(run("main do\n  100000000000000000000.even?\nend\n")->data)
+                    .value);
+            assertTrue(
+                std::get<BoolValue>(run("main do\n  (100000000000000000000 + 1).odd?\nend\n")->data)
+                    .value);
         });
 
         it("dispatches shorthand method callbacks through source-owned receiver methods", []() {
-            auto result = run(
-                "main do\n"
-                "  var values = [1, 2, 3, 4]\n"
-                "  values.filter!(&.even?)\n"
-                "  values\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  var values = [1, 2, 3, 4]\n"
+                    "  values.filter!(&.even?)\n"
+                    "  values\n"
+                    "end\n");
             assertEqual(result->toString(), std::string("[2, 4]"));
         });
 
@@ -774,48 +758,44 @@ int main() {
         });
 
         it("Integer.parse handles a string too large for int64_t", []() {
-            auto result = run(
-                "main do\n"
-                "  match Integer.parse(\"999999999999999999999999\") do\n"
-                "    Ok(n) => n\n"
-                "    Error(e) => e\n"
-                "  end\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  match Integer.parse(\"999999999999999999999999\") do\n"
+                    "    Ok(n) => n\n"
+                    "    Error(e) => e\n"
+                    "  end\n"
+                    "end\n");
             assertEqual(result->toString(), std::string("999999999999999999999999"));
         });
 
         it("Integer.parse returns a typed ParseError on invalid input", []() {
-            auto result = run(
-                "main do\n"
-                "  match Integer.parse(\"abc\") do\n"
-                "    Ok(_) => -1\n"
-                "    Error(e) => e.position\n"
-                "  end\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  match Integer.parse(\"abc\") do\n"
+                    "    Ok(_) => -1\n"
+                    "    Error(e) => e.position\n"
+                    "  end\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(0));
         });
 
         it("Integer.parse returns value and rest on trailing", []() {
-            auto result = run(
-                "main do\n"
-                "  match Integer.parse(\"12ab\") do\n"
-                "    Ok(_) => -1\n"
-                "    Error(e) => e.value\n"
-                "  end\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  match Integer.parse(\"12ab\") do\n"
+                    "    Ok(_) => -1\n"
+                    "    Error(e) => e.value\n"
+                    "  end\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(12));
         });
 
         it("Integer.parsePrefix returns Just((value, rest))", []() {
-            auto result = run(
-                "main do\n"
-                "  let Just(pair) = Integer.parsePrefix(\"123xyz\")\n"
-                "  pair\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let Just(pair) = Integer.parsePrefix(\"123xyz\")\n"
+                    "  pair\n"
+                    "end\n");
             auto& tup = std::get<TupleValue>(result->data);
             assertEqual(tup.elements.size(), size_t(2));
             assertEqual(std::get<IntValue>(tup.elements[0]->data).value, int64_t(123));
@@ -823,14 +803,13 @@ int main() {
         });
 
         it("Float.parse returns a typed ParseError on invalid input", []() {
-            auto result = run(
-                "main do\n"
-                "  match Float.parse(\"abc\") do\n"
-                "    Ok(f) => \"\"\n"
-                "    Error(e) => e.message\n"
-                "  end\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  match Float.parse(\"abc\") do\n"
+                    "    Ok(f) => \"\"\n"
+                    "    Error(e) => e.message\n"
+                    "  end\n"
+                    "end\n");
             assertEqual(std::get<StringValue>(result->data).value, std::string("invalid float"));
         });
 
@@ -838,35 +817,33 @@ int main() {
             for (const auto places : {"-1", "16", "999999999999999999999"}) {
                 bool rejected = false;
                 try {
-                    run(std::string("main do\n") +
-                        "  Kex.Intrinsic.Float.formatFixed(1.0, " + places +
-                        ")\nend\n");
+                    run(std::string("main do\n") + "  Kex.Intrinsic.Float.formatFixed(1.0, " +
+                        places + ")\nend\n");
                 } catch (const RuntimeError& error) {
-                    rejected = std::string(error.what()).find(
-                        "decimal places must be between 0 and 15") != std::string::npos;
+                    rejected =
+                        std::string(error.what()).find("decimal places must be between 0 and 15") !=
+                        std::string::npos;
                 }
                 assertTrue(rejected);
             }
         });
 
         it("Number.parse tries integer then falls back to float", []() {
-            auto ri = run(
-                "main do\n"
-                "  match Number.parse(\"42\") do\n"
-                "    Ok(n) => n\n"
-                "    Error(_) => -1\n"
-                "  end\n"
-                "end\n"
-            );
+            auto ri =
+                run("main do\n"
+                    "  match Number.parse(\"42\") do\n"
+                    "    Ok(n) => n\n"
+                    "    Error(_) => -1\n"
+                    "  end\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(ri->data).value, int64_t(42));
-            auto rf = run(
-                "main do\n"
-                "  match Number.parse(\"3.14\") do\n"
-                "    Ok(n) => n\n"
-                "    Error(_) => 0.0\n"
-                "  end\n"
-                "end\n"
-            );
+            auto rf =
+                run("main do\n"
+                    "  match Number.parse(\"3.14\") do\n"
+                    "    Ok(n) => n\n"
+                    "    Error(_) => 0.0\n"
+                    "  end\n"
+                    "end\n");
             assertTrue(std::holds_alternative<FloatValue>(rf->data));
         });
     });
@@ -921,7 +898,6 @@ int main() {
             auto result = run("main do\n  !true\nend\n");
             assertFalse(std::get<BoolValue>(result->data).value);
         });
-
     });
 
     describe("Interpreter — Variables", []() {
@@ -931,62 +907,56 @@ int main() {
         });
 
         it("var binding and reassignment", []() {
-            auto result = run(
-                "main do\n"
-                "  var x = 1\n"
-                "  x = 2\n"
-                "  x = 3\n"
-                "  x\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  var x = 1\n"
+                    "  x = 2\n"
+                    "  x = 3\n"
+                    "  x\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(3));
         });
 
         it("let propagates through expressions", []() {
-            auto result = run(
-                "main do\n"
-                "  let x = 5\n"
-                "  let y = x + 3\n"
-                "  y\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let x = 5\n"
+                    "  let y = x + 3\n"
+                    "  y\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(8));
         });
     });
 
     describe("Interpreter — Functions", []() {
         it("calls simple function", []() {
-            auto result = run(
-                "let double(n: Int) = n * 2\n"
-                "main do\n  double(21)\nend\n"
-            );
+            auto result =
+                run("let double(n: Int) = n * 2\n"
+                    "main do\n  double(21)\nend\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
         });
 
         it("calls function with multiple args", []() {
-            auto result = run(
-                "let add(a: Int, b: Int) = a + b\n"
-                "main do\n  add(3, 4)\nend\n"
-            );
+            auto result =
+                run("let add(a: Int, b: Int) = a + b\n"
+                    "main do\n  add(3, 4)\nend\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(7));
         });
 
         it("recursive function with pattern matching", []() {
-            auto result = run(
-                "let factorial(0) = 1\n"
-                "let factorial(n: Int) = n * factorial(n - 1)\n"
-                "main do\n  factorial(5)\nend\n"
-            );
+            auto result =
+                run("let factorial(0) = 1\n"
+                    "let factorial(n: Int) = n * factorial(n - 1)\n"
+                    "main do\n  factorial(5)\nend\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(120));
         });
 
         it("recursive fibonacci", []() {
-            auto result = run(
-                "let fib(0) = 0\n"
-                "let fib(1) = 1\n"
-                "let fib(n: Int) = fib(n - 1) + fib(n - 2)\n"
-                "main do\n  fib(10)\nend\n"
-            );
+            auto result =
+                run("let fib(0) = 0\n"
+                    "let fib(1) = 1\n"
+                    "let fib(n: Int) = fib(n - 1) + fib(n - 2)\n"
+                    "main do\n  fib(10)\nend\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(55));
         });
 
@@ -996,85 +966,79 @@ int main() {
                 "  let age = 2026 - birthYear\n"
                 "  IO.printLine(\"Hello, ${name} (${age})\")\n"
                 "end\n"
-                "main do\n  greet(\"Alice\", 1994)\nend\n"
-            );
+                "main do\n  greet(\"Alice\", 1994)\nend\n");
             assertEqual(output, std::string("Hello, Alice (32)\n"));
         });
 
-        it("nested local function (let name(params) do...end inside a body) keeps its params", []() {
-            // Parser::parseLetExpr desugars this shape to a Lambda — its
-            // params were previously dropped entirely (hardcoded `{}`),
-            // so the body's references to them resolved to whatever the
-            // *enclosing* scope happened to have, or nothing at all.
-            auto result = run(
-                "let countTo(n: Int) do\n"
-                "  let loop(state: Int) do\n"
-                "    if state >= n\n"
-                "      state\n"
-                "    else\n"
-                "      loop(state + 1)\n"
-                "    end\n"
-                "  end\n"
-                "  loop(0)\n"
-                "end\n"
-                "main do\n  countTo(5)\nend\n"
-            );
-            assertEqual(std::get<IntValue>(result->data).value, int64_t(5));
-        });
+        it("nested local function (let name(params) do...end inside a body) keeps its params",
+           []() {
+               // Parser::parseLetExpr desugars this shape to a Lambda — its
+               // params were previously dropped entirely (hardcoded `{}`),
+               // so the body's references to them resolved to whatever the
+               // *enclosing* scope happened to have, or nothing at all.
+               auto result =
+                   run("let countTo(n: Int) do\n"
+                       "  let loop(state: Int) do\n"
+                       "    if state >= n\n"
+                       "      state\n"
+                       "    else\n"
+                       "      loop(state + 1)\n"
+                       "    end\n"
+                       "  end\n"
+                       "  loop(0)\n"
+                       "end\n"
+                       "main do\n  countTo(5)\nend\n");
+               assertEqual(std::get<IntValue>(result->data).value, int64_t(5));
+           });
     });
 
     describe("Interpreter — Control Flow", []() {
         it("if true branch", []() {
-            auto result = run(
-                "main do\n"
-                "  if true\n    1\n  else\n    2\n  end\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  if true\n    1\n  else\n    2\n  end\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(1));
         });
 
         it("if false branch", []() {
-            auto result = run(
-                "main do\n"
-                "  if false\n    1\n  else\n    2\n  end\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  if false\n    1\n  else\n    2\n  end\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(2));
         });
 
         it("if with comparison", []() {
-            auto result = run(
-                "main do\n"
-                "  let x = 10\n"
-                "  if x > 5\n    \"big\"\n  else\n    \"small\"\n  end\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let x = 10\n"
+                    "  if x > 5\n    \"big\"\n  else\n    \"small\"\n  end\n"
+                    "end\n");
             assertEqual(std::get<StringValue>(result->data).value, std::string("big"));
         });
 
         it("match expression", []() {
-            auto result = run(
-                "main do\n"
-                "  match 42 do\n"
-                "    0 => \"zero\"\n"
-                "    42 => \"the answer\"\n"
-                "    _ => \"other\"\n"
-                "  end\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  match 42 do\n"
+                    "    0 => \"zero\"\n"
+                    "    42 => \"the answer\"\n"
+                    "    _ => \"other\"\n"
+                    "  end\n"
+                    "end\n");
             assertEqual(std::get<StringValue>(result->data).value, std::string("the answer"));
         });
 
         it("match with guard", []() {
-            auto result = run(
-                "main do\n"
-                "  match 85 do\n"
-                "    n when n >= 90 => \"A\"\n"
-                "    n when n >= 80 => \"B\"\n"
-                "    _ => \"F\"\n"
-                "  end\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  match 85 do\n"
+                    "    n when n >= 90 => \"A\"\n"
+                    "    n when n >= 80 => \"B\"\n"
+                    "    _ => \"F\"\n"
+                    "  end\n"
+                    "end\n");
             assertEqual(std::get<StringValue>(result->data).value, std::string("B"));
         });
 
@@ -1083,20 +1047,19 @@ int main() {
             // evaluated no-op (silently returned None without running the
             // body even once). It must actually run, repeatedly, until a
             // `return` inside it throws (Kex has no break/continue).
-            auto result = run(
-                "let countTo(limit: Int) -> Int do\n"
-                "  var i = 0\n"
-                "  loop do\n"
-                "    if i >= limit\n"
-                "      return i\n"
-                "    end\n"
-                "    i = i + 1\n"
-                "  end\n"
-                "end\n"
-                "main do\n"
-                "  countTo(5)\n"
-                "end\n"
-            );
+            auto result =
+                run("let countTo(limit: Int) -> Int do\n"
+                    "  var i = 0\n"
+                    "  loop do\n"
+                    "    if i >= limit\n"
+                    "      return i\n"
+                    "    end\n"
+                    "    i = i + 1\n"
+                    "  end\n"
+                    "end\n"
+                    "main do\n"
+                    "  countTo(5)\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(5));
         });
 
@@ -1106,26 +1069,24 @@ int main() {
             // as a primary if-expression requiring its own `do` block, not
             // as a trailing guard. `return if COND` should short-circuit
             // with None when COND is true, and otherwise fall through.
-            auto guarded = run(
-                "let f(skip: Bool) -> String do\n"
-                "  return if skip\n"
-                "  return \"ran\"\n"
-                "end\n"
-                "main do\n"
-                "  f(true)\n"
-                "end\n"
-            );
+            auto guarded =
+                run("let f(skip: Bool) -> String do\n"
+                    "  return if skip\n"
+                    "  return \"ran\"\n"
+                    "end\n"
+                    "main do\n"
+                    "  f(true)\n"
+                    "end\n");
             assertTrue(guarded->isNone());
 
-            auto notGuarded = run(
-                "let f(skip: Bool) -> String do\n"
-                "  return if skip\n"
-                "  return \"ran\"\n"
-                "end\n"
-                "main do\n"
-                "  f(false)\n"
-                "end\n"
-            );
+            auto notGuarded =
+                run("let f(skip: Bool) -> String do\n"
+                    "  return if skip\n"
+                    "  return \"ran\"\n"
+                    "end\n"
+                    "main do\n"
+                    "  f(false)\n"
+                    "end\n");
             assertEqual(std::get<StringValue>(notGuarded->data).value, std::string("ran"));
         });
     });
@@ -1145,12 +1106,11 @@ int main() {
         });
 
         it("tuple destructuring", []() {
-            auto result = run(
-                "main do\n"
-                "  let (a, b) = (10, 20)\n"
-                "  a + b\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let (a, b) = (10, 20)\n"
+                    "  a + b\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(30));
         });
 
@@ -1158,13 +1118,12 @@ int main() {
             // Regression test: `let (Tag(x), y) = ...` used to only bind
             // bare-variable tuple elements; a ConstructorPattern element
             // like Tag(x) was silently skipped, leaving `x` undefined.
-            auto result = run(
-                "type Wrapped = Tag(Int)\n"
-                "main do\n"
-                "  let (Tag(x), y) = (Tag(7), 3)\n"
-                "  x + y\n"
-                "end\n"
-            );
+            auto result =
+                run("type Wrapped = Tag(Int)\n"
+                    "main do\n"
+                    "  let (Tag(x), y) = (Tag(7), 3)\n"
+                    "  x + y\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(10));
         });
 
@@ -1176,152 +1135,137 @@ int main() {
         });
 
         it("routes bare UFCS through source-owned receiver methods", []() {
-            auto result = run(
-                "main do\n"
-                "  let doubled = map([1, 2, 3]) { |n| n * 2 }\n"
-                "  let odds = filter(1..5) { |n| n.odd? }\n"
-                "  (doubled, odds)\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let doubled = map([1, 2, 3]) { |n| n * 2 }\n"
+                    "  let odds = filter(1..5) { |n| n.odd? }\n"
+                    "  (doubled, odds)\n"
+                    "end\n");
             assertEqual(result->toString(), std::string("([2, 4, 6], [1, 3, 5])"));
         });
     });
 
     describe("Interpreter — String Interpolation", []() {
         it("interpolates variables", []() {
-            auto result = run(
-                "main do\n"
-                "  let name = \"World\"\n"
-                "  \"Hello, ${name}!\"\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let name = \"World\"\n"
+                    "  \"Hello, ${name}!\"\n"
+                    "end\n");
             assertEqual(std::get<StringValue>(result->data).value, std::string("Hello, World!"));
         });
 
         it("interpolates expressions", []() {
-            auto result = run(
-                "main do\n"
-                "  let x = 5\n"
-                "  \"x + 3 = ${x + 3}\"\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let x = 5\n"
+                    "  \"x + 3 = ${x + 3}\"\n"
+                    "end\n");
             assertEqual(std::get<StringValue>(result->data).value, std::string("x + 3 = 8"));
         });
 
         it("interpolates function calls", []() {
-            auto result = run(
-                "let double(n: Int) = n * 2\n"
-                "main do\n"
-                "  \"double(21) = ${double(21)}\"\n"
-                "end\n"
-            );
+            auto result =
+                run("let double(n: Int) = n * 2\n"
+                    "main do\n"
+                    "  \"double(21) = ${double(21)}\"\n"
+                    "end\n");
             assertEqual(std::get<StringValue>(result->data).value, std::string("double(21) = 42"));
         });
 
         it("does not interpolate raw backtick strings", []() {
-            auto result = run(
-                "main do\n"
-                "  let name = \"World\"\n"
-                "  `Hello, ${name}!`\n"
-                "end\n"
-            );
-            assertEqual(std::get<StringValue>(result->data).value,
-                        std::string("Hello, ${name}!"));
+            auto result =
+                run("main do\n"
+                    "  let name = \"World\"\n"
+                    "  `Hello, ${name}!`\n"
+                    "end\n");
+            assertEqual(std::get<StringValue>(result->data).value, std::string("Hello, ${name}!"));
         });
 
         it("evaluates dedented multiline raw strings", []() {
-            auto result = run(
-                "main do\n"
-                "  `\n"
-                "    first\n"
-                "      second\n"
-                "    `\n"
-                "end\n"
-            );
-            assertEqual(std::get<StringValue>(result->data).value,
-                        std::string("first\n  second\n"));
+            auto result =
+                run("main do\n"
+                    "  `\n"
+                    "    first\n"
+                    "      second\n"
+                    "    `\n"
+                    "end\n");
+            assertEqual(
+                std::get<StringValue>(result->data).value, std::string("first\n  second\n"));
         });
 
         it("dedents by content, not by the closing backtick's column", []() {
-            auto result = run(
-                "main do\n"
-                "  `\n"
-                "    first\n"
-                "      second\n"
-                "`\n"
-                "end\n"
-            );
-            assertEqual(std::get<StringValue>(result->data).value,
-                        std::string("first\n  second\n"));
+            auto result =
+                run("main do\n"
+                    "  `\n"
+                    "    first\n"
+                    "      second\n"
+                    "`\n"
+                    "end\n");
+            assertEqual(
+                std::get<StringValue>(result->data).value, std::string("first\n  second\n"));
         });
 
         it("re-indents a block spliced into an indented hole", []() {
-            auto result = run(
-                "main do\n"
-                "  let body = `\n"
-                "    :ok\n"
-                "    :also_ok\n"
-                "  `\n"
-                "  $`\n"
-                "    def foo do\n"
-                "      ${body}\n"
-                "    end\n"
-                "  `\n"
-                "end\n"
-            );
-            assertEqual(std::get<StringValue>(result->data).value,
-                        std::string("def foo do\n  :ok\n  :also_ok\nend\n"));
+            auto result =
+                run("main do\n"
+                    "  let body = `\n"
+                    "    :ok\n"
+                    "    :also_ok\n"
+                    "  `\n"
+                    "  $`\n"
+                    "    def foo do\n"
+                    "      ${body}\n"
+                    "    end\n"
+                    "  `\n"
+                    "end\n");
+            assertEqual(
+                std::get<StringValue>(result->data).value,
+                std::string("def foo do\n  :ok\n  :also_ok\nend\n"));
         });
 
         it("leaves an inline hole unindented", []() {
-            auto result = run(
-                "main do\n"
-                "  let body = \"a\\nb\"\n"
-                "  $`\n"
-                "    x = ${body};\n"
-                "  `\n"
-                "end\n"
-            );
-            assertEqual(std::get<StringValue>(result->data).value,
-                        std::string("x = a\nb;\n"));
+            auto result =
+                run("main do\n"
+                    "  let body = \"a\\nb\"\n"
+                    "  $`\n"
+                    "    x = ${body};\n"
+                    "  `\n"
+                    "end\n");
+            assertEqual(std::get<StringValue>(result->data).value, std::string("x = a\nb;\n"));
         });
 
         it("calls raw tags with one part and an empty values list", []() {
-            auto result = run(
-                "let rawTag(parts, values) = "
-                "(parts.first.or(\"\"), values.count)\n"
-                "main do\n"
-                "  rawTag`hello`\n"
-                "end\n"
-            );
+            auto result =
+                run("let rawTag(parts, values) = "
+                    "(parts.first.or(\"\"), values.count)\n"
+                    "main do\n"
+                    "  rawTag`hello`\n"
+                    "end\n");
             assertEqual(result->toString(), std::string("(hello, 0)"));
         });
 
         it("evaluates parser-level interpolating backticks", []() {
-            auto result = run(
-                "let name = \"Ada\"\n"
-                "main do\n"
-                "  $`hello ${name}, ${20 + 22}!`\n"
-                "end\n");
-            assertEqual(
-                result->toString(), std::string("hello Ada, 42!"));
+            auto result =
+                run("let name = \"Ada\"\n"
+                    "main do\n"
+                    "  $`hello ${name}, ${20 + 22}!`\n"
+                    "end\n");
+            assertEqual(result->toString(), std::string("hello Ada, 42!"));
         });
 
         it("passes interpolated values to tags without stringifying", []() {
-            auto result = run(
-                "let inspectTag(parts, values) = (parts, values)\n"
-                "main do\n"
-                "  inspectTag$`left ${40 + 2} right`\n"
-                "end\n");
-            assertEqual(
-                result->toString(),
-                std::string("([left ,  right], [42])"));
+            auto result =
+                run("let inspectTag(parts, values) = (parts, values)\n"
+                    "main do\n"
+                    "  inspectTag$`left ${40 + 2} right`\n"
+                    "end\n");
+            assertEqual(result->toString(), std::string("([left ,  right], [42])"));
         });
 
         it("keeps escaped interpolation syntax literal", []() {
             auto result = run("main do\n  $`literal $${name}`\nend\n");
-            assertEqual(
-                result->toString(), std::string("literal ${name}"));
+            assertEqual(result->toString(), std::string("literal ${name}"));
         });
 
         it("supports raw backticks inside interpolation expressions", []() {
@@ -1367,8 +1311,7 @@ int main() {
             assertEqual(ok.tag, std::string("Ok"));
             const auto& line = std::get<VariantValue>(ok.args.at(0)->data);
             assertEqual(line.tag, std::string("Just"));
-            assertEqual(std::get<StringValue>(line.args.at(0)->data).value,
-                        std::string("hello"));
+            assertEqual(std::get<StringValue>(line.args.at(0)->data).value, std::string("hello"));
         });
 
         it("IO.readLine returns Ok(None) at EOF", []() {
@@ -1388,8 +1331,7 @@ int main() {
             std::cin.rdbuf(prevCin);
             const auto& character = std::get<VariantValue>(result->data);
             assertEqual(character.tag, std::string("Just"));
-            assertEqual(std::get<StringValue>(character.args.at(0)->data).value,
-                        std::string("a"));
+            assertEqual(std::get<StringValue>(character.args.at(0)->data).value, std::string("a"));
         });
 
         it("IO.getChar returns None at EOF", []() {
@@ -1403,7 +1345,8 @@ int main() {
 
     describe("Interpreter — File IO", []() {
         auto scratchPath = []() -> std::string {
-            return (std::filesystem::temp_directory_path() / "kex_interpreter_test_file_io.txt").string();
+            return (std::filesystem::temp_directory_path() / "kex_interpreter_test_file_io.txt")
+                .string();
         };
 
         it("writes and reads a file", [scratchPath]() {
@@ -1411,10 +1354,13 @@ int main() {
             std::filesystem::remove(path);
             auto result = runFS(
                 "main do\n"
-                "  FS.File.write(\"" + path + "\", \"hello\")\n"
-                "  FS.File.read(\"" + path + "\").or(\"\")\n"
-                "end\n"
-            );
+                "  FS.File.write(\"" +
+                path +
+                "\", \"hello\")\n"
+                "  FS.File.read(\"" +
+                path +
+                "\").or(\"\")\n"
+                "end\n");
             assertEqual(std::get<StringValue>(result->data).value, std::string("hello"));
             std::filesystem::remove(path);
         });
@@ -1440,11 +1386,16 @@ int main() {
             std::filesystem::remove(path);
             auto result = runFS(
                 "main do\n"
-                "  FS.File.write(\"" + path + "\", \"a\")\n"
-                "  FS.File.append(\"" + path + "\", \"b\")\n"
-                "  FS.File.read(\"" + path + "\").or(\"\")\n"
-                "end\n"
-            );
+                "  FS.File.write(\"" +
+                path +
+                "\", \"a\")\n"
+                "  FS.File.append(\"" +
+                path +
+                "\", \"b\")\n"
+                "  FS.File.read(\"" +
+                path +
+                "\").or(\"\")\n"
+                "end\n");
             assertEqual(std::get<StringValue>(result->data).value, std::string("ab"));
             std::filesystem::remove(path);
         });
@@ -1466,8 +1417,9 @@ int main() {
                     runFS("main do\n  " + expression + "\nend\n");
                 } catch (const std::exception& error) {
                     threw = true;
-                    assertTrue(std::string(error.what()).find(api + " is test-only")
-                               != std::string::npos, error.what());
+                    assertTrue(
+                        std::string(error.what()).find(api + " is test-only") != std::string::npos,
+                        error.what());
                 }
                 assertTrue(threw, "mock should be denied outside a test: " + api);
             }
@@ -1502,10 +1454,8 @@ int main() {
                 "  let appender = FS.File.open(\"mock.txt\", FS.Append).try\n"
                 "  appender.print(\"!\")\n"
                 "  FS.File.read(\"mock.txt\").or(\"\")\n"
-                "end\n"
-            );
-            assertEqual(std::get<StringValue>(result->data).value,
-                        std::string("new!"));
+                "end\n");
+            assertEqual(std::get<StringValue>(result->data).value, std::string("new!"));
         });
 
         it("lets trying rescue an OpenFailed file result", []() {
@@ -1518,8 +1468,7 @@ int main() {
                 "    OpenFailed(_) => \"failed\"\n"
                 "  end\n"
                 "end\n");
-            assertEqual(std::get<StringValue>(result->data).value,
-                        std::string("failed"));
+            assertEqual(std::get<StringValue>(result->data).value, std::string("failed"));
         });
 
         it("reading a nonexistent file returns ReadFailed", []() {
@@ -1539,8 +1488,7 @@ int main() {
                 "  let Ok(Just(line)) = handle.readLine\n"
                 "  content + line\n"
                 "end\n");
-            assertEqual(std::get<StringValue>(result->data).value,
-                        std::string("hello\nhello"));
+            assertEqual(std::get<StringValue>(result->data).value, std::string("hello\nhello"));
         });
 
         it("reset rewinds a handle to the start of the file", []() {
@@ -1553,8 +1501,8 @@ int main() {
                 "  let second = handle.read.try\n"
                 "  first + \"|\" + second\n"
                 "end\n");
-            assertEqual(std::get<StringValue>(result->data).value,
-                        std::string("hello world|hello world"));
+            assertEqual(
+                std::get<StringValue>(result->data).value, std::string("hello world|hello world"));
         });
 
         it("seek moves a handle's cursor to an absolute offset", []() {
@@ -1565,8 +1513,7 @@ int main() {
                 "  handle.seek(6).try\n"
                 "  handle.read.try\n"
                 "end\n");
-            assertEqual(std::get<StringValue>(result->data).value,
-                        std::string("world"));
+            assertEqual(std::get<StringValue>(result->data).value, std::string("world"));
         });
 
         it("seek and reset share the cursor readLine advances", []() {
@@ -1580,8 +1527,7 @@ int main() {
                 "  let Ok(Just(c)) = handle.readLine\n"
                 "  a + \"/\" + b + \"/\" + c\n"
                 "end\n");
-            assertEqual(std::get<StringValue>(result->data).value,
-                        std::string("one/two/one"));
+            assertEqual(std::get<StringValue>(result->data).value, std::string("one/two/one"));
         });
 
         it("deleting a nonexistent file answers DeleteFailed", []() {
@@ -1597,10 +1543,13 @@ int main() {
             std::filesystem::remove(path);
             auto result = runFS(
                 "main do\n"
-                "  FS.File.write(\"" + path + "\", \"a\\nb\\nc\")\n"
-                "  FS.File.readLines(\"" + path + "\").or([])\n"
-                "end\n"
-            );
+                "  FS.File.write(\"" +
+                path +
+                "\", \"a\\nb\\nc\")\n"
+                "  FS.File.readLines(\"" +
+                path +
+                "\").or([])\n"
+                "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(3));
             assertEqual(std::get<StringValue>(list.elements[0]->data).value, std::string("a"));
@@ -1613,10 +1562,13 @@ int main() {
             std::filesystem::remove(path);
             auto result = runFS(
                 "main do\n"
-                "  FS.File.write(\"" + path + "\", \"a\\nb\")\n"
-                "  FS.File.feed(\"" + path + "\").try.take(2)\n"
-                "end\n"
-            );
+                "  FS.File.write(\"" +
+                path +
+                "\", \"a\\nb\")\n"
+                "  FS.File.feed(\"" +
+                path +
+                "\").try.take(2)\n"
+                "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(2));
             assertEqual(std::get<StringValue>(list.elements[0]->data).value, std::string("a"));
@@ -1632,11 +1584,14 @@ int main() {
             std::filesystem::remove(path);
             auto result = runFS(
                 "main do\n"
-                "  FS.File.write(\"" + path + "\", \"a\\nb\\nc\")\n"
-                "  let lines = FS.File.feed(\"" + path + "\").try\n"
+                "  FS.File.write(\"" +
+                path +
+                "\", \"a\\nb\\nc\")\n"
+                "  let lines = FS.File.feed(\"" +
+                path +
+                "\").try\n"
                 "  lines.take(1) + lines.take(1) + lines.take(1) + lines.take(1)\n"
-                "end\n"
-            );
+                "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(3));
             assertEqual(std::get<StringValue>(list.elements[0]->data).value, std::string("a"));
@@ -1651,12 +1606,15 @@ int main() {
             std::filesystem::remove(path);
             auto result = runFS(
                 "main do\n"
-                "  FS.File.write(\"" + path + "\", \"a\\nb\\nc\")\n"
-                "  let handle = FS.File.open(\"" + path + "\", Read).try\n"
+                "  FS.File.write(\"" +
+                path +
+                "\", \"a\\nb\\nc\")\n"
+                "  let handle = FS.File.open(\"" +
+                path +
+                "\", Read).try\n"
                 "  handle.getLine\n"
                 "  handle.feed.try.take(5)\n"
-                "end\n"
-            );
+                "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(2));
             assertEqual(std::get<StringValue>(list.elements[0]->data).value, std::string("b"));
@@ -1677,12 +1635,11 @@ int main() {
             // the receiver used to fall back to an Atom that got silently
             // smuggled in as the step function's first argument, corrupting
             // the stream ("Cannot add Atom and Int" on .take()).
-            auto result = run(
-                "main do\n"
-                "  let naturals = Stream.from(0) { |n| n + 1 }\n"
-                "  naturals.take(3)\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let naturals = Stream.from(0) { |n| n + 1 }\n"
+                    "  naturals.take(3)\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(3));
             assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(0));
@@ -1706,16 +1663,15 @@ int main() {
             // "Just" — dispatch must map the variant back to its declaring
             // type, otherwise this silently falls back to the unrelated
             // list `map` builtin.
-            auto result = run(
-                "type Option<A> = Just(A) | Nothing\n"
-                "make Option<A> do\n"
-                "  let map(@Just(x), f) = Just(f(x))\n"
-                "  let map(@Nothing, _) = Nothing\n"
-                "end\n"
-                "main do\n"
-                "  Just(5).map { |x| x * 2 }\n"
-                "end\n"
-            );
+            auto result =
+                run("type Option<A> = Just(A) | Nothing\n"
+                    "make Option<A> do\n"
+                    "  let map(@Just(x), f) = Just(f(x))\n"
+                    "  let map(@Nothing, _) = Nothing\n"
+                    "end\n"
+                    "main do\n"
+                    "  Just(5).map { |x| x * 2 }\n"
+                    "end\n");
             auto& var = std::get<VariantValue>(result->data);
             assertEqual(var.tag, std::string("Just"));
             assertEqual(std::get<IntValue>(var.args.at(0)->data).value, int64_t(10));
@@ -1724,16 +1680,15 @@ int main() {
         it("make TypeName dispatches on a zero-arg variant (regression)", []() {
             // Zero-arg variant (Nothing) is now a VariantValue, dispatched
             // via the VariantValue receiverType case in the dispatch chain.
-            auto result = run(
-                "type Option<A> = Just(A) | Nothing\n"
-                "make Option<A> do\n"
-                "  let map(@Just(x), f) = Just(f(x))\n"
-                "  let map(@Nothing, _) = Nothing\n"
-                "end\n"
-                "main do\n"
-                "  Nothing.map { |x| x * 2 }\n"
-                "end\n"
-            );
+            auto result =
+                run("type Option<A> = Just(A) | Nothing\n"
+                    "make Option<A> do\n"
+                    "  let map(@Just(x), f) = Just(f(x))\n"
+                    "  let map(@Nothing, _) = Nothing\n"
+                    "end\n"
+                    "main do\n"
+                    "  Nothing.map { |x| x * 2 }\n"
+                    "end\n");
             auto& var = std::get<VariantValue>(result->data);
             assertTrue(var.tag == "Nothing");
         });
@@ -1745,26 +1700,24 @@ int main() {
             // used to leave `f` entirely absent from the RecordValue rather
             // than applying the declared default, breaking anything that
             // destructures/reads that field without setting it explicitly.
-            auto result = run(
-                "record Counter do\n"
-                "  value : Int = 0\n"
-                "end\n"
-                "main do\n"
-                "  Counter { }.value\n"
-                "end\n"
-            );
+            auto result =
+                run("record Counter do\n"
+                    "  value : Int = 0\n"
+                    "end\n"
+                    "main do\n"
+                    "  Counter { }.value\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(0));
         });
 
         it("explicit fields override declared defaults", []() {
-            auto result = run(
-                "record Counter do\n"
-                "  value : Int = 0\n"
-                "end\n"
-                "main do\n"
-                "  Counter { value: 99 }.value\n"
-                "end\n"
-            );
+            auto result =
+                run("record Counter do\n"
+                    "  value : Int = 0\n"
+                    "end\n"
+                    "main do\n"
+                    "  Counter { value: 99 }.value\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(99));
         });
 
@@ -1773,20 +1726,19 @@ int main() {
             // used to silently skip the private block entirely — execMakeDef
             // only handled bare FunctionDef items, not VisibilityBlock ones —
             // so `f` was never registered at all.
-            auto result = run(
-                "record Box do\n"
-                "  value : Int\n"
-                "end\n"
-                "make Box do\n"
-                "  let pub(b) = b.priv\n"
-                "  private do\n"
-                "    let priv(b) = b.value * 2\n"
-                "  end\n"
-                "end\n"
-                "main do\n"
-                "  Box { value: 5 }.pub\n"
-                "end\n"
-            );
+            auto result =
+                run("record Box do\n"
+                    "  value : Int\n"
+                    "end\n"
+                    "make Box do\n"
+                    "  let pub(b) = b.priv\n"
+                    "  private do\n"
+                    "    let priv(b) = b.value * 2\n"
+                    "  end\n"
+                    "end\n"
+                    "main do\n"
+                    "  Box { value: 5 }.pub\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(10));
         });
     });
@@ -1797,8 +1749,7 @@ int main() {
                 "main(args) do\n"
                 "  args\n"
                 "end\n",
-                {"foo", "bar"}
-            );
+                {"foo", "bar"});
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(2));
             assertEqual(std::get<StringValue>(list.elements[0]->data).value, std::string("foo"));
@@ -1833,7 +1784,8 @@ int main() {
 
         it("ENV.get with a default returns the default when unset", []() {
             unsetenv("KEX_TEST_ENV_VAR_UNSET");
-            auto result = run("main do\n  ENV.get(\"KEX_TEST_ENV_VAR_UNSET\", \"fallback\")\nend\n");
+            auto result =
+                run("main do\n  ENV.get(\"KEX_TEST_ENV_VAR_UNSET\", \"fallback\")\nend\n");
             assertEqual(std::get<StringValue>(result->data).value, std::string("fallback"));
         });
 
@@ -1913,8 +1865,7 @@ int main() {
                 "  { \"a\": 1 }.each do |key, value|\n"
                 "    IO.printLine(\"${key}=${value}\")\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             assertEqual(output, std::string("a=1\n"));
         });
 
@@ -1923,13 +1874,12 @@ int main() {
             // used to bind a variable literally named after the map KEY
             // ("key") instead of the rename target ("x") — field.pattern
             // (the rename) was parsed but ignored at eval time.
-            auto result = run(
-                "main do\n"
-                "  let ages = { \"alice\": 30, \"bob\": 25 }\n"
-                "  let { \"alice\": a, \"bob\": b } = ages\n"
-                "  a + b\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let ages = { \"alice\": 30, \"bob\": 25 }\n"
+                    "  let { \"alice\": a, \"bob\": b } = ages\n"
+                    "  a + b\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(55));
         });
     });
@@ -1985,33 +1935,33 @@ int main() {
                     run("main do\n  " + expression + "\nend\n");
                 } catch (const RuntimeError& error) {
                     threw = true;
-                    assertTrue(std::string(error.what()).find("Undefined function: " + name)
-                               != std::string::npos, error.what());
+                    assertTrue(
+                        std::string(error.what()).find("Undefined function: " + name) !=
+                            std::string::npos,
+                        error.what());
                 }
                 assertTrue(threw, "private intrinsic should not be publicly callable: " + name);
             }
         });
 
         it("keeps List and Stream intrinsic identities distinct", []() {
-            auto result = run(
-                "main do\n"
-                "  let tail = Kex.Intrinsic.List.drop([1, 2, 3], 1)\n"
-                "  let stream = Stream.from(1) { |n| n + 1 }\n"
-                "  let shifted = Kex.Intrinsic.Stream.drop(stream, 2)\n"
-                "  let values = Kex.Intrinsic.Stream.take(shifted, 2)\n"
-                "  (tail, values)\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let tail = Kex.Intrinsic.List.drop([1, 2, 3], 1)\n"
+                    "  let stream = Stream.from(1) { |n| n + 1 }\n"
+                    "  let shifted = Kex.Intrinsic.Stream.drop(stream, 2)\n"
+                    "  let values = Kex.Intrinsic.Stream.take(shifted, 2)\n"
+                    "  (tail, values)\n"
+                    "end\n");
             assertEqual(result->toString(), std::string("([2, 3], [3, 4])"));
         });
 
         it("creates sequence and takes elements", []() {
-            auto result = run(
-                "main do\n"
-                "  let naturals = Stream.from(0) { |n| n + 1 }\n"
-                "  naturals.take(5)\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let naturals = Stream.from(0) { |n| n + 1 }\n"
+                    "  naturals.take(5)\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(5));
             assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(0));
@@ -2019,12 +1969,11 @@ int main() {
         });
 
         it("drops elements from stream", []() {
-            auto result = run(
-                "main do\n"
-                "  let naturals = Stream.from(0) { |n| n + 1 }\n"
-                "  naturals.drop(5).take(3)\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let naturals = Stream.from(0) { |n| n + 1 }\n"
+                    "  naturals.drop(5).take(3)\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(3));
             assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(5));
@@ -2032,13 +1981,12 @@ int main() {
         });
 
         it("lazily maps a stream", []() {
-            auto result = run(
-                "main do\n"
-                "  let squares = Stream.from(1) { |n| n + 1 }\n"
-                "    .map { |n| n * n }\n"
-                "  squares.take(5)\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let squares = Stream.from(1) { |n| n + 1 }\n"
+                    "    .map { |n| n * n }\n"
+                    "  squares.take(5)\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(1));
             assertEqual(std::get<IntValue>(list.elements[1]->data).value, int64_t(4));
@@ -2048,14 +1996,13 @@ int main() {
         });
 
         it("lazily filters a stream", []() {
-            auto result = run(
-                "let even?(n: Int) = n.modulo(2) == 0\n"
-                "main do\n"
-                "  let evens = Stream.from(1) { |n| n + 1 }\n"
-                "    .filter(~even?)\n"
-                "  evens.take(5)\n"
-                "end\n"
-            );
+            auto result =
+                run("let even?(n: Int) = n.modulo(2) == 0\n"
+                    "main do\n"
+                    "  let evens = Stream.from(1) { |n| n + 1 }\n"
+                    "    .filter(~even?)\n"
+                    "  evens.take(5)\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(2));
             assertEqual(std::get<IntValue>(list.elements[1]->data).value, int64_t(4));
@@ -2065,15 +2012,14 @@ int main() {
         });
 
         it("chains map and filter lazily", []() {
-            auto result = run(
-                "let even?(n: Int) = n.modulo(2) == 0\n"
-                "main do\n"
-                "  let evenSquares = Stream.from(1) { |n| n + 1 }\n"
-                "    .map { |n| n * n }\n"
-                "    .filter(~even?)\n"
-                "  evenSquares.take(4)\n"
-                "end\n"
-            );
+            auto result =
+                run("let even?(n: Int) = n.modulo(2) == 0\n"
+                    "main do\n"
+                    "  let evenSquares = Stream.from(1) { |n| n + 1 }\n"
+                    "    .map { |n| n * n }\n"
+                    "    .filter(~even?)\n"
+                    "  evenSquares.take(4)\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(4));
             assertEqual(std::get<IntValue>(list.elements[1]->data).value, int64_t(16));
@@ -2082,19 +2028,18 @@ int main() {
         });
 
         it("computes primes via lazy filter", []() {
-            auto result = run(
-                "let isPrime?(n: Int) do\n"
-                "  if n < 2\n"
-                "    return false\n"
-                "  end\n"
-                "  return (2..n - 1).all? { |d| n.modulo(d) != 0 }\n"
-                "end\n"
-                "main do\n"
-                "  let primes = Stream.from(2) { |n| n + 1 }\n"
-                "    .filter(~isPrime?)\n"
-                "  primes.take(10)\n"
-                "end\n"
-            );
+            auto result =
+                run("let isPrime?(n: Int) do\n"
+                    "  if n < 2\n"
+                    "    return false\n"
+                    "  end\n"
+                    "  return (2..n - 1).all? { |d| n.modulo(d) != 0 }\n"
+                    "end\n"
+                    "main do\n"
+                    "  let primes = Stream.from(2) { |n| n + 1 }\n"
+                    "    .filter(~isPrime?)\n"
+                    "  primes.take(10)\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(10));
             assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(2));
@@ -2109,13 +2054,12 @@ int main() {
             // The index-addressed generator this replaced had to cap how far
             // `filter` would rescan, and reported a stream whose matches were
             // merely sparse as ENDED — `take(5)` here answered three elements.
-            auto result = run(
-                "main do\n"
-                "  Stream.from(0) { |n| n + 1 }\n"
-                "    .filter { |n| n.modulo(1000) == 0 }\n"
-                "    .take(5)\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  Stream.from(0) { |n| n + 1 }\n"
+                    "    .filter { |n| n.modulo(1000) == 0 }\n"
+                    "    .take(5)\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(5));
             assertEqual(std::get<IntValue>(list.elements[4]->data).value, int64_t(4000));
@@ -2125,30 +2069,28 @@ int main() {
             // Memoised cells: the step function runs once per element, not once
             // per element per access. Under the old generator this counted
             // ~5000 steps rather than 100.
-            auto result = run(
-                "main do\n"
-                "  var steps = 0\n"
-                "  let s = Stream.from(0) do |n|\n"
-                "    steps = steps + 1\n"
-                "    n + 1\n"
-                "  end\n"
-                "  s.take(100)\n"
-                "  s.take(100)\n"
-                "  steps\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  var steps = 0\n"
+                    "  let s = Stream.from(0) do |n|\n"
+                    "    steps = steps + 1\n"
+                    "    n + 1\n"
+                    "  end\n"
+                    "  s.take(100)\n"
+                    "  s.take(100)\n"
+                    "  steps\n"
+                    "end\n");
             // 99 steps to reach the 100th element, and nothing on the second walk.
             assertEqual(std::get<IntValue>(result->data).value, int64_t(99));
         });
 
         it("shares forced elements between a stream and its drop", []() {
-            auto result = run(
-                "main do\n"
-                "  let s = Stream.from(0) { |n| n + 1 }\n"
-                "  let rest = s.drop(3)\n"
-                "  s.take(2) + rest.take(2)\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let s = Stream.from(0) { |n| n + 1 }\n"
+                    "  let rest = s.drop(3)\n"
+                    "  s.take(2) + rest.take(2)\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(4));
             assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(0));
@@ -2159,23 +2101,21 @@ int main() {
         it("walks a long stream without overflowing the stack", []() {
             // A memoised chain is a linked list, so releasing one by recursion
             // would die on a stream of any real length.
-            auto result = run(
-                "main do\n"
-                "  Stream.from(0) { |n| n + 1 }.take(50000).count\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  Stream.from(0) { |n| n + 1 }.take(50000).count\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(50000));
         });
     });
 
     describe("Interpreter — Feeds", []() {
         it("consumes as it is read", []() {
-            auto result = run(
-                "main do\n"
-                "  let f = Feed.Elements([1, 2, 3, 4])\n"
-                "  f.take(2) + f.take(2) + f.take(2)\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let f = Feed.Elements([1, 2, 3, 4])\n"
+                    "  f.take(2) + f.take(2) + f.take(2)\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             // Two windows and then nothing — not the same window three times.
             assertEqual(list.elements.size(), size_t(4));
@@ -2184,26 +2124,24 @@ int main() {
         });
 
         it("reports itself spent once the source runs out", []() {
-            auto result = run(
-                "main do\n"
-                "  let f = Feed.Elements([1])\n"
-                "  f.collect\n"
-                "  f.spent?\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let f = Feed.Elements([1])\n"
+                    "  f.collect\n"
+                    "  f.spent?\n"
+                    "end\n");
             assertEqual(std::get<BoolValue>(result->data).value, true);
         });
 
         it("draws map and filter from the same cursor", []() {
             // A mapped feed is not a second cursor over the same source:
             // reading through the map consumes the receiver too.
-            auto result = run(
-                "main do\n"
-                "  let f = Feed.Elements([1, 2, 3, 4])\n"
-                "  let doubled = f.map { |n| n * 2 }\n"
-                "  doubled.take(2) + f.take(2)\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let f = Feed.Elements([1, 2, 3, 4])\n"
+                    "  let doubled = f.map { |n| n * 2 }\n"
+                    "  doubled.take(2) + f.take(2)\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(4));
             assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(2));
@@ -2212,12 +2150,11 @@ int main() {
         });
 
         it("becomes a replayable stream with toStream", []() {
-            auto result = run(
-                "main do\n"
-                "  let s = Feed.Elements([1, 2, 3]).toStream\n"
-                "  s.take(2) + s.take(2)\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let s = Feed.Elements([1, 2, 3]).toStream\n"
+                    "  s.take(2) + s.take(2)\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(4));
             assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(1));
@@ -2225,12 +2162,11 @@ int main() {
         });
 
         it("walks a stream once without holding its start", []() {
-            auto result = run(
-                "main do\n"
-                "  let f = Stream.from(1) { |n| n + 1 }.toFeed\n"
-                "  f.take(2) + f.take(2)\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let f = Stream.from(1) { |n| n + 1 }.toFeed\n"
+                    "  f.take(2) + f.take(2)\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(4));
             assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(1));
@@ -2238,24 +2174,22 @@ int main() {
         });
 
         it("answers None past the end", []() {
-            auto result = run(
-                "main do\n"
-                "  let f = Feed.Elements([1])\n"
-                "  f.pull\n"
-                "  f.pull\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  let f = Feed.Elements([1])\n"
+                    "  f.pull\n"
+                    "  f.pull\n"
+                    "end\n");
             assertEqual(result->isNone(), true);
         });
     });
 
     describe("Interpreter — Ranges", []() {
         it("maps over range", []() {
-            auto result = run(
-                "main do\n"
-                "  (1..5).map { |x| x * x }\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  (1..5).map { |x| x * x }\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(5));
             assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(1));
@@ -2263,11 +2197,10 @@ int main() {
         });
 
         it("filters range", []() {
-            auto result = run(
-                "main do\n"
-                "  (1..10).filter { |x| x.modulo(2) == 0 }\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  (1..10).filter { |x| x.modulo(2) == 0 }\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(5));
             assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(2));
@@ -2275,11 +2208,10 @@ int main() {
         });
 
         it("reduces range", []() {
-            auto result = run(
-                "main do\n"
-                "  (1..100).reduce(0) { |acc, x| acc + x }\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  (1..100).reduce(0) { |acc, x| acc + x }\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(5050));
         });
 
@@ -2307,11 +2239,10 @@ int main() {
         });
 
         it("collects Just results, dropping None", []() {
-            auto result = run(
-                "main do\n"
-                "  [1, 2, 3, 4].collect { |n| n.even? then Just(n * 10) else None }\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  [1, 2, 3, 4].collect { |n| n.even? then Just(n * 10) else None }\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(2));
             assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(20));
@@ -2319,23 +2250,20 @@ int main() {
         });
 
         it("supports method chains inside shorthand lambdas", []() {
-            auto result = run(
-                "main do\n"
-                "  (1..3).items.map(&.to(String).or(\"\"))\n"
-                "end\n");
+            auto result =
+                run("main do\n"
+                    "  (1..3).items.map(&.to(String).or(\"\"))\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
-            assertEqual(std::get<StringValue>(list.elements[0]->data).value,
-                        std::string("1"));
-            assertEqual(std::get<StringValue>(list.elements[2]->data).value,
-                        std::string("3"));
+            assertEqual(std::get<StringValue>(list.elements[0]->data).value, std::string("1"));
+            assertEqual(std::get<StringValue>(list.elements[2]->data).value, std::string("3"));
         });
 
         it("collects over a range via Enumerable", []() {
-            auto result = run(
-                "main do\n"
-                "  (1..5).collect { |n| n.modulo(2) == 0 then Just(n * n) else None }\n"
-                "end\n"
-            );
+            auto result =
+                run("main do\n"
+                    "  (1..5).collect { |n| n.modulo(2) == 0 then Just(n * n) else None }\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data);
             assertEqual(list.elements.size(), size_t(2));
             assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(4));
@@ -2350,8 +2278,7 @@ int main() {
                 "  3.times do\n"
                 "    IO.printLine(\"hi\")\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             assertEqual(output, std::string("hi\nhi\nhi\n"));
         });
 
@@ -2361,8 +2288,7 @@ int main() {
                 "  3.times do |i|\n"
                 "    IO.printLine(i)\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             assertEqual(output, std::string("0\n1\n2\n"));
         });
     });
@@ -2371,53 +2297,49 @@ int main() {
         it("top-level `let x = expr` is visible in subsequent top-level bindings", []() {
             // Regression: before the parser+evaluator fix each top-level `let`
             // wrapped in a scoped MainBlock, so `y` couldn't see `x`.
-            auto result = run(
-                "let x = 10\n"
-                "let y = x * 3\n"
-                "main do\n"
-                "  y\n"
-                "end\n"
-            );
+            auto result =
+                run("let x = 10\n"
+                    "let y = x * 3\n"
+                    "main do\n"
+                    "  y\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(30));
         });
 
         it("top-level `let` binding a list is accessible by name", []() {
-            auto result = run(
-                "let items = [1, 2, 3]\n"
-                "main do\n"
-                "  items.count\n"
-                "end\n"
-            );
+            auto result =
+                run("let items = [1, 2, 3]\n"
+                    "main do\n"
+                    "  items.count\n"
+                    "end\n");
             assertEqual(std::get<IntValue>(result->data).value, int64_t(3));
         });
     });
 
     describe("Interpreter — Traits and Comparable", []() {
         it("trait default method is callable", []() {
-            auto result = run(
-                "trait Describable do\n"
-                "  describe : () -> String\n"
-                "  let shout = this.describe.upperCase\n"
-                "end\n"
-                "record Dog do name : String end\n"
-                "make Dog, implement: Describable do\n"
-                "  let describe = \"Dog: \" + @name\n"
-                "end\n"
-                "main do Dog { name: \"rex\" }.shout end\n"
-            );
+            auto result =
+                run("trait Describable do\n"
+                    "  describe : () -> String\n"
+                    "  let shout = this.describe.upperCase\n"
+                    "end\n"
+                    "record Dog do name : String end\n"
+                    "make Dog, implement: Describable do\n"
+                    "  let describe = \"Dog: \" + @name\n"
+                    "end\n"
+                    "main do Dog { name: \"rex\" }.shout end\n");
             assertEqual(std::get<StringValue>(result->data).value, std::string("DOG: REX"));
         });
 
         it("inherits all trait defaults when registering them grows the function table", []() {
             std::string source = "trait ManyDefaults do\n";
-            for (int i = 0; i < 64; ++i)
-                source += "  let value" + std::to_string(i) + " = "
-                    + std::to_string(i) + "\n";
-            source +=
-                "end\n"
-                "record DefaultTarget do end\n"
-                "make DefaultTarget, implement: ManyDefaults do end\n"
-                "main do DefaultTarget {}.value63 end\n";
+            for (int i = 0; i < 64; ++i) {
+                source += "  let value" + std::to_string(i) + " = " + std::to_string(i) + "\n";
+            }
+            source += "end\n"
+                      "record DefaultTarget do end\n"
+                      "make DefaultTarget, implement: ManyDefaults do end\n"
+                      "main do DefaultTarget {}.value63 end\n";
 
             auto result = run(source);
             assertEqual(std::get<IntValue>(result->data).value, int64_t(63));
@@ -2425,8 +2347,7 @@ int main() {
 
         it("repeats Monoid values through the default method", []() {
             auto text = run("main do \"ha\".repeat(3) end\n");
-            assertEqual(std::get<StringValue>(text->data).value,
-                        std::string("hahaha"));
+            assertEqual(std::get<StringValue>(text->data).value, std::string("hahaha"));
 
             auto items = run("main do [1, 2].repeat(2) end\n");
             const auto& list = std::get<ListValue>(items->data);
@@ -2457,24 +2378,23 @@ int main() {
         });
 
         it("sort uses Comparable.compare for user records", []() {
-            auto result = run(
-                "trait Comparable do\n"
-                "  compare : This -> Comparison\n"
-                "end\n"
-                "record Box do n : Integer end\n"
-                "make Box, implement: Comparable do\n"
-                "  let compare(other) do\n"
-                "    if @n < other.n then Less\n"
-                "    elif @n > other.n then Greater\n"
-                "    else Equal\n"
-                "    end\n"
-                "  end\n"
-                "end\n"
-                "main do\n"
-                "  let sorted = [Box { n: 3 }, Box { n: 1 }, Box { n: 2 }].sort\n"
-                "  sorted.map { |b| b.n }\n"
-                "end\n"
-            );
+            auto result =
+                run("trait Comparable do\n"
+                    "  compare : This -> Comparison\n"
+                    "end\n"
+                    "record Box do n : Integer end\n"
+                    "make Box, implement: Comparable do\n"
+                    "  let compare(other) do\n"
+                    "    if @n < other.n then Less\n"
+                    "    elif @n > other.n then Greater\n"
+                    "    else Equal\n"
+                    "    end\n"
+                    "  end\n"
+                    "end\n"
+                    "main do\n"
+                    "  let sorted = [Box { n: 3 }, Box { n: 1 }, Box { n: 2 }].sort\n"
+                    "  sorted.map { |b| b.n }\n"
+                    "end\n");
             auto& list = std::get<ListValue>(result->data).elements;
             assertEqual(std::get<IntValue>(list[0]->data).value, int64_t(1));
             assertEqual(std::get<IntValue>(list[1]->data).value, int64_t(2));
@@ -2482,9 +2402,7 @@ int main() {
         });
 
         it("sort with custom comparator (2-arg form)", []() {
-            auto result = run(
-                "main do [3, 1, 4, 1, 5].sort { |a, b| a > b } end\n"
-            );
+            auto result = run("main do [3, 1, 4, 1, 5].sort { |a, b| a > b } end\n");
             auto& list = std::get<ListValue>(result->data).elements;
             assertEqual(std::get<IntValue>(list[0]->data).value, int64_t(5));
             assertEqual(std::get<IntValue>(list[1]->data).value, int64_t(4));
@@ -2521,8 +2439,7 @@ int main() {
                 "  receive do\n"
                 "    :pong => IO.printLine(\"pong\")\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             assertEqual(out, std::string("pong\n"));
         });
 
@@ -2547,8 +2464,7 @@ int main() {
                 "  receive do\n"
                 "    :got_b => IO.printLine(\"selective\")\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             assertEqual(out, std::string("selective\n"));
         });
 
@@ -2560,82 +2476,83 @@ int main() {
                 "    parent.send((:ready, Process.self))\n"
                 "  end\n"
                 "  receive do\n"
-                "    (:ready, childSelf) => IO.printLine((parent == childSelf).to(String).or(\"\"))\n"
+                "    (:ready, childSelf) => IO.printLine((parent == "
+                "childSelf).to(String).or(\"\"))\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             assertEqual(out, std::string("false\n"));
         });
 
-        it("two processes with same-named top-level lets in their spawn bodies don't cross-contaminate", []() {
-            auto out = runOutput(
-                "main do\n"
-                "  let parent = Process.self\n"
-                "  spawn do\n"
-                "    let n = 1\n"
-                "    parent.send(n)\n"
-                "  end\n"
-                "  spawn do\n"
-                "    let n = 2\n"
-                "    parent.send(n)\n"
-                "  end\n"
-                "  receive do\n"
-                "    n => receive do\n"
-                "      m => IO.printLine((n + m).to(String).or(\"\"))\n"
-                "    end\n"
-                "  end\n"
-                "end\n"
-            );
-            // Order between the two spawned processes isn't guaranteed, but
-            // if either process's `n` leaked into the other's environment
-            // (the m_env-swap bug this test exists to catch), the sum would
-            // come out wrong (e.g. 2+2 or 1+1 instead of 1+2).
-            assertEqual(out, std::string("3\n"));
-        });
+        it("two processes with same-named top-level lets in their spawn bodies don't "
+           "cross-contaminate",
+           []() {
+               auto out = runOutput(
+                   "main do\n"
+                   "  let parent = Process.self\n"
+                   "  spawn do\n"
+                   "    let n = 1\n"
+                   "    parent.send(n)\n"
+                   "  end\n"
+                   "  spawn do\n"
+                   "    let n = 2\n"
+                   "    parent.send(n)\n"
+                   "  end\n"
+                   "  receive do\n"
+                   "    n => receive do\n"
+                   "      m => IO.printLine((n + m).to(String).or(\"\"))\n"
+                   "    end\n"
+                   "  end\n"
+                   "end\n");
+               // Order between the two spawned processes isn't guaranteed, but
+               // if either process's `n` leaked into the other's environment
+               // (the m_env-swap bug this test exists to catch), the sum would
+               // come out wrong (e.g. 2+2 or 1+1 instead of 1+2).
+               assertEqual(out, std::string("3\n"));
+           });
 
-        it("a process spawned on one execute() call is reachable from a later call on the same Evaluator", []() {
-            // Mirrors REPL usage: `let pid = spawn do ... end` on one line,
-            // then `pid.send(...)` on a later line — the Scheduler must
-            // persist across execute() calls, not be torn down between
-            // them, so a still-alive (blocked-in-receive) process from an
-            // earlier call keeps working on a later one.
-            Evaluator evaluator;
-            // Kept alive for the whole test, matching how main.cxx's REPL
-            // mode keeps every line's Program alive forever (`new`, never
-            // deleted) — spawn captures a raw pointer into the AST (same
-            // convention LambdaValue::body already uses), so a process
-            // still blocked in `receive` after execute() returns needs its
-            // originating Program to outlive it.
-            std::vector<ast::Program> keepAlive;
+        it("a process spawned on one execute() call is reachable from a later call on the same "
+           "Evaluator",
+           []() {
+               // Mirrors REPL usage: `let pid = spawn do ... end` on one line,
+               // then `pid.send(...)` on a later line — the Scheduler must
+               // persist across execute() calls, not be torn down between
+               // them, so a still-alive (blocked-in-receive) process from an
+               // earlier call keeps working on a later one.
+               Evaluator evaluator;
+               // Kept alive for the whole test, matching how main.cxx's REPL
+               // mode keeps every line's Program alive forever (`new`, never
+               // deleted) — spawn captures a raw pointer into the AST (same
+               // convention LambdaValue::body already uses), so a process
+               // still blocked in `receive` after execute() returns needs its
+               // originating Program to outlive it.
+               std::vector<ast::Program> keepAlive;
 
-            auto runOnEvaluator = [&](const std::string& source) {
-                Lexer lexer(source);
-                auto tokens = lexer.tokenizeAll();
-                Parser parser(std::move(tokens));
-                keepAlive.push_back(parser.parseProgram());
-                evaluator.execute(keepAlive.back());
-            };
+               auto runOnEvaluator = [&](const std::string& source) {
+                   Lexer lexer(source);
+                   auto tokens = lexer.tokenizeAll();
+                   Parser parser(std::move(tokens));
+                   keepAlive.push_back(parser.parseProgram());
+                   evaluator.execute(keepAlive.back());
+               };
 
-            // Top-level `let` (no `main` wrapper), matching the REPL's
-            // actual line-by-line shape — top-level `var` isn't a
-            // supported construct today, unrelated to this test's concern.
-            runOnEvaluator(
-                "let storedPid = spawn do\n"
-                "  receive do\n"
-                "    (:ping, sender) => sender.send(:pong)\n"
-                "  end\n"
-                "end\n"
-            );
-            runOnEvaluator(
-                "main do\n"
-                "  storedPid.send((:ping, Process.self))\n"
-                "  receive do\n"
-                "    :pong => IO.printLine(\"cross-call\")\n"
-                "  end\n"
-                "end\n"
-            );
-            assertEqual(evaluator.output(), std::string("cross-call\n"));
-        });
+               // Top-level `let` (no `main` wrapper), matching the REPL's
+               // actual line-by-line shape — top-level `var` isn't a
+               // supported construct today, unrelated to this test's concern.
+               runOnEvaluator(
+                   "let storedPid = spawn do\n"
+                   "  receive do\n"
+                   "    (:ping, sender) => sender.send(:pong)\n"
+                   "  end\n"
+                   "end\n");
+               runOnEvaluator(
+                   "main do\n"
+                   "  storedPid.send((:ping, Process.self))\n"
+                   "  receive do\n"
+                   "    :pong => IO.printLine(\"cross-call\")\n"
+                   "  end\n"
+                   "end\n");
+               assertEqual(evaluator.output(), std::string("cross-call\n"));
+           });
     });
 
     describe("Interpreter — Processes (phase 2: receive timeout/after)", []() {
@@ -2647,8 +2564,7 @@ int main() {
                 "  after timeout: 20\n"
                 "    IO.printLine(\"timed out\")\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             assertEqual(out, std::string("timed out\n"));
         });
 
@@ -2667,8 +2583,7 @@ int main() {
                 "  after timeout: 5000\n"
                 "    IO.printLine(\"should not time out\")\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             assertEqual(out, std::string("got it early\n"));
         });
 
@@ -2698,8 +2613,7 @@ int main() {
                 "  after timeout: 20\n"
                 "    IO.printLine(\"second: correctly timed out\")\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             assertEqual(out, std::string("first: got it\nsecond: correctly timed out\n"));
         });
     });
@@ -2724,34 +2638,35 @@ int main() {
                 "  # the time we've been woken and resumed, it's already run\n"
                 "  # to completion.\n"
                 "  IO.printLine(\"after: \" + child.alive?().to(String).or(\"\"))\n"
-                "end\n"
-            );
+                "end\n");
             assertEqual(out, std::string("before: true\ngot done\nafter: false\n"));
         });
 
-        it("link() is passive bookkeeping — a linked partner exiting does not kill the other process", []() {
-            // Deliberately NOT BEAM's link model: this asserts the
-            // absence of cascading kill, since it'd be
-            // an easy regression to accidentally reintroduce later.
-            auto out = runOutput(
-                "main do\n"
-                "  let parent = Process.self\n"
-                "  let child = spawn do\n"
-                "    receive do\n"
-                "      :go => IO.printLine(\"child exiting\")\n"
-                "    end\n"
-                "  end\n"
-                "  child.link()\n"
-                "  child.send(:go)\n"
-                "  receive do\n"
-                "    _ => IO.printLine(\"unexpected\")\n"
-                "  after timeout: 20\n"
-                "    IO.printLine(\"parent still alive: \" + Process.self.alive?().to(String).or(\"\"))\n"
-                "  end\n"
-                "end\n"
-            );
-            assertEqual(out, std::string("child exiting\nparent still alive: true\n"));
-        });
+        it("link() is passive bookkeeping — a linked partner exiting does not kill the other "
+           "process",
+           []() {
+               // Deliberately NOT BEAM's link model: this asserts the
+               // absence of cascading kill, since it'd be
+               // an easy regression to accidentally reintroduce later.
+               auto out = runOutput(
+                   "main do\n"
+                   "  let parent = Process.self\n"
+                   "  let child = spawn do\n"
+                   "    receive do\n"
+                   "      :go => IO.printLine(\"child exiting\")\n"
+                   "    end\n"
+                   "  end\n"
+                   "  child.link()\n"
+                   "  child.send(:go)\n"
+                   "  receive do\n"
+                   "    _ => IO.printLine(\"unexpected\")\n"
+                   "  after timeout: 20\n"
+                   "    IO.printLine(\"parent still alive: \" + "
+                   "Process.self.alive?().to(String).or(\"\"))\n"
+                   "  end\n"
+                   "end\n");
+               assertEqual(out, std::string("child exiting\nparent still alive: true\n"));
+           });
     });
 
     describe("Interpreter — Processes (phase 4: Task)", []() {
@@ -2763,8 +2678,7 @@ int main() {
                 "    Ok(v) => IO.printLine(\"got \" + v.to(String).or(\"\"))\n"
                 "    Error(reason) => IO.printLine(\"error \" + reason.to(String).or(\"\"))\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             assertEqual(out, std::string("got 30\n"));
         });
 
@@ -2780,8 +2694,7 @@ int main() {
                 "    Ok(v) => IO.printLine(\"got \" + v.to(String).or(\"\"))\n"
                 "    Error(reason) => IO.printLine(\"error \" + reason.to(String).or(\"\"))\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             // An atom converts to its name (kexhq/kex#92): `:timeout` is
             // "timeout", the inverse of `"timeout".to(Atom)`.
             assertEqual(out, std::string("error timeout\n"));
@@ -2799,170 +2712,178 @@ int main() {
                 "      Error(reason) => IO.printLine(\"error \" + reason.to(String).or(\"\"))\n"
                 "    end\n"
                 "  }\n"
-                "end\n"
-            );
+                "end\n");
             assertEqual(out, std::string("got 2\ngot 4\n"));
         });
     });
 
-    describe("Interpreter — Processes (regressions: bugs found while implementing the scheduler)", []() {
-        it("a runtime error at top level still propagates, not silently swallowed by the process wrapper", []() {
-            // Wrapping the top-level program in a process's fiber (see
-            // Scheduler::runToCompletion) needs a catch(...) to turn an
-            // uncaught Kex-level error into that process's exit value — an
-            // earlier version of this let the error vanish entirely
-            // instead of reaching Evaluator::execute()'s caller, because
-            // the fiber's outer catch(...) discarded it rather than
-            // propagating it back out. Would have silently swallowed
-            // every runtime error in top-level code, not just
-            // process-related code.
-            try {
-                run("main do\n  undefinedFunctionCall()\nend\n");
-                assertTrue(false, "expected an exception");
-            } catch (const std::exception& e) {
-                std::string msg = e.what();
-                assertTrue(msg.find("Undefined function") != std::string::npos, msg);
-            }
-        });
+    describe(
+        "Interpreter — Processes (regressions: bugs found while implementing the scheduler)", []() {
+            it("a runtime error at top level still propagates, not silently swallowed by the "
+               "process wrapper",
+               []() {
+                   // Wrapping the top-level program in a process's fiber (see
+                   // Scheduler::runToCompletion) needs a catch(...) to turn an
+                   // uncaught Kex-level error into that process's exit value — an
+                   // earlier version of this let the error vanish entirely
+                   // instead of reaching Evaluator::execute()'s caller, because
+                   // the fiber's outer catch(...) discarded it rather than
+                   // propagating it back out. Would have silently swallowed
+                   // every runtime error in top-level code, not just
+                   // process-related code.
+                   try {
+                       run("main do\n  undefinedFunctionCall()\nend\n");
+                       assertTrue(false, "expected an exception");
+                   } catch (const std::exception& e) {
+                       std::string msg = e.what();
+                       assertTrue(msg.find("Undefined function") != std::string::npos, msg);
+                   }
+               });
 
-        it("destroying a still-suspended process doesn't corrupt later, unrelated process operations", []() {
-            // Boost.Context resumes a still-suspended fiber one last time
-            // (to throw forced_unwind) when its Evaluator/Scheduler is
-            // destroyed — a generic catch(...) around a spawned process's
-            // entry function swallows that internal exception instead of
-            // letting it propagate, corrupting Boost.Context's state for
-            // every subsequent, unrelated fiber operation. First block
-            // spawns a process that never finishes (blocked in receive
-            // forever, same shape as examples/beam/proc_ping.kex's server
-            // loop) and lets its Evaluator be destroyed while still
-            // suspended; the second block proves a completely fresh,
-            // unrelated process round trip still works afterward.
-            {
-                auto out = runOutput(
-                    "main do\n"
-                    "  spawn do\n"
-                    "    receive do\n"
-                    "      :never => IO.printLine(\"unreachable\")\n"
-                    "    end\n"
-                    "  end\n"
-                    "  IO.printLine(\"main done, child left suspended\")\n"
-                    "end\n"
-                );
-                assertEqual(out, std::string("main done, child left suspended\n"));
-            }
-            auto out2 = runOutput(
-                "main do\n"
-                "  let parent = Process.self\n"
-                "  spawn do\n"
-                "    parent.send(:ok)\n"
-                "  end\n"
-                "  receive do\n"
-                "    :ok => IO.printLine(\"still works\")\n"
-                "  end\n"
-                "end\n"
-            );
-            assertEqual(out2, std::string("still works\n"));
-        });
+            it("destroying a still-suspended process doesn't corrupt later, unrelated process "
+               "operations",
+               []() {
+                   // Boost.Context resumes a still-suspended fiber one last time
+                   // (to throw forced_unwind) when its Evaluator/Scheduler is
+                   // destroyed — a generic catch(...) around a spawned process's
+                   // entry function swallows that internal exception instead of
+                   // letting it propagate, corrupting Boost.Context's state for
+                   // every subsequent, unrelated fiber operation. First block
+                   // spawns a process that never finishes (blocked in receive
+                   // forever, same shape as examples/beam/proc_ping.kex's server
+                   // loop) and lets its Evaluator be destroyed while still
+                   // suspended; the second block proves a completely fresh,
+                   // unrelated process round trip still works afterward.
+                   {
+                       auto out = runOutput(
+                           "main do\n"
+                           "  spawn do\n"
+                           "    receive do\n"
+                           "      :never => IO.printLine(\"unreachable\")\n"
+                           "    end\n"
+                           "  end\n"
+                           "  IO.printLine(\"main done, child left suspended\")\n"
+                           "end\n");
+                       assertEqual(out, std::string("main done, child left suspended\n"));
+                   }
+                   auto out2 = runOutput(
+                       "main do\n"
+                       "  let parent = Process.self\n"
+                       "  spawn do\n"
+                       "    parent.send(:ok)\n"
+                       "  end\n"
+                       "  receive do\n"
+                       "    :ok => IO.printLine(\"still works\")\n"
+                       "  end\n"
+                       "end\n");
+                   assertEqual(out2, std::string("still works\n"));
+               });
 
-        it("a server process handling multiple round trips, interleaved with the caller, doesn't corrupt fiber state", []() {
-            // A single thread_local "which continuation does
-            // yieldToScheduler() resume" slot was only ever set once, when
-            // a fiber first started — resuming the SAME fiber a second
-            // time (after some OTHER fiber had run in between and
-            // repointed that global slot at itself) read a stale pointer
-            // into a different, unrelated, currently-suspended fiber's own
-            // stack. Boost.Context caught it as an assertion failure
-            // rather than silently corrupting memory, which is how this
-            // was found. Two fibers each yielding more than once,
-            // interleaved, is the minimal repro — a ping server handling
-            // more than one round trip.
-            auto out = runOutput(
-                "foul pingServer do\n"
-                "  spawn do\n"
-                "    loop do\n"
-                "      receive do |sender|\n"
-                "        :ping => sender.send(:pong)\n"
-                "      end\n"
-                "    end\n"
-                "  end\n"
-                "end\n"
-                "main do\n"
-                "  let server = pingServer()\n"
-                "  server.sendFrom(:ping)\n"
-                "  receive do :pong => IO.printLine(\"pong1\") end\n"
-                "  server.sendFrom(:ping)\n"
-                "  receive do :pong => IO.printLine(\"pong2\") end\n"
-                "  server.sendFrom(:ping)\n"
-                "  receive do :pong => IO.printLine(\"pong3\") end\n"
-                "end\n"
-            );
-            assertEqual(out, std::string("pong1\npong2\npong3\n"));
+            it("a server process handling multiple round trips, interleaved with the caller, "
+               "doesn't corrupt fiber state",
+               []() {
+                   // A single thread_local "which continuation does
+                   // yieldToScheduler() resume" slot was only ever set once, when
+                   // a fiber first started — resuming the SAME fiber a second
+                   // time (after some OTHER fiber had run in between and
+                   // repointed that global slot at itself) read a stale pointer
+                   // into a different, unrelated, currently-suspended fiber's own
+                   // stack. Boost.Context caught it as an assertion failure
+                   // rather than silently corrupting memory, which is how this
+                   // was found. Two fibers each yielding more than once,
+                   // interleaved, is the minimal repro — a ping server handling
+                   // more than one round trip.
+                   auto out = runOutput(
+                       "foul pingServer do\n"
+                       "  spawn do\n"
+                       "    loop do\n"
+                       "      receive do |sender|\n"
+                       "        :ping => sender.send(:pong)\n"
+                       "      end\n"
+                       "    end\n"
+                       "  end\n"
+                       "end\n"
+                       "main do\n"
+                       "  let server = pingServer()\n"
+                       "  server.sendFrom(:ping)\n"
+                       "  receive do :pong => IO.printLine(\"pong1\") end\n"
+                       "  server.sendFrom(:ping)\n"
+                       "  receive do :pong => IO.printLine(\"pong2\") end\n"
+                       "  server.sendFrom(:ping)\n"
+                       "  receive do :pong => IO.printLine(\"pong3\") end\n"
+                       "end\n");
+                   assertEqual(out, std::string("pong1\npong2\npong3\n"));
+               });
         });
-    });
 
     describe("Interpreter — Processes (phase 5: Supervisor, :only_crashed only)", []() {
-        it("Supervisor.start(restart: :only_crashed) starts each worker and returns Ok(supervisorPid)", []() {
-            auto out = runOutput(
-                "foul startWorker do\n"
-                "  spawn do\n"
-                "    receive do\n"
-                "      :never => 1\n"
-                "    end\n"
-                "  end\n"
-                "end\n"
-                "main do\n"
-                "  let result = Supervisor.start(restart: :only_crashed,\n"
-                "    [Supervisor.worker { startWorker() }])\n"
-                "  match result do\n"
-                "    Ok(pid) => IO.printLine(\"started\")\n"
-                "    Error(reason) => IO.printLine(\"error: \" + reason.to(String).or(\"\"))\n"
-                "  end\n"
-                "end\n"
-            );
-            assertEqual(out, std::string("started\n"));
-        });
+        it("Supervisor.start(restart: :only_crashed) starts each worker and returns "
+           "Ok(supervisorPid)",
+           []() {
+               auto out = runOutput(
+                   "foul startWorker do\n"
+                   "  spawn do\n"
+                   "    receive do\n"
+                   "      :never => 1\n"
+                   "    end\n"
+                   "  end\n"
+                   "end\n"
+                   "main do\n"
+                   "  let result = Supervisor.start(restart: :only_crashed,\n"
+                   "    [Supervisor.worker { startWorker() }])\n"
+                   "  match result do\n"
+                   "    Ok(pid) => IO.printLine(\"started\")\n"
+                   "    Error(reason) => IO.printLine(\"error: \" + reason.to(String).or(\"\"))\n"
+                   "  end\n"
+                   "end\n");
+               assertEqual(out, std::string("started\n"));
+           });
 
-        it("respawns a worker that finishes, with a different pid, matching :only_crashed (one_for_one)", []() {
-            auto out = runOutput(
-                "foul startWorker(parent) do\n"
-                "  spawn do\n"
-                "    parent.send((:worker_started, Process.self))\n"
-                "    receive do\n"
-                "      :die => IO.printLine(\"worker dying\")\n"
-                "    end\n"
-                "  end\n"
-                "end\n"
-                "main do\n"
-                "  let parent = Process.self\n"
-                "  Supervisor.start(restart: :only_crashed,\n"
-                "    [Supervisor.worker { startWorker(parent) }])\n"
-                "  receive do\n"
-                "    (:worker_started, pid1) => do\n"
-                "      pid1.send(:die)\n"
-                "      receive do\n"
-                "        (:worker_started, pid2) => IO.printLine((pid1 == pid2).to(String).or(\"\"))\n"
-                "      after timeout: 500\n"
-                "        IO.printLine(\"no restart\")\n"
-                "      end\n"
-                "    end\n"
-                "  end\n"
-                "end\n"
-            );
-            assertEqual(out, std::string("worker dying\nfalse\n"));
-        });
+        it("respawns a worker that finishes, with a different pid, matching :only_crashed "
+           "(one_for_one)",
+           []() {
+               auto out = runOutput(
+                   "foul startWorker(parent) do\n"
+                   "  spawn do\n"
+                   "    parent.send((:worker_started, Process.self))\n"
+                   "    receive do\n"
+                   "      :die => IO.printLine(\"worker dying\")\n"
+                   "    end\n"
+                   "  end\n"
+                   "end\n"
+                   "main do\n"
+                   "  let parent = Process.self\n"
+                   "  Supervisor.start(restart: :only_crashed,\n"
+                   "    [Supervisor.worker { startWorker(parent) }])\n"
+                   "  receive do\n"
+                   "    (:worker_started, pid1) => do\n"
+                   "      pid1.send(:die)\n"
+                   "      receive do\n"
+                   "        (:worker_started, pid2) => IO.printLine((pid1 == "
+                   "pid2).to(String).or(\"\"))\n"
+                   "      after timeout: 500\n"
+                   "        IO.printLine(\"no restart\")\n"
+                   "      end\n"
+                   "    end\n"
+                   "  end\n"
+                   "end\n");
+               assertEqual(out, std::string("worker dying\nfalse\n"));
+           });
 
-        it("restart strategies other than :only_crashed return a clear Error, not silently wrong behavior", []() {
-            auto out = runOutput(
-                "main do\n"
-                "  let result = Supervisor.start(restart: :all, [])\n"
-                "  match result do\n"
-                "    Ok(_) => IO.printLine(\"unexpected ok\")\n"
-                "    Error(reason) => IO.printLine(\"rejected: \" + reason.to(String).or(\"\").contains?(\"only_crashed\").to(String).or(\"\"))\n"
-                "  end\n"
-                "end\n"
-            );
-            assertEqual(out, std::string("rejected: true\n"));
-        });
+        it("restart strategies other than :only_crashed return a clear Error, not silently wrong "
+           "behavior",
+           []() {
+               auto out = runOutput(
+                   "main do\n"
+                   "  let result = Supervisor.start(restart: :all, [])\n"
+                   "  match result do\n"
+                   "    Ok(_) => IO.printLine(\"unexpected ok\")\n"
+                   "    Error(reason) => IO.printLine(\"rejected: \" + "
+                   "reason.to(String).or(\"\").contains?(\"only_crashed\").to(String).or(\"\"))\n"
+                   "  end\n"
+                   "end\n");
+               assertEqual(out, std::string("rejected: true\n"));
+           });
     });
 
     // A Kex Float is always finite. Erlang floats cannot represent NaN or
@@ -2982,36 +2903,41 @@ int main() {
         };
 
         it("raises on a domain error instead of returning NaN", [&]() {
-            assertTrue(raises("Math.sqrt(-1.0)", "Math.sqrt: undefined result (NaN)"),
-                       "Math.sqrt(-1.0) should raise");
-            assertTrue(raises("Math.acos(2.0)", "Math.acos: undefined result (NaN)"),
-                       "Math.acos(2.0) should raise");
+            assertTrue(
+                raises("Math.sqrt(-1.0)", "Math.sqrt: undefined result (NaN)"),
+                "Math.sqrt(-1.0) should raise");
+            assertTrue(
+                raises("Math.acos(2.0)", "Math.acos: undefined result (NaN)"),
+                "Math.acos(2.0) should raise");
         });
 
         it("raises on overflow instead of returning Infinity", [&]() {
-            assertTrue(raises("Math.exp(1000.0)", "Math.exp: result overflowed (Infinity)"),
-                       "Math.exp(1000.0) should raise");
-            assertTrue(raises("Math.log(0.0)", "Math.log: result overflowed (-Infinity)"),
-                       "Math.log(0.0) should raise");
+            assertTrue(
+                raises("Math.exp(1000.0)", "Math.exp: result overflowed (Infinity)"),
+                "Math.exp(1000.0) should raise");
+            assertTrue(
+                raises("Math.log(0.0)", "Math.log: result overflowed (-Infinity)"),
+                "Math.log(0.0) should raise");
         });
 
         // BEAM rejects `1.0e308 * 10.0` the same way, so plain arithmetic
         // needs the check too — not just the Math intrinsics.
         it("raises when arithmetic overflows", [&]() {
-            assertTrue(raises("1.0e308 * 10.0",
-                              "Float multiplication: result overflowed (Infinity)"),
-                       "float multiplication overflow should raise");
-            assertTrue(raises("1.0e308 + 1.0e308",
-                              "Float addition: result overflowed (Infinity)"),
-                       "float addition overflow should raise");
-            assertTrue(raises("10.0 ^ 400.0",
-                              "Exponentiation: result overflowed (Infinity)"),
-                       "exponentiation overflow should raise");
+            assertTrue(
+                raises("1.0e308 * 10.0", "Float multiplication: result overflowed (Infinity)"),
+                "float multiplication overflow should raise");
+            assertTrue(
+                raises("1.0e308 + 1.0e308", "Float addition: result overflowed (Infinity)"),
+                "float addition overflow should raise");
+            assertTrue(
+                raises("10.0 ^ 400.0", "Exponentiation: result overflowed (Infinity)"),
+                "exponentiation overflow should raise");
         });
 
         it("rejects a float literal too large to represent", [&]() {
-            assertTrue(raises("1.0e999", "Float literal out of range"),
-                       "an out-of-range float literal should raise");
+            assertTrue(
+                raises("1.0e999", "Float literal out of range"),
+                "an out-of-range float literal should raise");
         });
 
         it("still computes finite results", [&]() {

@@ -29,9 +29,9 @@ auto stripAnsi(const std::string& s) -> std::string {
             // than scanning only for 'm', which would swallow everything to
             // EOF when a /clear's ED sequence preceded any later color code.
             size_t j = i + 2;
-            while (j < s.size() &&
-                   !((unsigned char)s[j] >= 0x40 && (unsigned char)s[j] <= 0x7e))
+            while (j < s.size() && !((unsigned char)s[j] >= 0x40 && (unsigned char)s[j] <= 0x7e)) {
                 j++;
+            }
             i = (j < s.size()) ? j + 1 : j;
         } else {
             out += s[i];
@@ -47,8 +47,9 @@ auto runCommand(const std::string& command) -> std::string {
     if (pipe) {
         std::array<char, 4096> buf;
         size_t n;
-        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0) {
             result.append(buf.data(), n);
+        }
         pclose(pipe);
     }
     return stripAnsi(result);
@@ -87,15 +88,15 @@ auto runBeamRepl(const std::string& input) -> std::string {
     }
     close(fd);
 
-    std::string cmd = std::string(KEX_BINARY_PATH) +
-        " --no-colors < " + tmpPath + " 2>&1";
+    std::string cmd = std::string(KEX_BINARY_PATH) + " --no-colors < " + tmpPath + " 2>&1";
     std::string result;
     FILE* pipe = popen(cmd.c_str(), "r");
     if (pipe) {
         std::array<char, 4096> buf;
         size_t n;
-        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0) {
             result.append(buf.data(), n);
+        }
         pclose(pipe);
     }
     std::remove(tmpPath);
@@ -113,14 +114,15 @@ auto runWalkerFile(const std::string& source, bool noCheck = false) -> std::stri
     close(fd);
 
     std::string cmd = std::string(KEX_BINARY_PATH) + " --run-walker " +
-        (noCheck ? "--no-check " : "") + "--no-colors " + sourcePath + " 2>&1";
+                      (noCheck ? "--no-check " : "") + "--no-colors " + sourcePath + " 2>&1";
     std::string result;
     FILE* pipe = popen(cmd.c_str(), "r");
     if (pipe) {
         std::array<char, 4096> buf;
         size_t n;
-        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0) {
             result.append(buf.data(), n);
+        }
         pclose(pipe);
     }
     std::remove(sourcePath);
@@ -134,33 +136,31 @@ auto runWalkerFile(const std::string& source, bool noCheck = false) -> std::stri
 // lambda returns, and a captured local dangles. That mistake made this very
 // test pass vacuously — it asserted on the output of a program that was never
 // written.
-constexpr const char* kRecordSpreadProbe =
-    "record One do\n"
-    "  a : Int = 1\n"
-    "end\n"
-    "\n"
-    "main do\n"
-    "  [One {}].each do |x, y|\n"
-    "    IO.printLine(\"spread: ${x} ${y}\")\n"
-    "  end\n"
-    "end\n";
+constexpr const char* kRecordSpreadProbe = "record One do\n"
+                                           "  a : Int = 1\n"
+                                           "end\n"
+                                           "\n"
+                                           "main do\n"
+                                           "  [One {}].each do |x, y|\n"
+                                           "    IO.printLine(\"spread: ${x} ${y}\")\n"
+                                           "  end\n"
+                                           "end\n";
 
-constexpr const char* kCollapseBuilder =
-    "module Boxes do\n"
-    "  record Box do\n"
-    "    total : Int = 0\n"
-    "  end\n"
-    "  compiled do\n"
-    "    let of(n: Int) -> Box do\n"
-    "      Box { total: n }\n"
-    "    end\n"
-    "    make Box do\n"
-    "      let scaled(by: Int) -> Int do\n"
-    "        @total * by\n"
-    "      end\n"
-    "    end\n"
-    "  end\n"
-    "end\n";
+constexpr const char* kCollapseBuilder = "module Boxes do\n"
+                                         "  record Box do\n"
+                                         "    total : Int = 0\n"
+                                         "  end\n"
+                                         "  compiled do\n"
+                                         "    let of(n: Int) -> Box do\n"
+                                         "      Box { total: n }\n"
+                                         "    end\n"
+                                         "    make Box do\n"
+                                         "      let scaled(by: Int) -> Int do\n"
+                                         "        @total * by\n"
+                                         "      end\n"
+                                         "    end\n"
+                                         "  end\n"
+                                         "end\n";
 
 auto collapseReportFor(const std::string& source) -> std::string {
     char sourcePath[] = "/tmp/kex_collapse_cli_test_XXXXXX.kex";
@@ -171,15 +171,14 @@ auto collapseReportFor(const std::string& source) -> std::string {
         f << source;
     }
     close(fd);
-    auto out = runCommand(std::string(KEX_BINARY_PATH) +
-                          " --collapse-report --no-colors " + sourcePath +
-                          " 2>&1");
+    auto out = runCommand(
+        std::string(KEX_BINARY_PATH) + " --collapse-report --no-colors " + sourcePath + " 2>&1");
     std::remove(sourcePath);
     return out;
 }
 
-auto runBeamFile(const std::string& source, const std::string& argument,
-                 bool noCheck = false) -> std::string {
+auto runBeamFile(const std::string& source, const std::string& argument, bool noCheck = false)
+    -> std::string {
     char sourcePath[] = "/tmp/kex_beam_cli_test_XXXXXX.kex";
     int fd = mkstemps(sourcePath, 4);
     assertTrue(fd >= 0, "mkstemps should create a Kex source file");
@@ -189,15 +188,16 @@ auto runBeamFile(const std::string& source, const std::string& argument,
     }
     close(fd);
 
-    std::string cmd = std::string(KEX_BINARY_PATH) + " --run " +
-        (noCheck ? "--no-check " : "") + sourcePath + " " + argument + " 2>&1";
+    std::string cmd = std::string(KEX_BINARY_PATH) + " --run " + (noCheck ? "--no-check " : "") +
+                      sourcePath + " " + argument + " 2>&1";
     std::string result;
     FILE* pipe = popen(cmd.c_str(), "r");
     if (pipe) {
         std::array<char, 4096> buf;
         size_t n;
-        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0) {
             result.append(buf.data(), n);
+        }
         pclose(pipe);
     }
     std::remove(sourcePath);
@@ -219,10 +219,12 @@ int main() {
                 const auto walker = runWalkerFile(file);
                 const auto beam = runBeamFile(file, "");
                 assertEqual(beam, walker, "file backends disagree");
-                assertTrue(runRepl(body).find("\n" + walker) != std::string::npos,
-                           "walker REPL differs from file: " + body);
-                assertTrue(runBeamRepl(body).find("\n" + beam) != std::string::npos,
-                           "BEAM REPL differs from file: " + body);
+                assertTrue(
+                    runRepl(body).find("\n" + walker) != std::string::npos,
+                    "walker REPL differs from file: " + body);
+                assertTrue(
+                    runBeamRepl(body).find("\n" + beam) != std::string::npos,
+                    "BEAM REPL differs from file: " + body);
             }
         });
     });
@@ -236,36 +238,29 @@ int main() {
             const auto modules = src / "chain";
             fs::create_directories(modules);
 
-            std::ofstream(modules / "leaf.kex")
-                << "module Chain.Leaf\n"
-                   "let value() -> Integer = 42\n";
+            std::ofstream(modules / "leaf.kex") << "module Chain.Leaf\n"
+                                                   "let value() -> Integer = 42\n";
             std::ofstream(modules / "middle.kex")
                 << "module Chain.Middle\n"
                    "let value() -> Integer = Chain.Leaf.value()\n";
             const auto entry = src / "main.kex";
-            std::ofstream(entry)
-                << "main do\n"
-                   "  IO.printLine(Chain.Middle.value())\n"
-                   "end\n";
+            std::ofstream(entry) << "main do\n"
+                                    "  IO.printLine(Chain.Middle.value())\n"
+                                    "end\n";
 
             const auto output = runCommand(
-                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
-                entry.string() + " 2>&1");
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " + entry.string() + " 2>&1");
             const auto directOut = root / "direct-out";
             fs::create_directories(directOut);
             const auto directOutput = runCommand(
-                std::string(KEX_BINARY_PATH) + " --compile --no-colors " +
-                "--source-root " + src.string() + " -o " +
-                directOut.string() + " " +
+                std::string(KEX_BINARY_PATH) + " --compile --no-colors " + "--source-root " +
+                src.string() + " -o " + directOut.string() + " " +
                 (modules / "middle.kex").string() + " 2>&1");
-            const bool emittedLeaf = fs::exists(
-                directOut / "Kex.Chain.Leaf.beam");
+            const bool emittedLeaf = fs::exists(directOut / "Kex.Chain.Leaf.beam");
             fs::remove_all(root);
             assertEqual(output, std::string("42\n"));
-            assertTrue(directOutput.find("Finished") != std::string::npos,
-                       directOutput);
-            assertTrue(emittedLeaf,
-                       "explicit source root should discover sibling module");
+            assertTrue(directOutput.find("Finished") != std::string::npos, directOutput);
+            assertTrue(emittedLeaf, "explicit source root should discover sibling module");
         });
 
         it("discovers a module whose call is chained or interpolated", []() {
@@ -279,22 +274,19 @@ int main() {
             // Nothing `using`s App.Helper: the qualified calls below are the
             // only thing that can make it load. A lowercase segment used to
             // be taken for part of the module path (`App.Helper.hint`).
-            std::ofstream(modules / "helper.kex")
-                << "module App.Helper\n"
-                   "let hint -> String = \"hi\"\n";
+            std::ofstream(modules / "helper.kex") << "module App.Helper\n"
+                                                     "let hint -> String = \"hi\"\n";
             const auto entry = src / "main.kex";
-            std::ofstream(entry)
-                << "main do\n"
-                   "  IO.printLine(\"say ${App.Helper.hint}\")\n"
-                   "  IO.printLine(App.Helper.hint.count)\n"
-                   "end\n";
+            std::ofstream(entry) << "main do\n"
+                                    "  IO.printLine(\"say ${App.Helper.hint}\")\n"
+                                    "  IO.printLine(App.Helper.hint.count)\n"
+                                    "end\n";
 
             const auto beam = runCommand(
-                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
-                entry.string() + " 2>&1");
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " + entry.string() + " 2>&1");
             const auto walker = runCommand(
-                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " +
-                entry.string() + " 2>&1");
+                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " + entry.string() +
+                " 2>&1");
             fs::remove_all(root);
             assertEqual(beam, std::string("say hi\n2\n"));
             assertEqual(walker, std::string("say hi\n2\n"));
@@ -310,30 +302,27 @@ int main() {
             // Only top-level traits were registered, so a trait in a module
             // was unknown to the checker, and implementing it by its
             // qualified name inherited no defaults on either backend.
-            std::ofstream(src / "shop" / "rules.kex")
-                << "module Shop.Rules\n"
-                   "trait Pricing do\n"
-                   "  price :> Integer\n"
-                   "  let doubled = this.price * 2\n"
-                   "end\n";
+            std::ofstream(src / "shop" / "rules.kex") << "module Shop.Rules\n"
+                                                         "trait Pricing do\n"
+                                                         "  price :> Integer\n"
+                                                         "  let doubled = this.price * 2\n"
+                                                         "end\n";
             const auto entry = src / "main.kex";
-            std::ofstream(entry)
-                << "record Box do\n"
-                   "  size : Integer\n"
-                   "end\n"
-                   "make Box, implement: Shop.Rules.Pricing do\n"
-                   "  let price = @size\n"
-                   "end\n"
-                   "main do\n"
-                   "  IO.printLine(Box { size: 2 }.doubled)\n"
-                   "end\n";
+            std::ofstream(entry) << "record Box do\n"
+                                    "  size : Integer\n"
+                                    "end\n"
+                                    "make Box, implement: Shop.Rules.Pricing do\n"
+                                    "  let price = @size\n"
+                                    "end\n"
+                                    "main do\n"
+                                    "  IO.printLine(Box { size: 2 }.doubled)\n"
+                                    "end\n";
 
             const auto beam = runCommand(
-                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
-                entry.string() + " 2>&1");
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " + entry.string() + " 2>&1");
             const auto walker = runCommand(
-                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " +
-                entry.string() + " 2>&1");
+                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " + entry.string() +
+                " 2>&1");
             fs::remove_all(root);
             assertEqual(beam, std::string("4\n"));
             assertEqual(walker, std::string("4\n"));
@@ -346,26 +335,23 @@ int main() {
             const auto src = root / "src";
             const auto pair = src / "pair";
             fs::create_directories(pair);
-            std::ofstream(pair / "types.kex")
-                << "module Pair.Types\n"
-                   "record Dependency do\n"
-                   "  name : String\n"
-                   "end\n";
+            std::ofstream(pair / "types.kex") << "module Pair.Types\n"
+                                                 "record Dependency do\n"
+                                                 "  name : String\n"
+                                                 "end\n";
             std::ofstream(pair / "use.kex")
                 << "module Pair.Use\n"
                    "using Pair.Types, only: [Dependency]\n"
                    "let dependencyName(Dependency { name }) -> String = name\n";
             const auto entry = src / "main.kex";
-            std::ofstream(entry)
-                << "using Pair.Types, only: [Dependency]\n"
-                   "using Pair.Use, only: [dependencyName]\n"
-                   "main do\n"
-                   "  IO.printLine(dependencyName(Dependency { name: \"ok\" }))\n"
-                   "end\n";
+            std::ofstream(entry) << "using Pair.Types, only: [Dependency]\n"
+                                    "using Pair.Use, only: [dependencyName]\n"
+                                    "main do\n"
+                                    "  IO.printLine(dependencyName(Dependency { name: \"ok\" }))\n"
+                                    "end\n";
 
             const auto output = runCommand(
-                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
-                entry.string() + " 2>&1");
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " + entry.string() + " 2>&1");
             fs::remove_all(root);
             assertEqual(output, std::string("ok\n"));
         });
@@ -398,15 +384,15 @@ int main() {
             std::ofstream(entry)
                 << "main do\n"
                    "  IO.printLine(Records.Manifest.label(Records.Manifest.create(\"manifest\")))\n"
-                   "  IO.printLine(Records.Lockfile.label(Records.Lockfile.create(\"repo\", \"abc\")))\n"
+                   "  IO.printLine(Records.Lockfile.label(Records.Lockfile.create(\"repo\", "
+                   "\"abc\")))\n"
                    "end\n";
 
             const auto walker = runCommand(
-                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " +
-                entry.string() + " 2>&1");
+                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " + entry.string() +
+                " 2>&1");
             const auto beam = runCommand(
-                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
-                entry.string() + " 2>&1");
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " + entry.string() + " 2>&1");
             fs::remove_all(root);
             const std::string expected = "manifest\nrepo@abc\n";
             assertEqual(walker, expected);
@@ -424,30 +410,27 @@ int main() {
             const auto root = fs::path(mkdtemp(rootTemplate));
             const auto src = root / "src";
             fs::create_directories(src);
-            std::ofstream(src / "router.kex")
-                << "module Router\n"
-                   "record Conf do\n"
-                   "  name : String\n"
-                   "end\n"
-                   "make Conf do\n"
-                   "  let described = \"${@name}:${defaultPort}\"\n"
-                   "end\n"
-                   "private do\n"
-                   "  let defaultPort = 3000\n"
-                   "end\n";
+            std::ofstream(src / "router.kex") << "module Router\n"
+                                                 "record Conf do\n"
+                                                 "  name : String\n"
+                                                 "end\n"
+                                                 "make Conf do\n"
+                                                 "  let described = \"${@name}:${defaultPort}\"\n"
+                                                 "end\n"
+                                                 "private do\n"
+                                                 "  let defaultPort = 3000\n"
+                                                 "end\n";
             const auto entry = src / "main.kex";
-            std::ofstream(entry)
-                << "using Router\n"
-                   "main do\n"
-                   "  IO.printLine(Router.Conf { name: \"api\" }.described)\n"
-                   "end\n";
+            std::ofstream(entry) << "using Router\n"
+                                    "main do\n"
+                                    "  IO.printLine(Router.Conf { name: \"api\" }.described)\n"
+                                    "end\n";
 
             const auto walker = runCommand(
-                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " +
-                entry.string() + " 2>&1");
+                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " + entry.string() +
+                " 2>&1");
             const auto beam = runCommand(
-                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
-                entry.string() + " 2>&1");
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " + entry.string() + " 2>&1");
             fs::remove_all(root);
             assertEqual(walker, std::string("api:3000\n"));
             assertEqual(beam, std::string("api:3000\n"));
@@ -463,30 +446,27 @@ int main() {
             const auto root = fs::path(mkdtemp(rootTemplate));
             const auto src = root / "src";
             fs::create_directories(src);
-            std::ofstream(src / "lib.kex")
-                << "module Lib\n"
-                   "using Net.HTTP, only: [Headers]\n"
-                   "module Response do\n"
-                   "  record JSON do\n"
-                   "    status : Integer = 200\n"
-                   "    body : String\n"
-                   "    headers : Headers = Headers.empty\n"
-                   "  end\n"
-                   "end\n";
+            std::ofstream(src / "lib.kex") << "module Lib\n"
+                                              "using Net.HTTP, only: [Headers]\n"
+                                              "module Response do\n"
+                                              "  record JSON do\n"
+                                              "    status : Integer = 200\n"
+                                              "    body : String\n"
+                                              "    headers : Headers = Headers.empty\n"
+                                              "  end\n"
+                                              "end\n";
             const auto entry = src / "main.kex";
-            std::ofstream(entry)
-                << "using Lib\n"
-                   "main do\n"
-                   "  let r = Lib.Response.JSON { body: \"{}\" }\n"
-                   "  IO.printLine(\"${r.status} ${r.headers.entries.count}\")\n"
-                   "end\n";
+            std::ofstream(entry) << "using Lib\n"
+                                    "main do\n"
+                                    "  let r = Lib.Response.JSON { body: \"{}\" }\n"
+                                    "  IO.printLine(\"${r.status} ${r.headers.entries.count}\")\n"
+                                    "end\n";
 
             const auto walker = runCommand(
-                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " +
-                entry.string() + " 2>&1");
+                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " + entry.string() +
+                " 2>&1");
             const auto beam = runCommand(
-                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
-                entry.string() + " 2>&1");
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " + entry.string() + " 2>&1");
             fs::remove_all(root);
             assertEqual(walker, std::string("200 0\n"));
             assertEqual(beam, std::string("200 0\n"));
@@ -511,19 +491,17 @@ int main() {
                    "  let rendered(value) = \"[escaped ${value}]\"\n"
                    "end\n";
             const auto entry = src / "main.kex";
-            std::ofstream(entry)
-                << "using Lib\n"
-                   "let rendered(value: String) -> String = value\n"
-                   "main do\n"
-                   "  IO.printLine(Lib.render([\"<script>\"]))\n"
-                   "end\n";
+            std::ofstream(entry) << "using Lib\n"
+                                    "let rendered(value: String) -> String = value\n"
+                                    "main do\n"
+                                    "  IO.printLine(Lib.render([\"<script>\"]))\n"
+                                    "end\n";
 
             const auto walker = runCommand(
-                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " +
-                entry.string() + " 2>&1");
+                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " + entry.string() +
+                " 2>&1");
             const auto beam = runCommand(
-                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
-                entry.string() + " 2>&1");
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " + entry.string() + " 2>&1");
             fs::remove_all(root);
             assertEqual(walker, std::string("[escaped <script>]\n"));
             assertEqual(beam, std::string("[escaped <script>]\n"));
@@ -550,24 +528,21 @@ int main() {
                    "  let launchOn(port, host) = \"${@name} ${host}:${port}\"\n"
                    "end\n";
             const auto entry = src / "main.kex";
-            std::ofstream(entry)
-                << "using Lib\n"
-                   "main do\n"
-                   "  let r = Lib.Router { name: \"api\" }\n"
-                   "  IO.printLine(r.start(port: 4000))\n"
-                   "  IO.printLine(r.launchOn(host: \"0.0.0.0\", port: 4000))\n"
-                   "  IO.printLine(r.launchOn(4000, host: \"local\"))\n"
-                   "end\n";
+            std::ofstream(entry) << "using Lib\n"
+                                    "main do\n"
+                                    "  let r = Lib.Router { name: \"api\" }\n"
+                                    "  IO.printLine(r.start(port: 4000))\n"
+                                    "  IO.printLine(r.launchOn(host: \"0.0.0.0\", port: 4000))\n"
+                                    "  IO.printLine(r.launchOn(4000, host: \"local\"))\n"
+                                    "end\n";
 
             const auto walker = runCommand(
-                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " +
-                entry.string() + " 2>&1");
+                std::string(KEX_BINARY_PATH) + " --run-walker --no-colors " + entry.string() +
+                " 2>&1");
             const auto beam = runCommand(
-                std::string(KEX_BINARY_PATH) + " --run --no-colors " +
-                entry.string() + " 2>&1");
+                std::string(KEX_BINARY_PATH) + " --run --no-colors " + entry.string() + " 2>&1");
             fs::remove_all(root);
-            const std::string expected =
-                "api on 4000\napi 0.0.0.0:4000\napi local:4000\n";
+            const std::string expected = "api on 4000\napi 0.0.0.0:4000\napi local:4000\n";
             assertEqual(walker, expected);
             assertEqual(beam, expected);
         });
@@ -585,35 +560,31 @@ int main() {
             fs::create_directories(stdlibDir);
             fs::create_directories(runtimeDir);
             fs::copy_file(KEX_BINARY_PATH, binDir / "kex");
-            for (const auto& source :
-                 fs::recursive_directory_iterator("src/stdlib"))
-                if (source.is_regular_file() &&
-                    source.path().extension() == ".kex") {
-                    const auto relative =
-                        fs::relative(source.path(), "src/stdlib");
-                    fs::create_directories(
-                        (stdlibDir / relative).parent_path());
-                    fs::copy_file(source.path(),
-                                  stdlibDir / relative);
+            for (const auto& source : fs::recursive_directory_iterator("src/stdlib")) {
+                if (source.is_regular_file() && source.path().extension() == ".kex") {
+                    const auto relative = fs::relative(source.path(), "src/stdlib");
+                    fs::create_directories((stdlibDir / relative).parent_path());
+                    fs::copy_file(source.path(), stdlibDir / relative);
                 }
+            }
             const auto buildRuntime = fs::path(KEX_BINARY_PATH).parent_path() / "runtime/beam";
-            for (const auto& artifact : fs::directory_iterator(buildRuntime))
-                if (artifact.path().extension() == ".beam")
+            for (const auto& artifact : fs::directory_iterator(buildRuntime)) {
+                if (artifact.path().extension() == ".beam") {
                     fs::copy_file(artifact.path(), runtimeDir / artifact.path().filename());
+                }
+            }
 
             const auto program = root / "installed.kex";
-            std::ofstream(program)
-                << "main do\n"
-                   "  IO.printLine(Stream.from(1) { |n| n + 1 }.take(2))\n"
-                   "end\n";
+            std::ofstream(program) << "main do\n"
+                                      "  IO.printLine(Stream.from(1) { |n| n + 1 }.take(2))\n"
+                                      "end\n";
 
             const auto interpreterOutput = runCommand(
-                "env -u KEX_STDLIB_DIR " + (binDir / "kex").string() +
-                " --no-check --no-colors " + program.string() + " 2>&1");
-            const auto beamOutput = runCommand(
-                "env -u KEX_STDLIB_DIR -u KEX_RUNTIME_DIR " +
-                (binDir / "kex").string() + " --run --no-check --no-colors " +
+                "env -u KEX_STDLIB_DIR " + (binDir / "kex").string() + " --no-check --no-colors " +
                 program.string() + " 2>&1");
+            const auto beamOutput = runCommand(
+                "env -u KEX_STDLIB_DIR -u KEX_RUNTIME_DIR " + (binDir / "kex").string() +
+                " --run --no-check --no-colors " + program.string() + " 2>&1");
             fs::remove_all(root);
             assertEqual(interpreterOutput, std::string("[1, 2]\n"));
             assertEqual(beamOutput, std::string("[1, 2]\n"));
@@ -626,16 +597,16 @@ int main() {
             // receiver.kex). With `--no-check` it reaches the runtime, where
             // BEAM used to fall off the end of the generated dispatcher and
             // raise a bare `if_clause` — no method, no receiver, no location.
-            const std::string source =
-                "main do\n"
-                "  let due = Date.of(2026, 2, 22)\n"
-                "  IO.printLine(due.iso)\n"
-                "end\n";
+            const std::string source = "main do\n"
+                                       "  let due = Date.of(2026, 2, 22)\n"
+                                       "  IO.printLine(due.iso)\n"
+                                       "end\n";
             const std::string walker = runWalkerFile(source, /*noCheck=*/true);
             const std::string beam = runBeamFile(source, "", /*noCheck=*/true);
             for (const auto& out : {walker, beam}) {
-                assertTrue(out.find("Undefined method: iso for Result<Date, ?>")
-                           != std::string::npos, out);
+                assertTrue(
+                    out.find("Undefined method: iso for Result<Date, ?>") != std::string::npos,
+                    out);
                 assertTrue(out.find("if_clause") == std::string::npos, out);
             }
         });
@@ -643,20 +614,19 @@ int main() {
 
     describe("CLI — mutable captured if/elif", []() {
         it("threads the selected elif branch through a closure on BEAM", []() {
-            const std::string source =
-                "main do\n"
-                "  var selected = \"none\"\n"
-                "  [\"branch\"].each do |line|\n"
-                "    if line == \"tag\"\n"
-                "      selected = \"tag\"\n"
-                "    elif line == \"branch\"\n"
-                "      selected = \"branch\"\n"
-                "    else\n"
-                "      selected = \"other\"\n"
-                "    end\n"
-                "  end\n"
-                "  IO.printLine(selected)\n"
-                "end\n";
+            const std::string source = "main do\n"
+                                       "  var selected = \"none\"\n"
+                                       "  [\"branch\"].each do |line|\n"
+                                       "    if line == \"tag\"\n"
+                                       "      selected = \"tag\"\n"
+                                       "    elif line == \"branch\"\n"
+                                       "      selected = \"branch\"\n"
+                                       "    else\n"
+                                       "      selected = \"other\"\n"
+                                       "    end\n"
+                                       "  end\n"
+                                       "  IO.printLine(selected)\n"
+                                       "end\n";
             assertEqual(runWalkerFile(source), std::string("branch\n"));
             assertEqual(runBeamFile(source, ""), std::string("branch\n"));
         });
@@ -669,15 +639,14 @@ int main() {
             // agrees. (`Maths.sqrt` would be the nicer example, but the
             // walker still resolves an unknown namespace to a global of the
             // same name — see the note in the PR.)
-            const std::string source =
-                "main do\n"
-                "  IO.printLine(Missing.thing(1))\n"
-                "end\n";
+            const std::string source = "main do\n"
+                                       "  IO.printLine(Missing.thing(1))\n"
+                                       "end\n";
             const std::string walker = runWalkerFile(source, /*noCheck=*/true);
             const std::string beam = runBeamFile(source, "", /*noCheck=*/true);
-            for (const auto& out : {walker, beam})
-                assertTrue(out.find("Undefined function: Missing.thing")
-                           != std::string::npos, out);
+            for (const auto& out : {walker, beam}) {
+                assertTrue(out.find("Undefined function: Missing.thing") != std::string::npos, out);
+            }
         });
     });
 
@@ -715,26 +684,21 @@ int main() {
                 "let site : Process.Shared<String> = Process.Shared.named(\"repl.site\")\n"
                 "site.put(\"hi\")\n"
                 "site.get\n");
-            assertTrue(out.find("=> Just(\"hi\") : Optional<String>") != std::string::npos,
-                       out);
+            assertTrue(out.find("=> Just(\"hi\") : Optional<String>") != std::string::npos, out);
             assertTrue(out.find("Undefined method") == std::string::npos, out);
         });
 
         it("persists var bindings, reassignment, and ! mutation", []() {
-            const std::string input =
-                "var s = \"hello\"\n"
-                "s.replace!(\"lo\", \"a\")\n"
-                "s\n"
-                "var n = 1\n"
-                "n = n + 5\n"
-                "n\n";
+            const std::string input = "var s = \"hello\"\n"
+                                      "s.replace!(\"lo\", \"a\")\n"
+                                      "s\n"
+                                      "var n = 1\n"
+                                      "n = n + 5\n"
+                                      "n\n";
             for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
-                assertTrue(out.find("Undefined identifier: s")
-                           == std::string::npos, out);
-                assertTrue(out.find("unimplemented expr node")
-                           == std::string::npos, out);
-                assertTrue(out.find("=> \"hela\" : String")
-                           != std::string::npos, out);
+                assertTrue(out.find("Undefined identifier: s") == std::string::npos, out);
+                assertTrue(out.find("unimplemented expr node") == std::string::npos, out);
+                assertTrue(out.find("=> \"hela\" : String") != std::string::npos, out);
                 assertTrue(out.find("=> 6 : Int") != std::string::npos, out);
             }
         });
@@ -744,24 +708,18 @@ int main() {
             // ran it as a statement, but `n += 1` fell through to the
             // expression path — `IO.inspect(n += 1)` — where AssignExpr
             // does not lower ("unimplemented expr node AssignExpr").
-            const std::string input =
-                "var n = 5\n"
-                "n * 2\n"
-                "n += 1\n"
-                "n *= 2\n"
-                "n\n"
-                "n == 12\n";
+            const std::string input = "var n = 5\n"
+                                      "n * 2\n"
+                                      "n += 1\n"
+                                      "n *= 2\n"
+                                      "n\n"
+                                      "n == 12\n";
             for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
-                assertTrue(out.find("unimplemented expr node")
-                           == std::string::npos, out);
-                assertTrue(out.find("=> 10 : Integer") != std::string::npos,
-                           out);
-                assertTrue(out.find("=> 6 : Integer") != std::string::npos,
-                           out);
-                assertTrue(out.find("=> 12 : Integer") != std::string::npos,
-                           out);
-                assertTrue(out.find("=> true : Bool") != std::string::npos,
-                           out);
+                assertTrue(out.find("unimplemented expr node") == std::string::npos, out);
+                assertTrue(out.find("=> 10 : Integer") != std::string::npos, out);
+                assertTrue(out.find("=> 6 : Integer") != std::string::npos, out);
+                assertTrue(out.find("=> 12 : Integer") != std::string::npos, out);
+                assertTrue(out.find("=> true : Bool") != std::string::npos, out);
             }
         });
 
@@ -784,26 +742,17 @@ int main() {
             };
             for (const auto& input : inputs) {
                 for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
-                    assertTrue(out.find("Cannot rebind '") != std::string::npos,
-                               out);
-                    assertTrue(out.find("re-enter the whole pattern") !=
-                                   std::string::npos,
-                               out);
+                    assertTrue(out.find("Cannot rebind '") != std::string::npos, out);
+                    assertTrue(out.find("re-enter the whole pattern") != std::string::npos, out);
                 }
             }
-            for (const auto& out :
-                 {runRepl(inputs[0]), runBeamRepl(inputs[0])}) {
-                assertTrue(out.find("=> 1 : Integer") != std::string::npos,
-                           out);
-                assertTrue(out.find("=> 3 : Integer") != std::string::npos,
-                           out);
-                assertTrue(out.find("=> 4 : Integer") != std::string::npos,
-                           out);
+            for (const auto& out : {runRepl(inputs[0]), runBeamRepl(inputs[0])}) {
+                assertTrue(out.find("=> 1 : Integer") != std::string::npos, out);
+                assertTrue(out.find("=> 3 : Integer") != std::string::npos, out);
+                assertTrue(out.find("=> 4 : Integer") != std::string::npos, out);
             }
-            for (const auto& out :
-                 {runRepl(inputs[1]), runBeamRepl(inputs[1])}) {
-                assertTrue(out.find("=> 1 : Integer") != std::string::npos,
-                           out);
+            for (const auto& out : {runRepl(inputs[1]), runBeamRepl(inputs[1])}) {
+                assertTrue(out.find("=> 1 : Integer") != std::string::npos, out);
             }
         });
 
@@ -811,10 +760,8 @@ int main() {
             // kexhq/kex#604: `var n = 1` echoed `1 : Void` while `let x = 5`
             // echoes `5 : Integer` — the REPL showed the declaration's own
             // unit type instead of unwrapping to the bound value like `let`.
-            for (const auto& out :
-                 {runRepl("var n = 1\n"), runBeamRepl("var n = 1\n")}) {
-                assertTrue(out.find("=> 1 : Integer") != std::string::npos,
-                           out);
+            for (const auto& out : {runRepl("var n = 1\n"), runBeamRepl("var n = 1\n")}) {
+                assertTrue(out.find("=> 1 : Integer") != std::string::npos, out);
             }
         });
 
@@ -824,10 +771,9 @@ int main() {
             // stayed bound to the constant's own function: `UP` echoed
             // `<function:<lambda>>` on the interpreter and failed to parse at
             // all on BEAM, so a constant was unusable in either REPL.
-            const std::string input =
-                "let UP = 42\n"
-                "UP\n"
-                "UP + 1\n";
+            const std::string input = "let UP = 42\n"
+                                      "UP\n"
+                                      "UP + 1\n";
             for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
                 assertTrue(out.find("function:") == std::string::npos, out);
                 assertTrue(out.find("Expected ')'") == std::string::npos, out);
@@ -846,9 +792,7 @@ int main() {
                 "  let source = \"{ /* profile */ \\\"name\\\": \\\"Kex\\\" }\"\n"
                 "source\n";
             for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
-                assertTrue(
-                    out.find("unimplemented expr node") == std::string::npos,
-                    out);
+                assertTrue(out.find("unimplemented expr node") == std::string::npos, out);
                 assertTrue(out.find("\"name\"") != std::string::npos, out);
             }
         });
@@ -861,10 +805,7 @@ int main() {
                 "f.try\n"
                 "let f = FS.File.open(\"typed.txt\", FS.Write).try\n"
                 "f\n");
-            assertTrue(
-                out.find("FileHandle<CannotRead, CanWrite>") !=
-                    std::string::npos,
-                out);
+            assertTrue(out.find("FileHandle<CannotRead, CanWrite>") != std::string::npos, out);
             assertTrue(out.find(": FileHandle\n") == std::string::npos, out);
         });
 
@@ -876,13 +817,9 @@ int main() {
                 "writer.get\n"
                 "writer.getLine\n"
                 "writer.read\n");
-            assertTrue(out.find("FileHandle<CannotRead, CanWrite>") !=
-                           std::string::npos,
-                       out);
-            assertTrue(out.find("=> None : Optional") == std::string::npos,
-                       out);
-            assertTrue(out.find("=> \"\" : String") == std::string::npos,
-                       out);
+            assertTrue(out.find("FileHandle<CannotRead, CanWrite>") != std::string::npos, out);
+            assertTrue(out.find("=> None : Optional") == std::string::npos, out);
+            assertTrue(out.find("=> \"\" : String") == std::string::npos, out);
             assertTrue(out.find("error:") != std::string::npos, out);
         });
 
@@ -895,10 +832,13 @@ int main() {
                 "reader.readLine\n");
             // `String?` is the source-level spelling the checker renders;
             // the value-derived fallback said `Optional<String>`.
-            assertTrue(out.find("Ok(\"contents\") : Result<String, FS.FileError>") !=
-                           std::string::npos,
-                       out);
-            assertTrue(out.find("Ok(Just(\"contents\")) : Result<String?, ReadError>") != std::string::npos, out);
+            assertTrue(
+                out.find("Ok(\"contents\") : Result<String, FS.FileError>") != std::string::npos,
+                out);
+            assertTrue(
+                out.find("Ok(Just(\"contents\")) : Result<String?, ReadError>") !=
+                    std::string::npos,
+                out);
             assertTrue(out.find("Ok(None) : Result<String?, ReadError>") != std::string::npos, out);
         });
 
@@ -915,9 +855,7 @@ int main() {
                 "`\n"
                 "    hello\n"
                 "    `\n");
-            assertTrue(out.find("=> \"hello\n\" : String") !=
-                           std::string::npos,
-                       out);
+            assertTrue(out.find("=> \"hello\n\" : String") != std::string::npos, out);
         });
 
         it("continues interpolating backticks with an open hole", []() {
@@ -925,9 +863,7 @@ int main() {
                 "$`answer: ${\n"
                 "  40 + 2\n"
                 "}`\n");
-            assertTrue(out.find("=> \"answer: 42\" : String") !=
-                           std::string::npos,
-                       out);
+            assertTrue(out.find("=> \"answer: 42\" : String") != std::string::npos, out);
         });
 
         it("continues expressions with open delimiters", []() {
@@ -943,8 +879,7 @@ int main() {
         it("lists /clear in /help", []() {
             auto out = runRepl("/help\n");
             assertTrue(out.find("/clear") != std::string::npos, out);
-            assertTrue(out.find("Clear the terminal screen") != std::string::npos,
-                       out);
+            assertTrue(out.find("Clear the terminal screen") != std::string::npos, out);
         });
 
         it("clears the screen and keeps evaluating", []() {
@@ -967,7 +902,8 @@ int main() {
     describe("REPL CLI — Immutability", []() {
         it("rejects plain assignment to a let binding with a runtime error", []() {
             auto out = runRepl("let kx = \"a\"\nkx = \"b\"\nkx\n");
-            assertTrue(out.find("Cannot assign to immutable binding: kx") != std::string::npos, out);
+            assertTrue(
+                out.find("Cannot assign to immutable binding: kx") != std::string::npos, out);
             assertTrue(out.find("=> \"a\" : String") != std::string::npos, out);
         });
     });
@@ -990,8 +926,7 @@ int main() {
                      "end\n";
             }
             close(fd);
-            auto out = runRepl(std::string("/load ") + sourcePath +
-                               "\nstash(\"loaded\")\n");
+            auto out = runRepl(std::string("/load ") + sourcePath + "\nstash(\"loaded\")\n");
             std::remove(sourcePath);
             assertTrue(out.find("=> \"loaded\" : String") != std::string::npos, out);
             assertTrue(out.find("Undefined method") == std::string::npos, out);
@@ -1009,8 +944,8 @@ int main() {
             }
             close(fd);
 
-            auto out = runRepl(std::string("/load ") + sourcePath +
-                               "\nlet t = Loaded.values()\nt\n");
+            auto out =
+                runRepl(std::string("/load ") + sourcePath + "\nlet t = Loaded.values()\nt\n");
             std::remove(sourcePath);
             assertTrue(out.find("loaded ") != std::string::npos, out);
             // `[Integer]`, not the runtime-inspected `[Int]`: the checker now
@@ -1074,13 +1009,15 @@ int main() {
         it("hands options after the file to the program", []() {
             const std::string program = "main(args) do\n  IO.printLine(args)\nend\n";
             auto out = runBeamFile(program, "x -n 3 -v --limit 3 -- -q");
-            assertTrue(out.find("[x, -n, 3, -v, --limit, 3, --, -q]") != std::string::npos,
-                       "the program did not receive its options: " + out);
+            assertTrue(
+                out.find("[x, -n, 3, -v, --limit, 3, --, -q]") != std::string::npos,
+                "the program did not receive its options: " + out);
             // One `--` directly after the file only separates, as before:
             // Tey runs every program as `kex app.kex -- args`.
             auto separated = runBeamFile(program, "-- -v --force");
-            assertTrue(separated.find("[-v, --force]") != std::string::npos,
-                       "a `--` after the file was not taken as the separator: " + separated);
+            assertTrue(
+                separated.find("[-v, --force]") != std::string::npos,
+                "a `--` after the file was not taken as the separator: " + separated);
             char sourcePath[] = "/tmp/kex_walker_arg_test_XXXXXX.kex";
             int fd = mkstemps(sourcePath, 4);
             assertTrue(fd >= 0, "mkstemps should create a Kex source file");
@@ -1089,11 +1026,13 @@ int main() {
                 f << program;
             }
             close(fd);
-            auto walked = runCommand(std::string(KEX_BINARY_PATH) + " -R --no-colors " +
-                                     sourcePath + " x -n 3 --limit 3 2>&1");
+            auto walked = runCommand(
+                std::string(KEX_BINARY_PATH) + " -R --no-colors " + sourcePath +
+                " x -n 3 --limit 3 2>&1");
             std::remove(sourcePath);
-            assertTrue(walked.find("[x, -n, 3, --limit, 3]") != std::string::npos,
-                       "the walker's program did not receive its options: " + walked);
+            assertTrue(
+                walked.find("[x, -n, 3, --limit, 3]") != std::string::npos,
+                "the walker's program did not receive its options: " + walked);
         });
     });
 
@@ -1121,41 +1060,40 @@ int main() {
         // The replayed binding used to come back untyped, so `pa.get` was
         // dispatched by name and lost to every other `get`.
         it("calls a slot that shares a name with other functions", [entries]() {
-            auto out = runBeamRepl(entries +
-                                   "pa.put(\"name\", \"kex\")\n"
-                                   "pa.get(\"name\")\n");
-            assertTrue(out.find("Ok(Just(\"kex\")) : Result<String?, CallError>") !=
-                           std::string::npos,
-                       out);
+            auto out = runBeamRepl(
+                entries + "pa.put(\"name\", \"kex\")\n"
+                          "pa.get(\"name\")\n");
+            assertTrue(
+                out.find("Ok(Just(\"kex\")) : Result<String?, CallError>") != std::string::npos,
+                out);
             assertTrue(out.find("Undefined method") == std::string::npos, out);
         });
 
         // Both REPLs complete through the editor's analysis: the receiver is
         // typed from the session's program, not guessed from the line.
         it("completes a binding's slots and the server's own methods", [entries]() {
-            for (const auto& out : {runRepl(entries + "/complete pa.\n"),
-                                    runBeamRepl(entries + "/complete pa.\n")})
-                for (const auto* member : {"get", "keys", "put", "alive?",
-                                           "link", "monitor", "unlink", "within"})
-                    assertTrue(out.find(std::string("  pa.") + member + "\n") !=
-                                   std::string::npos,
-                               out);
+            for (const auto& out :
+                 {runRepl(entries + "/complete pa.\n"), runBeamRepl(entries + "/complete pa.\n")}) {
+                for (const auto* member :
+                     {"get", "keys", "put", "alive?", "link", "monitor", "unlink", "within"}) {
+                    assertTrue(
+                        out.find(std::string("  pa.") + member + "\n") != std::string::npos, out);
+                }
+            }
         });
 
         it("completes call results, chains, lambda parameters and literals", []() {
-            const std::string input =
-                "let s = \"x\"\n"
-                "/complete s.upp\n"
-                "/complete [1, 2].map { |x| x }.fil\n"
-                "/complete [\"a\"].map { |w| w.upp\n"
-                "/complete \"a\".upp\n";
+            const std::string input = "let s = \"x\"\n"
+                                      "/complete s.upp\n"
+                                      "/complete [1, 2].map { |x| x }.fil\n"
+                                      "/complete [\"a\"].map { |w| w.upp\n"
+                                      "/complete \"a\".upp\n";
             for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
-                for (const auto* expected : {
-                         "  s.upperCase\n",
-                         "  [1, 2].map { |x| x }.filter\n",
-                         "  [\"a\"].map { |w| w.upperCase\n",
-                         "  \"a\".upperCase\n"})
+                for (const auto* expected :
+                     {"  s.upperCase\n", "  [1, 2].map { |x| x }.filter\n",
+                      "  [\"a\"].map { |w| w.upperCase\n", "  \"a\".upperCase\n"}) {
                     assertTrue(out.find(expected) != std::string::npos, out);
+                }
             }
         });
 
@@ -1172,35 +1110,32 @@ int main() {
             };
             write("src/config.kex", "# Settings.\nmodule Config\n\nlet port() = 4000\n");
             write("src/db/schema.kex", "module DB.Schema\n");
-            write("src/db/repositories/users.kex",
-                  "module DB.Repositories.Users\n\n"
-                  "let find(id: Integer) = id\n"
-                  "let named(name: String) = name\n");
+            write(
+                "src/db/repositories/users.kex", "module DB.Repositories.Users\n\n"
+                                                 "let find(id: Integer) = id\n"
+                                                 "let named(name: String) = name\n");
             // Not modules of the project: a build directory's copy, and a
             // `module` line that is not the file's header.
             write("src/build/stale.kex", "module Stale\n");
             write("src/notes.kex", "let text = \"\"\"\nmodule Fake\n\"\"\"\n");
-            write("input.txt",
-                  "/complete Conf\n"
-                  "/complete DB.\n"
-                  "/complete DB.Repositories.Users.\n"
-                  "/complete Sta\n"
-                  "/complete Fak\n");
+            write(
+                "input.txt", "/complete Conf\n"
+                             "/complete DB.\n"
+                             "/complete DB.Repositories.Users.\n"
+                             "/complete Sta\n"
+                             "/complete Fak\n");
             const auto run = [&](const std::string& flags) {
-                return runCommand("cd " + project.string() + " && " +
-                                  std::string(KEX_BINARY_PATH) + flags +
-                                  " --no-colors < input.txt 2>&1");
+                return runCommand(
+                    "cd " + project.string() + " && " + std::string(KEX_BINARY_PATH) + flags +
+                    " --no-colors < input.txt 2>&1");
             };
             for (const auto& out : {run(" -i"), run("")}) {
-                for (const auto* expected : {
-                         "  Config\n",
-                         "  DB.Repositories\n",
-                         "  DB.Schema\n",
-                         "  DB.Repositories.Users.find\n",
-                         "  DB.Repositories.Users.named\n",
-                         "(no completions for \"Sta\")",
-                         "(no completions for \"Fak\")"})
+                for (const auto* expected :
+                     {"  Config\n", "  DB.Repositories\n", "  DB.Schema\n",
+                      "  DB.Repositories.Users.find\n", "  DB.Repositories.Users.named\n",
+                      "(no completions for \"Sta\")", "(no completions for \"Fak\")"}) {
                     assertTrue(out.find(expected) != std::string::npos, out);
+                }
             }
             fs::remove_all(project);
         });
@@ -1219,9 +1154,10 @@ int main() {
                 "  let p = Process.spawn(Entries)\n"
                 "end\n",
                 "");
-            assertTrue(out.find("`Process.spawn(Entries)` passes the type, not a value") !=
-                           std::string::npos,
-                       out);
+            assertTrue(
+                out.find("`Process.spawn(Entries)` passes the type, not a value") !=
+                    std::string::npos,
+                out);
             assertTrue(out.find("`Process.spawn(Entries {})`") != std::string::npos, out);
         });
     });
@@ -1236,14 +1172,14 @@ int main() {
                 "opened\n"
                 "opened.close\n");
             assertTrue(
-                out.find("Ok(<FileHandle: \"typed.txt\">) : "
-                         "Result<FileHandle<CannotRead, CanWrite>, FS.FileError>")
-                    != std::string::npos,
+                out.find(
+                    "Ok(<FileHandle: \"typed.txt\">) : "
+                    "Result<FileHandle<CannotRead, CanWrite>, FS.FileError>") != std::string::npos,
                 out);
             assertTrue(
-                out.find("<FileHandle: \"typed.txt\"> : "
-                         "FileHandle<CannotRead, CanWrite>")
-                    != std::string::npos,
+                out.find(
+                    "<FileHandle: \"typed.txt\"> : "
+                    "FileHandle<CannotRead, CanWrite>") != std::string::npos,
                 out);
             assertTrue(out.find(": Tuple") == std::string::npos, out);
             assertTrue(out.find(":MockFileHandle") == std::string::npos, out);
@@ -1258,10 +1194,13 @@ int main() {
                 "reader.readLine\n");
             // `String?` is the source-level spelling the checker renders;
             // the value-derived fallback said `Optional<String>`.
-            assertTrue(out.find("Ok(\"contents\") : Result<String, FS.FileError>") !=
-                           std::string::npos,
-                       out);
-            assertTrue(out.find("Ok(Just(\"contents\")) : Result<String?, ReadError>") != std::string::npos, out);
+            assertTrue(
+                out.find("Ok(\"contents\") : Result<String, FS.FileError>") != std::string::npos,
+                out);
+            assertTrue(
+                out.find("Ok(Just(\"contents\")) : Result<String?, ReadError>") !=
+                    std::string::npos,
+                out);
             assertTrue(out.find("Ok(None) : Result<String?, ReadError>") != std::string::npos, out);
         });
 
@@ -1294,8 +1233,8 @@ int main() {
             }
             close(fd);
 
-            auto out = runBeamRepl(std::string("/load ") + sourcePath +
-                                   "\nlet t = Loaded.values()\nt\n");
+            auto out =
+                runBeamRepl(std::string("/load ") + sourcePath + "\nlet t = Loaded.values()\nt\n");
             std::remove(sourcePath);
             assertTrue(out.find("loaded ") != std::string::npos, out);
             // `[Integer]`, not the runtime-inspected `[Int]`: the checker now
@@ -1334,16 +1273,17 @@ int main() {
                 << "/load lib/store.kex\nStore.shown(\"select 1\")\n"
                    "/load lib/broken.kex\n/load lib/leaning.kex\nlet x = 1\n";
             for (const auto* flags : {" --no-colors", " -i --no-colors"}) {
-                auto out = runCommand("cd " + root + " && " +
-                                      std::string(KEX_BINARY_PATH) + flags +
-                                      " < input.txt 2>&1");
+                auto out = runCommand(
+                    "cd " + root + " && " + std::string(KEX_BINARY_PATH) + flags +
+                    " < input.txt 2>&1");
                 assertTrue(out.find("\"select 1\" : String") != std::string::npos, out);
                 assertTrue(out.find("Unknown type") == std::string::npos, out);
-                assertTrue(out.find("lib/broken.kex was not loaded") !=
-                               std::string::npos, out);
-                assertTrue(out.find("lib/leaning.kex was not loaded: "
-                                    "could not parse module Shaky") !=
-                               std::string::npos, out);
+                assertTrue(out.find("lib/broken.kex was not loaded") != std::string::npos, out);
+                assertTrue(
+                    out.find(
+                        "lib/leaning.kex was not loaded: "
+                        "could not parse module Shaky") != std::string::npos,
+                    out);
                 assertTrue(out.find("=> 1 : Integer") != std::string::npos, out);
             }
             std::filesystem::remove_all(root);
@@ -1363,34 +1303,29 @@ int main() {
                    "make FrozenTicker, implement: Ticker do\n"
                    "  foul now() -> Integer = @at\nend\n\n"
                    "foul stamp() -> String = \"at ${Ticker.now()}\"\n";
-            std::ofstream(root + "/input.txt")
-                << "using Tickers\n"
-                   "let frozen = FrozenTicker { at: 7 }\n"
-                   "/with Tickers.Ticker = frozen\n"
-                   "stamp()\n"
-                   "let later = stamp()\n"
-                   "/with\n"
-                   "/with Tickers.Ticker = 5\n"
-                   "/without Tickers.Ticker\n"
-                   "stamp()\n"
-                   "later\n";
+            std::ofstream(root + "/input.txt") << "using Tickers\n"
+                                                  "let frozen = FrozenTicker { at: 7 }\n"
+                                                  "/with Tickers.Ticker = frozen\n"
+                                                  "stamp()\n"
+                                                  "let later = stamp()\n"
+                                                  "/with\n"
+                                                  "/with Tickers.Ticker = 5\n"
+                                                  "/without Tickers.Ticker\n"
+                                                  "stamp()\n"
+                                                  "later\n";
             for (const auto* flags : {" --no-colors", " -i --no-colors"}) {
-                auto out = runCommand("cd " + root + " && " +
-                                      std::string(KEX_BINARY_PATH) + flags +
-                                      " < input.txt 2>&1");
+                auto out = runCommand(
+                    "cd " + root + " && " + std::string(KEX_BINARY_PATH) + flags +
+                    " < input.txt 2>&1");
                 assertTrue(out.find("(with Tickers.Ticker)") != std::string::npos, out);
                 assertTrue(out.find("=> \"at 7\" : String") != std::string::npos, out);
-                assertTrue(out.find("  Tickers.Ticker = frozen") != std::string::npos,
-                           out);
-                assertTrue(out.find("does not implement it: Integer") !=
-                               std::string::npos, out);
-                assertTrue(out.find("(without Tickers.Ticker)") != std::string::npos,
-                           out);
-                assertTrue(out.find("=> \"at 1000\" : String") != std::string::npos,
-                           out);
+                assertTrue(out.find("  Tickers.Ticker = frozen") != std::string::npos, out);
+                assertTrue(out.find("does not implement it: Integer") != std::string::npos, out);
+                assertTrue(out.find("(without Tickers.Ticker)") != std::string::npos, out);
+                assertTrue(out.find("=> \"at 1000\" : String") != std::string::npos, out);
                 // A binding made under the replacement keeps what it saw.
-                assertTrue(out.rfind("=> \"at 7\" : String") >
-                               out.find("=> \"at 1000\" : String"), out);
+                assertTrue(
+                    out.rfind("=> \"at 7\" : String") > out.find("=> \"at 1000\" : String"), out);
             }
             std::filesystem::remove_all(root);
         });
@@ -1403,9 +1338,7 @@ int main() {
                 "let kilowatts = &.kilowatt.to(String)\n"
                 "kilowatts(54)\n"
                 "kilowatts(99)\n");
-            assertTrue(out.find("=> B : Units.Data.DataUnit") !=
-                           std::string::npos,
-                       out);
+            assertTrue(out.find("=> B : Units.Data.DataUnit") != std::string::npos, out);
             assertTrue(out.find("\"3.0 kW\"") != std::string::npos, out);
             assertTrue(out.find("\"54.0 kW\"") != std::string::npos, out);
             assertTrue(out.find("\"99.0 kW\"") != std::string::npos, out);
@@ -1416,8 +1349,7 @@ int main() {
             auto out = runBeamRepl(
                 "(1..3).items.map(&.to(String).or(\"\"))\n"
                 "IO.printLine({ \"kex\": 3 })\n");
-            assertTrue(out.find("=> [\"1\", \"2\", \"3\"] : [String]")
-                       != std::string::npos, out);
+            assertTrue(out.find("=> [\"1\", \"2\", \"3\"] : [String]") != std::string::npos, out);
             assertTrue(out.find("<<\"1\">>") == std::string::npos, out);
             assertTrue(out.find("=> :ok : Atom") == std::string::npos, out);
         });
@@ -1428,22 +1360,18 @@ int main() {
             // `InvalidFormat("x")`.
             const std::string input = "Date.of(2026, 2, 30)\n";
             for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
-                assertTrue(out.find("Error(InvalidDate(2026, 2, 30))")
-                           != std::string::npos, out);
+                assertTrue(out.find("Error(InvalidDate(2026, 2, 30))") != std::string::npos, out);
                 assertTrue(out.find(":InvalidDate") == std::string::npos, out);
             }
         });
 
         it("types a nullary variant by its ADT, not as an atom", []() {
-            const std::string input =
-                "type Colour = Red | Blue(Integer)\n"
-                "[Red, Red]\n"
-                "Just(Red)\n";
+            const std::string input = "type Colour = Red | Blue(Integer)\n"
+                                      "[Red, Red]\n"
+                                      "Just(Red)\n";
             for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
-                assertTrue(out.find("[Red, Red] : [Colour]")
-                           != std::string::npos, out);
-                assertTrue(out.find("Just(Red) : Colour?")
-                           != std::string::npos, out);
+                assertTrue(out.find("[Red, Red] : [Colour]") != std::string::npos, out);
+                assertTrue(out.find("Just(Red) : Colour?") != std::string::npos, out);
                 assertTrue(out.find("Atom") == std::string::npos, out);
             }
         });
@@ -1452,28 +1380,23 @@ int main() {
             // A Result's unused half and a record's element types are erased
             // at runtime, so the value-derived name reported `?`. The checked
             // type knows them.
-            const std::string input =
-                "Time.parse(\"14:03\")\n"
-                "Date.of(2026, 2, 30)\n";
+            const std::string input = "Time.parse(\"14:03\")\n"
+                                      "Date.of(2026, 2, 30)\n";
             for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
-                assertTrue(out.find(": Result<Time, TimeError>")
-                           != std::string::npos, out);
-                assertTrue(out.find(": Result<Date, TimeError>")
-                           != std::string::npos, out);
+                assertTrue(out.find(": Result<Time, TimeError>") != std::string::npos, out);
+                assertTrue(out.find(": Result<Date, TimeError>") != std::string::npos, out);
             }
         });
 
         it("widens a nullary constructor to its ADT when showing a type", []() {
             // The checked type of `Red` is `Red`; what a reader wants is the
             // type it belongs to.
-            const std::string input =
-                "type Colour = Red | Blue(Integer)\n"
-                "Red\n"
-                "[Red, Blue(2)]\n";
+            const std::string input = "type Colour = Red | Blue(Integer)\n"
+                                      "Red\n"
+                                      "[Red, Blue(2)]\n";
             for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
                 assertTrue(out.find("Red : Colour") != std::string::npos, out);
-                assertTrue(out.find("[Red, Blue(2)] : [Colour]")
-                           != std::string::npos, out);
+                assertTrue(out.find("[Red, Blue(2)] : [Colour]") != std::string::npos, out);
             }
         });
 
@@ -1493,12 +1416,9 @@ int main() {
                 "Just(42)\n"
                 "Ok(\"ready\")\n"
                 "Error(\"bad\")\n");
-            assertTrue(out.find("=> Just(42) : Integer?")
-                       != std::string::npos, out);
-            assertTrue(out.find("=> Ok(\"ready\") : Result<String, ?>")
-                       != std::string::npos, out);
-            assertTrue(out.find("=> Error(\"bad\") : Result<?, String>")
-                       != std::string::npos, out);
+            assertTrue(out.find("=> Just(42) : Integer?") != std::string::npos, out);
+            assertTrue(out.find("=> Ok(\"ready\") : Result<String, ?>") != std::string::npos, out);
+            assertTrue(out.find("=> Error(\"bad\") : Result<?, String>") != std::string::npos, out);
             assertTrue(out.find("{'Just',42}") == std::string::npos, out);
         });
 
@@ -1507,12 +1427,9 @@ int main() {
                 "(1, \"x\")\n"
                 "{ \"x\": 1 }\n"
                 "Less\n");
-            assertTrue(out.find("=> (1, \"x\") : (Integer, String)")
-                       != std::string::npos, out);
-            assertTrue(out.find("=> { \"x\": 1 } : {String: Integer}")
-                       != std::string::npos, out);
-            assertTrue(out.find("=> Less : Ordering")
-                       != std::string::npos, out);
+            assertTrue(out.find("=> (1, \"x\") : (Integer, String)") != std::string::npos, out);
+            assertTrue(out.find("=> { \"x\": 1 } : {String: Integer}") != std::string::npos, out);
+            assertTrue(out.find("=> Less : Ordering") != std::string::npos, out);
             assertTrue(out.find("#{") == std::string::npos, out);
             assertTrue(out.find("<<\"x\">>") == std::string::npos, out);
         });
@@ -1531,10 +1448,9 @@ int main() {
 
     describe("CLI — Map Display", []() {
         it("uses canonical key order on both backends", []() {
-            const std::string source =
-                "main do\n"
-                "  IO.printLine({ \"kex\": 3, \"fast\": 4, \"is\": 2 })\n"
-                "end\n";
+            const std::string source = "main do\n"
+                                       "  IO.printLine({ \"kex\": 3, \"fast\": 4, \"is\": 2 })\n"
+                                       "end\n";
             const std::string expected = "{ fast: 4, is: 2, kex: 3 }";
             auto interpreter = runRepl("IO.printLine({ \"kex\": 3, \"fast\": 4, \"is\": 2 })\n");
             auto beam = runBeamFile(source, "");
@@ -1545,13 +1461,12 @@ int main() {
 
     describe("CLI — opt-in JSON and Parsing stdlib", []() {
         it("parses commented JSON and serializes it on BEAM", []() {
-            const std::string source =
-                "using JSON\n"
-                "main do\n"
-                "  let Ok(value) = JSON.parse(\"{/*c*/\\\"x\\\":1}\", "
-                "options: { allowComments: true })\n"
-                "  IO.printLine(JSON.stringify(value))\n"
-                "end\n";
+            const std::string source = "using JSON\n"
+                                       "main do\n"
+                                       "  let Ok(value) = JSON.parse(\"{/*c*/\\\"x\\\":1}\", "
+                                       "options: { allowComments: true })\n"
+                                       "  IO.printLine(JSON.stringify(value))\n"
+                                       "end\n";
             assertEqual(runBeamFile(source, ""), std::string("{\"x\":1}\n"));
         });
 
@@ -1660,22 +1575,21 @@ int main() {
             // `let (a, b) = (1, 2)` printed `1 : (Integer, Integer)`.
             for (auto* run : {&runBeamRepl, &runRepl}) {
                 auto out = (*run)("let (a, b) = (1, 2)\n");
-                assertTrue(out.find("=> (1, 2) : (Integer, Integer)")
-                           != std::string::npos, out);
+                assertTrue(out.find("=> (1, 2) : (Integer, Integer)") != std::string::npos, out);
             }
         });
 
         it("evaluates a destructured right-hand side exactly once", []() {
             // The echo binds the right-hand side to a temporary rather than
             // re-running it, so its side effects happen once.
-            auto out = runBeamRepl(
-                "let (p, q) = (IO.printLine(\"ONCE\"), 7)\nq\n");
+            auto out = runBeamRepl("let (p, q) = (IO.printLine(\"ONCE\"), 7)\nq\n");
             // The REPL echoes the input line, which itself contains the
             // marker, so count only lines that are the marker on its own.
             size_t printed = 0;
             for (size_t i = out.find("\nONCE\n"); i != std::string::npos;
-                 i = out.find("\nONCE\n", i + 1))
-              printed++;
+                 i = out.find("\nONCE\n", i + 1)) {
+                printed++;
+            }
             assertEqual(printed, size_t(1), out);
             assertTrue(out.find("=> 7 : Int") != std::string::npos, out);
         });
@@ -1714,8 +1628,7 @@ int main() {
             // The checked type also fills in the Ok half, which the value
             // alone cannot know (it only ever holds one side).
             auto out = runBeamRepl("Integer.parse(\"12x\")\n");
-            assertTrue(out.find("Result<Integer, ParseError>")
-                       != std::string::npos, out);
+            assertTrue(out.find("Result<Integer, ParseError>") != std::string::npos, out);
             assertTrue(out.find("Tuple") == std::string::npos, out);
         });
 
@@ -1767,8 +1680,7 @@ int main() {
             assertTrue(out.find("from child") != std::string::npos, out);
         });
 
-        it("reads `let name do ... end` with an arm arrow as a definition",
-           []() {
+        it("reads `let name do ... end` with an arm arrow as a definition", []() {
             // The `=` of `=>` was taken for a binding, so this became a local
             // holding a lambda rather than a function.
             auto out = runBeamRepl(
@@ -1829,26 +1741,25 @@ int main() {
 
         it("names the value that stopped a collapse", []() {
             auto out = collapseReportFor(
-                std::string(kCollapseBuilder) +
-                "main do\n"
-                "  let n = 5\n"
-                "  IO.printLine(\"${Boxes.of(n).scaled(10)}\")\n"
-                "end\n");
+                std::string(kCollapseBuilder) + "main do\n"
+                                                "  let n = 5\n"
+                                                "  IO.printLine(\"${Boxes.of(n).scaled(10)}\")\n"
+                                                "end\n");
             // The reason, not just the verdict: knowing WHICH name is missing
             // is the difference between a report and a shrug.
             assertTrue(out.find("kept") != std::string::npos, out);
-            assertTrue(out.find("the value of `n` is not known at compile time")
-                           != std::string::npos, out);
+            assertTrue(
+                out.find("the value of `n` is not known at compile time") != std::string::npos,
+                out);
             // and the program still runs, correctly
             assertTrue(out.find("50") != std::string::npos, out);
         });
 
         it("reports a collapse that did happen", []() {
             auto out = collapseReportFor(
-                std::string(kCollapseBuilder) +
-                "main do\n"
-                "  IO.printLine(\"${Boxes.of(5).scaled(10)}\")\n"
-                "end\n");
+                std::string(kCollapseBuilder) + "main do\n"
+                                                "  IO.printLine(\"${Boxes.of(5).scaled(10)}\")\n"
+                                                "end\n");
             assertTrue(out.find("collapsed") != std::string::npos, out);
             assertTrue(out.find("kept") == std::string::npos, out);
             assertTrue(out.find("50") != std::string::npos, out);
@@ -1885,34 +1796,40 @@ int main() {
     describe("version reporting", []() {
         it("prints the version on the command line", []() {
             auto out = runCommand(std::string(KEX_BINARY_PATH) + " --version");
-            assertTrue(out.find("kex " + kex::versionNumber()) != std::string::npos,
-                       "expected the version number, got: " + out);
+            assertTrue(
+                out.find("kex " + kex::versionNumber()) != std::string::npos,
+                "expected the version number, got: " + out);
         });
 
         it("shows the same version in the REPL banner", []() {
             auto out = runRepl("1\n");
-            assertTrue(out.find(kex::versionNumber()) != std::string::npos,
-                       "expected the version number in the banner, got: " + out);
+            assertTrue(
+                out.find(kex::versionNumber()) != std::string::npos,
+                "expected the version number in the banner, got: " + out);
         });
 
         it("reports the same version to a Kex program", []() {
             auto out = runRepl("Kex.VERSION.number\n");
-            assertTrue(out.find(kex::versionNumber()) != std::string::npos,
-                       "Kex.VERSION disagrees with the binary: " + out);
+            assertTrue(
+                out.find(kex::versionNumber()) != std::string::npos,
+                "Kex.VERSION disagrees with the binary: " + out);
         });
 
         it("reports this build's git revision when there is one", []() {
             auto out = runRepl("Kex.VERSION.revision\n");
             if (*kex::kGitRevision) {
-                assertTrue(out.find(kex::kGitRevision) != std::string::npos,
-                           "expected the revision in the tuple, got: " + out);
+                assertTrue(
+                    out.find(kex::kGitRevision) != std::string::npos,
+                    "expected the revision in the tuple, got: " + out);
                 auto cli = runCommand(std::string(KEX_BINARY_PATH) + " --version");
-                assertTrue(cli.find(kex::kGitRevision) != std::string::npos,
-                           "expected the revision on the CLI, got: " + cli);
+                assertTrue(
+                    cli.find(kex::kGitRevision) != std::string::npos,
+                    "expected the revision on the CLI, got: " + cli);
             } else {
                 // A source archive has no commit to name, and says so.
-                assertTrue(out.find("None") != std::string::npos,
-                           "expected None without a revision, got: " + out);
+                assertTrue(
+                    out.find("None") != std::string::npos,
+                    "expected None without a revision, got: " + out);
             }
         });
     });
@@ -1922,15 +1839,14 @@ int main() {
     // the session instead of leaving it half booted.
     describe("--eval", []() {
         const std::string kex = std::string(KEX_BINARY_PATH) + " --no-colors";
-        const std::string boot =
-            " -e 'let x = 41' -e 'let double(n) do\n  n * 2\nend'";
+        const std::string boot = " -e 'let x = 41' -e 'let double(n) do\n  n * 2\nend'";
 
         it("enters its lines before the first prompt in both REPLs", [kex, boot]() {
             for (const std::string repl : {"", " -i"}) {
-                auto out = runCommand("echo 'double(x + 1)' | " + kex + repl +
-                                      boot + " 2>&1");
-                assertTrue(out.find("=> 84") != std::string::npos,
-                           "the typed line did not see the boot bindings: " + out);
+                auto out = runCommand("echo 'double(x + 1)' | " + kex + repl + boot + " 2>&1");
+                assertTrue(
+                    out.find("=> 84") != std::string::npos,
+                    "the typed line did not see the boot bindings: " + out);
             }
         });
 
@@ -1940,19 +1856,22 @@ int main() {
                     "echo 'IO.printLine(\"typed\")' | " + kex + repl +
                     " -e 'let y = undefinedThing' -e 'IO.printLine(\"later\")'"
                     " 2>&1; echo \"status=$?\"");
-                assertTrue(out.find("status=1") != std::string::npos,
-                           "a failed boot did not exit with 1: " + out);
-                assertTrue(out.find("later") == std::string::npos &&
-                               out.find("typed") == std::string::npos,
-                           "the session went on after a failed boot: " + out);
+                assertTrue(
+                    out.find("status=1") != std::string::npos,
+                    "a failed boot did not exit with 1: " + out);
+                assertTrue(
+                    out.find("later") == std::string::npos &&
+                        out.find("typed") == std::string::npos,
+                    "the session went on after a failed boot: " + out);
             }
         });
 
         it("refuses a file", [kex]() {
             auto out = runCommand(kex + " -e '1' some.kex 2>&1; echo \"status=$?\"");
-            assertTrue(out.find("status=1") != std::string::npos &&
-                           out.find("takes no file") != std::string::npos,
-                       "expected --eval to refuse a file: " + out);
+            assertTrue(
+                out.find("status=1") != std::string::npos &&
+                    out.find("takes no file") != std::string::npos,
+                "expected --eval to refuse a file: " + out);
         });
 
         // A record a pattern binds from a module under a source root: the
@@ -1970,12 +1889,13 @@ int main() {
                         "let carts() -> [Cart] do\n"
                         "  return [Cart { id: \"c1\", items: 2 }]\nend\n";
             }
-            auto out = runCommand("cd " + root.string() + " && echo 'cart.id' | " + kex +
-                                  " --source-root ." +
-                                  " -e 'let Just(cart) = Shop.Cart.carts.first' 2>&1");
+            auto out = runCommand(
+                "cd " + root.string() + " && echo 'cart.id' | " + kex + " --source-root ." +
+                " -e 'let Just(cart) = Shop.Cart.carts.first' 2>&1");
             std::filesystem::remove_all(root);
-            assertTrue(out.find("=> \"c1\" : String") != std::string::npos,
-                       "the field of the bound record was not read: " + out);
+            assertTrue(
+                out.find("=> \"c1\" : String") != std::string::npos,
+                "the field of the bound record was not read: " + out);
         });
 
         // Names outside ASCII: the BEAM REPL found a binding's name with an
@@ -1989,12 +1909,12 @@ int main() {
                     " -e 'let árvíztűrő = \"tükörfúrógép\"' -e 'var ő = 1'"
                     " -e 'ő = ő + 1' -e 'let 名前 = ő + 1' -e 'let Φ = 1.618'"
                     " -e 'IO.printLine(\"${árvíztűrő} ${ő} ${名前} ${Φ}\")' 2>&1");
-                assertTrue(out.find("tükörfúrógép 2 3 1.618") != std::string::npos,
-                           "the bindings did not hold their values (repl'" + repl +
-                               "'): " + out);
-                assertTrue(out.find("=> :árvíz : Atom") != std::string::npos,
-                           "the atom was not shown as written (repl'" + repl +
-                               "'): " + out);
+                assertTrue(
+                    out.find("tükörfúrógép 2 3 1.618") != std::string::npos,
+                    "the bindings did not hold their values (repl'" + repl + "'): " + out);
+                assertTrue(
+                    out.find("=> :árvíz : Atom") != std::string::npos,
+                    "the atom was not shown as written (repl'" + repl + "'): " + out);
             }
         });
     });
@@ -2004,36 +1924,42 @@ int main() {
     // as "Undefined function: Kex.embed" (kexhq/kex#543). An input has no
     // file, so the embedded paths here are absolute.
     describe("compile-time expansion in the REPL", []() {
-        const auto views = std::filesystem::temp_directory_path() /
-                           ("kex_repl_embed_" + std::to_string(getpid()));
+        const auto views =
+            std::filesystem::temp_directory_path() / ("kex_repl_embed_" + std::to_string(getpid()));
         std::filesystem::create_directories(views);
         std::ofstream(views / "hello.ket") << "---\nparams: [who: String]\n---\nHi <%= who %>";
         std::ofstream(views / "bye.ket") << "---\nparams: [who: String]\n---\nBye <%= who %>";
         const auto dir = views.string();
-        const auto input =
-            "let greet = Template.text(Kex.embed(\"" + dir + "/hello.ket\"))\n"
-            "greet(\"Ann\")\n"
-            "let render(name: String, who: String) -> String = "
-            "Template.text(Kex.embed(\"" + dir + "/${name}.ket\"))(who)\n"
-            "render(\"bye\", \"Bo\")\n"
-            "compiled do\n"
-            "  [\"hello\"].each do |name|\n"
-            "    let %name(who: String) -> String = "
-            "Template.text(Kex.embed(\"" + dir + "/${name}.ket\"))(who)\n"
-            "  end\n"
-            "end\n"
-            "hello(\"Cy\")\n";
+        const auto input = "let greet = Template.text(Kex.embed(\"" + dir +
+                           "/hello.ket\"))\n"
+                           "greet(\"Ann\")\n"
+                           "let render(name: String, who: String) -> String = "
+                           "Template.text(Kex.embed(\"" +
+                           dir +
+                           "/${name}.ket\"))(who)\n"
+                           "render(\"bye\", \"Bo\")\n"
+                           "compiled do\n"
+                           "  [\"hello\"].each do |name|\n"
+                           "    let %name(who: String) -> String = "
+                           "Template.text(Kex.embed(\"" +
+                           dir +
+                           "/${name}.ket\"))(who)\n"
+                           "  end\n"
+                           "end\n"
+                           "hello(\"Cy\")\n";
 
         it("embeds, renders and generates in both REPLs", [input]() {
             for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
-                assertTrue(out.find("\"Hi Ann\"") != std::string::npos,
-                           "expected the embedded template, got: " + out);
-                assertTrue(out.find("\"Bye Bo\"") != std::string::npos,
-                           "a later input reused an earlier template: " + out);
-                assertTrue(out.find("\"Hi Cy\"") != std::string::npos,
-                           "expected the compiled do block to generate: " + out);
-                assertTrue(out.find("error") == std::string::npos,
-                           "unexpected error: " + out);
+                assertTrue(
+                    out.find("\"Hi Ann\"") != std::string::npos,
+                    "expected the embedded template, got: " + out);
+                assertTrue(
+                    out.find("\"Bye Bo\"") != std::string::npos,
+                    "a later input reused an earlier template: " + out);
+                assertTrue(
+                    out.find("\"Hi Cy\"") != std::string::npos,
+                    "expected the compiled do block to generate: " + out);
+                assertTrue(out.find("error") == std::string::npos, "unexpected error: " + out);
             }
         });
     });

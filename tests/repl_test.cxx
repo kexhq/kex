@@ -18,15 +18,19 @@ public:
         // Detect if this is a function def
         bool isFuncDef = false;
         size_t defOffset = std::string::npos;
-        if (input.substr(0, 4) == "let ") defOffset = 4;
-        else if (input.substr(0, 5) == "foul ") defOffset = 5;
+        if (input.substr(0, 4) == "let ") {
+            defOffset = 4;
+        } else if (input.substr(0, 5) == "foul ") {
+            defOffset = 5;
+        }
         if (defOffset != std::string::npos) {
             auto parenPos = input.find('(', defOffset);
             auto eqPos = input.find('=', defOffset);
             auto doPos = input.find(" do", defOffset);
-            isFuncDef = (parenPos != std::string::npos &&
-                         (eqPos == std::string::npos || parenPos < eqPos) &&
-                         (doPos == std::string::npos || parenPos < doPos));
+            isFuncDef =
+                (parenPos != std::string::npos &&
+                 (eqPos == std::string::npos || parenPos < eqPos) &&
+                 (doPos == std::string::npos || parenPos < doPos));
         }
         if (input.substr(0, 7) == "module " || input.substr(0, 5) == "type " ||
             input.substr(0, 7) == "record " || input.substr(0, 5) == "make " ||
@@ -67,7 +71,9 @@ public:
     }
 
     ~ReplSession() {
-        for (auto* p : m_programs) delete p;
+        for (auto* p : m_programs) {
+            delete p;
+        }
     }
 
 private:
@@ -196,8 +202,7 @@ int main() {
                 "  0 => \"zero\"\n"
                 "  42 => \"the answer\"\n"
                 "  _ => \"other\"\n"
-                "end"
-            );
+                "end");
             assertEqual(result, std::string("\"the answer\""));
         });
     });

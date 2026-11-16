@@ -8,17 +8,15 @@ struct ValueBuilder {
     using Value = ValuePtr;
     using Fields = std::vector<std::pair<std::string, Value>>;
 
-    auto variant(std::string tag, std::string parent,
-                 std::vector<Value> args) const -> Value {
-        return interpreter::Value::variant(std::move(tag), std::move(parent),
-                                           std::move(args));
+    auto variant(std::string tag, std::string parent, std::vector<Value> args) const -> Value {
+        return interpreter::Value::variant(std::move(tag), std::move(parent), std::move(args));
     }
     auto record(std::string name, Fields fields) const -> Value {
         std::unordered_map<std::string, Value> mapped;
-        for (auto& [key, value] : fields)
+        for (auto& [key, value] : fields) {
             mapped.emplace(std::move(key), std::move(value));
-        return interpreter::Value::record("Kex.AST." + name,
-                                          std::move(mapped));
+        }
+        return interpreter::Value::record("Kex.AST." + name, std::move(mapped));
     }
     auto list(std::vector<Value> values) const -> Value {
         return interpreter::Value::list(std::move(values));
@@ -44,8 +42,12 @@ struct ValueBuilder {
     auto boolean(bool value) const -> Value {
         return interpreter::Value::boolean(value);
     }
-    auto none() const -> Value { return interpreter::Value::none(); }
-    auto just(Value value) const -> Value { return interpreter::Value::just(std::move(value)); }
+    auto none() const -> Value {
+        return interpreter::Value::none();
+    }
+    auto just(Value value) const -> Value {
+        return interpreter::Value::just(std::move(value));
+    }
 };
 
 } // namespace kex::interpreter

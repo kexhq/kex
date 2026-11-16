@@ -2,8 +2,7 @@
 
 namespace kex::interpreter {
 
-Environment::Environment(std::shared_ptr<Environment> parent)
-    : m_parent(std::move(parent)) {}
+Environment::Environment(std::shared_ptr<Environment> parent) : m_parent(std::move(parent)) {}
 
 auto Environment::define(const std::string& name, ValuePtr value, bool isMutable) -> void {
     m_bindings[name] = Binding{std::move(value), isMutable};
@@ -27,21 +26,33 @@ auto Environment::set(const std::string& name, ValuePtr value) -> bool {
 
 auto Environment::get(const std::string& name) const -> ValuePtr {
     auto it = m_bindings.find(name);
-    if (it != m_bindings.end()) return it->second.value;
-    if (m_parent) return m_parent->get(name);
+    if (it != m_bindings.end()) {
+        return it->second.value;
+    }
+    if (m_parent) {
+        return m_parent->get(name);
+    }
     return nullptr;
 }
 
 auto Environment::has(const std::string& name) const -> bool {
-    if (m_bindings.count(name)) return true;
-    if (m_parent) return m_parent->has(name);
+    if (m_bindings.count(name)) {
+        return true;
+    }
+    if (m_parent) {
+        return m_parent->has(name);
+    }
     return false;
 }
 
 auto Environment::isMutable(const std::string& name) const -> bool {
     auto it = m_bindings.find(name);
-    if (it != m_bindings.end()) return it->second.isMutable;
-    if (m_parent) return m_parent->isMutable(name);
+    if (it != m_bindings.end()) {
+        return it->second.isMutable;
+    }
+    if (m_parent) {
+        return m_parent->isMutable(name);
+    }
     return false;
 }
 
@@ -54,15 +65,20 @@ auto Environment::setReturnFrame(std::shared_ptr<bool> frame) -> void {
 }
 
 auto Environment::returnFrame() const -> std::shared_ptr<bool> {
-    for (const auto* scope = this; scope; scope = scope->m_parent.get())
-        if (scope->m_returnFrame) return scope->m_returnFrame;
+    for (const auto* scope = this; scope; scope = scope->m_parent.get()) {
+        if (scope->m_returnFrame) {
+            return scope->m_returnFrame;
+        }
+    }
     return nullptr;
 }
 
 auto Environment::names() const -> std::vector<std::string> {
     std::vector<std::string> out;
     out.reserve(m_bindings.size());
-    for (const auto& [name, b] : m_bindings) out.push_back(name);
+    for (const auto& [name, b] : m_bindings) {
+        out.push_back(name);
+    }
     return out;
 }
 

@@ -15,8 +15,9 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
     // The module function's key, for its parameter names and defaults.
     const auto calledKey = ownModuleFunction != moduleFunctions.end() ? called : std::string{};
     if (!called.empty() && ownModuleFunction == moduleFunctions.end() && externalModules &&
-        externalModules->exportToBeamFn.count(called))
+        externalModules->exportToBeamFn.count(called)) {
         return lowerExternalImportCall(n, called);
+    }
     // Named args → reorder into the callee's positional slots by param
     // name; then positional args (and a trailing block) fill remaining
     // slots in order, leftovers default to None. Mirrors the string
@@ -32,38 +33,49 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
         // positional call through the same local is already lowered
         // (kexhq/kex#309).
         if (subst.count(n.name)) {
-            if (auto origin = curryOrigin.find(n.name);
-                origin != curryOrigin.end()) {
-                if (auto oit = fnParamNames.find(origin->second);
-                    oit != fnParamNames.end()) {
+            if (auto origin = curryOrigin.find(n.name); origin != curryOrigin.end()) {
+                if (auto oit = fnParamNames.find(origin->second); oit != fnParamNames.end()) {
                     if (auto declared = fnAllParamNames.find(origin->second);
-                        declared != fnAllParamNames.end())
-                        for (const auto& [label, _] : n.namedArgs)
-                            if (!declared->second.count(label))
+                        declared != fnAllParamNames.end()) {
+                        for (const auto& [label, _] : n.namedArgs) {
+                            if (!declared->second.count(label)) {
                                 return unknownNamedArgument(origin->second, label);
+                            }
+                        }
+                    }
                     const auto& pnames = oit->second;
                     std::vector<Binding> binds;
                     std::vector<std::string> labels;
-                    for (const auto& [label, _] : n.namedArgs)
+                    for (const auto& [label, _] : n.namedArgs) {
                         labels.push_back(label);
-                    const auto placed = placeArguments(
-                        pnames, labels, n.args.size() + bool(n.block));
+                    }
+                    const auto placed =
+                        placeArguments(pnames, labels, n.args.size() + bool(n.block));
                     std::vector<ExprPtr> slots(pnames.size());
-                    for (size_t i = 0; i < n.namedArgs.size(); ++i)
-                        if (placed.labelSlots[i] != PlacedArguments::npos)
-                            slots[placed.labelSlots[i]] =
-                                atomize(n.namedArgs[i].second, binds);
+                    for (size_t i = 0; i < n.namedArgs.size(); ++i) {
+                        if (placed.labelSlots[i] != PlacedArguments::npos) {
+                            slots[placed.labelSlots[i]] = atomize(n.namedArgs[i].second, binds);
+                        }
+                    }
                     std::vector<ExprPtr> positional;
-                    for (const auto& a : n.args) positional.push_back(atomize(a, binds));
-                    if (n.block) positional.push_back(atomize(*n.block, binds));
-                    for (size_t k = 0; k < positional.size(); ++k)
-                        if (placed.positionalSlots[k] != PlacedArguments::npos)
-                            slots[placed.positionalSlots[k]] =
-                                std::move(positional[k]);
-                    for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+                    for (const auto& a : n.args) {
+                        positional.push_back(atomize(a, binds));
+                    }
+                    if (n.block) {
+                        positional.push_back(atomize(*n.block, binds));
+                    }
+                    for (size_t k = 0; k < positional.size(); ++k) {
+                        if (placed.positionalSlots[k] != PlacedArguments::npos) {
+                            slots[placed.positionalSlots[k]] = std::move(positional[k]);
+                        }
+                    }
+                    for (auto& s : slots) {
+                        if (!s) {
+                            s = lit(LitKind::None, "none");
+                        }
+                    }
                     auto ex = std::make_unique<Expr>();
-                    ex->node = CallIndirect{var(currentName(n.name)),
-                                            std::move(slots), false};
+                    ex->node = CallIndirect{var(currentName(n.name)), std::move(slots), false};
                     return wrapLets(binds, std::move(ex));
                 }
             }
@@ -72,13 +84,14 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
         std::string emittedName = n.name;
         // The import this scope names, ahead of the scan below, which
         // takes whichever module happens to declare the name first.
-        if (it == fnParamNames.end())
-            if (const auto& key = calledKey; !key.empty())
-                if (auto pit = fnParamNames.find(key);
-                    pit != fnParamNames.end()) {
+        if (it == fnParamNames.end()) {
+            if (const auto& key = calledKey; !key.empty()) {
+                if (auto pit = fnParamNames.find(key); pit != fnParamNames.end()) {
                     it = pit;
                     emittedName = moduleFunctions.at(key);
                 }
+            }
+        }
         if (it == fnParamNames.end()) {
             for (const auto& [key, val] : moduleFunctions) {
                 auto dot = key.rfind('.');
@@ -103,58 +116,83 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
                         if (ait != externalModules->nameToAtom.end()) {
                             std::vector<Binding> binds;
                             std::vector<std::string> labels;
-                            for (const auto& [label, _] : n.namedArgs)
+                            for (const auto& [label, _] : n.namedArgs) {
                                 labels.push_back(label);
-                            const auto placed = placeArguments(
-                                pnames, labels, n.args.size() + bool(n.block));
+                            }
+                            const auto placed =
+                                placeArguments(pnames, labels, n.args.size() + bool(n.block));
                             std::vector<ExprPtr> slots(pnames.size());
-                            for (size_t i = 0; i < n.namedArgs.size(); ++i)
-                                if (placed.labelSlots[i] != PlacedArguments::npos)
+                            for (size_t i = 0; i < n.namedArgs.size(); ++i) {
+                                if (placed.labelSlots[i] != PlacedArguments::npos) {
                                     slots[placed.labelSlots[i]] =
                                         atomize(n.namedArgs[i].second, binds);
+                                }
+                            }
                             std::vector<ExprPtr> positional;
-                            for (const auto& a : n.args) positional.push_back(atomize(a, binds));
-                            if (n.block) positional.push_back(atomize(*n.block, binds));
-                            for (size_t k = 0; k < positional.size(); ++k)
-                                if (placed.positionalSlots[k] != PlacedArguments::npos)
-                                    slots[placed.positionalSlots[k]] =
-                                        std::move(positional[k]);
-                            for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+                            for (const auto& a : n.args) {
+                                positional.push_back(atomize(a, binds));
+                            }
+                            if (n.block) {
+                                positional.push_back(atomize(*n.block, binds));
+                            }
+                            for (size_t k = 0; k < positional.size(); ++k) {
+                                if (placed.positionalSlots[k] != PlacedArguments::npos) {
+                                    slots[placed.positionalSlots[k]] = std::move(positional[k]);
+                                }
+                            }
+                            for (auto& s : slots) {
+                                if (!s) {
+                                    s = lit(LitKind::None, "none");
+                                }
+                            }
                             int ar = static_cast<int>(slots.size());
-                            return wrapLets(binds,
-                                externalCallExpr(qualKey, ait->second, eit->second, ar, std::move(slots)));
+                            return wrapLets(
+                                binds,
+                                externalCallExpr(
+                                    qualKey, ait->second, eit->second, ar, std::move(slots)));
                         }
                     }
                 }
             }
         }
-        if (it == fnParamNames.end())
+        if (it == fnParamNames.end()) {
             throw LowerError("IR lower: named args to unknown function " + n.name);
-        if (auto declared = fnAllParamNames.find(n.name);
-            declared != fnAllParamNames.end())
-            for (const auto& [label, _] : n.namedArgs)
-                if (!declared->second.count(label))
+        }
+        if (auto declared = fnAllParamNames.find(n.name); declared != fnAllParamNames.end()) {
+            for (const auto& [label, _] : n.namedArgs) {
+                if (!declared->second.count(label)) {
                     return unknownNamedArgument(n.name, label);
+                }
+            }
+        }
         // The clause the checker chose for these labels.
         const auto* signature = hir->selectedSignatureOf(n);
         const auto* selected = signature ? signature->clause : nullptr;
         const auto pnames = clauseNames(selected, it->second);
         std::vector<Binding> binds;
         std::vector<std::string> labels;
-        for (const auto& [label, _] : n.namedArgs) labels.push_back(label);
-        const auto placed = placeArguments(pnames, labels,
-                                           n.args.size() + bool(n.block));
+        for (const auto& [label, _] : n.namedArgs) {
+            labels.push_back(label);
+        }
+        const auto placed = placeArguments(pnames, labels, n.args.size() + bool(n.block));
         std::vector<ExprPtr> slots(pnames.size());
-        for (size_t i = 0; i < n.namedArgs.size(); ++i)
-            if (placed.labelSlots[i] != PlacedArguments::npos)
-                slots[placed.labelSlots[i]] =
-                    atomize(n.namedArgs[i].second, binds);
+        for (size_t i = 0; i < n.namedArgs.size(); ++i) {
+            if (placed.labelSlots[i] != PlacedArguments::npos) {
+                slots[placed.labelSlots[i]] = atomize(n.namedArgs[i].second, binds);
+            }
+        }
         std::vector<ExprPtr> positional;
-        for (const auto& a : n.args) positional.push_back(atomize(a, binds));
-        if (n.block) positional.push_back(atomize(*n.block, binds));
-        for (size_t k = 0; k < positional.size(); ++k)
-            if (placed.positionalSlots[k] != PlacedArguments::npos)
+        for (const auto& a : n.args) {
+            positional.push_back(atomize(a, binds));
+        }
+        if (n.block) {
+            positional.push_back(atomize(*n.block, binds));
+        }
+        for (size_t k = 0; k < positional.size(); ++k) {
+            if (placed.positionalSlots[k] != PlacedArguments::npos) {
                 slots[placed.positionalSlots[k]] = std::move(positional[k]);
+            }
+        }
         fillDefaultSlots(it->first, slots, binds, selected);
         auto ex = std::make_unique<Expr>();
         ex->node = localCall(emittedName, std::move(slots));
@@ -173,59 +211,70 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
     // :each/:all scope ahead of their block.
     const auto& target = hir->targetOf(n);
     if (const auto builtin = target.kind == hir::TargetKind::Builtin
-            ? names::testBuiltinOf(target.owner) : std::nullopt) {
-        const bool located = *builtin != names::TestBuiltin::Before &&
-                             *builtin != names::TestBuiltin::After;
+                                 ? names::testBuiltinOf(target.owner)
+                                 : std::nullopt) {
+        const bool located =
+            *builtin != names::TestBuiltin::Before && *builtin != names::TestBuiltin::After;
         auto where = located ? sourceLocationTuple() : ExprPtr{};
         std::vector<ExprPtr> args;
-        for (const auto& arg : n.args) args.push_back(atomize(arg, binds));
-        if (n.block) args.push_back(atomize(*n.block, binds));
-        if (where) args.push_back(std::move(where));
+        for (const auto& arg : n.args) {
+            args.push_back(atomize(arg, binds));
+        }
+        if (n.block) {
+            args.push_back(atomize(*n.block, binds));
+        }
+        if (where) {
+            args.push_back(std::move(where));
+        }
         const auto arity = static_cast<int>(args.size());
         const std::string function = *builtin == names::TestBuiltin::Assert
-            ? "assert_at" : std::string(names::testBuiltinName(*builtin));
+                                         ? "assert_at"
+                                         : std::string(names::testBuiltinName(*builtin));
         return wrapLets(binds, callE("kex_test", function, arity, std::move(args)));
     }
     std::vector<ExprPtr> args;
-    for (const auto& a : n.args) args.push_back(atomize(a, binds));
+    for (const auto& a : n.args) {
+        args.push_back(atomize(a, binds));
+    }
     // A trailing do-block is passed as the function's last argument.
-    if (n.block) args.push_back(atomize(*n.block, binds));
-    else if (auto defaults = fnDefaults.find(n.name);
-             defaults != fnDefaults.end())
-        for (size_t i = n.args.size(); i < defaults->second.size(); ++i)
-            if (defaults->second[i])
+    if (n.block) {
+        args.push_back(atomize(*n.block, binds));
+    } else if (auto defaults = fnDefaults.find(n.name); defaults != fnDefaults.end()) {
+        for (size_t i = n.args.size(); i < defaults->second.size(); ++i) {
+            if (defaults->second[i]) {
                 args.push_back(atomize(*defaults->second[i], binds));
+            }
+        }
+    }
     // A `using` import files its defaults under the qualified name, and
     // they are written against the owning module's scope.
-    if (const auto& key = calledKey; !n.block && !key.empty())
+    if (const auto& key = calledKey; !n.block && !key.empty()) {
         if (auto defaults = fnDefaults.find(key);
-            defaults != fnDefaults.end() &&
-            args.size() < defaults->second.size()) {
+            defaults != fnDefaults.end() && args.size() < defaults->second.size()) {
             args.resize(defaults->second.size());
             fillDefaultSlots(key, args, binds);
         }
-    if (auto requirements = fnTraitParams.find(n.name);
-        requirements != fnTraitParams.end())
+    }
+    if (auto requirements = fnTraitParams.find(n.name); requirements != fnTraitParams.end()) {
         for (const auto& [index, trait] : requirements->second) {
-            const ast::Expr* source =
-                index < n.args.size() ? n.args[index].get() : nullptr;
+            const ast::Expr* source = index < n.args.size() ? n.args[index].get() : nullptr;
             // A trait-typed parameter with a default may be omitted at the
             // call site, and then the dictionary comes from the default
             // value — the same expression the loop above passes as the
             // argument itself (kexhq/kex#175).
-            if (!source)
-                if (auto defaults = fnDefaults.find(n.name);
-                    defaults != fnDefaults.end() &&
-                    index < defaults->second.size() &&
-                    defaults->second[index])
+            if (!source) {
+                if (auto defaults = fnDefaults.find(n.name); defaults != fnDefaults.end() &&
+                                                             index < defaults->second.size() &&
+                                                             defaults->second[index]) {
                     source = defaults->second[index]->get();
-            if (!source)
-                throw LowerError(
-                    "IR lower: missing source argument for " + trait +
-                    " dictionary");
-            args.push_back(
-                atomize_ir(makeTraitDictionary(trait, *source), binds));
+                }
+            }
+            if (!source) {
+                throw LowerError("IR lower: missing source argument for " + trait + " dictionary");
+            }
+            args.push_back(atomize_ir(makeTraitDictionary(trait, *source), binds));
         }
+    }
     auto ex = std::make_unique<Expr>();
     int arity = static_cast<int>(args.size());
     // A 0-arity function/constant holding a fun (e.g. `let inc = ~add(1)`)
@@ -250,32 +299,31 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
     // The enclosing modules' own bindings first, innermost out: a
     // top-level `layout` answered `Views.layout(live)` inside `module
     // Views` while the walker called the module's own.
-    bool zeroArgThunk = !subst.count(n.name) &&
-        ([&] {
-             for (auto scope = currentModulePath; !scope.empty();) {
-                 if (moduleZeroArgFns.count(scope + "." + n.name)) {
-                     if (auto emitted = moduleFunctions.find(scope + "." + n.name);
-                         emitted != moduleFunctions.end())
-                         zeroArgCallName = emitted->second;
-                     return true;
-                 }
-                 const auto dot = scope.rfind('.');
-                 if (dot == std::string::npos) break;
-                 scope.resize(dot);
-             }
-             return false;
-         }() ||
-         zeroArgFns.count(n.name) || topLevelConstants.count(n.name));
+    bool zeroArgThunk = !subst.count(n.name) && ([&] {
+        for (auto scope = currentModulePath; !scope.empty();) {
+            if (moduleZeroArgFns.count(scope + "." + n.name)) {
+                if (auto emitted = moduleFunctions.find(scope + "." + n.name);
+                    emitted != moduleFunctions.end()) {
+                    zeroArgCallName = emitted->second;
+                }
+                return true;
+            }
+            const auto dot = scope.rfind('.');
+            if (dot == std::string::npos) {
+                break;
+            }
+            scope.resize(dot);
+        }
+        return false;
+    }() || zeroArgFns.count(n.name) || topLevelConstants.count(n.name));
     // Capitalized name = ADT constructor with a payload → tagged tuple.
-    if (!n.name.empty() && kex::startsUppercase(n.name)
-        && !zeroArgThunk) {
+    if (!n.name.empty() && kex::startsUppercase(n.name) && !zeroArgThunk) {
         if (auto tag = qualifiedVariantTag(n.name); !tag.empty()) {
             ex->node = Construct{tag, std::move(args)};
             return wrapLets(binds, std::move(ex));
         }
         ex->node = Construct{n.name, std::move(args)};
-    }
-    else if (zeroArgThunk && (!args.empty() || topLevelConstants.count(n.name))) {
+    } else if (zeroArgThunk && (!args.empty() || topLevelConstants.count(n.name))) {
         // A `let` constant holding a fun: `name(...)` resolves the
         // constant, then applies — including `thunk()` with NO args (the
         // walker looks the identifier up and applies the lambda once).
@@ -284,8 +332,9 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
         auto thunk = std::make_unique<Expr>();
         thunk->node = localCall(zeroArgCallName, {});
         ex->node = CallIndirect{std::move(thunk), std::move(args), false};
-    } else if (zeroArgThunk)
+    } else if (zeroArgThunk) {
         ex->node = localCall(zeroArgCallName, {});
+    }
     // A lexical binding (a `block` parameter, or any local holding a
     // callable) outranks a `using` import of the same name too, not just
     // the flat knownFns set below: innermost wins, as it does for every
@@ -299,8 +348,9 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
     // the imported function must still outrank knownFns once no local
     // shadows it, and `CallIndirect` (not `localCall`) is how a runtime value is
     // applied.
-    else if (subst.count(n.name))
+    else if (subst.count(n.name)) {
         ex->node = CallIndirect{var(currentName(n.name)), std::move(args), false};
+    }
     // The module function the checker bound the name to (a `using` import
     // of this lexical scope, or the module's own) outranks the flat knownFns
     // set. That set spans the whole merged program and carries every
@@ -310,8 +360,9 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
     // that function) although the tree-walker honours the import. The
     // receiver path already lets the source import win over identically
     // named prelude methods; see lowerMethodCall.
-    else if (ownModuleFunction != moduleFunctions.end())
+    else if (ownModuleFunction != moduleFunctions.end()) {
         ex->node = localCall(ownModuleFunction->second, std::move(args));
+    }
     // A bare call inside a `make` block naming one of its own methods.
     // The receiver is implicit at the call site exactly as it is in the
     // definition, so `decorate(@name)` means `this.decorate(name)` — which
@@ -328,9 +379,9 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
     // knownFns is checked last among the name-based fallbacks: the local
     // binding and `using`-import checks above already outrank it
     // (kexhq/kex#289, kexhq/kex#362).
-    else if (knownFns.count(n.name))
+    else if (knownFns.count(n.name)) {
         ex->node = prefixCall(n.name, std::move(args));
-    else if (auto external = externalPrefixCall(n.name, arity); !external.empty())
+    } else if (auto external = externalPrefixCall(n.name, arity); !external.empty()) {
         // UFCS runs both ways: `xs.length` and `length(xs)` are the same
         // call, and the walker resolves the prefix spelling against the
         // prelude just as it does the receiver spelling. Nothing here had
@@ -338,37 +389,38 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
         // own demonstration of the equivalence — died with "Undefined
         // function: map" on BEAM.
         ex->node = Call{external, n.name, arity, std::move(args), false};
-    else
+    } else {
         return wrapLets(binds, runtimeError("Undefined function: " + n.name));
+    }
     return wrapLets(binds, std::move(ex));
 }
 
-auto Lowering::makeTraitDictionary(const std::string& trait,
-                         const ast::Expr& value) -> ExprPtr {
+auto Lowering::makeTraitDictionary(const std::string& trait, const ast::Expr& value) -> ExprPtr {
     return makeTraitDictionaryFor(trait, hir->dictionaryTypeOf(value));
 }
 
 // The dictionary itself, for an already-resolved receiver type. An empty
 // `concreteType` means "not known here" and yields the provider's generic
 // dispatcher for every method, which routes on the runtime tag.
-auto Lowering::makeTraitDictionaryFor(const std::string& trait,
-                            const std::string& concreteType) -> ExprPtr {
+auto Lowering::makeTraitDictionaryFor(const std::string& trait, const std::string& concreteType)
+    -> ExprPtr {
     auto contract = traitMethods.find(trait);
-    if (contract == traitMethods.end())
+    if (contract == traitMethods.end()) {
         throw LowerError("IR lower: unknown trait dictionary " + trait);
+    }
     std::vector<ExprPtr> slots;
     std::vector<Binding> dictionaryBindings;
     for (const auto& method : contract->second) {
         std::string module;
         std::string function = method.name;
         const auto owners = methodOwners.find(method.name);
-        const bool localOwnsType = owners != methodOwners.end() &&
-            std::find(owners->second.begin(), owners->second.end(),
-                      concreteType) != owners->second.end();
+        const bool localOwnsType =
+            owners != methodOwners.end() &&
+            std::find(owners->second.begin(), owners->second.end(), concreteType) !=
+                owners->second.end();
         const bool localDispatcher =
             owners != methodOwners.end() && !owners->second.empty() &&
-            localMethodArities.count(method.name + "/" +
-                                     std::to_string(method.arity)) > 0;
+            localMethodArities.count(method.name + "/" + std::to_string(method.arity)) > 0;
         if (concreteType.empty() && localDispatcher) {
             // Type not known here, and a make block in this module
             // implements the method: its dispatcher routes on the runtime
@@ -376,12 +428,12 @@ auto Lowering::makeTraitDictionaryFor(const std::string& trait,
             // value. The provider's alone never reaches this module's
             // types: `IO.printLine(total(a, b))` printed a bare record on
             // BEAM, where the walker used the record's `showValue`.
-        } else if (localOwnsType && localMethodArities.count(
-                method.name + "/" + std::to_string(method.arity))) {
-            if (collidingMethods.count(method.name) &&
-                !concreteType.empty())
-                function = mangleReceiverImplementation(
-                    method.name, concreteType);
+        } else if (
+            localOwnsType &&
+            localMethodArities.count(method.name + "/" + std::to_string(method.arity))) {
+            if (collidingMethods.count(method.name) && !concreteType.empty()) {
+                function = mangleReceiverImplementation(method.name, concreteType);
+            }
         } else if (auto ownerModule = localTypeModules.find(concreteType);
                    ownerModule != localTypeModules.end()) {
             // A source module compiled in this same unit is not in the
@@ -390,16 +442,13 @@ auto Lowering::makeTraitDictionaryFor(const std::string& trait,
             module = names::moduleAtom(ownerModule->second);
             function = method.name;
         } else if (externalModules) {
-            auto candidates =
-                externalModules->receiverFunctions.find(method.name);
-            if (candidates !=
-                externalModules->receiverFunctions.end()) {
+            auto candidates = externalModules->receiverFunctions.find(method.name);
+            if (candidates != externalModules->receiverFunctions.end()) {
                 auto selected = std::find_if(
                     candidates->second.begin(), candidates->second.end(),
                     [&](const auto& candidate) {
-                        return candidate.beamArity == method.arity &&
-                            !concreteType.empty() &&
-                            candidate.receiverType == concreteType;
+                        return candidate.beamArity == method.arity && !concreteType.empty() &&
+                               candidate.receiverType == concreteType;
                     });
                 // No implementation for THIS receiver type: take the
                 // provider's DISPATCHER (`showValue/1`), not whichever
@@ -417,17 +466,17 @@ auto Lowering::makeTraitDictionaryFor(const std::string& trait,
                         candidates->second.begin(), candidates->second.end(),
                         [&](const auto& candidate) {
                             return candidate.beamArity == method.arity &&
-                                candidate.beamFunction == method.name;
+                                   candidate.beamFunction == method.name;
                         });
-                    if (dispatcher != candidates->second.end())
+                    if (dispatcher != candidates->second.end()) {
                         selected = dispatcher;
-                    else
+                    } else {
                         selected = std::find_if(
-                            candidates->second.begin(),
-                            candidates->second.end(),
+                            candidates->second.begin(), candidates->second.end(),
                             [&](const auto& candidate) {
                                 return candidate.beamArity == method.arity;
                             });
+                    }
                 }
                 if (selected != candidates->second.end()) {
                     module = selected->moduleAtom;
@@ -444,12 +493,14 @@ auto Lowering::makeTraitDictionaryFor(const std::string& trait,
         // source-arity wrapper and `~printShape` referenced a
         // `printShape/1` that did not exist — erlc rejected the whole
         // module (examples/trait-constraint.kex).
-        const bool localAnswers = localOwnsType ||
-            localMethodArities.count(method.name + "/" +
-                                     std::to_string(method.arity)) > 0;
-        if (module.empty() && !localAnswers)
-            throw LowerError("IR lower: no implementation for " + trait +
-                             "." + method.name + " on " + concreteType);
+        const bool localAnswers =
+            localOwnsType ||
+            localMethodArities.count(method.name + "/" + std::to_string(method.arity)) > 0;
+        if (module.empty() && !localAnswers) {
+            throw LowerError(
+                "IR lower: no implementation for " + trait + "." + method.name + " on " +
+                concreteType);
+        }
         Lambda lambda;
         std::vector<ExprPtr> callArgs;
         for (int i = 0; i < method.arity; ++i) {
@@ -462,9 +513,8 @@ auto Lowering::makeTraitDictionaryFor(const std::string& trait,
         // the context of the function building the dictionary appended.
         // A bare `emit/2` named no function of the module, and the IR
         // verifier refused it (kexhq/kex#635).
-        lambda.body = module.empty()
-            ? localCallExpr(function, std::move(callArgs))
-            : callE(module, function, method.arity, std::move(callArgs));
+        lambda.body = module.empty() ? localCallExpr(function, std::move(callArgs))
+                                     : callE(module, function, method.arity, std::move(callArgs));
         auto slot = std::make_unique<Expr>();
         slot->node = std::move(lambda);
         slots.push_back(atomize_ir(std::move(slot), dictionaryBindings));
@@ -491,12 +541,14 @@ auto Lowering::makeTraitDictionaryFor(const std::string& trait,
 // call site emits when it knows nothing about the type. Dispatch stays
 // identical; only the place the dictionary is built moves.
 auto Lowering::makeDictionaryWrapper(const FunDef& def) -> std::optional<FunDef> {
-    if (def.dictionaryTraits.empty()) return std::nullopt;
+    if (def.dictionaryTraits.empty()) {
+        return std::nullopt;
+    }
     const int contextSlots = def.hasCapabilityContext ? 1 : 0;
-    const int wrapped =
-        def.arity - static_cast<int>(def.dictionaryTraits.size()) -
-        contextSlots;
-    if (wrapped < 0) return std::nullopt;
+    const int wrapped = def.arity - static_cast<int>(def.dictionaryTraits.size()) - contextSlots;
+    if (wrapped < 0) {
+        return std::nullopt;
+    }
     std::vector<ExprPtr> args;
     std::vector<std::string> params;
     for (int i = 0; i < wrapped; ++i) {
@@ -508,8 +560,7 @@ auto Lowering::makeDictionaryWrapper(const FunDef& def) -> std::optional<FunDef>
     // — the order its own parameters were emitted in. The wrapper takes
     // the context as its own trailing parameter and passes it through, and
     // a dictionary slot naming a foul implementation hands it on too.
-    const auto contextParam =
-        def.hasCapabilityContext ? fresh("FwdCtx") : std::string{};
+    const auto contextParam = def.hasCapabilityContext ? fresh("FwdCtx") : std::string{};
     const auto savedContext = std::exchange(currentContextVar, contextParam);
     std::vector<Binding> binds;
     for (const auto& trait : def.dictionaryTraits) {
@@ -544,8 +595,7 @@ auto Lowering::makeDictionaryWrapper(const FunDef& def) -> std::optional<FunDef>
         pat->name = name;
         clause.params.push_back(std::move(pat));
     }
-    clause.body = wrapLets(
-        binds, callE("", def.name, def.arity, std::move(args)));
+    clause.body = wrapLets(binds, callE("", def.name, def.arity, std::move(args)));
     wrapper.clauses.push_back(std::move(clause));
     return wrapper;
 }
@@ -555,13 +605,19 @@ auto Lowering::makeDictionaryWrapper(const FunDef& def) -> std::optional<FunDef>
 // ["A","B","C"], or empty if the receiver isn't a pure uppercase path.
 auto Lowering::modulePath(const ast::Expr& e, std::vector<std::string>& out) -> bool {
     if (auto* uid = std::get_if<ast::UpperIdentifier>(&e.kind)) {
-        out.push_back(uid->name); return true;
+        out.push_back(uid->name);
+        return true;
     }
     if (auto* mc = std::get_if<ast::MethodCall>(&e.kind)) {
-        if (!mc->args.empty() || !mc->namedArgs.empty() || mc->block) return false;
+        if (!mc->args.empty() || !mc->namedArgs.empty() || mc->block) {
+            return false;
+        }
         if (!mc->method.empty() && kex::startsUppercase(mc->method)) {
-            if (!modulePath(*mc->receiver, out)) return false;
-            out.push_back(mc->method); return true;
+            if (!modulePath(*mc->receiver, out)) {
+                return false;
+            }
+            out.push_back(mc->method);
+            return true;
         }
     }
     return false;
@@ -571,13 +627,14 @@ auto Lowering::lowerMethodCall(const ast::MethodCall& n) -> ExprPtr {
     // `App.Models.User` as a value is that type's token, the same atom a
     // bare `User` is (kexhq/kex#509): what `select(as: App.Models.User)`
     // passes and `Type.of` reads. Sum types are registered by bare name.
-    if (n.receiver && n.args.empty() && n.namedArgs.empty() && !n.block &&
-        !n.mutating && !n.method.empty() &&
-        kex::startsUppercase(n.method)) {
+    if (n.receiver && n.args.empty() && n.namedArgs.empty() && !n.block && !n.mutating &&
+        !n.method.empty() && kex::startsUppercase(n.method)) {
         std::vector<std::string> path;
         if (modulePath(*n.receiver, path)) {
             std::string qualified;
-            for (const auto& segment : path) qualified += segment + ".";
+            for (const auto& segment : path) {
+                qualified += segment + ".";
+            }
             qualified += n.method;
             if (records.count(qualified) || adtLayouts.count(n.method)) {
                 auto ex = std::make_unique<Expr>();
@@ -589,12 +646,17 @@ auto Lowering::lowerMethodCall(const ast::MethodCall& n) -> ExprPtr {
     // A record field wins over a same-named function even when a block's
     // receiver type was not known to the checker. Keep UFCS as the lazy
     // fallback for values that do not declare this field (#476).
-    if (!n.receiver || n.parenthesized || n.mutating || !n.args.empty() ||
-        !n.namedArgs.empty() || n.block || !fieldAccessors.count(n.method))
+    if (!n.receiver || n.parenthesized || n.mutating || !n.args.empty() || !n.namedArgs.empty() ||
+        n.block || !fieldAccessors.count(n.method)) {
         return lowerMethodCallImpl(n);
+    }
     std::vector<std::string> path;
-    if (modulePath(*n.receiver, path)) return lowerMethodCallImpl(n);
-    if (auto field = staticFieldRead(n)) return field;
+    if (modulePath(*n.receiver, path)) {
+        return lowerMethodCallImpl(n);
+    }
+    if (auto field = staticFieldRead(n)) {
+        return field;
+    }
 
     auto receiver = lower(n.receiver);
     const auto name = fresh("FieldReceiver");
@@ -611,8 +673,7 @@ auto Lowering::lowerMethodCall(const ast::MethodCall& n) -> ExprPtr {
         value->name = fresh("FieldValue");
         clause.guard = recordGuard(slot, var(value->name));
         clause.patterns.push_back(std::move(value));
-        clause.body = callE("erlang", "element", 2,
-                            two(litInt(slot.position), var(name)));
+        clause.body = callE("erlang", "element", 2, two(litInt(slot.position), var(name)));
         match.clauses.push_back(std::move(clause));
     }
     MatchClause otherwise;

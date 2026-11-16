@@ -25,67 +25,83 @@ inline auto structuredTypeOfDeclared(const ast::TypeExpr& type) -> StructuredTyp
     const auto named = [](const ast::TypeName& name) {
         std::string joined;
         for (const auto& part : name.parts) {
-            if (!joined.empty()) joined += '.';
+            if (!joined.empty()) {
+                joined += '.';
+            }
             joined += part;
         }
         if (joined == "Int" || joined == "Byte" ||
-            (joined.size() > 3 && (joined.rfind("Int", 0) == 0 ||
-                                   joined.rfind("UInt", 0) == 0) &&
-             std::isdigit(static_cast<unsigned char>(joined.back()))))
+            (joined.size() > 3 && (joined.rfind("Int", 0) == 0 || joined.rfind("UInt", 0) == 0) &&
+             std::isdigit(static_cast<unsigned char>(joined.back())))) {
             return std::string("Integer");
-        if (joined == "Float32" || joined == "Float64") return std::string("Float");
-        if (joined == "Optional") return std::string("Option");
+        }
+        if (joined == "Float32" || joined == "Float64") {
+            return std::string("Float");
+        }
+        if (joined == "Optional") {
+            return std::string("Option");
+        }
         return joined;
     };
-    return std::visit([&](const auto& t) -> StructuredType {
-        using T = std::decay_t<decltype(t)>;
-        if constexpr (std::is_same_v<T, ast::TypeName>) {
-            return {named(t), {}};
-        } else if constexpr (std::is_same_v<T, ast::GenericType>) {
-            StructuredType result{named(t.name), {}};
-            for (const auto& arg : t.args) result.args.push_back(of(arg));
-            return result;
-        } else if constexpr (std::is_same_v<T, ast::FunctionType>) {
-            // `A -> B -> C` nests to the right; flatten it as a signature
-            // reads, unless the result was written in its own parentheses.
-            StructuredType result{"Function", {of(t.param)}};
-            const ast::TypeExpr* rest = t.result.get();
-            while (rest) {
-                const auto* next = std::get_if<ast::FunctionType>(&rest->kind);
-                if (!next || rest->parenthesized) break;
-                result.args.push_back(of(next->param));
-                rest = next->result.get();
+    return std::visit(
+        [&](const auto& t) -> StructuredType {
+            using T = std::decay_t<decltype(t)>;
+            if constexpr (std::is_same_v<T, ast::TypeName>) {
+                return {named(t), {}};
+            } else if constexpr (std::is_same_v<T, ast::GenericType>) {
+                StructuredType result{named(t.name), {}};
+                for (const auto& arg : t.args) {
+                    result.args.push_back(of(arg));
+                }
+                return result;
+            } else if constexpr (std::is_same_v<T, ast::FunctionType>) {
+                // `A -> B -> C` nests to the right; flatten it as a signature
+                // reads, unless the result was written in its own parentheses.
+                StructuredType result{"Function", {of(t.param)}};
+                const ast::TypeExpr* rest = t.result.get();
+                while (rest) {
+                    const auto* next = std::get_if<ast::FunctionType>(&rest->kind);
+                    if (!next || rest->parenthesized) {
+                        break;
+                    }
+                    result.args.push_back(of(next->param));
+                    rest = next->result.get();
+                }
+                result.args.push_back(
+                    rest ? structuredTypeOfDeclared(*rest) : StructuredType{"Any", {}});
+                return result;
+            } else if constexpr (std::is_same_v<T, ast::TupleType>) {
+                StructuredType result{"Tuple", {}};
+                for (const auto& element : t.elements) {
+                    result.args.push_back(of(element));
+                }
+                return result;
+            } else if constexpr (std::is_same_v<T, ast::ListType>) {
+                return {"List", {of(t.element)}};
+            } else if constexpr (std::is_same_v<T, ast::MapType>) {
+                return {"Map", {of(t.key), of(t.value)}};
+            } else if constexpr (std::is_same_v<T, ast::OptionalType>) {
+                return {"Option", {of(t.inner)}};
+            } else if constexpr (std::is_same_v<T, ast::BlockType>) {
+                return {"Function", {of(t.inner)}};
+            } else if constexpr (std::is_same_v<T, ast::AtomType>) {
+                return {"Atom", {}};
+            } else if constexpr (std::is_same_v<T, ast::GenericVar>) {
+                return {t.name, {}};
+            } else if constexpr (std::is_same_v<T, ast::UnionType>) {
+                // A union of atom literals (`:low | :high`) is an Atom at runtime;
+                // any other union has no single name.
+                const auto left = of(t.left);
+                const auto right = of(t.right);
+                if (left.name == "Atom" && right.name == "Atom") {
+                    return left;
+                }
+                return {"Any", {}};
+            } else {
+                return {"Any", {}};
             }
-            result.args.push_back(rest ? structuredTypeOfDeclared(*rest)
-                                       : StructuredType{"Any", {}});
-            return result;
-        } else if constexpr (std::is_same_v<T, ast::TupleType>) {
-            StructuredType result{"Tuple", {}};
-            for (const auto& element : t.elements) result.args.push_back(of(element));
-            return result;
-        } else if constexpr (std::is_same_v<T, ast::ListType>) {
-            return {"List", {of(t.element)}};
-        } else if constexpr (std::is_same_v<T, ast::MapType>) {
-            return {"Map", {of(t.key), of(t.value)}};
-        } else if constexpr (std::is_same_v<T, ast::OptionalType>) {
-            return {"Option", {of(t.inner)}};
-        } else if constexpr (std::is_same_v<T, ast::BlockType>) {
-            return {"Function", {of(t.inner)}};
-        } else if constexpr (std::is_same_v<T, ast::AtomType>) {
-            return {"Atom", {}};
-        } else if constexpr (std::is_same_v<T, ast::GenericVar>) {
-            return {t.name, {}};
-        } else if constexpr (std::is_same_v<T, ast::UnionType>) {
-            // A union of atom literals (`:low | :high`) is an Atom at runtime;
-            // any other union has no single name.
-            const auto left = of(t.left);
-            const auto right = of(t.right);
-            if (left.name == "Atom" && right.name == "Atom") return left;
-            return {"Any", {}};
-        } else {
-            return {"Any", {}};
-        }
-    }, type.kind);
+        },
+        type.kind);
 }
 
 // What each transparent alias stands for, by its declared name:
@@ -97,25 +113,30 @@ using DeclaredAliases = std::unordered_map<std::string, const ast::TypeExpr*>;
 // field, so `Type.Field.parse` reads it as one and `valueType` says so
 // (kexhq/kex#530). Only a name written without arguments is looked up; the
 // hop limit stops an alias cycle the checker reports anyway.
-inline auto expandDeclaredAliases(StructuredType type, const DeclaredAliases& aliases,
-                                  int hops = 0) -> StructuredType {
+inline auto expandDeclaredAliases(StructuredType type, const DeclaredAliases& aliases, int hops = 0)
+    -> StructuredType {
     if (type.args.empty() && hops < 16) {
         // An alias declared in a module is kept by its own name and may be
         // written qualified (`Accounts.AccountId`).
         auto found = aliases.find(type.name);
-        if (found == aliases.end())
-            if (const auto dot = type.name.rfind('.'); dot != std::string::npos)
+        if (found == aliases.end()) {
+            if (const auto dot = type.name.rfind('.'); dot != std::string::npos) {
                 found = aliases.find(type.name.substr(dot + 1));
-        if (found != aliases.end() && found->second)
-            return expandDeclaredAliases(structuredTypeOfDeclared(*found->second),
-                                         aliases, hops + 1);
+            }
+        }
+        if (found != aliases.end() && found->second) {
+            return expandDeclaredAliases(
+                structuredTypeOfDeclared(*found->second), aliases, hops + 1);
+        }
     }
-    for (auto& arg : type.args) arg = expandDeclaredAliases(std::move(arg), aliases, hops);
+    for (auto& arg : type.args) {
+        arg = expandDeclaredAliases(std::move(arg), aliases, hops);
+    }
     return type;
 }
 
-inline auto structuredTypeOfDeclared(const ast::TypeExpr& type,
-                                     const DeclaredAliases& aliases) -> StructuredType {
+inline auto structuredTypeOfDeclared(const ast::TypeExpr& type, const DeclaredAliases& aliases)
+    -> StructuredType {
     return expandDeclaredAliases(structuredTypeOfDeclared(type), aliases);
 }
 

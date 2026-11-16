@@ -47,8 +47,8 @@ struct KexiType {
     std::string variant;   // for Named: one nullary variant of the ADT `name` (`FileMode.Write`)
     std::vector<KexiTypePtr> typeArgs;
     std::vector<std::string> fieldNames; // for Record, parallel to typeArgs
-    KexiTypePtr result; // for Func
-    bool foul = false;  // for Func: FuncType::foul
+    KexiTypePtr result;                  // for Func
+    bool foul = false;                   // for Func: FuncType::foul
 };
 
 auto kexiPrimitive(const std::string& name) -> KexiTypePtr;
@@ -60,8 +60,7 @@ auto kexiMap(KexiTypePtr key, KexiTypePtr value) -> KexiTypePtr;
 auto kexiOptional(KexiTypePtr inner) -> KexiTypePtr;
 auto kexiUnion(std::vector<KexiTypePtr> members) -> KexiTypePtr;
 auto kexiIntersection(std::vector<KexiTypePtr> members) -> KexiTypePtr;
-auto kexiRecord(std::vector<std::string> names,
-                std::vector<KexiTypePtr> types) -> KexiTypePtr;
+auto kexiRecord(std::vector<std::string> names, std::vector<KexiTypePtr> types) -> KexiTypePtr;
 auto kexiConstrained(const std::string& var, const std::string& trait) -> KexiTypePtr;
 auto kexiNever() -> KexiTypePtr;
 auto kexiUnknown() -> KexiTypePtr;
@@ -226,7 +225,7 @@ struct KexiStructuralMetadata {
     std::string sourceModule;
     std::string moduleAtom;
     KexiModuleRole role = KexiModuleRole::Entry;
-    std::string entryBackPointer; // for companions: the entry module's atom
+    std::string entryBackPointer;          // for companions: the entry module's atom
     std::vector<KexiCompanion> companions; // for entries: the companion manifest
     std::vector<KexiRecord> records;
     std::vector<KexiADT> adts;

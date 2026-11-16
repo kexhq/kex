@@ -8,8 +8,8 @@ auto kex_repl_create() -> KexReplSession*;
 auto kex_repl_destroy(KexReplSession* session) -> void;
 auto kex_repl_eval(KexReplSession* session, const char* source) -> void;
 auto kex_repl_last_result(KexReplSession* session) -> const char*;
-auto kex_repl_complete(KexReplSession* session, const char* line, int start,
-                       const char* text) -> const char*;
+auto kex_repl_complete(KexReplSession* session, const char* line, int start, const char* text)
+    -> const char*;
 }
 
 using namespace test;
@@ -26,9 +26,10 @@ auto importsUnitsSi(KexReplSession* session) -> void {
     assertTrue(imported.find("error:") == std::string::npos, imported);
 
     auto measured = eval(session, "3.meter");
-    assertTrue(measured.find("notation:") != std::string::npos &&
-                   measured.find("\"m\"") != std::string::npos,
-               measured);
+    assertTrue(
+        measured.find("notation:") != std::string::npos &&
+            measured.find("\"m\"") != std::string::npos,
+        measured);
 }
 
 } // namespace
@@ -46,15 +47,17 @@ int main() {
         // `site.put` went to String ("Undefined method: put for String").
         it("runs an input on the checker's decisions", []() {
             auto* session = kex_repl_create();
-            eval(session, "let site : Process.Shared<String> = "
-                          "Process.Shared.named(\"wasm.site\")");
+            eval(
+                session, "let site : Process.Shared<String> = "
+                         "Process.Shared.named(\"wasm.site\")");
             const auto put = eval(session, "site.put(\"hi\")");
             const auto got = eval(session, "site.get");
             kex_repl_destroy(session);
             assertTrue(put.find("Undefined method") == std::string::npos, put);
-            assertTrue(got.find("\"hi\"") != std::string::npos &&
-                           got.find("Optional<String>") != std::string::npos,
-                       got);
+            assertTrue(
+                got.find("\"hi\"") != std::string::npos &&
+                    got.find("Optional<String>") != std::string::npos,
+                got);
         });
 
         it("restores standard-library module roots after reset", []() {

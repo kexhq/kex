@@ -15,92 +15,111 @@ auto mixHash(uint64_t seed, uint64_t value) -> uint64_t {
 }
 
 auto hashValue(const ValuePtr& value) -> uint64_t {
-    if (!value) return 0;
+    if (!value) {
+        return 0;
+    }
     std::hash<std::string> text;
-    return std::visit([&](const auto& node) -> uint64_t {
-        using T = std::decay_t<decltype(node)>;
-        const uint64_t kind = value->data.index();
-        if constexpr (std::is_same_v<T, IntValue>) {
-            return mixHash(kind, std::hash<int64_t>{}(node.value));
-        } else if constexpr (std::is_same_v<T, BigIntValue>) {
-            return mixHash(kind, text(node.value.get_str(16)));
-        } else if constexpr (std::is_same_v<T, FloatValue>) {
-            return mixHash(kind, std::hash<double>{}(node.value));
-        } else if constexpr (std::is_same_v<T, StringValue>) {
-            return mixHash(kind, text(node.value));
-        } else if constexpr (std::is_same_v<T, BinaryValue>) {
-            return mixHash(kind, text(std::string(node.bytes.begin(), node.bytes.end())));
-        } else if constexpr (std::is_same_v<T, CharValue>) {
-            return mixHash(kind, node.value);
-        } else if constexpr (std::is_same_v<T, BoolValue>) {
-            return mixHash(kind, node.value ? 1 : 0);
-        } else if constexpr (std::is_same_v<T, AtomValue>) {
-            return mixHash(kind, text(node.name));
-        } else if constexpr (std::is_same_v<T, VariantValue>) {
-            uint64_t seed = mixHash(kind, text(node.tag));
-            for (const auto& arg : node.args) seed = mixHash(seed, hashValue(arg));
-            return seed;
-        } else if constexpr (std::is_same_v<T, ListValue> ||
-                             std::is_same_v<T, TupleValue>) {
-            uint64_t seed = kind;
-            for (const auto& element : node.elements)
-                seed = mixHash(seed, hashValue(element));
-            return seed;
-        } else if constexpr (std::is_same_v<T, MapValue>) {
-            uint64_t entries = 0;
-            for (const auto& [key, item] : node.entries)
-                entries += mixHash(hashValue(key), hashValue(item));
-            return mixHash(kind, entries);
-        } else if constexpr (std::is_same_v<T, RecordValue>) {
-            uint64_t fields = 0;
-            for (const auto& [name, item] : node.fields)
-                fields += mixHash(text(name), hashValue(item));
-            return mixHash(mixHash(kind, text(node.typeName)), fields);
-        } else {
-            return mixHash(kind, text(value->toString()));
-        }
-    }, value->data);
+    return std::visit(
+        [&](const auto& node) -> uint64_t {
+            using T = std::decay_t<decltype(node)>;
+            const uint64_t kind = value->data.index();
+            if constexpr (std::is_same_v<T, IntValue>) {
+                return mixHash(kind, std::hash<int64_t>{}(node.value));
+            } else if constexpr (std::is_same_v<T, BigIntValue>) {
+                return mixHash(kind, text(node.value.get_str(16)));
+            } else if constexpr (std::is_same_v<T, FloatValue>) {
+                return mixHash(kind, std::hash<double>{}(node.value));
+            } else if constexpr (std::is_same_v<T, StringValue>) {
+                return mixHash(kind, text(node.value));
+            } else if constexpr (std::is_same_v<T, BinaryValue>) {
+                return mixHash(kind, text(std::string(node.bytes.begin(), node.bytes.end())));
+            } else if constexpr (std::is_same_v<T, CharValue>) {
+                return mixHash(kind, node.value);
+            } else if constexpr (std::is_same_v<T, BoolValue>) {
+                return mixHash(kind, node.value ? 1 : 0);
+            } else if constexpr (std::is_same_v<T, AtomValue>) {
+                return mixHash(kind, text(node.name));
+            } else if constexpr (std::is_same_v<T, VariantValue>) {
+                uint64_t seed = mixHash(kind, text(node.tag));
+                for (const auto& arg : node.args) {
+                    seed = mixHash(seed, hashValue(arg));
+                }
+                return seed;
+            } else if constexpr (std::is_same_v<T, ListValue> || std::is_same_v<T, TupleValue>) {
+                uint64_t seed = kind;
+                for (const auto& element : node.elements) {
+                    seed = mixHash(seed, hashValue(element));
+                }
+                return seed;
+            } else if constexpr (std::is_same_v<T, MapValue>) {
+                uint64_t entries = 0;
+                for (const auto& [key, item] : node.entries) {
+                    entries += mixHash(hashValue(key), hashValue(item));
+                }
+                return mixHash(kind, entries);
+            } else if constexpr (std::is_same_v<T, RecordValue>) {
+                uint64_t fields = 0;
+                for (const auto& [name, item] : node.fields) {
+                    fields += mixHash(text(name), hashValue(item));
+                }
+                return mixHash(mixHash(kind, text(node.typeName)), fields);
+            } else {
+                return mixHash(kind, text(value->toString()));
+            }
+        },
+        value->data);
 }
 
 // An Erlang external term as a Kex value. The KexI chunk is a plain tree of
 // tuples, lists, atoms, integers and binaries, so it maps across directly and
 // a Kex program can walk it with ordinary pattern matching.
 auto termToValue(const beam::TermPtr& term) -> ValuePtr {
-    if (!term) return Value::none();
-    return std::visit([](const auto& node) -> ValuePtr {
-        using T = std::decay_t<decltype(node)>;
-        if constexpr (std::is_same_v<T, beam::Term::Atom>) {
-            // The KexI schema uses `true`/`false` as booleans, not atoms.
-            if (node.name == "true") return Value::boolean(true);
-            if (node.name == "false") return Value::boolean(false);
-            return Value::atom(node.name);
-        } else if constexpr (std::is_same_v<T, beam::Term::Int>) {
-            return Value::integer(node.value);
-        } else if constexpr (std::is_same_v<T, beam::Term::Bin>) {
-            return Value::string(std::string(node.data.begin(), node.data.end()));
-        } else if constexpr (std::is_same_v<T, beam::Term::Tuple>) {
-            std::vector<ValuePtr> elements;
-            elements.reserve(node.elements.size());
-            for (const auto& element : node.elements)
-                elements.push_back(termToValue(element));
-            return Value::tuple(std::move(elements));
-        } else if constexpr (std::is_same_v<T, beam::Term::List>) {
-            std::vector<ValuePtr> elements;
-            elements.reserve(node.elements.size());
-            for (const auto& element : node.elements)
-                elements.push_back(termToValue(element));
-            return Value::list(std::move(elements));
-        } else if constexpr (std::is_same_v<T, beam::Term::Map>) {
-            MapValue map;
-            for (const auto& [key, value] : node.pairs)
-                map.entries.push_back({termToValue(key), termToValue(value)});
-            auto out = std::make_shared<Value>();
-            out->data = std::move(map);
-            return out;
-        } else {
-            return Value::list({});
-        }
-    }, term->value);
+    if (!term) {
+        return Value::none();
+    }
+    return std::visit(
+        [](const auto& node) -> ValuePtr {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, beam::Term::Atom>) {
+                // The KexI schema uses `true`/`false` as booleans, not atoms.
+                if (node.name == "true") {
+                    return Value::boolean(true);
+                }
+                if (node.name == "false") {
+                    return Value::boolean(false);
+                }
+                return Value::atom(node.name);
+            } else if constexpr (std::is_same_v<T, beam::Term::Int>) {
+                return Value::integer(node.value);
+            } else if constexpr (std::is_same_v<T, beam::Term::Bin>) {
+                return Value::string(std::string(node.data.begin(), node.data.end()));
+            } else if constexpr (std::is_same_v<T, beam::Term::Tuple>) {
+                std::vector<ValuePtr> elements;
+                elements.reserve(node.elements.size());
+                for (const auto& element : node.elements) {
+                    elements.push_back(termToValue(element));
+                }
+                return Value::tuple(std::move(elements));
+            } else if constexpr (std::is_same_v<T, beam::Term::List>) {
+                std::vector<ValuePtr> elements;
+                elements.reserve(node.elements.size());
+                for (const auto& element : node.elements) {
+                    elements.push_back(termToValue(element));
+                }
+                return Value::list(std::move(elements));
+            } else if constexpr (std::is_same_v<T, beam::Term::Map>) {
+                MapValue map;
+                for (const auto& [key, value] : node.pairs) {
+                    map.entries.push_back({termToValue(key), termToValue(value)});
+                }
+                auto out = std::make_shared<Value>();
+                out->data = std::move(map);
+                return out;
+            } else {
+                return Value::list({});
+            }
+        },
+        term->value);
 }
 
 } // namespace
@@ -113,8 +132,12 @@ auto Evaluator::registerKexBuiltins() -> void {
     };
 
     auto featureTag = [](const ValuePtr& arg) -> std::string {
-        if (auto* vv = std::get_if<VariantValue>(&arg->data)) return vv->tag;
-        if (auto* mv = std::get_if<ModuleValue>(&arg->data)) return mv->name;
+        if (auto* vv = std::get_if<VariantValue>(&arg->data)) {
+            return vv->tag;
+        }
+        if (auto* mv = std::get_if<ModuleValue>(&arg->data)) {
+            return mv->name;
+        }
         return "";
     };
 
@@ -122,21 +145,27 @@ auto Evaluator::registerKexBuiltins() -> void {
 #ifdef __EMSCRIPTEN__
     static const std::vector<std::string> interpreterFeatures = {"FileSystem"};
 #else
-    static const std::vector<std::string> interpreterFeatures = {
-        "FileSystem", "ExternalPrograms"};
+    static const std::vector<std::string> interpreterFeatures = {"FileSystem", "ExternalPrograms"};
 #endif
 
     auto hasFeature = [featureTag](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(false);
+        if (args.empty()) {
+            return Value::boolean(false);
+        }
         auto tag = featureTag(args[0]);
-        for (const auto& f : interpreterFeatures)
-            if (f == tag) return Value::boolean(true);
+        for (const auto& f : interpreterFeatures) {
+            if (f == tag) {
+                return Value::boolean(true);
+            }
+        }
         return Value::boolean(false);
     };
 
     auto listFeatures = [makeVariant](std::vector<ValuePtr>) -> ValuePtr {
         std::vector<ValuePtr> features;
-        for (const auto& f : interpreterFeatures) features.push_back(makeVariant(f));
+        for (const auto& f : interpreterFeatures) {
+            features.push_back(makeVariant(f));
+        }
         return Value::list(std::move(features));
     };
 
@@ -147,7 +176,9 @@ auto Evaluator::registerKexBuiltins() -> void {
     // once and BOTH backends resolve the same name. Previously `.inspect` was
     // interpreter-only and failed with "Undefined method: inspect" on BEAM.
     defineIntrinsic("Kex.inspect", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::string("()");
+        if (args.empty()) {
+            return Value::string("()");
+        }
         auto rendered = args[0]->inspect();
         if (args.size() > 1) {
             const auto* colors = std::get_if<BoolValue>(&args[1]->data);
@@ -157,8 +188,12 @@ auto Evaluator::registerKexBuiltins() -> void {
                     if (rendered[i] == '\x1b' && i + 1 < rendered.size() &&
                         rendered[i + 1] == '[') {
                         i += 2;
-                        while (i < rendered.size() && rendered[i] != 'm') ++i;
-                        if (i < rendered.size()) ++i;
+                        while (i < rendered.size() && rendered[i] != 'm') {
+                            ++i;
+                        }
+                        if (i < rendered.size()) {
+                            ++i;
+                        }
                     } else {
                         plain.push_back(rendered[i++]);
                     }
@@ -170,7 +205,9 @@ auto Evaluator::registerKexBuiltins() -> void {
     });
 
     defineIntrinsic("Kex.show", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::string("");
+        if (args.empty()) {
+            return Value::string("");
+        }
         return Value::string(args[0]->toString());
     });
 
@@ -178,23 +215,46 @@ auto Evaluator::registerKexBuiltins() -> void {
     // Any values. This deliberately reports language-level categories rather
     // than library-specific tags; consumers such as JSON remain source-owned.
     defineIntrinsic("Kex.kind", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::atom("none");
+        if (args.empty()) {
+            return Value::atom("none");
+        }
         const auto& data = args[0]->data;
-        if (auto* variant = std::get_if<VariantValue>(&data))
+        if (auto* variant = std::get_if<VariantValue>(&data)) {
             return Value::atom(variant->tag == "None" ? "none" : "variant");
-        if (std::holds_alternative<BoolValue>(data)) return Value::atom("bool");
-        if (std::holds_alternative<IntValue>(data) ||
-            std::holds_alternative<BigIntValue>(data))
+        }
+        if (std::holds_alternative<BoolValue>(data)) {
+            return Value::atom("bool");
+        }
+        if (std::holds_alternative<IntValue>(data) || std::holds_alternative<BigIntValue>(data)) {
             return Value::atom("integer");
-        if (std::holds_alternative<FloatValue>(data)) return Value::atom("float");
-        if (std::holds_alternative<StringValue>(data)) return Value::atom("string");
-        if (std::holds_alternative<ListValue>(data)) return Value::atom("list");
-        if (std::holds_alternative<MapValue>(data)) return Value::atom("map");
-        if (std::holds_alternative<CharValue>(data)) return Value::atom("char");
-        if (std::holds_alternative<AtomValue>(data)) return Value::atom("atom");
-        if (std::holds_alternative<TupleValue>(data)) return Value::atom("tuple");
-        if (std::holds_alternative<RecordValue>(data)) return Value::atom("record");
-        if (std::holds_alternative<UnitValue>(data)) return Value::atom("void");
+        }
+        if (std::holds_alternative<FloatValue>(data)) {
+            return Value::atom("float");
+        }
+        if (std::holds_alternative<StringValue>(data)) {
+            return Value::atom("string");
+        }
+        if (std::holds_alternative<ListValue>(data)) {
+            return Value::atom("list");
+        }
+        if (std::holds_alternative<MapValue>(data)) {
+            return Value::atom("map");
+        }
+        if (std::holds_alternative<CharValue>(data)) {
+            return Value::atom("char");
+        }
+        if (std::holds_alternative<AtomValue>(data)) {
+            return Value::atom("atom");
+        }
+        if (std::holds_alternative<TupleValue>(data)) {
+            return Value::atom("tuple");
+        }
+        if (std::holds_alternative<RecordValue>(data)) {
+            return Value::atom("record");
+        }
+        if (std::holds_alternative<UnitValue>(data)) {
+            return Value::atom("void");
+        }
         return Value::atom("other");
     });
 
@@ -206,15 +266,17 @@ auto Evaluator::registerKexBuiltins() -> void {
 
     // Kex.Code (kexhq/kex#399): loading compiled modules is a BEAM matter.
     defineIntrinsic("Code.load", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::error(Value::string(
-            "Kex.load needs the BEAM backend; the interpreter cannot load compiled modules"));
+        return Value::error(
+            Value::string(
+                "Kex.load needs the BEAM backend; the interpreter cannot load compiled modules"));
     });
-    defineIntrinsic("Code.loaded?", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::boolean(false);
-    });
+    defineIntrinsic(
+        "Code.loaded?", [](std::vector<ValuePtr>) -> ValuePtr { return Value::boolean(false); });
     defineIntrinsic("Code.call", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::error(Value::string(
-            "Kex.LoadedModule.call needs the BEAM backend; the interpreter cannot call compiled modules"));
+        return Value::error(
+            Value::string(
+                "Kex.LoadedModule.call needs the BEAM backend; the "
+                "interpreter cannot call compiled modules"));
     });
 
     defineIntrinsic("Kex.backend", [makeVariant](std::vector<ValuePtr>) -> ValuePtr {
@@ -223,21 +285,18 @@ auto Evaluator::registerKexBuiltins() -> void {
 
     // The BEAM's JSON fast path (kex_intrinsic_json.erl). The interpreter has
     // none, so both answer None and json.kex runs its own parser/encoder.
-    for (const char* name : {"Json.decode", "Json.decodeCommented", "Json.encode"})
-        defineIntrinsic(name, [](std::vector<ValuePtr>) -> ValuePtr {
-            return Value::none();
-        });
+    for (const char* name : {"Json.decode", "Json.decodeCommented", "Json.encode"}) {
+        defineIntrinsic(name, [](std::vector<ValuePtr>) -> ValuePtr { return Value::none(); });
+    }
 
     // Mirrors kex_intrinsic_kex:version/0 — see src/common/version.hxx for
     // why both sides read from one place.
     defineIntrinsic("Kex.version", [](std::vector<ValuePtr>) -> ValuePtr {
-        auto revision =
-            *kGitRevision
-                ? Value::variant("Just", "", {Value::string(kGitRevision)})
-                : Value::variant("None", "", {});
-        return Value::tuple({Value::integer(kVersionMajor),
-                             Value::integer(kVersionMinor),
-                             Value::integer(kVersionPatch), revision});
+        auto revision = *kGitRevision ? Value::variant("Just", "", {Value::string(kGitRevision)})
+                                      : Value::variant("None", "", {});
+        return Value::tuple(
+            {Value::integer(kVersionMajor), Value::integer(kVersionMinor),
+             Value::integer(kVersionPatch), revision});
     });
 
     // The release channel, "" for a stable build. Separate from version/0
@@ -254,13 +313,19 @@ auto Evaluator::registerKexBuiltins() -> void {
     // tree walker as well as on BEAM; a Kex program needed
     // `BEAM.beam_lib.chunks` plus `BEAM.erlang.binary_to_term` for it.
     defineIntrinsic("Interface.read", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
+        if (args.empty()) {
+            return Value::none();
+        }
         auto* path = std::get_if<StringValue>(&args[0]->data);
-        if (!path) return Value::none();
+        if (!path) {
+            return Value::none();
+        }
         try {
             auto beam = beam::readBeamFile(path->value);
             const auto* chunk = beam.findChunk("KexI");
-            if (!chunk) return Value::none();
+            if (!chunk) {
+                return Value::none();
+            }
             return Value::just(termToValue(beam::decodeEtf(chunk->data)));
         } catch (const std::exception&) {
             // A missing file, a non-BEAM file, or a chunk this build cannot

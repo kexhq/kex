@@ -19,7 +19,9 @@ inline const std::string kPreludeModule = "kex_prelude";
 // The root every Kex module compiles under: `Net.HTTP` is the BEAM module
 // `Kex.Net.HTTP`.
 inline const std::string kRuntimeRoot = "Kex";
-inline auto moduleAtom(const std::string& path) -> std::string { return kRuntimeRoot + "." + path; }
+inline auto moduleAtom(const std::string& path) -> std::string {
+    return kRuntimeRoot + "." + path;
+}
 
 // `value.try`: a postfix keyword, not a function, offered after a dot where
 // it applies (TypeChecker::memberCompletions).
@@ -63,7 +65,9 @@ inline const std::string kFalse = "False";
 
 // The name that binds nothing: a `_` parameter, pattern, or loop counter.
 inline const std::string kWildcard = "_";
-inline auto isWildcard(const std::string& name) -> bool { return name == kWildcard; }
+inline auto isWildcard(const std::string& name) -> bool {
+    return name == kWildcard;
+}
 
 // The atom a caller passes for an argument it leaves out: the callee puts
 // its own default in its place on entry, checked and lowered in its own
@@ -102,13 +106,19 @@ inline constexpr std::array<std::pair<std::string_view, TestBuiltin>, 5> kTestBu
 }};
 inline const std::string kTestIntrinsics = kIntrinsicRoot + ".Test";
 inline auto testBuiltinNamed(std::string_view name) -> std::optional<TestBuiltin> {
-    for (const auto& [spelling, builtin] : kTestBuiltins)
-        if (spelling == name) return builtin;
+    for (const auto& [spelling, builtin] : kTestBuiltins) {
+        if (spelling == name) {
+            return builtin;
+        }
+    }
     return std::nullopt;
 }
 inline auto testBuiltinName(TestBuiltin builtin) -> std::string_view {
-    for (const auto& [spelling, entry] : kTestBuiltins)
-        if (entry == builtin) return spelling;
+    for (const auto& [spelling, entry] : kTestBuiltins) {
+        if (entry == builtin) {
+            return spelling;
+        }
+    }
     return {};
 }
 // The intrinsic a decided call names (`Kex.Intrinsic.Test.assert`), and back.
@@ -116,7 +126,9 @@ inline auto testIntrinsicPath(TestBuiltin builtin) -> std::string {
     return kTestIntrinsics + "." + std::string(testBuiltinName(builtin));
 }
 inline auto testBuiltinOf(const std::string& owner) -> std::optional<TestBuiltin> {
-    if (!owner.starts_with(kTestIntrinsics + ".")) return std::nullopt;
+    if (!owner.starts_with(kTestIntrinsics + ".")) {
+        return std::nullopt;
+    }
     return testBuiltinNamed(std::string_view(owner).substr(kTestIntrinsics.size() + 1));
 }
 

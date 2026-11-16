@@ -5,14 +5,19 @@
 namespace kex::semantic {
 
 auto sameParameters(const Signature& left, const Signature& right) -> bool {
-    if (left.params.size() != right.params.size()) return false;
+    if (left.params.size() != right.params.size()) {
+        return false;
+    }
     for (std::size_t i = 0; i < left.params.size(); ++i) {
         const auto& a = left.params[i];
         const auto& b = right.params[i];
         if (a && b && std::holds_alternative<UnknownType>(a->kind) &&
-            std::holds_alternative<UnknownType>(b->kind))
+            std::holds_alternative<UnknownType>(b->kind)) {
             continue;
-        if (!typesEqual(a, b)) return false;
+        }
+        if (!typesEqual(a, b)) {
+            return false;
+        }
     }
     return true;
 }
@@ -27,28 +32,36 @@ auto TraitRegistry::get(const std::string& name) const -> const TraitDef* {
 }
 
 auto TraitRegistry::lookup(const std::string& written) const -> const TraitDef* {
-    if (const auto* exact = get(written)) return exact;
+    if (const auto* exact = get(written)) {
+        return exact;
+    }
     const TraitDef* found = nullptr;
     const auto suffix = "." + written;
-    for (const auto& [name, def] : m_traits)
+    for (const auto& [name, def] : m_traits) {
         if (name.size() > suffix.size() && name.ends_with(suffix)) {
-            if (found) return nullptr;
+            if (found) {
+                return nullptr;
+            }
             found = &def;
         }
+    }
     return found;
 }
 
-auto TraitRegistry::registerImplementation(const std::string& typeName,
-                                            const std::string& traitName) -> void {
+auto TraitRegistry::registerImplementation(
+    const std::string& typeName, const std::string& traitName) -> void {
     m_implementations[typeName].insert(traitName);
 }
 
 auto TraitRegistry::implementorKey(const TypePtr& type) const -> std::string {
-    if (auto* named = std::get_if<NamedType>(&type->kind)) return named->name;
+    if (auto* named = std::get_if<NamedType>(&type->kind)) {
+        return named->name;
+    }
     return typeToString(type);
 }
 
-auto TraitRegistry::satisfiesStructurally(const TypePtr& type, const std::string& traitName) const -> bool {
+auto TraitRegistry::satisfiesStructurally(const TypePtr& type, const std::string& traitName) const
+    -> bool {
     bool isInt = std::holds_alternative<SizedIntType>(type->kind) ||
                  (std::holds_alternative<PrimitiveType>(type->kind) &&
                   std::get<PrimitiveType>(type->kind).kind == PrimitiveType::Integer);
@@ -57,9 +70,8 @@ auto TraitRegistry::satisfiesStructurally(const TypePtr& type, const std::string
         // inside make blocks or by user type annotations that spell "Integer" as a name.
         if (auto* named = std::get_if<NamedType>(&type->kind)) {
             static const std::unordered_set<std::string> kIntNames = {
-                "Int", "Integer", "Byte", "Int8", "Int16", "Int32", "Int64",
-                "UInt8", "UInt16", "UInt32", "UInt64"
-            };
+                "Int",   "Integer", "Byte",   "Int8",   "Int16", "Int32",
+                "Int64", "UInt8",   "UInt16", "UInt32", "UInt64"};
             isInt = kIntNames.count(named->name) > 0;
         }
     }
@@ -67,36 +79,52 @@ auto TraitRegistry::satisfiesStructurally(const TypePtr& type, const std::string
     if (!isFloat) {
         if (auto* named = std::get_if<NamedType>(&type->kind)) {
             static const std::unordered_set<std::string> kFloatNames = {
-                "Float", "Float32", "Float64", "Double"
-            };
+                "Float", "Float32", "Float64", "Double"};
             isFloat = kFloatNames.count(named->name) > 0;
         }
     }
 
-    if (traitName == "Integer") return isInt;
-    if (traitName == "Float") return isFloat;
-    if (traitName == "Number") return isInt || isFloat;
+    if (traitName == "Integer") {
+        return isInt;
+    }
+    if (traitName == "Float") {
+        return isFloat;
+    }
+    if (traitName == "Number") {
+        return isInt || isFloat;
+    }
     return false;
 }
 
 auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName) const -> bool {
-    if (!type) return false;
+    if (!type) {
+        return false;
+    }
     // Every runtime value has structural inspect and plain show fallbacks.
     // Concrete make blocks may still override either presentation.
-    if (traitName == "Inspectable" || traitName == "Showable") return true;
+    if (traitName == "Inspectable" || traitName == "Showable") {
+        return true;
+    }
 
     // A value whose type IS the trait (e.g. NamedType("Shape") against trait "Shape")
     // trivially satisfies that trait — it was already widened to the trait type.
-    if (auto* named = std::get_if<NamedType>(&type->kind))
-        if (named->name == traitName && m_traits.count(traitName)) return true;
+    if (auto* named = std::get_if<NamedType>(&type->kind)) {
+        if (named->name == traitName && m_traits.count(traitName)) {
+            return true;
+        }
+    }
 
     // A ConstrainedType("T", "Integer") satisfies "Integer" and (by extension) "Number";
     // likewise "Float" satisfies "Number". This comes up when a constrained hint type
     // (e.g., from an imported signature's Integer constraint) is passed as an arg against
     // another constrained param — both are constrained the same way and are compatible.
     if (auto* ct = std::get_if<ConstrainedType>(&type->kind)) {
-        if (ct->traitName == traitName) return true;
-        if (traitName == "Number" && (ct->traitName == "Integer" || ct->traitName == "Float")) return true;
+        if (ct->traitName == traitName) {
+            return true;
+        }
+        if (traitName == "Number" && (ct->traitName == "Integer" || ct->traitName == "Float")) {
+            return true;
+        }
         return false;
     }
 
@@ -105,9 +133,14 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
     // target be used at the trait: `make Float | Integer` has a `Number`
     // receiver, so a method there may be declared to return `Number`.
     if (auto* uni = std::get_if<UnionType>(&type->kind)) {
-        if (uni->members.empty()) return false;
-        for (const auto& member : uni->members)
-            if (!satisfies(member, traitName)) return false;
+        if (uni->members.empty()) {
+            return false;
+        }
+        for (const auto& member : uni->members) {
+            if (!satisfies(member, traitName)) {
+                return false;
+            }
+        }
         return true;
     }
 
@@ -124,7 +157,9 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
         }
         if (auto* tup = std::get_if<TupleType>(&type->kind)) {
             for (const auto& elem : tup->elements) {
-                if (!satisfies(elem, traitName)) return false;
+                if (!satisfies(elem, traitName)) {
+                    return false;
+                }
             }
             return true;
         }
@@ -137,54 +172,84 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
     }
 
     auto it = m_implementations.find(implementorKey(type));
-    if (it != m_implementations.end() && it->second.count(traitName) > 0)
+    if (it != m_implementations.end() && it->second.count(traitName) > 0) {
         return true;
+    }
 
     // The family it belongs to claims it too: a list, map or optional what
     // `make [X], implement: Trait` claims, a sized number what `make Float`
     // or `make Integer` does (`1.5.present?`, a Float64, is Blankable).
     const auto family = familyKey(type);
-    if (family.empty()) return false;
+    if (family.empty()) {
+        return false;
+    }
     const auto claims = m_implementations.find(family);
     return claims != m_implementations.end() && claims->second.count(traitName) > 0;
 }
 
 // The name a type's family registers conformances under, or "".
 auto TraitRegistry::familyKey(const TypePtr& type) -> std::string {
-    if (std::holds_alternative<ListType>(type->kind)) return "List";
-    if (std::holds_alternative<MapType>(type->kind)) return "Map";
-    if (std::holds_alternative<OptionalType>(type->kind)) return "Optional";
-    if (isNumericType(type))
+    if (std::holds_alternative<ListType>(type->kind)) {
+        return "List";
+    }
+    if (std::holds_alternative<MapType>(type->kind)) {
+        return "Map";
+    }
+    if (std::holds_alternative<OptionalType>(type->kind)) {
+        return "Optional";
+    }
+    if (isNumericType(type)) {
         return std::holds_alternative<SizedFloatType>(type->kind) ? "Float" : "Integer";
+    }
     return "";
 }
 
-auto TraitRegistry::implementsInHome(const std::string& type,
-                                     const std::string& method) const -> bool {
+auto TraitRegistry::implementsInHome(const std::string& type, const std::string& method) const
+    -> bool {
     auto implemented = m_implementations.find(type);
-    if (implemented == m_implementations.end()) return false;
+    if (implemented == m_implementations.end()) {
+        return false;
+    }
     for (const auto& traitName : implemented->second) {
         auto trait = m_traits.find(traitName);
-        if (trait == m_traits.end()) continue;
-        for (const auto& required : trait->second.requiredMethods)
-            if (required.name == method) return true;
-        for (const auto& body : trait->second.defaultBodies)
-            if (body == method) return true;
+        if (trait == m_traits.end()) {
+            continue;
+        }
+        for (const auto& required : trait->second.requiredMethods) {
+            if (required.name == method) {
+                return true;
+            }
+        }
+        for (const auto& body : trait->second.defaultBodies) {
+            if (body == method) {
+                return true;
+            }
+        }
     }
     return false;
 }
 
-auto TraitRegistry::declaresMethod(const std::string& type,
-                                   const std::string& method) const -> bool {
+auto TraitRegistry::declaresMethod(const std::string& type, const std::string& method) const
+    -> bool {
     auto implemented = m_implementations.find(type);
-    if (implemented == m_implementations.end()) return false;
+    if (implemented == m_implementations.end()) {
+        return false;
+    }
     for (const auto& traitName : implemented->second) {
         auto trait = m_traits.find(traitName);
-        if (trait == m_traits.end()) continue;
-        for (const auto& required : trait->second.requiredMethods)
-            if (required.name == method) return true;
-        for (const auto& defaulted : trait->second.defaultMethods)
-            if (defaulted == method) return true;
+        if (trait == m_traits.end()) {
+            continue;
+        }
+        for (const auto& required : trait->second.requiredMethods) {
+            if (required.name == method) {
+                return true;
+            }
+        }
+        for (const auto& defaulted : trait->second.defaultMethods) {
+            if (defaulted == method) {
+                return true;
+            }
+        }
     }
     return false;
 }
@@ -192,12 +257,19 @@ auto TraitRegistry::declaresMethod(const std::string& type,
 auto TraitRegistry::requiredMethod(const TypePtr& type, const std::string& method) const
     -> std::pair<const TraitDef*, const Signature*> {
     auto implemented = m_implementations.find(implementorKey(type));
-    if (implemented == m_implementations.end()) return {nullptr, nullptr};
+    if (implemented == m_implementations.end()) {
+        return {nullptr, nullptr};
+    }
     for (const auto& traitName : implemented->second) {
         auto trait = m_traits.find(traitName);
-        if (trait == m_traits.end()) continue;
-        for (const auto& required : trait->second.requiredMethods)
-            if (required.name == method) return {&trait->second, &required};
+        if (trait == m_traits.end()) {
+            continue;
+        }
+        for (const auto& required : trait->second.requiredMethods) {
+            if (required.name == method) {
+                return {&trait->second, &required};
+            }
+        }
     }
     return {nullptr, nullptr};
 }
@@ -206,11 +278,18 @@ auto TraitRegistry::requiredOverloads(const TypePtr& type, const std::string& me
     -> std::vector<const Signature*> {
     std::vector<const Signature*> overloads;
     auto implemented = m_implementations.find(implementorKey(type));
-    if (implemented == m_implementations.end()) return overloads;
-    for (const auto& traitName : implemented->second)
-        if (auto trait = m_traits.find(traitName); trait != m_traits.end())
-            for (const auto& required : trait->second.requiredMethods)
-                if (required.name == method) overloads.push_back(&required);
+    if (implemented == m_implementations.end()) {
+        return overloads;
+    }
+    for (const auto& traitName : implemented->second) {
+        if (auto trait = m_traits.find(traitName); trait != m_traits.end()) {
+            for (const auto& required : trait->second.requiredMethods) {
+                if (required.name == method) {
+                    overloads.push_back(&required);
+                }
+            }
+        }
+    }
     return overloads;
 }
 
@@ -219,17 +298,21 @@ auto TraitRegistry::commonTrait(const TypePtr& a, const TypePtr& b) const -> std
     auto keyB = implementorKey(b);
     auto itA = m_implementations.find(keyA);
     auto itB = m_implementations.find(keyB);
-    if (itA == m_implementations.end() || itB == m_implementations.end()) return "";
+    if (itA == m_implementations.end() || itB == m_implementations.end()) {
+        return "";
+    }
     // Skip structural/primitive traits — only return user-defined ones.
     static const std::set<std::string> kBuiltin = {
-        "Number", "Integer", "Float", "Equatable", "Comparable",
-        "Showable",
-        "Blankable", "Truthyable", "Enumerable",
-        "Monoid", "Group", "Errorable",
+        "Number",    "Integer",    "Float",      "Equatable", "Comparable", "Showable",
+        "Blankable", "Truthyable", "Enumerable", "Monoid",    "Group",      "Errorable",
     };
     for (const auto& t : itA->second) {
-        if (kBuiltin.count(t)) continue;
-        if (itB->second.count(t)) return t;
+        if (kBuiltin.count(t)) {
+            continue;
+        }
+        if (itB->second.count(t)) {
+            return t;
+        }
     }
     return "";
 }
@@ -240,25 +323,23 @@ auto TraitRegistry::withBuiltins() -> TraitRegistry {
     reg.define(TraitDef{"Number", {}});
     reg.define(TraitDef{"Integer", {}});
     reg.define(TraitDef{"Float", {}});
-    reg.define(TraitDef{"Equatable",
-        {Signature{"==", {Type::typeVar(-1)}, Type::boolean()}}});
+    reg.define(TraitDef{"Equatable", {Signature{"==", {Type::typeVar(-1)}, Type::boolean()}}});
     // `Ordering` is the type comparable.kex declares and the interpreter
     // builds Less/Equal/Greater from. The result was previously named
     // "Comparison", which no declaration anywhere defines.
-    reg.define(TraitDef{"Comparable",
-        {Signature{"compare", {Type::typeVar(-1)}, Type::named("Ordering")}}});
-    reg.define(TraitDef{"Inspectable",
-        {Signature{"inspectValue", {Type::boolean()}, Type::string()}}});
-    reg.define(TraitDef{"Showable",
-        {Signature{"showValue", {}, Type::string()}}});
+    reg.define(
+        TraitDef{
+            "Comparable", {Signature{"compare", {Type::typeVar(-1)}, Type::named("Ordering")}}});
+    reg.define(
+        TraitDef{"Inspectable", {Signature{"inspectValue", {Type::boolean()}, Type::string()}}});
+    reg.define(TraitDef{"Showable", {Signature{"showValue", {}, Type::string()}}});
 
     // Primitive/sized types implement Equatable/Showable, keyed by their
     // canonical printed name (see implementorKey) — same registry path a
     // NamedType implementation would use.
     static const char* kEquatableShowable[] = {
-        "Int", "Integer", "Byte", "Int8", "Int16", "Int32",
-        "UInt16", "UInt32", "UInt64", "Float32", "Float64",
-        "Char", "Bool", "Atom", "String", "Void",
+        "Int",    "Integer", "Byte",    "Int8", "Int16", "Int32", "UInt16", "UInt32",
+        "UInt64", "Float32", "Float64", "Char", "Bool",  "Atom",  "String", "Void",
     };
     for (const char* name : kEquatableShowable) {
         reg.registerImplementation(name, "Equatable");
@@ -268,9 +349,8 @@ auto TraitRegistry::withBuiltins() -> TraitRegistry {
     // Bool doesn't order with <, >, <=, >= (matches inferBinaryOp's
     // existing rule), so Comparable is registered for everyone else.
     static const char* kComparable[] = {
-        "Int", "Integer", "Byte", "Int8", "Int16", "Int32",
-        "UInt16", "UInt32", "UInt64", "Float32", "Float64",
-        "Char", "String",
+        "Int",    "Integer", "Byte",    "Int8",    "Int16", "Int32",  "UInt16",
+        "UInt32", "UInt64",  "Float32", "Float64", "Char",  "String",
     };
     for (const char* name : kComparable) {
         reg.registerImplementation(name, "Comparable");

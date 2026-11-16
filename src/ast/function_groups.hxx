@@ -19,18 +19,16 @@ namespace kex::ast {
 
 // The dispatch types of a make-block method's clause: the receiver type,
 // then one per parameter.
-auto methodDispatchTypes(const FunctionClause& clause,
-                         const std::string& receiverType)
+auto methodDispatchTypes(const FunctionClause& clause, const std::string& receiverType)
     -> std::vector<std::string>;
-auto methodDispatchTypes(const FunctionDef& function,
-                         const std::string& receiverType)
+auto methodDispatchTypes(const FunctionDef& function, const std::string& receiverType)
     -> std::vector<std::string>;
 
 // Whether several same-name method signatures actually SEPARATE the values
 // they accept, which is what makes them an argument-type overload set (one
 // BEAM function each) rather than ordinary clause dispatch.
-auto separableOverloadSignatures(
-    const std::map<std::string, std::vector<std::string>>& signatures) -> bool;
+auto separableOverloadSignatures(const std::map<std::string, std::vector<std::string>>& signatures)
+    -> bool;
 
 // Whether a make-block method's first parameter is its receiver, matched by
 // pattern (`@[x | _]`, `Point { x, y }`, `x.._`), rather than an argument
@@ -54,8 +52,7 @@ auto freeFunctionArity(const FunctionDef& function) -> size_t;
 // `close(listener: TCPListener)`) have one each. Whatever describes a
 // function's contract — an interface, an export, a published signature —
 // reads these rather than only the first clause.
-auto signatureClauses(const FunctionDef& function)
-    -> std::vector<const FunctionClause*>;
+auto signatureClauses(const FunctionDef& function) -> std::vector<const FunctionClause*>;
 
 // A function's parameter names by position, for placing named arguments:
 // each position takes the first name any clause gives it, since a clause may
@@ -64,8 +61,7 @@ auto signatureClauses(const FunctionDef& function)
 auto parameterNames(const FunctionDef& function) -> std::vector<std::string>;
 
 // Each position's default value, from the first clause that gives one.
-auto parameterDefaults(const FunctionDef& function)
-    -> std::vector<const ExprPtr*>;
+auto parameterDefaults(const FunctionDef& function) -> std::vector<const ExprPtr*>;
 
 // Folds adjacent clauses of the same function into one FunctionDef, in
 // every container of the program. Idempotent, so it is safe to run again

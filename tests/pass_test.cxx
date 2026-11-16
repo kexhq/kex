@@ -21,13 +21,23 @@ struct Book {
     std::vector<Page> pages;
 };
 
-auto unitName(const Page& page) -> std::string { return page.name; }
-auto isAnswered(const Page& page) -> bool { return page.answered; }
-auto printUnit(std::ostream& out, const Page& page) -> void {
-    for (const auto word : page.words) out << word << " ";
+auto unitName(const Page& page) -> std::string {
+    return page.name;
 }
-auto unitName(const Book& book) -> std::string { return book.title; }
-auto printUnit(std::ostream& out, const Book& book) -> void { out << book.pages.size() << " pages"; }
+auto isAnswered(const Page& page) -> bool {
+    return page.answered;
+}
+auto printUnit(std::ostream& out, const Page& page) -> void {
+    for (const auto word : page.words) {
+        out << word << " ";
+    }
+}
+auto unitName(const Book& book) -> std::string {
+    return book.title;
+}
+auto printUnit(std::ostream& out, const Book& book) -> void {
+    out << book.pages.size() << " pages";
+}
 
 } // namespace toy
 
@@ -43,7 +53,9 @@ template <>
 struct kex::pass::IRUnitChildren<toy::Book, toy::Page> {
     template <typename Visit>
     static auto forEach(toy::Book& book, Visit&& visit) -> void {
-        for (auto& page : book.pages) visit(page);
+        for (auto& page : book.pages) {
+            visit(page);
+        }
     }
 };
 
@@ -60,7 +72,9 @@ struct SumAnalysis : AnalysisInfoMixin<SumAnalysis> {
     auto run(Page& page, AnalysisManager<Page>&) -> Result {
         ++sumRuns;
         int sum = 0;
-        for (const auto word : page.words) sum += word;
+        for (const auto word : page.words) {
+            sum += word;
+        }
         return sum;
     }
 };
@@ -79,7 +93,9 @@ struct DoubledSumAnalysis : AnalysisInfoMixin<DoubledSumAnalysis> {
 struct PageCountAnalysis : AnalysisInfoMixin<PageCountAnalysis> {
     static constexpr std::string_view kName = "page-count";
     using Result = std::size_t;
-    auto run(Book& book, AnalysisManager<Book>&) -> Result { return book.pages.size(); }
+    auto run(Book& book, AnalysisManager<Book>&) -> Result {
+        return book.pages.size();
+    }
 };
 
 struct AppendPass : PassInfoMixin<AppendPass> {
@@ -233,9 +249,8 @@ int main() {
     describe("PassInstrumentation", []() {
         it("skips a pass shouldRun refuses, unless it is required", []() {
             PassInstrumentationCallbacks callbacks;
-            callbacks.registerShouldRun([](std::string_view, const UnitRef& unit) {
-                return unit.name != "cached";
-            });
+            callbacks.registerShouldRun(
+                [](std::string_view, const UnitRef& unit) { return unit.name != "cached"; });
             AnalysisManager<Page> analyses(&callbacks);
             int requiredRuns = 0;
             PassManager<Page> pipeline;
@@ -270,8 +285,8 @@ int main() {
             pipeline.addPass(AppendPass{{}, 3});
             Page page{"p", {}};
             pipeline.run(page, analyses);
-            assertTrue(printed.str().find("page p after append") != std::string::npos,
-                       printed.str());
+            assertTrue(
+                printed.str().find("page p after append") != std::string::npos, printed.str());
             assertTrue(printed.str().find("3 ") != std::string::npos, printed.str());
             std::ostringstream report;
             timer.report(report);

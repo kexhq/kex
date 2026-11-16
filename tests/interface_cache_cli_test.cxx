@@ -20,18 +20,18 @@ namespace fs = std::filesystem;
 
 namespace {
 
-auto runKex(const std::string& cacheDir, const std::string& sourcePath,
-            const std::string& binary) -> std::string {
-    std::string cmd = std::string("KEX_CACHE=") + cacheDir + " XDG_CACHE_HOME=" +
-                      cacheDir + " " + binary + " --run --no-colors " +
-                      sourcePath + " 2>&1";
+auto runKex(const std::string& cacheDir, const std::string& sourcePath, const std::string& binary)
+    -> std::string {
+    std::string cmd = std::string("KEX_CACHE=") + cacheDir + " XDG_CACHE_HOME=" + cacheDir + " " +
+                      binary + " --run --no-colors " + sourcePath + " 2>&1";
     std::string result;
     FILE* pipe = popen(cmd.c_str(), "r");
     if (pipe) {
         std::array<char, 4096> buf;
         size_t n;
-        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0) {
             result.append(buf.data(), n);
+        }
         pclose(pipe);
     }
     return result;
@@ -43,7 +43,10 @@ auto writeTempSource(const std::string& source) -> std::string {
     close(fd);
     std::string path = std::string(tmp) + ".kex";
     std::rename(tmp, path.c_str());
-    { std::ofstream f(path); f << source; }
+    {
+        std::ofstream f(path);
+        f << source;
+    }
     return path;
 }
 
@@ -53,10 +56,14 @@ auto interfaceCacheEntryCount(const std::string& cacheDir) -> size_t {
     std::error_code ec;
     // runKex sets KEX_CACHE=cacheDir, the root every cache lives under.
     const auto dir = fs::path(cacheDir) / "prelude-interface";
-    if (!fs::exists(dir, ec)) return 0;
+    if (!fs::exists(dir, ec)) {
+        return 0;
+    }
     size_t count = 0;
     for (const auto& entry : fs::directory_iterator(dir, ec)) {
-        if (entry.path().extension() == ".bin") ++count;
+        if (entry.path().extension() == ".bin") {
+            ++count;
+        }
     }
     return count;
 }
@@ -66,7 +73,9 @@ auto interfaceCacheEntryCount(const std::string& cacheDir) -> size_t {
 // mtime resolution or clock skew — the same property an actual rebuild has.
 auto backdateFile(const std::string& path) -> void {
     struct stat st{};
-    if (stat(path.c_str(), &st) != 0) return;
+    if (stat(path.c_str(), &st) != 0) {
+        return;
+    }
     struct utimbuf times{};
     times.actime = st.st_atime;
     times.modtime = st.st_mtime - 3600;
@@ -82,8 +91,7 @@ auto copyBinaryForBackdate() -> std::string {
     const auto dest = fs::path(KEX_BINARY_PATH).parent_path() /
                       ("kex-backdate-probe-" + std::to_string(getpid()));
     std::error_code ec;
-    fs::copy_file(KEX_BINARY_PATH, dest,
-                  fs::copy_options::overwrite_existing, ec);
+    fs::copy_file(KEX_BINARY_PATH, dest, fs::copy_options::overwrite_existing, ec);
     chmod(dest.c_str(), 0755);
     return dest.string();
 }
@@ -91,42 +99,39 @@ auto copyBinaryForBackdate() -> std::string {
 } // namespace
 
 int main() {
-    describe("Prelude interface cache — key reacts to the compiler binary itself",
-             []() {
-                 it("mints a new entry when the kex binary's mtime changes under "
-                    "an unchanged version + stdlib",
-                    []() {
-                        char cacheTmp[] = "/tmp/kex_iface_cache_test_XXXXXX";
-                        std::string cacheDir = mkdtemp(cacheTmp);
-                        auto path = writeTempSource(
-                            "main do\n"
-                            "  IO.printLine(\"cached\")\n"
-                            "end\n");
-                        const auto binary = copyBinaryForBackdate();
+    describe("Prelude interface cache — key reacts to the compiler binary itself", []() {
+        it("mints a new entry when the kex binary's mtime changes under "
+           "an unchanged version + stdlib",
+           []() {
+               char cacheTmp[] = "/tmp/kex_iface_cache_test_XXXXXX";
+               std::string cacheDir = mkdtemp(cacheTmp);
+               auto path = writeTempSource(
+                   "main do\n"
+                   "  IO.printLine(\"cached\")\n"
+                   "end\n");
+               const auto binary = copyBinaryForBackdate();
 
-                        auto first = runKex(cacheDir, path, binary);
-                        assertEqual(first, std::string("cached\n"));
-                        auto afterFirst = interfaceCacheEntryCount(cacheDir);
-                        assertTrue(afterFirst >= 1,
-                                   "expected the first run to populate a cache entry");
+               auto first = runKex(cacheDir, path, binary);
+               assertEqual(first, std::string("cached\n"));
+               auto afterFirst = interfaceCacheEntryCount(cacheDir);
+               assertTrue(afterFirst >= 1, "expected the first run to populate a cache entry");
 
-                        backdateFile(binary);
+               backdateFile(binary);
 
-                        auto second = runKex(cacheDir, path, binary);
-                        assertEqual(second, std::string("cached\n"));
-                        auto afterSecond = interfaceCacheEntryCount(cacheDir);
-                        assertTrue(
-                            afterSecond > afterFirst,
-                            "a changed binary mtime should mint a new cache entry, "
-                            "not reuse the old build's interfaces: " +
-                                std::to_string(afterFirst) + " -> " +
-                                std::to_string(afterSecond));
+               auto second = runKex(cacheDir, path, binary);
+               assertEqual(second, std::string("cached\n"));
+               auto afterSecond = interfaceCacheEntryCount(cacheDir);
+               assertTrue(
+                   afterSecond > afterFirst,
+                   "a changed binary mtime should mint a new cache entry, "
+                   "not reuse the old build's interfaces: " +
+                       std::to_string(afterFirst) + " -> " + std::to_string(afterSecond));
 
-                        std::remove(path.c_str());
-                        std::remove(binary.c_str());
-                        fs::remove_all(cacheDir);
-                    });
-             });
+               std::remove(path.c_str());
+               std::remove(binary.c_str());
+               fs::remove_all(cacheDir);
+           });
+    });
 
     return runAll();
 }

@@ -8,13 +8,17 @@ template <typename T>
 auto cloneVec(const std::vector<T>& items) -> std::vector<T> {
     std::vector<T> out;
     out.reserve(items.size());
-    for (const auto& item : items) out.push_back(clone(item));
+    for (const auto& item : items) {
+        out.push_back(clone(item));
+    }
     return out;
 }
 
 template <typename T>
 auto cloneOpt(const std::optional<T>& item) -> std::optional<T> {
-    if (!item) return std::nullopt;
+    if (!item) {
+        return std::nullopt;
+    }
     return clone(*item);
 }
 
@@ -23,15 +27,18 @@ auto cloneNamed(const std::vector<std::pair<std::string, ExprPtr>>& items)
     -> std::vector<std::pair<std::string, ExprPtr>> {
     std::vector<std::pair<std::string, ExprPtr>> out;
     out.reserve(items.size());
-    for (const auto& [name, value] : items)
+    for (const auto& [name, value] : items) {
         out.emplace_back(name, clone(value));
+    }
     return out;
 }
 
 } // namespace
 
 auto clone(const TypeExprPtr& type) -> TypeExprPtr {
-    if (!type) return nullptr;
+    if (!type) {
+        return nullptr;
+    }
     auto out = std::make_unique<TypeExpr>();
     out->location = type->location;
     std::visit(
@@ -50,19 +57,20 @@ auto clone(const TypeExprPtr& type) -> TypeExprPtr {
             } else if constexpr (std::is_same_v<T, UnionType>) {
                 out->kind = UnionType{clone(node.left), clone(node.right)};
             } else if constexpr (std::is_same_v<T, IntersectionType>) {
-                out->kind =
-                    IntersectionType{clone(node.left), clone(node.right)};
+                out->kind = IntersectionType{clone(node.left), clone(node.right)};
             } else if constexpr (std::is_same_v<T, RecordType>) {
                 RecordType copy;
-                for (const auto& [name, fieldType] : node.fields)
+                for (const auto& [name, fieldType] : node.fields) {
                     copy.fields.emplace_back(name, clone(fieldType));
+                }
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, OptionalType>) {
                 out->kind = OptionalType{clone(node.inner)};
             } else if constexpr (std::is_same_v<T, BlockType>) {
                 BlockType copy{clone(node.inner), {}};
-                for (const auto& param : node.params)
+                for (const auto& param : node.params) {
                     copy.params.push_back(clone(param));
+                }
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, TypeQuery>) {
                 out->kind = TypeQuery{node.query, clone(node.argument)};
@@ -76,7 +84,9 @@ auto clone(const TypeExprPtr& type) -> TypeExprPtr {
 }
 
 auto clone(const PatternPtr& pattern) -> PatternPtr {
-    if (!pattern) return nullptr;
+    if (!pattern) {
+        return nullptr;
+    }
     auto out = std::make_unique<Pattern>();
     out->location = pattern->location;
     std::visit(
@@ -89,13 +99,13 @@ auto clone(const PatternPtr& pattern) -> PatternPtr {
             } else if constexpr (std::is_same_v<T, RecordPattern>) {
                 RecordPattern copy;
                 copy.typeName = node.typeName;
-                for (const auto& field : node.fields)
-                    copy.fields.push_back(FieldPattern{
-                        field.name, cloneOpt(field.pattern), field.isStringKey});
+                for (const auto& field : node.fields) {
+                    copy.fields.push_back(
+                        FieldPattern{field.name, cloneOpt(field.pattern), field.isStringKey});
+                }
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, ListPattern>) {
-                out->kind =
-                    ListPattern{cloneVec(node.elements), cloneOpt(node.rest)};
+                out->kind = ListPattern{cloneVec(node.elements), cloneOpt(node.rest)};
             } else if constexpr (std::is_same_v<T, TuplePattern>) {
                 out->kind = TuplePattern{cloneVec(node.elements)};
             } else if constexpr (std::is_same_v<T, RangePattern>) {
@@ -175,9 +185,12 @@ auto clone(const TypeDef& type) -> std::unique_ptr<TypeDef> {
     out->leadingPipe = type.leadingPipe;
     out->typeParams = type.typeParams;
     out->parents = type.parents;
-    if (type.variants) out->variants = cloneVec(*type.variants);
-    if (type.abstractFunctions)
+    if (type.variants) {
+        out->variants = cloneVec(*type.variants);
+    }
+    if (type.abstractFunctions) {
         out->abstractFunctions = cloneVec(*type.abstractFunctions);
+    }
     return out;
 }
 
@@ -186,9 +199,10 @@ auto clone(const RecordDef& record) -> std::unique_ptr<RecordDef> {
     out->location = record.location;
     out->name = record.name;
     out->typeParams = record.typeParams;
-    for (const auto& field : record.fields)
-        out->fields.push_back(RecordField{
-            field.name, clone(field.type), cloneOpt(field.defaultValue)});
+    for (const auto& field : record.fields) {
+        out->fields.push_back(
+            RecordField{field.name, clone(field.type), cloneOpt(field.defaultValue)});
+    }
     return out;
 }
 
@@ -204,13 +218,17 @@ auto clone(const MakeDef& make) -> std::unique_ptr<MakeDef> {
         std::visit(
             [&](const auto& node) {
                 using Ptr = std::decay_t<decltype(*node)>;
-                if (!node) return;
+                if (!node) {
+                    return;
+                }
                 if constexpr (std::is_same_v<Ptr, FunctionDef>) {
                     out->body.push_back(clone(*node));
                 } else if constexpr (std::is_same_v<Ptr, TypeAnnotation>) {
                     out->body.push_back(clone(*node));
                 } else if constexpr (std::is_same_v<Ptr, VisibilityBlock>) {
-                    if (auto copy = clone(*node)) out->body.push_back(std::move(copy));
+                    if (auto copy = clone(*node)) {
+                        out->body.push_back(std::move(copy));
+                    }
                 } else if constexpr (std::is_same_v<Ptr, Expr>) {
                     // A driver loop in a generated make's body. Expansion
                     // replaces it with the methods it declared, but a clone
@@ -224,7 +242,9 @@ auto clone(const MakeDef& make) -> std::unique_ptr<MakeDef> {
 }
 
 auto clone(const ExprPtr& expr) -> ExprPtr {
-    if (!expr) return nullptr;
+    if (!expr) {
+        return nullptr;
+    }
     auto out = std::make_unique<Expr>();
     out->location = expr->location;
     std::visit(
@@ -269,10 +289,11 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
             } else if constexpr (std::is_same_v<T, RecordConstruction>) {
                 RecordConstruction copy;
                 copy.typeName = node.typeName;
-                for (const auto& field : node.fields)
+                for (const auto& field : node.fields) {
                     copy.fields.push_back(
-                        RecordEntry{field.name, clone(field.value), field.spread,
-                                    field.keyLocation});
+                        RecordEntry{
+                            field.name, clone(field.value), field.spread, field.keyLocation});
+                }
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, BinaryOp>) {
                 out->kind = BinaryOp{clone(node.left), node.op, clone(node.right)};
@@ -281,13 +302,13 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
             } else if constexpr (std::is_same_v<T, TupleExpr>) {
                 out->kind = TupleExpr{cloneVec(node.elements)};
             } else if constexpr (std::is_same_v<T, ListExpr>) {
-                out->kind = ListExpr{cloneVec(node.elements), cloneOpt(node.rest),
-                                     node.anyElements};
+                out->kind =
+                    ListExpr{cloneVec(node.elements), cloneOpt(node.rest), node.anyElements};
             } else if constexpr (std::is_same_v<T, MapExpr>) {
                 MapExpr copy;
-                for (const auto& entry : node.entries)
-                    copy.entries.push_back(
-                        MapEntry{clone(entry.key), clone(entry.value)});
+                for (const auto& entry : node.entries) {
+                    copy.entries.push_back(MapEntry{clone(entry.key), clone(entry.value)});
+                }
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, RangeExpr>) {
                 out->kind = RangeExpr{clone(node.start), clone(node.end)};
@@ -295,9 +316,12 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
                 IfExpr copy;
                 copy.condition = clone(node.condition);
                 copy.thenBody = cloneVec(node.thenBody);
-                for (const auto& [condition, body] : node.elifs)
+                for (const auto& [condition, body] : node.elifs) {
                     copy.elifs.emplace_back(clone(condition), cloneVec(body));
-                if (node.elseBody) copy.elseBody = cloneVec(*node.elseBody);
+                }
+                if (node.elseBody) {
+                    copy.elseBody = cloneVec(*node.elseBody);
+                }
                 copy.letPattern = clone(node.letPattern);
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, MatchExpr>) {
@@ -337,9 +361,10 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
                 out->kind = SpawnExpr{cloneVec(node.body)};
             } else if constexpr (std::is_same_v<T, Lambda>) {
                 Lambda copy;
-                for (const auto& param : node.params)
+                for (const auto& param : node.params) {
                     copy.params.push_back(
                         LambdaParam{param.name, cloneOpt(param.type), param.location});
+                }
                 copy.body = cloneVec(node.body);
                 copy.returnAnnotation = cloneOpt(node.returnAnnotation);
                 copy.rescue = cloneOpt(node.rescue);
@@ -353,17 +378,17 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
             } else if constexpr (std::is_same_v<T, TrailingIf>) {
                 out->kind = TrailingIf{clone(node.expr), clone(node.condition)};
             } else if constexpr (std::is_same_v<T, ThenElseExpr>) {
-                out->kind = ThenElseExpr{clone(node.condition),
-                                         clone(node.thenExpr),
-                                         clone(node.elseExpr)};
+                out->kind =
+                    ThenElseExpr{clone(node.condition), clone(node.thenExpr), clone(node.elseExpr)};
             } else if constexpr (std::is_same_v<T, BlockExpr>) {
                 out->kind = BlockExpr{cloneVec(node.body)};
             } else if constexpr (std::is_same_v<T, CurryExpr>) {
                 CurryExpr copy;
                 copy.name = node.name;
                 copy.isOperator = node.isOperator;
-                for (const auto& group : node.argGroups)
+                for (const auto& group : node.argGroups) {
                     copy.argGroups.push_back(cloneVec(group));
+                }
                 copy.module = node.module;
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, TryExpr>) {
@@ -416,7 +441,9 @@ auto clone(const UsingBlock& block) -> std::unique_ptr<UsingBlock> {
     out->alias = block.alias;
     out->onlyNames = block.onlyNames;
     out->exceptNames = block.exceptNames;
-    for (const auto& expr : block.body) out->body.push_back(clone(expr));
+    for (const auto& expr : block.body) {
+        out->body.push_back(clone(expr));
+    }
     return out;
 }
 
@@ -439,18 +466,23 @@ auto cloneItems(const Items& items, Items& out) -> bool {
                         out.push_back(Ptr{});
                     } else if constexpr (std::is_same_v<Node, CompiledBlock>) {
                         ok = false;
-                    } else if constexpr (std::is_same_v<Node, VisibilityBlock> ||
-                                         std::is_same_v<Node, ModuleDef>) {
+                    } else if constexpr (
+                        std::is_same_v<Node, VisibilityBlock> || std::is_same_v<Node, ModuleDef>) {
                         auto copy = clone(*node);
-                        if (!copy) ok = false;
-                        else out.push_back(std::move(copy));
+                        if (!copy) {
+                            ok = false;
+                        } else {
+                            out.push_back(std::move(copy));
+                        }
                     } else {
                         out.push_back(clone(*node));
                     }
                 }
             },
             item);
-        if (!ok) return false;
+        if (!ok) {
+            return false;
+        }
     }
     return true;
 }
@@ -461,7 +493,9 @@ auto clone(const VisibilityBlock& block) -> std::unique_ptr<VisibilityBlock> {
     auto out = std::make_unique<VisibilityBlock>();
     out->location = block.location;
     out->isPublic = block.isPublic;
-    if (!cloneItems(block.items, out->items)) return nullptr;
+    if (!cloneItems(block.items, out->items)) {
+        return nullptr;
+    }
     return out;
 }
 
@@ -475,18 +509,24 @@ auto clone(const TraitDef& trait) -> std::unique_ptr<TraitDef> {
 }
 
 auto clone(const ExportDecl& decl) -> std::unique_ptr<ExportDecl> {
-    return std::make_unique<ExportDecl>(ExportDecl{
-        decl.location, decl.module, decl.alias, decl.onlyNames, decl.exceptNames});
+    return std::make_unique<ExportDecl>(
+        ExportDecl{decl.location, decl.module, decl.alias, decl.onlyNames, decl.exceptNames});
 }
 
 auto clone(const MainBlock& main) -> std::unique_ptr<MainBlock> {
     auto out = std::make_unique<MainBlock>();
     out->location = main.location;
-    for (const auto& param : main.params) out->params.push_back(clone(param));
-    for (const auto& expr : main.body) out->body.push_back(clone(expr));
+    for (const auto& param : main.params) {
+        out->params.push_back(clone(param));
+    }
+    for (const auto& expr : main.body) {
+        out->body.push_back(clone(expr));
+    }
     out->synthetic = main.synthetic;
     out->isExplicitMain = main.isExplicitMain;
-    if (main.rescue) out->rescue = clone(*main.rescue);
+    if (main.rescue) {
+        out->rescue = clone(*main.rescue);
+    }
     return out;
 }
 
@@ -499,13 +539,17 @@ auto clone(const ModuleDef& module) -> std::unique_ptr<ModuleDef> {
     out->location = module.location;
     out->name = module.name;
     out->isCapability = module.isCapability;
-    if (!cloneItems(module.body, out->body)) return nullptr;
+    if (!cloneItems(module.body, out->body)) {
+        return nullptr;
+    }
     return out;
 }
 
 auto clone(const Program& program) -> std::optional<Program> {
     Program out;
-    if (!cloneItems(program.items, out.items)) return std::nullopt;
+    if (!cloneItems(program.items, out.items)) {
+        return std::nullopt;
+    }
     return out;
 }
 

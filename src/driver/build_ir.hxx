@@ -60,10 +60,16 @@ public:
     Unit(Program& program, std::vector<std::string> files)
         : m_program(&program), m_files(std::move(files)) {}
 
-    auto program() const -> Program& { return *m_program; }
+    auto program() const -> Program& {
+        return *m_program;
+    }
     // The unit's files, in build order; the entry is the one empty path.
-    auto files() const -> const std::vector<std::string>& { return m_files; }
-    auto isEntry() const -> bool { return m_files.size() == 1 && m_files.front().empty(); }
+    auto files() const -> const std::vector<std::string>& {
+        return m_files;
+    }
+    auto isEntry() const -> bool {
+        return m_files.size() == 1 && m_files.front().empty();
+    }
     // Where its runtime errors point, and what its file module is named after.
     auto sourcePath() const -> const std::string&;
 
@@ -113,8 +119,12 @@ public:
     Program(const Program&) = delete;
     auto operator=(const Program&) -> Program& = delete;
 
-    auto entry() const -> ast::Program& { return *m_entry; }
-    auto settings() const -> const BuildSettings& { return m_settings; }
+    auto entry() const -> ast::Program& {
+        return *m_entry;
+    }
+    auto settings() const -> const BuildSettings& {
+        return m_settings;
+    }
 
     // `spec-base`: a spec's base file merged into the entry, and its text.
     std::string specBaseFile;
@@ -179,7 +189,9 @@ template <>
 struct IRUnitChildren<build::Program, build::Unit> {
     template <typename Visit>
     static auto forEach(build::Program& program, Visit&& visit) -> void {
-        for (auto& unit : program.units) visit(*unit);
+        for (auto& unit : program.units) {
+            visit(*unit);
+        }
     }
 };
 template <>
@@ -189,7 +201,9 @@ struct IRUnitChildren<build::Unit, ir::Module> {
     static constexpr bool kOuterAnalysesReadChildren = false;
     template <typename Visit>
     static auto forEach(build::Unit& unit, Visit&& visit) -> void {
-        for (auto& module : unit.modules) visit(module);
+        for (auto& module : unit.modules) {
+            visit(module);
+        }
     }
 };
 } // namespace kex::pass
@@ -379,8 +393,8 @@ auto defaultProgramPipeline() -> std::string;
 // interfaces a build was given (AvailableInterfacesAnalysis).
 // `reached`: units the program reached, compiled apart for it, whose `make`
 // functions travel with their receivers.
-auto overlayDescribedInterfaces(const semantic::ImportedInterfaces* view,
-                                semantic::ImportedInterfaces below, bool reached)
+auto overlayDescribedInterfaces(
+    const semantic::ImportedInterfaces* view, semantic::ImportedInterfaces below, bool reached)
     -> semantic::ImportedInterfaces;
 auto markReachedUnits(semantic::ImportedInterfaces& below) -> void;
 auto overlayOnView(const semantic::ImportedInterfaces& view, semantic::ImportedInterfaces below)
@@ -392,8 +406,10 @@ auto printPasses(std::ostream& out) -> void;
 
 // Runs `pipeline` over `program` with every analysis registered, reporting
 // to `callbacks`. False when a pass failed, which it has reported.
-auto runBuild(Program& program, ProgramPassManager& pipeline,
-              const pass::PassInstrumentationCallbacks& callbacks) -> bool;
+auto runBuild(
+    Program& program,
+    ProgramPassManager& pipeline,
+    const pass::PassInstrumentationCallbacks& callbacks) -> bool;
 
 // The providers a unit of this build lowers against: the prebuilt prelude's
 // and those of the units below it.

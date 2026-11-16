@@ -6,15 +6,12 @@ int main() {
     using namespace kex::mangle;
 
     describe("mangle::qualify", []() {
-        it("joins a scope and name with the separator", []() {
-            assertEqual(qualify("Module", "name"), std::string("Module.name"));
-        });
-        it("returns the bare name for an empty scope", []() {
-            assertEqual(qualify("", "name"), std::string("name"));
-        });
-        it("spells a member of a dotted scope as a program does", []() {
-            assertEqual(qualify("Net.HTTP", "get"), std::string("Net.HTTP.get"));
-        });
+        it("joins a scope and name with the separator",
+           []() { assertEqual(qualify("Module", "name"), std::string("Module.name")); });
+        it("returns the bare name for an empty scope",
+           []() { assertEqual(qualify("", "name"), std::string("name")); });
+        it("spells a member of a dotted scope as a program does",
+           []() { assertEqual(qualify("Net.HTTP", "get"), std::string("Net.HTTP.get")); });
     });
 
     describe("mangle::scopeOf / memberOf", []() {

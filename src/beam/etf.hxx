@@ -19,15 +19,31 @@ struct Term;
 using TermPtr = std::shared_ptr<Term>;
 
 struct Term {
-    struct Atom   { std::string name; };
-    struct Int    { int64_t value; };
-    struct BigInt { mpz_class value; };
-    struct Float  { double value; };
-    struct Bin    { std::vector<uint8_t> data; };
-    struct Tuple  { std::vector<TermPtr> elements; };
-    struct List   { std::vector<TermPtr> elements; }; // proper list (nil tail)
-    struct Map    { std::vector<std::pair<TermPtr, TermPtr>> pairs; };
-    struct Nil    {};
+    struct Atom {
+        std::string name;
+    };
+    struct Int {
+        int64_t value;
+    };
+    struct BigInt {
+        mpz_class value;
+    };
+    struct Float {
+        double value;
+    };
+    struct Bin {
+        std::vector<uint8_t> data;
+    };
+    struct Tuple {
+        std::vector<TermPtr> elements;
+    };
+    struct List {
+        std::vector<TermPtr> elements;
+    }; // proper list (nil tail)
+    struct Map {
+        std::vector<std::pair<TermPtr, TermPtr>> pairs;
+    };
+    struct Nil {};
 
     std::variant<Atom, Int, BigInt, Float, Bin, Tuple, List, Map, Nil> value;
 

@@ -6,22 +6,30 @@ namespace {
 // True at a real `<%` opener — not the `<%%` escape for a literal `<%`.
 // Mirrors Template.atTagOpen?.
 auto isTagOpen(const std::string& s, size_t i) -> bool {
-    if (i + 1 >= s.size()) return false;
-    if (s[i] != '<' || s[i + 1] != '%') return false;
-    if (i + 2 < s.size() && s[i + 2] == '%') return false;
+    if (i + 1 >= s.size()) {
+        return false;
+    }
+    if (s[i] != '<' || s[i + 1] != '%') {
+        return false;
+    }
+    if (i + 2 < s.size() && s[i + 2] == '%') {
+        return false;
+    }
     return true;
 }
 
 auto trim(const std::string& s) -> std::string {
     const auto b = s.find_first_not_of(" \t\r\n");
-    if (b == std::string::npos) return "";
+    if (b == std::string::npos) {
+        return "";
+    }
     const auto e = s.find_last_not_of(" \t\r\n");
     return s.substr(b, e - b + 1);
 }
 
 struct Frontmatter {
-    std::string paramsRaw;  // raw text of the `params: [...]` value, if any
-    size_t bodyStart = 0;   // byte offset where the template body starts
+    std::string paramsRaw; // raw text of the `params: [...]` value, if any
+    size_t bodyStart = 0;  // byte offset where the template body starts
 };
 
 // Mirrors Template.scanFrontmatter/atFrontmatterOpen?/parseFrontmatterLine,
@@ -30,10 +38,11 @@ struct Frontmatter {
 // have no other use for the rest of it yet.
 auto scanFrontmatter(const std::string& s) -> Frontmatter {
     Frontmatter result;
-    const bool opensFrontmatter =
-        s.size() >= 3 && s[0] == '-' && s[1] == '-' && s[2] == '-' &&
-        (s.size() == 3 || s[3] == '\n' || s[3] == '\r');
-    if (!opensFrontmatter) return result;
+    const bool opensFrontmatter = s.size() >= 3 && s[0] == '-' && s[1] == '-' && s[2] == '-' &&
+                                  (s.size() == 3 || s[3] == '\n' || s[3] == '\r');
+    if (!opensFrontmatter) {
+        return result;
+    }
 
     size_t firstNewline = s.find('\n', 0);
     size_t pos = firstNewline == std::string::npos ? s.size() : firstNewline + 1;
@@ -41,7 +50,9 @@ auto scanFrontmatter(const std::string& s) -> Frontmatter {
         const auto lineEnd = s.find('\n', pos);
         const auto lineStop = lineEnd == std::string::npos ? s.size() : lineEnd;
         std::string line = s.substr(pos, lineStop - pos);
-        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
         const auto nextPos = lineEnd == std::string::npos ? s.size() : lineEnd + 1;
         const auto trimmed = trim(line);
         if (trimmed == "---") {
@@ -50,8 +61,9 @@ auto scanFrontmatter(const std::string& s) -> Frontmatter {
         }
         if (!trimmed.empty()) {
             if (const auto colon = trimmed.find(':'); colon != std::string::npos) {
-                if (trim(trimmed.substr(0, colon)) == "params")
+                if (trim(trimmed.substr(0, colon)) == "params") {
                     result.paramsRaw = trim(trimmed.substr(colon + 1));
+                }
             }
         }
         pos = nextPos;
@@ -83,13 +95,15 @@ auto splitTopLevelCommas(const std::string& text) -> std::vector<std::string> {
             current += ch;
         }
     }
-    if (!current.empty()) parts.push_back(current);
+    if (!current.empty()) {
+        parts.push_back(current);
+    }
     return parts;
 }
 
 struct Param {
     std::string name;
-    std::string type;  // "" when the entry declared no `: Type`
+    std::string type; // "" when the entry declared no `: Type`
 };
 
 // Mirrors Parsed#parameters/parseTemplateParams/parseTemplateParam: a
@@ -98,12 +112,18 @@ struct Param {
 // key absent) declares no parameters, same as the stdlib scanner.
 auto parseParams(const std::string& raw) -> std::vector<Param> {
     std::vector<Param> params;
-    if (raw.size() < 2 || raw.front() != '[' || raw.back() != ']') return params;
+    if (raw.size() < 2 || raw.front() != '[' || raw.back() != ']') {
+        return params;
+    }
     const auto inner = trim(raw.substr(1, raw.size() - 2));
-    if (inner.empty()) return params;
+    if (inner.empty()) {
+        return params;
+    }
     for (const auto& item : splitTopLevelCommas(inner)) {
         const auto entry = trim(item);
-        if (entry.empty()) continue;
+        if (entry.empty()) {
+            continue;
+        }
         Param p;
         if (const auto colon = entry.find(':'); colon == std::string::npos) {
             p.name = entry;
@@ -111,12 +131,14 @@ auto parseParams(const std::string& raw) -> std::vector<Param> {
             p.name = trim(entry.substr(0, colon));
             p.type = trim(entry.substr(colon + 1));
         }
-        if (!p.name.empty()) params.push_back(std::move(p));
+        if (!p.name.empty()) {
+            params.push_back(std::move(p));
+        }
     }
     return params;
 }
 
-}  // namespace
+} // namespace
 
 auto translate(const std::string& source) -> Translation {
     Translation result;
@@ -125,9 +147,13 @@ auto translate(const std::string& source) -> Translation {
 
     result.source = "let __ket_render(";
     for (size_t i = 0; i < params.size(); i++) {
-        if (i) result.source += ", ";
+        if (i) {
+            result.source += ", ";
+        }
         result.source += params[i].name;
-        if (!params[i].type.empty()) result.source += ": " + params[i].type;
+        if (!params[i].type.empty()) {
+            result.source += ": " + params[i].type;
+        }
     }
     result.source += ") do\n";
 
@@ -138,15 +164,20 @@ auto translate(const std::string& source) -> Translation {
         // skipped — they never appear in the synthetic source.
         while (pos < n && !isTagOpen(source, pos)) {
             if (pos + 2 < n && source[pos] == '<' && source[pos + 1] == '%' &&
-                source[pos + 2] == '%')
+                source[pos + 2] == '%') {
                 pos += 3;
-            else
+            } else {
                 pos += 1;
+            }
         }
-        if (pos >= n) break;
+        if (pos >= n) {
+            break;
+        }
 
-        pos += 2;  // past "<%"
-        if (pos < n && source[pos] == '-') pos += 1;  // leftTrim marker
+        pos += 2; // past "<%"
+        if (pos < n && source[pos] == '-') {
+            pos += 1; // leftTrim marker
+        }
 
         // Classify: `<%=` interpolate, `<%==` raw, `<%#` comment, else
         // control. Mirrors Template.classifyTag.
@@ -180,7 +211,9 @@ auto translate(const std::string& source) -> Translation {
             }
             pos += 1;
         }
-        if (!closed) break;  // UnterminatedTag: stop scanning, best-effort.
+        if (!closed) {
+            break; // UnterminatedTag: stop scanning, best-effort.
+        }
         const size_t bodyEnd = pos;
         const std::string body = source.substr(bodyStart, bodyEnd - bodyStart);
 
@@ -236,15 +269,20 @@ auto translate(const std::string& source) -> Translation {
 }
 
 auto mapOffset(const std::vector<Segment>& segments, int synOffset) -> int {
-    for (const auto& seg : segments)
-        if (synOffset >= seg.synStart && synOffset < seg.synEnd)
+    for (const auto& seg : segments) {
+        if (synOffset >= seg.synStart && synOffset < seg.synEnd) {
             return seg.origStart + (synOffset - seg.synStart);
+        }
+    }
     // A position exactly at a segment's end (exclusive) is common for a
     // diagnostic reported one-past-the-last-character — still resolvable
     // against that same segment.
-    for (const auto& seg : segments)
-        if (synOffset == seg.synEnd) return seg.origEnd;
+    for (const auto& seg : segments) {
+        if (synOffset == seg.synEnd) {
+            return seg.origEnd;
+        }
+    }
     return -1;
 }
 
-}  // namespace kex::lsp::ket
+} // namespace kex::lsp::ket

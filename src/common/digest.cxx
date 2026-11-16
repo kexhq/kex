@@ -19,7 +19,9 @@ EM_JS(bool, hostSha256, (const uint8_t* data, size_t len, uint8_t* out), {
     try {
         // `require` is absent when this module is loaded as an ES module, so
         // its absence is a normal answer here, not an error.
-        if (typeof require !== "function") return false;
+        if (typeof require != = "function") {
+            return false;
+        }
         var digest = require("crypto")
                          .createHash("sha256")
                          .update(Buffer.from(HEAPU8.buffer, data, len))
@@ -44,10 +46,11 @@ auto sha256(std::span<const uint8_t> bytes) -> Sha256 {
     // that loads compiled artifacts (the browser REPL ships no unit and takes
     // the source-derived path), and node:crypto's hashing is synchronous,
     // which the SubtleCrypto API in browsers is not.
-    if (!hostSha256(bytes.data(), bytes.size(), out.data()))
+    if (!hostSha256(bytes.data(), bytes.size(), out.data())) {
         throw std::runtime_error(
             "cannot verify compiled artifacts here: this environment provides "
             "no synchronous SHA-256");
+    }
 #else
     SHA256(bytes.data(), bytes.size(), out.data());
 #endif
@@ -55,8 +58,8 @@ auto sha256(std::span<const uint8_t> bytes) -> Sha256 {
 }
 
 auto sha256(std::string_view text) -> Sha256 {
-    return sha256(std::span<const uint8_t>(
-        reinterpret_cast<const uint8_t*>(text.data()), text.size()));
+    return sha256(
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(text.data()), text.size()));
 }
 
 auto hexEncode(std::span<const uint8_t> bytes) -> std::string {

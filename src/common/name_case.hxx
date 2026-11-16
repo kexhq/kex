@@ -19,9 +19,13 @@ namespace kex {
 // Does `name` start with an uppercase letter (Unicode category Lu, the
 // lexer's `upperRanges`)?
 inline auto startsUppercase(std::string_view name) -> bool {
-    if (name.empty()) return false;
+    if (name.empty()) {
+        return false;
+    }
     const auto lead = static_cast<unsigned char>(name.front());
-    if (lead < 0x80) return lead >= 'A' && lead <= 'Z';
+    if (lead < 0x80) {
+        return lead >= 'A' && lead <= 'Z';
+    }
     const auto decoded = utf8::decode(name.substr(0, utf8::sequenceLength(name, 0)));
     return !decoded.empty() &&
            utf8::categories::inRanges(utf8::categories::upperRanges, decoded.front());
@@ -32,9 +36,13 @@ inline auto startsUppercase(std::string_view name) -> bool {
 // (Chinese, Arabic, …) has no uppercase form, so the lexer reads its names as
 // values, and `árvíz` is one exactly as `arviz` is.
 inline auto startsLowercase(std::string_view name) -> bool {
-    if (name.empty()) return false;
+    if (name.empty()) {
+        return false;
+    }
     const auto lead = static_cast<unsigned char>(name.front());
-    if (lead < 0x80) return (lead >= 'a' && lead <= 'z') || lead == '_';
+    if (lead < 0x80) {
+        return (lead >= 'a' && lead <= 'z') || lead == '_';
+    }
     const auto decoded = utf8::decode(name.substr(0, utf8::sequenceLength(name, 0)));
     return !decoded.empty() &&
            utf8::categories::inRanges(utf8::categories::letterRanges, decoded.front()) &&

@@ -98,13 +98,11 @@ int main() {
             assertEqual(tok.value, std::string("String"));
         });
 
-        it("tokenizes None as its own token", []() {
-            assertEqual(firstToken("None").type, TokenType::None);
-        });
+        it("tokenizes None as its own token",
+           []() { assertEqual(firstToken("None").type, TokenType::None); });
 
-        it("tokenizes underscore as wildcard", []() {
-            assertEqual(firstToken("_").type, TokenType::Underscore);
-        });
+        it("tokenizes underscore as wildcard",
+           []() { assertEqual(firstToken("_").type, TokenType::Underscore); });
 
         it("tokenizes a lowercase letter from another script", []() {
             // Greek is the everyday case — `α` reads as a variable, the same
@@ -196,8 +194,8 @@ int main() {
         });
 
         it("lexes radix literals beyond int64", []() {
-            assertEqual(firstToken("0xFFFFFFFFFFFFFFFFFF").value,
-                        std::string("4722366482869645213695"));
+            assertEqual(
+                firstToken("0xFFFFFFFFFFFFFFFFFF").value, std::string("4722366482869645213695"));
         });
 
         it("rejects radix literals with no digits or bad digits", []() {
@@ -372,8 +370,7 @@ int main() {
         it("reports an unterminated raw backtick string", []() {
             auto tok = firstToken("`never closed");
             assertEqual(tok.type, TokenType::Error);
-            assertTrue(tok.value.find("Unterminated backtick") !=
-                       std::string::npos);
+            assertTrue(tok.value.find("Unterminated backtick") != std::string::npos);
         });
     });
 
@@ -400,14 +397,15 @@ int main() {
             assertEqual(tok.value, std::string("fooBar"));
         });
 
-        it("stops a lowercase-led atom at a following space, not eating an adjacent identifier", []() {
-            auto tokens = tokenize(":foo Bar");
-            assertEqual(tokens.size(), static_cast<size_t>(3)); // Atom, UpperIdent, Eof
-            assertEqual(tokens[0].type, TokenType::Atom);
-            assertEqual(tokens[0].value, std::string("foo"));
-            assertEqual(tokens[1].type, TokenType::UpperIdent);
-            assertEqual(tokens[1].value, std::string("Bar"));
-        });
+        it("stops a lowercase-led atom at a following space, not eating an adjacent identifier",
+           []() {
+               auto tokens = tokenize(":foo Bar");
+               assertEqual(tokens.size(), static_cast<size_t>(3)); // Atom, UpperIdent, Eof
+               assertEqual(tokens[0].type, TokenType::Atom);
+               assertEqual(tokens[0].value, std::string("foo"));
+               assertEqual(tokens[1].type, TokenType::UpperIdent);
+               assertEqual(tokens[1].value, std::string("Bar"));
+           });
     });
 
     describe("Lexer — Operators", []() {
@@ -469,9 +467,8 @@ int main() {
             assertEqual(firstToken("|").type, TokenType::Pipe);
         });
 
-        it("tokenizes pragma start", []() {
-            assertEqual(firstToken("#[").type, TokenType::HashLBracket);
-        });
+        it("tokenizes pragma start",
+           []() { assertEqual(firstToken("#[").type, TokenType::HashLBracket); });
     });
 
     describe("Lexer — Comments", []() {
@@ -555,7 +552,9 @@ int main() {
         auto reprint = [](const std::string& source) -> std::optional<std::string> {
             auto tokens = tokenize(source);
             auto texts = tokenTexts(tokens, source);
-            if (!texts) return std::nullopt;
+            if (!texts) {
+                return std::nullopt;
+            }
             std::string out;
             for (const auto& text : *texts) {
                 out += text.trivia;
@@ -566,7 +565,9 @@ int main() {
         auto roundTrips = [reprint](const std::string& source) {
             auto out = reprint(source);
             assertTrue(out.has_value());
-            if (out) assertEqual(*out, source);
+            if (out) {
+                assertEqual(*out, source);
+            }
         };
 
         it("keeps comments, blank lines and trailing trivia", [roundTrips]() {
@@ -576,12 +577,12 @@ int main() {
             roundTrips("   \n\t\n");
         });
 
-        it("keeps separators, CRLF and newlines inside parentheses", [roundTrips]() {
-            roundTrips("let a = 1; let b = 2\r\nlet c = (a\n  + b)\r\n");
-        });
+        it("keeps separators, CRLF and newlines inside parentheses",
+           [roundTrips]() { roundTrips("let a = 1; let b = 2\r\nlet c = (a\n  + b)\r\n"); });
 
         it("keeps string, interpolation and number spellings as written", [roundTrips]() {
-            roundTrips("let s = \"a ${1 + 2} \\\"q\\\"\"\nlet n = 1_000\nlet r = `raw`\nlet c = 'x'\n");
+            roundTrips(
+                "let s = \"a ${1 + 2} \\\"q\\\"\"\nlet n = 1_000\nlet r = `raw`\nlet c = 'x'\n");
         });
 
         // A comment on a line of its own is followed by that line's newline,
@@ -593,14 +594,17 @@ int main() {
             auto tokens = tokenize(source);
             auto texts = tokenTexts(tokens, source);
             assertTrue(texts.has_value());
-            if (!texts) return;
+            if (!texts) {
+                return;
+            }
             bool found = false;
-            for (size_t i = 0; i + 1 < tokens.size(); ++i)
+            for (size_t i = 0; i + 1 < tokens.size(); ++i) {
                 if ((*texts)[i].trivia.find("# about y") != std::string_view::npos) {
                     assertEqual(tokens[i].type, TokenType::Newline);
                     assertEqual(tokens[i + 1].type, TokenType::Let);
                     found = true;
                 }
+            }
             assertTrue(found);
         });
 
@@ -610,22 +614,27 @@ int main() {
             size_t files = 0;
             std::vector<std::string> failures;
             for (const auto* dir : {"examples", "spec", "src/stdlib"}) {
-                if (!fs::exists(root / dir)) continue;
+                if (!fs::exists(root / dir)) {
+                    continue;
+                }
                 for (const auto& entry : fs::recursive_directory_iterator(root / dir)) {
-                    if (!entry.is_regular_file() || entry.path().extension() != ".kex")
+                    if (!entry.is_regular_file() || entry.path().extension() != ".kex") {
                         continue;
+                    }
                     std::ifstream in(entry.path(), std::ios::binary);
                     std::stringstream buffer;
                     buffer << in.rdbuf();
                     const auto source = buffer.str();
                     ++files;
                     auto out = reprint(source);
-                    if (!out || *out != source)
+                    if (!out || *out != source) {
                         failures.push_back(entry.path().lexically_relative(root).string());
+                    }
                 }
             }
-            for (const auto& failure : failures)
+            for (const auto& failure : failures) {
                 std::cerr << "    not lossless: " << failure << "\n";
+            }
             assertTrue(files > 300);
             assertEqual(failures.size(), size_t{0});
         });

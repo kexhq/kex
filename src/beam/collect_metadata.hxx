@@ -34,8 +34,7 @@ struct CollectOptions {
     const kex::semantic::Analyzer* analysis = nullptr;
 };
 
-auto collectMetadata(const kex::ast::Program& program,
-                     const CollectOptions& opts) -> KexiChunk;
+auto collectMetadata(const kex::ast::Program& program, const CollectOptions& opts) -> KexiChunk;
 
 // Every bare type name in `chunk` — in its signatures, constants, types,
 // methods and record fields — replaced by what `qualify` makes of it. A
@@ -47,30 +46,29 @@ auto collectMetadata(const kex::ast::Program& program,
 // the method's arity, or "".
 auto emittedImplementationOf(
     const KexiMethod& method,
-    const std::function<bool(const std::string& function, int arity)>& emitted)
-    -> std::string;
+    const std::function<bool(const std::string& function, int arity)>& emitted) -> std::string;
 // Records each receiver method's implementation a value of its type reaches
 // through the dispatcher (`routed`: the emitted module's
 // routedImplementations). One source of truth, the emitted module, for every
 // consumer that devirtualizes.
 auto recordImplementations(
-    KexiChunk& chunk,
-    const std::function<bool(const std::string& function, int arity)>& routed)
+    KexiChunk& chunk, const std::function<bool(const std::string& function, int arity)>& routed)
     -> void;
 // The functions a Core Erlang module defines, as `emitted` above asks; it
 // reads `coreSource`, which must outlive it.
 auto coreExports(const std::string& coreSource)
     -> std::function<bool(const std::string& function, int arity)>;
 
-auto qualifyTypeNames(KexiChunk& chunk,
-                      const std::function<std::string(const std::string&)>& qualify)
-    -> void;
+auto qualifyTypeNames(
+    KexiChunk& chunk, const std::function<std::string(const std::string&)>& qualify) -> void;
 // Qualifies the bare type names in `chunk`'s signatures as module `modulePath`
 // of `program` reads them: its own types, then those of the modules it uses
 // (`Match` in `Regex` is `Regex.Match`). `knownTypes` are the qualified types
 // declared outside `program`; its own modules' types are added.
-auto qualifyModuleTypeNames(KexiChunk& chunk, const ast::Program& program,
-                            const std::string& modulePath,
-                            std::set<std::string> knownTypes) -> void;
+auto qualifyModuleTypeNames(
+    KexiChunk& chunk,
+    const ast::Program& program,
+    const std::string& modulePath,
+    std::set<std::string> knownTypes) -> void;
 
 } // namespace kex::beam

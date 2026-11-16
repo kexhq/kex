@@ -44,4 +44,4 @@ auto translate(const std::string& source) -> Translation;
 // no corresponding template text.
 auto mapOffset(const std::vector<Segment>& segments, int synOffset) -> int;
 
-}  // namespace kex::lsp::ket
+} // namespace kex::lsp::ket

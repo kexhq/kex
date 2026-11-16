@@ -42,11 +42,12 @@ public:
 
     template <typename Pass>
     auto registerPass(std::string_view description, std::function<Pass()> make) -> void {
-        m_passes.insert_or_assign(std::string(Pass::name()),
-                                  Entry{std::string(description), [make = std::move(make)] {
-                                            return std::unique_ptr<PassConcept<IRUnit>>(
-                                                std::make_unique<PassModel<IRUnit, Pass>>(make()));
-                                        }});
+        m_passes.insert_or_assign(
+            std::string(Pass::name()),
+            Entry{std::string(description), [make = std::move(make)] {
+                      return std::unique_ptr<PassConcept<IRUnit>>(
+                          std::make_unique<PassModel<IRUnit, Pass>>(make()));
+                  }});
     }
     template <typename Pass>
     auto registerPass(std::string_view description) -> void {
@@ -60,7 +61,8 @@ public:
 
     // A level nested in this one: `module(...)` inside a unit pipeline.
     auto registerNested(std::string name, std::string description, NestedFactory make) -> void {
-        m_nested.insert_or_assign(std::move(name), NestedEntry{std::move(description), std::move(make)});
+        m_nested.insert_or_assign(
+            std::move(name), NestedEntry{std::move(description), std::move(make)});
     }
 
     // Adds `elements` to `pipeline`; the first problem, or nullopt.
@@ -69,19 +71,23 @@ public:
         for (const auto& element : elements) {
             if (element.inner.empty()) {
                 const auto found = m_passes.find(element.name);
-                if (found == m_passes.end())
+                if (found == m_passes.end()) {
                     return "unknown " + std::string(IRUnitLevel<IRUnit>::kName) + " pass '" +
                            element.name + "'";
+                }
                 pipeline.addPass(found->second.make());
                 continue;
             }
             const auto nested = m_nested.find(element.name);
-            if (nested == m_nested.end())
+            if (nested == m_nested.end()) {
                 return "'" + element.name + "' takes no pipeline at the " +
                        std::string(IRUnitLevel<IRUnit>::kName) + " level";
+            }
             std::string error;
             auto pass = nested->second.make(element.inner, error);
-            if (!pass) return error;
+            if (!pass) {
+                return error;
+            }
             pipeline.addPass(std::move(pass));
         }
         return std::nullopt;
@@ -89,7 +95,9 @@ public:
     auto build(PassManager<IRUnit>& pipeline, std::string_view text) const
         -> std::optional<std::string> {
         const auto parsed = parsePipelineText(text);
-        if (!parsed.error.empty()) return parsed.error;
+        if (!parsed.error.empty()) {
+            return parsed.error;
+        }
         return build(pipeline, parsed.elements);
     }
 
@@ -124,8 +132,8 @@ private:
 // Lets `outer` pipelines nest `inner`'s: `module(guards,verify)` in a unit
 // pipeline builds an InnerPassAdaptor over the passes `inner` registers.
 template <typename Outer, typename Inner>
-auto registerNestedLevel(PassRegistry<Outer>& outer, const PassRegistry<Inner>& inner,
-                         std::string description) -> void {
+auto registerNestedLevel(
+    PassRegistry<Outer>& outer, const PassRegistry<Inner>& inner, std::string description) -> void {
     outer.registerNested(
         std::string(IRUnitLevel<Inner>::kName), std::move(description),
         [&inner](const std::vector<PipelineElement>& elements, std::string& error)

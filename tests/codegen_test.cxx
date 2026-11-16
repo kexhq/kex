@@ -25,8 +25,8 @@ using namespace test;
 // Minimal external modules covering the most commonly used namespace modules.
 auto stdlibExternal() -> kex::ir::ExternalModules {
     kex::ir::ExternalModules ext;
-    auto addExport = [&](const char* mod, const char* beamMod,
-                         const char* fn, const char* beamFn, int arity) {
+    auto addExport = [&](const char* mod, const char* beamMod, const char* fn, const char* beamFn,
+                         int arity) {
         ext.nameToAtom[mod] = beamMod;
         std::string key = std::string(mod) + "." + fn;
         ext.exportToBeamFn[key] = beamFn;
@@ -58,12 +58,12 @@ auto stdlibExternal() -> kex::ir::ExternalModules {
     return ext;
 }
 
-auto countOccurrences(const std::string& haystack, const std::string& needle)
-    -> std::size_t {
+auto countOccurrences(const std::string& haystack, const std::string& needle) -> std::size_t {
     std::size_t count = 0;
     for (std::size_t at = haystack.find(needle); at != std::string::npos;
-         at = haystack.find(needle, at + needle.size()))
+         at = haystack.find(needle, at + needle.size())) {
         count++;
+    }
     return count;
 }
 
@@ -82,9 +82,12 @@ auto testInterfaces() -> const kex::semantic::ImportedInterfaces& {
 // over them. `lower` is lowerProgram or lowerModules.
 // `interfaces` is what the checker sees, the prelude's by default.
 template <typename Lower>
-auto lowerCheckedWith(const kex::ast::Program& program, const std::string& stem,
-                      kex::ir::LowerContext context, Lower lower,
-                      const kex::semantic::ImportedInterfaces* interfaces = nullptr) {
+auto lowerCheckedWith(
+    const kex::ast::Program& program,
+    const std::string& stem,
+    kex::ir::LowerContext context,
+    Lower lower,
+    const kex::semantic::ImportedInterfaces* interfaces = nullptr) {
     kex::semantic::Analyzer analyzer(interfaces ? interfaces : &testInterfaces());
     (void)analyzer.analyze(program);
     const kex::hir::Program hir(program, analyzer);
@@ -93,20 +96,24 @@ auto lowerCheckedWith(const kex::ast::Program& program, const std::string& stem,
 #ifdef KEX_RUNTIME_BEAM_DIR
     externals = kex::preludeRegistry(KEX_RUNTIME_BEAM_DIR).buildExternalModules();
 #endif
-    if (context.externals) externals = kex::ir::mergeExternalModules(externals, *context.externals);
+    if (context.externals) {
+        externals = kex::ir::mergeExternalModules(externals, *context.externals);
+    }
     context.externals = &externals;
     return lower(program, stem, context);
 }
 
-auto lowerChecked(const kex::ast::Program& program, const std::string& stem,
-                  kex::ir::LowerContext context = {}) -> kex::ir::Module {
+auto lowerChecked(
+    const kex::ast::Program& program, const std::string& stem, kex::ir::LowerContext context = {})
+    -> kex::ir::Module {
     return lowerCheckedWith(program, stem, context, &kex::ir::lowerProgram);
 }
 
-auto lowerModulesChecked(const kex::ast::Program& program, const std::string& stem,
-                         kex::ir::LowerContext context = {},
-                         const kex::semantic::ImportedInterfaces* interfaces = nullptr)
-    -> std::vector<kex::ir::Module> {
+auto lowerModulesChecked(
+    const kex::ast::Program& program,
+    const std::string& stem,
+    kex::ir::LowerContext context = {},
+    const kex::semantic::ImportedInterfaces* interfaces = nullptr) -> std::vector<kex::ir::Module> {
     return lowerCheckedWith(program, stem, context, &kex::ir::lowerModules, interfaces);
 }
 
@@ -129,8 +136,7 @@ auto emit(const std::string& source, const std::string& stem = "test") -> std::s
 
 // The production path with hot-reload upgrade points inserted, as main.cxx
 // runs it before every emit.
-auto emitUpgradable(const std::string& source, const std::string& stem = "test")
-    -> std::string {
+auto emitUpgradable(const std::string& source, const std::string& stem = "test") -> std::string {
     kex::Lexer lexer(source);
     auto tokens = lexer.tokenizeAll();
     kex::Parser parser(std::move(tokens));
@@ -152,14 +158,14 @@ auto emitIr(const std::string& source, const std::string& stem = "test") -> std:
     return emitted(lowerChecked(program, stem, {.externals = &ext})).source;
 }
 
-auto emitWithExternal(const std::string& source,
-                      const kex::ir::ExternalModules& external,
-                      const std::string& stem = "external") -> std::string {
+auto emitWithExternal(
+    const std::string& source,
+    const kex::ir::ExternalModules& external,
+    const std::string& stem = "external") -> std::string {
     kex::Lexer lexer(source);
     kex::Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
-    return emitted(
-        lowerChecked(program, stem, {.externals = &external})).source;
+    return emitted(lowerChecked(program, stem, {.externals = &external})).source;
 }
 
 auto emitWithResolvedCalls(
@@ -179,36 +185,34 @@ auto emitWithResolvedCalls(
 // End-to-end fixtures use the same checked interfaces and hidden protocol
 // dictionaries as the compiler. The smaller emit() helper intentionally
 // remains analyzer-free for isolated lowering tests.
-auto emitProduction(const std::string& source,
-                    const std::string& stem) -> std::string {
+auto emitProduction(const std::string& source, const std::string& stem) -> std::string {
     kex::Lexer lexer(source);
     kex::Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
-    const auto& interfaces =
-        kex::preludeSemanticInterfaces(KEX_RUNTIME_BEAM_DIR);
+    const auto& interfaces = kex::preludeSemanticInterfaces(KEX_RUNTIME_BEAM_DIR);
     kex::semantic::Analyzer analyzer(&interfaces);
     assertTrue(analyzer.analyze(program), "fixture should pass semantic analysis");
-    auto external =
-        kex::preludeRegistry(KEX_RUNTIME_BEAM_DIR).buildExternalModules();
+    auto external = kex::preludeRegistry(KEX_RUNTIME_BEAM_DIR).buildExternalModules();
     const kex::hir::Program hir(program, analyzer);
     return emitted(kex::ir::lowerProgram(program, stem, {.externals = &external, .hir = &hir}))
         .source;
 }
 #endif
 
-auto emitWithPrelude(const std::string& source,
-                     const std::unordered_set<std::string>& receiverFunctions,
-                     const std::string& stem = "prelude_receiver") -> std::string {
+auto emitWithPrelude(
+    const std::string& source,
+    const std::unordered_set<std::string>& receiverFunctions,
+    const std::string& stem = "prelude_receiver") -> std::string {
     kex::Lexer lexer(source);
     kex::Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
     kex::ir::ExternalModules ext;
-    for (const auto& name : receiverFunctions)
-        for (int arity = 1; arity <= 4; arity++)
-            ext.receiverFunctions[name].push_back(
-                {"kex_prelude", name, arity});
-    return emitted(
-        lowerChecked(program, stem, {.externals = &ext})).source;
+    for (const auto& name : receiverFunctions) {
+        for (int arity = 1; arity <= 4; arity++) {
+            ext.receiverFunctions[name].push_back({"kex_prelude", name, arity});
+        }
+    }
+    return emitted(lowerChecked(program, stem, {.externals = &ext})).source;
 }
 
 auto emitWithExternalRecords(
@@ -229,8 +233,9 @@ auto emitWithExternalRecords(
             fields[field] = kex::semantic::Type::unknown();
         }
     }
-    return emitted(lowerCheckedWith(program, stem, {.externalRecords = &records},
-                                    &kex::ir::lowerProgram, &interfaces))
+    return emitted(lowerCheckedWith(
+                       program, stem, {.externalRecords = &records}, &kex::ir::lowerProgram,
+                       &interfaces))
         .source;
 }
 
@@ -243,27 +248,30 @@ auto runIrOnBeam(const std::string& source, const std::string& stem) -> std::str
     core << emitIr(source, stem);
     core.close();
 
-    auto compile = "erlc +from_core -pa runtime/beam -o /tmp " + corePath +
-                   " 2>&1";
+    auto compile = "erlc +from_core -pa runtime/beam -o /tmp " + corePath + " 2>&1";
     auto compileResult = std::system(compile.c_str());
     if (compileResult != 0) {
         std::ifstream dbg(corePath);
-        std::string coreContent((std::istreambuf_iterator<char>(dbg)),
-                                 std::istreambuf_iterator<char>());
+        std::string coreContent(
+            (std::istreambuf_iterator<char>(dbg)), std::istreambuf_iterator<char>());
         std::cerr << "=== Generated Core Erlang (" << corePath << ") ===\n"
                   << coreContent << "\n=== END ===\n";
     }
     assertEqual(compileResult, 0, "erlc should compile IR output");
 
-    auto run = "erl -noshell -pa build/runtime/beam -pa runtime/beam -pa /tmp -eval 'io:format(\"~p~n\", [kex_" + stem +
-               ":main()]), halt()'";
+    auto run = "erl -noshell -pa build/runtime/beam -pa runtime/beam -pa /tmp -eval "
+               "'io:format(\"~p~n\", [kex_" +
+               stem + ":main()]), halt()'";
     std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(run.c_str(), "r"), pclose);
     assertTrue(pipe != nullptr, "popen should run the BEAM module");
     std::string output;
     char buf[256];
-    while (fgets(buf, sizeof(buf), pipe.get())) output += buf;
-    while (!output.empty() && (output.back() == '\n' || output.back() == '\r'))
+    while (fgets(buf, sizeof(buf), pipe.get())) {
+        output += buf;
+    }
+    while (!output.empty() && (output.back() == '\n' || output.back() == '\r')) {
         output.pop_back();
+    }
     return output;
 }
 
@@ -293,8 +301,7 @@ int main() {
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
             auto ext = stdlibExternal();
-            return emitted(
-                       lowerChecked(program, "test", {.externals = &ext}))
+            return emitted(lowerChecked(program, "test", {.externals = &ext}))
                 .routedImplementations;
         };
         it("routes owners whose guards cannot take each other's values", [&]() {
@@ -347,8 +354,9 @@ int main() {
             auto out = emit("main do\n  42\nend\n");
             // Last non-whitespace content should be "end"
             auto trimmed = out;
-            while (!trimmed.empty() && std::isspace(static_cast<unsigned char>(trimmed.back())))
+            while (!trimmed.empty() && std::isspace(static_cast<unsigned char>(trimmed.back()))) {
                 trimmed.pop_back();
+            }
             assertEqual(trimmed.substr(trimmed.size() - 3), std::string("end"));
         });
 
@@ -407,8 +415,7 @@ int main() {
                 "  @Ok(x) => x\n"
                 "  @Error(e) => e\n"
                 "end\n"
-                "main do f(42) end\n"
-            );
+                "main do f(42) end\n");
             assertTrue(contains(out, "{'Ok'"), out);
             assertTrue(contains(out, "{'Error'"), out);
         });
@@ -421,8 +428,7 @@ int main() {
                 "  @Equal => 0\n"
                 "  @Greater => 1\n"
                 "end\n"
-                "main do f(Less) end\n"
-            );
+                "main do f(Less) end\n");
             assertTrue(contains(out, "'Less'"), out);
             assertTrue(contains(out, "'Equal'"), out);
             assertTrue(contains(out, "'Greater'"), out);
@@ -430,13 +436,14 @@ int main() {
     });
 
     describe("IR Core Erlang emitter — binary operators", []() {
-         it("emits addition via kex_intrinsic_number:add (polymorphic + for numbers and strings)", []() {
-            auto out = emit("main do\n  \"a\" + \"b\"\nend\n");
-            // + dispatches through kex_intrinsic_number:add/2 which handles both number
-            // addition (erlang:'+') and string concatenation (erlang:'++')
-            // at runtime based on the operand types.
-            assertTrue(contains(out, "call 'kex_intrinsic_number':'add'"), out);
-        });
+        it("emits addition via kex_intrinsic_number:add (polymorphic + for numbers and strings)",
+           []() {
+               auto out = emit("main do\n  \"a\" + \"b\"\nend\n");
+               // + dispatches through kex_intrinsic_number:add/2 which handles both number
+               // addition (erlang:'+') and string concatenation (erlang:'++')
+               // at runtime based on the operand types.
+               assertTrue(contains(out, "call 'kex_intrinsic_number':'add'"), out);
+           });
 
         it("emits integer addition via erlang:'+'", []() {
             auto out = emit("main do\n  1 + 2\nend\n");
@@ -545,9 +552,9 @@ int main() {
 
         it("multiple lets form a chain", []() {
             auto out = emit("main do\n  let x = 1\n  let y = 2\n  x\nend\n");
-            auto first  = out.find("let <X>");
+            auto first = out.find("let <X>");
             auto second = out.find("let <Y>");
-            assertTrue(first  != std::string::npos, "missing let <X>");
+            assertTrue(first != std::string::npos, "missing let <X>");
             assertTrue(second != std::string::npos, "missing let <Y>");
             assertTrue(first < second, "X should appear before Y");
         });
@@ -572,62 +579,61 @@ int main() {
     // -----------------------------------------------------------------------
     describe("compile-time expansion — chain collapse", []() {
         it("collapses a fully static compiled chain, and only that", []() {
-            const std::string source =
-                "module Boxes do\n"
-                "  record Box do\n"
-                "    total : Int = 0\n"
-                "  end\n"
-                "  compiled do\n"
-                "    let of(n: Int) -> Box do\n"
-                "      Box { total: n }\n"
-                "    end\n"
-                "    make Box do\n"
-                "      let add(n: Int) -> Box do\n"
-                "        Box { total: @total + n }\n"
-                "      end\n"
-                "      let scaled(by: Int) -> Int do\n"
-                "        @total * by\n"
-                "      end\n"
-                "      let capped(e) -> Box do\n"
-                "        Box { total: @total, extra: e }\n"
-                "      end\n"
-                "    end\n"
-                "  end\n"
-                "end\n"
-                "\n"
-                // A top-level binding, NOT a compiled constant. The sandbox
-                // could evaluate it — which is exactly why it must not: this
-                // one happens to be a literal, but the next one is
-                // `Time.now()`, and baking that in changes the program.
-                "let seed = 4\n"
-                "\n"
-                "main do\n"
-                "  let a = Boxes.of(2).add(3).scaled(10)\n"
-                "  let b = Boxes.of(seed).add(3).scaled(10)\n"
-                "  a + b\n"
-                "end\n";
+            const std::string source = "module Boxes do\n"
+                                       "  record Box do\n"
+                                       "    total : Int = 0\n"
+                                       "  end\n"
+                                       "  compiled do\n"
+                                       "    let of(n: Int) -> Box do\n"
+                                       "      Box { total: n }\n"
+                                       "    end\n"
+                                       "    make Box do\n"
+                                       "      let add(n: Int) -> Box do\n"
+                                       "        Box { total: @total + n }\n"
+                                       "      end\n"
+                                       "      let scaled(by: Int) -> Int do\n"
+                                       "        @total * by\n"
+                                       "      end\n"
+                                       "      let capped(e) -> Box do\n"
+                                       "        Box { total: @total, extra: e }\n"
+                                       "      end\n"
+                                       "    end\n"
+                                       "  end\n"
+                                       "end\n"
+                                       "\n"
+                                       // A top-level binding, NOT a compiled constant. The sandbox
+                                       // could evaluate it — which is exactly why it must not: this
+                                       // one happens to be a literal, but the next one is
+                                       // `Time.now()`, and baking that in changes the program.
+                                       "let seed = 4\n"
+                                       "\n"
+                                       "main do\n"
+                                       "  let a = Boxes.of(2).add(3).scaled(10)\n"
+                                       "  let b = Boxes.of(seed).add(3).scaled(10)\n"
+                                       "  a + b\n"
+                                       "end\n";
             kex::Lexer lexer(source);
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
             std::vector<kex::semantic::Diagnostic> diagnostics;
-            assertTrue(kex::compiled::expand(program, diagnostics),
-                       "expansion should succeed");
+            assertTrue(kex::compiled::expand(program, diagnostics), "expansion should succeed");
             auto ext = stdlibExternal();
-            auto out = emitted(
-                           lowerChecked(program, "collapse", {.externals = &ext}))
-                           .source;
+            auto out = emitted(lowerChecked(program, "collapse", {.externals = &ext})).source;
 
             // `a` is gone: the whole chain is the number it always was.
-            assertTrue(out.find("50") != std::string::npos,
-                       "the static chain should survive as its literal value");
+            assertTrue(
+                out.find("50") != std::string::npos,
+                "the static chain should survive as its literal value");
             // `b` is not, because `seed` is a runtime binding — so exactly one
             // of each builder call remains. An assertion of "no calls at all"
             // would pass just as well if collapse became over-eager and reached
             // through a name it has no business evaluating.
-            assertEqual(countOccurrences(out, "apply 'add'"), size_t{1},
-                        "only the runtime chain should still call add");
-            assertEqual(countOccurrences(out, "apply 'scaled'"), 1,
-                        "only the runtime chain should still call scaled");
+            assertEqual(
+                countOccurrences(out, "apply 'add'"), size_t{1},
+                "only the runtime chain should still call add");
+            assertEqual(
+                countOccurrences(out, "apply 'scaled'"), 1,
+                "only the runtime chain should still call scaled");
         });
 
         it("collapses a builder given a map bound to a name", []() {
@@ -636,25 +642,24 @@ int main() {
             // value: every such insert stayed a runtime chain. The binding's
             // keys are known, so it collapses like the map written in place;
             // a map that arrives as a parameter still cannot.
-            const std::string source =
-                "module Rows do\n"
-                "  compiled do\n"
-                "    let columns(row: {Atom: Any}) -> String = "
-                "row.keys.map { |key| \"${key}\" }.join(\",\")\n"
-                "  end\n"
-                "end\n"
-                "\n"
-                "let bound(x: Integer, y: Integer) -> String do\n"
-                "  let row = { a: x, b: y }\n"
-                "  Rows.columns(row)\n"
-                "end\n"
-                "\n"
-                "let given(row: {Atom: Any}) -> String = Rows.columns(row)\n"
-                "\n"
-                "main do\n"
-                "  IO.printLine(bound(1, 2))\n"
-                "  IO.printLine(given({ c: 3 }))\n"
-                "end\n";
+            const std::string source = "module Rows do\n"
+                                       "  compiled do\n"
+                                       "    let columns(row: {Atom: Any}) -> String = "
+                                       "row.keys.map { |key| \"${key}\" }.join(\",\")\n"
+                                       "  end\n"
+                                       "end\n"
+                                       "\n"
+                                       "let bound(x: Integer, y: Integer) -> String do\n"
+                                       "  let row = { a: x, b: y }\n"
+                                       "  Rows.columns(row)\n"
+                                       "end\n"
+                                       "\n"
+                                       "let given(row: {Atom: Any}) -> String = Rows.columns(row)\n"
+                                       "\n"
+                                       "main do\n"
+                                       "  IO.printLine(bound(1, 2))\n"
+                                       "  IO.printLine(given({ c: 3 }))\n"
+                                       "end\n";
             kex::Lexer lexer(source);
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
@@ -662,23 +667,23 @@ int main() {
             std::vector<kex::compiled::CollapseNote> report;
             kex::compiled::ExpandOptions options;
             options.report = &report;
-            assertTrue(kex::compiled::expand(program, diagnostics, options),
-                       "expansion should succeed");
+            assertTrue(
+                kex::compiled::expand(program, diagnostics, options), "expansion should succeed");
             int collapsed = 0;
-            for (const auto& note : report) collapsed += note.collapsed ? 1 : 0;
-            assertEqual(static_cast<int>(report.size()), 2,
-                        "both calls should be collapse candidates");
+            for (const auto& note : report) {
+                collapsed += note.collapsed ? 1 : 0;
+            }
+            assertEqual(
+                static_cast<int>(report.size()), 2, "both calls should be collapse candidates");
             assertEqual(collapsed, 1, "only the bound map should collapse");
             auto ext = stdlibExternal();
-            auto out = emitted(
-                           lowerChecked(program, "collapse", {.externals = &ext}))
-                           .source;
-            assertEqual(countOccurrences(out, "apply 'Rows.columns'"), 1,
-                        "only the parameter's call should still run the builder");
+            auto out = emitted(lowerChecked(program, "collapse", {.externals = &ext})).source;
+            assertEqual(
+                countOccurrences(out, "apply 'Rows.columns'"), 1,
+                "only the parameter's call should still run the builder");
         });
 
-        it("collapses through a string argument and a nullary compiled function",
-           []() {
+        it("collapses through a string argument and a nullary compiled function", []() {
             // Two things that both looked fine and both silently disabled
             // collapse for a whole class of builder:
             //
@@ -689,85 +694,77 @@ int main() {
             //    node but not the same thing. Read as a binding, the nullary
             //    FUNCTION was evaluated at compile time and its definition
             //    pruned, leaving its uses undefined.
-            const std::string source =
-                "module Boxes do\n"
-                "  record Box do\n"
-                "    total : Int = 0\n"
-                "  end\n"
-                "  compiled do\n"
-                "    let empty() -> Box = Box {}\n"
-                "    make Box do\n"
-                "      let add(n: Int) -> Box do\n"
-                "        Box { total: @total + n }\n"
-                "      end\n"
-                "      let tag(label: String) -> String do\n"
-                "        \"${label}!\"\n"
-                "      end\n"
-                "    end\n"
-                "  end\n"
-                "end\n"
-                "\n"
-                "main do\n"
-                "  Boxes.empty().add(9).tag(\"count\")\n"
-                "end\n";
+            const std::string source = "module Boxes do\n"
+                                       "  record Box do\n"
+                                       "    total : Int = 0\n"
+                                       "  end\n"
+                                       "  compiled do\n"
+                                       "    let empty() -> Box = Box {}\n"
+                                       "    make Box do\n"
+                                       "      let add(n: Int) -> Box do\n"
+                                       "        Box { total: @total + n }\n"
+                                       "      end\n"
+                                       "      let tag(label: String) -> String do\n"
+                                       "        \"${label}!\"\n"
+                                       "      end\n"
+                                       "    end\n"
+                                       "  end\n"
+                                       "end\n"
+                                       "\n"
+                                       "main do\n"
+                                       "  Boxes.empty().add(9).tag(\"count\")\n"
+                                       "end\n";
             kex::Lexer lexer(source);
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
             std::vector<kex::semantic::Diagnostic> diagnostics;
-            assertTrue(kex::compiled::expand(program, diagnostics),
-                       "expansion should succeed");
+            assertTrue(kex::compiled::expand(program, diagnostics), "expansion should succeed");
             auto ext = stdlibExternal();
-            auto out = emitted(
-                           lowerChecked(program, "strings", {.externals = &ext}))
-                           .source;
+            auto out = emitted(lowerChecked(program, "strings", {.externals = &ext})).source;
 
-            assertEqual(countOccurrences(out, "apply 'add'"), 0,
-                        "the whole chain is static");
-            assertEqual(countOccurrences(out, "apply 'tag'"), 0,
-                        "a string argument is a known value");
-            assertEqual(countOccurrences(out, "apply 'empty'"), 0,
-                        "a nullary compiled function is callable and collapses");
+            assertEqual(countOccurrences(out, "apply 'add'"), 0, "the whole chain is static");
+            assertEqual(
+                countOccurrences(out, "apply 'tag'"), 0, "a string argument is a known value");
+            assertEqual(
+                countOccurrences(out, "apply 'empty'"), 0,
+                "a nullary compiled function is callable and collapses");
         });
 
-        it("collapses a static expression whose outermost node is not a call",
-           []() {
+        it("collapses a static expression whose outermost node is not a call", []() {
             // The first rule was "the terminal of a call chain", which left
             // `"0 " + Css.px(24)` building at runtime — both operands literal,
             // the result decidable, and the only reason it survived was that
             // the outermost node happened to be a `+`. Being fully determined
             // is the property that matters; the chain shape never was.
-            const std::string source =
-                "module Css do\n"
-                "  compiled do\n"
-                "    let px(n: Int) -> String = \"${n}px\"\n"
-                "  end\n"
-                "end\n"
-                "\n"
-                "main do\n"
-                "  \"0 \" + Css.px(24)\n"
-                "end\n";
+            const std::string source = "module Css do\n"
+                                       "  compiled do\n"
+                                       "    let px(n: Int) -> String = \"${n}px\"\n"
+                                       "  end\n"
+                                       "end\n"
+                                       "\n"
+                                       "main do\n"
+                                       "  \"0 \" + Css.px(24)\n"
+                                       "end\n";
             kex::Lexer lexer(source);
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
             std::vector<kex::semantic::Diagnostic> diagnostics;
-            assertTrue(kex::compiled::expand(program, diagnostics),
-                       "expansion should succeed");
+            assertTrue(kex::compiled::expand(program, diagnostics), "expansion should succeed");
             auto ext = stdlibExternal();
-            auto out = emitted(
-                           lowerChecked(program, "concat", {.externals = &ext}))
-                           .source;
+            auto out = emitted(lowerChecked(program, "concat", {.externals = &ext})).source;
 
             // "0 24px" as a single binary literal — the `+` is gone, and with
             // it the is_tuple dispatch guard that duplicated both operands.
-            const std::string joined =
-                "#<48>(8,1,'integer',['unsigned'|['big']]),"
-                "#<32>(8,1,'integer',['unsigned'|['big']]),"
-                "#<50>(8,1,'integer',['unsigned'|['big']]),"
-                "#<52>(8,1,'integer',['unsigned'|['big']])";
-            assertTrue(out.find(joined) != std::string::npos,
-                       "\"0 \" + Css.px(24) should be one literal \"0 24px\"");
-            assertEqual(countOccurrences(out, "'kex_prelude':'+'"), 0,
-                        "no concatenation should survive to runtime");
+            const std::string joined = "#<48>(8,1,'integer',['unsigned'|['big']]),"
+                                       "#<32>(8,1,'integer',['unsigned'|['big']]),"
+                                       "#<50>(8,1,'integer',['unsigned'|['big']]),"
+                                       "#<52>(8,1,'integer',['unsigned'|['big']])";
+            assertTrue(
+                out.find(joined) != std::string::npos,
+                "\"0 \" + Css.px(24) should be one literal \"0 24px\"");
+            assertEqual(
+                countOccurrences(out, "'kex_prelude':'+'"), 0,
+                "no concatenation should survive to runtime");
         });
 
         it("carries a runtime value through as a placeholder", []() {
@@ -776,72 +773,71 @@ int main() {
             // value — and the reified literal refers back to `seed` where it
             // came to rest. `scaled` MULTIPLIES, so the second chain cannot,
             // and falls back to running.
-            const std::string source =
-                "module Boxes do\n"
-                "  record Box do\n"
-                "    total : Int = 0\n"
-                "    extra : Int = 0\n"
-                "  end\n"
-                "  compiled do\n"
-                "    let of(n: Int) -> Box do\n"
-                "      Box { total: n }\n"
-                "    end\n"
-                "    make Box do\n"
-                "      let note(e) -> Box do\n"
-                "        Box { total: @total, extra: e }\n"
-                "      end\n"
-                "      let scaled(by: Int) -> Int do\n"
-                "        @total * by\n"
-                "      end\n"
-                "      let capped(e) -> Box do\n"
-                "        Box { total: @total, extra: e }\n"
-                "      end\n"
-                "    end\n"
-                "  end\n"
-                "end\n"
-                "\n"
-                // Upper-case, and top level: the shape that could only be a
-                // qualifier if it appeared as a receiver.
-                "let CAP = 9\n"
-                "\n"
-                "main do\n"
-                "  let seed = 7\n"
-                "  let carried = Boxes.of(2).note(seed)\n"
-                "  let computed = Boxes.of(seed).scaled(3)\n"
-                "  let upper = Boxes.of(3).capped(CAP)\n"
-                "  (carried, computed, upper)\n"
-                "end\n";
+            const std::string source = "module Boxes do\n"
+                                       "  record Box do\n"
+                                       "    total : Int = 0\n"
+                                       "    extra : Int = 0\n"
+                                       "  end\n"
+                                       "  compiled do\n"
+                                       "    let of(n: Int) -> Box do\n"
+                                       "      Box { total: n }\n"
+                                       "    end\n"
+                                       "    make Box do\n"
+                                       "      let note(e) -> Box do\n"
+                                       "        Box { total: @total, extra: e }\n"
+                                       "      end\n"
+                                       "      let scaled(by: Int) -> Int do\n"
+                                       "        @total * by\n"
+                                       "      end\n"
+                                       "      let capped(e) -> Box do\n"
+                                       "        Box { total: @total, extra: e }\n"
+                                       "      end\n"
+                                       "    end\n"
+                                       "  end\n"
+                                       "end\n"
+                                       "\n"
+                                       // Upper-case, and top level: the shape that could only be a
+                                       // qualifier if it appeared as a receiver.
+                                       "let CAP = 9\n"
+                                       "\n"
+                                       "main do\n"
+                                       "  let seed = 7\n"
+                                       "  let carried = Boxes.of(2).note(seed)\n"
+                                       "  let computed = Boxes.of(seed).scaled(3)\n"
+                                       "  let upper = Boxes.of(3).capped(CAP)\n"
+                                       "  (carried, computed, upper)\n"
+                                       "end\n";
             kex::Lexer lexer(source);
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
             std::vector<kex::semantic::Diagnostic> diagnostics;
-            assertTrue(kex::compiled::expand(program, diagnostics),
-                       "expansion should succeed");
+            assertTrue(kex::compiled::expand(program, diagnostics), "expansion should succeed");
             auto ext = stdlibExternal();
-            auto out = emitted(
-                           lowerChecked(program, "carried", {.externals = &ext}))
-                           .source;
+            auto out = emitted(lowerChecked(program, "carried", {.externals = &ext})).source;
 
             // `carried` is the literal record with Seed still a REFERENCE —
             // not the value 7, which would bake in a runtime binding.
             // A record declared inside a module is tagged with its qualified
             // identity, so `Boxes.Box` cannot collide with a `Box` declared
             // in a sibling module.
-            assertTrue(out.find("{'Boxes.Box', 2, Seed}") != std::string::npos,
-                       "a carried placeholder reifies back to its expression");
+            assertTrue(
+                out.find("{'Boxes.Box', 2, Seed}") != std::string::npos,
+                "a carried placeholder reifies back to its expression");
             // An UPPER-case binding is a placeholder too. It is ambiguous with
             // a module or type qualifier only in RECEIVER position, which
             // isCollapsible checks separately, so as an argument it rides
             // through like any other name.
-            assertTrue(out.find("apply 'CAP'/0()") != std::string::npos,
-                       "an upper-case binding reifies back to a reference");
-            assertEqual(countOccurrences(out, "apply 'capped'"), 0,
-                        "a chain taking an upper-case binding still collapses");
-            assertEqual(countOccurrences(out, "apply 'note'"), 0,
-                        "the carrying chain collapses");
+            assertTrue(
+                out.find("apply 'CAP'/0()") != std::string::npos,
+                "an upper-case binding reifies back to a reference");
+            assertEqual(
+                countOccurrences(out, "apply 'capped'"), 0,
+                "a chain taking an upper-case binding still collapses");
+            assertEqual(countOccurrences(out, "apply 'note'"), 0, "the carrying chain collapses");
             // `computed` cannot: multiplying a placeholder has no answer.
-            assertEqual(countOccurrences(out, "apply 'scaled'"), 1,
-                        "a chain that computes with a placeholder keeps running");
+            assertEqual(
+                countOccurrences(out, "apply 'scaled'"), 1,
+                "a chain that computes with a placeholder keeps running");
         });
 
         it("does not collapse an unrelated module's same-named function", []() {
@@ -860,22 +856,22 @@ int main() {
             auto program = parser.parseProgram();
             std::vector<kex::semantic::Diagnostic> diagnostics;
             std::vector<kex::compiled::CollapseNote> report;
-            assertTrue(kex::compiled::expand(
-                           program, diagnostics, {.report = &report}),
-                       "expansion should succeed");
-            assertTrue(report.empty(),
-                       "a bare-name collision must not opt runtime code into collapse");
+            assertTrue(
+                kex::compiled::expand(program, diagnostics, {.report = &report}),
+                "expansion should succeed");
+            assertTrue(
+                report.empty(), "a bare-name collision must not opt runtime code into collapse");
 
             const kex::ast::MainBlock* main = nullptr;
-            for (const auto& item : program.items)
-                if (const auto* found =
-                        std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&item))
+            for (const auto& item : program.items) {
+                if (const auto* found = std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&item)) {
                     main = found->get();
-            assertTrue(main && main->body.size() == 1,
-                       "main call should survive expansion");
-            assertTrue(std::holds_alternative<kex::ast::MethodCall>(
-                           main->body.front()->kind),
-                       "RuntimeOwner.collide must remain a runtime call");
+                }
+            }
+            assertTrue(main && main->body.size() == 1, "main call should survive expansion");
+            assertTrue(
+                std::holds_alternative<kex::ast::MethodCall>(main->body.front()->kind),
+                "RuntimeOwner.collide must remain a runtime call");
         });
     });
 
@@ -897,27 +893,25 @@ int main() {
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
             std::vector<kex::semantic::Diagnostic> diagnostics;
-            assertTrue(kex::compiled::expand(program, diagnostics),
-                       "expansion should succeed");
+            assertTrue(kex::compiled::expand(program, diagnostics), "expansion should succeed");
             unsetenv("KEX_CODEGEN_BUILD_TAG");
             auto ext = stdlibExternal();
-            auto out = emitted(
-                           lowerChecked(program, "envtag", {.externals = &ext}))
-                           .source;
+            auto out = emitted(lowerChecked(program, "envtag", {.externals = &ext})).source;
 
             // "baked" as a binary literal, and no ENV call left to make it.
-            const std::string baked =
-                "#<98>(8,1,'integer',['unsigned'|['big']]),"
-                "#<97>(8,1,'integer',['unsigned'|['big']]),"
-                "#<107>(8,1,'integer',['unsigned'|['big']]),"
-                "#<101>(8,1,'integer',['unsigned'|['big']]),"
-                "#<100>(8,1,'integer',['unsigned'|['big']])";
-            assertTrue(out.find(baked) != std::string::npos,
-                       "the environment value should be inlined");
-            assertEqual(countOccurrences(out, "'BUILD_TAG'"), std::size_t{0},
-                        "the constant leaves no definition behind");
-            assertEqual(countOccurrences(out, "Env"), std::size_t{0},
-                        "no ENV read should survive to runtime");
+            const std::string baked = "#<98>(8,1,'integer',['unsigned'|['big']]),"
+                                      "#<97>(8,1,'integer',['unsigned'|['big']]),"
+                                      "#<107>(8,1,'integer',['unsigned'|['big']]),"
+                                      "#<101>(8,1,'integer',['unsigned'|['big']]),"
+                                      "#<100>(8,1,'integer',['unsigned'|['big']])";
+            assertTrue(
+                out.find(baked) != std::string::npos, "the environment value should be inlined");
+            assertEqual(
+                countOccurrences(out, "'BUILD_TAG'"), std::size_t{0},
+                "the constant leaves no definition behind");
+            assertEqual(
+                countOccurrences(out, "Env"), std::size_t{0},
+                "no ENV read should survive to runtime");
         });
     });
 
@@ -940,16 +934,15 @@ int main() {
             layouts["Rev"] = {"zebra", "middle", "apple"};
 
             std::string why;
-            auto literal = kex::compiled::valueToLiteral(
-                record, kex::SourceLocation{}, why, {&layouts});
+            auto literal =
+                kex::compiled::valueToLiteral(record, kex::SourceLocation{}, why, {&layouts});
             assertTrue(literal != nullptr, "a record should reify: " + why);
-            const auto* construction =
-                std::get_if<kex::ast::RecordConstruction>(&literal->kind);
+            const auto* construction = std::get_if<kex::ast::RecordConstruction>(&literal->kind);
             assertTrue(construction != nullptr, "reifies to a RecordConstruction");
-            assertEqual(construction->fields.size(), std::size_t{3},
-                        "every field survives");
-            assertEqual(construction->fields[0].name, std::string("zebra"),
-                        "declaration order, not alphabetical");
+            assertEqual(construction->fields.size(), std::size_t{3}, "every field survives");
+            assertEqual(
+                construction->fields[0].name, std::string("zebra"),
+                "declaration order, not alphabetical");
             assertEqual(construction->fields[1].name, std::string("middle"), "");
             assertEqual(construction->fields[2].name, std::string("apple"), "");
         });
@@ -962,13 +955,12 @@ int main() {
             value.fields["apple"] = kex::interpreter::Value::integer(2);
             record->data = std::move(value);
 
-            kex::compiled::RecordLayouts layouts;  // deliberately empty
+            kex::compiled::RecordLayouts layouts; // deliberately empty
             std::string why;
-            auto literal = kex::compiled::valueToLiteral(
-                record, kex::SourceLocation{}, why, {&layouts});
+            auto literal =
+                kex::compiled::valueToLiteral(record, kex::SourceLocation{}, why, {&layouts});
             assertTrue(literal != nullptr, "still reifies: " + why);
-            const auto* construction =
-                std::get_if<kex::ast::RecordConstruction>(&literal->kind);
+            const auto* construction = std::get_if<kex::ast::RecordConstruction>(&literal->kind);
             assertTrue(construction != nullptr, "reifies to a RecordConstruction");
             // Alphabetical: the fields live in an unordered_map, and identical
             // builds must not emit different code.
@@ -987,31 +979,30 @@ int main() {
                 "  let identity -> Point = this\n"
                 "end\n",
                 "new_cost");
-            assertEqual(countOccurrences(out, "updateRecord"), std::size_t{0},
-                        "no record update helper is emitted");
-            assertEqual(countOccurrences(out, "<new>"), std::size_t{0},
-                        "the receiver alias is compile-time only");
+            assertEqual(
+                countOccurrences(out, "updateRecord"), std::size_t{0},
+                "no record update helper is emitted");
+            assertEqual(
+                countOccurrences(out, "<new>"), std::size_t{0},
+                "the receiver alias is compile-time only");
         });
 
         it("fully-overriding New emits byte-identically to explicit construction", []() {
-            const std::string prefix =
-                "record Point do\n"
-                "  x : Integer\n"
-                "  y : Integer\n"
-                "end\n"
-                "make Point do\n";
+            const std::string prefix = "record Point do\n"
+                                       "  x : Integer\n"
+                                       "  y : Integer\n"
+                                       "end\n"
+                                       "make Point do\n";
             auto viaNew = emitIr(
-                prefix +
-                    "  let replaced(v: Integer) -> Point = New { x: v, y: v }\n"
-                    "end\n",
+                prefix + "  let replaced(v: Integer) -> Point = New { x: v, y: v }\n"
+                         "end\n",
                 "new_full_override");
             auto explicitRecord = emitIr(
-                prefix +
-                    "  let replaced(v: Integer) -> Point = Point { x: v, y: v }\n"
-                    "end\n",
+                prefix + "  let replaced(v: Integer) -> Point = Point { x: v, y: v }\n"
+                         "end\n",
                 "new_full_override");
-            assertEqual(viaNew, explicitRecord,
-                        "New must not read this or materialize an intermediate");
+            assertEqual(
+                viaNew, explicitRecord, "New must not read this or materialize an intermediate");
         });
 
         it("preserves both reassigned variables after if and elif branches", []() {
@@ -1114,10 +1105,10 @@ int main() {
                 "  response.body\n"
                 "end\n",
                 records);
-            assertTrue(contains(output, "'Response'"),
-                       "external record tag should be lowered");
-            assertTrue(contains(output, "call 'erlang':'element'("),
-                       "external record field should use its compiled layout");
+            assertTrue(contains(output, "'Response'"), "external record tag should be lowered");
+            assertTrue(
+                contains(output, "call 'erlang':'element'("),
+                "external record field should use its compiled layout");
         });
 
         it("rejects indistinguishable conflicting record layouts", []() {
@@ -1128,14 +1119,11 @@ int main() {
             bool rejected = false;
             try {
                 (void)emitWithExternalRecords(
-                    "main do Shared { left: 1, right: 2 }.left end\n",
-                    records);
+                    "main do Shared { left: 1, right: 2 }.left end\n", records);
             } catch (const kex::ir::LowerError& error) {
-                rejected = contains(error.what(),
-                                    "ambiguous record layout for field");
+                rejected = contains(error.what(), "ambiguous record layout for field");
             }
-            assertTrue(rejected,
-                       "a field read cannot choose between identical tags and sizes");
+            assertTrue(rejected, "a field read cannot choose between identical tags and sizes");
         });
 
         it("separates free calls from receiver calls of the same name and arity", []() {
@@ -1145,7 +1133,8 @@ int main() {
                 "  let foo(extra: Integer) -> Integer = @value * extra\n"
                 "end\n"
                 "let foo(x: Integer, y: Integer) -> Integer = x + y\n"
-                "main do foo(2, 3) end\n", "free_method_collision");
+                "main do foo(2, 3) end\n",
+                "free_method_collision");
             assertTrue(contains(core, "foo$free"), core);
             assertTrue(contains(core, "foo/Widget"), core);
             assertTrue(contains(core, "'foo'/2"), core);
@@ -1200,14 +1189,14 @@ int main() {
         });
 
         it("returns Optional from universal conversions on BEAM", []() {
-            assertEqual(runIrOnBeam(
-                "main do \"42\".to(Integer) end\n", "to_optional_success"),
+            assertEqual(
+                runIrOnBeam("main do \"42\".to(Integer) end\n", "to_optional_success"),
                 std::string("{'Just',42}"));
-            assertEqual(runIrOnBeam(
-                "main do \"42x\".to(Integer) end\n", "to_optional_failure"),
+            assertEqual(
+                runIrOnBeam("main do \"42x\".to(Integer) end\n", "to_optional_failure"),
                 std::string("'None'"));
-            assertEqual(runIrOnBeam(
-                "main do 42.to(String) end\n", "to_string_optional"),
+            assertEqual(
+                runIrOnBeam("main do 42.to(String) end\n", "to_string_optional"),
                 std::string("{'Just',<<\"42\">>}"));
         });
 
@@ -1265,8 +1254,8 @@ int main() {
             text.backendModule = "Kex.Web.Response";
             text.backendFunction = "text";
             text.backendArity = 1;
-            text.signature = {"text", {kex::semantic::Type::string()},
-                              kex::semantic::Type::string()};
+            text.signature = {
+                "text", {kex::semantic::Type::string()}, kex::semantic::Type::string()};
             response.exports["text"].push_back(std::move(text));
             interfaces.modules["Web.Response"] = std::move(response);
 
@@ -1274,8 +1263,7 @@ int main() {
                 program, "external_split", {.externals = &external}, &interfaces);
             auto globalCore = emitted(std::move(modules[0])).source;
 
-            assertTrue(contains(
-                globalCore, "call 'Kex.Web.Response':'text'"), globalCore);
+            assertTrue(contains(globalCore, "call 'Kex.Web.Response':'text'"), globalCore);
         });
 
         it("routes companion calls to file-global functions through the entry", []() {
@@ -1289,9 +1277,8 @@ int main() {
             auto modules = lowerModulesChecked(program, "global_helper");
             assertEqual(modules.size(), size_t{2});
             auto companionCore = emitted(std::move(modules[1])).source;
-            assertTrue(contains(
-                companionCore, "call 'kex_global_helper':'normalize'"),
-                companionCore);
+            assertTrue(
+                contains(companionCore, "call 'kex_global_helper':'normalize'"), companionCore);
         });
 
         it("top-level using resolves to cross-module call", []() {
@@ -1425,13 +1412,15 @@ int main() {
 
     describe("IR Core Erlang emitter — function definitions", []() {
         it("single-clause function emits fun with correct arity", []() {
-            auto out = emit("let double(n: Integer) -> Integer = n * 2\nmain do\n  double(3)\nend\n");
+            auto out =
+                emit("let double(n: Integer) -> Integer = n * 2\nmain do\n  double(3)\nend\n");
             assertTrue(contains(out, "'double'/1"), out);
             assertTrue(contains(out, "fun (N)"), out);
         });
 
         it("function body uses its normalized parameter directly", []() {
-            auto out = emit("let double(n: Integer) -> Integer = n * 2\nmain do\n  double(3)\nend\n");
+            auto out =
+                emit("let double(n: Integer) -> Integer = n * 2\nmain do\n  double(3)\nend\n");
             assertTrue(contains(out, "call 'erlang':'*'(N, 2)"), out);
         });
 
@@ -1460,13 +1449,16 @@ int main() {
 
     describe("IR Core Erlang emitter — match expressions", []() {
         it("match emits case with when 'true' guards", []() {
-            auto out = emit("main do\n  match 1 do\n    1 => \"one\"\n    _ => \"other\"\n  end\nend\n");
+            auto out =
+                emit("main do\n  match 1 do\n    1 => \"one\"\n    _ => \"other\"\n  end\nend\n");
             assertTrue(contains(out, "case"), out);
             assertTrue(contains(out, "when 'true'"), out);
         });
 
         it("tuple subject remains a tuple in the case expression", []() {
-            auto out = emit("main do\n  match (1, 2) do\n    (1, 2) => true\n    (_, _) => false\n  end\nend\n");
+            auto out = emit(
+                "main do\n  match (1, 2) do\n    (1, 2) => true\n    (_, _) => false\n "
+                " end\nend\n");
             assertTrue(contains(out, "case {1, 2}"), out);
             // The pattern stays a 2-tuple; its numeric elements bind fresh
             // vars compared with `==` in the guard, so `0` matches `0.0`.
@@ -1476,11 +1468,12 @@ int main() {
         });
 
         it("no semicolons between match clauses", []() {
-            auto out = emit("main do\n  match 1 do\n    1 => \"one\"\n    _ => \"other\"\n  end\nend\n");
+            auto out =
+                emit("main do\n  match 1 do\n    1 => \"one\"\n    _ => \"other\"\n  end\nend\n");
             assertTrue(contains(out, "->"), "output should contain arrows");
             // Extract the case body and assert no semicolons between clauses
             auto caseStart = out.find("case ");
-            auto caseEnd   = out.find("end", caseStart);
+            auto caseEnd = out.find("end", caseStart);
             assertTrue(caseStart != std::string::npos, "should have case");
             auto caseText = out.substr(caseStart, caseEnd - caseStart);
             assertFalse(contains(caseText, ";"), "no semicolons between case clauses");
@@ -1531,8 +1524,7 @@ int main() {
                 "  $`answer: ${40 + 2}`\n"
                 "end\n");
             assertTrue(contains(out, "kex_io':'to_string'"), out);
-            assertTrue(
-                contains(out, "unicode':'characters_to_binary'"), out);
+            assertTrue(contains(out, "unicode':'characters_to_binary'"), out);
         });
 
         it("passes raw values through an interpolating tag ABI", []() {
@@ -1542,8 +1534,7 @@ int main() {
                 "  inspectTag$`answer: ${40 + 2}`\n"
                 "end\n");
             assertTrue(contains(out, "apply 'inspectTag'/2"), out);
-            assertTrue(
-                contains(out, "erlang':'+'"), out);
+            assertTrue(contains(out, "erlang':'+'"), out);
             assertFalse(contains(out, "kex_io':'to_string'"), out);
         });
     });
@@ -1555,28 +1546,23 @@ int main() {
             external.exportToBeamFn["Numbers.doubled"] = "doubled";
             external.exportArity["Numbers.doubled"] = 1;
 
-            auto out = emitWithExternal(
-                "main do\n  let x = 21\n  x.doubled\nend\n", external);
+            auto out = emitWithExternal("main do\n  let x = 21\n  x.doubled\nend\n", external);
             assertTrue(!contains(out, "call 'kex_numbers':'doubled'"), out);
         });
 
         it("routes only declared external receiver functions", []() {
             kex::ir::ExternalModules external;
-            external.receiverFunctions["doubled"].push_back(
-                {"kex_numbers", "doubled", 1});
+            external.receiverFunctions["doubled"].push_back({"kex_numbers", "doubled", 1});
 
-            auto out = emitWithExternal(
-                "main do\n  let x = 21\n  x.doubled\nend\n", external);
+            auto out = emitWithExternal("main do\n  let x = 21\n  x.doubled\nend\n", external);
             assertTrue(contains(out, "call 'kex_numbers':'doubled'"), out);
         });
 
         it("routes overloaded operators from external receiver interfaces", []() {
             kex::ir::ExternalModules external;
-            external.receiverFunctions["/"].push_back(
-                {"kex_units", "divide_measure", 2});
+            external.receiverFunctions["/"].push_back({"kex_units", "divide_measure", 2});
 
-            auto out = emitWithExternal(
-                "main do\n  left / right\nend\n", external);
+            auto out = emitWithExternal("main do\n  left / right\nend\n", external);
             assertTrue(contains(out, "call 'kex_units':'divide_measure'"), out);
         });
 
@@ -1587,9 +1573,7 @@ int main() {
             external.exportArity["Stream.Sequence"] = 2;
             external.exportParamNames["Stream.Sequence"] = {"from", "step"};
 
-            auto out = emitWithExternal(
-                "main do Sequence(from: 0) { |n| n + 1 } end\n",
-                external);
+            auto out = emitWithExternal("main do Sequence(from: 0) { |n| n + 1 } end\n", external);
             assertTrue(contains(out, "call 'Kex.Stream':'Sequence'"), out);
         });
 
@@ -1601,10 +1585,8 @@ int main() {
             integerTarget.backendFunction = "describe_integer";
             integerTarget.backendArity = 1;
             integerTarget.signature = {
-                "describe", {kex::semantic::Type::integer()},
-                kex::semantic::Type::string()};
-            interfaces.receiverFunctions["describe"].push_back(
-                std::move(integerTarget));
+                "describe", {kex::semantic::Type::integer()}, kex::semantic::Type::string()};
+            interfaces.receiverFunctions["describe"].push_back(std::move(integerTarget));
 
             kex::semantic::ImportedFunction stringTarget;
             stringTarget.sourceName = "describe";
@@ -1612,15 +1594,12 @@ int main() {
             stringTarget.backendFunction = "describe_string";
             stringTarget.backendArity = 1;
             stringTarget.signature = {
-                "describe", {kex::semantic::Type::string()},
-                kex::semantic::Type::string()};
-            interfaces.receiverFunctions["describe"].push_back(
-                std::move(stringTarget));
+                "describe", {kex::semantic::Type::string()}, kex::semantic::Type::string()};
+            interfaces.receiverFunctions["describe"].push_back(std::move(stringTarget));
 
             auto out = emitWithResolvedCalls("main do 42.describe end\n", interfaces);
 
-            assertTrue(contains(
-                out, "call 'Kex.Numbers':'describe_integer'(42)"), out);
+            assertTrue(contains(out, "call 'Kex.Numbers':'describe_integer'(42)"), out);
             assertFalse(contains(out, "call 'Kex.Strings':'describe_string'"), out);
         });
 
@@ -1679,8 +1658,7 @@ int main() {
                 kex::semantic::Type::integer()};
             interfaces.receiverFunctions["scaled"].push_back(std::move(scaled));
 
-            auto out = emitWithResolvedCalls(
-                "main do 7.scaled(factor: 6) end\n", interfaces);
+            auto out = emitWithResolvedCalls("main do 7.scaled(factor: 6) end\n", interfaces);
 
             assertTrue(contains(out, "call 'Kex.Numbers':'scaled'(7, 6)"), out);
         });
@@ -1696,65 +1674,61 @@ int main() {
             text.backendFunction = "make_text";
             text.backendArity = 1;
             text.signature = {
-                "text", {kex::semantic::Type::string()},
-                kex::semantic::Type::named("Response")};
+                "text", {kex::semantic::Type::string()}, kex::semantic::Type::named("Response")};
             response.exports["text"].push_back(std::move(text));
             interfaces.modules["Web.Response"] = std::move(response);
 
-            auto out = emitWithResolvedCalls(
-                "main do Web.Response.text(\"ok\") end\n", interfaces);
+            auto out = emitWithResolvedCalls("main do Web.Response.text(\"ok\") end\n", interfaces);
 
-            assertTrue(contains(
-                out, "call 'Kex.Web.Response':'make_text'("), out);
+            assertTrue(contains(out, "call 'Kex.Web.Response':'make_text'("), out);
             assertFalse(contains(out, "'make_text'('Web.Response'"), out);
         });
 
         it("routes a declared block receiver function without a compiler name", []() {
             auto out = emitWithPrelude(
-                "main do\n  let x = [1]\n  x.transform { |item| item }\nend\n",
-                {"transform"});
+                "main do\n  let x = [1]\n  x.transform { |item| item }\nend\n", {"transform"});
             assertTrue(callsPrelude(out, "transform"), out);
         });
 
         it("routes migrated list receiver functions through their Kex declarations", []() {
-            struct Case { const char* name; const char* expression; };
+            struct Case {
+                const char* name;
+                const char* expression;
+            };
             const std::vector<Case> cases = {
-                {"first", "xs.first"},
-                {"second", "xs.second"},
-                {"third", "xs.third"},
-                {"rest", "xs.rest"},
-                {"push", "xs.push(4)"},
-                {"indexOf", "xs.indexOf(2)"},
+                {"first", "xs.first"}, {"second", "xs.second"}, {"third", "xs.third"},
+                {"rest", "xs.rest"},   {"push", "xs.push(4)"},  {"indexOf", "xs.indexOf(2)"},
             };
             for (const auto& item : cases) {
-                auto source = std::string("main do\n  let xs = [1,2,3]\n  ") +
-                              item.expression + "\nend\n";
+                auto source =
+                    std::string("main do\n  let xs = [1,2,3]\n  ") + item.expression + "\nend\n";
                 auto out = emitWithPrelude(source, {item.name});
-                assertTrue(callsPrelude(out, item.name),
-                    out);
+                assertTrue(callsPrelude(out, item.name), out);
             }
         });
 
         it("routes migrated numeric receiver functions through Kex", []() {
-            struct Case { const char* name; const char* expression; };
+            struct Case {
+                const char* name;
+                const char* expression;
+            };
             const std::vector<Case> cases = {
-                {"even?", "value.even?"},
-                {"odd?", "value.odd?"},
-                {"modulo", "value.modulo(2)"},
-                {"abs", "value.abs"},
-                {"sqrt", "value.sqrt"},
+                {"even?", "value.even?"}, {"odd?", "value.odd?"}, {"modulo", "value.modulo(2)"},
+                {"abs", "value.abs"},     {"sqrt", "value.sqrt"},
             };
             for (const auto& item : cases) {
-                auto source = std::string("main do\n  let value = 4\n  ") +
-                              item.expression + "\nend\n";
+                auto source =
+                    std::string("main do\n  let value = 4\n  ") + item.expression + "\nend\n";
                 auto out = emitWithPrelude(source, {item.name});
-                assertTrue(callsPrelude(out, item.name),
-                    out);
+                assertTrue(callsPrelude(out, item.name), out);
             }
         });
 
         it("routes Optional and Result predicates through Kex", []() {
-            struct Case { const char* name; const char* expression; };
+            struct Case {
+                const char* name;
+                const char* expression;
+            };
             const std::vector<Case> cases = {
                 {"none?", "None.none?"},
                 {"present?", "Just(1).present?"},
@@ -1762,16 +1736,17 @@ int main() {
                 {"error?", "Error(:failed).error?"},
             };
             for (const auto& item : cases) {
-                auto source = std::string("main do\n  ") + item.expression +
-                              "\nend\n";
+                auto source = std::string("main do\n  ") + item.expression + "\nend\n";
                 auto out = emitWithPrelude(source, {item.name});
-                assertTrue(callsPrelude(out, item.name),
-                    out);
+                assertTrue(callsPrelude(out, item.name), out);
             }
         });
 
         it("routes migrated collection and process predicates through Kex", []() {
-            struct Case { const char* name; const char* expression; };
+            struct Case {
+                const char* name;
+                const char* expression;
+            };
             const std::vector<Case> cases = {
                 {"contains?", "[1,2,3].contains?(2)"},
                 {"empty?", "[].empty?"},
@@ -1779,57 +1754,47 @@ int main() {
                 {"alive?", "self().alive?"},
             };
             for (const auto& item : cases) {
-                auto source = std::string("main do\n  ") + item.expression +
-                              "\nend\n";
+                auto source = std::string("main do\n  ") + item.expression + "\nend\n";
                 auto out = emitWithPrelude(source, {item.name});
-                assertTrue(callsPrelude(out, item.name),
-                    out);
+                assertTrue(callsPrelude(out, item.name), out);
             }
         });
 
         it("routes zero-argument count through Kex", []() {
-            auto out = emitWithPrelude(
-                "main do\n  [1,2,3].count\nend\n", {"count"});
+            auto out = emitWithPrelude("main do\n  [1,2,3].count\nend\n", {"count"});
             assertTrue(callsPrelude(out, "count"), out);
         });
 
         it("modulo routes through kex_prelude", []() {
-            auto out = emitWithPrelude(
-                "main do\n  let x = 5\n  x.modulo(3)\nend\n", {"modulo"});
+            auto out = emitWithPrelude("main do\n  let x = 5\n  x.modulo(3)\nend\n", {"modulo"});
             assertTrue(callsPrelude(out, "modulo"), out);
         });
 
         it("even? routes through kex_prelude", []() {
-            auto out = emitWithPrelude(
-                "main do\n  let x = 4\n  x.even?\nend\n", {"even?"});
+            auto out = emitWithPrelude("main do\n  let x = 4\n  x.even?\nend\n", {"even?"});
             assertTrue(callsPrelude(out, "even?"), out);
         });
 
         it("each binds lambda and calls lists:foreach", []() {
-            auto out = emitWithPrelude(
-                "main do\n  [1,2,3].each { |x| IO.printLine(x) }\nend\n",
-                {"each"});
+            auto out =
+                emitWithPrelude("main do\n  [1,2,3].each { |x| IO.printLine(x) }\nend\n", {"each"});
             assertTrue(callsPrelude(out, "each"), out);
         });
 
         it("map routes to kex_prelude", []() {
-            auto out = emitWithPrelude(
-                "main do\n  [1,2,3].map { |x| x }\nend\n", {"map"});
+            auto out = emitWithPrelude("main do\n  [1,2,3].map { |x| x }\nend\n", {"map"});
             assertTrue(callsPrelude(out, "map"), out);
         });
 
         it("filter routes to kex_prelude", []() {
-            auto out = emitWithPrelude(
-                "main do\n  [1,2,3].filter { |x| true }\nend\n", {"filter"});
+            auto out = emitWithPrelude("main do\n  [1,2,3].filter { |x| true }\nend\n", {"filter"});
             assertTrue(callsPrelude(out, "filter"), out);
         });
 
         it("push routes through kex_prelude", []() {
-            auto out = emitWithPrelude(
-                "main do\n  let xs = [1]\n  xs.push(2)\nend\n", {"push"});
+            auto out = emitWithPrelude("main do\n  let xs = [1]\n  xs.push(2)\nend\n", {"push"});
             assertTrue(callsPrelude(out, "push"), out);
         });
-
     });
 
     describe("IR Core Erlang emitter — process primitives", []() {
@@ -1839,8 +1804,7 @@ int main() {
                 "foul go do\n"
                 "  spawn do IO.printLine(\"child\") end\n"
                 "end\n"
-                "main do go() end\n"
-            );
+                "main do go() end\n");
             assertTrue(contains(out, "call 'erlang':'spawn'"), out);
         });
 
@@ -1852,8 +1816,7 @@ int main() {
                 "    :stop => IO.printLine(\"done\")\n"
                 "  end\n"
                 "end\n"
-                "main do spawn do loop() end end\n"
-            );
+                "main do spawn do loop() end end\n");
             assertTrue(contains(out, "receive"), out);
             assertTrue(contains(out, "after 'infinity'"), out);
         });
@@ -1868,8 +1831,7 @@ int main() {
                 "    IO.printLine(\"timeout\")\n"
                 "  end\n"
                 "end\n"
-                "main do waitOne() end\n"
-            );
+                "main do waitOne() end\n");
             assertTrue(contains(out, "receive"), out);
             assertTrue(contains(out, "after 1000"), out);
         });
@@ -1927,8 +1889,7 @@ int main() {
                 "foul go do\n"
                 "  Task.start { IO.printLine(\"async\") }\n"
                 "end\n"
-                "main do go() end\n"
-            );
+                "main do go() end\n");
             assertTrue(contains(out, "call 'Kex.Task':'start'"), out);
         });
 
@@ -1947,10 +1908,8 @@ int main() {
 
         it("task.await() routes through the source-owned receiver", []() {
             kex::ir::ExternalModules ext;
-            ext.receiverFunctions["await"].push_back(
-                {"kex_prelude", "await", 1, {}});
-            ext.receiverFunctions["await"].push_back(
-                {"kex_prelude", "await", 2, {"timeout"}});
+            ext.receiverFunctions["await"].push_back({"kex_prelude", "await", 1, {}});
+            ext.receiverFunctions["await"].push_back({"kex_prelude", "await", 2, {"timeout"}});
             auto out = emitWithExternal(
                 "# kex: no-check\n"
                 "foul go do\n"
@@ -1975,8 +1934,7 @@ int main() {
                 "  me\n"
                 "end\n"
                 "main do go() end\n",
-                ext
-            );
+                ext);
             assertTrue(contains(out, "call 'Kex.Process':'self'("), out);
         });
     });
@@ -1989,57 +1947,67 @@ int main() {
         };
 
         it("hello world compiles and runs on BEAM", [&erlcAvailable]() {
-            if (!erlcAvailable()) return; // skip
+            if (!erlcAvailable()) {
+                return; // skip
+            }
             // Emit .core (ctest runs from build dir, so runtime/beam is a valid relative path)
-            auto out = emitProduction(
-                "main do\n  IO.printLine(\"hello from beam\")\nend\n",
-                "e2e_hello");
+            auto out =
+                emitProduction("main do\n  IO.printLine(\"hello from beam\")\nend\n", "e2e_hello");
             std::ofstream f("/tmp/kex_e2e_hello.core");
             f << out;
             f.close();
-            int r2 = std::system("erlc +from_core -pa runtime/beam -o /tmp /tmp/kex_e2e_hello.core > /dev/null 2>&1");
+            int r2 = std::system(
+                "erlc +from_core -pa runtime/beam -o /tmp /tmp/kex_e2e_hello.core "
+                "> /dev/null 2>&1");
             assertEqual(r2, 0, "erlc should succeed");
-            int r3 = std::system("erl -noshell -pa runtime/beam -pa /tmp -eval 'kex_e2e_hello:main(), halt()' > /dev/null 2>&1");
+            int r3 = std::system(
+                "erl -noshell -pa runtime/beam -pa /tmp -eval "
+                "'kex_e2e_hello:main(), halt()' > /dev/null 2>&1");
             assertEqual(r3, 0, "erl should exit 0");
         });
 
         it("function call compiles and produces correct output", [&erlcAvailable]() {
-            if (!erlcAvailable()) return;
-            const char* src =
-                "let double(n: Integer) -> Integer = n * 2\n"
-                "main do\n"
-                "  IO.printLine(double(21))\n"
-                "end\n";
+            if (!erlcAvailable()) {
+                return;
+            }
+            const char* src = "let double(n: Integer) -> Integer = n * 2\n"
+                              "main do\n"
+                              "  IO.printLine(double(21))\n"
+                              "end\n";
             auto out = emitProduction(src, "e2e_double");
             std::ofstream f("/tmp/kex_e2e_double.core");
             f << out;
             f.close();
-            int r = std::system("erlc +from_core -pa runtime/beam -o /tmp /tmp/kex_e2e_double.core > /dev/null 2>&1");
+            int r = std::system(
+                "erlc +from_core -pa runtime/beam -o /tmp /tmp/kex_e2e_double.core "
+                "> /dev/null 2>&1");
             assertEqual(r, 0, "erlc should succeed on double");
-            FILE* pipe = popen("erl -noshell -pa runtime/beam -pa /tmp -eval 'kex_e2e_double:main(), halt()'", "r");
+            FILE* pipe = popen(
+                "erl -noshell -pa runtime/beam -pa /tmp -eval 'kex_e2e_double:main(), halt()'",
+                "r");
             assertTrue(pipe != nullptr, "popen succeeded");
             char buf[256] = {};
             fgets(buf, sizeof(buf), pipe);
             pclose(pipe);
             std::string actual(buf);
-            while (!actual.empty() && (actual.back() == '\n' || actual.back() == '\r'))
+            while (!actual.empty() && (actual.back() == '\n' || actual.back() == '\r')) {
                 actual.pop_back();
+            }
             assertEqual(actual, std::string("42"), "double(21) should print 42");
         });
 
         it("preserves qualified uppercase constants on BEAM", [&erlcAvailable]() {
-            if (!erlcAvailable()) return;
-            auto out = emitProduction(
-                "main do IO.printLine(Math.PI) end\n",
-                "e2e_math_pi");
+            if (!erlcAvailable()) {
+                return;
+            }
+            auto out = emitProduction("main do IO.printLine(Math.PI) end\n", "e2e_math_pi");
             std::ofstream file("/tmp/kex_e2e_math_pi.core");
             file << out;
             file.close();
             int compileResult = std::system(
                 "erlc +from_core -pa runtime/beam -o /tmp "
                 "/tmp/kex_e2e_math_pi.core > /dev/null 2>&1");
-            assertEqual(compileResult, 0,
-                        "erlc should compile Math.PI");
+            assertEqual(compileResult, 0, "erlc should compile Math.PI");
             FILE* pipe = popen(
                 "erl -noshell -pa runtime/beam -pa /tmp "
                 "-eval 'kex_e2e_math_pi:main(), halt()'",
@@ -2049,12 +2017,10 @@ int main() {
             fgets(buffer, sizeof(buffer), pipe);
             pclose(pipe);
             std::string actual(buffer);
-            while (!actual.empty() &&
-                   (actual.back() == '\n' ||
-                    actual.back() == '\r'))
+            while (!actual.empty() && (actual.back() == '\n' || actual.back() == '\r')) {
                 actual.pop_back();
-            assertTrue(actual.rfind("3.14159", 0) == 0,
-                       "Math.PI must remain numeric on BEAM");
+            }
+            assertTrue(actual.rfind("3.14159", 0) == 0, "Math.PI must remain numeric on BEAM");
         });
     });
 
@@ -2065,21 +2031,24 @@ int main() {
                 "  receive do\n"
                 "    :inc => serve(n + 1)\n"
                 "  end\n"
-                "end\n", "srv");
-            assertTrue(contains(out, "call 'kex_srv':'serve'("),
-                           "the self-call after a receive must be remote");
-            assertTrue(out.find("apply 'serve'/") == std::string::npos,
-                       "no local self-call may remain");
+                "end\n",
+                "srv");
+            assertTrue(
+                contains(out, "call 'kex_srv':'serve'("),
+                "the self-call after a receive must be remote");
+            assertTrue(
+                out.find("apply 'serve'/") == std::string::npos, "no local self-call may remain");
         });
 
         it("keeps local calls in a function that never receives", []() {
             auto out = emitUpgradable(
-                "let count(n: Integer) -> Integer = n == 0 then 0 else count(n - 1)\n",
-                "pure");
-            assertTrue(contains(out, "apply 'count'/1("),
-                           "a function that does not receive keeps its local call");
-            assertTrue(out.find("call 'kex_pure':'count'") == std::string::npos,
-                       "no remote call is inserted without a receive");
+                "let count(n: Integer) -> Integer = n == 0 then 0 else count(n - 1)\n", "pure");
+            assertTrue(
+                contains(out, "apply 'count'/1("),
+                "a function that does not receive keeps its local call");
+            assertTrue(
+                out.find("call 'kex_pure':'count'") == std::string::npos,
+                "no remote call is inserted without a receive");
         });
 
         it("lifts a receiving loop into an exported function", []() {
@@ -2093,13 +2062,14 @@ int main() {
                 "    end\n"
                 "  end\n"
                 "  IO.printLine(n)\n"
-                "end\n", "lifted");
-            assertTrue(contains(out, "'__kex_loop_main_0'/1 ="),
-                           "the loop becomes a module function");
-            assertTrue(contains(out, "'__kex_loop_main_0'/1, 'module_info'/0"),
-                           "and is exported");
-            assertTrue(contains(out, "call 'kex_lifted':'__kex_loop_main_0'("),
-                           "entered and continued through remote calls");
+                "end\n",
+                "lifted");
+            assertTrue(
+                contains(out, "'__kex_loop_main_0'/1 ="), "the loop becomes a module function");
+            assertTrue(contains(out, "'__kex_loop_main_0'/1, 'module_info'/0"), "and is exported");
+            assertTrue(
+                contains(out, "call 'kex_lifted':'__kex_loop_main_0'("),
+                "entered and continued through remote calls");
         });
 
         it("leaves a loop in place when an early return escapes it", []() {
@@ -2111,9 +2081,11 @@ int main() {
                 "    end\n"
                 "  end\n"
                 "  0\n"
-                "end\n", "early");
-            assertTrue(out.find("__kex_loop_") == std::string::npos,
-                       "a `return` must stay in the function that catches it");
+                "end\n",
+                "early");
+            assertTrue(
+                out.find("__kex_loop_") == std::string::npos,
+                "a `return` must stay in the function that catches it");
         });
     });
 

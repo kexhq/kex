@@ -29,11 +29,12 @@ struct CompileTimeIntrinsic {
     // Types the whole call, arguments included, when they are not ordinary
     // values (a function's NAME). Returns null to leave the call to its stdlib
     // signature (and `fold`).
-    TypePtr (TypeChecker::*check)(const ast::Expr& expr,
-                                  const ast::MethodCall& call) = nullptr;
+    TypePtr (TypeChecker::*check)(const ast::Expr& expr, const ast::MethodCall& call) = nullptr;
     // Once the arguments are typed: records the answer the call folds to.
-    void (TypeChecker::*fold)(const ast::Expr& expr, const ast::MethodCall& call,
-                              const std::vector<TypePtr>& argTypes) = nullptr;
+    void (TypeChecker::*fold)(
+        const ast::Expr& expr,
+        const ast::MethodCall& call,
+        const std::vector<TypePtr>& argTypes) = nullptr;
 };
 
 // The intrinsic a call named `name` with `arity` arguments is, if any.

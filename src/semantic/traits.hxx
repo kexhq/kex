@@ -5,7 +5,7 @@
 namespace kex::ast {
 struct Expr;
 struct FunctionClause;
-}
+} // namespace kex::ast
 #include <optional>
 #include <set>
 #include <string>
@@ -61,10 +61,10 @@ using ShownThrough =
 // `typesEqual` never equates, so it counts as equal to another Unknown here.
 auto sameParameters(const Signature& left, const Signature& right) -> bool;
 
-
 struct TraitDef {
-    std::string name;                        // "Number", "Comparable", user-defined names too
-    std::vector<Signature> requiredMethods;  // e.g. Comparable requires `compare : This -> Comparison`
+    std::string name; // "Number", "Comparable", user-defined names too
+    std::vector<Signature>
+        requiredMethods; // e.g. Comparable requires `compare : This -> Comparison`
     // Names of methods the trait DEFINES a default body for. They have no
     // signature of their own and are not registered per implementing type, so
     // without this list `bot.shout` (an inherited default) is indistinguishable
@@ -117,8 +117,7 @@ public:
     // Whether `type`'s own module implements `method`: a method a trait it
     // claims requires, or a default from that trait's body.
     auto implementsInHome(const std::string& type, const std::string& method) const -> bool;
-    auto declaresMethod(const std::string& type, const std::string& method) const
-        -> bool;
+    auto declaresMethod(const std::string& type, const std::string& method) const -> bool;
     // The method a trait `type` claims requires under `method`'s name, and
     // that trait; nulls when no claimed trait requires one.
     auto requiredMethod(const TypePtr& type, const std::string& method) const

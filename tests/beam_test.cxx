@@ -139,11 +139,8 @@ int main() {
             kex::Lexer lexer("module T do\nvalue : Result<String, Integer>?\nend");
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
-            auto& module = std::get<std::unique_ptr<kex::ast::ModuleDef>>(
-                program.items[0]);
-            auto& annotation =
-                std::get<std::unique_ptr<kex::ast::TypeAnnotation>>(
-                    module->body[0]);
+            auto& module = std::get<std::unique_ptr<kex::ast::ModuleDef>>(program.items[0]);
+            auto& annotation = std::get<std::unique_ptr<kex::ast::TypeAnnotation>>(module->body[0]);
 
             TermBuilder builder;
             kex::ast::Converter converter(builder);
@@ -158,15 +155,13 @@ int main() {
             kex::interpreter::ValueBuilder valueBuilder;
             kex::ast::Converter valueConverter(valueBuilder);
             auto value = valueConverter.typeRef(*annotation->type);
-            auto& nullableValue =
-                std::get<kex::interpreter::VariantValue>(value->data);
+            auto& nullableValue = std::get<kex::interpreter::VariantValue>(value->data);
             test::assertEqual(nullableValue.tag, std::string("NullableType"));
-            auto& namedValue = std::get<kex::interpreter::VariantValue>(
-                nullableValue.args[0]->data);
+            auto& namedValue =
+                std::get<kex::interpreter::VariantValue>(nullableValue.args[0]->data);
             test::assertEqual(namedValue.tag, std::string("NamedType"));
             test::assertEqual(
-                std::get<kex::interpreter::StringValue>(namedValue.args[0]->data)
-                    .value,
+                std::get<kex::interpreter::StringValue>(namedValue.args[0]->data).value,
                 std::string("Result"));
         });
 
@@ -174,8 +169,7 @@ int main() {
             kex::Lexer lexer("let pick([Some(value), _]) = value");
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
-            auto& function = std::get<std::unique_ptr<kex::ast::FunctionDef>>(
-                program.items[0]);
+            auto& function = std::get<std::unique_ptr<kex::ast::FunctionDef>>(program.items[0]);
             auto& pattern = **function->clauses[0].params[0].pattern;
 
             TermBuilder termBuilder;
@@ -185,75 +179,58 @@ int main() {
             test::assertTrue(listPattern[0]->isAtom("ListPattern"));
             test::assertEqual(listPattern[1]->asList().size(), size_t(2));
             test::assertTrue(
-                listPattern[1]->asList()[0]->asTuple()[0]->isAtom(
-                    "ConstructorPattern"));
+                listPattern[1]->asList()[0]->asTuple()[0]->isAtom("ConstructorPattern"));
 
             kex::interpreter::ValueBuilder valueBuilder;
             kex::ast::Converter valueConverter(valueBuilder);
             auto value = valueConverter.patternRef(pattern);
-            auto& listValue =
-                std::get<kex::interpreter::VariantValue>(value->data);
+            auto& listValue = std::get<kex::interpreter::VariantValue>(value->data);
             test::assertEqual(listValue.tag, std::string("ListPattern"));
             test::assertEqual(
-                std::get<kex::interpreter::ListValue>(listValue.args[0]->data)
-                    .elements.size(),
+                std::get<kex::interpreter::ListValue>(listValue.args[0]->data).elements.size(),
                 size_t(2));
         });
 
         test::it("encodes nullary AST variants as Kex constructor atoms", []() {
             TermBuilder builder;
-            auto wildcard = builder.variant(
-                "WildcardPattern", "Kex.AST.PatternRef", {});
+            auto wildcard = builder.variant("WildcardPattern", "Kex.AST.PatternRef", {});
             test::assertTrue(wildcard->isAtom("WildcardPattern"));
         });
 
         test::it("uses the shared declaration converter", []() {
-            kex::Lexer lexer(
-                "# Select a value\nlet pick(value : String) : String = value");
+            kex::Lexer lexer("# Select a value\nlet pick(value : String) : String = value");
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
-            auto& function = std::get<std::unique_ptr<kex::ast::FunctionDef>>(
-                program.items[0]);
+            auto& function = std::get<std::unique_ptr<kex::ast::FunctionDef>>(program.items[0]);
 
             TermBuilder termBuilder;
             kex::ast::Converter termConverter(termBuilder);
-            auto term = termConverter.functionDef(
-                *function, "Select a value", "fixture.kex");
+            auto term = termConverter.functionDef(*function, "Select a value", "fixture.kex");
             auto& node = term->asTuple();
             test::assertTrue(node[0]->isAtom("FunctionDef"));
             auto& info = node[1]->asTuple();
             test::assertTrue(info[0]->isAtom("Kex.AST.FunctionInfo"));
-            test::assertEqual(info[1]->asBinaryStr(),
-                              std::string("pick"));
-            test::assertEqual(info[2]->asTuple()[1]->asBinaryStr(),
-                              std::string("Select a value"));
+            test::assertEqual(info[1]->asBinaryStr(), std::string("pick"));
+            test::assertEqual(info[2]->asTuple()[1]->asBinaryStr(), std::string("Select a value"));
             auto& location = info[6]->asTuple();
             test::assertTrue(location[0]->isAtom("Kex.AST.Location"));
-            test::assertEqual(location[1]->asBinaryStr(),
-                              std::string("fixture.kex"));
+            test::assertEqual(location[1]->asBinaryStr(), std::string("fixture.kex"));
 
-            auto wholeProgram = termConverter.program(
-                program, "fixture.kex", {{2, "Select a value"}});
+            auto wholeProgram =
+                termConverter.program(program, "fixture.kex", {{2, "Select a value"}});
             auto& programRecord = wholeProgram->asTuple();
             test::assertTrue(programRecord[0]->isAtom("Kex.AST.Program"));
             test::assertEqual(programRecord[1]->asInt(), int64_t(2));
-            test::assertEqual(
-                programRecord[2]->asList().size(),
-                size_t(1));
+            test::assertEqual(programRecord[2]->asList().size(), size_t(1));
 
             kex::interpreter::ValueBuilder valueBuilder;
             kex::ast::Converter valueConverter(valueBuilder);
-            auto value = valueConverter.functionDef(
-                *function, "Select a value", "fixture.kex");
-            auto& valueNode =
-                std::get<kex::interpreter::VariantValue>(value->data);
+            auto value = valueConverter.functionDef(*function, "Select a value", "fixture.kex");
+            auto& valueNode = std::get<kex::interpreter::VariantValue>(value->data);
             test::assertEqual(valueNode.tag, std::string("FunctionDef"));
-            auto& valueInfo =
-                std::get<kex::interpreter::RecordValue>(
-                    valueNode.args[0]->data);
+            auto& valueInfo = std::get<kex::interpreter::RecordValue>(valueNode.args[0]->data);
             test::assertEqual(
-                std::get<kex::interpreter::StringValue>(
-                    valueInfo.fields.at("name")->data).value,
+                std::get<kex::interpreter::StringValue>(valueInfo.fields.at("name")->data).value,
                 std::string("pick"));
         });
 
@@ -377,11 +354,11 @@ int main() {
 
             test::assertEqual(decoded.typeInterface.exports.size(), size_t(1));
             test::assertEqual(decoded.typeInterface.exports[0].name, std::string("greet"));
-            test::assertEqual(decoded.typeInterface.exports[0].beamFunction,
-                              std::string("greet_impl"));
+            test::assertEqual(
+                decoded.typeInterface.exports[0].beamFunction, std::string("greet_impl"));
             test::assertEqual(decoded.typeInterface.exports[0].beamArity, 1);
-            test::assertEqual(decoded.typeInterface.exports[0].paramTypes[0]->name,
-                              std::string("String"));
+            test::assertEqual(
+                decoded.typeInterface.exports[0].paramTypes[0]->name, std::string("String"));
         });
 
         test::it("round-trips export param names (KexI v3)", []() {
@@ -466,14 +443,10 @@ int main() {
             auto decoded = deserializeKexi(serializeKexi(chunk));
 
             test::assertEqual(decoded.metadata.traitDefs.size(), size_t(1));
-            test::assertEqual(decoded.metadata.traitDefs[0].name,
-                              std::string("Readable"));
-            test::assertEqual(
-                decoded.metadata.traitDefs[0].requiredMethods.size(), size_t(2));
-            test::assertTrue(
-                decoded.metadata.traitDefs[0].requiredMethods[0].isFoul);
-            test::assertTrue(
-                !decoded.metadata.traitDefs[0].requiredMethods[1].isFoul);
+            test::assertEqual(decoded.metadata.traitDefs[0].name, std::string("Readable"));
+            test::assertEqual(decoded.metadata.traitDefs[0].requiredMethods.size(), size_t(2));
+            test::assertTrue(decoded.metadata.traitDefs[0].requiredMethods[0].isFoul);
+            test::assertTrue(!decoded.metadata.traitDefs[0].requiredMethods[1].isFoul);
         });
 
         test::it("round-trips companion with back-pointer", []() {
@@ -489,19 +462,16 @@ int main() {
             auto decoded = deserializeKexi(bytes);
 
             test::assertTrue(decoded.metadata.role == KexiModuleRole::Companion);
-            test::assertEqual(decoded.metadata.unitId,
-                              std::string("example/binary-tree"));
-            test::assertEqual(decoded.metadata.sourceModule,
-                              std::string("BinaryTree"));
-            test::assertEqual(decoded.metadata.entryBackPointer,
-                              std::string("kex_binary_tree"));
+            test::assertEqual(decoded.metadata.unitId, std::string("example/binary-tree"));
+            test::assertEqual(decoded.metadata.sourceModule, std::string("BinaryTree"));
+            test::assertEqual(decoded.metadata.entryBackPointer, std::string("kex_binary_tree"));
         });
 
         test::it("round-trips entry with companion manifest", []() {
             KexiChunk chunk;
             chunk.metadata.moduleAtom = "kex_test";
             chunk.metadata.role = KexiModuleRole::Entry;
-            Hash128 hash = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
+            Hash128 hash = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
             chunk.metadata.companions.push_back({"Kex.Foo", "Kex.Foo.beam", hash});
             chunk.interfaceHash = computeInterfaceHash(chunk);
 
@@ -509,12 +479,11 @@ int main() {
             auto decoded = deserializeKexi(bytes);
 
             test::assertEqual(decoded.metadata.companions.size(), size_t(1));
-            test::assertEqual(decoded.metadata.companions[0].beamAtom,
-                              std::string("Kex.Foo"));
-            test::assertEqual(decoded.metadata.companions[0].relativePath,
-                              std::string("Kex.Foo.beam"));
-            test::assertTrue(decoded.metadata.companions[0].expectedHash == hash,
-                            "expected hash should match");
+            test::assertEqual(decoded.metadata.companions[0].beamAtom, std::string("Kex.Foo"));
+            test::assertEqual(
+                decoded.metadata.companions[0].relativePath, std::string("Kex.Foo.beam"));
+            test::assertTrue(
+                decoded.metadata.companions[0].expectedHash == hash, "expected hash should match");
         });
 
         test::it("round-trips entry package policy", []() {
@@ -528,13 +497,10 @@ int main() {
             chunk.metadata.package.receiverProviders = {"Core", "Collections"};
 
             auto decoded = deserializeKexi(serializeKexi(chunk));
-            test::assertEqual(decoded.metadata.package.id,
-                              std::string("kex/stdlib"));
+            test::assertEqual(decoded.metadata.package.id, std::string("kex/stdlib"));
             test::assertEqual(decoded.metadata.package.unitIds.size(), size_t(1));
-            test::assertEqual(decoded.metadata.package.automaticImports[0],
-                              std::string("Core"));
-            test::assertEqual(decoded.metadata.package.receiverProviders.size(),
-                              size_t(2));
+            test::assertEqual(decoded.metadata.package.automaticImports[0], std::string("Core"));
+            test::assertEqual(decoded.metadata.package.receiverProviders.size(), size_t(2));
         });
 
         test::it("hash is stable across identical payloads", []() {
@@ -559,25 +525,22 @@ int main() {
             KexiChunk chunk;
             chunk.metadata.moduleAtom = "kex_test";
             auto interfaceHash = computeInterfaceHash(chunk);
-            chunk.artifactHash = {1, 2, 3, 4, 5, 6, 7, 8,
-                                  9, 10, 11, 12, 13, 14, 15, 16};
-            chunk.sourceHash = {16, 15, 14, 13, 12, 11, 10, 9,
-                                8, 7, 6, 5, 4, 3, 2, 1};
+            chunk.artifactHash = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+            chunk.sourceHash = {16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1};
             chunk.intrinsicAbiVersion = kex::kIntrinsicAbiVersion;
-            chunk.backendRepresentationVersion =
-                kex::kBeamRepresentationVersion;
+            chunk.backendRepresentationVersion = kex::kBeamRepresentationVersion;
 
             auto decoded = deserializeKexi(serializeKexi(chunk));
-            test::assertTrue(decoded.artifactHash == chunk.artifactHash,
-                             "artifact digest should round-trip");
-            test::assertTrue(decoded.sourceHash == chunk.sourceHash,
-                             "source digest should round-trip");
-            test::assertEqual(decoded.intrinsicAbiVersion,
-                              kex::kIntrinsicAbiVersion);
-            test::assertEqual(decoded.backendRepresentationVersion,
-                              kex::kBeamRepresentationVersion);
-            test::assertTrue(computeInterfaceHash(chunk) == interfaceHash,
-                             "build digests must not affect interface hash");
+            test::assertTrue(
+                decoded.artifactHash == chunk.artifactHash, "artifact digest should round-trip");
+            test::assertTrue(
+                decoded.sourceHash == chunk.sourceHash, "source digest should round-trip");
+            test::assertEqual(decoded.intrinsicAbiVersion, kex::kIntrinsicAbiVersion);
+            test::assertEqual(
+                decoded.backendRepresentationVersion, kex::kBeamRepresentationVersion);
+            test::assertTrue(
+                computeInterfaceHash(chunk) == interfaceHash,
+                "build digests must not affect interface hash");
         });
 
         test::it("rejects unsupported schema version", []() {
@@ -659,8 +622,7 @@ int main() {
             test::assertEqual(distinct.name, std::string("AccountId"));
             test::assertTrue(distinct.isDistinct);
             test::assertTrue(distinct.backingType != nullptr);
-            test::assertEqual(distinct.backingType->name,
-                              std::string("Integer"));
+            test::assertEqual(distinct.backingType->name, std::string("Integer"));
         });
 
         test::it("round-trips complex type terms", []() {
@@ -672,11 +634,11 @@ int main() {
             exp.paramTypes = {
                 kexiFunc({kexiPrimitive("Integer")}, kexiPrimitive("Bool")),
             };
-            exp.returnType = kexiOptional(kexiList(
-                kexiMap(kexiPrimitive("String"), kexiUnion({
-                    kexiPrimitive("Integer"),
-                    kexiNamed("Tree", {kexiNamed("a")}),
-                }))));
+            exp.returnType = kexiOptional(kexiList(kexiMap(
+                kexiPrimitive("String"), kexiUnion({
+                                             kexiPrimitive("Integer"),
+                                             kexiNamed("Tree", {kexiNamed("a")}),
+                                         }))));
             chunk.typeInterface.exports.push_back(std::move(exp));
             chunk.interfaceHash = computeInterfaceHash(chunk);
 
@@ -704,15 +666,13 @@ int main() {
             chunk.interfaceHash = computeInterfaceHash(chunk);
 
             auto decoded = deserializeKexi(serializeKexi(chunk));
-            const auto& param =
-                decoded.typeInterface.exports.front().paramTypes.front();
+            const auto& param = decoded.typeInterface.exports.front().paramTypes.front();
             test::assertTrue(param->kind == KexiType::Intersection);
             test::assertTrue(param->typeArgs.size() == 2);
             const auto& record = param->typeArgs[1];
             test::assertTrue(record->kind == KexiType::Record);
             test::assertEqual(record->fieldNames.front(), std::string("name"));
-            test::assertEqual(record->typeArgs.front()->name,
-                              std::string("String"));
+            test::assertEqual(record->typeArgs.front()->name, std::string("String"));
         });
     });
 
@@ -734,15 +694,12 @@ int main() {
             options.flattenModules = true;
             auto chunk = collectMetadata(program, options);
             test::assertEqual(chunk.metadata.records.size(), size_t(1));
-            test::assertEqual(chunk.metadata.records[0].name,
-                              std::string("Request"));
-            test::assertEqual(chunk.metadata.records[0].fields[0].name,
-                              std::string("path"));
+            test::assertEqual(chunk.metadata.records[0].name, std::string("Request"));
+            test::assertEqual(chunk.metadata.records[0].fields[0].name, std::string("path"));
             test::assertEqual(chunk.typeInterface.exports.size(), size_t(1));
-            test::assertEqual(chunk.typeInterface.exports[0].name,
-                              std::string("Web.Types.build"));
-            test::assertEqual(chunk.typeInterface.exports[0].beamFunction,
-                              std::string("Web__Types__build"));
+            test::assertEqual(chunk.typeInterface.exports[0].name, std::string("Web.Types.build"));
+            test::assertEqual(
+                chunk.typeInterface.exports[0].beamFunction, std::string("Web__Types__build"));
         });
 
         test::it("collects nested receiver functions for unit routing", []() {
@@ -764,10 +721,8 @@ int main() {
             auto chunk = collectMetadata(program, options);
 
             test::assertEqual(chunk.typeInterface.methods.size(), size_t(1));
-            test::assertEqual(chunk.typeInterface.methods[0].name,
-                              std::string("start"));
-            test::assertEqual(chunk.typeInterface.methods[0].beamFunction,
-                              std::string("start"));
+            test::assertEqual(chunk.typeInterface.methods[0].name, std::string("start"));
+            test::assertEqual(chunk.typeInterface.methods[0].beamFunction, std::string("start"));
         });
 
         test::it("collects a nested module companion by qualified name", []() {
@@ -786,15 +741,12 @@ int main() {
             options.entryBackPointer = "kex_prelude";
             auto chunk = collectMetadata(program, options);
             test::assertEqual(chunk.typeInterface.exports.size(), size_t(1));
-            test::assertEqual(chunk.typeInterface.exports[0].name,
-                              std::string("text"));
+            test::assertEqual(chunk.typeInterface.exports[0].name, std::string("text"));
             test::assertEqual(chunk.typeInterface.methods.size(), size_t(1));
-            test::assertEqual(chunk.typeInterface.methods[0].name,
-                              std::string("text"));
-            test::assertEqual(chunk.typeInterface.methods[0].receiverType->name,
-                              std::string("String"));
-            test::assertEqual(chunk.metadata.sourceModule,
-                              std::string("Web.Response"));
+            test::assertEqual(chunk.typeInterface.methods[0].name, std::string("text"));
+            test::assertEqual(
+                chunk.typeInterface.methods[0].receiverType->name, std::string("String"));
+            test::assertEqual(chunk.metadata.sourceModule, std::string("Web.Response"));
         });
 
         test::it("labels an entry while collecting top-level declarations", []() {
@@ -808,11 +760,9 @@ int main() {
 
             auto chunk = collectMetadata(program, options);
 
-            test::assertEqual(chunk.metadata.sourceModule,
-                              std::string("Public.Entry"));
+            test::assertEqual(chunk.metadata.sourceModule, std::string("Public.Entry"));
             test::assertEqual(chunk.typeInterface.exports.size(), size_t(1));
-            test::assertEqual(chunk.typeInterface.exports[0].name,
-                              std::string("visible"));
+            test::assertEqual(chunk.typeInterface.exports[0].name, std::string("visible"));
         });
 
         test::it("uses inferred function results instead of syntax-only unknowns", []() {
@@ -822,8 +772,7 @@ int main() {
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
             kex::semantic::Analyzer analyzer;
-            test::assertTrue(analyzer.analyze(program),
-                             "fixture should pass semantic analysis");
+            test::assertTrue(analyzer.analyze(program), "fixture should pass semantic analysis");
 
             CollectOptions options;
             options.moduleAtom = "kex_inferred";
@@ -835,17 +784,15 @@ int main() {
             test::assertEqual(doubleExport.name, std::string("double"));
             test::assertEqual(doubleExport.paramTypes.size(), size_t(1));
             test::assertTrue(doubleExport.paramTypes[0]->kind == KexiType::Primitive);
-            test::assertEqual(doubleExport.paramTypes[0]->name,
-                              std::string("Integer"));
+            test::assertEqual(doubleExport.paramTypes[0]->name, std::string("Integer"));
             test::assertTrue(doubleExport.returnType->kind == KexiType::Primitive);
-            test::assertEqual(doubleExport.returnType->name,
-                              std::string("Integer"));
+            test::assertEqual(doubleExport.returnType->name, std::string("Integer"));
 
             auto decoded = deserializeKexi(serializeKexi(chunk));
-            test::assertEqual(decoded.typeInterface.exports[0].returnType->name,
-                              std::string("Integer"));
-            test::assertEqual(decoded.typeInterface.exports[1].returnType->name,
-                              std::string("Integer"));
+            test::assertEqual(
+                decoded.typeInterface.exports[0].returnType->name, std::string("Integer"));
+            test::assertEqual(
+                decoded.typeInterface.exports[1].returnType->name, std::string("Integer"));
         });
 
         test::it("falls back to annotations when analysis is unavailable", []() {
@@ -856,10 +803,10 @@ int main() {
             options.moduleAtom = "kex_syntax_fallback";
             auto chunk = collectMetadata(program, options);
             test::assertEqual(chunk.typeInterface.exports.size(), size_t(1));
-            test::assertEqual(chunk.typeInterface.exports[0].paramTypes[0]->name,
-                              std::string("String"));
-            test::assertEqual(chunk.typeInterface.exports[0].returnType->name,
-                              std::string("String"));
+            test::assertEqual(
+                chunk.typeInterface.exports[0].paramTypes[0]->name, std::string("String"));
+            test::assertEqual(
+                chunk.typeInterface.exports[0].returnType->name, std::string("String"));
         });
 
         test::it("keeps same-named module exports attached to their declarations", []() {
@@ -873,8 +820,7 @@ int main() {
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
             kex::semantic::Analyzer analyzer;
-            test::assertTrue(analyzer.analyze(program),
-                             "fixture should pass semantic analysis");
+            test::assertTrue(analyzer.analyze(program), "fixture should pass semantic analysis");
 
             CollectOptions numberOptions;
             numberOptions.unitId = "fixture/modules";
@@ -882,22 +828,18 @@ int main() {
             numberOptions.moduleName = "Numbers";
             numberOptions.analysis = &analyzer;
             auto numbers = collectMetadata(program, numberOptions);
-            test::assertEqual(numbers.metadata.unitId,
-                              std::string("fixture/modules"));
-            test::assertEqual(numbers.metadata.sourceModule,
-                              std::string("Numbers"));
-            test::assertEqual(numbers.typeInterface.exports[0].beamFunction,
-                              std::string("value"));
-            test::assertEqual(numbers.typeInterface.exports[0].returnType->name,
-                              std::string("Integer"));
+            test::assertEqual(numbers.metadata.unitId, std::string("fixture/modules"));
+            test::assertEqual(numbers.metadata.sourceModule, std::string("Numbers"));
+            test::assertEqual(numbers.typeInterface.exports[0].beamFunction, std::string("value"));
+            test::assertEqual(
+                numbers.typeInterface.exports[0].returnType->name, std::string("Integer"));
 
             CollectOptions flagOptions;
             flagOptions.moduleAtom = "kex_flags";
             flagOptions.moduleName = "Flags";
             flagOptions.analysis = &analyzer;
             auto flags = collectMetadata(program, flagOptions);
-            test::assertEqual(flags.typeInterface.exports[0].returnType->name,
-                              std::string("Bool"));
+            test::assertEqual(flags.typeInterface.exports[0].returnType->name, std::string("Bool"));
         });
 
         test::it("uses analyzed receiver-function results", []() {
@@ -908,22 +850,19 @@ int main() {
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
             kex::semantic::Analyzer analyzer;
-            test::assertTrue(analyzer.analyze(program),
-                             "fixture should pass semantic analysis");
+            test::assertTrue(analyzer.analyze(program), "fixture should pass semantic analysis");
 
             CollectOptions options;
             options.moduleAtom = "kex_integer_extension";
             options.analysis = &analyzer;
             auto chunk = collectMetadata(program, options);
             test::assertEqual(chunk.typeInterface.methods.size(), size_t(1));
-            test::assertEqual(chunk.typeInterface.methods[0].name,
-                              std::string("doubled"));
-            test::assertEqual(chunk.typeInterface.methods[0].beamFunction,
-                              std::string("doubled"));
-            test::assertEqual(chunk.typeInterface.methods[0].returnType->name,
-                              std::string("Integer"));
-            test::assertEqual(chunk.metadata.methodOwnership[0].beamFunction,
-                              std::string("doubled"));
+            test::assertEqual(chunk.typeInterface.methods[0].name, std::string("doubled"));
+            test::assertEqual(chunk.typeInterface.methods[0].beamFunction, std::string("doubled"));
+            test::assertEqual(
+                chunk.typeInterface.methods[0].returnType->name, std::string("Integer"));
+            test::assertEqual(
+                chunk.metadata.methodOwnership[0].beamFunction, std::string("doubled"));
         });
 
         test::it("collects trait default receiver functions", []() {
@@ -947,21 +886,15 @@ int main() {
             test::assertEqual(method.beamArity, 2);
             test::assertTrue(method.receiverType->kind == KexiType::Constrained);
             test::assertEqual(method.receiverType->name, std::string("T"));
-            test::assertEqual(method.receiverType->traitName,
-                              std::string("Enumerable"));
+            test::assertEqual(method.receiverType->traitName, std::string("Enumerable"));
             test::assertEqual(chunk.metadata.methodOwnership.size(), size_t(1));
-            test::assertEqual(chunk.metadata.methodOwnership[0].methodName,
-                              std::string("map"));
+            test::assertEqual(chunk.metadata.methodOwnership[0].methodName, std::string("map"));
             test::assertEqual(chunk.metadata.traitDefs.size(), size_t(1));
-            test::assertEqual(chunk.metadata.traitDefs[0].name,
-                              std::string("Enumerable"));
+            test::assertEqual(chunk.metadata.traitDefs[0].name, std::string("Enumerable"));
+            test::assertEqual(chunk.metadata.traitDefs[0].requiredMethods.size(), size_t(1));
             test::assertEqual(
-                chunk.metadata.traitDefs[0].requiredMethods.size(), size_t(1));
-            test::assertEqual(
-                chunk.metadata.traitDefs[0].requiredMethods[0].name,
-                std::string("reduce"));
-            test::assertTrue(
-                chunk.metadata.traitDefs[0].requiredMethods[0].isFoul);
+                chunk.metadata.traitDefs[0].requiredMethods[0].name, std::string("reduce"));
+            test::assertTrue(chunk.metadata.traitDefs[0].requiredMethods[0].isFoul);
         });
     });
 
@@ -977,14 +910,12 @@ int main() {
                 {"stdlib-artifact", "Collections"},
                 {"application-artifact", "Application"},
             };
-            test::assertTrue(
-                kex::module::validatePackageMetadata(package, available).empty());
+            test::assertTrue(kex::module::validatePackageMetadata(package, available).empty());
 
             package.receiverProviders.push_back("Application");
             auto errors = kex::module::validatePackageMetadata(package, available);
             test::assertEqual(errors.size(), size_t(1));
-            test::assertTrue(errors[0].message.find("unit it does not own") !=
-                             std::string::npos);
+            test::assertTrue(errors[0].message.find("unit it does not own") != std::string::npos);
         });
 
         test::it("restores nullary constructor refinements from KexI", []() {
@@ -1029,8 +960,8 @@ int main() {
             const auto& constructor = interfaces.modules.at("Units").exports.at("Hour").front();
             test::assertTrue(constructor.isConstructor);
             test::assertEqual(constructor.constructorOwner, std::string("TimeUnit"));
-            test::assertEqual(kex::semantic::typeToString(constructor.signature.result),
-                              std::string("Hour"));
+            test::assertEqual(
+                kex::semantic::typeToString(constructor.signature.result), std::string("Hour"));
             fs::remove_all(root);
         });
 
@@ -1046,8 +977,7 @@ int main() {
             chunk.metadata.sourceModule = "Numbers";
             chunk.metadata.moduleAtom = "kex_fixture";
             chunk.intrinsicAbiVersion = kex::kIntrinsicAbiVersion;
-            chunk.backendRepresentationVersion =
-                kex::kBeamRepresentationVersion;
+            chunk.backendRepresentationVersion = kex::kBeamRepresentationVersion;
             KexiMethod doubled;
             doubled.name = "doubled";
             doubled.beamFunction = "doubled";
@@ -1105,49 +1035,41 @@ int main() {
             test::assertEqual(matches.size(), size_t(1));
             test::assertEqual(matches[0].first, std::string("kex_fixture"));
             auto external = registry.buildExternalModules();
-            test::assertEqual(external.receiverFunctions["doubled"].size(),
-                              size_t(1));
+            test::assertEqual(external.receiverFunctions["doubled"].size(), size_t(1));
             test::assertEqual(
-                external.receiverFunctions["doubled"][0].moduleAtom,
-                std::string("kex_fixture"));
+                external.receiverFunctions["doubled"][0].moduleAtom, std::string("kex_fixture"));
             test::assertEqual(
-                external.receiverFunctions["scaled"][0].paramNames[0],
-                std::string("factor"));
+                external.receiverFunctions["scaled"][0].paramNames[0], std::string("factor"));
             auto semantic = registry.buildSemanticInterfaces();
             test::assertTrue(semantic.modules.count("Numbers") > 0);
             test::assertTrue(semantic.modules["Numbers"].automaticImport);
-            test::assertEqual(semantic.modules["Numbers"].backendModule,
-                              std::string("kex_fixture"));
             test::assertEqual(
-                semantic.modules["Numbers"].exports["answer"].size(), size_t(1));
+                semantic.modules["Numbers"].backendModule, std::string("kex_fixture"));
+            test::assertEqual(semantic.modules["Numbers"].exports["answer"].size(), size_t(1));
             const auto& narrowSignature =
                 semantic.modules["Numbers"].exports["narrow"][0].signature;
             test::assertEqual(
-                kex::semantic::typeToString(narrowSignature.params[0]),
-                std::string("Int32"));
-            test::assertTrue(std::holds_alternative<
-                kex::semantic::ConstrainedType>(narrowSignature.result->kind));
-            test::assertEqual(semantic.receiverFunctions["doubled"].size(),
-                              size_t(1));
+                kex::semantic::typeToString(narrowSignature.params[0]), std::string("Int32"));
+            test::assertTrue(
+                std::holds_alternative<kex::semantic::ConstrainedType>(
+                    narrowSignature.result->kind));
+            test::assertEqual(semantic.receiverFunctions["doubled"].size(), size_t(1));
             const auto& receiver = semantic.receiverFunctions["doubled"][0];
-            test::assertEqual(receiver.backendModule,
-                              std::string("kex_fixture"));
+            test::assertEqual(receiver.backendModule, std::string("kex_fixture"));
             test::assertEqual(receiver.signature.params.size(), size_t(1));
-            test::assertTrue(std::holds_alternative<
-                kex::semantic::PrimitiveType>(receiver.signature.params[0]->kind));
+            test::assertTrue(
+                std::holds_alternative<kex::semantic::PrimitiveType>(
+                    receiver.signature.params[0]->kind));
             test::assertEqual(
-                kex::semantic::typeToString(receiver.signature.result),
-                std::string("Integer"));
+                kex::semantic::typeToString(receiver.signature.result), std::string("Integer"));
             test::assertEqual(
-                semantic.receiverFunctions["scaled"][0].paramNames[0],
-                std::string("factor"));
+                semantic.receiverFunctions["scaled"][0].paramNames[0], std::string("factor"));
 
             auto competing = package;
             competing.id = "example/competing";
             auto conflict = registry.declarePackage(competing);
             test::assertEqual(conflict.size(), size_t(1));
-            test::assertTrue(conflict[0].message.find("already owned") !=
-                             std::string::npos);
+            test::assertTrue(conflict[0].message.find("already owned") != std::string::npos);
 
             fs::remove_all(root);
         });
@@ -1164,8 +1086,7 @@ int main() {
             chunk.metadata.sourceModule = "Core";
             chunk.metadata.moduleAtom = "kex_stdlib";
             chunk.intrinsicAbiVersion = kex::kIntrinsicAbiVersion;
-            chunk.backendRepresentationVersion =
-                kex::kBeamRepresentationVersion;
+            chunk.backendRepresentationVersion = kex::kBeamRepresentationVersion;
             chunk.metadata.package.id = "kex/stdlib";
             chunk.metadata.package.unitIds = {"stdlib-artifact"};
             chunk.metadata.package.automaticImports = {"Core"};
@@ -1187,8 +1108,7 @@ int main() {
             test::assertTrue(registry.loadUnit(beamPath).empty());
             test::assertEqual(registry.automaticImportModules().size(), size_t(1));
             test::assertEqual(
-                registry.findMethodsForReceiver("identity", "Integer").size(),
-                size_t(1));
+                registry.findMethodsForReceiver("identity", "Integer").size(), size_t(1));
 
             fs::remove_all(root);
         });
@@ -1219,13 +1139,12 @@ int main() {
             auto errors = registry.loadUnit(beamPath);
             test::assertEqual(errors.size(), size_t(1));
             test::assertTrue(
-                errors[0].message.find("implementation digest mismatch") !=
-                    std::string::npos,
+                errors[0].message.find("implementation digest mismatch") != std::string::npos,
                 errors[0].message);
-            auto embedded = deserializeKexi(
-                changed.findChunk(KEXI_CHUNK_ID)->data);
-            test::assertTrue(embedded.interfaceHash == interfaceHash,
-                             "implementation change must preserve interface hash");
+            auto embedded = deserializeKexi(changed.findChunk(KEXI_CHUNK_ID)->data);
+            test::assertTrue(
+                embedded.interfaceHash == interfaceHash,
+                "implementation change must preserve interface hash");
 
             fs::remove_all(root);
         });
@@ -1242,8 +1161,7 @@ int main() {
             chunk.metadata.sourceModule = "Fixture";
             chunk.metadata.moduleAtom = "kex_fixture";
             chunk.intrinsicAbiVersion = kex::kIntrinsicAbiVersion + 1;
-            chunk.backendRepresentationVersion =
-                kex::kBeamRepresentationVersion;
+            chunk.backendRepresentationVersion = kex::kBeamRepresentationVersion;
             BeamFile beam;
             beam.setChunk("Code", {1, 2, 3, 4});
             chunk.artifactHash = computeArtifactHash(beam);
@@ -1253,8 +1171,9 @@ int main() {
             KexiRegistry registry;
             auto errors = registry.loadUnit(beamPath);
             test::assertEqual(errors.size(), size_t(1));
-            test::assertTrue(errors[0].message.find("private intrinsic ABI") !=
-                             std::string::npos, errors[0].message);
+            test::assertTrue(
+                errors[0].message.find("private intrinsic ABI") != std::string::npos,
+                errors[0].message);
 
             fs::remove_all(root);
         });
@@ -1267,7 +1186,8 @@ int main() {
             // Create a minimal BEAM file
             BeamFile bf;
             bf.chunks.push_back({"AtU8", {0, 0, 0, 1, 4, 't', 'e', 's', 't'}});
-            bf.chunks.push_back({"Code", {0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 1, 1, 3, 153, 0}});
+            bf.chunks.push_back(
+                {"Code", {0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 1, 1, 3, 153, 0}});
 
             KexiChunk chunk;
             chunk.metadata.moduleAtom = "test_mod";
@@ -1314,13 +1234,11 @@ int main() {
         };
 
         test::it("hashes the empty input", [&]() {
-            test::assertEqual(hashOf(""),
-                              std::string("e3b0c44298fc1c149afbf4c8996fb924"));
+            test::assertEqual(hashOf(""), std::string("e3b0c44298fc1c149afbf4c8996fb924"));
         });
 
         test::it("hashes a single block", [&]() {
-            test::assertEqual(hashOf("abc"),
-                              std::string("ba7816bf8f01cfea414140de5dae2223"));
+            test::assertEqual(hashOf("abc"), std::string("ba7816bf8f01cfea414140de5dae2223"));
         });
 
         test::it("hashes across the two-block padding boundary", [&]() {
@@ -1331,8 +1249,8 @@ int main() {
         });
 
         test::it("hashes a multi-block input", [&]() {
-            test::assertEqual(hashOf(std::string(1000, 'a')),
-                              std::string("41edece42d63e8d9bf515a9ba6932e1c"));
+            test::assertEqual(
+                hashOf(std::string(1000, 'a')), std::string("41edece42d63e8d9bf515a9ba6932e1c"));
         });
     });
 

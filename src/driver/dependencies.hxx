@@ -36,8 +36,8 @@ struct LoadedDep {
 extern bool g_dependencyFailureThrows;
 [[noreturn]] auto dependencyFailure(const std::string& what) -> void;
 // An error about a module's file, at its header.
-auto reportModuleFileError(const std::filesystem::path& file, int line,
-                           const std::string& message) -> void;
+auto reportModuleFileError(const std::filesystem::path& file, int line, const std::string& message)
+    -> void;
 
 // Where an expansion keeps template scans between builds, and for which
 // toolchain (kexhq/kex#323); left empty when every cache is off.
@@ -84,8 +84,8 @@ extern bool g_memoizeDependencyExpansion;
 
 // Whether the prelude imports `module` into every program: its interface is
 // already known, so its source is never merged in.
-auto isAutomaticImport(const semantic::ImportedInterfaces* interfaces,
-                       const std::string& module) -> bool;
+auto isAutomaticImport(const semantic::ImportedInterfaces* interfaces, const std::string& module)
+    -> bool;
 // The modules `program` names, through `using` or a qualified reference,
 // whose source has to be merged in: all but the automatic imports.
 auto sourceModulesNamedBy(const ast::Program& program) -> std::unordered_set<std::string>;
@@ -118,23 +118,28 @@ struct Dependencies {
 // PROVIDED set, even an empty one, is authoritative and skips that re-analyze;
 // the recursion into dependency files always passes nullopt and uses the
 // discovery cache.
-auto loadDependencies(const ast::Program& program, const std::vector<std::string>& roots,
-                      const semantic::ImportedInterfaces* interfaces,
-                      const std::optional<std::unordered_set<std::string>>& qualifiedModules =
-                          std::nullopt) -> Dependencies;
+auto loadDependencies(
+    const ast::Program& program,
+    const std::vector<std::string>& roots,
+    const semantic::ImportedInterfaces* interfaces,
+    const std::optional<std::unordered_set<std::string>>& qualifiedModules = std::nullopt)
+    -> Dependencies;
 // Merges the loaded files' declarations into `program`, ahead of its own, and
 // refuses a module declared in a file named for another.
-auto mergeDependencies(ast::Program& program, Dependencies& dependencies,
-                       const std::vector<std::string>& roots,
-                       const semantic::ImportedInterfaces* interfaces) -> void;
+auto mergeDependencies(
+    ast::Program& program,
+    Dependencies& dependencies,
+    const std::vector<std::string>& roots,
+    const semantic::ImportedInterfaces* interfaces) -> void;
 
 // A program the walker runs, checked first, as `kex -R` runs one: the project
 // modules it uses merged in, expanded, and checked silently against
 // `interfaces`. For a harness or an embedder; a dependency that cannot be
 // loaded throws.
-auto prepareForWalker(ast::Program& program, const std::vector<std::string>& roots,
-                      const semantic::ImportedInterfaces* interfaces,
-                      const std::string& sourcePath = {})
-    -> std::unique_ptr<hir::CheckedProgram>;
+auto prepareForWalker(
+    ast::Program& program,
+    const std::vector<std::string>& roots,
+    const semantic::ImportedInterfaces* interfaces,
+    const std::string& sourcePath = {}) -> std::unique_ptr<hir::CheckedProgram>;
 
 } // namespace kex::driver

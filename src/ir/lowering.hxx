@@ -18,11 +18,13 @@ namespace kex::ir {
 // The types a `make` method's symbol and its dispatcher guards are spelled
 // from: its receiver as given, then each parameter's annotation as the
 // checker resolved it (`Any` where none is written).
-auto methodSignatureTypes(const hir::Program& hir, const ast::FunctionDef& method,
-                          const std::string& receiver) -> std::vector<std::string>;
+auto methodSignatureTypes(
+    const hir::Program& hir, const ast::FunctionDef& method, const std::string& receiver)
+    -> std::vector<std::string>;
 // The identities the checker gives the types a module declares.
-auto ownTypeIdentities(const hir::Program& hir, const std::string& module,
-                       const std::set<std::string>& declared) -> std::unordered_set<std::string>;
+auto ownTypeIdentities(
+    const hir::Program& hir, const std::string& module, const std::set<std::string>& declared)
+    -> std::unordered_set<std::string>;
 
 using namespace kex::ir::detail;
 
@@ -87,9 +89,9 @@ struct Lowering {
         bool hasDefault = false;
     };
     std::map<std::string, std::vector<FieldLayout>> recordLayouts;
-    std::map<std::string,
-             std::vector<std::pair<std::string, std::vector<semantic::StructuredType>>>>
-        adtLayouts;
+    std::
+        map<std::string, std::vector<std::pair<std::string, std::vector<semantic::StructuredType>>>>
+            adtLayouts;
 
     auto traitIdentityOf(const std::string& written) const -> std::string;
 
@@ -162,8 +164,7 @@ struct Lowering {
     // Local overload key -> (emitted exact symbol, receiver-first dispatch
     // types). Operators use this to build a guarded bare-symbol dispatcher;
     // named calls select the exact symbol directly from semantic analysis.
-    std::unordered_map<std::string,
-        std::vector<std::pair<std::string, std::vector<std::string>>>>
+    std::unordered_map<std::string, std::vector<std::pair<std::string, std::vector<std::string>>>>
         argumentOverloadSignatures;
     // Operator symbols overloaded by a make block (`make T do let +(o) ...`).
     // The corresponding binary-op Intrinsic then dispatches at runtime: a
@@ -215,8 +216,7 @@ struct Lowering {
     std::unordered_set<std::string> topLevelFoulArities;
     std::unordered_set<std::string> capabilityModules;
     // Each capability declared in this unit and the foul members it declares.
-    std::unordered_map<std::string, std::unordered_set<std::string>>
-        capabilityMembers;
+    std::unordered_map<std::string, std::unordered_set<std::string>> capabilityMembers;
     // Name of the context variable in scope; empty means there is none, and
     // a call from there passes a fresh empty map.
     std::string currentContextVar;
@@ -234,8 +234,7 @@ struct Lowering {
     // Top-level trailing defaults, used to expand omitted arguments at local
     // call sites.
     std::unordered_map<std::string, std::vector<const ast::ExprPtr*>> fnDefaults;
-    std::unordered_map<std::string,
-        std::vector<std::pair<std::size_t, std::string>>> fnTraitParams;
+    std::unordered_map<std::string, std::vector<std::pair<std::size_t, std::string>>> fnTraitParams;
     // Names that are real functions in this module (top-level + make methods).
     // A call to a name NOT in here is an indirect apply through a variable
     // holding a fun (e.g. a `block` parameter).
@@ -283,10 +282,8 @@ struct Lowering {
     auto lowerDecidedOperator(const ast::BinaryOp& n, const hir::Target& decision) -> ExprPtr;
     // The checker's static type for `expr` (null when it has none).
     // Lexical source binding -> trait -> hidden dictionary IR binding.
-    std::unordered_map<std::string,
-        std::unordered_map<std::string, std::string>> traitDictionaries;
-    std::unordered_map<std::string,
-        std::vector<ExternalModules::TraitMethod>> traitMethods;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> traitDictionaries;
+    std::unordered_map<std::string, std::vector<ExternalModules::TraitMethod>> traitMethods;
     // ADT/variant type → its tag names (e.g. Optional → {"Just","None"}). Used
     // by the dispatcher to wildcard-match any variant of a type, not just the
     // type name itself (which isn't set as element(1) on any variant value).
@@ -304,41 +301,40 @@ struct Lowering {
     // selected (`String`), so a stand-in's same-arity overloads each have a
     // runtime name (kexhq/kex#623); empty when the call names none.
     auto capabilityDispatchLowered(
-        const std::string& capability, const std::string& method,
-        std::vector<ExprPtr> loweredArgs, std::vector<Binding>& binds,
+        const std::string& capability,
+        const std::string& method,
+        std::vector<ExprPtr> loweredArgs,
+        std::vector<Binding>& binds,
         const std::function<ExprPtr(std::vector<ExprPtr>)>& directCall,
-        const std::string& overloadKey = {})
-        -> ExprPtr;
+        const std::string& overloadKey = {}) -> ExprPtr;
 
     auto isCapabilityModule(const std::string& name) const -> bool;
     auto checkedCallModule(const ast::MethodCall& n) const -> std::string;
 
-    auto capabilityInterfaceHas(const std::string& capability,
-                                const std::string& method) const -> bool;
+    auto capabilityInterfaceHas(const std::string& capability, const std::string& method) const
+        -> bool;
 
     auto currentContext() -> ExprPtr;
     auto callNeedsContext(const std::string& name, int arity) const -> bool;
     auto externalConstant(const ast::Expr& reference, const std::string& name) -> ExprPtr;
 
-    auto externalCallExpr(const std::string& qualKey, const std::string& atom,
-                          const std::string& beamFunction, int arity,
-                          std::vector<ExprPtr> args) -> ExprPtr;
-    auto localCallExpr(const std::string& name, std::vector<ExprPtr> args)
-        -> ExprPtr;
-    auto ownsMethod(const std::string& typeName,
-                    const std::string& method) const -> bool;
+    auto externalCallExpr(
+        const std::string& qualKey,
+        const std::string& atom,
+        const std::string& beamFunction,
+        int arity,
+        std::vector<ExprPtr> args) -> ExprPtr;
+    auto localCallExpr(const std::string& name, std::vector<ExprPtr> args) -> ExprPtr;
+    auto ownsMethod(const std::string& typeName, const std::string& method) const -> bool;
 
-    auto localCall(const std::string& name, std::vector<ExprPtr> args)
-        -> Call;
+    auto localCall(const std::string& name, std::vector<ExprPtr> args) -> Call;
 
-    auto undefinedMethod(const std::string& method, ExprPtr receiver,
-                         const std::string& hint = {}) -> ExprPtr;
-
-    auto undefinedMethodOrField(const ast::MethodCall& n, ExprPtr receiver)
+    auto undefinedMethod(const std::string& method, ExprPtr receiver, const std::string& hint = {})
         -> ExprPtr;
 
-    auto unknownNamedArgument(const std::string& qualified,
-                              const std::string& label) -> ExprPtr;
+    auto undefinedMethodOrField(const ast::MethodCall& n, ExprPtr receiver) -> ExprPtr;
+
+    auto unknownNamedArgument(const std::string& qualified, const std::string& label) -> ExprPtr;
 
     static auto opSymbol(TokenType t) -> std::string;
 
@@ -383,8 +379,14 @@ struct Lowering {
         std::string name;
         std::optional<Lit> lit;
         auto get() const -> ExprPtr {
-            if (!name.empty()) return var(name);
-            if (lit) { auto e = std::make_unique<Expr>(); e->node = *lit; return e; }
+            if (!name.empty()) {
+                return var(name);
+            }
+            if (lit) {
+                auto e = std::make_unique<Expr>();
+                e->node = *lit;
+                return e;
+            }
             return var("_clone_bug");
         }
     };
@@ -398,7 +400,6 @@ struct Lowering {
 
     auto atomize(const ast::ExprPtr& e, std::vector<Binding>& binds) -> ExprPtr;
 
-
     auto opOf(TokenType t) -> Op;
 
     static auto isOrderingOp(Op op) -> bool;
@@ -410,48 +411,46 @@ struct Lowering {
     // being defined.
     auto constantSymbolOf(const ast::Expr& reference) const -> std::string;
 
-    auto lowerFieldDefault(const RecordInfo& info, const ast::ExprPtr& e)
-        -> ExprPtr;
+    auto lowerFieldDefault(const RecordInfo& info, const ast::ExprPtr& e) -> ExprPtr;
 
     // ---- Expression lowering ---------------------------------------------
     auto lower(const ast::ExprPtr& e) -> ExprPtr;
 
     static auto curryOp(const std::string& name) -> std::optional<Op>;
-    auto lowerNameAsUfcsFun(const std::string& name,
-                            const std::vector<ast::ExprPtr>& args) -> ExprPtr;
+    auto lowerNameAsUfcsFun(const std::string& name, const std::vector<ast::ExprPtr>& args)
+        -> ExprPtr;
 
     auto lowerCurry(const ast::Expr& e, const ast::CurryExpr& n) -> ExprPtr;
 
+    auto clauseNames(const ast::FunctionClause* clause, const std::vector<std::string>& fallback)
+        -> std::vector<std::string>;
 
-    auto clauseNames(const ast::FunctionClause* clause,
-                     const std::vector<std::string>& fallback) -> std::vector<std::string>;
+    auto blockFitsExactOverload(const std::string& key, size_t count) const -> bool;
 
-    auto blockFitsExactOverload(const std::string& key, size_t count) const
-        -> bool;
+    auto fillOmittedArguments(const std::vector<std::string>& defaults, std::vector<ExprPtr>& slots)
+        -> void;
 
-    auto fillOmittedArguments(const std::vector<std::string>& defaults,
-                              std::vector<ExprPtr>& slots) -> void;
+    auto fillDefaultSlots(
+        const std::string& name,
+        std::vector<ExprPtr>& slots,
+        std::vector<Binding>& binds,
+        const ast::FunctionClause* clause = nullptr) -> void;
 
-    auto fillDefaultSlots(const std::string& name,
-                          std::vector<ExprPtr>& slots,
-                          std::vector<Binding>& binds,
-                          const ast::FunctionClause* clause = nullptr) -> void;
-
-
-    auto nextExtendingModule(const std::string& method,
-                             const std::string& typeName, int arity) const
+    auto
+    nextExtendingModule(const std::string& method, const std::string& typeName, int arity) const
         -> std::string;
 
     auto makeMethodFor(const ast::MethodCall& n) const -> const MakeMethod*;
 
     auto staticFieldRead(const ast::MethodCall& n) -> ExprPtr;
 
-    auto typeOwnsStaticFunction(const std::string& type,
-                              const std::string& method) const -> bool;
+    auto typeOwnsStaticFunction(const std::string& type, const std::string& method) const -> bool;
 
     auto selectedMakeMethod(const ast::MethodCall& n) const -> const MakeMethod*;
-    auto lowerResolvedCall(const ast::MethodCall& n, const semantic::ResolvedCallTarget& target,
-                           const std::string& capabilityTarget) -> ExprPtr;
+    auto lowerResolvedCall(
+        const ast::MethodCall& n,
+        const semantic::ResolvedCallTarget& target,
+        const std::string& capabilityTarget) -> ExprPtr;
     auto lowerServerSlotCall(const ast::MethodCall& n, const semantic::ResolvedCallTarget& target)
         -> ExprPtr;
     auto lowerValueReceiverCall(const ast::MethodCall& n) -> ExprPtr;
@@ -461,11 +460,11 @@ struct Lowering {
     auto lowerTypeOf(const ast::MethodCall& n, const semantic::StaticTypeAnswer& answer) -> ExprPtr;
     auto lowerTraitDictionaryCall(const ast::MethodCall& n) -> ExprPtr;
     auto thisFieldRead(const ast::MethodCall& n) -> ExprPtr;
-    auto lowerModuleFunctionCall(const ast::MethodCall& n, const std::string& module,
-                                 const std::vector<std::string>& path) -> ExprPtr;
-    auto lowerTypeNamespaceCall(const ast::MethodCall& n, const ast::UpperIdentifier& type) -> ExprPtr;
-
-
+    auto lowerModuleFunctionCall(
+        const ast::MethodCall& n, const std::string& module, const std::vector<std::string>& path)
+        -> ExprPtr;
+    auto lowerTypeNamespaceCall(const ast::MethodCall& n, const ast::UpperIdentifier& type)
+        -> ExprPtr;
 
     auto receiverOwner(const ast::MethodCall& n) const -> std::string;
     // The receiver type's own implementation of a call, where the run-time
@@ -480,24 +479,24 @@ struct Lowering {
     auto ownerNameOf(const std::string& type) const -> std::string;
     // The symbol a `make` method of `typeName` is emitted under, from its
     // declaration; definitions and the calls the checker bound to it alike.
-    auto makeMethodSymbol(const ast::FunctionDef& method, const std::string& typeName,
-                          size_t sourceArity) const -> std::string;
+    auto makeMethodSymbol(
+        const ast::FunctionDef& method, const std::string& typeName, size_t sourceArity) const
+        -> std::string;
     // The name `owner`'s implementation of `method` is emitted under when
     // several types define it (`count/List`), or nullopt when it keeps the
     // bare name or an argument-overloaded one. Definitions and direct calls
     // both name it through this, so the two cannot disagree.
-    auto collidingImplementationName(const std::string& method,
-                                     const std::string& owner,
-                                     size_t sourceArity) const
+    auto collidingImplementationName(
+        const std::string& method, const std::string& owner, size_t sourceArity) const
         -> std::optional<std::string>;
     // Whether every clause of `method` binds its parameters by plain name —
     // none matches on an argument (`to(String)`), so calling its
     // implementation directly means the same as going through the dispatcher.
-    auto takesPlainParameters(const std::string& method,
-                              const std::string& owner) const -> bool;
+    auto takesPlainParameters(const std::string& method, const std::string& owner) const -> bool;
 
-    auto placeMethodArguments(const ast::MethodCall& n, const MakeMethod& method,
-                              std::vector<Binding>& binds) -> std::vector<ExprPtr>;
+    auto placeMethodArguments(
+        const ast::MethodCall& n, const MakeMethod& method, std::vector<Binding>& binds)
+        -> std::vector<ExprPtr>;
 
     auto lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n) -> ExprPtr;
 
@@ -507,11 +506,10 @@ struct Lowering {
     // handled by the enclosing statement — see lowerBodyFrom/loop handling).
     bool m_lowerMutatingAsValue = false;
 
-    auto makeTraitDictionary(const std::string& trait,
-                             const ast::Expr& value) -> ExprPtr;
+    auto makeTraitDictionary(const std::string& trait, const ast::Expr& value) -> ExprPtr;
 
-    auto makeTraitDictionaryFor(const std::string& trait,
-                                const std::string& concreteType) -> ExprPtr;
+    auto makeTraitDictionaryFor(const std::string& trait, const std::string& concreteType)
+        -> ExprPtr;
 
     auto makeDictionaryWrapper(const FunDef& def) -> std::optional<FunDef>;
 
@@ -526,8 +524,8 @@ struct Lowering {
     auto recordTypeOf(const ast::Expr& e) const -> std::string;
 
     auto lowerParsedInterpolatedString(
-        const std::vector<std::string>& stringParts,
-        const std::vector<ast::ExprPtr>& values) -> ExprPtr;
+        const std::vector<std::string>& stringParts, const std::vector<ast::ExprPtr>& values)
+        -> ExprPtr;
 
     // ---- IR construction helpers -----------------------------------------
     auto litInt(long v) -> ExprPtr;
@@ -541,13 +539,10 @@ struct Lowering {
     // veto the name-level foul mark above.
     mutable std::unordered_set<std::string> pureBackendTargets;
     mutable bool foulBackendTargetsBuilt = false;
-    auto isFoulBackendTarget(const std::string& mod, const std::string& fn,
-                             int arity) -> bool;
+    auto isFoulBackendTarget(const std::string& mod, const std::string& fn, int arity) -> bool;
 
-    static auto foulKey(const std::string& mod, const std::string& fn)
-        -> std::string;
-    static auto foulKey(const std::string& mod, const std::string& fn, int arity)
-        -> std::string;
+    static auto foulKey(const std::string& mod, const std::string& fn) -> std::string;
+    static auto foulKey(const std::string& mod, const std::string& fn, int arity) -> std::string;
 
     auto callE(std::string mod, std::string fn, int arity, std::vector<ExprPtr> args) -> ExprPtr;
     auto intrin(Op op, std::vector<ExprPtr> args) -> ExprPtr;
@@ -559,8 +554,7 @@ struct Lowering {
     std::unordered_map<std::string, int> variantArity;
     std::unordered_map<std::string, std::string> variantOwner;
 
-    auto withDisplayInfo(ExprPtr body, const std::string& moduleName = "")
-        -> ExprPtr;
+    auto withDisplayInfo(ExprPtr body, const std::string& moduleName = "") -> ExprPtr;
 
     // ---- Constructors -----------------------------------------------------
     auto makeLet(std::string name, ExprPtr value, ExprPtr body) -> ExprPtr;
@@ -579,39 +573,35 @@ struct Lowering {
 
     // ---- Guards -------------------------------------------------------------
     // A match written in source, for the `guards` pass to expand.
-    auto sourceMatch(std::vector<ExprPtr> subjects, std::vector<MatchClause> clauses)
-        -> ExprPtr;
+    auto sourceMatch(std::vector<ExprPtr> subjects, std::vector<MatchClause> clauses) -> ExprPtr;
 
     // Rescue arms with `when` guards or type tests cannot stay native:
     // the emitter drops TryCatch clause guards, so wrap the arms in one
     // catch-all whose body is the guard expansion with a rethrow failure.
     // Guardless arms pass through untouched. Matches the walker, whose
     // rescue guards skip only on literal `false` (unlike match).
-    auto expandRescueGuards(std::vector<MatchClause> clauses)
-        -> std::vector<MatchClause>;
+    auto expandRescueGuards(std::vector<MatchClause> clauses) -> std::vector<MatchClause>;
 
     auto fieldAccess(const std::string& fname, ExprPtr base) -> ExprPtr;
-    auto fieldAccessIn(const std::string& typeName, const std::string& fname,
-                       ExprPtr base) -> ExprPtr;
-    void destructureRecordPattern(const std::string& baseVar, const ast::RecordPattern& rp,
-                                  std::vector<std::pair<std::string, ExprPtr>>& prefix);
+    auto fieldAccessIn(const std::string& typeName, const std::string& fname, ExprPtr base)
+        -> ExprPtr;
+    void destructureRecordPattern(
+        const std::string& baseVar,
+        const ast::RecordPattern& rp,
+        std::vector<std::pair<std::string, ExprPtr>>& prefix);
     void collectRecordBindings(const ast::RecordPattern& rp, std::vector<std::string>& names);
-    auto wrapRecordPattern(const std::string& baseVar, const ast::RecordPattern& rp,
-                           ExprPtr body) -> ExprPtr;
-    auto anonymousRecordCandidates(const ast::RecordPattern& rp)
-        -> std::vector<std::string>;
-    auto anonymousRecordTest(const std::string& subject,
-                             const ast::RecordPattern& rp) -> ExprPtr;
-    auto anonymousFieldRead(const std::string& subject,
-                            const std::vector<std::string>& tags,
-                            const std::string& field) -> ExprPtr;
-    auto wrapAnonymousRecordPattern(const std::string& subject,
-                                    const ast::RecordPattern& rp,
-                                    ExprPtr body) -> ExprPtr;
+    auto wrapRecordPattern(const std::string& baseVar, const ast::RecordPattern& rp, ExprPtr body)
+        -> ExprPtr;
+    auto anonymousRecordCandidates(const ast::RecordPattern& rp) -> std::vector<std::string>;
+    auto anonymousRecordTest(const std::string& subject, const ast::RecordPattern& rp) -> ExprPtr;
+    auto anonymousFieldRead(
+        const std::string& subject, const std::vector<std::string>& tags, const std::string& field)
+        -> ExprPtr;
+    auto wrapAnonymousRecordPattern(
+        const std::string& subject, const ast::RecordPattern& rp, ExprPtr body) -> ExprPtr;
     static auto anonymousRecordPattern(const std::vector<ast::PatternPtr>& pats)
         -> const ast::RecordPattern*;
-    auto topLevelPatternBinding(const ast::LetExpr& le, const std::string& name)
-        -> ExprPtr;
+    auto topLevelPatternBinding(const ast::LetExpr& le, const std::string& name) -> ExprPtr;
     // Type tests contributed by `name : Type` patterns in the clause being
     // lowered, waiting to be folded into its guard.
     std::vector<ExprPtr> pendingTypeGuards;
@@ -624,8 +614,10 @@ struct Lowering {
     auto lowerBodyScoped(const std::vector<ast::ExprPtr>& body) -> ExprPtr;
 
     auto lowerIf(const ast::IfExpr& n) -> ExprPtr;
-    auto lowerIfLet(const ast::IfExpr& n, const std::function<ExprPtr()>& lowerThen,
-                    const std::function<ExprPtr()>& lowerElse) -> ExprPtr;
+    auto lowerIfLet(
+        const ast::IfExpr& n,
+        const std::function<ExprPtr()>& lowerThen,
+        const std::function<ExprPtr()>& lowerElse) -> ExprPtr;
 
     auto lowerMatch(const ast::MatchExpr& n) -> ExprPtr;
 
@@ -643,8 +635,8 @@ struct Lowering {
         -> std::vector<std::pair<std::string, std::string>>;
     // A statement with its nested assignments hoisted, followed by `rest`
     // (null when it is the last statement, whose value it then is).
-    auto lowerStatementThen(const ast::ExprPtr& statement,
-                            const std::function<ExprPtr()>& rest) -> ExprPtr;
+    auto lowerStatementThen(const ast::ExprPtr& statement, const std::function<ExprPtr()>& rest)
+        -> ExprPtr;
     std::unordered_map<const ast::AssignExpr*, std::string> hoistedAssignments;
     // A statement passing a block that reassigns variables of the code around
     // it, threaded through `kex_intrinsic_fun:threadState` (lowering_body).
@@ -652,46 +644,54 @@ struct Lowering {
         -> std::vector<const ast::Lambda*>;
     auto lowerStatefulBlock(const ast::Lambda& block, const std::vector<std::string>& vars)
         -> ExprPtr;
-    auto lowerThreadedStatement(const ast::ExprPtr& e,
-                                const std::function<ExprPtr(ExprPtr)>& rest) -> ExprPtr;
+    auto lowerThreadedStatement(const ast::ExprPtr& e, const std::function<ExprPtr(ExprPtr)>& rest)
+        -> ExprPtr;
     // The blocks lowerThreadedStatement passes, each as the variable it names.
     std::unordered_map<const ast::Lambda*, std::string> threadedBlocks;
 
-    auto requireNoOuterMutation(const std::vector<ast::ExprPtr>& body,
-                                const char* what) -> void;
+    auto requireNoOuterMutation(const std::vector<ast::ExprPtr>& body, const char* what) -> void;
 
     auto stateExpr(const std::vector<std::string>& mutVars) -> ExprPtr;
     auto tailCall(const std::string& loopFn, const std::vector<std::string>& mutVars) -> ExprPtr;
 
     auto lowerBindingValue(const ast::LetExpr& le) -> ExprPtr;
 
-    auto loopControl(const ast::ExprPtr& e, const std::string& loopFn,
-                     const std::vector<std::string>& mutVars) -> ExprPtr;
+    auto loopControl(
+        const ast::ExprPtr& e, const std::string& loopFn, const std::vector<std::string>& mutVars)
+        -> ExprPtr;
 
-    auto lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i,
-                           const std::string& loopFn,
-                           const std::vector<std::string>& mutVars,
-                           const std::function<ExprPtr()>& onEnd,
-                           size_t end = static_cast<size_t>(-1)) -> ExprPtr;
+    auto lowerLoopBodyFrom(
+        const std::vector<ast::ExprPtr>& body,
+        size_t i,
+        const std::string& loopFn,
+        const std::vector<std::string>& mutVars,
+        const std::function<ExprPtr()>& onEnd,
+        size_t end = static_cast<size_t>(-1)) -> ExprPtr;
 
-    auto lowerLoopArmU(const ast::ExprPtr& arm, const std::string& loopFn,
-                       const std::vector<std::string>& mutVars,
-                       const std::function<ExprPtr()>& armEnd) -> ExprPtr;
+    auto lowerLoopArmU(
+        const ast::ExprPtr& arm,
+        const std::string& loopFn,
+        const std::vector<std::string>& mutVars,
+        const std::function<ExprPtr()>& armEnd) -> ExprPtr;
 
     auto lowerMutatingAsValue(const ast::MethodCall& mc) -> ExprPtr;
 
     auto lowerAssignmentValue(const ast::AssignExpr& assignment) -> ExprPtr;
 
-    auto lowerLoopCore(const std::vector<ast::ExprPtr>& loopBody, const ast::ExprPtr* cond,
-                       bool restIsLast, const std::function<ExprPtr()>& mkRest,
-                       const std::optional<std::string>* counterVar = nullptr) -> ExprPtr;
-    auto lowerLoopStmt(const std::vector<ast::ExprPtr>& loopBody, const ast::ExprPtr* cond,
-                       const std::vector<ast::ExprPtr>& outer, size_t outerStart,
-                       const std::optional<std::string>* counterVar = nullptr) -> ExprPtr;
+    auto lowerLoopCore(
+        const std::vector<ast::ExprPtr>& loopBody,
+        const ast::ExprPtr* cond,
+        bool restIsLast,
+        const std::function<ExprPtr()>& mkRest,
+        const std::optional<std::string>* counterVar = nullptr) -> ExprPtr;
+    auto lowerLoopStmt(
+        const std::vector<ast::ExprPtr>& loopBody,
+        const ast::ExprPtr* cond,
+        const std::vector<ast::ExprPtr>& outer,
+        size_t outerStart,
+        const std::optional<std::string>* counterVar = nullptr) -> ExprPtr;
 
-    auto lowerExternalImportCall(const ast::FunctionCall& n,
-                                 const std::string& qualKey) -> ExprPtr;
-
+    auto lowerExternalImportCall(const ast::FunctionCall& n, const std::string& qualKey) -> ExprPtr;
 
     // ---- Body lowering ----------------------------------------------------
     auto lowerBody(const std::vector<ast::ExprPtr>& body) -> ExprPtr;
@@ -701,8 +701,8 @@ struct Lowering {
     auto lowerRescueClauses(const ast::RescueBlock& rescue, bool blockValue = false)
         -> std::vector<MatchClause>;
 
-    auto wrapWithTryCatch(ExprPtr body, const ast::RescueBlock& rescue,
-                          bool blockValue = false) -> ExprPtr;
+    auto wrapWithTryCatch(ExprPtr body, const ast::RescueBlock& rescue, bool blockValue = false)
+        -> ExprPtr;
 
     static auto irHasEscapingTryThrow(const ExprPtr& e) -> bool;
 
@@ -724,72 +724,72 @@ struct Lowering {
     auto identityOf(const std::string& scope, const std::string& name) const -> std::string;
     auto discriminatingType(const std::string& written) const -> bool;
 
-    auto lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& group,
-                            const std::string& implicitThisName = "",
-                            const std::string& nameOverride = "") -> FunDef;
+    auto lowerFunctionGroup(
+        const std::vector<const ast::FunctionDef*>& group,
+        const std::string& implicitThisName = "",
+        const std::string& nameOverride = "") -> FunDef;
 
     // ---- Records ----------------------------------------------------------
-    void addFieldAccessor(const std::string& field, const std::string& record,
-                          int position, int tupleSize, bool local);
+    void addFieldAccessor(
+        const std::string& field,
+        const std::string& record,
+        int position,
+        int tupleSize,
+        bool local);
 
-    void collectRecordLayout(const std::string& name,
-                             const std::vector<std::string>& fields);
+    void collectRecordLayout(const std::string& name, const std::vector<std::string>& fields);
 
-    void collectRecord(const ast::RecordDef& rec,
-                       const std::string& owner = {});
+    void collectRecord(const ast::RecordDef& rec, const std::string& owner = {});
 
-    auto externalPrefixCall(const std::string& name, int arity) const
-        -> std::string;
-
+    auto externalPrefixCall(const std::string& name, int arity) const -> std::string;
 
     // A call the value decides among the providers the checker listed
     // (ResolvedCallTarget::alternatives).
     auto providerChoice(const ast::MethodCall& n, const semantic::ResolvedCallTarget& target)
         -> ExprPtr;
 
-
     auto fieldAccessorDelegate(const std::string& field, bool& blocked) const
         -> const ExternalModules::ReceiverFunction*;
 
-    auto makeAccessors(const std::unordered_set<std::string>& definedFns,
-                       const std::unordered_set<std::string>& definedFnArities)
-        -> std::vector<FunDef>;
+    auto makeAccessors(
+        const std::unordered_set<std::string>& definedFns,
+        const std::unordered_set<std::string>& definedFnArities) -> std::vector<FunDef>;
 
     // ---- Make blocks ------------------------------------------------------
-    auto lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
-                        const std::string& typeName) -> FunDef;
-
+    auto
+    lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group, const std::string& typeName)
+        -> FunDef;
 
     static auto primGuardBifs() -> const std::unordered_map<std::string, const char*>&;
     // The runtime shapes a value of `owner` can have, as `typeGuard` tells
     // them apart (`integer`, `binary`, `tuple:Point`, `atom:None`, ...), or
     // nothing when they are not known. Two owners whose shapes meet cannot
     // both be routed by guard order alone.
-    auto runtimeShapes(const std::string& owner)
-        -> std::optional<std::set<std::string>>;
-    static auto shapesMeet(const std::optional<std::set<std::string>>& a,
-                           const std::optional<std::set<std::string>>& b) -> bool;
+    auto runtimeShapes(const std::string& owner) -> std::optional<std::set<std::string>>;
+    static auto shapesMeet(
+        const std::optional<std::set<std::string>>& a,
+        const std::optional<std::set<std::string>>& b) -> bool;
 
     auto recordGuard(const FieldSlot& slot, ExprPtr v) -> ExprPtr;
 
     auto adtGuard(const std::vector<std::string>& tags, ExprPtr v) -> ExprPtr;
 
-
     auto typeGuard(const std::string& written, ExprPtr v) -> ExprPtr;
 
-
     auto makeArgumentDispatcher(
-        const std::string& name, int arity,
-        const std::vector<std::pair<std::string, std::vector<std::string>>>&
-            overloads,
+        const std::string& name,
+        int arity,
+        const std::vector<std::pair<std::string, std::vector<std::string>>>& overloads,
         const std::string& fallbackModule = {}) -> FunDef;
 
-    auto makeDispatcher(const std::string& name, int arity,
-                        const std::vector<std::string>& owners,
-                        const std::string& genericFallback = {},
-                        const std::string& genericFallbackModule = {},
-                        int genericFallbackArity = -1,
-                        bool contextualOwners = false) -> FunDef;
+    auto makeDispatcher(
+        const std::string& name,
+        int arity,
+        const std::vector<std::string>& owners,
+        const std::string& genericFallback = {},
+        const std::string& genericFallbackModule = {},
+        int genericFallbackArity = -1,
+        bool contextualOwners = false) -> FunDef;
 
     auto makeListOf(ExprPtr first, ExprPtr second) -> ExprPtr;
 

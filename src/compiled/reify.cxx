@@ -19,10 +19,11 @@ auto make(const SourceLocation& location) -> ast::ExprPtr {
 
 } // namespace
 
-auto valueToLiteral(const ValuePtr& value,
-                    const SourceLocation& location,
-                    std::string& error,
-                    const ReifyContext& context) -> ast::ExprPtr {
+auto valueToLiteral(
+    const ValuePtr& value,
+    const SourceLocation& location,
+    std::string& error,
+    const ReifyContext& context) -> ast::ExprPtr {
     if (!value) {
         error = "no value";
         return nullptr;
@@ -36,8 +37,7 @@ auto valueToLiteral(const ValuePtr& value,
                 // to a value — that is what lets a collapsed builder keep a
                 // runtime reference in the middle of an otherwise-literal
                 // result.
-                if (!context.placeholders ||
-                    node.index >= context.placeholders->size() ||
+                if (!context.placeholders || node.index >= context.placeholders->size() ||
                     !(*context.placeholders)[node.index]) {
                     error = "`" + node.name +
                             "` is not known at compile time and has no "
@@ -46,8 +46,8 @@ auto valueToLiteral(const ValuePtr& value,
                 }
                 // `clone` takes the owning pointer; borrow the node into one and
                 // release it again so the original AST keeps its owner.
-                auto borrowed = ast::ExprPtr(
-                    const_cast<ast::Expr*>((*context.placeholders)[node.index]));
+                auto borrowed =
+                    ast::ExprPtr(const_cast<ast::Expr*>((*context.placeholders)[node.index]));
                 auto copy = ast::clone(borrowed);
                 (void)borrowed.release();
                 for (const auto& retag : node.retags) {
@@ -62,9 +62,8 @@ auto valueToLiteral(const ValuePtr& value,
                     copy->kind = std::move(call);
                 }
                 return copy;
-            } else
-            if constexpr (std::is_same_v<T, interpreter::UnitValue>) {
-                out->kind = ast::TupleExpr{};  // `()`
+            } else if constexpr (std::is_same_v<T, interpreter::UnitValue>) {
+                out->kind = ast::TupleExpr{}; // `()`
             } else if constexpr (std::is_same_v<T, interpreter::IntValue>) {
                 out->kind = ast::IntLiteral{std::to_string(node.value)};
             } else if constexpr (std::is_same_v<T, interpreter::BigIntValue>) {
@@ -80,11 +79,11 @@ auto valueToLiteral(const ValuePtr& value,
                     text = buffer;
                 }
                 // A Float literal must still LOOK like one after reification.
-                if (text.find('.') == std::string::npos &&
-                    text.find('e') == std::string::npos &&
+                if (text.find('.') == std::string::npos && text.find('e') == std::string::npos &&
                     text.find("inf") == std::string::npos &&
-                    text.find("nan") == std::string::npos)
+                    text.find("nan") == std::string::npos) {
                     text += ".0";
+                }
                 out->kind = ast::FloatLiteral{text};
             } else if constexpr (std::is_same_v<T, interpreter::StringValue>) {
                 // interpolating=false: the text is already the final value, so
@@ -109,8 +108,8 @@ auto valueToLiteral(const ValuePtr& value,
                 if (node.elements.size() > 1) {
                     const auto first = node.elements.front()->data.index();
                     for (const auto& element : node.elements) {
-                        if (std::holds_alternative<interpreter::PlaceholderValue>(
-                                element->data) || element->data.index() != first) {
+                        if (std::holds_alternative<interpreter::PlaceholderValue>(element->data) ||
+                            element->data.index() != first) {
                             list.anyElements = true;
                             break;
                         }
@@ -118,7 +117,9 @@ auto valueToLiteral(const ValuePtr& value,
                 }
                 for (const auto& element : node.elements) {
                     auto lowered = valueToLiteral(element, location, error, context);
-                    if (!lowered) return nullptr;
+                    if (!lowered) {
+                        return nullptr;
+                    }
                     list.elements.push_back(std::move(lowered));
                 }
                 out->kind = std::move(list);
@@ -126,7 +127,9 @@ auto valueToLiteral(const ValuePtr& value,
                 ast::TupleExpr tuple;
                 for (const auto& element : node.elements) {
                     auto lowered = valueToLiteral(element, location, error, context);
-                    if (!lowered) return nullptr;
+                    if (!lowered) {
+                        return nullptr;
+                    }
                     tuple.elements.push_back(std::move(lowered));
                 }
                 out->kind = std::move(tuple);
@@ -134,9 +137,13 @@ auto valueToLiteral(const ValuePtr& value,
                 ast::MapExpr map;
                 for (const auto& [key, mapped] : node.entries) {
                     auto loweredKey = valueToLiteral(key, location, error, context);
-                    if (!loweredKey) return nullptr;
+                    if (!loweredKey) {
+                        return nullptr;
+                    }
                     auto loweredValue = valueToLiteral(mapped, location, error, context);
-                    if (!loweredValue) return nullptr;
+                    if (!loweredValue) {
+                        return nullptr;
+                    }
                     map.entries.push_back(
                         ast::MapEntry{std::move(loweredKey), std::move(loweredValue)});
                 }
@@ -149,12 +156,14 @@ auto valueToLiteral(const ValuePtr& value,
                 // literal gets DECLARATION order rather than the alphabetical
                 // unknown-type tail.
                 record.typeName = node.typeName;
-                if (context.layouts && !context.layouts->count(record.typeName))
-                    if (const auto dot = record.typeName.rfind('.');
-                        dot != std::string::npos)
+                if (context.layouts && !context.layouts->count(record.typeName)) {
+                    if (const auto dot = record.typeName.rfind('.'); dot != std::string::npos) {
                         if (const auto bare = record.typeName.substr(dot + 1);
-                            context.layouts->count(bare))
+                            context.layouts->count(bare)) {
                             record.typeName = bare;
+                        }
+                    }
+                }
                 // DECLARATION order, because a record is a tuple on BEAM and
                 // the order here can BE the tuple layout: lowering's main path
                 // looks each written field up by name, but its `records.find`
@@ -170,9 +179,13 @@ auto valueToLiteral(const ValuePtr& value,
                 names.reserve(node.fields.size());
                 if (context.layouts) {
                     const auto declared = context.layouts->find(record.typeName);
-                    if (declared != context.layouts->end())
-                        for (const auto& field : declared->second)
-                            if (node.fields.count(field)) names.push_back(&field);
+                    if (declared != context.layouts->end()) {
+                        for (const auto& field : declared->second) {
+                            if (node.fields.count(field)) {
+                                names.push_back(&field);
+                            }
+                        }
+                    }
                 }
                 // Anything the layout did not account for (and every field, if
                 // the type is unknown) keeps the reproducible alphabetical
@@ -180,19 +193,25 @@ auto valueToLiteral(const ValuePtr& value,
                 std::vector<const std::string*> extra;
                 for (const auto& [field, _] : node.fields) {
                     bool listed = false;
-                    for (const auto* seen : names)
-                        if (*seen == field) { listed = true; break; }
-                    if (!listed) extra.push_back(&field);
+                    for (const auto* seen : names) {
+                        if (*seen == field) {
+                            listed = true;
+                            break;
+                        }
+                    }
+                    if (!listed) {
+                        extra.push_back(&field);
+                    }
                 }
-                std::sort(extra.begin(), extra.end(),
-                          [](const std::string* a, const std::string* b) {
-                              return *a < *b;
-                          });
+                std::sort(
+                    extra.begin(), extra.end(),
+                    [](const std::string* a, const std::string* b) { return *a < *b; });
                 names.insert(names.end(), extra.begin(), extra.end());
                 for (const auto* field : names) {
-                    auto lowered =
-                        valueToLiteral(node.fields.at(*field), location, error, context);
-                    if (!lowered) return nullptr;
+                    auto lowered = valueToLiteral(node.fields.at(*field), location, error, context);
+                    if (!lowered) {
+                        return nullptr;
+                    }
                     record.fields.emplace_back(*field, std::move(lowered));
                 }
                 out->kind = std::move(record);
@@ -205,16 +224,17 @@ auto valueToLiteral(const ValuePtr& value,
                 std::string owner;
                 if (context.modules) {
                     const auto found = context.modules->find(node.parentType);
-                    if (found != context.modules->end()) owner = found->second;
+                    if (found != context.modules->end()) {
+                        owner = found->second;
+                    }
                 }
                 if (!owner.empty()) {
                     ast::ExprPtr path;
                     std::size_t start = 0;
                     for (;;) {
                         const auto dot = owner.find('.', start);
-                        auto part = owner.substr(start, dot == std::string::npos
-                                                            ? std::string::npos
-                                                            : dot - start);
+                        auto part = owner.substr(
+                            start, dot == std::string::npos ? std::string::npos : dot - start);
                         auto step = std::make_unique<ast::Expr>();
                         step->location = location;
                         if (!path) {
@@ -226,7 +246,9 @@ auto valueToLiteral(const ValuePtr& value,
                             step->kind = std::move(call);
                         }
                         path = std::move(step);
-                        if (dot == std::string::npos) break;
+                        if (dot == std::string::npos) {
+                            break;
+                        }
                         start = dot + 1;
                     }
                     ast::MethodCall constructor;
@@ -235,7 +257,9 @@ auto valueToLiteral(const ValuePtr& value,
                     constructor.parenthesized = !node.args.empty();
                     for (const auto& arg : node.args) {
                         auto lowered = valueToLiteral(arg, location, error, context);
-                        if (!lowered) return nullptr;
+                        if (!lowered) {
+                            return nullptr;
+                        }
                         constructor.args.push_back(std::move(lowered));
                     }
                     out->kind = std::move(constructor);
@@ -247,7 +271,9 @@ auto valueToLiteral(const ValuePtr& value,
                     call.reifiedConstructor = true;
                     for (const auto& arg : node.args) {
                         auto lowered = valueToLiteral(arg, location, error, context);
-                        if (!lowered) return nullptr;
+                        if (!lowered) {
+                            return nullptr;
+                        }
                         call.args.push_back(std::move(lowered));
                     }
                     out->kind = std::move(call);

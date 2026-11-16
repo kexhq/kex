@@ -44,35 +44,35 @@ auto popenCapture(const std::string& cmd) -> std::string {
     if (pipe) {
         std::array<char, 4096> buf;
         size_t n;
-        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0) {
             result.append(buf.data(), n);
+        }
         pclose(pipe);
     }
     return result;
 }
 
-auto replaceAll(std::string text, const std::string& from, const std::string& to)
-    -> std::string {
+auto replaceAll(std::string text, const std::string& from, const std::string& to) -> std::string {
     for (size_t at = text.find(from); at != std::string::npos;
-         at = text.find(from, at + to.size()))
+         at = text.find(from, at + to.size())) {
         text.replace(at, from.size(), to);
+    }
     return text;
 }
 
 // Compiles each version of `srv.kex` into its own directory, then runs
 // `driver` (an Erlang module named `driver` exporting run/0) against them.
 // Every version keeps the file name, so every version is the module kex_srv.
-auto runReload(const std::vector<std::string>& versions, const std::string& driver)
-    -> std::string {
+auto runReload(const std::vector<std::string>& versions, const std::string& driver) -> std::string {
     char tmp[] = "/tmp/kex_hot_reload_XXXXXX";
     fs::path root = mkdtemp(tmp);
     for (size_t i = 0; i < versions.size(); i++) {
         auto dir = root / ("v" + std::to_string(i + 1));
         fs::create_directories(dir);
         writeFile(dir / "srv.kex", versions[i]);
-        auto output = popenCapture(std::string(KEX_BINARY_PATH) +
-                                   " --compile --no-colors -o " + dir.string() +
-                                   " " + (dir / "srv.kex").string() + " 2>&1");
+        auto output = popenCapture(
+            std::string(KEX_BINARY_PATH) + " --compile --no-colors -o " + dir.string() + " " +
+            (dir / "srv.kex").string() + " 2>&1");
         if (!fs::exists(dir / "kex_srv.beam")) {
             fs::remove_all(root);
             return "v" + std::to_string(i + 1) + " failed to compile:\n" + output;
@@ -82,13 +82,13 @@ auto runReload(const std::vector<std::string>& versions, const std::string& driv
     // No `cd`: erl and erlc resolve from the working directory ctest gives
     // (the source tree), so a version manager picks the same Erlang there as
     // for the rest of the build — not whatever a temp directory defaults to.
-    auto erlc = popenCapture("erlc -o " + root.string() + " " +
-                             (root / "driver.erl").string() + " 2>&1");
+    auto erlc =
+        popenCapture("erlc -o " + root.string() + " " + (root / "driver.erl").string() + " 2>&1");
     // v1's directory also holds the runtime beams `--compile` copies next to
     // the program; the driver loads each kex_srv version explicitly.
-    auto output = popenCapture("erl -noshell -pa " + (root / "v1").string() +
-                               " -pa " + root.string() +
-                               " -eval 'driver:run(), halt().' 2>&1");
+    auto output = popenCapture(
+        "erl -noshell -pa " + (root / "v1").string() + " -pa " + root.string() +
+        " -eval 'driver:run(), halt().' 2>&1");
     std::error_code ec;
     fs::remove_all(root, ec);
     return erlc + output;
@@ -234,49 +234,55 @@ int main() {
     describe("hot code reload of a receive loop", []() {
         it("moves a self-recursive receive loop onto each new version", []() {
             std::vector<std::string> versions;
-            for (const char* step : {"1", "10", "100"})
+            for (const char* step : {"1", "10", "100"}) {
                 versions.push_back(replaceAll(kRecursiveLoop, "STEP", step));
-            auto output = runReload(versions,
-                                    std::string(kDriverPrelude) + kLoopDriver);
-            assertEqual(output,
-                        std::string("v1 1\n"
-                                    "v2 12\n"
-                                    "on old code false\n"
-                                    "alive after purge true\n"
-                                    "v3 122\n"),
-                        "the process must follow each reload and survive the purge");
+            }
+            auto output = runReload(versions, std::string(kDriverPrelude) + kLoopDriver);
+            assertEqual(
+                output,
+                std::string(
+                    "v1 1\n"
+                    "v2 12\n"
+                    "on old code false\n"
+                    "alive after purge true\n"
+                    "v3 122\n"),
+                "the process must follow each reload and survive the purge");
         });
 
         it("moves a `loop do receive` onto each new version", []() {
             std::vector<std::string> versions;
-            for (const char* step : {"1", "10", "100"})
+            for (const char* step : {"1", "10", "100"}) {
                 versions.push_back(replaceAll(kImperativeLoop, "STEP", step));
-            auto output = runReload(versions,
-                                    std::string(kDriverPrelude) + kLoopDriver);
-            assertEqual(output,
-                        std::string("v1 1\n"
-                                    "v2 12\n"
-                                    "on old code false\n"
-                                    "alive after purge true\n"
-                                    "v3 122\n"),
-                        "the lifted loop must follow each reload and survive the purge");
+            }
+            auto output = runReload(versions, std::string(kDriverPrelude) + kLoopDriver);
+            assertEqual(
+                output,
+                std::string(
+                    "v1 1\n"
+                    "v2 12\n"
+                    "on old code false\n"
+                    "alive after purge true\n"
+                    "v3 122\n"),
+                "the lifted loop must follow each reload and survive the purge");
         });
     });
 
     describe("hot code reload of a serving server", []() {
         it("migrates the state, finds new slots and runs the upgrade hook", []() {
-            auto output = runReload({kServingV1, kServingV2, kServingV3},
-                                    std::string(kDriverPrelude) + kServingDriver);
-            assertEqual(output,
-                        std::string("v1 bump {'Ok',1}\n"
-                                    // the new field took its default, 10
-                                    "v2 bump {'Ok',11}\n"
-                                    "v2 peek {'Ok',11}\n"
-                                    // the hook set step to 100, once
-                                    "v3 bump {'Ok',111}\n"
-                                    "v3 bump {'Ok',211}\n"
-                                    "alive after purge true\n"),
-                        "the server must keep its state across both reloads");
+            auto output = runReload(
+                {kServingV1, kServingV2, kServingV3}, std::string(kDriverPrelude) + kServingDriver);
+            assertEqual(
+                output,
+                std::string(
+                    "v1 bump {'Ok',1}\n"
+                    // the new field took its default, 10
+                    "v2 bump {'Ok',11}\n"
+                    "v2 peek {'Ok',11}\n"
+                    // the hook set step to 100, once
+                    "v3 bump {'Ok',111}\n"
+                    "v3 bump {'Ok',211}\n"
+                    "alive after purge true\n"),
+                "the server must keep its state across both reloads");
         });
     });
 

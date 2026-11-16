@@ -46,7 +46,6 @@ auto teyDependencyRoots(const std::string& start) -> std::vector<std::string>;
 
 // Where a checkout of `gitUrl` at `commit` lives, by tey's cache layout
 // (tey/src/tey/cache.kex). Exposed for tests.
-auto teyCachePackagePath(const std::string& gitUrl, const std::string& commit)
-    -> std::string;
+auto teyCachePackagePath(const std::string& gitUrl, const std::string& commit) -> std::string;
 
 } // namespace kex::lsp

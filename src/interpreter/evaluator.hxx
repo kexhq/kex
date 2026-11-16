@@ -31,14 +31,18 @@ class ReturnException : public std::exception {
 public:
     explicit ReturnException(ValuePtr value, std::shared_ptr<bool> frame = nullptr)
         : m_value(std::move(value)), m_frame(std::move(frame)) {}
-    auto value() const -> ValuePtr { return m_value; }
+    auto value() const -> ValuePtr {
+        return m_value;
+    }
     // Whether the call at `frame` should take this return.
     auto targets(const std::shared_ptr<bool>& frame) const -> bool {
         return !m_frame || m_frame == frame;
     }
     // Whether it is on its way to a call that is still running, so a block
     // must let it pass rather than take it as its own value.
-    auto passesThroughBlock() const -> bool { return m_frame && *m_frame; }
+    auto passesThroughBlock() const -> bool {
+        return m_frame && *m_frame;
+    }
 
 private:
     ValuePtr m_value;
@@ -51,7 +55,9 @@ class NextException : public std::exception {};
 class TryException : public std::exception {
 public:
     explicit TryException(ValuePtr error) : m_error(std::move(error)) {}
-    auto error() const -> ValuePtr { return m_error; }
+    auto error() const -> ValuePtr {
+        return m_error;
+    }
 
 private:
     ValuePtr m_error;
@@ -61,14 +67,13 @@ class RuntimeError : public std::runtime_error {
 public:
     RuntimeError(const std::string& msg, SourceLocation loc)
         : std::runtime_error(
-            std::string(loc.file) + ":" + std::to_string(loc.line) + ":"
-            + std::to_string(loc.column) + ": runtime error: " + msg) {}
+              std::string(loc.file) + ":" + std::to_string(loc.line) + ":" +
+              std::to_string(loc.column) + ": runtime error: " + msg) {}
 };
 
 class EvaluationTimeout : public std::runtime_error {
 public:
-    EvaluationTimeout()
-        : std::runtime_error("compile-time evaluation timed out") {}
+    EvaluationTimeout() : std::runtime_error("compile-time evaluation timed out") {}
 };
 
 // Code run by `Evaluator.run` went past one of its EvaluatorOptions: a step
@@ -121,9 +126,8 @@ public:
     // evaluator loaded, without loading it again: every tagged literal of a
     // program has its validator called in the same one.
     auto evaluateLoadedFunction(
-        const std::string& name,
-        std::vector<ValuePtr> args,
-        std::chrono::milliseconds timeout) -> ValuePtr;
+        const std::string& name, std::vector<ValuePtr> args, std::chrono::milliseconds timeout)
+        -> ValuePtr;
     // Loads `program`'s declarations ONCE under the same cooperative deadline
     // and termination guard as evaluateFunction, then forces each named
     // binding and returns its value. That is how src/compiled/ evaluates
@@ -162,8 +166,7 @@ public:
     // order — and on BEAM a record IS a tuple, so field order is the ABI. Any
     // code turning a record value back into source (src/compiled/) has to
     // recover the declared order from here rather than invent one.
-    auto recordFieldOrder() const
-        -> std::unordered_map<std::string, std::vector<std::string>>;
+    auto recordFieldOrder() const -> std::unordered_map<std::string, std::vector<std::string>>;
 
     // The module that declared each sum type the program knows, by the
     // type's bare name — the name its values carry as their `parentType`.
@@ -216,7 +219,9 @@ public:
     // environment, the clock, processes or the network. When nothing did,
     // what it computed depends on its sources alone, and a build may keep
     // it for the next one (compiled::setReuseCollapses).
-    auto touchedOutside() const -> bool { return m_touchedOutside; }
+    auto touchedOutside() const -> bool {
+        return m_touchedOutside;
+    }
     // More requests against the program an earlier evaluateExpressions on
     // this evaluator loaded, without loading it again: what a collapse's
     // second round asks, of a program the first round already ran.
@@ -259,9 +264,8 @@ public:
         std::unordered_set<std::string> envUnset;
     };
     auto captureMocks() const -> MockState {
-        return MockState{m_mockFiles, m_mockDirs, m_mockFileReader, m_mockIO,
-                         m_mockIOOutput, m_mockIOInputLines,
-                         m_mockEnv, m_mockEnvUnset};
+        return MockState{m_mockFiles,    m_mockDirs,         m_mockFileReader, m_mockIO,
+                         m_mockIOOutput, m_mockIOInputLines, m_mockEnv,        m_mockEnvUnset};
     }
     auto restoreMocks(MockState saved) -> void {
         m_mockFiles = std::move(saved.files);
@@ -278,132 +282,147 @@ public:
 private:
     // Top-level
     auto execTopLevel(const ast::TopLevelItem& item) -> void;
-    auto execModule(const ast::ModuleDef& mod,
-                    const std::string& parentModule = "") -> void;
+    auto execModule(const ast::ModuleDef& mod, const std::string& parentModule = "") -> void;
     // `enclosingModule` is the module a definition lexically sits in. For a
     // module-level function it equals `typeScope`; for a `make` body method it
     // is the only record of the module, since `typeScope` names the receiver
     // type. Methods need it to reach their module's `private do` helpers.
-    auto execFunctionDef(const ast::FunctionDef& def,
-                         const std::string& typeScope = "",
-                         bool hasImplicitReceiver = false,
-                         const std::string& enclosingModule = "") -> void;
-    auto execMakeDef(const ast::MakeDef& def,
-                     const std::string& enclosingModule = "") -> void;
+    auto execFunctionDef(
+        const ast::FunctionDef& def,
+        const std::string& typeScope = "",
+        bool hasImplicitReceiver = false,
+        const std::string& enclosingModule = "") -> void;
+    auto execMakeDef(const ast::MakeDef& def, const std::string& enclosingModule = "") -> void;
     // One member of the make target — called once per name so a union target
     // (`make Float | Integer`) registers the block under each.
-    auto execMakeDefFor(const ast::MakeDef& def,
-                        const std::string& typeName,
-                        const std::string& enclosingModule) -> void;
-    auto execTypeDef(const ast::TypeDef& def,
-                     const std::string& moduleScope = "") -> void;
+    auto execMakeDefFor(
+        const ast::MakeDef& def, const std::string& typeName, const std::string& enclosingModule)
+        -> void;
+    auto execTypeDef(const ast::TypeDef& def, const std::string& moduleScope = "") -> void;
     auto execRecordDef(const ast::RecordDef& def, const std::string& moduleScope = "") -> void;
     auto execTraitDef(const ast::TraitDef& def, const std::string& moduleScope) -> void;
-    auto traitIdentityOf(const std::string& written, const std::string& scope,
-                         bool lastResort = false) const -> std::string;
-    auto execCompiledBlock(const ast::CompiledBlock& block,
-                           const std::string& moduleScope = "") -> void;
-    auto execVisibilityBlock(const ast::VisibilityBlock& block,
-                             const std::string& typeScope = "",
-                             bool hasImplicitReceiver = false,
-                             const std::string& enclosingModule = "") -> void;
+    auto traitIdentityOf(
+        const std::string& written, const std::string& scope, bool lastResort = false) const
+        -> std::string;
+    auto execCompiledBlock(const ast::CompiledBlock& block, const std::string& moduleScope = "")
+        -> void;
+    auto execVisibilityBlock(
+        const ast::VisibilityBlock& block,
+        const std::string& typeScope = "",
+        bool hasImplicitReceiver = false,
+        const std::string& enclosingModule = "") -> void;
     auto execUsingBlock(const ast::UsingBlock& block, const std::string& moduleScope = "") -> void;
     auto execMainBlock(const ast::MainBlock& block) -> ValuePtr;
-    auto ensureModuleLoaded(const std::string& moduleName, SourceLocation loc,
-                            const std::string& currentModule = "") -> std::string;
+    auto ensureModuleLoaded(
+        const std::string& moduleName, SourceLocation loc, const std::string& currentModule = "")
+        -> std::string;
     // Resolves a bare namespace segment (`Set` in `Set.from(…)`) to its
     // qualified module (`Data.Set`) when a `using` brought it into scope
     // unqualified. Mirrors TypeChecker::resolveModulePath (kexhq/kex#229) —
     // see that function's comment for the precedence rules.
-    auto resolveNamespaceAlias(const std::string& name,
-                               SourceLocation loc) -> std::optional<std::string>;
+    auto resolveNamespaceAlias(const std::string& name, SourceLocation loc)
+        -> std::optional<std::string>;
     auto resolvePendingExports() -> void;
     // `program` is loaded first, unless it is null: already loaded.
-    auto runCompileTime(const ast::Program* program,
-                        std::chrono::milliseconds timeout,
-                        const std::function<void()>& produce) -> void;
+    auto runCompileTime(
+        const ast::Program* program,
+        std::chrono::milliseconds timeout,
+        const std::function<void()>& produce) -> void;
     auto evaluateRequests(
         const ast::Program* program,
         const std::vector<ExpressionRequest>& requests,
         std::chrono::milliseconds timeout,
         std::vector<std::string>* reasons) -> std::vector<ValuePtr>;
-    auto defineImported(const std::string& bindingName, const std::string& logicalName,
-                        const std::string& sourceModule, bool explicitImport,
-                        const std::string& moduleScope, ValuePtr value,
-                        SourceLocation loc) -> void;
+    auto defineImported(
+        const std::string& bindingName,
+        const std::string& logicalName,
+        const std::string& sourceModule,
+        bool explicitImport,
+        const std::string& moduleScope,
+        ValuePtr value,
+        SourceLocation loc) -> void;
 
     // Expressions
     auto eval(const ast::Expr& expr) -> ValuePtr;
     auto evalBody(const std::vector<ast::ExprPtr>& body) -> ValuePtr;
 
     // Binary/unary ops
-    auto evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr& right,
-                      SourceLocation loc) -> ValuePtr;
+    auto evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr& right, SourceLocation loc)
+        -> ValuePtr;
     auto evalUnaryOp(TokenType op, const ValuePtr& operand, SourceLocation loc) -> ValuePtr;
 
     // Function calling
     using NamedArgs = std::vector<std::pair<std::string, ValuePtr>>;
-    auto callFunction(const std::string& name, std::vector<ValuePtr> args,
-                      NamedArgs namedArgs, SourceLocation loc) -> ValuePtr;
+    auto callFunction(
+        const std::string& name,
+        std::vector<ValuePtr> args,
+        NamedArgs namedArgs,
+        SourceLocation loc) -> ValuePtr;
     // Applies a `~name(...)` capture once its bound args are known, or —
     // when that is still fewer than `arity` calls for (-1: unknown arity,
     // always applies) — hands back ANOTHER partial value that closes over
     // them and recurses here on its own next call. `~add3(a)` called via a
     // plain `x(2)` needs this to eventually hand back a value still waiting
     // on a third argument, not run add3 with one short.
-    auto makeCurriedCall(std::string fnName, int arity, bool isOp,
-                         bool isUnaryOp, TokenType opToken,
-                         std::vector<ValuePtr> boundArgs) -> ValuePtr;
+    auto makeCurriedCall(
+        std::string fnName,
+        int arity,
+        bool isOp,
+        bool isUnaryOp,
+        TokenType opToken,
+        std::vector<ValuePtr> boundArgs) -> ValuePtr;
     auto checkDeadline() const -> void;
-    auto findNamedClause(const std::string& functionName,
-                         const NamedArgs& namedArgs,
-                         std::optional<std::size_t> positionalCount = std::nullopt) const
+    auto findNamedClause(
+        const std::string& functionName,
+        const NamedArgs& namedArgs,
+        std::optional<std::size_t> positionalCount = std::nullopt) const
         -> const ast::FunctionClause*;
     // Whether `clause` declares every label and, with `checkTypes`, the value
     // is of the type it annotates the labelled parameter with.
-    auto namedArgsTypeFit(const ast::FunctionClause& clause,
-                          const NamedArgs& namedArgs, bool checkTypes) const
+    auto namedArgsTypeFit(
+        const ast::FunctionClause& clause, const NamedArgs& namedArgs, bool checkTypes) const
         -> bool;
     // The first label no clause of `functionName` declares, if any.
-    auto unknownNamedArgument(const std::string& functionName,
-                              const NamedArgs& namedArgs) const
+    auto unknownNamedArgument(const std::string& functionName, const NamedArgs& namedArgs) const
         -> std::optional<std::string>;
     // A module defining a same-named function whose clause does accept the
     // labels — the `using` a call site is missing.
-    auto moduleSupplyingNamedClause(const std::string& functionName,
-                                    const NamedArgs& namedArgs) const
+    auto
+    moduleSupplyingNamedClause(const std::string& functionName, const NamedArgs& namedArgs) const
         -> std::optional<std::string>;
-    auto receiverArgumentOffset(const std::string& functionName,
-                                const std::vector<ValuePtr>& args) const -> size_t;
-    auto resolveMethodName(const ValuePtr& receiver, const std::string& method,
-                           const std::vector<ValuePtr>* args = nullptr) const
-        -> std::string;
-    auto registerRuntimeSignature(const ast::TypeAnnotation& annotation,
-                                  const std::string& scope,
-                                  bool implicitReceiver) -> void;
-    auto runtimeTypeMatches(const ValuePtr& value,
-                            const ast::TypeExpr& type) const -> bool;
+    auto
+    receiverArgumentOffset(const std::string& functionName, const std::vector<ValuePtr>& args) const
+        -> size_t;
+    auto resolveMethodName(
+        const ValuePtr& receiver,
+        const std::string& method,
+        const std::vector<ValuePtr>* args = nullptr) const -> std::string;
+    auto registerRuntimeSignature(
+        const ast::TypeAnnotation& annotation, const std::string& scope, bool implicitReceiver)
+        -> void;
+    auto runtimeTypeMatches(const ValuePtr& value, const ast::TypeExpr& type) const -> bool;
     auto resolveRecordTypeName(const std::string& name) const -> std::string;
 
     std::unordered_map<std::string, std::vector<std::string>> m_traitMethods;
     std::unordered_map<std::string, ValuePtr> m_functionValues;
 
     // Pattern matching
-    auto matchPattern(const ast::Pattern& pattern, const ValuePtr& value,
-                      bool isMutable = false) -> bool;
+    auto matchPattern(const ast::Pattern& pattern, const ValuePtr& value, bool isMutable = false)
+        -> bool;
     // Binds a `let`/`var` pattern against an already-evaluated value, with
     // the same per-shape semantics for both — `var` only marks the bindings
     // mutable (kexhq/kex#602).
-    auto bindPattern(const ast::Pattern& pattern, const ValuePtr& value,
-                     SourceLocation loc, bool isMutable) -> void;
+    auto bindPattern(
+        const ast::Pattern& pattern, const ValuePtr& value, SourceLocation loc, bool isMutable)
+        -> void;
 
     // Try/rescue support
     static auto tryFailureResult(const ValuePtr& failure) -> ValuePtr;
     // A successful result of a body whose failing `.try` made it `T?` or
     // `T or! E`: `Just(value)` or `Ok(value)`, as `wrapper` says.
     static auto wrappedSuccess(const std::string& wrapper, ValuePtr value) -> ValuePtr;
-    auto evalRescue(const ast::RescueBlock& rescue, const ValuePtr& error,
-                    SourceLocation loc) -> ValuePtr;
+    auto evalRescue(const ast::RescueBlock& rescue, const ValuePtr& error, SourceLocation loc)
+        -> ValuePtr;
 
     // `let NAME = expr` at top level registers NAME as a zero-arg function
     // (constant) — auto-call it on lookup so `NAME` reads as its value, not
@@ -454,15 +473,21 @@ public:
     // failures and exits 0 makes every CI job built on it green regardless of
     // what the specs said. Kept as a count rather than a bool so a caller can
     // say how many without re-parsing the summary line.
-    auto testsFailed() const -> int { return m_testsFailed; }
+    auto testsFailed() const -> int {
+        return m_testsFailed;
+    }
 
     // How the describe/it DSL reports itself (kexhq/kex#199). `Pretty` is the
     // ✓/✗ prose a person reads; `Json` is one JSON record per case on stdout,
     // for an editor's test tree; `List` discovers cases WITHOUT running any
     // body, which is what a test explorer needs before the first run.
     enum class TestReportMode { Pretty, Json, List };
-    auto setTestReportMode(TestReportMode mode) -> void { m_testReportMode = mode; }
-    auto testReportMode() const -> TestReportMode { return m_testReportMode; }
+    auto setTestReportMode(TestReportMode mode) -> void {
+        m_testReportMode = mode;
+    }
+    auto testReportMode() const -> TestReportMode {
+        return m_testReportMode;
+    }
     // Run only the cases whose full name path (enclosing describes plus the
     // `it` label) equals one of these, or sits underneath one of them. Empty
     // means "run everything".
@@ -479,8 +504,9 @@ public:
     // calls an earlier one's definitions.
     auto setProgram(const hir::Program* program) -> void {
         m_programs.clear();
-        for (const auto& checked : m_checkedPrograms)
+        for (const auto& checked : m_checkedPrograms) {
             m_programs.push(checked->program ? &*checked->program : nullptr);
+        }
         m_programs.push(program);
     }
     auto addProgram(const hir::Program* program) -> void {
@@ -496,28 +522,28 @@ private:
     // The function `type`'s own `method` is bound to, or "": the checker
     // names a module's type qualified (`Accounts.AccountId`), a `make` block
     // inside the module binds it as written there (`AccountId::successor`).
-    auto ownMethodName(const std::string& type, const std::string& method) const
-        -> std::string;
+    auto ownMethodName(const std::string& type, const std::string& method) const -> std::string;
     auto decidedFunction(const ast::Expr& expr, const ast::MethodCall& call) const -> std::string;
     auto decidedModuleFunction(const ast::Expr& expr, const ast::MethodCall& call) const
         -> std::string;
     auto evalConversion(const ast::Expr& receiver, const std::string& target) -> ValuePtr;
-    auto evalIntrinsicCall(const ast::MethodCall& call, const std::string& path,
-                           const SourceLocation& location) -> ValuePtr;
+    auto evalIntrinsicCall(
+        const ast::MethodCall& call, const std::string& path, const SourceLocation& location)
+        -> ValuePtr;
     // The testing DSL builtin a bare call is: as the checker decided, or by
     // its spelling in a run nothing checked.
     auto testBuiltinCalled(const ast::FunctionCall& call) const
         -> std::optional<names::TestBuiltin>;
-    auto evalTestBuiltin(names::TestBuiltin builtin, const ast::FunctionCall& call,
-                         const SourceLocation& location) -> ValuePtr;
+    auto evalTestBuiltin(
+        names::TestBuiltin builtin, const ast::FunctionCall& call, const SourceLocation& location)
+        -> ValuePtr;
     // A distinct value passed where a `Showable` is expected, shown by its
     // own `showValue`. The value is the bare backing one, and nothing at run
     // time says it is a Tuplex: `IO.printLine(x)` printed `(5, 11)` here
     // while BEAM, which builds the dictionary from the static type, printed
     // `5+11i`. `index` counts the call's arguments as its signature does.
-    auto showErasedArgument(const ast::Expr& call, size_t index,
-                            const ast::Expr* argument, ValuePtr value)
-        -> ValuePtr;
+    auto showErasedArgument(
+        const ast::Expr& call, size_t index, const ast::Expr* argument, ValuePtr value) -> ValuePtr;
     // Current server caller/reference, saved per process by Scheduler.
     ValuePtr m_servingFrom;
     // Slots declared `-> Void`: casts. A call on a server whose type the
@@ -543,7 +569,10 @@ private:
         std::unordered_map<std::string, ValuePtr> exports;
         std::unordered_map<std::string, std::string> submodules;
     };
-    struct PendingExport { std::string owner; const ast::ExportDecl* decl; };
+    struct PendingExport {
+        std::string owner;
+        const ast::ExportDecl* decl;
+    };
 
     std::shared_ptr<Environment> m_env;
     std::shared_ptr<Environment> m_globalEnv;
@@ -559,8 +588,7 @@ private:
         std::string receiverType;
         std::vector<const ast::TypeExpr*> params;
     };
-    std::unordered_map<std::string, std::vector<RuntimeSignature>>
-        m_runtimeSignatures;
+    std::unordered_map<std::string, std::vector<RuntimeSignature>> m_runtimeSignatures;
     std::unordered_map<std::string, ModuleEntry> m_moduleRegistry;
     // Capability substitutions installed by `with Name = value do ... end`,
     // innermost last. A stack rather than a map so nesting and restoration
@@ -571,13 +599,10 @@ private:
     // add helpers of its own (`capability Storage` beside `module Storage`),
     // and those are not the replacement's to answer: `Storage.located(...)`
     // inside `with Storage = Disk {...}` went to Disk and failed.
-    std::unordered_map<std::string, std::unordered_set<std::string>>
-        m_capabilityMembers;
-    auto capabilityMember(const std::string& capability,
-                          const std::string& name) const -> bool {
+    std::unordered_map<std::string, std::unordered_set<std::string>> m_capabilityMembers;
+    auto capabilityMember(const std::string& capability, const std::string& name) const -> bool {
         auto members = m_capabilityMembers.find(capability);
-        return members == m_capabilityMembers.end() ||
-               members->second.contains(name);
+        return members == m_capabilityMembers.end() || members->second.contains(name);
     }
     // A capability named from inside its module, or one nested in it, is
     // `Ticker` there but `Clocks.Ticker` everywhere else. Replacements are
@@ -586,8 +611,9 @@ private:
     auto canonicalCapability(const std::string& name) const -> std::string {
         auto scope = m_currentModule;
         while (!scope.empty()) {
-            if (auto full = scope + "." + name; m_capabilityMembers.contains(full))
+            if (auto full = scope + "." + name; m_capabilityMembers.contains(full)) {
                 return full;
+            }
             const auto dot = scope.rfind('.');
             scope = dot == std::string::npos ? std::string() : scope.substr(0, dot);
         }
@@ -596,11 +622,13 @@ private:
         // the call misses the `with` binding and silently reaches the real
         // implementation — the fail-open `with` exists to prevent. BEAM
         // tries the same candidates when it lowers the call.
-        for (auto it = m_usingModules.rbegin(); it != m_usingModules.rend(); ++it)
-            for (const auto& imported : *it)
-                if (auto full = imported + "." + name;
-                    m_capabilityMembers.contains(full))
+        for (auto it = m_usingModules.rbegin(); it != m_usingModules.rend(); ++it) {
+            for (const auto& imported : *it) {
+                if (auto full = imported + "." + name; m_capabilityMembers.contains(full)) {
                     return full;
+                }
+            }
+        }
         return name;
     }
     // Whether `module` is a capability with a replacement in scope that
@@ -611,9 +639,11 @@ private:
                capabilityMember(capability, member);
     }
     auto lookupCapability(const std::string& name) const -> ValuePtr {
-        for (auto it = m_capabilityBindings.rbegin();
-             it != m_capabilityBindings.rend(); ++it)
-            if (it->first == name) return it->second;
+        for (auto it = m_capabilityBindings.rbegin(); it != m_capabilityBindings.rend(); ++it) {
+            if (it->first == name) {
+                return it->second;
+            }
+        }
         return nullptr;
     }
     // Runs a closure under the substitutions of the region it was WRITTEN in
@@ -627,8 +657,12 @@ private:
         CapabilityBindings& live;
         CapabilityBindings saved;
         CapabilityScope(CapabilityBindings& current, const CapabilityBindings& captured)
-            : live(current), saved(std::move(current)) { live = captured; }
-        ~CapabilityScope() { live = std::move(saved); }
+            : live(current), saved(std::move(current)) {
+            live = captured;
+        }
+        ~CapabilityScope() {
+            live = std::move(saved);
+        }
     };
     std::vector<PendingExport> m_pendingExports;
     std::unordered_set<std::string> m_loadingModules;
@@ -645,7 +679,10 @@ private:
     // Modules brought into scope by `using`, one set per environment scope so
     // the lexical `using M do ... end` form ends with its block.
     std::vector<std::set<std::string>> m_usingModules;
-    struct ImportOrigin { std::string module; bool explicitImport = false; };
+    struct ImportOrigin {
+        std::string module;
+        bool explicitImport = false;
+    };
     std::vector<std::unordered_map<std::string, ImportOrigin>> m_importScopes{{}};
     std::unordered_map<std::string, ImportOrigin> m_moduleImportOrigins;
     // Maps a sum-type variant name (e.g. "Just", "Ok", "Fizz") to the type
@@ -673,8 +710,7 @@ private:
         std::vector<std::pair<std::string, ValuePtr>> imports;
     };
     std::unordered_map<std::string, RecordScope> m_recordScopes;
-    auto evalFieldDefault(const std::string& typeName, const ast::Expr& value)
-        -> ValuePtr;
+    auto evalFieldDefault(const std::string& typeName, const ast::Expr& value) -> ValuePtr;
     std::vector<std::string> m_scriptArgs;
     bool m_replMode = false;
     bool m_preludeLoaded = false;
@@ -708,8 +744,7 @@ private:
     // asked for. Consulted before the map, and its `None` means "no such
     // file", so a callback can model absence too (kexhq/kex#143).
     ValuePtr m_mockFileReader;
-    auto mockFileContent(const std::string& path)
-        -> std::optional<std::string>;
+    auto mockFileContent(const std::string& path) -> std::optional<std::string>;
 
     // See setMocksAllowed. Denied by default: an Evaluator used for
     // compile-time evaluation (compiled do, tagged-literal validation) is
@@ -772,14 +807,18 @@ private:
     // fallback. kex_test:failure_location/1 makes the same choice on BEAM.
     bool m_inTestCase = false;
     SourceLocation m_lastTestFileLocation;
-    auto reportTestCase(const std::vector<std::string>& path, const char* status,
-                        double durationMs, const std::string& message,
-                        SourceLocation caseLoc, SourceLocation failLoc) -> void;
-    auto reportTestDiscovery(const std::vector<std::string>& path,
-                             const char* kind, SourceLocation loc) -> void;
+    auto reportTestCase(
+        const std::vector<std::string>& path,
+        const char* status,
+        double durationMs,
+        const std::string& message,
+        SourceLocation caseLoc,
+        SourceLocation failLoc) -> void;
+    auto
+    reportTestDiscovery(const std::vector<std::string>& path, const char* kind, SourceLocation loc)
+        -> void;
     auto reportTestSummary() -> void;
-    auto testCaseSelected(const std::vector<std::string>& path, bool isGroup) const
-        -> bool;
+    auto testCaseSelected(const std::vector<std::string>& path, bool isGroup) const -> bool;
     auto emitTestRecord(const std::string& json) -> void;
 };
 

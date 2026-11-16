@@ -45,7 +45,9 @@ public:
         preserved.m_all = true;
         return preserved;
     }
-    static auto none() -> PreservedAnalyses { return {}; }
+    static auto none() -> PreservedAnalyses {
+        return {};
+    }
 
     template <typename Analysis>
     auto preserve() -> PreservedAnalyses& {
@@ -57,15 +59,21 @@ public:
         return *this;
     }
     template <typename Analysis>
-    auto preserved() const -> bool { return preserved(Analysis::key()); }
+    auto preserved() const -> bool {
+        return preserved(Analysis::key());
+    }
     auto preserved(const AnalysisKey* key) const -> bool {
         return m_all || m_preserved.contains(key);
     }
-    auto allPreserved() const -> bool { return m_all; }
+    auto allPreserved() const -> bool {
+        return m_all;
+    }
 
     // What both left valid: a pipeline preserves what every pass in it did.
     auto intersect(const PreservedAnalyses& other) -> void {
-        if (other.m_all) return;
+        if (other.m_all) {
+            return;
+        }
         if (m_all) {
             *this = other;
             return;
@@ -87,7 +95,9 @@ struct AnalysisInfoMixin {
         static const AnalysisKey identity{};
         return &identity;
     }
-    static auto name() -> std::string_view { return Derived::kName; }
+    static auto name() -> std::string_view {
+        return Derived::kName;
+    }
 };
 
 namespace detail {
@@ -105,7 +115,9 @@ template <typename Tuple>
 struct KeysOf;
 template <typename... Analyses>
 struct KeysOf<std::tuple<Analyses...>> {
-    static auto keys() -> std::vector<const AnalysisKey*> { return {Analyses::key()...}; }
+    static auto keys() -> std::vector<const AnalysisKey*> {
+        return {Analyses::key()...};
+    }
 };
 
 } // namespace detail
@@ -132,17 +144,21 @@ public:
         return registerAnalysis<Analysis>([] { return Analysis{}; });
     }
     template <typename Analysis>
-    auto registered() const -> bool { return m_analyses.contains(Analysis::key()); }
+    auto registered() const -> bool {
+        return m_analyses.contains(Analysis::key());
+    }
 
     // `Analysis`'s result for `unit`, computed now unless it is still valid.
     template <typename Analysis>
     auto result(IRUnit& unit) -> typename Analysis::Result& {
         const auto entry = std::pair{Analysis::key(), &unit};
-        if (const auto found = m_results.find(entry); found != m_results.end())
+        if (const auto found = m_results.find(entry); found != m_results.end()) {
             return static_cast<ResultModel<Analysis>&>(*found->second).value;
+        }
         const auto registered = m_analyses.find(Analysis::key());
-        if (registered == m_analyses.end())
+        if (registered == m_analyses.end()) {
             throw std::logic_error("analysis not registered: " + std::string(Analysis::name()));
+        }
         auto computed = registered->second->run(unit, *this);
         auto& value = static_cast<ResultModel<Analysis>&>(*computed).value;
         m_results.emplace(entry, std::move(computed));
@@ -153,28 +169,37 @@ public:
     template <typename Analysis>
     auto cachedResult(const IRUnit& unit) const -> const typename Analysis::Result* {
         const auto found = m_results.find(std::pair{Analysis::key(), &unit});
-        if (found == m_results.end()) return nullptr;
+        if (found == m_results.end()) {
+            return nullptr;
+        }
         return &static_cast<const ResultModel<Analysis>&>(*found->second).value;
     }
 
     // Drops every result for `unit` that `preserved` does not keep, and every
     // result computed from one it drops.
     auto invalidate(const IRUnit& unit, const PreservedAnalyses& preserved) -> void {
-        if (preserved.allPreserved()) return;
+        if (preserved.allPreserved()) {
+            return;
+        }
         std::set<const AnalysisKey*> dropped;
-        for (const auto& [entry, _] : m_results)
-            if (entry.second == &unit && !preserved.preserved(entry.first))
+        for (const auto& [entry, _] : m_results) {
+            if (entry.second == &unit && !preserved.preserved(entry.first)) {
                 dropped.insert(entry.first);
+            }
+        }
         for (bool grew = true; grew;) {
             grew = false;
             for (const auto& [entry, _] : m_results) {
-                if (entry.second != &unit || dropped.contains(entry.first)) continue;
-                for (const auto* dependency : m_analyses.at(entry.first)->dependencies())
+                if (entry.second != &unit || dropped.contains(entry.first)) {
+                    continue;
+                }
+                for (const auto* dependency : m_analyses.at(entry.first)->dependencies()) {
                     if (dropped.contains(dependency)) {
                         dropped.insert(entry.first);
                         grew = true;
                         break;
                     }
+                }
             }
         }
         std::erase_if(m_results, [&](const auto& result) {
@@ -185,9 +210,13 @@ public:
     auto clear(const IRUnit& unit) -> void {
         std::erase_if(m_results, [&](const auto& result) { return result.first.second == &unit; });
     }
-    auto clear() -> void { m_results.clear(); }
+    auto clear() -> void {
+        m_results.clear();
+    }
 
-    auto callbacks() const -> const PassInstrumentationCallbacks* { return m_callbacks; }
+    auto callbacks() const -> const PassInstrumentationCallbacks* {
+        return m_callbacks;
+    }
 
 private:
     struct ResultConcept {

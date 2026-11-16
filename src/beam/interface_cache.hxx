@@ -32,8 +32,8 @@ auto cacheMissReasonName(CacheMissReason reason) -> const char*;
 auto serializeImportedInterfaces(const kex::semantic::ImportedInterfaces& ifaces)
     -> std::vector<uint8_t>;
 
-auto deserializeImportedInterfaces(const std::vector<uint8_t>& bytes,
-                                   CacheMissReason* reason = nullptr)
+auto deserializeImportedInterfaces(
+    const std::vector<uint8_t>& bytes, CacheMissReason* reason = nullptr)
     -> std::optional<kex::semantic::ImportedInterfaces>;
 
 // The checker's types and signatures as this cache writes them, for another
@@ -46,8 +46,8 @@ auto decodeSignature(SaxReader& sax) -> kex::semantic::Signature;
 // Drop all but the newest `keepNewest` *.bin entries in `dir`, never `keep`
 // itself. Best-effort: every failure is silently ignored, the cache stays
 // correct (just briefly unpruned) when pruning loses a race.
-auto pruneInterfaceCacheDirectory(const std::filesystem::path& dir,
-                                  const std::filesystem::path& keep,
-                                  size_t keepNewest = 5) -> void;
+auto pruneInterfaceCacheDirectory(
+    const std::filesystem::path& dir, const std::filesystem::path& keep, size_t keepNewest = 5)
+    -> void;
 
 } // namespace kex::beam

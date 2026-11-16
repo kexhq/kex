@@ -51,18 +51,19 @@ auto popenCapture(const std::string& cmd) -> std::string {
     if (pipe) {
         std::array<char, 4096> buf;
         size_t n;
-        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0) {
             result.append(buf.data(), n);
+        }
         pclose(pipe);
     }
     return result;
 }
 
-auto replaceAll(std::string text, const std::string& from, const std::string& to)
-    -> std::string {
+auto replaceAll(std::string text, const std::string& from, const std::string& to) -> std::string {
     for (size_t at = text.find(from); at != std::string::npos;
-         at = text.find(from, at + to.size()))
+         at = text.find(from, at + to.size())) {
         text.replace(at, from.size(), to);
+    }
     return text;
 }
 
@@ -181,21 +182,22 @@ int main() {
             const std::string nodeB = "kexb" + suffix;
             const std::string cookie = "kexcluster" + suffix;
             writeFile(root / "node_a.kex", std::string(kShared) + kNodeA);
-            writeFile(root / "node_b.kex",
-                      std::string(kShared) + replaceAll(kNodeB, "NODE_A", nodeA));
+            writeFile(
+                root / "node_b.kex", std::string(kShared) + replaceAll(kNodeB, "NODE_A", nodeA));
 
             const std::string kex = KEX_BINARY_PATH;
             const auto logA = root / "a.log";
-            std::system((kex + " --no-colors --sname " + nodeA + " --cookie " + cookie +
-                         " " + (root / "node_a.kex").string() + " > " + logA.string() +
-                         " 2>&1 &").c_str());
-            auto outputB = popenCapture(kex + " --no-colors --sname " + nodeB +
-                                        " --cookie " + cookie + " " +
-                                        (root / "node_b.kex").string() + " 2>&1");
+            std::system((kex + " --no-colors --sname " + nodeA + " --cookie " + cookie + " " +
+                         (root / "node_a.kex").string() + " > " + logA.string() + " 2>&1 &")
+                            .c_str());
+            auto outputB = popenCapture(
+                kex + " --no-colors --sname " + nodeB + " --cookie " + cookie + " " +
+                (root / "node_b.kex").string() + " 2>&1");
 
             if (outputB.rfind("alive: true", 0) != 0) {
                 std::cout << "    (skipped: this machine cannot start a distributed "
-                             "Erlang node)\n" << outputB;
+                             "Erlang node)\n"
+                          << outputB;
                 std::error_code ec;
                 fs::remove_all(root, ec);
                 return;
@@ -205,19 +207,23 @@ int main() {
             std::string outputA;
             for (int i = 0; i < 100; i++) {
                 outputA = readFile(logA);
-                if (outputA.find('\n') != std::string::npos) break;
+                if (outputA.find('\n') != std::string::npos) {
+                    break;
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
 
-            assertEqual(outputB,
-                        std::string("alive: true\n"
-                                    "reached a: true\n"
-                                    "a listed: true\n"
-                                    "pong from a: true hihihi\n"
-                                    "remote bump: 1\n"
-                                    "remote bump: 2\n"
-                                    "spawned on a: true\n"),
-                        "node b's view of the cluster");
+            assertEqual(
+                outputB,
+                std::string(
+                    "alive: true\n"
+                    "reached a: true\n"
+                    "a listed: true\n"
+                    "pong from a: true hihihi\n"
+                    "remote bump: 1\n"
+                    "remote bump: 2\n"
+                    "spawned on a: true\n"),
+                "node b's view of the cluster");
             assertEqual(outputA, std::string("a stopped\n"), "node a's own output");
 
             std::error_code ec;
@@ -237,20 +243,25 @@ int main() {
             const auto logStore = root / "store.log";
             std::system(("cd " + dir.string() + " && " + kex +
                          " --no-colors --sname store --cookie kexexample store_node.kex > " +
-                         logStore.string() + " 2>&1 &").c_str());
-            auto client = popenCapture("cd " + dir.string() + " && " + kex +
-                                       " --no-colors --sname client --cookie kexexample"
-                                       " client_node.kex 2>&1");
+                         logStore.string() + " 2>&1 &")
+                            .c_str());
+            auto client = popenCapture(
+                "cd " + dir.string() + " && " + kex +
+                " --no-colors --sname client --cookie kexexample"
+                " client_node.kex 2>&1");
             std::string store;
             for (int i = 0; i < 100; i++) {
                 store = readFile(logStore);
-                if (store.find("stopping") != std::string::npos) break;
+                if (store.find("stopping") != std::string::npos) {
+                    break;
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
             // A client that failed never stopped the store, which would then
             // hold the test open until ctest's timeout.
-            if (store.find("stopping") == std::string::npos)
+            if (store.find("stopping") == std::string::npos) {
                 std::system("pkill -f 'sname store --cookie kexexample' 2>/dev/null");
+            }
             std::error_code ec;
             fs::remove_all(root, ec);
             if (client.find("Start this node with a name") != std::string::npos ||
@@ -262,16 +273,17 @@ int main() {
             // atom cannot spell — `sjc22-bm208-…` on a CI runner — takes the
             // quoted form: `:"store@sjc22-…"`. Compare with the quotes removed.
             std::string unquoted = client;
-            unquoted.erase(std::remove(unquoted.begin(), unquoted.end(), '"'),
-                           unquoted.end());
-            assertTrue(unquoted.find("greeting: hello from :store@") != std::string::npos &&
-                           unquoted.find("keys now: [client@") != std::string::npos &&
-                           unquoted.find(", greeting]") != std::string::npos &&
-                           unquoted.find("spawned block ran on :store@") != std::string::npos,
-                       "client_node.kex output: " + client);
-            assertTrue(store.find("store: handing the store to a client") != std::string::npos &&
-                           store.find("store: stopping") != std::string::npos,
-                       "store_node.kex output: " + store);
+            unquoted.erase(std::remove(unquoted.begin(), unquoted.end(), '"'), unquoted.end());
+            assertTrue(
+                unquoted.find("greeting: hello from :store@") != std::string::npos &&
+                    unquoted.find("keys now: [client@") != std::string::npos &&
+                    unquoted.find(", greeting]") != std::string::npos &&
+                    unquoted.find("spawned block ran on :store@") != std::string::npos,
+                "client_node.kex output: " + client);
+            assertTrue(
+                store.find("store: handing the store to a client") != std::string::npos &&
+                    store.find("store: stopping") != std::string::npos,
+                "store_node.kex output: " + store);
         });
     });
 

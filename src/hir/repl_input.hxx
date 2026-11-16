@@ -36,10 +36,11 @@ struct CheckedInput {
 // session's, its `main` statements in the session's `main`, with `after`
 // checked behind them. `prepare` runs on the session program before
 // the analysis: a REPL that reads modules from disk merges them there.
-auto checkReplInput(std::unique_ptr<ast::Program> session, ast::Program& input,
-                    std::vector<ast::ExprPtr> after,
-                    const std::function<void(ast::Program&)>& prepare,
-                    const semantic::ImportedInterfaces* interfaces)
-    -> CheckedInput;
+auto checkReplInput(
+    std::unique_ptr<ast::Program> session,
+    ast::Program& input,
+    std::vector<ast::ExprPtr> after,
+    const std::function<void(ast::Program&)>& prepare,
+    const semantic::ImportedInterfaces* interfaces) -> CheckedInput;
 
 } // namespace kex::hir

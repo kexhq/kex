@@ -19,11 +19,14 @@ auto runKex(const std::string& args) -> std::string {
     std::string cmd = std::string(KEX_BINARY_PATH) + " " + args + " 2>/dev/null";
     std::string result;
     FILE* pipe = popen(cmd.c_str(), "r");
-    if (!pipe) return result;
+    if (!pipe) {
+        return result;
+    }
     std::array<char, 4096> buf;
     size_t n;
-    while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+    while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0) {
         result.append(buf.data(), n);
+    }
     pclose(pipe);
     return result;
 }
@@ -33,12 +36,18 @@ auto runKex(const std::string& args) -> std::string {
 // test does not need; what matters is that the bytes are shaped as promised.
 auto valueOf(const std::string& json, const std::string& key) -> std::string {
     const auto at = json.find("\"" + key + "\":");
-    if (at == std::string::npos) return "<missing>";
+    if (at == std::string::npos) {
+        return "<missing>";
+    }
     auto start = at + key.size() + 3;
-    if (start >= json.size()) return "<missing>";
+    if (start >= json.size()) {
+        return "<missing>";
+    }
     if (json[start] == '"') {
         const auto end = json.find('"', start + 1);
-        if (end == std::string::npos) return "<unterminated>";
+        if (end == std::string::npos) {
+            return "<unterminated>";
+        }
         return json.substr(start + 1, end - start - 1);
     }
     const auto end = json.find_first_of(",}", start);
@@ -46,9 +55,14 @@ auto valueOf(const std::string& json, const std::string& key) -> std::string {
 }
 
 auto isInteger(const std::string& text) -> bool {
-    if (text.empty()) return false;
-    for (char c : text)
-        if (c < '0' || c > '9') return false;
+    if (text.empty()) {
+        return false;
+    }
+    for (char c : text) {
+        if (c < '0' || c > '9') {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -67,9 +81,8 @@ int main() {
             assertEqual(info[info.size() - 2], '}');
         });
 
-        it("reports the version this binary actually is", [&]() {
-            assertEqual(valueOf(info, "version"), kex::versionNumber());
-        });
+        it("reports the version this binary actually is",
+           [&]() { assertEqual(valueOf(info, "version"), kex::versionNumber()); });
 
         it("reports runtime_otp_floor as an integer or null", [&]() {
             const auto floor = valueOf(info, "runtime_otp_floor");
@@ -82,9 +95,10 @@ int main() {
         });
 
         it("carries every key a reader is promised", [&]() {
-            for (const auto* key : {"version", "revision", "built",
-                                    "runtime_otp_floor", "runtime_dir", "erl"})
+            for (const auto* key :
+                 {"version", "revision", "built", "runtime_otp_floor", "runtime_dir", "erl"}) {
                 assertTrue(valueOf(info, key) != "<missing>");
+            }
         });
 
         it("quotes absent strings as null, not as empty strings", [&]() {

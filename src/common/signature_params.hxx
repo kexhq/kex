@@ -31,12 +31,15 @@ namespace kex {
 // The single parameter type this expression contributes, and what remains.
 // `Cat -> String` yields `Cat`, leaving `String`; anything that is not a
 // function type yields nullptr (the chain is shorter than the parameter list).
-inline auto peelSignatureParam(const ast::TypeExpr* type,
-                               const ast::TypeExpr** rest)
+inline auto peelSignatureParam(const ast::TypeExpr* type, const ast::TypeExpr** rest)
     -> const ast::TypeExpr* {
-    if (!type) return nullptr;
+    if (!type) {
+        return nullptr;
+    }
     const auto* fn = std::get_if<ast::FunctionType>(&type->kind);
-    if (!fn || !fn->param) return nullptr;
+    if (!fn || !fn->param) {
+        return nullptr;
+    }
     *rest = fn->result ? fn->result.get() : nullptr;
     return fn->param.get();
 }
@@ -50,7 +53,9 @@ inline auto signatureParamTypes(const ast::TypeExpr* annotation, size_t count)
     for (size_t i = 0; i < count; ++i) {
         const ast::TypeExpr* next = nullptr;
         const auto* param = peelSignatureParam(rest, &next);
-        if (!param) return {};
+        if (!param) {
+            return {};
+        }
         out.push_back(param);
         rest = next;
     }
@@ -74,46 +79,72 @@ template <typename Items>
 inline auto attachSignatureParamTypes(Items& items) -> void {
     struct Pending {
         const ast::TypeAnnotation* annotation = nullptr;
-        int count = 0;      // signature lines written before the definition
+        int count = 0;        // signature lines written before the definition
         bool applied = false; // a definition of this name has been seen since
     };
     std::unordered_map<std::string, Pending> pending;
     for (auto& item : items) {
-        std::visit([&](auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
-                if (!node || !node->type) return;
-                // `:>` / `::>` leave the receiver (or the sender) out of the
-                // written chain, so the arrow segments no longer line up with
-                // the parameter list one for one.
-                if (node->implicitThis || node->implicitFrom) return;
-                auto& entry = pending[node->name];
-                if (entry.annotation && !entry.applied) { ++entry.count; return; }
-                entry = Pending{node.get(), 1, false};
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                if (!node) return;
-                auto found = pending.find(node->name);
-                if (found == pending.end() || !found->second.annotation) return;
-                found->second.applied = true;
-                if (found->second.count != 1) return;
-                const auto* annotation = found->second.annotation->type.get();
-                for (auto& clause : node->clauses) {
-                    if (clause.params.empty()) continue;
-                    const auto types =
-                        signatureParamTypes(annotation, clause.params.size());
-                    if (types.empty()) continue;
-                    for (size_t i = 0; i < clause.params.size(); ++i)
-                        if (!clause.params[i].type || !*clause.params[i].type)
-                            clause.params[i].signatureType = types[i];
+        std::visit(
+            [&](auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
+                    if (!node || !node->type) {
+                        return;
+                    }
+                    // `:>` / `::>` leave the receiver (or the sender) out of the
+                    // written chain, so the arrow segments no longer line up with
+                    // the parameter list one for one.
+                    if (node->implicitThis || node->implicitFrom) {
+                        return;
+                    }
+                    auto& entry = pending[node->name];
+                    if (entry.annotation && !entry.applied) {
+                        ++entry.count;
+                        return;
+                    }
+                    entry = Pending{node.get(), 1, false};
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                    if (!node) {
+                        return;
+                    }
+                    auto found = pending.find(node->name);
+                    if (found == pending.end() || !found->second.annotation) {
+                        return;
+                    }
+                    found->second.applied = true;
+                    if (found->second.count != 1) {
+                        return;
+                    }
+                    const auto* annotation = found->second.annotation->type.get();
+                    for (auto& clause : node->clauses) {
+                        if (clause.params.empty()) {
+                            continue;
+                        }
+                        const auto types = signatureParamTypes(annotation, clause.params.size());
+                        if (types.empty()) {
+                            continue;
+                        }
+                        for (size_t i = 0; i < clause.params.size(); ++i) {
+                            if (!clause.params[i].type || !*clause.params[i].type) {
+                                clause.params[i].signatureType = types[i];
+                            }
+                        }
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                    if (node) {
+                        attachSignatureParamTypes(node->body);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                    if (node) {
+                        attachSignatureParamTypes(node->items);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
+                    if (node) {
+                        attachSignatureParamTypes(node->items);
+                    }
                 }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (node) attachSignatureParamTypes(node->body);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
-                if (node) attachSignatureParamTypes(node->items);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
-                if (node) attachSignatureParamTypes(node->items);
-            }
-        }, item);
+            },
+            item);
     }
 }
 
@@ -121,7 +152,9 @@ inline auto attachSignatureParamTypes(Items& items) -> void {
 // the parameter itself, else the one its signature line supplies. Returns
 // nullptr when neither exists.
 inline auto dispatchParamType(const ast::Param& param) -> const ast::TypeExpr* {
-    if (param.type && *param.type) return param.type->get();
+    if (param.type && *param.type) {
+        return param.type->get();
+    }
     return param.signatureType;
 }
 

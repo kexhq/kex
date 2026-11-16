@@ -29,13 +29,19 @@ struct NameIndex {
 // at each point of it. `path` is the file preferred for a name several
 // declare. With `fileLocalTopLevel`, `modules` holds a whole workspace's
 // files, not one program's: a file's top-level declarations are its own.
-auto indexNames(const ast::Program& program, const std::string& path,
-                const TypeChecker& checker, const ImportedInterfaces* imports,
-                ProgramModules& modules, bool fileLocalTopLevel = false)
-    -> std::vector<ScopeSnapshot>;
+auto indexNames(
+    const ast::Program& program,
+    const std::string& path,
+    const TypeChecker& checker,
+    const ImportedInterfaces* imports,
+    ProgramModules& modules,
+    bool fileLocalTopLevel = false) -> std::vector<ScopeSnapshot>;
 
 // The index of one program: its own symbols (collectSymbols), indexed.
-auto buildNameIndex(const ast::Program& program, const std::string& path,
-                    const TypeChecker& checker, const ImportedInterfaces* imports) -> NameIndex;
+auto buildNameIndex(
+    const ast::Program& program,
+    const std::string& path,
+    const TypeChecker& checker,
+    const ImportedInterfaces* imports) -> NameIndex;
 
 } // namespace kex::semantic

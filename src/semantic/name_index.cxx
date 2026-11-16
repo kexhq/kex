@@ -17,11 +17,21 @@ namespace {
 
 // The name an expression the checker recorded as a use spells.
 auto usedName(const ast::Expr& expr) -> const std::string* {
-    if (const auto* identifier = std::get_if<ast::Identifier>(&expr.kind)) return &identifier->name;
-    if (const auto* upper = std::get_if<ast::UpperIdentifier>(&expr.kind)) return &upper->name;
-    if (const auto* call = std::get_if<ast::FunctionCall>(&expr.kind)) return &call->name;
-    if (const auto* tagged = std::get_if<ast::TaggedLiteral>(&expr.kind)) return &tagged->tag;
-    if (const auto* capture = std::get_if<ast::CurryExpr>(&expr.kind)) return &capture->name;
+    if (const auto* identifier = std::get_if<ast::Identifier>(&expr.kind)) {
+        return &identifier->name;
+    }
+    if (const auto* upper = std::get_if<ast::UpperIdentifier>(&expr.kind)) {
+        return &upper->name;
+    }
+    if (const auto* call = std::get_if<ast::FunctionCall>(&expr.kind)) {
+        return &call->name;
+    }
+    if (const auto* tagged = std::get_if<ast::TaggedLiteral>(&expr.kind)) {
+        return &tagged->tag;
+    }
+    if (const auto* capture = std::get_if<ast::CurryExpr>(&expr.kind)) {
+        return &capture->name;
+    }
     return nullptr;
 }
 
@@ -38,10 +48,13 @@ auto before(const SourceLocation& left, const SourceLocation& right) -> bool {
 
 } // namespace
 
-auto indexNames(const ast::Program& program, const std::string& path,
-                const TypeChecker& checker, const ImportedInterfaces* imports,
-                ProgramModules& modules, bool fileLocalTopLevel)
-    -> std::vector<ScopeSnapshot> {
+auto indexNames(
+    const ast::Program& program,
+    const std::string& path,
+    const TypeChecker& checker,
+    const ImportedInterfaces* imports,
+    ProgramModules& modules,
+    bool fileLocalTopLevel) -> std::vector<ScopeSnapshot> {
     const auto eachImported = [&](const std::string& within, const std::string& written,
                                   const std::optional<std::string>& alias,
                                   const std::vector<std::string>& only,
@@ -58,18 +71,22 @@ auto indexNames(const ast::Program& program, const std::string& path,
     std::vector<std::optional<Imported>> importedByContext(contexts.size());
     const auto importedIn = [&](std::size_t id) -> const Imported& {
         auto& imported = importedByContext[id];
-        if (imported) return *imported;
+        if (imported) {
+            return *imported;
+        }
         imported.emplace();
         for (const auto& import : contexts[id].imports) {
-            if (import.alias) imported->names.push_back(*import.alias);
-            eachImported(contexts[id].module, import.module, import.alias, import.onlyNames,
-                         import.exceptNames,
-                         [&](const std::string& name, const std::string& module, bool receiver) {
-                             imported->names.push_back(name);
-                             resolve_core::mergeImportOrigin(
-                                 imported->origins, name,
-                                 {module, !import.onlyNames.empty(), receiver});
-                         });
+            if (import.alias) {
+                imported->names.push_back(*import.alias);
+            }
+            eachImported(
+                contexts[id].module, import.module, import.alias, import.onlyNames,
+                import.exceptNames,
+                [&](const std::string& name, const std::string& module, bool receiver) {
+                    imported->names.push_back(name);
+                    resolve_core::mergeImportOrigin(
+                        imported->origins, name, {module, !import.onlyNames.empty(), receiver});
+                });
         }
         return *imported;
     };
@@ -78,15 +95,18 @@ auto indexNames(const ast::Program& program, const std::string& path,
     std::vector<std::tuple<SourceLocation, SymbolInfo*, uint32_t>> constructorReferences;
     for (const auto& [expr, context] : checker.nameUses()) {
         const auto* name = usedName(*expr);
-        if (!name) continue;
+        if (!name) {
+            continue;
+        }
         // The declaration the checker bound it to, where it recorded one.
         std::string module;
         if (const auto called = checker.calledFunctions().find(expr);
-            called != checker.calledFunctions().end())
+            called != checker.calledFunctions().end()) {
             module = owningModule(called->second);
-        else if (const auto constant = checker.referencedConstants().find(expr);
-                 constant != checker.referencedConstants().end())
+        } else if (const auto constant = checker.referencedConstants().find(expr);
+                   constant != checker.referencedConstants().end()) {
             module = owningModule(constant->second);
+        }
         auto* symbol = module.empty() ? nullptr : modules.referenced(module, *name, path);
         if (!symbol) {
             const auto& origins = importedIn(context).origins.front();
@@ -101,17 +121,22 @@ auto indexNames(const ast::Program& program, const std::string& path,
                 const bool encloses = symbol->module.empty() || symbol->module == within ||
                                       within.starts_with(symbol->module + ".");
                 if (!encloses || (fileLocalTopLevel && symbol->module.empty() &&
-                                  symbol->definition.file != path))
+                                  symbol->definition.file != path)) {
                     symbol = nullptr;
+                }
             }
         }
-        if (symbol) references.emplace_back(expr->location, symbol);
+        if (symbol) {
+            references.emplace_back(expr->location, symbol);
+        }
     }
     // A method call is a reference to the function the checker decided it
     // runs: the receiver type's own `make` function, or its home module's.
     for (const auto& [expr, decided] : checker.decidedCalls()) {
         const auto* call = std::get_if<ast::MethodCall>(&expr->kind);
-        if (!call || call->methodLocation.line == 0) continue;
+        if (!call || call->methodLocation.line == 0) {
+            continue;
+        }
         SymbolInfo* symbol = nullptr;
         if (decided.kind == CallKind::ModuleFunction) {
             symbol = modules.referenced(owningModule(decided.owner), call->method, path);
@@ -120,19 +145,22 @@ auto indexNames(const ast::Program& program, const std::string& path,
             // target as written (`Circle` inside `module Geo`).
             for (auto& candidate : modules.symbols()) {
                 if (candidate.kind != SymbolKind::Function || candidate.name != call->method ||
-                    candidate.makeTarget.empty())
+                    candidate.makeTarget.empty()) {
                     continue;
-                const auto written = candidate.module.empty() ||
-                                             candidate.makeTarget.find('.') != std::string::npos
-                                         ? candidate.makeTarget
-                                         : candidate.module + "." + candidate.makeTarget;
+                }
+                const auto written =
+                    candidate.module.empty() || candidate.makeTarget.find('.') != std::string::npos
+                        ? candidate.makeTarget
+                        : candidate.module + "." + candidate.makeTarget;
                 if (written == decided.owner || candidate.makeTarget == decided.owner) {
                     symbol = &candidate;
                     break;
                 }
             }
         }
-        if (symbol) references.emplace_back(call->methodLocation, symbol);
+        if (symbol) {
+            references.emplace_back(call->methodLocation, symbol);
+        }
     }
     // A qualified call (`Geo.area(2)`) is a reference to the function of the
     // module its receiver names, as the checker resolved that receiver. The
@@ -141,51 +169,63 @@ auto indexNames(const ast::Program& program, const std::string& path,
     for (const auto& [expr, signature] : checker.selectedCallSignatures()) {
         (void)signature;
         const auto* call = std::get_if<ast::MethodCall>(&expr->kind);
-        if (!call || !call->receiver || call->methodLocation.line == 0) continue;
+        if (!call || !call->receiver || call->methodLocation.line == 0) {
+            continue;
+        }
         const auto receiver = checker.decidedCalls().find(call->receiver.get());
         if (receiver == checker.decidedCalls().end() ||
-            receiver->second.kind != CallKind::ModuleReference)
+            receiver->second.kind != CallKind::ModuleReference) {
             continue;
-        if (auto* symbol = modules.referenced(receiver->second.owner, call->method, path))
+        }
+        if (auto* symbol = modules.referenced(receiver->second.owner, call->method, path)) {
             references.emplace_back(call->methodLocation, symbol);
+        }
     }
     // A type named in an annotation, or a record constructed, is a reference
     // to the type the checker resolved the name to.
     const auto recordNamed = [&](const std::string& identity) {
         const auto module = owningModule(identity);
-        return modules.referenced(module, module.empty() ? identity
-                                                         : identity.substr(module.size() + 1),
-                                  path);
+        return modules.referenced(
+            module, module.empty() ? identity : identity.substr(module.size() + 1), path);
     };
-    for (const auto& [type, identity] : checker.annotatedTypes())
-        if (auto* symbol = recordNamed(identity)) references.emplace_back(type->location, symbol);
+    for (const auto& [type, identity] : checker.annotatedTypes()) {
+        if (auto* symbol = recordNamed(identity)) {
+            references.emplace_back(type->location, symbol);
+        }
+    }
     // A record named in a pattern (`Point { x }`), and a constructor
     // (`Tint(3)`, `Shades.Light`), which leads to the type declaring it.
     const auto visitExpr = [&](const auto& self, const ast::Expr& expr) -> void {
         ast::forEachOwnedPattern(expr, [&](const ast::Pattern& owned) {
             ast::forEachSubPattern(owned, [&](const ast::Pattern& pattern) {
-                if (const auto* record = std::get_if<ast::RecordPattern>(&pattern.kind))
+                if (const auto* record = std::get_if<ast::RecordPattern>(&pattern.kind)) {
                     if (const auto found = checker.recordPatterns().find(record);
-                        found != checker.recordPatterns().end())
-                        if (auto* symbol = recordNamed(found->second))
+                        found != checker.recordPatterns().end()) {
+                        if (auto* symbol = recordNamed(found->second)) {
                             references.emplace_back(pattern.location, symbol);
+                        }
+                    }
+                }
             });
         });
         if (const auto decided = checker.decidedCalls().find(&expr);
             decided != checker.decidedCalls().end() &&
             decided->second.kind == CallKind::Constructor &&
             (std::holds_alternative<ast::FunctionCall>(expr.kind) ||
-             std::holds_alternative<ast::UpperIdentifier>(expr.kind)))
+             std::holds_alternative<ast::UpperIdentifier>(expr.kind))) {
             if (auto* symbol = recordNamed(decided->second.owner);
                 symbol && symbol->kind == SymbolKind::Type) {
                 const auto* call = std::get_if<ast::FunctionCall>(&expr.kind);
                 const auto& written =
                     call ? call->name : std::get<ast::UpperIdentifier>(expr.kind).name;
-                constructorReferences.emplace_back(expr.location, symbol,
-                                                   static_cast<uint32_t>(written.size()));
+                constructorReferences.emplace_back(
+                    expr.location, symbol, static_cast<uint32_t>(written.size()));
             }
+        }
         ast::forEachChild(expr, [&](const ast::ExprPtr& child) {
-            if (child) self(self, *child);
+            if (child) {
+                self(self, *child);
+            }
         });
     };
     ast::forEachBodyExpr(program, [&](const ast::Expr& body) { visitExpr(visitExpr, body); });
@@ -194,31 +234,35 @@ auto indexNames(const ast::Program& program, const std::string& path,
         const auto* named = construction && type ? std::get_if<NamedType>(&type->kind) : nullptr;
         // Only where the record's name is written: not `New { ... }`.
         if (!named || !(named->name == construction->typeName ||
-                        named->name.ends_with("." + construction->typeName)))
+                        named->name.ends_with("." + construction->typeName))) {
             continue;
-        if (auto* symbol = recordNamed(named->name)) references.emplace_back(expr->location, symbol);
+        }
+        if (auto* symbol = recordNamed(named->name)) {
+            references.emplace_back(expr->location, symbol);
+        }
     }
     // A `using` is a reference to each name it brings in.
     forEachUsing(program, [&](const WrittenUsing& written) {
-        eachImported(written.within, written.module.dotted(), written.alias, written.onlyNames,
-                     written.exceptNames,
-                     [&](const std::string& name, const std::string& module, bool) {
-                         if (auto* symbol = modules.referenced(module, name, path))
-                             references.emplace_back(written.location, symbol);
-                     });
+        eachImported(
+            written.within, written.module.dotted(), written.alias, written.onlyNames,
+            written.exceptNames, [&](const std::string& name, const std::string& module, bool) {
+                if (auto* symbol = modules.referenced(module, name, path)) {
+                    references.emplace_back(written.location, symbol);
+                }
+            });
     });
-    std::stable_sort(references.begin(), references.end(),
-                     [](const auto& left, const auto& right) {
-                         return before(left.first, right.first);
-                     });
+    std::stable_sort(references.begin(), references.end(), [](const auto& left, const auto& right) {
+        return before(left.first, right.first);
+    });
     // One place found by two of the answers above is one reference.
-    references.erase(std::unique(references.begin(), references.end(),
-                                 [](const auto& left, const auto& right) {
-                                     return left.second == right.second &&
-                                            !before(left.first, right.first) &&
-                                            !before(right.first, left.first);
-                                 }),
-                     references.end());
+    references.erase(
+        std::unique(
+            references.begin(), references.end(),
+            [](const auto& left, const auto& right) {
+                return left.second == right.second && !before(left.first, right.first) &&
+                       !before(right.first, left.first);
+            }),
+        references.end());
     for (const auto& [location, symbol] : references) {
         symbol->references.push_back(location);
         symbol->referenceLengths.push_back(0);
@@ -230,7 +274,9 @@ auto indexNames(const ast::Program& program, const std::string& path,
 
     std::vector<ScopeSnapshot> scopes;
     for (const auto& [expr, bound] : checker.scopeNames()) {
-        if (!path.empty() && expr->location.file != path) continue;
+        if (!path.empty() && expr->location.file != path) {
+            continue;
+        }
         auto names = bound.bound;
         const auto& imported = importedIn(bound.context).names;
         names.insert(names.end(), imported.begin(), imported.end());
@@ -240,16 +286,25 @@ auto indexNames(const ast::Program& program, const std::string& path,
     }
     // In source order; of two at one place the one that sees more last.
     std::sort(scopes.begin(), scopes.end(), [](const auto& left, const auto& right) {
-        if (before(left.location, right.location)) return true;
-        if (before(right.location, left.location)) return false;
-        if (left.names.size() != right.names.size()) return left.names.size() < right.names.size();
+        if (before(left.location, right.location)) {
+            return true;
+        }
+        if (before(right.location, left.location)) {
+            return false;
+        }
+        if (left.names.size() != right.names.size()) {
+            return left.names.size() < right.names.size();
+        }
         return left.names < right.names;
     });
     return scopes;
 }
 
-auto buildNameIndex(const ast::Program& program, const std::string& path,
-                    const TypeChecker& checker, const ImportedInterfaces* imports) -> NameIndex {
+auto buildNameIndex(
+    const ast::Program& program,
+    const std::string& path,
+    const TypeChecker& checker,
+    const ImportedInterfaces* imports) -> NameIndex {
     ProgramModules modules(collectSymbols(program, path));
     NameIndex index;
     index.completionScopes = indexNames(program, path, checker, imports, modules);

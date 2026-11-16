@@ -21,13 +21,19 @@ namespace {
 // later on the command line and still wins.
 auto runKex(const std::vector<std::string>& args, const std::string& standardIn) -> std::string {
     std::string cmd = std::string(KEX_BINARY_PATH) + " --colors";
-    for (const auto& a : args) { cmd += " "; cmd += a; }
+    for (const auto& a : args) {
+        cmd += " ";
+        cmd += a;
+    }
 
     std::string tmpPath;
     if (!standardIn.empty()) {
         char tmp[] = "/tmp/kex_color_cli_test_XXXXXX";
         int fd = mkstemp(tmp);
-        { std::ofstream f(tmp); f << standardIn; }
+        {
+            std::ofstream f(tmp);
+            f << standardIn;
+        }
         close(fd);
         tmpPath = tmp;
         cmd += " < " + tmpPath;
@@ -44,7 +50,9 @@ auto runKex(const std::vector<std::string>& args, const std::string& standardIn)
         }
         pclose(pipe);
     }
-    if (!tmpPath.empty()) std::remove(tmpPath.c_str());
+    if (!tmpPath.empty()) {
+        std::remove(tmpPath.c_str());
+    }
     return result;
 }
 
@@ -62,14 +70,15 @@ auto runKexStreams(const std::vector<std::string>& args) -> CapturedStreams {
     close(errFd);
 
     std::string cmd = std::string(KEX_BINARY_PATH) + " --colors";
-    for (const auto& arg : args) cmd += " " + arg;
+    for (const auto& arg : args) {
+        cmd += " " + arg;
+    }
     cmd += " > " + std::string(outPath) + " 2> " + errPath;
     std::system(cmd.c_str());
 
     auto read = [](const char* path) {
         std::ifstream file(path);
-        return std::string(std::istreambuf_iterator<char>(file),
-                           std::istreambuf_iterator<char>());
+        return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     };
     CapturedStreams captured{read(outPath), read(errPath)};
     std::remove(outPath);
@@ -84,7 +93,10 @@ auto writeTempSource(const std::string& source) -> std::string {
     // Rename with .kex extension so the compiler accepts it
     std::string path = std::string(tmp) + ".kex";
     std::rename(tmp, path.c_str());
-    { std::ofstream f(path); f << source; }
+    {
+        std::ofstream f(path);
+        f << source;
+    }
     return path;
 }
 
@@ -96,11 +108,10 @@ auto contains(const std::string& haystack, const std::string& needle) -> bool {
     return haystack.find(needle) != std::string::npos;
 }
 
-const std::string TYPE_ERROR_SRC =
-    "main do\n"
-    "  let nums = [1, 2, 3]\n"
-    "  nums.filter { |x| x + 1 }\n"
-    "end\n";
+const std::string TYPE_ERROR_SRC = "main do\n"
+                                   "  let nums = [1, 2, 3]\n"
+                                   "  nums.filter { |x| x + 1 }\n"
+                                   "end\n";
 
 const std::string RANGED_VALIDATION_SRC =
     "let demo(parts: [String], values: [Any]) -> String = "
@@ -185,8 +196,9 @@ int main() {
                 "  IO.printLine(\"printed\")\n"
                 "  IO.inspect(42)\n"
                 "end\n");
-            for (const auto& backend : {std::vector<std::string>{"--run-walker", "--no-colors", path},
-                                        std::vector<std::string>{"--run", "--no-colors", path}}) {
+            for (const auto& backend :
+                 {std::vector<std::string>{"--run-walker", "--no-colors", path},
+                  std::vector<std::string>{"--run", "--no-colors", path}}) {
                 auto captured = runKexStreams(backend);
                 assertEqual(captured.out, std::string("printed\n"));
                 assertEqual(captured.err, std::string("42 : Integer\n"));
@@ -196,15 +208,17 @@ int main() {
     });
 
     describe("Color CLI — error diagnostics", []() {
-        it("colors a type error: gray location, red label, bold functions, cyan types, magenta arrows", []() {
-            auto path = writeTempSource(TYPE_ERROR_SRC);
-            auto out = runKex({"--check", path}, "");
-            std::remove(path.c_str());
-            assertTrue(hasAnsi(out), "expected ANSI escapes in: " + out);
-            assertTrue(contains(out, "\x1b[90m"), "missing gray location prefix: " + out);
-            assertTrue(contains(out, "\x1b[31m"), "missing red error label: " + out);
-            assertTrue(contains(out, "\x1b[35m->"), "missing magenta arrow: " + out);
-        });
+        it("colors a type error: gray location, red label, bold functions, cyan types, magenta "
+           "arrows",
+           []() {
+               auto path = writeTempSource(TYPE_ERROR_SRC);
+               auto out = runKex({"--check", path}, "");
+               std::remove(path.c_str());
+               assertTrue(hasAnsi(out), "expected ANSI escapes in: " + out);
+               assertTrue(contains(out, "\x1b[90m"), "missing gray location prefix: " + out);
+               assertTrue(contains(out, "\x1b[31m"), "missing red error label: " + out);
+               assertTrue(contains(out, "\x1b[35m->"), "missing magenta arrow: " + out);
+           });
 
         it("renders function names bold and types cyan (distinct, not the same)", []() {
             auto path = writeTempSource(TYPE_ERROR_SRC);
@@ -216,7 +230,8 @@ int main() {
             assertFalse(contains(out, "\x1b[36mfilter"), "function name wrongly cyan: " + out);
             // Type name Integer is cyan, matching the REPL/IO.inspect type suffix.
             assertTrue(contains(out, "\x1b[36mInteger"), "type name not cyan in error: " + out);
-            assertFalse(contains(out, "\x1b[33mInteger"), "type name wrongly yellow in error: " + out);
+            assertFalse(
+                contains(out, "\x1b[33mInteger"), "type name wrongly yellow in error: " + out);
         });
 
         it("--no-colors strips every ANSI escape from errors", []() {
@@ -232,8 +247,7 @@ int main() {
 
         it("underlines compile-time validator ranges", []() {
             auto path = writeTempSource(RANGED_VALIDATION_SRC);
-            auto out =
-                runKex({"--no-colors", "--check", path}, "");
+            auto out = runKex({"--no-colors", "--check", path}, "");
             std::remove(path.c_str());
             assertTrue(
                 contains(out, ":3:15-3:17: warning: ranged warning"),
@@ -241,48 +255,45 @@ int main() {
             assertTrue(
                 contains(out, "3 | main do demo`abcde` end"),
                 "missing ranged diagnostic source line: " + out);
-            assertTrue(contains(out, "^~"),
-                       "missing ranged diagnostic underline: " + out);
+            assertTrue(contains(out, "^~"), "missing ranged diagnostic underline: " + out);
         });
 
         it("emits validator range endpoints in JSON", []() {
             auto path = writeTempSource(RANGED_VALIDATION_SRC);
             auto out = runKex({"--json", "--check", path}, "");
             std::remove(path.c_str());
-            assertTrue(contains(out, "\"line\": 3"),
-                       "missing JSON start line: " + out);
-            assertTrue(contains(out, "\"column\": 15"),
-                       "missing JSON start column: " + out);
-            assertTrue(contains(out, "\"end_line\": 3"),
-                       "missing JSON end line: " + out);
-            assertTrue(contains(out, "\"end_column\": 17"),
-                       "missing JSON end column: " + out);
+            assertTrue(contains(out, "\"line\": 3"), "missing JSON start line: " + out);
+            assertTrue(contains(out, "\"column\": 15"), "missing JSON start column: " + out);
+            assertTrue(contains(out, "\"end_line\": 3"), "missing JSON end line: " + out);
+            assertTrue(contains(out, "\"end_column\": 17"), "missing JSON end column: " + out);
         });
 
         it("points validator crashes back to the triggering literal", []() {
             auto path = writeTempSource(CRASHING_VALIDATION_SRC);
-            auto out =
-                runKex({"--no-colors", "--check", path}, "");
+            auto out = runKex({"--no-colors", "--check", path}, "");
             std::remove(path.c_str());
-            assertTrue(contains(out, ":2:1: error: Compile-time validator "
-                                     "`validateDemo` crashed:"),
-                       "missing primary validator diagnostic: " + out);
-            assertTrue(contains(out, ":7:9: note: triggered by tagged literal "
-                                     "`demo`"),
-                       "missing triggering-literal note: " + out);
+            assertTrue(
+                contains(
+                    out, ":2:1: error: Compile-time validator "
+                         "`validateDemo` crashed:"),
+                "missing primary validator diagnostic: " + out);
+            assertTrue(
+                contains(
+                    out, ":7:9: note: triggered by tagged literal "
+                         "`demo`"),
+                "missing triggering-literal note: " + out);
         });
 
         it("includes validator trigger notes in JSON", []() {
             auto path = writeTempSource(CRASHING_VALIDATION_SRC);
             auto out = runKex({"--json", "--check", path}, "");
             std::remove(path.c_str());
-            assertTrue(contains(out, "\"notes\": ["),
-                       "missing JSON notes array: " + out);
-            assertTrue(contains(out, "\"line\": 7"),
-                       "missing JSON note line: " + out);
+            assertTrue(contains(out, "\"notes\": ["), "missing JSON notes array: " + out);
+            assertTrue(contains(out, "\"line\": 7"), "missing JSON note line: " + out);
             assertTrue(
-                contains(out, "\"message\": \"triggered by tagged literal "
-                              "`demo`\""),
+                contains(
+                    out, "\"message\": \"triggered by tagged literal "
+                         "`demo`\""),
                 "missing JSON note message: " + out);
         });
     });
@@ -315,19 +326,20 @@ int main() {
                 "end\n"
                 "make ColorProbe, implement: Inspectable do\n"
                 "  let inspectValue(colors: Bool) -> String = "
-                    "if colors then \"colors-on\" else \"colors-off\" end\n"
+                "if colors then \"colors-on\" else \"colors-off\" end\n"
                 "end\n"
                 "main do\n"
                 "  IO.inspect(ColorProbe { value: 1 })\n"
                 "end\n");
-            for (const auto& backend : {std::vector<std::string>{"--run-walker", path},
-                                        std::vector<std::string>{"--run", path}}) {
+            for (const auto& backend :
+                 {std::vector<std::string>{"--run-walker", path},
+                  std::vector<std::string>{"--run", path}}) {
                 auto out = runKex(backend, "");
                 assertTrue(contains(out, "colors-on"), out);
             }
-            for (const auto& backend : {
-                     std::vector<std::string>{"--run-walker", "--no-colors", path},
-                     std::vector<std::string>{"--run", "--no-colors", path}}) {
+            for (const auto& backend :
+                 {std::vector<std::string>{"--run-walker", "--no-colors", path},
+                  std::vector<std::string>{"--run", "--no-colors", path}}) {
                 auto out = runKex(backend, "");
                 assertTrue(contains(out, "colors-off"), out);
                 assertFalse(hasAnsi(out), "unexpected ANSI escapes in: " + out);
@@ -337,22 +349,23 @@ int main() {
     });
 
     describe("Color CLI — spec reporter", []() {
-        const std::string source =
-            "it(\"passes\") do\n"
-            "  assert(true)\n"
-            "end\n"
-            "it(\"fails\") do\n"
-            "  assert(false)\n"
-            "end\n";
+        const std::string source = "it(\"passes\") do\n"
+                                   "  assert(true)\n"
+                                   "end\n"
+                                   "it(\"fails\") do\n"
+                                   "  assert(false)\n"
+                                   "end\n";
 
         it("renders passing ticks green and failing crosses red", [source]() {
             auto path = writeTempSource(source);
             auto out = runKex({"--run-walker", path}, "");
             std::remove(path.c_str());
-            assertTrue(contains(out, "\x1b[32m\xE2\x9C\x93\x1b[0m passes"),
-                       "passing tick not green: " + out);
-            assertTrue(contains(out, "\x1b[31m\xE2\x9C\x97\x1b[0m fails"),
-                       "failing cross not red: " + out);
+            assertTrue(
+                contains(out, "\x1b[32m\xE2\x9C\x93\x1b[0m passes"),
+                "passing tick not green: " + out);
+            assertTrue(
+                contains(out, "\x1b[31m\xE2\x9C\x97\x1b[0m fails"),
+                "failing cross not red: " + out);
         });
 
         it("keeps spec output plain with --no-colors", [source]() {

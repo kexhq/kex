@@ -9,4 +9,4 @@ auto runBeamRepl(bool skipPrelude) -> int;
 auto runWalkerRepl(bool skipPrelude) -> int;
 
 // A line `--eval` queues, read by the REPL before the terminal.
-auto queueReplScriptLine(const std::string &line) -> void;
+auto queueReplScriptLine(const std::string& line) -> void;

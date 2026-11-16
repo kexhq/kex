@@ -31,10 +31,10 @@ using ImportScope = std::unordered_map<std::string, ImportOrigin>;
 // The scope rule under it: `requested` as written when `exists` says so,
 // else relative to the innermost enclosing module that has it, else
 // unchanged.
-auto resolveModulePathIn(const std::string& currentModule,
-                         const std::string& requested,
-                         const std::function<bool(const std::string&)>& exists)
-    -> std::string;
+auto resolveModulePathIn(
+    const std::string& currentModule,
+    const std::string& requested,
+    const std::function<bool(const std::string&)>& exists) -> std::string;
 
 // Merge one imported name into the scope stack per the `using` rules,
 // creating the current scope when the stack is empty. A same-module
@@ -47,22 +47,22 @@ struct MergeOutcome {
     bool proceed = true;
     std::optional<std::string> ambiguity;
 };
-auto mergeImportOrigin(std::vector<ImportScope>& scopes,
-                       const std::string& name, ImportOrigin origin)
-    -> MergeOutcome;
+auto mergeImportOrigin(
+    std::vector<ImportScope>& scopes, const std::string& name, ImportOrigin origin) -> MergeOutcome;
 
 // `using M[, as: A][, only: ...]` imports M's names — except when it
 // only binds an alias. `as:` alone imports nothing; an `only:` list
 // beside it still asks.
-auto usingImportsNames(const std::optional<std::string>& alias,
-                       const std::vector<std::string>& only) -> bool;
+auto usingImportsNames(
+    const std::optional<std::string>& alias, const std::vector<std::string>& only) -> bool;
 
 // Per-name half of the same rule: an `only:` list picks, an `except:`
 // list removes. Both lists naming one name is rejected upstream as
 // mutually exclusive; here `except:` is checked last, so it wins ties.
-auto usingSelectsName(const std::string& name,
-                      const std::vector<std::string>& only,
-                      const std::vector<std::string>& except) -> bool;
+auto usingSelectsName(
+    const std::string& name,
+    const std::vector<std::string>& only,
+    const std::vector<std::string>& except) -> bool;
 
 // Innermost-first `scope.name` walk over the enclosing modules of
 // `currentModule`: the full path first, then stripping one segment at a
@@ -70,14 +70,17 @@ auto usingSelectsName(const std::string& name,
 // record-name chains (table E) and the checker's nested-module walk
 // share this; what "exists" means stays per consumer.
 template <typename Exists>
-auto resolveInScopes(const std::string& currentModule,
-                     const std::string& name, Exists exists)
+auto resolveInScopes(const std::string& currentModule, const std::string& name, Exists exists)
     -> std::optional<std::string> {
     for (auto scope = currentModule; !scope.empty();) {
         const auto candidate = scope + "." + name;
-        if (exists(candidate)) return candidate;
+        if (exists(candidate)) {
+            return candidate;
+        }
         const auto dot = scope.rfind('.');
-        if (dot == std::string::npos) break;
+        if (dot == std::string::npos) {
+            break;
+        }
         scope.resize(dot);
     }
     return std::nullopt;
@@ -93,14 +96,13 @@ struct SuffixMatch {
     std::string name;
 };
 template <typename Map>
-auto matchSuffix(const Map& candidates, const std::string& suffix)
-    -> SuffixMatch {
+auto matchSuffix(const Map& candidates, const std::string& suffix) -> SuffixMatch {
     SuffixMatch match;
     for (const auto& [candidate, _] : candidates) {
         if (candidate.size() <= suffix.size() ||
-            candidate.compare(candidate.size() - suffix.size(),
-                              suffix.size(), suffix) != 0)
+            candidate.compare(candidate.size() - suffix.size(), suffix.size(), suffix) != 0) {
             continue;
+        }
         if (match.kind == SuffixMatchKind::Unique) {
             match.kind = SuffixMatchKind::Ambiguous;
             match.name.clear();
@@ -156,8 +158,8 @@ using AliasExpander = std::function<TypePtr(const TypePtr&)>;
 // nominals (uniqueness below vetoes suffix collisions), head-only
 // for List/Map, record-table membership for structural receivers
 // (resolution already picked the winner), nothing else.
-auto receiverCoversHead(const TypePtr& receiver, const std::string& head,
-                        const ImportedInterfaces& ifaces) -> bool;
+auto receiverCoversHead(
+    const TypePtr& receiver, const std::string& head, const ImportedInterfaces& ifaces) -> bool;
 
 // The receiver type (`Head`) whose own implementation an imported receiver
 // call is proven to run, or nullopt to keep the dispatcher; the backend names
@@ -172,9 +174,10 @@ auto receiverCoversHead(const TypePtr& receiver, const std::string& head,
 // lowering laid out). (10), no trait dictionary for the receiver, is checked by lowering,
 // which owns the computed dictionaries.
 auto staticReceiverHead(
-    const ImportedFunction& winner, const TypePtr& receiverType,
-    const ImportedInterfaces& ifaces, AliasExpander expandAlias)
-    -> std::optional<std::string>;
+    const ImportedFunction& winner,
+    const TypePtr& receiverType,
+    const ImportedInterfaces& ifaces,
+    AliasExpander expandAlias) -> std::optional<std::string>;
 
 } // namespace resolve_core
 

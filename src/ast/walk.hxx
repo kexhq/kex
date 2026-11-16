@@ -33,13 +33,19 @@ template <typename E, typename Visit>
 auto forEachChild(E& expr, Visit&& visit) -> void {
     using Ptr = detail::ExprPtrOf<E>;
     auto one = [&](Ptr& child) {
-        if (child) visit(child);
+        if (child) {
+            visit(child);
+        }
     };
     auto maybe = [&](auto& child) {
-        if (child) one(*child);
+        if (child) {
+            one(*child);
+        }
     };
     auto all = [&](auto& children) {
-        for (auto& child : children) one(child);
+        for (auto& child : children) {
+            one(child);
+        }
     };
     auto clauses = [&](auto& list) {
         for (auto& clause : list) {
@@ -55,20 +61,25 @@ auto forEachChild(E& expr, Visit&& visit) -> void {
     std::visit(
         [&](auto& node) {
             using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, StringLiteral> ||
-                          std::is_same_v<T, TaggedLiteral>) {
+            if constexpr (std::is_same_v<T, StringLiteral> || std::is_same_v<T, TaggedLiteral>) {
                 all(node.values);
             } else if constexpr (std::is_same_v<T, MethodCall>) {
                 one(node.receiver);
                 all(node.args);
-                for (auto& [_, value] : node.namedArgs) one(value);
+                for (auto& [_, value] : node.namedArgs) {
+                    one(value);
+                }
                 maybe(node.block);
             } else if constexpr (std::is_same_v<T, FunctionCall>) {
                 all(node.args);
-                for (auto& [_, value] : node.namedArgs) one(value);
+                for (auto& [_, value] : node.namedArgs) {
+                    one(value);
+                }
                 maybe(node.block);
             } else if constexpr (std::is_same_v<T, RecordConstruction>) {
-                for (auto& field : node.fields) one(field.value);
+                for (auto& field : node.fields) {
+                    one(field.value);
+                }
             } else if constexpr (std::is_same_v<T, BinaryOp>) {
                 one(node.left);
                 one(node.right);
@@ -94,7 +105,9 @@ auto forEachChild(E& expr, Visit&& visit) -> void {
                     one(condition);
                     all(body);
                 }
-                if (node.elseBody) all(*node.elseBody);
+                if (node.elseBody) {
+                    all(*node.elseBody);
+                }
             } else if constexpr (std::is_same_v<T, MatchExpr>) {
                 one(node.subject);
                 clauses(node.clauses);
@@ -102,22 +115,22 @@ auto forEachChild(E& expr, Visit&& visit) -> void {
                 clauses(node.clauses);
                 maybe(node.timeout);
                 maybe(node.afterBody);
-            } else if constexpr (std::is_same_v<T, LoopExpr> ||
-                                 std::is_same_v<T, SpawnExpr> ||
-                                 std::is_same_v<T, BlockExpr> ||
-                                 std::is_same_v<T, UsingExpr>) {
+            } else if constexpr (
+                std::is_same_v<T, LoopExpr> || std::is_same_v<T, SpawnExpr> ||
+                std::is_same_v<T, BlockExpr> || std::is_same_v<T, UsingExpr>) {
                 all(node.body);
             } else if constexpr (std::is_same_v<T, WhileExpr>) {
                 one(node.condition);
                 all(node.body);
-            } else if constexpr (std::is_same_v<T, LetExpr> ||
-                                 std::is_same_v<T, VarExpr> ||
-                                 std::is_same_v<T, AssignExpr> ||
-                                 std::is_same_v<T, ReturnExpr>) {
+            } else if constexpr (
+                std::is_same_v<T, LetExpr> || std::is_same_v<T, VarExpr> ||
+                std::is_same_v<T, AssignExpr> || std::is_same_v<T, ReturnExpr>) {
                 one(node.value);
             } else if constexpr (std::is_same_v<T, Lambda>) {
                 all(node.body);
-                if (node.rescue) rescue(*node.rescue);
+                if (node.rescue) {
+                    rescue(*node.rescue);
+                }
             } else if constexpr (std::is_same_v<T, ShorthandLambda>) {
                 one(node.lambda);
             } else if constexpr (std::is_same_v<T, SpreadExpr>) {
@@ -130,7 +143,9 @@ auto forEachChild(E& expr, Visit&& visit) -> void {
                 one(node.thenExpr);
                 one(node.elseExpr);
             } else if constexpr (std::is_same_v<T, CurryExpr>) {
-                for (auto& group : node.argGroups) all(group);
+                for (auto& group : node.argGroups) {
+                    all(group);
+                }
             } else if constexpr (std::is_same_v<T, TryExpr>) {
                 one(node.operand);
             } else if constexpr (std::is_same_v<T, TryingExpr>) {
@@ -171,25 +186,37 @@ auto forEachOperand(const Expr& expr, Visit&& visit, bool shortCircuit = true) -
     std::visit(
         [&](const auto& node) {
             using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, AssignExpr> || std::is_same_v<T, LetExpr> ||
-                          std::is_same_v<T, VarExpr>) {
-                if (node.value) visit(node.value);
-            } else if constexpr (std::is_same_v<T, MethodCall> ||
-                                 std::is_same_v<T, FunctionCall>) {
-                if constexpr (std::is_same_v<T, MethodCall>)
-                    if (node.receiver) visit(node.receiver);
-                for (const auto& argument : node.args)
-                    if (argument) visit(argument);
-                for (const auto& [_, value] : node.namedArgs)
-                    if (value) visit(value);
+            if constexpr (
+                std::is_same_v<T, AssignExpr> || std::is_same_v<T, LetExpr> ||
+                std::is_same_v<T, VarExpr>) {
+                if (node.value) {
+                    visit(node.value);
+                }
+            } else if constexpr (std::is_same_v<T, MethodCall> || std::is_same_v<T, FunctionCall>) {
+                if constexpr (std::is_same_v<T, MethodCall>) {
+                    if (node.receiver) {
+                        visit(node.receiver);
+                    }
+                }
+                for (const auto& argument : node.args) {
+                    if (argument) {
+                        visit(argument);
+                    }
+                }
+                for (const auto& [_, value] : node.namedArgs) {
+                    if (value) {
+                        visit(value);
+                    }
+                }
             } else if constexpr (std::is_same_v<T, BinaryOp>) {
                 if (shortCircuit ||
-                    (node.op != TokenType::AmpAmp && node.op != TokenType::PipePipe))
+                    (node.op != TokenType::AmpAmp && node.op != TokenType::PipePipe)) {
                     kex::ast::forEachChild(expr, visit);
-            } else if constexpr (std::is_same_v<T, UnaryOp> || std::is_same_v<T, TupleExpr> ||
-                                 std::is_same_v<T, ListExpr> ||
-                                 std::is_same_v<T, RecordConstruction> ||
-                                 std::is_same_v<T, StringLiteral>) {
+                }
+            } else if constexpr (
+                std::is_same_v<T, UnaryOp> || std::is_same_v<T, TupleExpr> ||
+                std::is_same_v<T, ListExpr> || std::is_same_v<T, RecordConstruction> ||
+                std::is_same_v<T, StringLiteral>) {
                 kex::ast::forEachChild(expr, visit);
             }
         },
@@ -200,11 +227,11 @@ auto forEachOperand(const Expr& expr, Visit&& visit, bool shortCircuit = true) -
 // pre-order; stops at the first hit.
 template <typename Predicate>
 auto anyExpr(const Expr& expr, Predicate&& predicate) -> bool {
-    if (predicate(expr)) return true;
+    if (predicate(expr)) {
+        return true;
+    }
     bool found = false;
-    forEachChild(expr, [&](const ExprPtr& child) {
-        found = found || anyExpr(*child, predicate);
-    });
+    forEachChild(expr, [&](const ExprPtr& child) { found = found || anyExpr(*child, predicate); });
     return found;
 }
 
@@ -215,21 +242,29 @@ template <typename OnGuard>
 auto forEachGuard(const Expr& expr, OnGuard&& onGuard) -> void {
     auto clauses = [&](const auto& list) {
         for (const auto& clause : list) {
-            if (clause.guard && *clause.guard) onGuard(**clause.guard);
-            if (clause.body) forEachGuard(*clause.body, onGuard);
+            if (clause.guard && *clause.guard) {
+                onGuard(**clause.guard);
+            }
+            if (clause.body) {
+                forEachGuard(*clause.body, onGuard);
+            }
         }
     };
     if (const auto* match = std::get_if<MatchExpr>(&expr.kind)) {
-        if (match->subject) forEachGuard(*match->subject, onGuard);
+        if (match->subject) {
+            forEachGuard(*match->subject, onGuard);
+        }
         clauses(match->clauses);
         return;
     }
     if (const auto* receive = std::get_if<ReceiveExpr>(&expr.kind)) {
         clauses(receive->clauses);
-        if (receive->timeout && *receive->timeout)
+        if (receive->timeout && *receive->timeout) {
             forEachGuard(**receive->timeout, onGuard);
-        if (receive->afterBody && *receive->afterBody)
+        }
+        if (receive->afterBody && *receive->afterBody) {
             forEachGuard(**receive->afterBody, onGuard);
+        }
         return;
     }
     forEachChild(expr, [&](const ExprPtr& child) { forEachGuard(*child, onGuard); });
@@ -241,26 +276,42 @@ auto forEachGuard(const Expr& expr, OnGuard&& onGuard) -> void {
 template <typename Node, typename Visit>
 auto forEachDeclared(const Program& program, Visit&& visit) -> void {
     auto items = [&](auto& self, const auto& list) -> void {
-        for (const auto& item : list)
-            std::visit([&](const auto& node) {
-                using T = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<T, std::unique_ptr<Node>>) {
-                    if (node) visit(*node);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<ModuleDef>>) {
-                    if (node) self(self, node->body);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<MakeDef>>) {
-                    if (node) self(self, node->body);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<TraitDef>> &&
-                                     std::is_same_v<Node, FunctionDef>) {
-                    if (node)
-                        for (const auto& member : node->body)
-                            if (const auto* fn = std::get_if<std::unique_ptr<FunctionDef>>(&member);
-                                fn && *fn)
-                                visit(**fn);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<VisibilityBlock>>) {
-                    if (node) self(self, node->items);
-                }
-            }, item);
+        for (const auto& item : list) {
+            std::visit(
+                [&](const auto& node) {
+                    using T = std::decay_t<decltype(node)>;
+                    if constexpr (std::is_same_v<T, std::unique_ptr<Node>>) {
+                        if (node) {
+                            visit(*node);
+                        }
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<ModuleDef>>) {
+                        if (node) {
+                            self(self, node->body);
+                        }
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<MakeDef>>) {
+                        if (node) {
+                            self(self, node->body);
+                        }
+                    } else if constexpr (
+                        std::is_same_v<T, std::unique_ptr<TraitDef>> &&
+                        std::is_same_v<Node, FunctionDef>) {
+                        if (node) {
+                            for (const auto& member : node->body) {
+                                if (const auto* fn =
+                                        std::get_if<std::unique_ptr<FunctionDef>>(&member);
+                                    fn && *fn) {
+                                    visit(**fn);
+                                }
+                            }
+                        }
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<VisibilityBlock>>) {
+                        if (node) {
+                            self(self, node->items);
+                        }
+                    }
+                },
+                item);
+        }
     };
     items(items, program.items);
 }
@@ -278,21 +329,34 @@ template <typename Visit>
 auto forEachBodyExpr(const Program& program, Visit&& visit) -> void {
     forEachFunction(program, [&](const FunctionDef& function) {
         for (const auto& clause : function.clauses) {
-            for (const auto& param : clause.params)
-                if (param.defaultValue && *param.defaultValue) visit(**param.defaultValue);
-            for (const auto& expr : clause.body)
-                if (expr) visit(*expr);
+            for (const auto& param : clause.params) {
+                if (param.defaultValue && *param.defaultValue) {
+                    visit(**param.defaultValue);
+                }
+            }
+            for (const auto& expr : clause.body) {
+                if (expr) {
+                    visit(*expr);
+                }
+            }
         }
     });
     forEachDeclared<RecordDef>(program, [&](const RecordDef& record) {
-        for (const auto& field : record.fields)
-            if (field.defaultValue && *field.defaultValue) visit(**field.defaultValue);
+        for (const auto& field : record.fields) {
+            if (field.defaultValue && *field.defaultValue) {
+                visit(**field.defaultValue);
+            }
+        }
     });
-    for (const auto& item : program.items)
-        if (const auto* main = std::get_if<std::unique_ptr<MainBlock>>(&item);
-            main && *main)
-            for (const auto& expr : (*main)->body)
-                if (expr) visit(*expr);
+    for (const auto& item : program.items) {
+        if (const auto* main = std::get_if<std::unique_ptr<MainBlock>>(&item); main && *main) {
+            for (const auto& expr : (*main)->body) {
+                if (expr) {
+                    visit(*expr);
+                }
+            }
+        }
+    }
 }
 
 } // namespace kex::ast
@@ -306,18 +370,17 @@ namespace kex::ast {
 // which desugars the same way) recorded `App.Helper.hint` as the module to
 // load, and `App.Helper` itself was never found.
 inline auto writtenModulePath(const Expr& receiver) -> std::optional<std::string> {
-    if (const auto* root = std::get_if<UpperIdentifier>(&receiver.kind))
+    if (const auto* root = std::get_if<UpperIdentifier>(&receiver.kind)) {
         return root->name;
+    }
     const auto* segment = std::get_if<MethodCall>(&receiver.kind);
-    if (!segment || !segment->receiver || !segment->args.empty() ||
-        !segment->namedArgs.empty() || segment->block || segment->method.empty() ||
-        !kex::startsUppercase(segment->method))
+    if (!segment || !segment->receiver || !segment->args.empty() || !segment->namedArgs.empty() ||
+        segment->block || segment->method.empty() || !kex::startsUppercase(segment->method)) {
         return std::nullopt;
+    }
     auto parent = writtenModulePath(*segment->receiver);
-    return parent ? std::optional<std::string>{*parent + "." + segment->method}
-                  : std::nullopt;
+    return parent ? std::optional<std::string>{*parent + "." + segment->method} : std::nullopt;
 }
-
 
 // Calls `visit(const Pattern&)` on `pattern` and every pattern nested in it,
 // outermost first, in source order.
@@ -325,27 +388,42 @@ template <typename Visit>
 auto forEachSubPattern(const Pattern& pattern, Visit&& visit) -> void {
     visit(pattern);
     auto one = [&](const PatternPtr& nested) {
-        if (nested) forEachSubPattern(*nested, visit);
-    };
-    std::visit([&](const auto& node) {
-        using T = std::decay_t<decltype(node)>;
-        if constexpr (std::is_same_v<T, ThisPattern>) {
-            one(node.inner);
-        } else if constexpr (std::is_same_v<T, ConstructorPattern>) {
-            for (const auto& nested : node.args) one(nested);
-        } else if constexpr (std::is_same_v<T, TuplePattern>) {
-            for (const auto& nested : node.elements) one(nested);
-        } else if constexpr (std::is_same_v<T, RecordPattern>) {
-            for (const auto& field : node.fields)
-                if (field.pattern) one(*field.pattern);
-        } else if constexpr (std::is_same_v<T, ListPattern>) {
-            for (const auto& element : node.elements) one(element);
-            if (node.rest) one(*node.rest);
-        } else if constexpr (std::is_same_v<T, RangePattern>) {
-            one(node.start);
-            one(node.end);
+        if (nested) {
+            forEachSubPattern(*nested, visit);
         }
-    }, pattern.kind);
+    };
+    std::visit(
+        [&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, ThisPattern>) {
+                one(node.inner);
+            } else if constexpr (std::is_same_v<T, ConstructorPattern>) {
+                for (const auto& nested : node.args) {
+                    one(nested);
+                }
+            } else if constexpr (std::is_same_v<T, TuplePattern>) {
+                for (const auto& nested : node.elements) {
+                    one(nested);
+                }
+            } else if constexpr (std::is_same_v<T, RecordPattern>) {
+                for (const auto& field : node.fields) {
+                    if (field.pattern) {
+                        one(*field.pattern);
+                    }
+                }
+            } else if constexpr (std::is_same_v<T, ListPattern>) {
+                for (const auto& element : node.elements) {
+                    one(element);
+                }
+                if (node.rest) {
+                    one(*node.rest);
+                }
+            } else if constexpr (std::is_same_v<T, RangePattern>) {
+                one(node.start);
+                one(node.end);
+            }
+        },
+        pattern.kind);
 }
 
 // Calls `visit(const Pattern&)` on each pattern `expr` itself holds (not
@@ -354,27 +432,35 @@ auto forEachSubPattern(const Pattern& pattern, Visit&& visit) -> void {
 template <typename Visit>
 auto forEachOwnedPattern(const Expr& expr, Visit&& visit) -> void {
     auto one = [&](const PatternPtr& pattern) {
-        if (pattern) visit(*pattern);
+        if (pattern) {
+            visit(*pattern);
+        }
     };
     auto clauses = [&](const std::vector<MatchClause>& list) {
-        for (const auto& clause : list)
-            for (const auto& pattern : clause.patterns) one(pattern);
-    };
-    std::visit([&](const auto& node) {
-        using T = std::decay_t<decltype(node)>;
-        if constexpr (std::is_same_v<T, IfExpr>) {
-            one(node.letPattern);
-        } else if constexpr (std::is_same_v<T, MatchExpr> ||
-                             std::is_same_v<T, ReceiveExpr>) {
-            clauses(node.clauses);
-        } else if constexpr (std::is_same_v<T, LetExpr> || std::is_same_v<T, VarExpr>) {
-            one(node.pattern);
-        } else if constexpr (std::is_same_v<T, Lambda>) {
-            if (node.rescue) clauses(node.rescue->clauses);
-        } else if constexpr (std::is_same_v<T, TryingExpr>) {
-            clauses(node.rescue.clauses);
+        for (const auto& clause : list) {
+            for (const auto& pattern : clause.patterns) {
+                one(pattern);
+            }
         }
-    }, expr.kind);
+    };
+    std::visit(
+        [&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, IfExpr>) {
+                one(node.letPattern);
+            } else if constexpr (std::is_same_v<T, MatchExpr> || std::is_same_v<T, ReceiveExpr>) {
+                clauses(node.clauses);
+            } else if constexpr (std::is_same_v<T, LetExpr> || std::is_same_v<T, VarExpr>) {
+                one(node.pattern);
+            } else if constexpr (std::is_same_v<T, Lambda>) {
+                if (node.rescue) {
+                    clauses(node.rescue->clauses);
+                }
+            } else if constexpr (std::is_same_v<T, TryingExpr>) {
+                clauses(node.rescue.clauses);
+            }
+        },
+        expr.kind);
 }
 
 } // namespace kex::ast

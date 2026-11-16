@@ -25,20 +25,27 @@ auto isVar(const ExprPtr& e, const std::string& name) -> bool {
 
 auto isSelf(const Expr& e, const FunDef& fn) -> const Call* {
     const auto* call = std::get_if<Call>(&e.node);
-    return call && call->module.empty() && call->name == fn.name && call->arity == fn.arity ? call
-                                                                                            : nullptr;
+    return call && call->module.empty() && call->name == fn.name && call->arity == fn.arity
+               ? call
+               : nullptr;
 }
 
 auto callsSelf(const Expr& e, const FunDef& fn) -> bool {
-    if (isSelf(e, fn)) return true;
+    if (isSelf(e, fn)) {
+        return true;
+    }
     return anyChild(e, [&](const ExprPtr& c) { return callsSelf(*c, fn); });
 }
 
 auto reads(const Expr& e, const std::string& name) -> std::size_t {
     std::size_t n = 0;
-    if (const auto* v = std::get_if<Var>(&e.node); v && v->name == name) ++n;
+    if (const auto* v = std::get_if<Var>(&e.node); v && v->name == name) {
+        ++n;
+    }
     forEachChild(e, [&](const ExprPtr& c) {
-        if (c) n += reads(*c, name);
+        if (c) {
+            n += reads(*c, name);
+        }
     });
     return n;
 }
@@ -57,29 +64,41 @@ struct ListWalk {
 };
 
 auto listWalk(const FunDef& fn) -> std::optional<ListWalk> {
-    if (!fn.pureCopy || fn.clauses.size() != 1 || fn.arity < 1) return std::nullopt;
+    if (!fn.pureCopy || fn.clauses.size() != 1 || fn.arity < 1) {
+        return std::nullopt;
+    }
     const auto& clause = fn.clauses.front();
-    if ((clause.guard && *clause.guard) || !clause.body) return std::nullopt;
+    if ((clause.guard && *clause.guard) || !clause.body) {
+        return std::nullopt;
+    }
     ListWalk walk;
     walk.fn = &fn;
     for (std::size_t i = 0; i < clause.params.size(); ++i) {
         const auto& p = clause.params[i];
-        if (!p || p->kind != PatKind::Var) return std::nullopt;
-        if (i == 0) walk.list = p->name;
-        else walk.extra.push_back(p->name);
+        if (!p || p->kind != PatKind::Var) {
+            return std::nullopt;
+        }
+        if (i == 0) {
+            walk.list = p->name;
+        } else {
+            walk.extra.push_back(p->name);
+        }
     }
     const auto* match = std::get_if<Match>(&clause.body->node);
-    if (!match || match->subjects.size() != 1 || !isVar(match->subjects[0], walk.list))
+    if (!match || match->subjects.size() != 1 || !isVar(match->subjects[0], walk.list)) {
         return std::nullopt;
+    }
     for (const auto& c : match->clauses) {
-        if ((c.guard && *c.guard) || c.patterns.size() != 1 || !c.patterns[0] || !c.body)
+        if ((c.guard && *c.guard) || c.patterns.size() != 1 || !c.patterns[0] || !c.body) {
             return std::nullopt;
+        }
         const auto& p = *c.patterns[0];
         if (p.kind == PatKind::List && !p.ofString && p.args.empty() && !p.rest && !walk.empty) {
             walk.empty = &c;
-        } else if (p.kind == PatKind::List && !p.ofString && p.args.size() == 1 && p.args[0] &&
-                   p.args[0]->kind == PatKind::Var && p.rest && p.rest->kind == PatKind::Var &&
-                   !walk.cons) {
+        } else if (
+            p.kind == PatKind::List && !p.ofString && p.args.size() == 1 && p.args[0] &&
+            p.args[0]->kind == PatKind::Var && p.rest && p.rest->kind == PatKind::Var &&
+            !walk.cons) {
             walk.cons = &c;
             walk.head = p.args[0]->name;
             walk.rest = p.rest->name;
@@ -89,9 +108,12 @@ auto listWalk(const FunDef& fn) -> std::optional<ListWalk> {
             return std::nullopt;
         }
     }
-    if (!walk.empty || !walk.cons) return std::nullopt;
-    if (callsSelf(*walk.empty->body, fn) || (walk.other && callsSelf(*walk.other->body, fn)))
+    if (!walk.empty || !walk.cons) {
         return std::nullopt;
+    }
+    if (callsSelf(*walk.empty->body, fn) || (walk.other && callsSelf(*walk.other->body, fn))) {
+        return std::nullopt;
+    }
     // `rest` only as the first argument of its own recursion, and every
     // recursion walks `rest`.
     std::size_t selfCalls = 0;
@@ -102,21 +124,32 @@ auto listWalk(const FunDef& fn) -> std::optional<ListWalk> {
             walksRest = walksRest && !call->args.empty() && isVar(call->args[0], walk.rest);
         }
         forEachChild(e, [&](const ExprPtr& c) {
-            if (c) count(*c);
+            if (c) {
+                count(*c);
+            }
         });
     };
     count(*walk.cons->body);
-    if (!walksRest || reads(*walk.cons->body, walk.rest) != selfCalls) return std::nullopt;
+    if (!walksRest || reads(*walk.cons->body, walk.rest) != selfCalls) {
+        return std::nullopt;
+    }
     // Its list is walked, never read whole.
-    if (reads(*walk.cons->body, walk.list) != 0) return std::nullopt;
+    if (reads(*walk.cons->body, walk.list) != 0) {
+        return std::nullopt;
+    }
     return walk;
 }
 
 // Whether `call` passes the walk's own parameters after the list unchanged.
 auto passesOwn(const Call& call, const ListWalk& walk) -> bool {
-    if (call.args.size() != walk.extra.size() + 1) return false;
-    for (std::size_t i = 0; i < walk.extra.size(); ++i)
-        if (!isVar(call.args[i + 1], walk.extra[i])) return false;
+    if (call.args.size() != walk.extra.size() + 1) {
+        return false;
+    }
+    for (std::size_t i = 0; i < walk.extra.size(); ++i) {
+        if (!isVar(call.args[i + 1], walk.extra[i])) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -125,9 +158,13 @@ auto passesOwn(const Call& call, const ListWalk& walk) -> bool {
 auto producerTail(const Expr& e, const ListWalk& walk, std::set<std::string> recursions) -> bool {
     const auto& fn = *walk.fn;
     if (const auto* let = std::get_if<Let>(&e.node)) {
-        if (!let->value || !let->body) return false;
+        if (!let->value || !let->body) {
+            return false;
+        }
         if (const auto* call = isSelf(*let->value, fn)) {
-            if (!passesOwn(*call, walk)) return false;
+            if (!passesOwn(*call, walk)) {
+                return false;
+            }
             recursions.insert(let->name);
         } else if (callsSelf(*let->value, fn)) {
             return false;
@@ -135,23 +172,39 @@ auto producerTail(const Expr& e, const ListWalk& walk, std::set<std::string> rec
         return producerTail(*let->body, walk, std::move(recursions));
     }
     if (const auto* seq = std::get_if<Seq>(&e.node)) {
-        if (seq->exprs.empty()) return false;
-        for (std::size_t i = 0; i + 1 < seq->exprs.size(); ++i)
-            if (!seq->exprs[i] || callsSelf(*seq->exprs[i], fn)) return false;
+        if (seq->exprs.empty()) {
+            return false;
+        }
+        for (std::size_t i = 0; i + 1 < seq->exprs.size(); ++i) {
+            if (!seq->exprs[i] || callsSelf(*seq->exprs[i], fn)) {
+                return false;
+            }
+        }
         return seq->exprs.back() && producerTail(*seq->exprs.back(), walk, std::move(recursions));
     }
     if (const auto* match = std::get_if<Match>(&e.node)) {
-        for (const auto& s : match->subjects)
-            if (!s || callsSelf(*s, fn)) return false;
+        for (const auto& s : match->subjects) {
+            if (!s || callsSelf(*s, fn)) {
+                return false;
+            }
+        }
         for (const auto& c : match->clauses) {
-            if (c.guard && *c.guard && callsSelf(**c.guard, fn)) return false;
-            if (!c.body || !producerTail(*c.body, walk, recursions)) return false;
+            if (c.guard && *c.guard && callsSelf(**c.guard, fn)) {
+                return false;
+            }
+            if (!c.body || !producerTail(*c.body, walk, recursions)) {
+                return false;
+            }
         }
         return true;
     }
-    if (const auto* call = isSelf(e, fn)) return passesOwn(*call, walk);
+    if (const auto* call = isSelf(e, fn)) {
+        return passesOwn(*call, walk);
+    }
     if (const auto* list = std::get_if<MakeList>(&e.node)) {
-        if (list->elements.size() != 1 || !list->rest || !*list->rest) return false;
+        if (list->elements.size() != 1 || !list->rest || !*list->rest) {
+            return false;
+        }
         const auto* tail = std::get_if<Var>(&(*list->rest)->node);
         return tail && recursions.contains(tail->name) && list->elements[0] &&
                !callsSelf(*list->elements[0], fn);
@@ -161,14 +214,19 @@ auto producerTail(const Expr& e, const ListWalk& walk, std::set<std::string> rec
 
 auto isProducer(const ListWalk& walk) -> bool {
     const auto* none = std::get_if<MakeList>(&walk.empty->body->node);
-    if (!none || !none->elements.empty() || (none->rest && *none->rest)) return false;
-    if (!producerTail(*walk.cons->body, walk, {})) return false;
+    if (!none || !none->elements.empty() || (none->rest && *none->rest)) {
+        return false;
+    }
+    if (!producerTail(*walk.cons->body, walk, {})) {
+        return false;
+    }
     // Each recursion is read once: as the tail of its element.
     std::function<bool(const Expr&)> once = [&](const Expr& e) -> bool {
-        if (const auto* let = std::get_if<Let>(&e.node);
-            let && let->value && isSelf(*let->value, *walk.fn) &&
-            reads(*walk.cons->body, let->name) != 1)
+        if (const auto* let = std::get_if<Let>(&e.node); let && let->value &&
+                                                         isSelf(*let->value, *walk.fn) &&
+                                                         reads(*walk.cons->body, let->name) != 1) {
             return false;
+        }
         return !anyChild(e, [&](const ExprPtr& c) { return !once(*c); });
     };
     return once(*walk.cons->body);
@@ -179,16 +237,26 @@ public:
     explicit Fuser(Module& mod) : m_mod(mod) {}
 
     auto run() -> void {
-        for (const auto& fn : m_mod.functions) m_names.insert(fn.name);
+        for (const auto& fn : m_mod.functions) {
+            m_names.insert(fn.name);
+        }
         for (int round = 0; round < kMaxRounds; ++round) {
             index();
             bool changed = false;
-            for (std::size_t i = 0; i < m_mod.functions.size(); ++i)
-                for (auto& clause : m_mod.functions[i].clauses)
-                    if (clause.body) changed = rewrite(clause.body) || changed;
-            for (auto& fn : m_made) m_mod.functions.push_back(std::move(fn));
+            for (std::size_t i = 0; i < m_mod.functions.size(); ++i) {
+                for (auto& clause : m_mod.functions[i].clauses) {
+                    if (clause.body) {
+                        changed = rewrite(clause.body) || changed;
+                    }
+                }
+            }
+            for (auto& fn : m_made) {
+                m_mod.functions.push_back(std::move(fn));
+            }
             m_made.clear();
-            if (!changed) break;
+            if (!changed) {
+                break;
+            }
         }
         dropUnused();
     }
@@ -196,12 +264,17 @@ public:
 private:
     auto index() -> void {
         m_walks.clear();
-        for (const auto& fn : m_mod.functions)
-            if (auto walk = listWalk(fn)) m_walks[{fn.name, fn.arity}] = *walk;
+        for (const auto& fn : m_mod.functions) {
+            if (auto walk = listWalk(fn)) {
+                m_walks[{fn.name, fn.arity}] = *walk;
+            }
+        }
     }
 
     auto walkOf(const Call& call) const -> const ListWalk* {
-        if (!call.module.empty()) return nullptr;
+        if (!call.module.empty()) {
+            return nullptr;
+        }
         const auto found = m_walks.find({call.name, call.arity});
         return found == m_walks.end() ? nullptr : &found->second;
     }
@@ -214,11 +287,17 @@ private:
         // every name is bound once, so the producer's call is brought out to
         // where its result is bound.
         while (auto* outer = std::get_if<Let>(&e->node)) {
-            if (!outer->value || !std::holds_alternative<Let>(outer->value->node)) break;
+            if (!outer->value || !std::holds_alternative<Let>(outer->value->node)) {
+                break;
+            }
             const auto* tail = outer->value.get();
-            while (const auto* inner = std::get_if<Let>(&tail->node)) tail = inner->body.get();
+            while (const auto* inner = std::get_if<Let>(&tail->node)) {
+                tail = inner->body.get();
+            }
             const auto* call = tail ? std::get_if<Call>(&tail->node) : nullptr;
-            if (!call || !walkOf(*call)) break;
+            if (!call || !walkOf(*call)) {
+                break;
+            }
             auto value = std::move(outer->value);
             auto& inner = std::get<Let>(value->node);
             outer->value = std::move(inner.body);
@@ -228,15 +307,17 @@ private:
         if (auto* let = std::get_if<Let>(&e->node); let && let->value && let->body) {
             const auto* produced = std::get_if<Call>(&let->value->node);
             const auto* producer = produced ? walkOf(*produced) : nullptr;
-            if (producer && isProducer(*producer) && reads(*let->body, let->name) == 1)
+            if (producer && isProducer(*producer) && reads(*let->body, let->name) == 1) {
                 if (Call* consumer = consumerOf(*let->body, let->name)) {
                     if (const auto* walk = walkOf(*consumer)) {
                         const auto name = fused(*producer, *walk);
                         Call call{"", name, 0, {}, false};
-                        for (auto& a : std::get<Call>(let->value->node).args)
+                        for (auto& a : std::get<Call>(let->value->node).args) {
                             call.args.push_back(std::move(a));
-                        for (std::size_t k = 1; k < consumer->args.size(); ++k)
+                        }
+                        for (std::size_t k = 1; k < consumer->args.size(); ++k) {
                             call.args.push_back(std::move(consumer->args[k]));
+                        }
                         call.arity = static_cast<int>(call.args.size());
                         *consumer = std::move(call);
                         auto body = std::move(let->body);
@@ -244,24 +325,31 @@ private:
                         changed = true;
                     }
                 }
+            }
         }
         forEachChild(*e, [&](ExprPtr& c) {
-            if (c) changed = rewrite(c) || changed;
+            if (c) {
+                changed = rewrite(c) || changed;
+            }
         });
         return changed;
     }
 
     // The call that walks `name`, its first argument, outside any function.
     static auto consumerOf(Expr& e, const std::string& name) -> Call* {
-        if (auto* call = std::get_if<Call>(&e.node); call && !call->args.empty() &&
-                                                     isVar(call->args[0], name))
+        if (auto* call = std::get_if<Call>(&e.node);
+            call && !call->args.empty() && isVar(call->args[0], name)) {
             return call;
+        }
         if (std::holds_alternative<Lambda>(e.node) || std::holds_alternative<LetRec>(e.node) ||
-            std::holds_alternative<Receive>(e.node) || std::holds_alternative<TryCatch>(e.node))
+            std::holds_alternative<Receive>(e.node) || std::holds_alternative<TryCatch>(e.node)) {
             return nullptr;
+        }
         Call* found = nullptr;
         forEachChild(e, [&](ExprPtr& c) {
-            if (c && !found) found = consumerOf(*c, name);
+            if (c && !found) {
+                found = consumerOf(*c, name);
+            }
         });
         return found;
     }
@@ -270,7 +358,9 @@ private:
     // list to Q: P's parameters, then Q's after its list.
     auto fused(const ListWalk& p, const ListWalk& q) -> std::string {
         const auto key = std::make_pair(p.fn->name, q.fn->name);
-        if (const auto made = m_fused.find(key); made != m_fused.end()) return made->second;
+        if (const auto made = m_fused.find(key); made != m_fused.end()) {
+            return made->second;
+        }
         std::string name;
         do {
             name = p.fn->name + "__fused" + std::to_string(m_counter++);
@@ -286,8 +376,12 @@ private:
         const auto next = [&](std::vector<ExprPtr> qArgs) {
             Call call{"", name, arity, {}, false};
             call.args.push_back(var(pRest));
-            for (const auto& x : p.extra) call.args.push_back(var(inP(x)));
-            for (auto& a : qArgs) call.args.push_back(std::move(a));
+            for (const auto& x : p.extra) {
+                call.args.push_back(var(inP(x)));
+            }
+            for (auto& a : qArgs) {
+                call.args.push_back(std::move(a));
+            }
             auto e = std::make_unique<Expr>();
             e->node = std::move(call);
             return e;
@@ -298,14 +392,17 @@ private:
             auto body = cloneExpr(*q.cons->body, inQ);
             std::function<void(ExprPtr&)> recurse = [&](ExprPtr& x) {
                 forEachChild(*x, [&](ExprPtr& c) {
-                    if (c) recurse(c);
+                    if (c) {
+                        recurse(c);
+                    }
                 });
-                if (auto* call = std::get_if<Call>(&x->node);
-                    call && call->module.empty() && call->name == q.fn->name &&
-                    call->arity == q.fn->arity) {
+                if (auto* call = std::get_if<Call>(&x->node); call && call->module.empty() &&
+                                                              call->name == q.fn->name &&
+                                                              call->arity == q.fn->arity) {
                     std::vector<ExprPtr> qArgs;
-                    for (std::size_t k = 1; k < call->args.size(); ++k)
+                    for (std::size_t k = 1; k < call->args.size(); ++k) {
                         qArgs.push_back(std::move(call->args[k]));
+                    }
                     x = next(std::move(qArgs));
                 }
             };
@@ -332,7 +429,9 @@ private:
             }
             if (isSelf(*x, *p.fn)) {
                 std::vector<ExprPtr> qArgs;
-                for (const auto& y : q.extra) qArgs.push_back(var(inQ(y)));
+                for (const auto& y : q.extra) {
+                    qArgs.push_back(var(inQ(y)));
+                }
                 x = next(std::move(qArgs));
                 return;
             }
@@ -341,7 +440,9 @@ private:
             } else if (auto* seq = std::get_if<Seq>(&x->node)) {
                 emit(seq->exprs.back());
             } else if (auto* match = std::get_if<Match>(&x->node)) {
-                for (auto& c : match->clauses) emit(c.body);
+                for (auto& c : match->clauses) {
+                    emit(c.body);
+                }
             }
         };
 
@@ -359,8 +460,12 @@ private:
             return pattern;
         };
         clause.params.push_back(param(inP(p.list)));
-        for (const auto& x : p.extra) clause.params.push_back(param(inP(x)));
-        for (const auto& x : q.extra) clause.params.push_back(param(inQ(x)));
+        for (const auto& x : p.extra) {
+            clause.params.push_back(param(inP(x)));
+        }
+        for (const auto& x : q.extra) {
+            clause.params.push_back(param(inQ(x)));
+        }
         Match match;
         match.subjects.push_back(var(inP(p.list)));
         {
@@ -405,27 +510,41 @@ private:
     // copy's call of itself keeps nothing alive.
     auto dropUnused() -> void {
         std::map<std::pair<std::string, int>, const FunDef*> byName;
-        for (const auto& fn : m_mod.functions) byName[{fn.name, fn.arity}] = &fn;
+        for (const auto& fn : m_mod.functions) {
+            byName[{fn.name, fn.arity}] = &fn;
+        }
         std::set<std::pair<std::string, int>> reached;
         std::vector<const FunDef*> work;
-        for (const auto& fn : m_mod.functions)
-            if (!fn.pureCopy || fn.exported)
-                if (reached.insert({fn.name, fn.arity}).second) work.push_back(&fn);
+        for (const auto& fn : m_mod.functions) {
+            if (!fn.pureCopy || fn.exported) {
+                if (reached.insert({fn.name, fn.arity}).second) {
+                    work.push_back(&fn);
+                }
+            }
+        }
         std::function<void(const Expr&)> follow = [&](const Expr& e) {
-            if (const auto* call = std::get_if<Call>(&e.node); call && call->module.empty())
+            if (const auto* call = std::get_if<Call>(&e.node); call && call->module.empty()) {
                 if (const auto found = byName.find({call->name, call->arity});
-                    found != byName.end() && reached.insert(found->first).second)
+                    found != byName.end() && reached.insert(found->first).second) {
                     work.push_back(found->second);
+                }
+            }
             forEachChild(e, [&](const ExprPtr& c) {
-                if (c) follow(*c);
+                if (c) {
+                    follow(*c);
+                }
             });
         };
         while (!work.empty()) {
             const auto* fn = work.back();
             work.pop_back();
             for (const auto& clause : fn->clauses) {
-                if (clause.body) follow(*clause.body);
-                if (clause.guard && *clause.guard) follow(**clause.guard);
+                if (clause.body) {
+                    follow(*clause.body);
+                }
+                if (clause.guard && *clause.guard) {
+                    follow(**clause.guard);
+                }
             }
         }
         std::erase_if(m_mod.functions, [&](const FunDef& fn) {
@@ -443,6 +562,8 @@ private:
 
 } // namespace
 
-auto fuseLists(Module& mod) -> void { Fuser(mod).run(); }
+auto fuseLists(Module& mod) -> void {
+    Fuser(mod).run();
+}
 
 } // namespace kex::ir

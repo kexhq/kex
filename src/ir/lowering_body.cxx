@@ -11,7 +11,9 @@ namespace kex::ir {
 // bindings (updating `subst`); every other statement's value is bound to
 // a throwaway name; the last statement is the sequence's value.
 auto Lowering::lowerBody(const std::vector<ast::ExprPtr>& body) -> ExprPtr {
-    if (body.empty()) return lit(LitKind::Atom, "ok");
+    if (body.empty()) {
+        return lit(LitKind::Atom, "ok");
+    }
     return lowerBodyFrom(body, 0);
 }
 
@@ -25,29 +27,47 @@ auto Lowering::reassigningBlocks(const ast::Expr& e, std::vector<std::string>& v
     std::function<void(const ast::Expr&)> visit = [&](const ast::Expr& x) {
         std::vector<const ast::ExprPtr*> passed;
         if (const auto* mc = std::get_if<ast::MethodCall>(&x.kind)) {
-            for (const auto& a : mc->args) passed.push_back(&a);
-            if (mc->block) passed.push_back(&*mc->block);
+            for (const auto& a : mc->args) {
+                passed.push_back(&a);
+            }
+            if (mc->block) {
+                passed.push_back(&*mc->block);
+            }
         } else if (const auto* fc = std::get_if<ast::FunctionCall>(&x.kind)) {
-            for (const auto& a : fc->args) passed.push_back(&a);
-            if (fc->block) passed.push_back(&*fc->block);
+            for (const auto& a : fc->args) {
+                passed.push_back(&a);
+            }
+            if (fc->block) {
+                passed.push_back(&*fc->block);
+            }
         }
         for (const auto* p : passed) {
             const auto* lambda = *p ? std::get_if<ast::Lambda>(&(**p).kind) : nullptr;
-            if (!lambda || lambda->collection) continue;
+            if (!lambda || lambda->collection) {
+                continue;
+            }
             std::unordered_set<std::string> mutated;
-            for (const auto& s : lambda->body) collectMutated(s, mutated);
-            for (const auto& param : lambda->params) mutated.erase(param.name);
+            for (const auto& s : lambda->body) {
+                collectMutated(s, mutated);
+            }
+            for (const auto& param : lambda->params) {
+                mutated.erase(param.name);
+            }
             bool reassigns = false;
-            for (const auto& v : mutated)
+            for (const auto& v : mutated) {
                 if (subst.count(v)) {
                     all.insert(v);
                     reassigns = true;
                 }
-            if (reassigns && std::find(found.begin(), found.end(), lambda) == found.end())
+            }
+            if (reassigns && std::find(found.begin(), found.end(), lambda) == found.end()) {
                 found.push_back(lambda);
+            }
         }
         ast::forEachOperand(x, [&](const ast::ExprPtr& child) {
-            if (child) visit(*child);
+            if (child) {
+                visit(*child);
+            }
         });
     };
     visit(e);
@@ -113,14 +133,20 @@ auto Lowering::lowerStatefulBlock(const ast::Lambda& block, const std::vector<st
         tuple->node = MakeTuple{std::move(pair)};
         return makeLet(t, std::move(value), std::move(tuple));
     };
-    auto lowered = lowerLoopBodyFrom(body, 0, "", vars, [&]() -> ExprPtr {
-        if (lastIsValue) return answer(lower(body.back()));
-        if (const auto* assign = last ? std::get_if<ast::AssignExpr>(&last->kind) : nullptr)
-            return answer(var(currentName(assign->name)));
-        auto unit = std::make_unique<Expr>();
-        unit->node = MakeTuple{};
-        return answer(std::move(unit));
-    }, lastIsValue ? body.size() - 1 : body.size());
+    auto lowered = lowerLoopBodyFrom(
+        body, 0, "", vars,
+        [&]() -> ExprPtr {
+            if (lastIsValue) {
+                return answer(lower(body.back()));
+            }
+            if (const auto* assign = last ? std::get_if<ast::AssignExpr>(&last->kind) : nullptr) {
+                return answer(var(currentName(assign->name)));
+            }
+            auto unit = std::make_unique<Expr>();
+            unit->node = MakeTuple{};
+            return answer(std::move(unit));
+        },
+        lastIsValue ? body.size() - 1 : body.size());
     lam.body = statePattern ? makeMatch1(var(state), std::move(statePattern), std::move(lowered))
                             : std::move(lowered);
     subst = snap;
@@ -142,31 +168,40 @@ auto Lowering::lowerStatefulBlock(const ast::Lambda& block, const std::vector<st
 // specialize-blocks replaces the whole with a copy of the callee carrying the
 // state, where it can. `rest` lowers what follows, given the statement's
 // value. Null when `e` passes no such block.
-auto Lowering::lowerThreadedStatement(const ast::ExprPtr& e,
-                                      const std::function<ExprPtr(ExprPtr)>& rest) -> ExprPtr {
+auto Lowering::lowerThreadedStatement(
+    const ast::ExprPtr& e, const std::function<ExprPtr(ExprPtr)>& rest) -> ExprPtr {
     const ast::ExprPtr* source = &e;
     if (const auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
-        if (!std::holds_alternative<ast::VarPattern>(le->pattern->kind)) return nullptr;
+        if (!std::holds_alternative<ast::VarPattern>(le->pattern->kind)) {
+            return nullptr;
+        }
         source = &le->value;
     } else if (const auto* ve = std::get_if<ast::VarExpr>(&e->kind)) {
-        if (!ve->pattern || !std::holds_alternative<ast::VarPattern>(ve->pattern->kind))
+        if (!ve->pattern || !std::holds_alternative<ast::VarPattern>(ve->pattern->kind)) {
             return nullptr;
+        }
         source = &ve->value;
     } else if (const auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
         source = &ae->value;
-    } else if (!std::holds_alternative<ast::MethodCall>(e->kind) &&
-               !std::holds_alternative<ast::FunctionCall>(e->kind)) {
+    } else if (
+        !std::holds_alternative<ast::MethodCall>(e->kind) &&
+        !std::holds_alternative<ast::FunctionCall>(e->kind)) {
         return nullptr;
     }
-    if (!*source) return nullptr;
+    if (!*source) {
+        return nullptr;
+    }
     std::vector<std::string> vars;
     const auto blocks = reassigningBlocks(**source, vars);
-    if (blocks.empty()) return nullptr;
+    if (blocks.empty()) {
+        return nullptr;
+    }
 
     std::vector<Binding> binds;
     std::vector<ExprPtr> blockFns;
-    for (const auto* block : blocks)
+    for (const auto* block : blocks) {
         blockFns.push_back(atomize_ir(lowerStatefulBlock(*block, vars), binds));
+    }
     auto initial = atomize_ir(stateExpr(vars), binds);
     std::vector<std::string> placeholders;
     const auto outer = threadedBlocks;
@@ -188,8 +223,9 @@ auto Lowering::lowerThreadedStatement(const ast::ExprPtr& e,
         blocksArg = std::make_unique<Expr>();
         blocksArg->node = MakeList{std::move(blockFns), std::nullopt};
     }
-    auto call = callE("kex_intrinsic_fun", blocks.size() == 1 ? "threadState" : "threadStates", 3,
-                      three(std::move(blocksArg), std::move(initial), std::move(statementFn)));
+    auto call = callE(
+        "kex_intrinsic_fun", blocks.size() == 1 ? "threadState" : "threadStates", 3,
+        three(std::move(blocksArg), std::move(initial), std::move(statementFn)));
 
     const auto result = fresh("Threaded");
     auto pattern = std::make_unique<Pattern>();
@@ -250,11 +286,15 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
                 subst[ae->name] = ssa;
                 return makeLet(ssa, std::move(value), next(ssa));
             }
-            if (isLast) return value;
+            if (isLast) {
+                return value;
+            }
             const auto discarded = fresh("Statement");
             return makeLet(discarded, std::move(value), lowerBodyFrom(body, i + 1));
         };
-        if (auto threaded = lowerThreadedStatement(e, bindValue)) return threaded;
+        if (auto threaded = lowerThreadedStatement(e, bindValue)) {
+            return threaded;
+        }
     }
 
     // let PATTERN = value
@@ -264,16 +304,18 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
             std::vector<Binding> hoisted;
             const auto assigned = hoistNestedAssignments(e, hoisted);
             auto val = lowerBindingValue(*le);
-            for (const auto& [name, renamed] : assigned) subst[name] = renamed;
+            for (const auto& [name, renamed] : assigned) {
+                subst[name] = renamed;
+            }
             std::string ssa = subst.count(vp->name) ? fresh(vp->name) : vp->name;
             subst[vp->name] = ssa;
             immutableBindings.insert(vp->name);
             if (const auto* curry = std::get_if<ast::CurryExpr>(&le->value->kind);
-                curry && curry->argGroups.empty() && !curry->isOperator &&
-                curry->module.empty())
+                curry && curry->argGroups.empty() && !curry->isOperator && curry->module.empty()) {
                 curryOrigin[vp->name] = curry->name;
-            else
+            } else {
                 curryOrigin.erase(vp->name);
+            }
             auto rest = isLast ? var(ssa) : lowerBodyFrom(body, i + 1);
             return wrapLets(hoisted, makeLet(ssa, std::move(val), std::move(rest)));
         }
@@ -286,23 +328,26 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
                 std::string rv = fresh("Anon");
                 std::vector<std::string> names;
                 collectRecordBindings(*rp, names);
-                for (const auto& name : names) subst[name] = name;
-                auto rest = isLast ? lit(LitKind::Atom, "ok")
-                                   : lowerBodyFrom(body, i + 1);
+                for (const auto& name : names) {
+                    subst[name] = name;
+                }
+                auto rest = isLast ? lit(LitKind::Atom, "ok") : lowerBodyFrom(body, i + 1);
                 // Lowering the rest moved the location on; a missing key
                 // is reported at this `let`, as the walker does.
                 currentLoc = &e->location;
                 return makeLet(
-                    rv, lower(le->value),
-                    wrapAnonymousRecordPattern(rv, *rp, std::move(rest)));
+                    rv, lower(le->value), wrapAnonymousRecordPattern(rv, *rp, std::move(rest)));
             }
             std::string rv = fresh("rec");
             std::vector<std::pair<std::string, ExprPtr>> prefix;
             destructureRecordPattern(rv, *rp, prefix);
-            for (auto& [nm, _] : prefix) subst[nm] = nm;
+            for (auto& [nm, _] : prefix) {
+                subst[nm] = nm;
+            }
             auto rest = isLast ? lit(LitKind::Atom, "ok") : lowerBodyFrom(body, i + 1);
-            for (auto it = prefix.rbegin(); it != prefix.rend(); ++it)
+            for (auto it = prefix.rbegin(); it != prefix.rend(); ++it) {
                 rest = makeLet(it->first, std::move(it->second), std::move(rest));
+            }
             return makeLet(rv, lower(le->value), std::move(rest));
         }
         auto val = lower(le->value);
@@ -312,26 +357,23 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
     }
     // var PATTERN = value  (fresh mutable bindings)
     if (auto* ve = std::get_if<ast::VarExpr>(&e->kind)) {
-        if (auto* vp = ve->pattern
-                ? std::get_if<ast::VarPattern>(&ve->pattern->kind)
-                : nullptr) {
+        if (auto* vp = ve->pattern ? std::get_if<ast::VarPattern>(&ve->pattern->kind) : nullptr) {
             auto val = lower(ve->value);
             std::string ssa = subst.count(vp->name) ? fresh(vp->name) : vp->name;
             subst[vp->name] = ssa;
             immutableBindings.erase(vp->name);
             if (const auto* curry = std::get_if<ast::CurryExpr>(&ve->value->kind);
-                curry && curry->argGroups.empty() && !curry->isOperator &&
-                curry->module.empty())
+                curry && curry->argGroups.empty() && !curry->isOperator && curry->module.empty()) {
                 curryOrigin[vp->name] = curry->name;
-            else
+            } else {
                 curryOrigin.erase(vp->name);
+            }
             auto rest = isLast ? var(ssa) : lowerBodyFrom(body, i + 1);
             return makeLet(ssa, std::move(val), std::move(rest));
         }
         // Record destructure, mirroring `let` above — bound mutable.
-        if (auto* rp = ve->pattern
-                ? std::get_if<ast::RecordPattern>(&ve->pattern->kind)
-                : nullptr) {
+        if (auto* rp =
+                ve->pattern ? std::get_if<ast::RecordPattern>(&ve->pattern->kind) : nullptr) {
             if (rp->typeName.empty()) {
                 std::string rv = fresh("Anon");
                 std::vector<std::string> names;
@@ -340,12 +382,10 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
                     subst[name] = name;
                     immutableBindings.erase(name);
                 }
-                auto rest = isLast ? lit(LitKind::Atom, "ok")
-                                   : lowerBodyFrom(body, i + 1);
+                auto rest = isLast ? lit(LitKind::Atom, "ok") : lowerBodyFrom(body, i + 1);
                 currentLoc = &e->location;
                 return makeLet(
-                    rv, lower(ve->value),
-                    wrapAnonymousRecordPattern(rv, *rp, std::move(rest)));
+                    rv, lower(ve->value), wrapAnonymousRecordPattern(rv, *rp, std::move(rest)));
             }
             std::string rv = fresh("rec");
             std::vector<std::pair<std::string, ExprPtr>> prefix;
@@ -355,20 +395,25 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
                 immutableBindings.erase(nm);
             }
             auto rest = isLast ? lit(LitKind::Atom, "ok") : lowerBodyFrom(body, i + 1);
-            for (auto it = prefix.rbegin(); it != prefix.rend(); ++it)
+            for (auto it = prefix.rbegin(); it != prefix.rend(); ++it) {
                 rest = makeLet(it->first, std::move(it->second), std::move(rest));
+            }
             return makeLet(rv, lower(ve->value), std::move(rest));
         }
         // `var y = f(x = 1)`: the nested assignment is bound first.
         std::vector<Binding> hoisted;
         const auto assigned = hoistNestedAssignments(e, hoisted);
         auto val = lower(ve->value);
-        for (const auto& [name, renamed] : assigned) subst[name] = renamed;
+        for (const auto& [name, renamed] : assigned) {
+            subst[name] = renamed;
+        }
         auto pat = lowerPattern(ve->pattern);
         if (ve->pattern) {
             std::vector<std::string> names;
             patternBoundNames(ve->pattern, names);
-            for (const auto& name : names) immutableBindings.erase(name);
+            for (const auto& name : names) {
+                immutableBindings.erase(name);
+            }
         }
         auto rest = isLast ? lit(LitKind::Atom, "ok") : lowerBodyFrom(body, i + 1);
         return wrapLets(hoisted, makeMatch1(std::move(val), std::move(pat), std::move(rest)));
@@ -387,11 +432,16 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
             if (immutableBindings.count(id->name)) {
                 auto err = std::make_unique<Expr>();
                 std::string loc;
-                if (currentLoc) loc = std::string(currentLoc->file) + ":"
-                    + std::to_string(currentLoc->line) + ":"
-                    + std::to_string(currentLoc->column) + ": ";
-                err->node = Call{"erlang", "error", 1,
-                    one(lit(LitKind::String, loc + "runtime error: Cannot use '!' on immutable binding: " + id->name)), false};
+                if (currentLoc) {
+                    loc = std::string(currentLoc->file) + ":" + std::to_string(currentLoc->line) +
+                          ":" + std::to_string(currentLoc->column) + ": ";
+                }
+                err->node = Call{
+                    "erlang", "error", 1,
+                    one(lit(
+                        LitKind::String,
+                        loc + "runtime error: Cannot use '!' on immutable binding: " + id->name)),
+                    false};
                 return err;
             }
             auto val = lowerMutatingAsValue(*mc);
@@ -420,16 +470,23 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
             std::unordered_set<std::string> muts;
             collectMutated(e, muts);
             std::vector<std::string> mutVars;
-            for (const auto& v : muts) if (subst.count(v)) mutVars.push_back(v);
+            for (const auto& v : muts) {
+                if (subst.count(v)) {
+                    mutVars.push_back(v);
+                }
+            }
             std::sort(mutVars.begin(), mutVars.end());
             if (!mutVars.empty()) {
-                std::function<ExprPtr()> yieldState =
-                    [&]() -> ExprPtr { return stateExpr(mutVars); };
+                std::function<ExprPtr()> yieldState = [&]() -> ExprPtr {
+                    return stateExpr(mutVars);
+                };
                 ExprPtr caseE;
                 if (we) {
                     std::string capability;
                     for (size_t k = 0; k < we->capability.parts.size(); ++k) {
-                        if (k) capability += ".";
+                        if (k) {
+                            capability += ".";
+                        }
                         capability += we->capability.parts[k];
                     }
                     std::vector<Binding> withBinds;
@@ -446,28 +503,25 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
                     subst = snap;
                     currentContextVar = savedContext;
                     caseE = wrapLets(
-                        withBinds,
-                        makeLet(extended,
-                                callE("maps", "put", 3, std::move(putArgs)),
-                                std::move(inner)));
+                        withBinds, makeLet(
+                                       extended, callE("maps", "put", 3, std::move(putArgs)),
+                                       std::move(inner)));
                 } else if (ie) {
                     auto branch = [&](const std::vector<ast::ExprPtr>& bb) {
                         auto snap = subst;
                         auto r = lowerLoopBodyFrom(bb, 0, "", mutVars, yieldState);
-                        subst = snap; return r;
+                        subst = snap;
+                        return r;
                     };
-                    ExprPtr elseP = ie->elseBody ? branch(*ie->elseBody)
-                                                 : stateExpr(mutVars);
+                    ExprPtr elseP = ie->elseBody ? branch(*ie->elseBody) : stateExpr(mutVars);
                     for (auto it2 = ie->elifs.rbegin(); it2 != ie->elifs.rend(); ++it2) {
                         auto ec = lower(it2->first);
                         auto eb = branch(it2->second);
-                        elseP = matchBool(std::move(ec), std::move(eb),
-                                          std::move(elseP));
+                        elseP = matchBool(std::move(ec), std::move(eb), std::move(elseP));
                     }
                     auto cc = lower(ie->condition);
                     auto cb = branch(ie->thenBody);
-                    caseE = matchBool(std::move(cc), std::move(cb),
-                                      std::move(elseP));
+                    caseE = matchBool(std::move(cc), std::move(cb), std::move(elseP));
                 } else if (te) {
                     // The rescue arms see the pre-`trying` names: the
                     // body may have thrown before any of its rebinds.
@@ -494,8 +548,7 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
                             subst[rescue.catchAllParam] = rescue.catchAllParam;
                             c.patterns.push_back(std::move(p));
                         }
-                        c.body = lowerLoopBodyFrom(rescue.catchAllBody, 0, "",
-                                                   mutVars, yieldState);
+                        c.body = lowerLoopBodyFrom(rescue.catchAllBody, 0, "", mutVars, yieldState);
                         subst = beforeTry;
                         tc.clauses.push_back(std::move(c));
                     } else {
@@ -503,14 +556,13 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
                         for (const auto& clause : rescue.clauses) {
                             MatchClause mc;
                             mc.patterns.push_back(
-                                clause.patterns.empty()
-                                    ? wildPat()
-                                    : lowerPattern(clause.patterns[0]));
-                            mc.guard = withTypeGuards(
-                                clause.guard ? lower(*clause.guard) : nullptr);
+                                clause.patterns.empty() ? wildPat()
+                                                        : lowerPattern(clause.patterns[0]));
+                            mc.guard =
+                                withTypeGuards(clause.guard ? lower(*clause.guard) : nullptr);
                             mc.body = clause.body
-                                ? lowerLoopArmU(clause.body, "", mutVars, yieldState)
-                                : yieldState();
+                                          ? lowerLoopArmU(clause.body, "", mutVars, yieldState)
+                                          : yieldState();
                             subst = beforeTry;
                             rclauses.push_back(std::move(mc));
                         }
@@ -525,8 +577,9 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
                     for (const auto& cl : me->clauses) {
                         auto snap = subst;
                         MatchClause mc;
-                        for (const auto& p : cl.patterns)
+                        for (const auto& p : cl.patterns) {
                             mc.patterns.push_back(lowerPattern(p));
+                        }
                         mc.guard = withTypeGuards(cl.guard ? lower(*cl.guard) : nullptr);
                         mc.body = lowerLoopArmU(cl.body, "", mutVars, yieldState);
                         subst = snap;
@@ -547,20 +600,22 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
                     std::string nv = fresh(v);
                     subst[v] = nv;
                     auto vp = std::make_unique<Pattern>();
-                    vp->kind = PatKind::Var; vp->name = nv;
+                    vp->kind = PatKind::Var;
+                    vp->name = nv;
                     pat->args.push_back(std::move(vp));
                 }
-                auto rest = isLast ? lit(LitKind::Atom, "ok")
-                                   : lowerBodyFrom(body, i + 1);
+                auto rest = isLast ? lit(LitKind::Atom, "ok") : lowerBodyFrom(body, i + 1);
                 return makeMatch1(std::move(caseE), std::move(pat), std::move(rest));
             }
         }
     }
     // loop / while → tail-recursive local function threading mutable state.
-    if (auto* le = std::get_if<ast::LoopExpr>(&e->kind))
+    if (auto* le = std::get_if<ast::LoopExpr>(&e->kind)) {
         return lowerLoopStmt(le->body, nullptr, body, i, &le->counter);
-    if (auto* we = std::get_if<ast::WhileExpr>(&e->kind))
+    }
+    if (auto* we = std::get_if<ast::WhileExpr>(&e->kind)) {
         return lowerLoopStmt(we->body, &we->condition, body, i);
+    }
 
     // `return X if cond` as a non-last statement: return only when cond
     // holds, otherwise fall through to the rest (a plain ReturnExpr lowers
@@ -570,7 +625,8 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
         if (auto* ti = std::get_if<ast::TrailingIf>(&re->value->kind)) {
             // lowerBodyFrom() rebinds mutated vars — sequence it last.
             auto c = lower(ti->condition);
-            auto retX = std::make_unique<Expr>(); retX->node = Return{lower(ti->expr)};
+            auto retX = std::make_unique<Expr>();
+            retX->node = Return{lower(ti->expr)};
             auto rest = lowerBodyFrom(body, i + 1);
             return matchBool(std::move(c), std::move(retX), std::move(rest));
         }
@@ -585,8 +641,7 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
     // tagged with the alias's own name instead of the module it names
     // (kexhq/kex#alias). `isLast` still means nothing follows, so it
     // falls through as an ordinary (no-op) statement in that case.
-    if (auto* ue = std::get_if<ast::UsingExpr>(&e->kind);
-        ue && ue->body.empty() && !isLast) {
+    if (auto* ue = std::get_if<ast::UsingExpr>(&e->kind); ue && ue->body.empty() && !isLast) {
         return lowerBodyFrom(body, i + 1);
     }
 
@@ -599,7 +654,7 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
 // supplies the BLOCK's value — the same thing the tree-walker does —
 // rather than leaving the enclosing function the way a `return` written
 // in the block's body does (kexhq/kex#408).
-auto Lowering::lowerRescueClauses(const ast::RescueBlock& rescue, bool blockValue )
+auto Lowering::lowerRescueClauses(const ast::RescueBlock& rescue, bool blockValue)
     -> std::vector<MatchClause> {
     std::vector<MatchClause> out;
     if (rescue.isInlineReturn) {
@@ -634,8 +689,7 @@ auto Lowering::lowerRescueClauses(const ast::RescueBlock& rescue, bool blockValu
             } else {
                 mc.patterns.push_back(wildPat());
             }
-            mc.guard = withTypeGuards(
-                clause.guard ? lower(*clause.guard) : nullptr);
+            mc.guard = withTypeGuards(clause.guard ? lower(*clause.guard) : nullptr);
             mc.body = clause.body ? lower(clause.body) : lit(LitKind::Atom, "ok");
             out.push_back(std::move(mc));
         }
@@ -643,8 +697,8 @@ auto Lowering::lowerRescueClauses(const ast::RescueBlock& rescue, bool blockValu
     return out;
 }
 
-auto Lowering::wrapWithTryCatch(ExprPtr body, const ast::RescueBlock& rescue,
-                      bool blockValue ) -> ExprPtr {
+auto Lowering::wrapWithTryCatch(ExprPtr body, const ast::RescueBlock& rescue, bool blockValue)
+    -> ExprPtr {
     TryCatch tc;
     tc.body = std::move(body);
     tc.clauses = expandRescueGuards(lowerRescueClauses(rescue, blockValue));
@@ -657,19 +711,26 @@ auto Lowering::wrapWithTryCatch(ExprPtr body, const ast::RescueBlock& rescue,
 // unless it sits inside a TryCatch's body (which catches it). Nested
 // lambdas are separate scopes, so their `.try`s don't count here.
 auto Lowering::irHasEscapingTryThrow(const ExprPtr& e) -> bool {
-    if (!e) return false;
-    if (std::holds_alternative<TryThrow>(e->node)) return true;
-    if (std::holds_alternative<Lambda>(e->node)) return false;
+    if (!e) {
+        return false;
+    }
+    if (std::holds_alternative<TryThrow>(e->node)) {
+        return true;
+    }
+    if (std::holds_alternative<Lambda>(e->node)) {
+        return false;
+    }
     if (const auto* tc = std::get_if<TryCatch>(&e->node)) {
         // The body's throws are caught here; only clause (rescue) bodies
         // can still escape.
-        for (const auto& c : tc->clauses)
-            if (irHasEscapingTryThrow(c.body)) return true;
+        for (const auto& c : tc->clauses) {
+            if (irHasEscapingTryThrow(c.body)) {
+                return true;
+            }
+        }
         return false;
     }
-    return anyChild(*e, [](const ExprPtr& child) {
-        return irHasEscapingTryThrow(child);
-    });
+    return anyChild(*e, [](const ExprPtr& child) { return irHasEscapingTryThrow(child); });
 }
 
 // Wrap a rescue-less function body so an escaped `.try` failure becomes
@@ -677,7 +738,9 @@ auto Lowering::irHasEscapingTryThrow(const ExprPtr& e) -> bool {
 // TryException at the function boundary (evaluator.cxx execFunctionDef).
 auto Lowering::wrapSuccess(ExprPtr body, const ast::Expr* last) -> ExprPtr {
     const auto wrapper = last ? hir->successWrapperAfter(*last) : std::string{};
-    if (wrapper.empty()) return body;
+    if (wrapper.empty()) {
+        return body;
+    }
     const auto value = fresh("succeeded");
     std::vector<ExprPtr> args;
     args.push_back(var(value));
@@ -704,7 +767,8 @@ auto Lowering::wrapPropagateTryError(ExprPtr body) -> ExprPtr {
     MatchClause c;
     std::string en = fresh("_TryE");
     auto p = std::make_unique<Pattern>();
-    p->kind = PatKind::Var; p->name = en;
+    p->kind = PatKind::Var;
+    p->name = en;
     c.patterns.push_back(std::move(p));
     auto errCtor = std::make_unique<Expr>();
     errCtor->node = Construct{"Error", one(var(en))};

@@ -20,9 +20,12 @@ static auto makePreludeDb() -> Workspace {
     std::filesystem::path dir = "src/stdlib";
     std::error_code ec;
     for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
-        if (entry.path().extension() != ".kex") continue;
+        if (entry.path().extension() != ".kex") {
+            continue;
+        }
         std::ifstream f(entry.path());
-        std::ostringstream ss; ss << f.rdbuf();
+        std::ostringstream ss;
+        ss << f.rdbuf();
         db.updateFile(entry.path().string(), ss.str());
     }
     return db;
@@ -42,8 +45,11 @@ static auto preludeSymbols() -> const std::vector<kex::semantic::SymbolInfo>& {
     static const auto symbols = [] {
         std::vector<std::string> paths;
         std::error_code ec;
-        for (const auto& entry : std::filesystem::directory_iterator("src/stdlib", ec))
-            if (entry.path().extension() == ".kex") paths.push_back(entry.path().string());
+        for (const auto& entry : std::filesystem::directory_iterator("src/stdlib", ec)) {
+            if (entry.path().extension() == ".kex") {
+                paths.push_back(entry.path().string());
+            }
+        }
         return kex::semantic::symbolsOfFiles(paths, {});
     }();
     return symbols;
@@ -68,8 +74,9 @@ static auto completeAt(const std::string& marked) -> std::vector<std::string> {
     const auto cursor = marked.find("<|>");
     auto source = marked;
     source.erase(cursor, 3);
-    return kex::semantic::completeAt(preludeSymbols(), checkSource, "<completion>", source,
-                                     cursor, &interfaces()).matches;
+    return kex::semantic::completeAt(
+               preludeSymbols(), checkSource, "<completion>", source, cursor, &interfaces())
+        .matches;
 }
 
 static auto has(const std::vector<std::string>& v, const std::string& s) -> bool {
@@ -78,9 +85,9 @@ static auto has(const std::vector<std::string>& v, const std::string& s) -> bool
 
 // Simulates the full completion pipeline: resolveCompletionQuery + DB lookup +
 // rewriteCompletions — returning what readline would actually insert.
-static auto simulate(Workspace& db, const std::string& linebuf,
-                     int start, const char* text) -> std::vector<std::string> {
-    auto cq  = kex::resolveCompletionQuery(linebuf.c_str(), start, text);
+static auto simulate(Workspace& db, const std::string& linebuf, int start, const char* text)
+    -> std::vector<std::string> {
+    auto cq = kex::resolveCompletionQuery(linebuf.c_str(), start, text);
     auto raw = db.completionsFor(cq.dbQuery);
     return kex::rewriteCompletions(std::move(raw), cq.rewriteFrom, cq.rewriteTo);
 }
@@ -89,97 +96,95 @@ int main() {
     // ── qualifierFromBefore ─────────────────────────────────────────────────
     describe("qualifierFromBefore", []() {
         it("identifier maps to itself", []() {
-            assertEqual(kex::qualifierFromBefore("IO"),   std::string("IO"));
+            assertEqual(kex::qualifierFromBefore("IO"), std::string("IO"));
             assertEqual(kex::qualifierFromBefore("Math"), std::string("Math"));
         });
         it("list literal maps to List", []() {
             assertEqual(kex::qualifierFromBefore("[1,2,3]"), std::string("List"));
-            assertEqual(kex::qualifierFromBefore("]"),       std::string("List"));
+            assertEqual(kex::qualifierFromBefore("]"), std::string("List"));
         });
         it("integer literal maps to Integer", []() {
-            assertEqual(kex::qualifierFromBefore("42"),  std::string("Integer"));
-            assertEqual(kex::qualifierFromBefore("0"),   std::string("Integer"));
+            assertEqual(kex::qualifierFromBefore("42"), std::string("Integer"));
+            assertEqual(kex::qualifierFromBefore("0"), std::string("Integer"));
         });
-        it("char literal maps to Char", []() {
-            assertEqual(kex::qualifierFromBefore("'a'"), std::string("Char"));
-        });
-        it("string literal maps to String", []() {
-            assertEqual(kex::qualifierFromBefore("\"hi\""), std::string("String"));
-        });
+        it("char literal maps to Char",
+           []() { assertEqual(kex::qualifierFromBefore("'a'"), std::string("Char")); });
+        it("string literal maps to String",
+           []() { assertEqual(kex::qualifierFromBefore("\"hi\""), std::string("String")); });
     });
 
     // ── resolveCompletionQuery ──────────────────────────────────────────────
     describe("resolveCompletionQuery", []() {
         it("no dot — passthrough, no rewrite", []() {
             auto cq = kex::resolveCompletionQuery("pri", 0, "pri");
-            assertEqual(cq.dbQuery,     std::string("pri"));
+            assertEqual(cq.dbQuery, std::string("pri"));
             assertEqual(cq.rewriteFrom, std::string(""));
-            assertEqual(cq.rewriteTo,   std::string(""));
+            assertEqual(cq.rewriteTo, std::string(""));
         });
 
         // ── Case A: readline split on '.' ──────────────────────────────────
         it("A: identifier split — IO. text=''", []() {
             auto cq = kex::resolveCompletionQuery("IO.", 3, "");
-            assertEqual(cq.dbQuery,     std::string("IO."));
+            assertEqual(cq.dbQuery, std::string("IO."));
             assertEqual(cq.rewriteFrom, std::string("IO."));
-            assertEqual(cq.rewriteTo,   std::string(""));
+            assertEqual(cq.rewriteTo, std::string(""));
         });
         it("A: identifier split — IO.pr text='pr'", []() {
             auto cq = kex::resolveCompletionQuery("IO.pr", 3, "pr");
-            assertEqual(cq.dbQuery,     std::string("IO.pr"));
+            assertEqual(cq.dbQuery, std::string("IO.pr"));
             assertEqual(cq.rewriteFrom, std::string("IO."));
-            assertEqual(cq.rewriteTo,   std::string(""));
+            assertEqual(cq.rewriteTo, std::string(""));
         });
         it("A: list literal split — [1,2,3]. text=''", []() {
             auto cq = kex::resolveCompletionQuery("[1,2,3].", 8, "");
-            assertEqual(cq.dbQuery,     std::string("List."));
+            assertEqual(cq.dbQuery, std::string("List."));
             assertEqual(cq.rewriteFrom, std::string("List."));
-            assertEqual(cq.rewriteTo,   std::string(""));
+            assertEqual(cq.rewriteTo, std::string(""));
         });
         it("A: list literal split — [1,2,3].ma text='ma'", []() {
             auto cq = kex::resolveCompletionQuery("[1,2,3].ma", 8, "ma");
-            assertEqual(cq.dbQuery,     std::string("List.ma"));
+            assertEqual(cq.dbQuery, std::string("List.ma"));
             assertEqual(cq.rewriteFrom, std::string("List."));
-            assertEqual(cq.rewriteTo,   std::string(""));
+            assertEqual(cq.rewriteTo, std::string(""));
         });
 
         // ── Case B: readline did NOT split ─────────────────────────────────
         it("B: full IO.pr text='IO.pr' start=0 — no rewrite (identifier)", []() {
             auto cq = kex::resolveCompletionQuery("IO.pr", 0, "IO.pr");
-            assertEqual(cq.dbQuery,     std::string("IO.pr"));
+            assertEqual(cq.dbQuery, std::string("IO.pr"));
             assertEqual(cq.rewriteFrom, std::string("IO."));
-            assertEqual(cq.rewriteTo,   std::string("IO."));  // identity rewrite
+            assertEqual(cq.rewriteTo, std::string("IO.")); // identity rewrite
         });
         it("B: list literal [1,2,3]. text='[1,2,3].' start=0", []() {
             auto cq = kex::resolveCompletionQuery("[1,2,3].", 0, "[1,2,3].");
-            assertEqual(cq.dbQuery,     std::string("List."));
+            assertEqual(cq.dbQuery, std::string("List."));
             assertEqual(cq.rewriteFrom, std::string("List."));
-            assertEqual(cq.rewriteTo,   std::string("[1,2,3]."));
+            assertEqual(cq.rewriteTo, std::string("[1,2,3]."));
         });
         it("B: list literal with member [1,2,3].ma text='[1,2,3].ma' start=0", []() {
             auto cq = kex::resolveCompletionQuery("[1,2,3].ma", 0, "[1,2,3].ma");
-            assertEqual(cq.dbQuery,     std::string("List.ma"));
+            assertEqual(cq.dbQuery, std::string("List.ma"));
             assertEqual(cq.rewriteFrom, std::string("List."));
-            assertEqual(cq.rewriteTo,   std::string("[1,2,3]."));
+            assertEqual(cq.rewriteTo, std::string("[1,2,3]."));
         });
         it("B: integer literal 23. text='23.' start=0", []() {
             auto cq = kex::resolveCompletionQuery("23.", 0, "23.");
-            assertEqual(cq.dbQuery,     std::string("Integer."));
+            assertEqual(cq.dbQuery, std::string("Integer."));
             assertEqual(cq.rewriteFrom, std::string("Integer."));
-            assertEqual(cq.rewriteTo,   std::string("23."));
+            assertEqual(cq.rewriteTo, std::string("23."));
         });
         it("B: char literal 's'. text=\"'s'.\" start=0", []() {
             auto cq = kex::resolveCompletionQuery("'s'.", 0, "'s'.");
-            assertEqual(cq.dbQuery,     std::string("Char."));
+            assertEqual(cq.dbQuery, std::string("Char."));
             assertEqual(cq.rewriteFrom, std::string("Char."));
-            assertEqual(cq.rewriteTo,   std::string("'s'."));
+            assertEqual(cq.rewriteTo, std::string("'s'."));
         });
         it("B: identifier in expression — 'foo + Math.s' text='Math.s' start=6", []() {
             // readline did not split: text is "Math.s", start=6 (after space)
             auto cq = kex::resolveCompletionQuery("foo + Math.s", 6, "Math.s");
-            assertEqual(cq.dbQuery,     std::string("Math.s"));
+            assertEqual(cq.dbQuery, std::string("Math.s"));
             assertEqual(cq.rewriteFrom, std::string("Math."));
-            assertEqual(cq.rewriteTo,   std::string("Math."));
+            assertEqual(cq.rewriteTo, std::string("Math."));
         });
     });
 
@@ -228,8 +233,8 @@ int main() {
         });
         it("types a lambda parameter on a half-typed line", []() {
             const std::string line = "  [\"a\"].map { |w| w.";
-            auto source = "main do\n" + line + "<|>" +
-                          kex::semantic::completionClosers(line) + "\nend\n";
+            auto source =
+                "main do\n" + line + "<|>" + kex::semantic::completionClosers(line) + "\nend\n";
             auto r = completeAt(source);
             assertTrue(has(r, "upperCase"), "String member missing");
         });
@@ -257,12 +262,11 @@ int main() {
 
     describe("completionClosers", []() {
         it("closes delimiters and blocks in order", []() {
-            assertEqual(kex::semantic::completionClosers("xs.map { |x| f(x"),
-                        std::string(")}"));
-            assertEqual(kex::semantic::completionClosers("make String do\n  [1, \"]\""),
-                        std::string("]\nend"));
-            assertEqual(kex::semantic::completionClosers("f(1) do end"),
-                        std::string(""));
+            assertEqual(kex::semantic::completionClosers("xs.map { |x| f(x"), std::string(")}"));
+            assertEqual(
+                kex::semantic::completionClosers("make String do\n  [1, \"]\""),
+                std::string("]\nend"));
+            assertEqual(kex::semantic::completionClosers("f(1) do end"), std::string(""));
         });
     });
 
@@ -342,8 +346,9 @@ int main() {
             auto db = makePreludeDb();
             auto r = simulate(db, "23.", 0, "23.");
             // Integer make-block functions, prefixed with "23."
-            for (const auto& s : r)
+            for (const auto& s : r) {
                 assertTrue(s.rfind("23.", 0) == 0);
+            }
         });
         it("top-level bare prefix — global names", []() {
             auto db = makePreludeDb();
@@ -362,21 +367,20 @@ int main() {
         });
         it("make String user function shows as String member", []() {
             auto db = makePreludeDb();
-            db.updateFile("<repl>",
-                "make String do\n"
-                "  let capitalize(s) = s\n"
-                "end\n");
+            db.updateFile(
+                "<repl>", "make String do\n"
+                          "  let capitalize(s) = s\n"
+                          "end\n");
             auto r = simulate(db, "String.", 0, "String.");
             assertTrue(has(r, "String.capitalize"));
         });
         it("accumulated REPL updates keep all definitions", []() {
             auto db = makePreludeDb();
             // Simulate two separate REPL inputs accumulated
-            std::string accum =
-                "let foo(x) = x\n"
-                "make String do\n"
-                "  let shout(s) = s\n"
-                "end\n";
+            std::string accum = "let foo(x) = x\n"
+                                "make String do\n"
+                                "  let shout(s) = s\n"
+                                "end\n";
             db.updateFile("<repl>", accum);
             auto r1 = simulate(db, "fo", 0, "fo");
             assertTrue(has(r1, "foo"));
@@ -391,11 +395,11 @@ int main() {
             // incidentally, and used to leak here.
             auto members = simulate(db, "Kex.", 0, "Kex.");
             assertTrue(has(members, "Kex.VERSION"), "VERSION missing");
-            for (const auto& leaked : {"Kex.major", "Kex.minor",
-                                       "Kex.patch", "Kex.revision",
-                                       "Kex.number", "Kex.tuple"})
-                assertTrue(!has(members, leaked),
-                           std::string("leaked into the module: ") + leaked);
+            for (const auto& leaked :
+                 {"Kex.major", "Kex.minor", "Kex.patch", "Kex.revision", "Kex.number",
+                  "Kex.tuple"}) {
+                assertTrue(!has(members, leaked), std::string("leaked into the module: ") + leaked);
+            }
 
             // They still complete where they belong.
             auto fields = simulate(db, "Version.", 0, "Version.");
@@ -405,52 +409,53 @@ int main() {
         it("replaces module exports safely when an editor updates a file", []() {
             Workspace db;
             const std::string path = "/tmp/kex-lsp-reload.kex";
-            db.updateFile(path,
-                "module Old do\n"
-                "  let alpha() = 1\n"
-                "end\n");
+            db.updateFile(
+                path, "module Old do\n"
+                      "  let alpha() = 1\n"
+                      "end\n");
             assertTrue(has(db.completionsFor("Old.al"), "Old.alpha"));
 
-            db.updateFile(path,
-                "module New do\n"
-                "  let beta() = 2\n"
-                "end\n");
-            assertTrue(db.completionsFor("Old.al").empty(),
-                       "stale module export survived an in-memory update");
+            db.updateFile(
+                path, "module New do\n"
+                      "  let beta() = 2\n"
+                      "end\n");
+            assertTrue(
+                db.completionsFor("Old.al").empty(),
+                "stale module export survived an in-memory update");
             assertTrue(has(db.completionsFor("New.be"), "New.beta"));
         });
         it("offers lexical bindings at the requested editor position", []() {
             Workspace db;
             const std::string path = "/tmp/kex-lsp-scope.kex";
-            db.updateFile(path,
-                "main do\n"
-                "  let localValue = 1\n"
-                "  localValue\n"
-                "end\n");
+            db.updateFile(
+                path, "main do\n"
+                      "  let localValue = 1\n"
+                      "  localValue\n"
+                      "end\n");
             resolveTogether(db, {path});
             auto matches = db.completionsAt(path, 3, 7, "loc");
-            assertTrue(has(matches, "localValue"),
-                       "position-aware completion lost a local let binding");
+            assertTrue(
+                has(matches, "localValue"), "position-aware completion lost a local let binding");
         });
         it("offers the implicit new binding inside make functions", []() {
             Workspace db;
             const std::string path = "/tmp/kex-lsp-new-scope.kex";
-            db.updateFile(path,
-                "record User do\n"
-                "  age : Integer\n"
-                "end\n"
-                "make User do\n"
-                "  let birthday -> User do\n"
-                "    new.age = new.age + 1\n"
-                "    new\n"
-                "  end\n"
-                "end\n");
+            db.updateFile(
+                path, "record User do\n"
+                      "  age : Integer\n"
+                      "end\n"
+                      "make User do\n"
+                      "  let birthday -> User do\n"
+                      "    new.age = new.age + 1\n"
+                      "    new\n"
+                      "  end\n"
+                      "end\n");
             resolveTogether(db, {path});
             auto matches = db.completionsAt(path, 7, 7, "ne");
-            assertTrue(has(matches, "new"),
-                       "make completion omitted the implicit new binding");
-            assertTrue(has(db.completionsFor("User."), "User.age"),
-                       "record receiver completion omitted its fields");
+            assertTrue(has(matches, "new"), "make completion omitted the implicit new binding");
+            assertTrue(
+                has(db.completionsFor("User."), "User.age"),
+                "record receiver completion omitted its fields");
         });
     });
 

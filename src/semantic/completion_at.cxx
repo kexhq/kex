@@ -9,7 +9,6 @@
 #include <fstream>
 #include <iterator>
 
-
 #include <algorithm>
 #include <cctype>
 #include <string_view>
@@ -21,29 +20,34 @@
 namespace kex::semantic {
 
 auto completionQualifierForType(const TypePtr& type) -> std::string {
-    if (!type) return {};
-    return std::visit([&type](const auto& value) -> std::string {
-        using T = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<T, ListType>) return "List";
-        else if constexpr (std::is_same_v<T, MapType>) return "Map";
-        else if constexpr (std::is_same_v<T, OptionalType>)
-            return "Optional";
-        else if constexpr (std::is_same_v<T, NamedType>)
-        {
-            // A type named before a dot (`List.ma`) is a namespace there:
-            // complete what it holds, not its `Type` record's fields.
-            if (value.name == kex::names::kTypeRecord && value.typeArgs.size() == 1)
-                return completionQualifierForType(value.typeArgs.front());
-            return value.typeArgs.empty() ? value.name : typeToString(type);
-        }
-        else if constexpr (std::is_same_v<T, PrimitiveType> ||
-                           std::is_same_v<T, SizedIntType> ||
-                           std::is_same_v<T, SizedFloatType>)
-            return typeToString(type);
+    if (!type) {
         return {};
-    }, type->kind);
+    }
+    return std::visit(
+        [&type](const auto& value) -> std::string {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, ListType>) {
+                return "List";
+            } else if constexpr (std::is_same_v<T, MapType>) {
+                return "Map";
+            } else if constexpr (std::is_same_v<T, OptionalType>) {
+                return "Optional";
+            } else if constexpr (std::is_same_v<T, NamedType>) {
+                // A type named before a dot (`List.ma`) is a namespace there:
+                // complete what it holds, not its `Type` record's fields.
+                if (value.name == kex::names::kTypeRecord && value.typeArgs.size() == 1) {
+                    return completionQualifierForType(value.typeArgs.front());
+                }
+                return value.typeArgs.empty() ? value.name : typeToString(type);
+            } else if constexpr (
+                std::is_same_v<T, PrimitiveType> || std::is_same_v<T, SizedIntType> ||
+                std::is_same_v<T, SizedFloatType>) {
+                return typeToString(type);
+            }
+            return {};
+        },
+        type->kind);
 }
-
 
 auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
     const auto isWord = [](unsigned char c) {
@@ -53,13 +57,18 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
     // `#` outside a string.
     const auto commentStart = [&](size_t end) -> size_t {
         size_t lineStart = end;
-        while (lineStart > 0 && source[lineStart - 1] != '\n') --lineStart;
+        while (lineStart > 0 && source[lineStart - 1] != '\n') {
+            --lineStart;
+        }
         char quote = 0;
         for (size_t j = lineStart; j < end; ++j) {
             const char c = source[j];
             if (quote) {
-                if (c == '\\') ++j;
-                else if (c == quote) quote = 0;
+                if (c == '\\') {
+                    ++j;
+                } else if (c == quote) {
+                    quote = 0;
+                }
             } else if (c == '"' || c == '\'') {
                 quote = c;
             } else if (c == '#') {
@@ -77,9 +86,13 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
                 crossedLine = crossedLine || source[i - 1] == '\n';
                 --i;
             }
-            if (!crossedLine) return i;
+            if (!crossedLine) {
+                return i;
+            }
             const auto comment = commentStart(i);
-            if (comment == std::string::npos) return i;
+            if (comment == std::string::npos) {
+                return i;
+            }
             i = comment;
         }
     };
@@ -92,22 +105,29 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
                 ++depth;
             } else if (c == open) {
                 --depth;
-                if (depth == 0) return j - 1;
+                if (depth == 0) {
+                    return j - 1;
+                }
             }
         }
         return std::string::npos;
     };
 
     size_t i = cursor;
-    while (i > 0 && isWord(static_cast<unsigned char>(source[i - 1]))) --i;
+    while (i > 0 && isWord(static_cast<unsigned char>(source[i - 1]))) {
+        --i;
+    }
     i = skipSpaceBack(i);
-    if (i == 0 || source[i - 1] != '.') return {};
+    if (i == 0 || source[i - 1] != '.') {
+        return {};
+    }
     const size_t dot = i - 1;
 
     // `&.text` in `items.map(&.text)`: the shorthand block's parameter is the
     // receiver (recoveredReceiverQualifier types it).
-    if (dot > 0 && source[dot - 1] == '&')
+    if (dot > 0 && source[dot - 1] == '&') {
         return {.start = dot - 1, .dot = dot, .callOpen = 0, .valid = true};
+    }
     // Where the outermost expression is recorded is decided by how the
     // receiver ENDS: a call or a block at its `(` / `{`, a member of
     // something by its name (MethodCall::methodLocation). Only the last link says
@@ -124,8 +144,12 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
         // name in front of it, and `[c][0]` into the list before the index.
         if (c == ')' || c == ']') {
             const size_t open = matchOpen(i, c, c == ')' ? '(' : '[');
-            if (open == std::string::npos) return {};
-            if (c == ')' && atEnd) callOpen = open;
+            if (open == std::string::npos) {
+                return {};
+            }
+            if (c == ')' && atEnd) {
+                callOpen = open;
+            }
             atEnd = false;
             i = open;
             continue;
@@ -135,13 +159,16 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
         // whole receiver.
         if (c == '}') {
             const size_t open = matchOpen(i, '}', '{');
-            if (open == std::string::npos) return {};
-            if (atEnd) callOpen = open;
+            if (open == std::string::npos) {
+                return {};
+            }
+            if (atEnd) {
+                callOpen = open;
+            }
             atEnd = false;
             const size_t before = skipSpaceBack(open);
-            if (before > 0 &&
-                (isWord(static_cast<unsigned char>(source[before - 1])) ||
-                 source[before - 1] == ')')) {
+            if (before > 0 && (isWord(static_cast<unsigned char>(source[before - 1])) ||
+                               source[before - 1] == ')')) {
                 i = before;
                 continue;
             }
@@ -152,63 +179,92 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
             size_t j = i - 1;
             while (j > 0) {
                 --j;
-                if (source[j] == c && (j == 0 || source[j - 1] != '\\')) break;
+                if (source[j] == c && (j == 0 || source[j - 1] != '\\')) {
+                    break;
+                }
             }
             i = j;
             continue;
         }
-        if (!isWord(static_cast<unsigned char>(c))) break;
-        while (i > 0 && isWord(static_cast<unsigned char>(source[i - 1]))) --i;
+        if (!isWord(static_cast<unsigned char>(c))) {
+            break;
+        }
+        while (i > 0 && isWord(static_cast<unsigned char>(source[i - 1]))) {
+            --i;
+        }
         // A leading `!` is a negation in front of the receiver, not part of
         // its name: `!control.hint` reads `hint` on `control` (#456).
-        while (i < dot && (source[i] == '!' || source[i] == '?')) ++i;
+        while (i < dot && (source[i] == '!' || source[i] == '?')) {
+            ++i;
+        }
         // `@size` is one expression and the AST records it starting at the
         // `@`. Stopping at the sigil pointed one byte too far right, so the
         // recorded type could not be found and every `@field.method` fell back
         // to re-analyzing the whole buffer.
-        if (i > 0 && source[i - 1] == '@') --i;
+        if (i > 0 && source[i - 1] == '@') {
+            --i;
+        }
         // A dot here means the chain continues leftwards: `Web.Server.new(0)`.
         const size_t before = skipSpaceBack(i);
-        if (before == 0 || source[before - 1] != '.') break;
+        if (before == 0 || source[before - 1] != '.') {
+            break;
+        }
         // Lowercase: a capitalized name after a dot is a namespace or a
         // constructor (`FS.File`), not a member call.
-        if (atEnd && std::islower(static_cast<unsigned char>(source[i]))) member = i;
+        if (atEnd && std::islower(static_cast<unsigned char>(source[i]))) {
+            member = i;
+        }
         atEnd = false;
         i = skipSpaceBack(before - 1);
     }
-    if (i >= dot) return {};
+    if (i >= dot) {
+        return {};
+    }
     return {.start = i, .dot = dot, .callOpen = callOpen, .member = member, .valid = true};
 }
 
 auto bareCallReceiver(const std::string& source, const DotReceiver& receiver) -> bool {
-    if (!receiver.valid || !receiver.callOpen || receiver.callOpen <= receiver.start) return false;
-    return std::all_of(source.begin() + static_cast<std::ptrdiff_t>(receiver.start),
-                       source.begin() + static_cast<std::ptrdiff_t>(receiver.callOpen),
-                       [](char c) {
-                           return std::isalnum(static_cast<unsigned char>(c)) || c == '_' ||
-                                  c == '?' || c == '!';
-                       });
+    if (!receiver.valid || !receiver.callOpen || receiver.callOpen <= receiver.start) {
+        return false;
+    }
+    return std::all_of(
+        source.begin() + static_cast<std::ptrdiff_t>(receiver.start),
+        source.begin() + static_cast<std::ptrdiff_t>(receiver.callOpen), [](char c) {
+            return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '?' || c == '!';
+        });
 }
 
 auto receiverTypeOf(const Analyzer& analyzer, const ast::Expr* expression) -> TypePtr {
-    if (!expression) return nullptr;
+    if (!expression) {
+        return nullptr;
+    }
     // `new.age = ...`: the value written, not the assignment's own Unit.
     if (const auto* assignment = std::get_if<ast::AssignExpr>(&expression->kind);
-        assignment && !assignment->path.empty())
+        assignment && !assignment->path.empty()) {
         return analyzer.assignmentTargetTypeOf(expression);
+    }
     return analyzer.displayTypeOf(expression);
 }
 
-auto checkedReceiver(const CompletionChecker& check, const std::string& source,
-                     const std::string& path, const DotReceiver& receiver,
-                     size_t cursor) -> std::optional<CheckedReceiver> {
-    if (!receiver.valid || cursor < receiver.dot) return std::nullopt;
+auto checkedReceiver(
+    const CompletionChecker& check,
+    const std::string& source,
+    const std::string& path,
+    const DotReceiver& receiver,
+    size_t cursor) -> std::optional<CheckedReceiver> {
+    if (!receiver.valid || cursor < receiver.dot) {
+        return std::nullopt;
+    }
     // The 1-based line and column of `offset` in `text`.
     const auto positionOf = [](const std::string& text, size_t offset) {
         int line = 1;
         size_t lineStart = 0;
-        for (size_t i = 0; i < offset; ++i)
-            if (text[i] == '\n') { ++line; lineStart = i + 1; }
+        for (size_t i = 0; i < offset; ++i) {
+            if (text[i] == '\n') {
+                ++line;
+                lineStart = i + 1;
+            }
+        }
         return std::pair<int, int>{line, static_cast<int>(offset - lineStart) + 1};
     };
     // The typed expression the analysis records at a position. Several can
@@ -227,9 +283,12 @@ auto checkedReceiver(const CompletionChecker& check, const std::string& source,
             // first the receiver was a Bool (`make lsp-sweep`). It is never the
             // receiver.
             const bool candidateOperator = std::holds_alternative<ast::BinaryOp>(candidate.kind);
-            if (held && std::holds_alternative<ast::BinaryOp>(held->kind))
+            if (held && std::holds_alternative<ast::BinaryOp>(held->kind)) {
                 return !candidateOperator;
-            if (candidateOperator) return !held;
+            }
+            if (candidateOperator) {
+                return !held;
+            }
             const bool candidateCall = std::holds_alternative<ast::MethodCall>(candidate.kind) ||
                                        std::holds_alternative<ast::FunctionCall>(candidate.kind);
             // A receiver written as a plain name is that name, not a chain
@@ -239,8 +298,12 @@ auto checkedReceiver(const CompletionChecker& check, const std::string& source,
             // else Greater` records the conditional at `other`'s position too,
             // and which of the two came first was the map's order.
             if (plainName) {
-                if (std::holds_alternative<ast::Identifier>(candidate.kind)) return true;
-                if (held && std::holds_alternative<ast::Identifier>(held->kind)) return false;
+                if (std::holds_alternative<ast::Identifier>(candidate.kind)) {
+                    return true;
+                }
+                if (held && std::holds_alternative<ast::Identifier>(held->kind)) {
+                    return false;
+                }
                 return !held || !candidateCall;
             }
             // A call over the identifier it starts with.
@@ -249,19 +312,29 @@ auto checkedReceiver(const CompletionChecker& check, const std::string& source,
         };
         for (const auto& [expression, _] : analyzer.typeMap()) {
             if (!expression || expression->location.line != position.first ||
-                expression->location.column != position.second)
+                expression->location.column != position.second) {
                 continue;
-            if (std::holds_alternative<ast::Identifier>(expression->kind)) name = expression;
+            }
+            if (std::holds_alternative<ast::Identifier>(expression->kind)) {
+                name = expression;
+            }
             const auto type = receiverTypeOf(analyzer, expression);
-            if (!type || std::holds_alternative<UnknownType>(type->kind)) continue;
-            if (better(typed, *expression)) typed = expression;
-            if (!completionQualifierForType(type).empty() && better(qualified, *expression))
+            if (!type || std::holds_alternative<UnknownType>(type->kind)) {
+                continue;
+            }
+            if (better(typed, *expression)) {
+                typed = expression;
+            }
+            if (!completionQualifierForType(type).empty() && better(qualified, *expression)) {
                 qualified = expression;
+            }
         }
         // A plain name is the receiver even when the checker could not type
         // it: otherwise the chain sharing its position, a String in
         // `"in-order: " + tree.inOrder`, was completed instead.
-        if (plainName && name) return name;
+        if (plainName && name) {
+            return name;
+        }
         return qualified ? qualified : typed;
     };
     // The shorthand `&.`: its parameter is a block's, typed by the call the
@@ -269,10 +342,12 @@ auto checkedReceiver(const CompletionChecker& check, const std::string& source,
     // checker types it, and the body's `kexItem` is the receiver.
     if (source[receiver.start] == '&') {
         const std::string opening = "{ |kexItem| ";
-        auto rewritten = source.substr(0, receiver.start) + opening + "kexItem }" +
-                         source.substr(cursor);
+        auto rewritten =
+            source.substr(0, receiver.start) + opening + "kexItem }" + source.substr(cursor);
         auto checked = check(path, rewritten);
-        if (!checked) return std::nullopt;
+        if (!checked) {
+            return std::nullopt;
+        }
         const auto* expression =
             typedAt(*checked->analyzer, positionOf(rewritten, receiver.start + opening.size()));
         return CheckedReceiver{std::move(*checked), expression};
@@ -296,9 +371,13 @@ auto checkedReceiver(const CompletionChecker& check, const std::string& source,
         source.begin() + static_cast<std::ptrdiff_t>(receiver.dot) + 1,
         source.begin() + static_cast<std::ptrdiff_t>(cursor),
         [](char c) { return !std::isspace(static_cast<unsigned char>(c)); });
-    if (!memberFollows && !memberTyped) recovered.erase(receiver.dot, cursor - receiver.dot);
+    if (!memberFollows && !memberTyped) {
+        recovered.erase(receiver.dot, cursor - receiver.dot);
+    }
     auto checked = check(path, recovered);
-    if (!checked) return std::nullopt;
+    if (!checked) {
+        return std::nullopt;
+    }
     // Everything before the deletion keeps its position. The receiver is
     // recorded where its outermost expression is: a member by its name, a
     // call at its `(`. A chain's start is its root's (`layer` in
@@ -306,26 +385,29 @@ auto checkedReceiver(const CompletionChecker& check, const std::string& source,
     // expression is asked there.
     if (receiver.member) {
         const auto [line, column] = positionOf(source, receiver.member);
-        for (const auto& [expression, _] : checked->analyzer->typeMap())
-            if (const auto* call = expression
-                    ? std::get_if<ast::MethodCall>(&expression->kind) : nullptr;
+        for (const auto& [expression, _] : checked->analyzer->typeMap()) {
+            if (const auto* call =
+                    expression ? std::get_if<ast::MethodCall>(&expression->kind) : nullptr;
                 call && call->methodLocation.line == line &&
-                call->methodLocation.column == column &&
-                expression->location.file == path)
+                call->methodLocation.column == column && expression->location.file == path) {
                 return CheckedReceiver{std::move(*checked), expression};
+            }
+        }
         // `listener.localAddress.try.`: the `.try` is no call. The parser
         // records it at the token after the keyword, up to the dot asked at.
         if (source.compare(receiver.member, 3, "try") == 0) {
             const auto from = positionOf(source, receiver.member);
             const auto to = positionOf(source, receiver.dot);
-            for (const auto& [expression, _] : checked->analyzer->typeMap())
+            for (const auto& [expression, _] : checked->analyzer->typeMap()) {
                 if (expression && std::holds_alternative<ast::TryExpr>(expression->kind) &&
                     expression->location.file == path) {
-                    const std::pair<int, int> at{expression->location.line,
-                                                 expression->location.column};
-                    if (from <= at && at <= to)
+                    const std::pair<int, int> at{
+                        expression->location.line, expression->location.column};
+                    if (from <= at && at <= to) {
                         return CheckedReceiver{std::move(*checked), expression};
+                    }
                 }
+            }
         }
         return CheckedReceiver{std::move(*checked), nullptr};
     }
@@ -337,26 +419,37 @@ auto checkedReceiver(const CompletionChecker& check, const std::string& source,
         int depth = 0;
         size_t close = receiver.start;
         for (; close < receiver.dot; ++close) {
-            if (source[close] == '(') ++depth;
-            else if (source[close] == ')' && --depth == 0) break;
+            if (source[close] == '(') {
+                ++depth;
+            } else if (source[close] == ')' && --depth == 0) {
+                break;
+            }
         }
         const auto from = positionOf(source, receiver.start + 1);
         const auto to = positionOf(source, close);
         std::vector<const ast::Expr*> inside;
         for (const auto& [expression, _] : checked->analyzer->typeMap()) {
-            if (!expression || expression->location.file != path) continue;
+            if (!expression || expression->location.file != path) {
+                continue;
+            }
             const std::pair<int, int> at{expression->location.line, expression->location.column};
-            if (from <= at && at < to) inside.push_back(expression);
+            if (from <= at && at < to) {
+                inside.push_back(expression);
+            }
         }
         std::unordered_set<const ast::Expr*> nested;
         const auto markNested = [&](const auto& self, const ast::Expr& parent) -> void {
             ast::forEachChild(parent, [&](const ast::ExprPtr& child) {
-                if (child && nested.insert(child.get()).second) self(self, *child);
+                if (child && nested.insert(child.get()).second) {
+                    self(self, *child);
+                }
             });
         };
-        for (const auto* expression : inside) markNested(markNested, *expression);
+        for (const auto* expression : inside) {
+            markNested(markNested, *expression);
+        }
         const ast::Expr* outermost = nullptr;
-        for (const auto* expression : inside)
+        for (const auto* expression : inside) {
             if (!nested.contains(expression)) {
                 if (outermost) {
                     outermost = nullptr;
@@ -364,6 +457,7 @@ auto checkedReceiver(const CompletionChecker& check, const std::string& source,
                 }
                 outermost = expression;
             }
+        }
         return CheckedReceiver{std::move(*checked), outermost};
     }
     // `@timeout.` is the field read, which shares the `@` with the implicit
@@ -376,19 +470,23 @@ auto checkedReceiver(const CompletionChecker& check, const std::string& source,
         !receiver.callOpen && !fieldShorthand);
     // A bare call (`words()`) is recorded where its name is, not at its `(`:
     // there the receiver's start is the call itself.
-    if (!expression && receiver.callOpen && bareCallReceiver(source, receiver))
+    if (!expression && receiver.callOpen && bareCallReceiver(source, receiver)) {
         expression = typedAt(*checked->analyzer, positionOf(source, receiver.start));
+    }
     return CheckedReceiver{std::move(*checked), expression};
 }
 
-auto recoveredReceiverQualifier(const CompletionChecker& check,
-                                const std::string& source,
-                                const std::string& path,
-                                const DotReceiver& receiver, size_t cursor,
-                                const ImportedInterfaces*)
-    -> std::string {
+auto recoveredReceiverQualifier(
+    const CompletionChecker& check,
+    const std::string& source,
+    const std::string& path,
+    const DotReceiver& receiver,
+    size_t cursor,
+    const ImportedInterfaces*) -> std::string {
     const auto found = checkedReceiver(check, source, path, receiver, cursor);
-    if (!found || !found->expression) return {};
+    if (!found || !found->expression) {
+        return {};
+    }
     return completionQualifierForType(receiverTypeOf(*found->checked.analyzer, found->expression));
 }
 
@@ -401,24 +499,34 @@ auto completionClosers(const std::string& text) -> std::string {
     for (size_t i = 0; i < text.size(); ++i) {
         const char c = text[i];
         if (c == '#') {
-            while (i < text.size() && text[i] != '\n') ++i;
+            while (i < text.size() && text[i] != '\n') {
+                ++i;
+            }
         } else if (c == '"' || c == '\'' || c == '`') {
-            for (++i; i < text.size() && text[i] != c; ++i)
-                if (text[i] == '\\' && c != '`') ++i;
+            for (++i; i < text.size() && text[i] != c; ++i) {
+                if (text[i] == '\\' && c != '`') {
+                    ++i;
+                }
+            }
         } else if (c == '(' || c == '[' || c == '{') {
             open.push_back(c);
         } else if (c == ')' || c == ']' || c == '}') {
-            if (!open.empty() && open.back() != 'd') open.pop_back();
-        } else if (isWord(static_cast<unsigned char>(c)) &&
-                   (i == 0 || !isWord(static_cast<unsigned char>(text[i - 1])))) {
-            size_t end = i;
-            while (end < text.size() &&
-                   isWord(static_cast<unsigned char>(text[end])))
-                ++end;
-            const auto word = std::string_view(text).substr(i, end - i);
-            if (word == "do") open.push_back('d');
-            else if (word == "end" && !open.empty() && open.back() == 'd')
+            if (!open.empty() && open.back() != 'd') {
                 open.pop_back();
+            }
+        } else if (
+            isWord(static_cast<unsigned char>(c)) &&
+            (i == 0 || !isWord(static_cast<unsigned char>(text[i - 1])))) {
+            size_t end = i;
+            while (end < text.size() && isWord(static_cast<unsigned char>(text[end]))) {
+                ++end;
+            }
+            const auto word = std::string_view(text).substr(i, end - i);
+            if (word == "do") {
+                open.push_back('d');
+            } else if (word == "end" && !open.empty() && open.back() == 'd') {
+                open.pop_back();
+            }
             i = end - 1;
         }
     }
@@ -434,19 +542,24 @@ auto completionClosers(const std::string& text) -> std::string {
     return closers;
 }
 
-auto completeAt(const std::vector<SymbolInfo>& base, const CompletionChecker& check,
-                const std::string& path, const std::string& source,
-                size_t cursor, const ImportedInterfaces* interfaces)
-    -> CompletionAt {
+auto completeAt(
+    const std::vector<SymbolInfo>& base,
+    const CompletionChecker& check,
+    const std::string& path,
+    const std::string& source,
+    size_t cursor,
+    const ImportedInterfaces* interfaces) -> CompletionAt {
     // The names completion reads: `base`'s, and those a checked program
     // declares with the names in scope at each point of it.
     auto baseSymbols = base;
     const auto namesIn = [&](const std::optional<CheckedSource>& checked) {
         IndexedFiles files{{"<base>", &baseSymbols}};
-        if (checked)
-            files.push_back({path, const_cast<std::vector<SymbolInfo>*>(
-                                        &checked->analyzer->nameIndex().symbols),
-                             &checked->analyzer->nameIndex().completionScopes});
+        if (checked) {
+            files.push_back(
+                {path,
+                 const_cast<std::vector<SymbolInfo>*>(&checked->analyzer->nameIndex().symbols),
+                 &checked->analyzer->nameIndex().completionScopes});
+        }
         return files;
     };
     const auto globalCompletions = [&](const std::string& prefix,
@@ -459,21 +572,23 @@ auto completeAt(const std::vector<SymbolInfo>& base, const CompletionChecker& ch
     cursor = std::min(cursor, source.size());
     CompletionAt result;
     size_t wordStart = cursor;
-    while (wordStart > 0 &&
-           isWord(static_cast<unsigned char>(source[wordStart - 1])))
+    while (wordStart > 0 && isWord(static_cast<unsigned char>(source[wordStart - 1]))) {
         --wordStart;
+    }
     result.replaceFrom = wordStart;
     const auto word = source.substr(wordStart, cursor - wordStart);
 
     // A member of an expression the analyzer can type.
     if (const auto receiver = scanDotReceiver(source, cursor); receiver.valid) {
-        result.qualifier = recoveredReceiverQualifier(
-            check, source, path, receiver, cursor, interfaces);
+        result.qualifier =
+            recoveredReceiverQualifier(check, source, path, receiver, cursor, interfaces);
         if (!result.qualifier.empty()) {
             const auto qualified = result.qualifier + ".";
-            for (auto& match : globalCompletions(qualified + word, check(path, source)))
-                if (match.rfind(qualified, 0) == 0)
+            for (auto& match : globalCompletions(qualified + word, check(path, source))) {
+                if (match.rfind(qualified, 0) == 0) {
                     result.matches.push_back(match.substr(qualified.size()));
+                }
+            }
             return result;
         }
     }
@@ -481,15 +596,17 @@ auto completeAt(const std::vector<SymbolInfo>& base, const CompletionChecker& ch
     // A dotted name that is not an expression — `IO.pr`, `Web.Server.` — is a
     // module path, looked up as written.
     size_t pathStart = wordStart;
-    while (pathStart > 0 &&
-           (isWord(static_cast<unsigned char>(source[pathStart - 1])) ||
-            source[pathStart - 1] == '.'))
+    while (pathStart > 0 && (isWord(static_cast<unsigned char>(source[pathStart - 1])) ||
+                             source[pathStart - 1] == '.')) {
         --pathStart;
+    }
     if (pathStart < wordStart) {
         const auto qualified = source.substr(pathStart, wordStart - pathStart);
-        for (auto& match : globalCompletions(qualified + word, check(path, source)))
-            if (match.rfind(qualified, 0) == 0)
+        for (auto& match : globalCompletions(qualified + word, check(path, source))) {
+            if (match.rfind(qualified, 0) == 0) {
                 result.matches.push_back(match.substr(qualified.size()));
+            }
+        }
         return result;
     }
 
@@ -498,32 +615,38 @@ auto completeAt(const std::vector<SymbolInfo>& base, const CompletionChecker& ch
     const auto checked = check(path, source);
     int line = 1;
     size_t lineStart = 0;
-    for (size_t i = 0; i < wordStart; ++i)
-        if (source[i] == '\n') { ++line; lineStart = i + 1; }
-    result.matches = completionsAt(namesIn(checked), path, static_cast<uint32_t>(line),
-                                   static_cast<uint32_t>(wordStart - lineStart + 1), word,
-                                   interfaces);
+    for (size_t i = 0; i < wordStart; ++i) {
+        if (source[i] == '\n') {
+            ++line;
+            lineStart = i + 1;
+        }
+    }
+    result.matches = completionsAt(
+        namesIn(checked), path, static_cast<uint32_t>(line),
+        static_cast<uint32_t>(wordStart - lineStart + 1), word, interfaces);
     std::sort(result.matches.begin(), result.matches.end());
     result.matches.erase(
-        std::unique(result.matches.begin(), result.matches.end()),
-        result.matches.end());
+        std::unique(result.matches.begin(), result.matches.end()), result.matches.end());
     return result;
 }
 
-auto completeReplInput(const std::vector<SymbolInfo>& base, const CompletionChecker& check,
-                       const std::string& definitions,
-                       const std::string& bindings,
-                       const std::string& input, const std::string& line,
-                       size_t point, bool declaration,
-                       const ImportedInterfaces* interfaces) -> CompletionAt {
-    const auto prefix =
-        definitions + (declaration ? "" : "main do\n" + bindings);
-    const auto program = prefix + input + completionClosers(input) +
-                         (declaration ? "\n" : "\nend\n");
+auto completeReplInput(
+    const std::vector<SymbolInfo>& base,
+    const CompletionChecker& check,
+    const std::string& definitions,
+    const std::string& bindings,
+    const std::string& input,
+    const std::string& line,
+    size_t point,
+    bool declaration,
+    const ImportedInterfaces* interfaces) -> CompletionAt {
+    const auto prefix = definitions + (declaration ? "" : "main do\n" + bindings);
+    const auto program =
+        prefix + input + completionClosers(input) + (declaration ? "\n" : "\nend\n");
     const size_t lineStart = prefix.size() + (input.size() - line.size());
-    auto completion = completeAt(base, check, "<repl-completion>", program,
-                                 lineStart + std::min(point, line.size()),
-                                 interfaces);
+    auto completion = completeAt(
+        base, check, "<repl-completion>", program, lineStart + std::min(point, line.size()),
+        interfaces);
     completion.replaceFrom -= lineStart;
     return completion;
 }
@@ -532,8 +655,9 @@ auto completeReplInput(const std::vector<SymbolInfo>& base, const CompletionChec
 
 namespace kex::semantic {
 
-auto symbolsOfSource(const std::string& path, std::string source,
-                     const std::vector<std::string>& roots) -> std::vector<SymbolInfo> {
+auto symbolsOfSource(
+    const std::string& path, std::string source, const std::vector<std::string>& roots)
+    -> std::vector<SymbolInfo> {
     Lexer lexer(std::move(source), path);
     Parser parser(lexer.tokenizeAll(), path);
     auto program = parser.parseProgram();
@@ -545,16 +669,19 @@ auto symbolsOfSource(const std::string& path, std::string source,
     return collectSymbols(program, path);
 }
 
-auto symbolsOfFiles(const std::vector<std::string>& paths,
-                    const std::vector<std::string>& roots) -> std::vector<SymbolInfo> {
+auto symbolsOfFiles(const std::vector<std::string>& paths, const std::vector<std::string>& roots)
+    -> std::vector<SymbolInfo> {
     std::vector<SymbolInfo> symbols;
     for (const auto& path : paths) {
         std::ifstream input(path, std::ios::binary);
-        if (!input) continue;
-        std::string source((std::istreambuf_iterator<char>(input)),
-                           std::istreambuf_iterator<char>());
-        for (auto& symbol : symbolsOfSource(path, std::move(source), roots))
+        if (!input) {
+            continue;
+        }
+        std::string source(
+            (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        for (auto& symbol : symbolsOfSource(path, std::move(source), roots)) {
             symbols.push_back(std::move(symbol));
+        }
     }
     return symbols;
 }

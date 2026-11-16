@@ -12,16 +12,17 @@ namespace kex::semantic {
 class CollectPass {
 public:
     // The symbols `program` declares (collectSymbols).
-    auto collect(const ast::Program& program, const std::string& path)
-        -> std::vector<SymbolInfo>;
+    auto collect(const ast::Program& program, const std::string& path) -> std::vector<SymbolInfo>;
 
 private:
     auto collectTopLevel(const ast::TopLevelItem& item) -> void;
     auto collectModule(const ast::ModuleDef& mod) -> void;
     // `makeTarget`: the type whose `make` block declares it, "" for a free
     // function. Two types' same-named functions are two symbols.
-    auto collectFunction(const ast::FunctionDef& def, const std::string& module,
-                         const std::string& makeTarget = std::string()) -> void;
+    auto collectFunction(
+        const ast::FunctionDef& def,
+        const std::string& module,
+        const std::string& makeTarget = std::string()) -> void;
     auto collectType(const ast::TypeDef& def, const std::string& module) -> void;
     auto collectRecord(const ast::RecordDef& def, const std::string& module) -> void;
     auto collectMake(const ast::MakeDef& def, const std::string& module) -> void;

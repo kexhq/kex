@@ -12,67 +12,97 @@
 
 namespace kex::interpreter {
 
-static auto fileModeName(const ValuePtr& modeVal)
-    -> std::optional<std::string> {
-    if (auto* atom = std::get_if<AtomValue>(&modeVal->data)) return atom->name;
-    if (auto* var = std::get_if<VariantValue>(&modeVal->data)) return var->tag;
+static auto fileModeName(const ValuePtr& modeVal) -> std::optional<std::string> {
+    if (auto* atom = std::get_if<AtomValue>(&modeVal->data)) {
+        return atom->name;
+    }
+    if (auto* var = std::get_if<VariantValue>(&modeVal->data)) {
+        return var->tag;
+    }
     return std::nullopt;
 }
 
 // Translate the stdlib's declared file-mode variants at the runtime boundary.
-static auto modeFlags(const std::string& name)
-    -> std::optional<std::ios::openmode> {
-    if (name == "Write")     return std::ios::out | std::ios::trunc;
-    if (name == "Append")    return std::ios::out | std::ios::app;
-    if (name == "ReadWrite") return std::ios::in  | std::ios::out;
-    if (name == "Read")      return std::ios::in;
+static auto modeFlags(const std::string& name) -> std::optional<std::ios::openmode> {
+    if (name == "Write") {
+        return std::ios::out | std::ios::trunc;
+    }
+    if (name == "Append") {
+        return std::ios::out | std::ios::app;
+    }
+    if (name == "ReadWrite") {
+        return std::ios::in | std::ios::out;
+    }
+    if (name == "Read") {
+        return std::ios::in;
+    }
     return std::nullopt;
 }
 
 // A file's lines as Kex Strings (kex::splitLines).
 static auto lineValues(const std::string& content) -> std::vector<ValuePtr> {
     std::vector<ValuePtr> result;
-    for (auto& line : kex::splitLines(content)) result.push_back(Value::string(std::move(line)));
+    for (auto& line : kex::splitLines(content)) {
+        result.push_back(Value::string(std::move(line)));
+    }
     return result;
 }
 
 static auto invalidUtf8Offset(std::string_view text) -> std::optional<size_t> {
     for (size_t i = 0; i < text.size();) {
         const auto lead = static_cast<uint8_t>(text[i]);
-        size_t width = lead < 0x80 ? 1 : lead >= 0xc2 && lead <= 0xdf ? 2
-                     : lead >= 0xe0 && lead <= 0xef ? 3
-                     : lead >= 0xf0 && lead <= 0xf4 ? 4 : 0;
-        if (!width || i + width > text.size()) return i;
-        for (size_t j = 1; j < width; ++j)
-            if ((static_cast<uint8_t>(text[i + j]) & 0xc0) != 0x80) return i;
+        size_t width = lead < 0x80                    ? 1
+                       : lead >= 0xc2 && lead <= 0xdf ? 2
+                       : lead >= 0xe0 && lead <= 0xef ? 3
+                       : lead >= 0xf0 && lead <= 0xf4 ? 4
+                                                      : 0;
+        if (!width || i + width > text.size()) {
+            return i;
+        }
+        for (size_t j = 1; j < width; ++j) {
+            if ((static_cast<uint8_t>(text[i + j]) & 0xc0) != 0x80) {
+                return i;
+            }
+        }
         if (width == 3) {
             const auto b = static_cast<uint8_t>(text[i + 1]);
-            if ((lead == 0xe0 && b < 0xa0) || (lead == 0xed && b >= 0xa0)) return i;
+            if ((lead == 0xe0 && b < 0xa0) || (lead == 0xed && b >= 0xa0)) {
+                return i;
+            }
         }
         if (width == 4) {
             const auto b = static_cast<uint8_t>(text[i + 1]);
-            if ((lead == 0xf0 && b < 0x90) || (lead == 0xf4 && b >= 0x90)) return i;
+            if ((lead == 0xf0 && b < 0x90) || (lead == 0xf4 && b >= 0x90)) {
+                return i;
+            }
         }
         i += width;
     }
     return std::nullopt;
 }
 
-static auto readError(const char* tag, std::optional<size_t> offset = std::nullopt)
-    -> ValuePtr {
+static auto readError(const char* tag, std::optional<size_t> offset = std::nullopt) -> ValuePtr {
     std::vector<ValuePtr> args;
-    if (offset) args.push_back(Value::integer(static_cast<int64_t>(*offset)));
+    if (offset) {
+        args.push_back(Value::integer(static_cast<int64_t>(*offset)));
+    }
     return Value::error(Value::variant(tag, "ReadError", std::move(args)));
 }
 
 static auto textReadResult(std::string text) -> ValuePtr {
-    if (auto offset = invalidUtf8Offset(text)) return readError("InvalidUtf8", offset);
+    if (auto offset = invalidUtf8Offset(text)) {
+        return readError("InvalidUtf8", offset);
+    }
     return Value::ok(Value::string(std::move(text)));
 }
 
 static auto optionalTextReadResult(std::optional<std::string> text) -> ValuePtr {
-    if (!text) return Value::ok(Value::none());
-    if (auto offset = invalidUtf8Offset(*text)) return readError("InvalidUtf8", offset);
+    if (!text) {
+        return Value::ok(Value::none());
+    }
+    if (auto offset = invalidUtf8Offset(*text)) {
+        return readError("InvalidUtf8", offset);
+    }
     return Value::ok(Value::just(Value::string(std::move(*text))));
 }
 
@@ -91,16 +121,21 @@ static auto isDirectoryPath(const std::string& path) -> bool {
 // A line read off getline loses its "\n" but keeps the "\r" of a CRLF ending.
 // Every line reader drops it too, as String.lines and BEAM's file:read_line do.
 static auto chompCarriageReturn(std::string line) -> std::string {
-    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+    }
     return line;
 }
 
 static auto optionalValueReadResult(const ValuePtr& value) -> ValuePtr {
-    if (!value || value->isNone()) return Value::ok(Value::none());
+    if (!value || value->isNone()) {
+        return Value::ok(Value::none());
+    }
     if (auto* variant = std::get_if<VariantValue>(&value->data);
         variant && variant->tag == "Just" && !variant->args.empty()) {
-        if (auto* text = std::get_if<StringValue>(&variant->args[0]->data))
+        if (auto* text = std::get_if<StringValue>(&variant->args[0]->data)) {
             return optionalTextReadResult(text->value);
+        }
     }
     return readError("ReadFailed");
 }
@@ -115,12 +150,14 @@ auto Evaluator::registerFileBuiltins() -> void {
     // forwarded to the matching IO intrinsic, so a handle write is literally
     // the same operation as `IO.print` — same terminal, same Mock.IO capture,
     // no second code path to keep in step.
-    auto viaStandardStream =
-        [this](const ValuePtr& receiver, const char* stdoutName,
-               const char* stderrName, const char* stdinName,
-               std::vector<ValuePtr> args) -> std::optional<ValuePtr> {
+    auto viaStandardStream = [this](
+                                 const ValuePtr& receiver, const char* stdoutName,
+                                 const char* stderrName, const char* stdinName,
+                                 std::vector<ValuePtr> args) -> std::optional<ValuePtr> {
         auto* handle = std::get_if<FileHandleValue>(&receiver->data);
-        if (!handle || !isStandardHandle(handle->path)) return std::nullopt;
+        if (!handle || !isStandardHandle(handle->path)) {
+            return std::nullopt;
+        }
         const char* target = handle->path == kStdoutPath   ? stdoutName
                              : handle->path == kStderrPath ? stderrName
                                                            : stdinName;
@@ -128,36 +165,47 @@ auto Evaluator::registerFileBuiltins() -> void {
         // reading stdout, writing stdin. The typestate on `IO.out` and
         // `IO.in` already rejects those at compile time; this is the
         // runtime floor under it.
-        if (!target) return Value::none();
+        if (!target) {
+            return Value::none();
+        }
         auto intrinsic = m_intrinsicEnv->get(target);
         auto* function = intrinsic ? std::get_if<FunctionValue>(&intrinsic->data) : nullptr;
-        if (!function || !function->native) return Value::none();
+        if (!function || !function->native) {
+            return Value::none();
+        }
         return function->native(std::move(args));
     };
     // Drops the receiver: the IO intrinsics take only what is written.
-    auto standardWrite = [viaStandardStream](const std::vector<ValuePtr>& args,
-                                             const char* stdoutName,
-                                             const char* stderrName)
-        -> std::optional<ValuePtr> {
-        return viaStandardStream(args[0], stdoutName, stderrName, nullptr,
-                                 {args.begin() + 1, args.end()});
+    auto standardWrite = [viaStandardStream](
+                             const std::vector<ValuePtr>& args, const char* stdoutName,
+                             const char* stderrName) -> std::optional<ValuePtr> {
+        return viaStandardStream(
+            args[0], stdoutName, stderrName, nullptr, {args.begin() + 1, args.end()});
     };
-    auto standardRead = [viaStandardStream](const std::vector<ValuePtr>& args,
-                                            const char* stdinName)
-        -> std::optional<ValuePtr> {
+    auto standardRead = [viaStandardStream](
+                            const std::vector<ValuePtr>& args,
+                            const char* stdinName) -> std::optional<ValuePtr> {
         return viaStandardStream(args[0], nullptr, nullptr, stdinName, {});
     };
 
     // FS.File.open(path, mode) -> Result<FileHandle<R, W>, FileError>
     reg("File.open", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() != 2) return Value::none();
+        if (args.size() != 2) {
+            return Value::none();
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::none();
+        if (!pathStr) {
+            return Value::none();
+        }
         const auto& path = pathStr->value;
         const auto mode = fileModeName(args[1]);
-        if (!mode) return Value::none();
+        if (!mode) {
+            return Value::none();
+        }
         const auto flags = modeFlags(*mode);
-        if (!flags) return Value::none();
+        if (!flags) {
+            return Value::none();
+        }
 
         // Check mock first: if mocked, create an in-memory-backed handle
         auto mocked = mockFileContent(path);
@@ -166,7 +214,9 @@ auto Evaluator::registerFileBuiltins() -> void {
             // Seed the in-memory map so the handle's cursor operations below
             // work against a concrete buffer, whether the content came from
             // the fixture map or from an `onRead` rule.
-            if (*mode == "Write") *mocked = std::string{};
+            if (*mode == "Write") {
+                *mocked = std::string{};
+            }
             m_mockFiles[path] = *mocked;
             m_mockFiles["__mock_pos__" + path] =
                 *mode == "Append" ? std::to_string(mocked->size()) : "0";
@@ -176,16 +226,15 @@ auto Evaluator::registerFileBuiltins() -> void {
         if (!isMocked) {
             if (isDirectoryPath(path)) {
                 auto fileError = std::make_shared<Value>();
-                fileError->data = VariantValue{
-                    "OpenFailed", "FileError", {Value::string(path)}, {}, {}};
+                fileError->data =
+                    VariantValue{"OpenFailed", "FileError", {Value::string(path)}, {}, {}};
                 return Value::error(fileError);
             }
-            fs = std::make_shared<std::fstream>(
-                path, *flags | std::ios::binary);
+            fs = std::make_shared<std::fstream>(path, *flags | std::ios::binary);
             if (!fs->is_open()) {
                 auto fileError = std::make_shared<Value>();
-                fileError->data = VariantValue{
-                    "OpenFailed", "FileError", {Value::string(path)}, {}, {}};
+                fileError->data =
+                    VariantValue{"OpenFailed", "FileError", {Value::string(path)}, {}, {}};
                 return Value::error(fileError);
             }
         } else {
@@ -203,94 +252,131 @@ auto Evaluator::registerFileBuiltins() -> void {
     auto mockCursor = [this](const std::string& path) -> size_t {
         std::string cursorKey = "__mock_pos__" + path;
         auto posIt = m_mockFiles.find(cursorKey);
-        if (posIt == m_mockFiles.end()) return 0;
-        try { return static_cast<size_t>(std::stoul(posIt->second)); } catch (...) { return 0; }
+        if (posIt == m_mockFiles.end()) {
+            return 0;
+        }
+        try {
+            return static_cast<size_t>(std::stoul(posIt->second));
+        } catch (...) {
+            return 0;
+        }
     };
     auto setMockCursor = [this](const std::string& path, size_t pos) {
         m_mockFiles["__mock_pos__" + path] = std::to_string(pos);
     };
 
     // handle.getLine -> String?
-    reg("FileHandle.getLine", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
-        if (auto forwarded = standardRead(args, "IO.getLine"))
-            return optionalValueReadResult(*forwarded);
-        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        if (!h) return Value::none();
-
-        auto mockIt = m_mockFiles.find(h->path);
-        if (mockIt != m_mockFiles.end()) {
-            size_t pos = mockCursor(h->path);
-            const auto& content = mockIt->second;
-            if (pos >= content.size()) return Value::ok(Value::none());
-            auto end = content.find('\n', pos);
-            std::string line;
-            if (end == std::string::npos) {
-                line = content.substr(pos);
-                pos = content.size();
-            } else {
-                line = content.substr(pos, end - pos);
-                pos = end + 1;
+    reg("FileHandle.getLine",
+        [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
+            if (args.empty()) {
+                return Value::none();
             }
-            setMockCursor(h->path, pos);
-            return optionalTextReadResult(chompCarriageReturn(std::move(line)));
-        }
+            if (auto forwarded = standardRead(args, "IO.getLine")) {
+                return optionalValueReadResult(*forwarded);
+            }
+            auto* h = std::get_if<FileHandleValue>(&args[0]->data);
+            if (!h) {
+                return Value::none();
+            }
 
-        if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
-        std::string line;
-        if (!std::getline(*h->stream, line))
-            return h->stream->eof() ? Value::ok(Value::none()) : readError("ReadFailed");
-        return optionalTextReadResult(chompCarriageReturn(std::move(line)));
-    });
+            auto mockIt = m_mockFiles.find(h->path);
+            if (mockIt != m_mockFiles.end()) {
+                size_t pos = mockCursor(h->path);
+                const auto& content = mockIt->second;
+                if (pos >= content.size()) {
+                    return Value::ok(Value::none());
+                }
+                auto end = content.find('\n', pos);
+                std::string line;
+                if (end == std::string::npos) {
+                    line = content.substr(pos);
+                    pos = content.size();
+                } else {
+                    line = content.substr(pos, end - pos);
+                    pos = end + 1;
+                }
+                setMockCursor(h->path, pos);
+                return optionalTextReadResult(chompCarriageReturn(std::move(line)));
+            }
+
+            if (!h->stream || !h->stream->is_open()) {
+                return readError("ReadFailed");
+            }
+            std::string line;
+            if (!std::getline(*h->stream, line)) {
+                return h->stream->eof() ? Value::ok(Value::none()) : readError("ReadFailed");
+            }
+            return optionalTextReadResult(chompCarriageReturn(std::move(line)));
+        });
 
     // handle.getChar -> Result<String?, ReadError> (single character)
-    reg("FileHandle.get", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
-        if (auto forwarded = standardRead(args, "IO.get"))
-            return optionalValueReadResult(*forwarded);
-        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        if (!h) return Value::none();
+    reg("FileHandle.get",
+        [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
+            if (args.empty()) {
+                return Value::none();
+            }
+            if (auto forwarded = standardRead(args, "IO.get")) {
+                return optionalValueReadResult(*forwarded);
+            }
+            auto* h = std::get_if<FileHandleValue>(&args[0]->data);
+            if (!h) {
+                return Value::none();
+            }
 
-        auto mockIt = m_mockFiles.find(h->path);
-        if (mockIt != m_mockFiles.end()) {
-            size_t pos = mockCursor(h->path);
-            const auto& content = mockIt->second;
-            if (pos >= content.size()) return Value::ok(Value::none());
-            const auto rest = std::string_view(content).substr(pos);
-            const auto width = utf8::sequenceLength(rest, 0);
-            const auto consumed = std::min(width, rest.size());
-            auto scalar = content.substr(pos, consumed);
-            setMockCursor(h->path, pos + consumed);
+            auto mockIt = m_mockFiles.find(h->path);
+            if (mockIt != m_mockFiles.end()) {
+                size_t pos = mockCursor(h->path);
+                const auto& content = mockIt->second;
+                if (pos >= content.size()) {
+                    return Value::ok(Value::none());
+                }
+                const auto rest = std::string_view(content).substr(pos);
+                const auto width = utf8::sequenceLength(rest, 0);
+                const auto consumed = std::min(width, rest.size());
+                auto scalar = content.substr(pos, consumed);
+                setMockCursor(h->path, pos + consumed);
+                return optionalTextReadResult(std::move(scalar));
+            }
+
+            if (!h->stream || !h->stream->is_open()) {
+                return readError("ReadFailed");
+            }
+            char lead;
+            if (!h->stream->get(lead)) {
+                return h->stream->eof() ? Value::ok(Value::none()) : readError("ReadFailed");
+            }
+            std::string scalar(1, lead);
+            const auto width = utf8::sequenceLength(std::string_view(&lead, 1), 0);
+            size_t wanted = static_cast<unsigned char>(lead) < 0x80             ? 1
+                            : (static_cast<unsigned char>(lead) & 0xe0) == 0xc0 ? 2
+                            : (static_cast<unsigned char>(lead) & 0xf0) == 0xe0 ? 3
+                            : (static_cast<unsigned char>(lead) & 0xf8) == 0xf0 ? 4
+                                                                                : 1;
+            (void)width;
+            for (size_t i = 1; i < wanted; ++i) {
+                char byte;
+                if (!h->stream->get(byte)) {
+                    break;
+                }
+                scalar += byte;
+            }
             return optionalTextReadResult(std::move(scalar));
-        }
-
-        if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
-        char lead;
-        if (!h->stream->get(lead))
-            return h->stream->eof() ? Value::ok(Value::none()) : readError("ReadFailed");
-        std::string scalar(1, lead);
-        const auto width = utf8::sequenceLength(std::string_view(&lead, 1), 0);
-        size_t wanted = static_cast<unsigned char>(lead) < 0x80 ? 1
-                      : (static_cast<unsigned char>(lead) & 0xe0) == 0xc0 ? 2
-                      : (static_cast<unsigned char>(lead) & 0xf0) == 0xe0 ? 3
-                      : (static_cast<unsigned char>(lead) & 0xf8) == 0xf0 ? 4 : 1;
-        (void)width;
-        for (size_t i = 1; i < wanted; ++i) {
-            char byte;
-            if (!h->stream->get(byte)) break;
-            scalar += byte;
-        }
-        return optionalTextReadResult(std::move(scalar));
-    });
+        });
 
     // handle.printLine(msg) -> Void. The Bool these three used to answer was
     // never an error channel — nothing checked it — so kexhq/kex#139 dropped
     // it: the call says `ok`, and failure belongs to the device.
     reg("FileHandle.printLine", [this, standardWrite](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::unit();
-        if (auto forwarded = standardWrite(args, "IO.printLine", "IO.printError")) return *forwarded;
+        if (args.size() < 2) {
+            return Value::unit();
+        }
+        if (auto forwarded = standardWrite(args, "IO.printLine", "IO.printError")) {
+            return *forwarded;
+        }
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        if (!h) return Value::unit();
+        if (!h) {
+            return Value::unit();
+        }
         std::string content = args[1]->toString();
 
         auto mockIt = m_mockFiles.find(h->path);
@@ -299,17 +385,25 @@ auto Evaluator::registerFileBuiltins() -> void {
             return Value::unit();
         }
 
-        if (!h->stream || !h->stream->is_open()) return Value::unit();
+        if (!h->stream || !h->stream->is_open()) {
+            return Value::unit();
+        }
         *h->stream << content << "\n";
         return Value::unit();
     });
 
     // handle.print(msg) -> Void
     reg("FileHandle.print", [this, standardWrite](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::unit();
-        if (auto forwarded = standardWrite(args, "IO.print", "IO.printErrorRaw")) return *forwarded;
+        if (args.size() < 2) {
+            return Value::unit();
+        }
+        if (auto forwarded = standardWrite(args, "IO.print", "IO.printErrorRaw")) {
+            return *forwarded;
+        }
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        if (!h) return Value::unit();
+        if (!h) {
+            return Value::unit();
+        }
         std::string content = args[1]->toString();
 
         auto mockIt = m_mockFiles.find(h->path);
@@ -318,7 +412,9 @@ auto Evaluator::registerFileBuiltins() -> void {
             return Value::unit();
         }
 
-        if (!h->stream || !h->stream->is_open()) return Value::unit();
+        if (!h->stream || !h->stream->is_open()) {
+            return Value::unit();
+        }
         *h->stream << content;
         return Value::unit();
     });
@@ -326,161 +422,228 @@ auto Evaluator::registerFileBuiltins() -> void {
     // --- Binary/raw I/O ---
 
     // handle.read -> String? (remaining content)
-    reg("FileHandle.read", [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
-        // `read` is "the rest of it", so on stdin it drains to EOF rather
-        // than forwarding to a line-at-a-time IO intrinsic.
-        if (auto* std_ = std::get_if<FileHandleValue>(&args[0]->data);
-            std_ && isStandardHandle(std_->path)) {
-            if (std_->path != kStdinPath) return Value::none();
-            if (m_mockIO) {
-                std::string drained;
-                while (!m_mockIOInputLines.empty()) {
-                    drained += m_mockIOInputLines.front() + "\n";
-                    m_mockIOInputLines.pop_front();
+    reg("FileHandle.read",
+        [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
+            if (args.empty()) {
+                return Value::none();
+            }
+            // `read` is "the rest of it", so on stdin it drains to EOF rather
+            // than forwarding to a line-at-a-time IO intrinsic.
+            if (auto* std_ = std::get_if<FileHandleValue>(&args[0]->data);
+                std_ && isStandardHandle(std_->path)) {
+                if (std_->path != kStdinPath) {
+                    return Value::none();
                 }
-                return textReadResult(std::move(drained));
+                if (m_mockIO) {
+                    std::string drained;
+                    while (!m_mockIOInputLines.empty()) {
+                        drained += m_mockIOInputLines.front() + "\n";
+                        m_mockIOInputLines.pop_front();
+                    }
+                    return textReadResult(std::move(drained));
+                }
+                std::ostringstream buf;
+                buf << std::cin.rdbuf();
+                return textReadResult(buf.str());
+            }
+            auto* h = std::get_if<FileHandleValue>(&args[0]->data);
+            if (!h) {
+                return Value::none();
+            }
+
+            auto mockIt = m_mockFiles.find(h->path);
+            if (mockIt != m_mockFiles.end()) {
+                size_t pos = mockCursor(h->path);
+                const auto& content = mockIt->second;
+                if (pos >= content.size()) {
+                    return Value::ok(Value::string(""));
+                }
+                auto remaining = content.substr(pos);
+                setMockCursor(h->path, content.size());
+                return textReadResult(std::move(remaining));
+            }
+
+            if (!h->stream || !h->stream->is_open()) {
+                return readError("ReadFailed");
             }
             std::ostringstream buf;
-            buf << std::cin.rdbuf();
+            buf << h->stream->rdbuf();
+            if (h->stream->bad()) {
+                return readError("ReadFailed");
+            }
             return textReadResult(buf.str());
-        }
-        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        if (!h) return Value::none();
+        });
 
-        auto mockIt = m_mockFiles.find(h->path);
-        if (mockIt != m_mockFiles.end()) {
-            size_t pos = mockCursor(h->path);
-            const auto& content = mockIt->second;
-            if (pos >= content.size())
-                return Value::ok(Value::string(""));
-            auto remaining = content.substr(pos);
-            setMockCursor(h->path, content.size());
-            return textReadResult(std::move(remaining));
-        }
-
-        if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
-        std::ostringstream buf;
-        buf << h->stream->rdbuf();
-        if (h->stream->bad()) return readError("ReadFailed");
-        return textReadResult(buf.str());
-    });
-
-    reg("FileHandle.readBytes", [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return readError("ReadFailed");
-        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        if (!h) return readError("ReadFailed");
-        if (isStandardHandle(h->path)) {
-            if (h->path != kStdinPath) return readError("ReadFailed");
-            std::ostringstream out; out << std::cin.rdbuf();
-            const auto text = out.str();
-            return Value::ok(Value::binary({text.begin(), text.end()}));
-        }
-        if (auto it = m_mockFiles.find(h->path); it != m_mockFiles.end()) {
-            const auto pos = std::min(mockCursor(h->path), it->second.size());
-            std::vector<uint8_t> bytes(it->second.begin() + pos, it->second.end());
-            setMockCursor(h->path, it->second.size());
-            return Value::ok(Value::binary(std::move(bytes)));
-        }
-        if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
-        std::vector<uint8_t> bytes(std::istreambuf_iterator<char>(*h->stream), {});
-        return h->stream->bad() ? readError("ReadFailed")
-                                : Value::ok(Value::binary(std::move(bytes)));
-    });
+    reg("FileHandle.readBytes",
+        [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
+            if (args.empty()) {
+                return readError("ReadFailed");
+            }
+            auto* h = std::get_if<FileHandleValue>(&args[0]->data);
+            if (!h) {
+                return readError("ReadFailed");
+            }
+            if (isStandardHandle(h->path)) {
+                if (h->path != kStdinPath) {
+                    return readError("ReadFailed");
+                }
+                std::ostringstream out;
+                out << std::cin.rdbuf();
+                const auto text = out.str();
+                return Value::ok(Value::binary({text.begin(), text.end()}));
+            }
+            if (auto it = m_mockFiles.find(h->path); it != m_mockFiles.end()) {
+                const auto pos = std::min(mockCursor(h->path), it->second.size());
+                std::vector<uint8_t> bytes(it->second.begin() + pos, it->second.end());
+                setMockCursor(h->path, it->second.size());
+                return Value::ok(Value::binary(std::move(bytes)));
+            }
+            if (!h->stream || !h->stream->is_open()) {
+                return readError("ReadFailed");
+            }
+            std::vector<uint8_t> bytes(std::istreambuf_iterator<char>(*h->stream), {});
+            return h->stream->bad() ? readError("ReadFailed")
+                                    : Value::ok(Value::binary(std::move(bytes)));
+        });
 
     // handle.put(bytes) -> Result<Void, WriteError>. The bytes verbatim; a
     // String is its UTF-8 bytes. The write that reports failure: a closed
     // handle, a device error, or standard input.
     reg("FileHandle.put", [this](std::vector<ValuePtr> args) -> ValuePtr {
         auto failed = [] { return Value::error(Value::variant("WriteFailed", "WriteError")); };
-        if (args.size() < 2) return failed();
-        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        if (!h) return failed();
-        std::string bytes;
-        if (auto* value = std::get_if<BinaryValue>(&args[1]->data))
-            bytes.assign(value->bytes.begin(), value->bytes.end());
-        else if (auto* text = std::get_if<StringValue>(&args[1]->data))
-            bytes = text->value;
-        else
+        if (args.size() < 2) {
             return failed();
+        }
+        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
+        if (!h) {
+            return failed();
+        }
+        std::string bytes;
+        if (auto* value = std::get_if<BinaryValue>(&args[1]->data)) {
+            bytes.assign(value->bytes.begin(), value->bytes.end());
+        } else if (auto* text = std::get_if<StringValue>(&args[1]->data)) {
+            bytes = text->value;
+        } else {
+            return failed();
+        }
         if (h->path == kStdoutPath || h->path == kStderrPath) {
-            if (m_mockIO) m_mockIOOutput += bytes;
-            else if (h->path == kStdoutPath) std::cout.write(bytes.data(), bytes.size());
-            else std::cerr.write(bytes.data(), bytes.size());
+            if (m_mockIO) {
+                m_mockIOOutput += bytes;
+            } else if (h->path == kStdoutPath) {
+                std::cout.write(bytes.data(), bytes.size());
+            } else {
+                std::cerr.write(bytes.data(), bytes.size());
+            }
             return Value::ok(Value::unit());
         }
-        if (h->path == kStdinPath) return failed();
+        if (h->path == kStdinPath) {
+            return failed();
+        }
         if (auto it = m_mockFiles.find(h->path); it != m_mockFiles.end()) {
             it->second.append(bytes);
             return Value::ok(Value::unit());
         }
-        if (!h->stream || !h->stream->is_open()) return failed();
+        if (!h->stream || !h->stream->is_open()) {
+            return failed();
+        }
         h->stream->write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-        if (h->stream->bad()) return failed();
+        if (h->stream->bad()) {
+            return failed();
+        }
         return Value::ok(Value::unit());
     });
 
     // handle.getChunk(limit) -> Result<Binary?, ReadError>: up to +limit+
     // bytes, None at the end. Standard input answers a line at a time,
     // newline included, so an interactive read never waits for a full buffer.
-    reg("FileHandle.getChunk", [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return readError("ReadFailed");
-        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        auto* limitValue = std::get_if<IntValue>(&args[1]->data);
-        if (!h || !limitValue || limitValue->value <= 0) return readError("ReadFailed");
-        const auto limit = static_cast<size_t>(limitValue->value);
-        auto chunk = [](std::string_view bytes) {
-            return Value::ok(Value::just(Value::binary({bytes.begin(), bytes.end()})));
-        };
-        if (h->path == kStdinPath) {
-            auto line = standardRead(args, "IO.getLine");
-            if (!line || (*line)->isNone()) return Value::ok(Value::none());
-            auto* variant = std::get_if<VariantValue>(&(*line)->data);
-            if (!variant || variant->args.empty()) return readError("ReadFailed");
-            auto* text = std::get_if<StringValue>(&variant->args[0]->data);
-            if (!text) return readError("ReadFailed");
-            return chunk(text->value + "\n");
-        }
-        if (isStandardHandle(h->path)) return readError("ReadFailed");
-        if (auto it = m_mockFiles.find(h->path); it != m_mockFiles.end()) {
-            const auto pos = std::min(mockCursor(h->path), it->second.size());
-            if (pos >= it->second.size()) return Value::ok(Value::none());
-            const auto take = std::min(limit, it->second.size() - pos);
-            setMockCursor(h->path, pos + take);
-            return chunk(std::string_view(it->second).substr(pos, take));
-        }
-        if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
-        std::string buffer(limit, '\0');
-        h->stream->read(buffer.data(), static_cast<std::streamsize>(limit));
-        const auto got = static_cast<size_t>(h->stream->gcount());
-        if (h->stream->bad()) return readError("ReadFailed");
-        if (got == 0) {
-            h->stream->clear(h->stream->rdstate() & ~std::ios::failbit);
-            return Value::ok(Value::none());
-        }
-        if (h->stream->eof()) h->stream->clear(std::ios::eofbit);
-        buffer.resize(got);
-        return chunk(buffer);
-    });
+    reg("FileHandle.getChunk",
+        [this, mockCursor, setMockCursor, standardRead](std::vector<ValuePtr> args) -> ValuePtr {
+            if (args.size() < 2) {
+                return readError("ReadFailed");
+            }
+            auto* h = std::get_if<FileHandleValue>(&args[0]->data);
+            auto* limitValue = std::get_if<IntValue>(&args[1]->data);
+            if (!h || !limitValue || limitValue->value <= 0) {
+                return readError("ReadFailed");
+            }
+            const auto limit = static_cast<size_t>(limitValue->value);
+            auto chunk = [](std::string_view bytes) {
+                return Value::ok(Value::just(Value::binary({bytes.begin(), bytes.end()})));
+            };
+            if (h->path == kStdinPath) {
+                auto line = standardRead(args, "IO.getLine");
+                if (!line || (*line)->isNone()) {
+                    return Value::ok(Value::none());
+                }
+                auto* variant = std::get_if<VariantValue>(&(*line)->data);
+                if (!variant || variant->args.empty()) {
+                    return readError("ReadFailed");
+                }
+                auto* text = std::get_if<StringValue>(&variant->args[0]->data);
+                if (!text) {
+                    return readError("ReadFailed");
+                }
+                return chunk(text->value + "\n");
+            }
+            if (isStandardHandle(h->path)) {
+                return readError("ReadFailed");
+            }
+            if (auto it = m_mockFiles.find(h->path); it != m_mockFiles.end()) {
+                const auto pos = std::min(mockCursor(h->path), it->second.size());
+                if (pos >= it->second.size()) {
+                    return Value::ok(Value::none());
+                }
+                const auto take = std::min(limit, it->second.size() - pos);
+                setMockCursor(h->path, pos + take);
+                return chunk(std::string_view(it->second).substr(pos, take));
+            }
+            if (!h->stream || !h->stream->is_open()) {
+                return readError("ReadFailed");
+            }
+            std::string buffer(limit, '\0');
+            h->stream->read(buffer.data(), static_cast<std::streamsize>(limit));
+            const auto got = static_cast<size_t>(h->stream->gcount());
+            if (h->stream->bad()) {
+                return readError("ReadFailed");
+            }
+            if (got == 0) {
+                h->stream->clear(h->stream->rdstate() & ~std::ios::failbit);
+                return Value::ok(Value::none());
+            }
+            if (h->stream->eof()) {
+                h->stream->clear(std::ios::eofbit);
+            }
+            buffer.resize(got);
+            return chunk(buffer);
+        });
 
     // --- Lifecycle ---
 
     // handle.atEnd? -> Bool
     reg("FileHandle.atEnd?", [this, mockCursor](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(true);
+        if (args.empty()) {
+            return Value::boolean(true);
+        }
         // stdin has no cheap end-of-input test that does not consume a
         // character; report "not at end" and let the read answer None.
-        if (auto* h = std::get_if<FileHandleValue>(&args[0]->data))
-            if (isStandardHandle(h->path)) return Value::boolean(false);
+        if (auto* h = std::get_if<FileHandleValue>(&args[0]->data)) {
+            if (isStandardHandle(h->path)) {
+                return Value::boolean(false);
+            }
+        }
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        if (!h) return Value::boolean(true);
+        if (!h) {
+            return Value::boolean(true);
+        }
 
         auto mockIt = m_mockFiles.find(h->path);
         if (mockIt != m_mockFiles.end()) {
             return Value::boolean(mockCursor(h->path) >= mockIt->second.size());
         }
 
-        if (!h->stream || !h->stream->is_open()) return Value::boolean(true);
+        if (!h->stream || !h->stream->is_open()) {
+            return Value::boolean(true);
+        }
         // Peek rather than read eofbit: a whole-file `read` (through rdbuf)
         // drains the stream without ever setting it, and BEAM answers true
         // there. Clear afterwards so a later seek or write is unaffected.
@@ -493,7 +656,9 @@ auto Evaluator::registerFileBuiltins() -> void {
     reg("FileHandle.close", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (!args.empty()) {
             if (auto* h = std::get_if<FileHandleValue>(&args[0]->data)) {
-                if (h->stream && h->stream->is_open()) h->stream->close();
+                if (h->stream && h->stream->is_open()) {
+                    h->stream->close();
+                }
             }
         }
         return Value::unit();
@@ -501,17 +666,25 @@ auto Evaluator::registerFileBuiltins() -> void {
 
     // handle.seek(offset) -> Result<Void, ReadError>
     reg("FileHandle.seek", [this, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return readError("ReadFailed");
+        if (args.size() < 2) {
+            return readError("ReadFailed");
+        }
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         auto* offset = std::get_if<IntValue>(&args[1]->data);
-        if (!h || !offset || offset->value < 0) return readError("ReadFailed");
-        if (isStandardHandle(h->path)) return readError("ReadFailed");
+        if (!h || !offset || offset->value < 0) {
+            return readError("ReadFailed");
+        }
+        if (isStandardHandle(h->path)) {
+            return readError("ReadFailed");
+        }
         const auto pos = static_cast<size_t>(offset->value);
         if (m_mockFiles.count(h->path)) {
             setMockCursor(h->path, pos);
             return Value::ok(Value::unit());
         }
-        if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
+        if (!h->stream || !h->stream->is_open()) {
+            return readError("ReadFailed");
+        }
         // Read and write share one cursor on a real file, so both pointers
         // move together; `clear()` first drops any eof/fail bit a prior
         // read left behind, which would otherwise make the seek a no-op.
@@ -523,15 +696,23 @@ auto Evaluator::registerFileBuiltins() -> void {
 
     // handle.reset -> Result<Void, ReadError>
     reg("FileHandle.reset", [this, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return readError("ReadFailed");
+        if (args.empty()) {
+            return readError("ReadFailed");
+        }
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        if (!h) return readError("ReadFailed");
-        if (isStandardHandle(h->path)) return readError("ReadFailed");
+        if (!h) {
+            return readError("ReadFailed");
+        }
+        if (isStandardHandle(h->path)) {
+            return readError("ReadFailed");
+        }
         if (m_mockFiles.count(h->path)) {
             setMockCursor(h->path, 0);
             return Value::ok(Value::unit());
         }
-        if (!h->stream || !h->stream->is_open()) return readError("ReadFailed");
+        if (!h->stream || !h->stream->is_open()) {
+            return readError("ReadFailed");
+        }
         h->stream->clear();
         h->stream->seekg(0);
         h->stream->seekp(0);
@@ -543,8 +724,9 @@ auto Evaluator::registerFileBuiltins() -> void {
     for (const auto& [publicName, primitiveName] :
          std::initializer_list<std::pair<const char*, const char*>>{
              {"readLine", "getLine"}, {"getChar", "get"}, {"eof?", "atEnd?"}}) {
-        if (auto value = m_intrinsicEnv->get("FileHandle." + std::string(primitiveName)))
+        if (auto value = m_intrinsicEnv->get("FileHandle." + std::string(primitiveName))) {
             defineIntrinsic("FileHandle." + std::string(publicName), value);
+        }
     }
     // FileHandle.feed -> Feed<String>? — the handle's REMAINING lines.
     //
@@ -554,141 +736,208 @@ auto Evaluator::registerFileBuiltins() -> void {
     // once means. Delegating to `File::feed` by path, as this used to, opened
     // a second handle at the top of the file and answered the whole thing.
     defineIntrinsic("FileHandle.feed", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
+        if (args.empty()) {
+            return Value::none();
+        }
         auto* handle = std::get_if<FileHandleValue>(&args[0]->data);
-        if (!handle) return Value::none();
+        if (!handle) {
+            return Value::none();
+        }
         if (!handle->stream) {
             // A standard stream sentinel carries no fstream (kexhq/kex#139);
             // there is nothing to read from stdout or stderr.
             auto feed = m_intrinsicEnv->get("File.feed");
             auto* function = feed ? std::get_if<FunctionValue>(&feed->data) : nullptr;
-            return function && function->native
-                ? function->native({Value::string(handle->path)})
-                : Value::none();
+            return function && function->native ? function->native({Value::string(handle->path)})
+                                                : Value::none();
         }
         auto stream = handle->stream;
         return Value::just(lazy::feedValue([stream]() -> ValuePtr {
             std::string line;
-            if (!std::getline(*stream, line)) return nullptr;
+            if (!std::getline(*stream, line)) {
+                return nullptr;
+            }
             return Value::string(chompCarriageReturn(line));
         }));
     });
 
     // File.read(path) -> Result<String, FileError>
     reg("File.read", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string("")}));
+        if (args.empty()) {
+            return Value::error(Value::variant("ReadFailed", "FileError", {Value::string("")}));
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string("")}));
+        if (!pathStr) {
+            return Value::error(Value::variant("ReadFailed", "FileError", {Value::string("")}));
+        }
         auto finish = [&](std::string content) -> ValuePtr {
-            if (auto offset = invalidUtf8Offset(content))
-                return Value::error(Value::variant("InvalidUtf8", "FileError",
-                    {Value::string(pathStr->value), Value::integer(static_cast<int64_t>(*offset))}));
+            if (auto offset = invalidUtf8Offset(content)) {
+                return Value::error(
+                    Value::variant(
+                        "InvalidUtf8", "FileError",
+                        {Value::string(pathStr->value),
+                         Value::integer(static_cast<int64_t>(*offset))}));
+            }
             return Value::ok(Value::string(std::move(content)));
         };
-        if (auto mocked = mockFileContent(pathStr->value)) return finish(*mocked);
-        if (isDirectoryPath(pathStr->value))
-            return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(pathStr->value)}));
+        if (auto mocked = mockFileContent(pathStr->value)) {
+            return finish(*mocked);
+        }
+        if (isDirectoryPath(pathStr->value)) {
+            return Value::error(
+                Value::variant("ReadFailed", "FileError", {Value::string(pathStr->value)}));
+        }
         std::ifstream file(pathStr->value, std::ios::binary);
-        if (!file.is_open()) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(pathStr->value)}));
+        if (!file.is_open()) {
+            return Value::error(
+                Value::variant("ReadFailed", "FileError", {Value::string(pathStr->value)}));
+        }
         std::ostringstream buf;
         buf << file.rdbuf();
-        if (file.bad()) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(pathStr->value)}));
+        if (file.bad()) {
+            return Value::error(
+                Value::variant("ReadFailed", "FileError", {Value::string(pathStr->value)}));
+        }
         return finish(buf.str());
     });
 
     reg("File.readBytes", [this](std::vector<ValuePtr> args) -> ValuePtr {
         auto* path = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         const auto name = path ? path->value : std::string{};
-        if (!path) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}));
-        if (auto mocked = mockFileContent(name))
-            return Value::ok(Value::binary({mocked->begin(), mocked->end()}));
-        if (isDirectoryPath(name))
+        if (!path) {
             return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}));
+        }
+        if (auto mocked = mockFileContent(name)) {
+            return Value::ok(Value::binary({mocked->begin(), mocked->end()}));
+        }
+        if (isDirectoryPath(name)) {
+            return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}));
+        }
         std::ifstream file(name, std::ios::binary);
-        if (!file) return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}));
+        if (!file) {
+            return Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}));
+        }
         std::vector<uint8_t> bytes(std::istreambuf_iterator<char>(file), {});
-        return file.bad() ? Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}))
-                          : Value::ok(Value::binary(std::move(bytes)));
+        return file.bad()
+                   ? Value::error(Value::variant("ReadFailed", "FileError", {Value::string(name)}))
+                   : Value::ok(Value::binary(std::move(bytes)));
     });
 
     // File.writeBytes(path, bytes) -> Result<Void, FileError>
     reg("File.writeBytes", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return writeFailed("");
+        if (args.size() < 2) {
+            return writeFailed("");
+        }
         auto* path = std::get_if<StringValue>(&args[0]->data);
-        if (!path) return writeFailed("");
+        if (!path) {
+            return writeFailed("");
+        }
         auto* value = std::get_if<BinaryValue>(&args[1]->data);
-        if (!value) return writeFailed(path->value);
+        if (!value) {
+            return writeFailed(path->value);
+        }
         const std::string bytes(value->bytes.begin(), value->bytes.end());
         if (m_mockFiles.count(path->value)) {
             m_mockFiles[path->value] = bytes;
             return Value::ok(Value::unit());
         }
         std::ofstream file(path->value, std::ios::binary | std::ios::trunc);
-        if (!file) return writeFailed(path->value);
+        if (!file) {
+            return writeFailed(path->value);
+        }
         file.write(bytes.data(), bytes.size());
         return file ? Value::ok(Value::unit()) : writeFailed(path->value);
     });
 
     // File.write(path, content) -> Result<Void, FileError>
     reg("File.write", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return writeFailed("");
+        if (args.size() < 2) {
+            return writeFailed("");
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return writeFailed("");
+        if (!pathStr) {
+            return writeFailed("");
+        }
         std::string content = args[1]->toString();
         if (m_mockFiles.count(pathStr->value)) {
             m_mockFiles[pathStr->value] = content;
             return Value::ok(Value::unit());
         }
         std::ofstream file(pathStr->value, std::ios::binary | std::ios::trunc);
-        if (!file.is_open()) return writeFailed(pathStr->value);
+        if (!file.is_open()) {
+            return writeFailed(pathStr->value);
+        }
         file << content;
         return file ? Value::ok(Value::unit()) : writeFailed(pathStr->value);
     });
 
     // File.append(path, content) -> Bool
     reg("File.append", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::boolean(false);
+        if (args.size() < 2) {
+            return Value::boolean(false);
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::boolean(false);
+        if (!pathStr) {
+            return Value::boolean(false);
+        }
         std::string content = args[1]->toString();
         if (m_mockFiles.count(pathStr->value)) {
             m_mockFiles[pathStr->value] += content;
             return Value::boolean(true);
         }
         std::ofstream file(pathStr->value, std::ios::binary | std::ios::app);
-        if (!file.is_open()) return Value::boolean(false);
+        if (!file.is_open()) {
+            return Value::boolean(false);
+        }
         file << content;
         return Value::boolean(static_cast<bool>(file));
     });
 
     // File.exists?(path) -> Bool  /  File.file?(path) -> Bool
     auto fileExistsFn = [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(false);
+        if (args.empty()) {
+            return Value::boolean(false);
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::boolean(false);
-        if (mockFileContent(pathStr->value)) return Value::boolean(true);
+        if (!pathStr) {
+            return Value::boolean(false);
+        }
+        if (mockFileContent(pathStr->value)) {
+            return Value::boolean(true);
+        }
         std::error_code ec;
-        return Value::boolean(std::filesystem::exists(pathStr->value, ec) &&
-                              std::filesystem::is_regular_file(pathStr->value, ec));
+        return Value::boolean(
+            std::filesystem::exists(pathStr->value, ec) &&
+            std::filesystem::is_regular_file(pathStr->value, ec));
     };
     reg("File.exists?", fileExistsFn);
-    reg("File.file?",   fileExistsFn);
+    reg("File.file?", fileExistsFn);
 
     // File.dir?(path) -> Bool
     reg("File.directory?", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(false);
+        if (args.empty()) {
+            return Value::boolean(false);
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::boolean(false);
-        if (m_mockDirs.count(pathStr->value)) return Value::boolean(true);
+        if (!pathStr) {
+            return Value::boolean(false);
+        }
+        if (m_mockDirs.count(pathStr->value)) {
+            return Value::boolean(true);
+        }
         std::error_code ec;
         return Value::boolean(std::filesystem::is_directory(pathStr->value, ec));
     });
 
     // File.delete(path) -> Bool
     reg("File.delete", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(false);
+        if (args.empty()) {
+            return Value::boolean(false);
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::boolean(false);
+        if (!pathStr) {
+            return Value::boolean(false);
+        }
         if (m_mockFiles.count(pathStr->value)) {
             m_mockFiles.erase(pathStr->value);
             m_mockFiles.erase("__mock_pos__" + pathStr->value);
@@ -701,27 +950,35 @@ auto Evaluator::registerFileBuiltins() -> void {
 
     // File.copy(src, dst) -> Bool
     reg("File.copy", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::boolean(false);
+        if (args.size() < 2) {
+            return Value::boolean(false);
+        }
         auto* src = std::get_if<StringValue>(&args[0]->data);
         auto* dst = std::get_if<StringValue>(&args[1]->data);
-        if (!src || !dst) return Value::boolean(false);
+        if (!src || !dst) {
+            return Value::boolean(false);
+        }
         auto srcMock = m_mockFiles.find(src->value);
         if (srcMock != m_mockFiles.end()) {
             m_mockFiles[dst->value] = srcMock->second;
             return Value::boolean(true);
         }
         std::error_code ec;
-        std::filesystem::copy_file(src->value, dst->value,
-            std::filesystem::copy_options::overwrite_existing, ec);
+        std::filesystem::copy_file(
+            src->value, dst->value, std::filesystem::copy_options::overwrite_existing, ec);
         return Value::boolean(!ec);
     });
 
     // File.rename(src, dst) -> Bool
     reg("File.rename", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::boolean(false);
+        if (args.size() < 2) {
+            return Value::boolean(false);
+        }
         auto* src = std::get_if<StringValue>(&args[0]->data);
         auto* dst = std::get_if<StringValue>(&args[1]->data);
-        if (!src || !dst) return Value::boolean(false);
+        if (!src || !dst) {
+            return Value::boolean(false);
+        }
         auto srcMock = m_mockFiles.find(src->value);
         if (srcMock != m_mockFiles.end()) {
             m_mockFiles[dst->value] = std::move(srcMock->second);
@@ -735,32 +992,49 @@ auto Evaluator::registerFileBuiltins() -> void {
 
     // File.changeMode(path, mode) -> Bool  (chmod with a numeric mode)
     reg("File.changeMode", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::boolean(false);
+        if (args.size() < 2) {
+            return Value::boolean(false);
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         auto* mode = std::get_if<IntValue>(&args[1]->data);
-        if (!pathStr || !mode || mode->value < 0 || mode->value > 07777) return Value::boolean(false);
-        if (m_mockFiles.count(pathStr->value)) return Value::boolean(true);
+        if (!pathStr || !mode || mode->value < 0 || mode->value > 07777) {
+            return Value::boolean(false);
+        }
+        if (m_mockFiles.count(pathStr->value)) {
+            return Value::boolean(true);
+        }
         std::error_code ec;
-        std::filesystem::permissions(pathStr->value,
-            static_cast<std::filesystem::perms>(mode->value),
+        std::filesystem::permissions(
+            pathStr->value, static_cast<std::filesystem::perms>(mode->value),
             std::filesystem::perm_options::replace, ec);
         return Value::boolean(!ec);
     });
 
     // File.lines(path) -> [String]?
     reg("File.lines", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
+        if (args.empty()) {
+            return Value::none();
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::none();
+        if (!pathStr) {
+            return Value::none();
+        }
         auto mocked = mockFileContent(pathStr->value);
-        if (mocked)
+        if (mocked) {
             return Value::just(Value::list(lineValues((*mocked))));
+        }
         std::ifstream file(pathStr->value, std::ios::binary);
-        if (!file.is_open()) return Value::none();
+        if (!file.is_open()) {
+            return Value::none();
+        }
         std::vector<ValuePtr> result;
         std::string line;
-        while (std::getline(file, line)) result.push_back(Value::string(line));
-        if (file.bad()) return Value::none();
+        while (std::getline(file, line)) {
+            result.push_back(Value::string(line));
+        }
+        if (file.bad()) {
+            return Value::none();
+        }
         return Value::just(Value::list(std::move(result)));
     });
 
@@ -773,9 +1047,13 @@ auto Evaluator::registerFileBuiltins() -> void {
     // memory before returning. A one-shot feed is what a file honestly is:
     // reading consumes, and rewinding is not on offer.
     reg("File.feed", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
+        if (args.empty()) {
+            return Value::none();
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::none();
+        if (!pathStr) {
+            return Value::none();
+        }
 
         // A mocked file is a string that is already resident, so there is
         // nothing to stream off disk — walk it as a feed anyway, so a test
@@ -784,81 +1062,117 @@ auto Evaluator::registerFileBuiltins() -> void {
             auto text = std::make_shared<std::istringstream>(*mocked);
             return Value::just(lazy::feedValue([text]() -> ValuePtr {
                 std::string line;
-                if (!std::getline(*text, line)) return nullptr;
+                if (!std::getline(*text, line)) {
+                    return nullptr;
+                }
                 return Value::string(chompCarriageReturn(line));
             }));
         }
 
-        if (isDirectoryPath(pathStr->value)) return Value::none();
+        if (isDirectoryPath(pathStr->value)) {
+            return Value::none();
+        }
         auto file = std::make_shared<std::ifstream>(pathStr->value, std::ios::binary);
-        if (!file->is_open()) return Value::none();
+        if (!file->is_open()) {
+            return Value::none();
+        }
         return Value::just(lazy::feedValue([file]() -> ValuePtr {
             // A file has an end: past the last line the feed is spent, not
             // producing None forever (issue #215). pullFeed latches on the
             // first null, so the handle closes with the last reference.
             std::string line;
-            if (!std::getline(*file, line)) return nullptr;
+            if (!std::getline(*file, line)) {
+                return nullptr;
+            }
             return Value::string(chompCarriageReturn(line));
         }));
     });
 
     // File.size(path) -> Int?
     reg("File.size", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
+        if (args.empty()) {
+            return Value::none();
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::none();
+        if (!pathStr) {
+            return Value::none();
+        }
         auto mocked = mockFileContent(pathStr->value);
-        if (mocked)
-            return Value::just(
-                Value::integer(static_cast<int64_t>((*mocked).size())));
+        if (mocked) {
+            return Value::just(Value::integer(static_cast<int64_t>((*mocked).size())));
+        }
         std::error_code ec;
         auto sz = std::filesystem::file_size(pathStr->value, ec);
-        if (ec) return Value::none();
+        if (ec) {
+            return Value::none();
+        }
         return Value::just(Value::integer(static_cast<int64_t>(sz)));
     });
 
     // File.basename(path) -> String
     reg("File.basename", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::string("");
+        if (args.empty()) {
+            return Value::string("");
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::string("");
+        if (!pathStr) {
+            return Value::string("");
+        }
         return Value::string(std::filesystem::path(pathStr->value).filename().string());
     });
 
     // File.dirname(path) -> String
     reg("File.dirname", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::string(".");
+        if (args.empty()) {
+            return Value::string(".");
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::string(".");
+        if (!pathStr) {
+            return Value::string(".");
+        }
         auto parent = std::filesystem::path(pathStr->value).parent_path();
         return Value::string(parent.empty() ? "." : parent.string());
     });
 
     // File.extension(path) -> String
     reg("File.extension", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::string("");
+        if (args.empty()) {
+            return Value::string("");
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::string("");
+        if (!pathStr) {
+            return Value::string("");
+        }
         return Value::string(std::filesystem::path(pathStr->value).extension().string());
     });
 
     // File.join(base, part) -> String
     reg("File.join", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return args.empty() ? Value::string("") : Value::string(args[0]->toString());
+        if (args.size() < 2) {
+            return args.empty() ? Value::string("") : Value::string(args[0]->toString());
+        }
         auto* base = std::get_if<StringValue>(&args[0]->data);
         auto* part = std::get_if<StringValue>(&args[1]->data);
-        if (!base || !part) return Value::string("");
+        if (!base || !part) {
+            return Value::string("");
+        }
         return Value::string((std::filesystem::path(base->value) / part->value).string());
     });
 
     // File.absolute(path) -> String?
     reg("File.absolute", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
+        if (args.empty()) {
+            return Value::none();
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::none();
+        if (!pathStr) {
+            return Value::none();
+        }
         std::error_code ec;
         auto abs = std::filesystem::absolute(pathStr->value, ec);
-        if (ec) return Value::none();
+        if (ec) {
+            return Value::none();
+        }
         auto canon = std::filesystem::weakly_canonical(abs, ec);
         return Value::just(Value::string(ec ? abs.string() : canon.string()));
     });
@@ -869,10 +1183,11 @@ auto Evaluator::registerFileBuiltins() -> void {
         const auto path = args.empty() ? std::string{} : args[0]->toString();
         std::error_code ec;
         auto canon = std::filesystem::canonical(path, ec);
-        if (!ec) return Value::ok(Value::string(canon.string()));
+        if (!ec) {
+            return Value::ok(Value::string(canon.string()));
+        }
         auto fileError = std::make_shared<Value>();
-        fileError->data = VariantValue{
-            "ReadFailed", "FileError", {Value::string(path)}, {}, {}};
+        fileError->data = VariantValue{"ReadFailed", "FileError", {Value::string(path)}, {}, {}};
         return Value::error(fileError);
     });
 
@@ -880,28 +1195,38 @@ auto Evaluator::registerFileBuiltins() -> void {
     // modification time in epoch seconds, from one lstat (kexhq/kex#401).
     // Whole seconds, because that is all OTP's file_info reports on BEAM.
     reg("File.info", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
+        if (args.empty()) {
+            return Value::none();
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::none();
-        if (auto mocked = mockFileContent(pathStr->value))
-            return Value::just(Value::tuple(
-                {Value::atom("file"),
-                 Value::integer(static_cast<int64_t>(mocked->size())),
-                 Value::integer(0)}));
-        struct stat info {};
-        if (::lstat(pathStr->value.c_str(), &info) != 0) return Value::none();
+        if (!pathStr) {
+            return Value::none();
+        }
+        if (auto mocked = mockFileContent(pathStr->value)) {
+            return Value::just(
+                Value::tuple(
+                    {Value::atom("file"), Value::integer(static_cast<int64_t>(mocked->size())),
+                     Value::integer(0)}));
+        }
+        struct stat info{};
+        if (::lstat(pathStr->value.c_str(), &info) != 0) {
+            return Value::none();
+        }
         const char* kind = S_ISREG(info.st_mode)   ? "file"
                            : S_ISDIR(info.st_mode) ? "directory"
                            : S_ISLNK(info.st_mode) ? "symlink"
                                                    : "other";
-        return Value::just(Value::tuple(
-            {Value::atom(kind), Value::integer(static_cast<int64_t>(info.st_size)),
-             Value::integer(static_cast<int64_t>(info.st_mtime))}));
+        return Value::just(
+            Value::tuple(
+                {Value::atom(kind), Value::integer(static_cast<int64_t>(info.st_size)),
+                 Value::integer(static_cast<int64_t>(info.st_mtime))}));
     });
 
     // File.symlink?(path) -> Bool, without following the link (lstat).
     reg("File.symlink?", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(false);
+        if (args.empty()) {
+            return Value::boolean(false);
+        }
         std::error_code ec;
         const auto status = std::filesystem::symlink_status(args[0]->toString(), ec);
         return Value::boolean(!ec && std::filesystem::is_symlink(status));
@@ -915,33 +1240,52 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
 
     // Directory.exists?(path) -> Bool  /  Directory.dir?(path) -> Bool
     auto dirExistsFn = [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(false);
+        if (args.empty()) {
+            return Value::boolean(false);
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::boolean(false);
-        if (m_mockDirs.count(pathStr->value)) return Value::boolean(true);
+        if (!pathStr) {
+            return Value::boolean(false);
+        }
+        if (m_mockDirs.count(pathStr->value)) {
+            return Value::boolean(true);
+        }
         std::error_code ec;
         return Value::boolean(std::filesystem::is_directory(pathStr->value, ec));
     };
     reg("Directory.exists?", dirExistsFn);
-    reg("Directory.directory?",    dirExistsFn);
+    reg("Directory.directory?", dirExistsFn);
 
     // Directory.file?(path) -> Bool
     reg("Directory.file?", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(false);
+        if (args.empty()) {
+            return Value::boolean(false);
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::boolean(false);
-        if (mockFileContent(pathStr->value)) return Value::boolean(true);
+        if (!pathStr) {
+            return Value::boolean(false);
+        }
+        if (mockFileContent(pathStr->value)) {
+            return Value::boolean(true);
+        }
         std::error_code ec;
-        return Value::boolean(std::filesystem::exists(pathStr->value, ec) &&
-                              std::filesystem::is_regular_file(pathStr->value, ec));
+        return Value::boolean(
+            std::filesystem::exists(pathStr->value, ec) &&
+            std::filesystem::is_regular_file(pathStr->value, ec));
     });
 
     // Directory.create(path) -> Bool  (creates including parents)
     reg("Directory.create", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(false);
+        if (args.empty()) {
+            return Value::boolean(false);
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::boolean(false);
-        if (m_mockDirs.count(pathStr->value)) return Value::boolean(true);
+        if (!pathStr) {
+            return Value::boolean(false);
+        }
+        if (m_mockDirs.count(pathStr->value)) {
+            return Value::boolean(true);
+        }
         std::error_code ec;
         std::filesystem::create_directories(pathStr->value, ec);
         return Value::boolean(!ec);
@@ -949,9 +1293,13 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
 
     // Directory.delete(path) -> Bool  (empty directory only)
     reg("Directory.delete", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(false);
+        if (args.empty()) {
+            return Value::boolean(false);
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::boolean(false);
+        if (!pathStr) {
+            return Value::boolean(false);
+        }
         if (m_mockDirs.count(pathStr->value)) {
             m_mockDirs.erase(pathStr->value);
             return Value::boolean(true);
@@ -959,133 +1307,182 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
         // A directory function never removes a file: std::filesystem::remove
         // takes either, so check first (symlink_status: a link is not one).
         std::error_code ec;
-        if (!std::filesystem::is_directory(std::filesystem::symlink_status(pathStr->value, ec)))
+        if (!std::filesystem::is_directory(std::filesystem::symlink_status(pathStr->value, ec))) {
             return Value::boolean(false);
+        }
         bool removed = std::filesystem::remove(pathStr->value, ec);
         return Value::boolean(removed && !ec);
     });
 
     // Directory.deleteAll(path) -> Bool  (recursive)
     reg("Directory.deleteAll", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(false);
+        if (args.empty()) {
+            return Value::boolean(false);
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::boolean(false);
+        if (!pathStr) {
+            return Value::boolean(false);
+        }
         if (m_mockDirs.count(pathStr->value)) {
             m_mockDirs.erase(pathStr->value);
             // Remove all mocked files under this directory
             const auto& dirPath = pathStr->value;
             std::string prefix = dirPath;
-            if (!prefix.empty() && prefix.back() != '/') prefix += '/';
-            for (auto it = m_mockFiles.begin(); it != m_mockFiles.end(); ) {
-                if (it->first.rfind(prefix, 0) == 0) it = m_mockFiles.erase(it);
-                else ++it;
+            if (!prefix.empty() && prefix.back() != '/') {
+                prefix += '/';
+            }
+            for (auto it = m_mockFiles.begin(); it != m_mockFiles.end();) {
+                if (it->first.rfind(prefix, 0) == 0) {
+                    it = m_mockFiles.erase(it);
+                } else {
+                    ++it;
+                }
             }
             return Value::boolean(true);
         }
         // Only a directory tree: a file, a symlink or a missing path is false.
         std::error_code ec;
-        if (!std::filesystem::is_directory(std::filesystem::symlink_status(pathStr->value, ec)))
+        if (!std::filesystem::is_directory(std::filesystem::symlink_status(pathStr->value, ec))) {
             return Value::boolean(false);
+        }
         auto removed = std::filesystem::remove_all(pathStr->value, ec);
         return Value::boolean(removed > 0 && !ec);
     });
 
     // Directory.list(path) -> [String]?  (entry names, not full paths)
     reg("Directory.list", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
+        if (args.empty()) {
+            return Value::none();
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::none();
+        if (!pathStr) {
+            return Value::none();
+        }
         const auto& dirPath = pathStr->value;
 
         if (m_mockDirs.count(dirPath)) {
             // Collect names of mocked files/dirs directly under this path
             std::string prefix = dirPath;
-            if (!prefix.empty() && prefix.back() != '/') prefix += '/';
+            if (!prefix.empty() && prefix.back() != '/') {
+                prefix += '/';
+            }
             std::vector<ValuePtr> entries;
             for (const auto& [p, _] : m_mockFiles) {
-                if (p.rfind(prefix, 0) == 0 && p.find('/', prefix.size()) == std::string::npos)
+                if (p.rfind(prefix, 0) == 0 && p.find('/', prefix.size()) == std::string::npos) {
                     entries.push_back(Value::string(std::filesystem::path(p).filename().string()));
+                }
             }
             for (const auto& d : m_mockDirs) {
                 if (d != dirPath && d.rfind(prefix, 0) == 0 &&
-                    d.find('/', prefix.size()) == std::string::npos)
+                    d.find('/', prefix.size()) == std::string::npos) {
                     entries.push_back(Value::string(std::filesystem::path(d).filename().string()));
+                }
             }
             return Value::just(Value::list(std::move(entries)));
         }
 
         std::error_code ec;
-        if (!std::filesystem::is_directory(dirPath, ec)) return Value::none();
+        if (!std::filesystem::is_directory(dirPath, ec)) {
+            return Value::none();
+        }
         std::vector<std::string> names;
         for (const auto& entry : std::filesystem::directory_iterator(dirPath, ec)) {
-            if (!ec) names.push_back(entry.path().filename().string());
+            if (!ec) {
+                names.push_back(entry.path().filename().string());
+            }
         }
         std::sort(names.begin(), names.end());
         std::vector<ValuePtr> entries;
-        for (auto& nm : names) entries.push_back(Value::string(nm));
+        for (auto& nm : names) {
+            entries.push_back(Value::string(nm));
+        }
         return Value::just(Value::list(std::move(entries)));
     });
 
     // Directory.files(path) -> [String]?
     reg("Directory.files", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
+        if (args.empty()) {
+            return Value::none();
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::none();
+        if (!pathStr) {
+            return Value::none();
+        }
         const auto& dirPath = pathStr->value;
 
         if (m_mockDirs.count(dirPath)) {
             std::string prefix = dirPath;
-            if (!prefix.empty() && prefix.back() != '/') prefix += '/';
+            if (!prefix.empty() && prefix.back() != '/') {
+                prefix += '/';
+            }
             std::vector<ValuePtr> files;
             for (const auto& [p, _] : m_mockFiles) {
-                if (p.rfind(prefix, 0) == 0 && p.find('/', prefix.size()) == std::string::npos)
+                if (p.rfind(prefix, 0) == 0 && p.find('/', prefix.size()) == std::string::npos) {
                     files.push_back(Value::string(std::filesystem::path(p).filename().string()));
+                }
             }
             return Value::just(Value::list(std::move(files)));
         }
 
         std::error_code ec;
-        if (!std::filesystem::is_directory(dirPath, ec)) return Value::none();
+        if (!std::filesystem::is_directory(dirPath, ec)) {
+            return Value::none();
+        }
         std::vector<std::string> names;
         for (const auto& entry : std::filesystem::directory_iterator(dirPath, ec)) {
-            if (!ec && std::filesystem::is_regular_file(entry.path(), ec))
+            if (!ec && std::filesystem::is_regular_file(entry.path(), ec)) {
                 names.push_back(entry.path().filename().string());
+            }
         }
         std::sort(names.begin(), names.end());
         std::vector<ValuePtr> files;
-        for (auto& nm : names) files.push_back(Value::string(nm));
+        for (auto& nm : names) {
+            files.push_back(Value::string(nm));
+        }
         return Value::just(Value::list(std::move(files)));
     });
 
     // Directory.dirs(path) -> [String]?
     reg("Directory.directories", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
+        if (args.empty()) {
+            return Value::none();
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::none();
+        if (!pathStr) {
+            return Value::none();
+        }
         const auto& dirPath = pathStr->value;
 
         if (m_mockDirs.count(dirPath)) {
             std::string prefix = dirPath;
-            if (!prefix.empty() && prefix.back() != '/') prefix += '/';
+            if (!prefix.empty() && prefix.back() != '/') {
+                prefix += '/';
+            }
             std::vector<ValuePtr> dirs;
             for (const auto& d : m_mockDirs) {
                 if (d != dirPath && d.rfind(prefix, 0) == 0 &&
-                    d.find('/', prefix.size()) == std::string::npos)
+                    d.find('/', prefix.size()) == std::string::npos) {
                     dirs.push_back(Value::string(std::filesystem::path(d).filename().string()));
+                }
             }
             return Value::just(Value::list(std::move(dirs)));
         }
 
         std::error_code ec;
-        if (!std::filesystem::is_directory(dirPath, ec)) return Value::none();
+        if (!std::filesystem::is_directory(dirPath, ec)) {
+            return Value::none();
+        }
         std::vector<std::string> names;
         for (const auto& entry : std::filesystem::directory_iterator(dirPath, ec)) {
-            if (!ec && std::filesystem::is_directory(entry.path(), ec))
+            if (!ec && std::filesystem::is_directory(entry.path(), ec)) {
                 names.push_back(entry.path().filename().string());
+            }
         }
         std::sort(names.begin(), names.end());
         std::vector<ValuePtr> dirs;
-        for (auto& nm : names) dirs.push_back(Value::string(nm));
+        for (auto& nm : names) {
+            dirs.push_back(Value::string(nm));
+        }
         return Value::just(Value::list(std::move(dirs)));
     });
 
@@ -1099,7 +1496,9 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
     // Directory.home() -> String?
     reg("Directory.home", [](std::vector<ValuePtr>) -> ValuePtr {
         const char* home = std::getenv("HOME");
-        if (home) return Value::just(Value::string(home));
+        if (home) {
+            return Value::just(Value::string(home));
+        }
         return Value::none();
     });
 
@@ -1117,7 +1516,9 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
                 break;
             }
         }
-        if (dir.empty()) dir = "/tmp";
+        if (dir.empty()) {
+            dir = "/tmp";
+        }
         // Trailing separators are common in TMPDIR (macOS sets one) and would
         // double up under FS.Path.join. "/" itself keeps its slash.
         while (dir.size() > 1 && (dir.back() == '/' || dir.back() == '\\')) {
@@ -1130,26 +1531,28 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
 // A mocked file's content: the `onRead` callback when one is installed,
 // otherwise the in-memory map. The callback wins so a rule can override a
 // fixture, and its `None` means the file does not exist (kexhq/kex#143).
-auto Evaluator::mockFileContent(const std::string& path)
-    -> std::optional<std::string> {
+auto Evaluator::mockFileContent(const std::string& path) -> std::optional<std::string> {
     if (m_mockFileReader) {
-        if (auto* fn = std::get_if<FunctionValue>(&m_mockFileReader->data);
-            fn && fn->native) {
+        if (auto* fn = std::get_if<FunctionValue>(&m_mockFileReader->data); fn && fn->native) {
             auto answer = fn->native({Value::string(path)});
-            if (!answer) return std::nullopt;
+            if (!answer) {
+                return std::nullopt;
+            }
             // `Just(content)` is a hit, `None` a miss — the same Optional the
             // real `FS.File.read` answers with.
             if (auto* variant = std::get_if<VariantValue>(&answer->data)) {
-                if (variant->tag == "None" || variant->args.empty())
+                if (variant->tag == "None" || variant->args.empty()) {
                     return std::nullopt;
-                return variant->args[0] ? variant->args[0]->toString()
-                                        : std::string{};
+                }
+                return variant->args[0] ? variant->args[0]->toString() : std::string{};
             }
             return answer->toString();
         }
     }
     auto found = m_mockFiles.find(path);
-    if (found == m_mockFiles.end()) return std::nullopt;
+    if (found == m_mockFiles.end()) {
+        return std::nullopt;
+    }
     return found->second;
 }
 
@@ -1157,9 +1560,13 @@ auto Evaluator::registerMockBuiltins() -> void {
     // Mock.FS.File(path, content) -> Void  — register an in-memory file
     auto mockFile = [this](std::vector<ValuePtr> args) -> ValuePtr {
         requireMocksAllowed("Mock.FS.File");
-        if (args.size() < 2) return Value::unit();
+        if (args.size() < 2) {
+            return Value::unit();
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::unit();
+        if (!pathStr) {
+            return Value::unit();
+        }
         m_mockFiles[pathStr->value] = args[1]->toString();
         return Value::unit();
     };
@@ -1167,9 +1574,13 @@ auto Evaluator::registerMockBuiltins() -> void {
     // Mock.FS.Directory(path) -> Void  — register an in-memory directory
     auto mockDirectory = [this](std::vector<ValuePtr> args) -> ValuePtr {
         requireMocksAllowed("Mock.FS.Directory");
-        if (args.empty()) return Value::unit();
+        if (args.empty()) {
+            return Value::unit();
+        }
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
-        if (!pathStr) return Value::unit();
+        if (!pathStr) {
+            return Value::unit();
+        }
         m_mockDirs.insert(pathStr->value);
         return Value::unit();
     };
@@ -1187,10 +1598,16 @@ auto Evaluator::registerMockBuiltins() -> void {
     // call, matching how `Mock.Files { files: ... }` is written.
     auto mockFiles = [this](std::vector<ValuePtr> args) -> ValuePtr {
         requireMocksAllowed("Mock.FS.files");
-        if (args.empty()) return Value::unit();
-        if (auto* map = std::get_if<MapValue>(&args[0]->data))
-            for (const auto& [key, value] : map->entries)
-                if (key && value) m_mockFiles[key->toString()] = value->toString();
+        if (args.empty()) {
+            return Value::unit();
+        }
+        if (auto* map = std::get_if<MapValue>(&args[0]->data)) {
+            for (const auto& [key, value] : map->entries) {
+                if (key && value) {
+                    m_mockFiles[key->toString()] = value->toString();
+                }
+            }
+        }
         return Value::unit();
     };
 

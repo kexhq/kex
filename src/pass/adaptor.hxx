@@ -32,27 +32,29 @@ namespace detail {
 template <typename Children, typename = void>
 struct OuterAnalysesReadChildren : std::true_type {};
 template <typename Children>
-struct OuterAnalysesReadChildren<Children, std::void_t<decltype(Children::kOuterAnalysesReadChildren)>>
+struct OuterAnalysesReadChildren<
+    Children,
+    std::void_t<decltype(Children::kOuterAnalysesReadChildren)>>
     : std::bool_constant<Children::kOuterAnalysesReadChildren> {};
 } // namespace detail
 
 // An outer analysis whose result is the inner level's analysis manager.
 template <typename Inner, typename Outer>
-struct InnerAnalysisManagerProxy
-    : AnalysisInfoMixin<InnerAnalysisManagerProxy<Inner, Outer>> {
+struct InnerAnalysisManagerProxy : AnalysisInfoMixin<InnerAnalysisManagerProxy<Inner, Outer>> {
     static constexpr std::string_view kName = "inner-analysis-manager-proxy";
     struct Result {
         AnalysisManager<Inner>* manager;
     };
     explicit InnerAnalysisManagerProxy(AnalysisManager<Inner>& manager) : m_manager(&manager) {}
-    auto run(Outer&, AnalysisManager<Outer>&) -> Result { return {m_manager}; }
+    auto run(Outer&, AnalysisManager<Outer>&) -> Result {
+        return {m_manager};
+    }
     AnalysisManager<Inner>* m_manager;
 };
 
 // An inner analysis whose result reads the outer level's cached results.
 template <typename Outer, typename Inner>
-struct OuterAnalysisManagerProxy
-    : AnalysisInfoMixin<OuterAnalysisManagerProxy<Outer, Inner>> {
+struct OuterAnalysisManagerProxy : AnalysisInfoMixin<OuterAnalysisManagerProxy<Outer, Inner>> {
     static constexpr std::string_view kName = "outer-analysis-manager-proxy";
     class Result {
     public:
@@ -67,7 +69,9 @@ struct OuterAnalysisManagerProxy
     };
     explicit OuterAnalysisManagerProxy(const AnalysisManager<Outer>& manager)
         : m_manager(&manager) {}
-    auto run(Inner&, AnalysisManager<Inner>&) -> Result { return Result(m_manager); }
+    auto run(Inner&, AnalysisManager<Inner>&) -> Result {
+        return Result(m_manager);
+    }
     const AnalysisManager<Outer>* m_manager;
 };
 
@@ -92,8 +96,8 @@ public:
     explicit InnerPassAdaptor(PassManager<Inner> pipeline) : m_pipeline(std::move(pipeline)) {}
 
     auto run(Outer& outer, AnalysisManager<Outer>& analyses) -> PreservedAnalyses {
-        auto& inner = *analyses.template result<InnerAnalysisManagerProxy<Inner, Outer>>(outer)
-                           .manager;
+        auto& inner =
+            *analyses.template result<InnerAnalysisManagerProxy<Inner, Outer>>(outer).manager;
         // A child changed is its outer unit changed: inner keys say nothing
         // of the outer level's analyses.
         bool unchanged = true;
@@ -101,10 +105,12 @@ public:
             unchanged = m_pipeline.run(child, inner).allPreserved() && unchanged;
             inner.clear(child);
         });
-        if (unchanged || !detail::OuterAnalysesReadChildren<IRUnitChildren<Outer, Inner>>::value)
+        if (unchanged || !detail::OuterAnalysesReadChildren<IRUnitChildren<Outer, Inner>>::value) {
             return PreservedAnalyses::all();
+        }
         // The inner manager is still the inner manager.
-        return PreservedAnalyses::none().template preserve<InnerAnalysisManagerProxy<Inner, Outer>>();
+        return PreservedAnalyses::none()
+            .template preserve<InnerAnalysisManagerProxy<Inner, Outer>>();
     }
 
     auto printPipeline(std::ostream& out) const -> void {

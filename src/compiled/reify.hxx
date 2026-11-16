@@ -29,8 +29,7 @@ namespace kex::compiled {
 // record must be written in declaration order rather than in whatever order
 // happens to be convenient. A type missing from `layouts` falls back to
 // alphabetical, which is at least reproducible across builds.
-using RecordLayouts =
-    std::unordered_map<std::string, std::vector<std::string>>;
+using RecordLayouts = std::unordered_map<std::string, std::vector<std::string>>;
 
 // Everything reification needs beyond the value itself. A struct rather than
 // more parameters because both members are optional and neither is meaningful
@@ -52,9 +51,10 @@ struct ReifyContext {
     const std::unordered_map<std::string, std::string>* modules = nullptr;
 };
 
-auto valueToLiteral(const interpreter::ValuePtr& value,
-                    const SourceLocation& location,
-                    std::string& error,
-                    const ReifyContext& context = {}) -> ast::ExprPtr;
+auto valueToLiteral(
+    const interpreter::ValuePtr& value,
+    const SourceLocation& location,
+    std::string& error,
+    const ReifyContext& context = {}) -> ast::ExprPtr;
 
 } // namespace kex::compiled

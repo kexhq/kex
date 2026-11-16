@@ -33,41 +33,44 @@ struct TagUse {
 // The dotted module path a qualified tag is written with, or nothing when
 // the receiver is not one.
 auto modulePath(const ast::Expr& receiver) -> std::optional<std::string> {
-    if (const auto* root = std::get_if<ast::UpperIdentifier>(&receiver.kind))
+    if (const auto* root = std::get_if<ast::UpperIdentifier>(&receiver.kind)) {
         return root->name;
+    }
     const auto* segment = std::get_if<ast::MethodCall>(&receiver.kind);
-    if (!segment || !segment->receiver || !segment->args.empty()) return std::nullopt;
+    if (!segment || !segment->receiver || !segment->args.empty()) {
+        return std::nullopt;
+    }
     auto parent = modulePath(*segment->receiver);
-    if (!parent) return std::nullopt;
+    if (!parent) {
+        return std::nullopt;
+    }
     return *parent + "." + segment->method;
 }
 
-using Functions =
-    std::unordered_map<std::string, std::vector<const ast::FunctionDef*>>;
+using Functions = std::unordered_map<std::string, std::vector<const ast::FunctionDef*>>;
 
 auto companionName(const std::string& tag) -> std::string {
-    if (tag.empty()) return "validate";
+    if (tag.empty()) {
+        return "validate";
+    }
     auto result = std::string{"validate"};
-    result += static_cast<char>(
-        std::toupper(static_cast<unsigned char>(tag.front())));
+    result += static_cast<char>(std::toupper(static_cast<unsigned char>(tag.front())));
     result += tag.substr(1);
     return result;
 }
 
-auto walkExpr(
-    const ast::Expr& expression,
-    const std::string& scope,
-    std::vector<TagUse>& uses) -> void {
+auto walkExpr(const ast::Expr& expression, const std::string& scope, std::vector<TagUse>& uses)
+    -> void {
     if (const auto* tagged = std::get_if<ast::TaggedLiteral>(&expression.kind)) {
         uses.push_back(TagUse{&expression, tagged, scope});
     } else if (const auto* call = std::get_if<ast::MethodCall>(&expression.kind);
                call && call->tagged && call->receiver) {
-        if (auto path = modulePath(*call->receiver))
+        if (auto path = modulePath(*call->receiver)) {
             uses.push_back(TagUse{&expression, call->tagged.get(), scope, *path});
+        }
     }
-    ast::forEachChild(expression, [&](const ast::ExprPtr& child) {
-        walkExpr(*child, scope, uses);
-    });
+    ast::forEachChild(
+        expression, [&](const ast::ExprPtr& child) { walkExpr(*child, scope, uses); });
 }
 
 auto collectFunction(
@@ -76,60 +79,76 @@ auto collectFunction(
     Functions& functions,
     std::vector<TagUse>& uses) -> void {
     functions[kex::mangle::qualify(scope, function.name)].push_back(&function);
-    for (const auto& clause : function.clauses)
-        for (const auto& expression : clause.body)
-            if (expression) walkExpr(*expression, scope, uses);
-}
-
-auto collectModule(
-    const ast::ModuleDef& module,
-    Functions& functions,
-    std::vector<TagUse>& uses) -> void {
-    const auto scope = module.name;
-    for (const auto& item : module.body) {
-        std::visit([&](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (
-                std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                if (node) collectFunction(*node, scope, functions, uses);
-            } else if constexpr (
-                std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (node) collectModule(*node, functions, uses);
-            } else if constexpr (
-                std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
-                if (node)
-                    for (const auto& expression : node->body)
-                        if (expression) walkExpr(*expression, scope, uses);
+    for (const auto& clause : function.clauses) {
+        for (const auto& expression : clause.body) {
+            if (expression) {
+                walkExpr(*expression, scope, uses);
             }
-        }, item);
+        }
     }
 }
 
-auto collect(
-    const ast::Program& program,
-    Functions& functions,
-    std::vector<TagUse>& uses) -> void {
+auto collectModule(const ast::ModuleDef& module, Functions& functions, std::vector<TagUse>& uses)
+    -> void {
+    const auto scope = module.name;
+    for (const auto& item : module.body) {
+        std::visit(
+            [&](const auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                    if (node) {
+                        collectFunction(*node, scope, functions, uses);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                    if (node) {
+                        collectModule(*node, functions, uses);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+                    if (node) {
+                        for (const auto& expression : node->body) {
+                            if (expression) {
+                                walkExpr(*expression, scope, uses);
+                            }
+                        }
+                    }
+                }
+            },
+            item);
+    }
+}
+
+auto collect(const ast::Program& program, Functions& functions, std::vector<TagUse>& uses) -> void {
     for (const auto& item : program.items) {
-        std::visit([&](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (
-                std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                if (node) collectFunction(*node, "", functions, uses);
-            } else if constexpr (
-                std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
-                if (node)
-                    for (const auto& expression : node->body)
-                        if (expression) walkExpr(*expression, "", uses);
-            } else if constexpr (
-                std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (node) collectModule(*node, functions, uses);
-            } else if constexpr (
-                std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
-                if (node)
-                    for (const auto& expression : node->body)
-                        if (expression) walkExpr(*expression, "", uses);
-            }
-        }, item);
+        std::visit(
+            [&](const auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                    if (node) {
+                        collectFunction(*node, "", functions, uses);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
+                    if (node) {
+                        for (const auto& expression : node->body) {
+                            if (expression) {
+                                walkExpr(*expression, "", uses);
+                            }
+                        }
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                    if (node) {
+                        collectModule(*node, functions, uses);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+                    if (node) {
+                        for (const auto& expression : node->body) {
+                            if (expression) {
+                                walkExpr(*expression, "", uses);
+                            }
+                        }
+                    }
+                }
+            },
+            item);
     }
 }
 
@@ -169,21 +188,29 @@ auto loadUsingModules(
     // A qualified tag names its module itself, with or without a `using`
     // (`Number` is reached through the prelude).
     auto names = module::collectUsingModules(program);
-    for (const auto& use : uses)
+    for (const auto& use : uses) {
         if (!use.qualifier.empty() &&
-            std::find(names.begin(), names.end(), use.qualifier) == names.end())
+            std::find(names.begin(), names.end(), use.qualifier) == names.end()) {
             names.push_back(use.qualifier);
+        }
+    }
     // Once each: a build's program is every module it uses merged into one,
     // and the same module is `using`-ed by dozens of them.
     std::unordered_set<std::string> seenNames;
     std::unordered_set<std::string> seenPaths;
     for (const auto& name : names) {
-        if (!seenNames.insert(name).second) continue;
+        if (!seenNames.insert(name).second) {
+            continue;
+        }
         auto resolved = resolver.resolve(name);
-        if (!resolved || !seenPaths.insert(resolved->path).second) continue;
+        if (!resolved || !seenPaths.insert(resolved->path).second) {
+            continue;
+        }
 
         std::ifstream input{resolved->path};
-        if (!input) continue;
+        if (!input) {
+            continue;
+        }
         std::stringstream buffer;
         buffer << input.rdbuf();
 
@@ -195,7 +222,9 @@ auto loadUsingModules(
         auto parsed = std::make_unique<ast::Program>(parser.parseProgram());
         // A module that does not parse is reported by the normal pipeline;
         // silently skipping it here avoids duplicate diagnostics.
-        if (!parser.diagnostics().empty()) continue;
+        if (!parser.diagnostics().empty()) {
+            continue;
+        }
         module.program = std::move(parsed);
         modules.push_back(std::move(module));
     }
@@ -203,35 +232,34 @@ auto loadUsingModules(
 }
 
 auto exactValidatorSignature(
-    const std::vector<const ast::FunctionDef*>& definitions,
-    const semantic::Analyzer& analyzer) -> bool {
-    auto hasQualifiedIssueReturn =
-        [](const ast::FunctionDef& definition) {
-            for (const auto& clause : definition.clauses) {
-                if (!clause.returnAnnotation ||
-                    !*clause.returnAnnotation)
-                    return false;
-                auto* list = std::get_if<ast::ListType>(
-                    &(*clause.returnAnnotation)->kind);
-                if (!list || !list->element)
-                    return false;
-                auto* name = std::get_if<ast::TypeName>(
-                    &list->element->kind);
-                if (!name ||
-                    name->parts != std::vector<std::string>{
-                        "TaggedValidation", "Issue"})
-                    return false;
+    const std::vector<const ast::FunctionDef*>& definitions, const semantic::Analyzer& analyzer)
+    -> bool {
+    auto hasQualifiedIssueReturn = [](const ast::FunctionDef& definition) {
+        for (const auto& clause : definition.clauses) {
+            if (!clause.returnAnnotation || !*clause.returnAnnotation) {
+                return false;
             }
-            return !definition.clauses.empty();
-        };
+            auto* list = std::get_if<ast::ListType>(&(*clause.returnAnnotation)->kind);
+            if (!list || !list->element) {
+                return false;
+            }
+            auto* name = std::get_if<ast::TypeName>(&list->element->kind);
+            if (!name || name->parts != std::vector<std::string>{"TaggedValidation", "Issue"}) {
+                return false;
+            }
+        }
+        return !definition.clauses.empty();
+    };
 
     bool found = false;
     for (const auto* definition : definitions) {
-        if (!definition || definition->isFoul ||
-            !hasQualifiedIssueReturn(*definition))
+        if (!definition || definition->isFoul || !hasQualifiedIssueReturn(*definition)) {
             return false;
+        }
         auto* signatures = analyzer.functionSignatures(definition);
-        if (!signatures || signatures->empty()) return false;
+        if (!signatures || signatures->empty()) {
+            return false;
+        }
         for (const auto& signature : *signatures) {
             found = true;
             // The spelling was checked above; the checked type is qualified
@@ -241,31 +269,32 @@ auto exactValidatorSignature(
             const auto result = semantic::typeToString(signature.result);
             if (signature.isFoul || signature.params.size() != 1 ||
                 semantic::typeToString(signature.params[0]) != "String" ||
-                (result != "[TaggedValidation.Issue]" && result != "[Issue]"))
+                (result != "[TaggedValidation.Issue]" && result != "[Issue]")) {
                 return false;
+            }
         }
     }
     return found;
 }
 
-auto sourceLocationForOffset(
-    const TagUse& use,
-    std::optional<int64_t> offset) -> SourceLocation {
+auto sourceLocationForOffset(const TagUse& use, std::optional<int64_t> offset) -> SourceLocation {
     auto location = use.expr->location;
-    if (!offset || *offset < 0 || use.literal->bodyStartOffset < 0)
+    if (!offset || *offset < 0 || use.literal->bodyStartOffset < 0) {
         return location;
+    }
 
     std::ifstream input{std::string(location.file), std::ios::binary};
-    if (!input) return location;
-    std::string source{
-        std::istreambuf_iterator<char>{input},
-        std::istreambuf_iterator<char>{}};
-    const auto start =
-        static_cast<size_t>(use.literal->bodyStartOffset + 1);
+    if (!input) {
+        return location;
+    }
+    std::string source{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    const auto start = static_cast<size_t>(use.literal->bodyStartOffset + 1);
     const auto end = use.literal->bodyEndOffset > 0
-        ? static_cast<size_t>(use.literal->bodyEndOffset - 1)
-        : source.size();
-    if (start > end || end > source.size()) return location;
+                         ? static_cast<size_t>(use.literal->bodyEndOffset - 1)
+                         : source.size();
+    if (start > end || end > source.size()) {
+        return location;
+    }
 
     // Reconstruct the lexer's cooked-byte boundary map for raw literals.
     // Keeping it here makes validation independent of tag identity while
@@ -275,8 +304,7 @@ auto sourceLocationForOffset(
     std::vector<size_t> offsets;
     for (size_t cursor = start; cursor < end;) {
         offsets.push_back(cursor);
-        if (source[cursor] == '`' && cursor + 1 < end &&
-            source[cursor + 1] == '`') {
+        if (source[cursor] == '`' && cursor + 1 < end && source[cursor + 1] == '`') {
             decoded += '`';
             cursor += 2;
         } else {
@@ -293,16 +321,13 @@ auto sourceLocationForOffset(
     // Only a block-shaped literal is dedented, and by the margin its own
     // content shares — this must strip exactly what the lexer strips, or a
     // diagnostic's line and column land somewhere the tag never looked.
-    bool blockShaped =
-        decoded.starts_with("\n") || decoded.starts_with("\r\n");
+    bool blockShaped = decoded.starts_with("\n") || decoded.starts_with("\r\n");
     if (blockShaped) {
         erasePrefix(decoded.starts_with("\r\n") ? 2 : 1);
 
         if (auto closingLine = rawStringClosingLineStart(decoded)) {
             decoded.erase(*closingLine);
-            offsets.erase(
-                offsets.begin() + static_cast<long>(*closingLine),
-                offsets.end() - 1);
+            offsets.erase(offsets.begin() + static_cast<long>(*closingLine), offsets.end() - 1);
             offsets.back() = end;
         }
 
@@ -313,10 +338,13 @@ auto sourceLocationForOffset(
         while (lineStart < decoded.size()) {
             auto lineEnd = decoded.find('\n', lineStart);
             bool hasNewline = lineEnd != std::string::npos;
-            if (!hasNewline) lineEnd = decoded.size();
+            if (!hasNewline) {
+                lineEnd = decoded.size();
+            }
             auto contentEnd = lineEnd;
-            if (contentEnd > lineStart && decoded[contentEnd - 1] == '\r')
+            if (contentEnd > lineStart && decoded[contentEnd - 1] == '\r') {
                 contentEnd--;
+            }
             bool blank = std::all_of(
                 decoded.begin() + static_cast<long>(lineStart),
                 decoded.begin() + static_cast<long>(contentEnd),
@@ -338,9 +366,13 @@ auto sourceLocationForOffset(
     }
 
     auto cookedOffset = static_cast<size_t>(*offset);
-    if (cookedOffset >= offsets.size()) return location;
+    if (cookedOffset >= offsets.size()) {
+        return location;
+    }
     auto target = offsets[cookedOffset];
-    if (target > source.size()) return location;
+    if (target > source.size()) {
+        return location;
+    }
     int line = 1;
     int column = 1;
     for (size_t i = 0; i < target; ++i) {
@@ -356,11 +388,13 @@ auto sourceLocationForOffset(
     return location;
 }
 
-auto integerValue(const interpreter::ValuePtr& value)
-    -> std::optional<int64_t> {
-    if (!value) return std::nullopt;
-    if (auto* integer = std::get_if<interpreter::IntValue>(&value->data))
+auto integerValue(const interpreter::ValuePtr& value) -> std::optional<int64_t> {
+    if (!value) {
+        return std::nullopt;
+    }
+    if (auto* integer = std::get_if<interpreter::IntValue>(&value->data)) {
         return integer->value;
+    }
     return std::nullopt;
 }
 
@@ -369,16 +403,13 @@ auto appendIssues(
     const TagUse& use,
     const std::string& validator,
     std::vector<semantic::Diagnostic>& diagnostics) -> void {
-    auto* list = result
-        ? std::get_if<interpreter::ListValue>(&result->data)
-        : nullptr;
+    auto* list = result ? std::get_if<interpreter::ListValue>(&result->data) : nullptr;
     if (!list) {
-        diagnostics.push_back({
-            semantic::Diagnostic::Level::Error,
-            use.expr->location,
-            "Compile-time validator `" + validator +
-                "` must return [TaggedValidation.Issue], got " +
-                (result ? result->typeName() : std::string{"nothing"})});
+        diagnostics.push_back(
+            {semantic::Diagnostic::Level::Error, use.expr->location,
+             "Compile-time validator `" + validator +
+                 "` must return [TaggedValidation.Issue], got " +
+                 (result ? result->typeName() : std::string{"nothing"})});
         return;
     }
 
@@ -390,16 +421,12 @@ auto appendIssues(
     std::vector<PositionedDiagnostic> positioned;
 
     for (const auto& issueValue : list->elements) {
-        auto* issue = issueValue
-            ? std::get_if<interpreter::VariantValue>(&issueValue->data)
-            : nullptr;
-        if (!issue || (issue->tag != "Fatal" && issue->tag != "Warn") ||
-            issue->args.size() != 2) {
-            diagnostics.push_back({
-                semantic::Diagnostic::Level::Error,
-                use.expr->location,
-                "Compile-time validator `" + validator +
-                    "` returned a malformed Issue"});
+        auto* issue =
+            issueValue ? std::get_if<interpreter::VariantValue>(&issueValue->data) : nullptr;
+        if (!issue || (issue->tag != "Fatal" && issue->tag != "Warn") || issue->args.size() != 2) {
+            diagnostics.push_back(
+                {semantic::Diagnostic::Level::Error, use.expr->location,
+                 "Compile-time validator `" + validator + "` returned a malformed Issue"});
             continue;
         }
 
@@ -408,91 +435,80 @@ auto appendIssues(
         bool wholeLiteral = issue->args[0]->isNone();
         if (!issue->args[0]->isNone()) {
             // The span is a `ByteSpan?`: `Just(At(offset))`.
-            auto* span = std::get_if<interpreter::VariantValue>(
-                &issue->args[0]->data);
-            if (span && span->tag == "Just" && span->args.size() == 1 && span->args[0])
+            auto* span = std::get_if<interpreter::VariantValue>(&issue->args[0]->data);
+            if (span && span->tag == "Just" && span->args.size() == 1 && span->args[0]) {
                 span = std::get_if<interpreter::VariantValue>(&span->args[0]->data);
+            }
             if (span && span->tag == "At" && span->args.size() == 1) {
                 offset = integerValue(span->args[0]);
                 if (!offset) {
-                    diagnostics.push_back({
-                        semantic::Diagnostic::Level::Error,
-                        use.expr->location,
-                        "Compile-time validator `" + validator +
-                            "` returned an invalid Issue byte span"});
+                    diagnostics.push_back(
+                        {semantic::Diagnostic::Level::Error, use.expr->location,
+                         "Compile-time validator `" + validator +
+                             "` returned an invalid Issue byte span"});
                     continue;
                 }
-            } else if (span && span->tag == "Between" &&
-                       span->args.size() == 2) {
+            } else if (span && span->tag == "Between" && span->args.size() == 2) {
                 offset = integerValue(span->args[0]);
                 endOffset = integerValue(span->args[1]);
                 if (!offset || !endOffset) {
-                    diagnostics.push_back({
-                        semantic::Diagnostic::Level::Error,
-                        use.expr->location,
-                        "Compile-time validator `" + validator +
-                            "` returned an invalid Issue byte span"});
+                    diagnostics.push_back(
+                        {semantic::Diagnostic::Level::Error, use.expr->location,
+                         "Compile-time validator `" + validator +
+                             "` returned an invalid Issue byte span"});
                     continue;
                 }
             } else {
-                diagnostics.push_back({
-                    semantic::Diagnostic::Level::Error,
-                    use.expr->location,
-                    "Compile-time validator `" + validator +
-                        "` returned an invalid Issue byte span"});
+                diagnostics.push_back(
+                    {semantic::Diagnostic::Level::Error, use.expr->location,
+                     "Compile-time validator `" + validator +
+                         "` returned an invalid Issue byte span"});
                 continue;
             }
         }
-        const auto bodySize =
-            static_cast<int64_t>(use.literal->parts[0].size());
+        const auto bodySize = static_cast<int64_t>(use.literal->parts[0].size());
         if (wholeLiteral) {
             offset = 0;
             endOffset = bodySize;
         }
         if ((offset && (*offset < 0 || *offset > bodySize)) ||
-            (endOffset &&
-             (*endOffset < *offset || *endOffset > bodySize))) {
-            diagnostics.push_back({
-                semantic::Diagnostic::Level::Error,
-                use.expr->location,
-                "Compile-time validator `" + validator +
-                    "` returned an Issue byte span outside the literal"});
+            (endOffset && (*endOffset < *offset || *endOffset > bodySize))) {
+            diagnostics.push_back(
+                {semantic::Diagnostic::Level::Error, use.expr->location,
+                 "Compile-time validator `" + validator +
+                     "` returned an Issue byte span outside the literal"});
             continue;
         }
 
-        auto* message =
-            std::get_if<interpreter::StringValue>(&issue->args[1]->data);
+        auto* message = std::get_if<interpreter::StringValue>(&issue->args[1]->data);
         if (!message) {
-            diagnostics.push_back({
-                semantic::Diagnostic::Level::Error,
-                use.expr->location,
-                "Compile-time validator `" + validator +
-                    "` returned an Issue with a non-String message"});
+            diagnostics.push_back(
+                {semantic::Diagnostic::Level::Error, use.expr->location,
+                 "Compile-time validator `" + validator +
+                     "` returned an Issue with a non-String message"});
             continue;
         }
         semantic::Diagnostic diagnostic{
-            issue->tag == "Fatal"
-                ? semantic::Diagnostic::Level::Error
-                : semantic::Diagnostic::Level::Warning,
-            sourceLocationForOffset(use, offset),
-            message->value};
-        if (endOffset)
-            diagnostic.endLocation =
-                sourceLocationForOffset(use, endOffset);
-        positioned.push_back(PositionedDiagnostic{
-            std::move(diagnostic), *offset, wholeLiteral});
+            issue->tag == "Fatal" ? semantic::Diagnostic::Level::Error
+                                  : semantic::Diagnostic::Level::Warning,
+            sourceLocationForOffset(use, offset), message->value};
+        if (endOffset) {
+            diagnostic.endLocation = sourceLocationForOffset(use, endOffset);
+        }
+        positioned.push_back(PositionedDiagnostic{std::move(diagnostic), *offset, wholeLiteral});
     }
 
     std::stable_sort(
         positioned.begin(), positioned.end(),
-        [](const PositionedDiagnostic& left,
-           const PositionedDiagnostic& right) {
-            if (left.wholeLiteral != right.wholeLiteral)
+        [](const PositionedDiagnostic& left, const PositionedDiagnostic& right) {
+            if (left.wholeLiteral != right.wholeLiteral) {
                 return !left.wholeLiteral;
+            }
             return left.offset < right.offset;
         });
-    for (auto& item : positioned)
+    for (auto& item : positioned) {
         diagnostics.push_back(std::move(item.diagnostic));
+    }
 }
 
 } // namespace
@@ -501,8 +517,7 @@ auto validateTaggedLiterals(
     const ast::Program& program,
     const semantic::Analyzer& analyzer,
     const std::vector<std::string>& moduleRoots,
-    std::chrono::milliseconds timeout)
-    -> std::vector<semantic::Diagnostic> {
+    std::chrono::milliseconds timeout) -> std::vector<semantic::Diagnostic> {
     Functions functions;
     std::vector<TagUse> uses;
     collect(program, functions, uses);
@@ -519,15 +534,19 @@ auto validateTaggedLiterals(
     std::vector<ImportedModule> imported;
     bool importedLoaded = false;
     auto importedModules = [&]() -> const std::vector<ImportedModule>& {
-        if (importedLoaded) return imported;
+        if (importedLoaded) {
+            return imported;
+        }
         importedLoaded = true;
-        if (!moduleRoots.empty() && !uses.empty())
+        if (!moduleRoots.empty() && !uses.empty()) {
             imported = loadUsingModules(program, moduleRoots, uses);
-        for (auto& module : imported)
+        }
+        for (auto& module : imported) {
             if (module.program) {
                 std::vector<TagUse> ignored;
                 collect(*module.program, module.functions, ignored);
             }
+        }
         return imported;
     };
 
@@ -543,9 +562,9 @@ auto validateTaggedLiterals(
 
     std::vector<semantic::Diagnostic> diagnostics;
     for (const auto& use : uses) {
-        if (!use.literal || use.literal->interpolating ||
-            use.literal->parts.size() != 1)
+        if (!use.literal || use.literal->interpolating || use.literal->parts.size() != 1) {
             continue;
+        }
         const std::string subject = use.literal->parts[0];
 
         const auto companion = companionName(use.literal->tag);
@@ -557,10 +576,11 @@ auto validateTaggedLiterals(
         const Functions* scope = &functions;
         std::string moduleCompanionKey;
         const ImportedModule* matchedModule = nullptr;
-        if (!use.qualifier.empty() && !functions.contains(kex::mangle::qualify(owner, use.literal->tag))) {
+        if (!use.qualifier.empty() &&
+            !functions.contains(kex::mangle::qualify(owner, use.literal->tag))) {
             // A qualified tag is that module's own function: no trailing-
             // segment matching, which could find another module's tag.
-            for (const auto& module : importedModules())
+            for (const auto& module : importedModules()) {
                 if (module.functions.contains(kex::mangle::qualify(owner, use.literal->tag)) &&
                     module.functions.contains(companionKey)) {
                     scope = &module.functions;
@@ -569,7 +589,10 @@ auto validateTaggedLiterals(
                     matchedModule = &module;
                     break;
                 }
-            if (!matchedModule) continue;
+            }
+            if (!matchedModule) {
+                continue;
+            }
         } else if (!functions.contains(kex::mangle::qualify(owner, use.literal->tag))) {
             // A module file collects its functions under its own scope
             // ("Regex.regex"), while the tag at the use site is unqualified
@@ -579,38 +602,43 @@ auto validateTaggedLiterals(
             for (const auto& module : importedModules()) {
                 for (const auto& [key, definitions] : module.functions) {
                     const auto bare = kex::mangle::memberOf(key);
-                    if (bare != use.literal->tag) continue;
-                    const auto prefix =
-                        key.size() > bare.size() ? key.substr(0, key.size() - bare.size())
-                                                 : std::string{};
-                    if (!module.functions.contains(prefix + companion)) continue;
+                    if (bare != use.literal->tag) {
+                        continue;
+                    }
+                    const auto prefix = key.size() > bare.size()
+                                            ? key.substr(0, key.size() - bare.size())
+                                            : std::string{};
+                    if (!module.functions.contains(prefix + companion)) {
+                        continue;
+                    }
                     fromModule = &module.functions;
                     home = module.program.get();
                     moduleCompanionKey = prefix + companion;
                     matchedModule = &module;
                     break;
                 }
-                if (fromModule) break;
+                if (fromModule) {
+                    break;
+                }
             }
-            if (!fromModule)
+            if (!fromModule) {
                 continue; // precompiled source, or no companion anywhere
+            }
             scope = fromModule;
         }
 
-        auto found = scope->find(
-            scope == &functions ? companionKey : moduleCompanionKey);
-        if (found == scope->end())
+        auto found = scope->find(scope == &functions ? companionKey : moduleCompanionKey);
+        if (found == scope->end()) {
             continue;
+        }
 
-        const auto& signatureSource =
-            matchedModule ? matchedModule->analyzed() : analyzer;
+        const auto& signatureSource = matchedModule ? matchedModule->analyzed() : analyzer;
         if (!exactValidatorSignature(found->second, signatureSource)) {
-            diagnostics.push_back({
-                semantic::Diagnostic::Level::Error,
-                found->second.front()->location,
-                "Companion validator `" + companion +
-                    "` must be pure with signature "
-                    "String -> [TaggedValidation.Issue]"});
+            diagnostics.push_back(
+                {semantic::Diagnostic::Level::Error, found->second.front()->location,
+                 "Companion validator `" + companion +
+                     "` must be pure with signature "
+                     "String -> [TaggedValidation.Issue]"});
             continue;
         }
 
@@ -625,13 +653,16 @@ auto validateTaggedLiterals(
                 sandbox = std::make_unique<interpreter::Evaluator>(analyzer.importedInterfaces());
                 sandbox->loadPrelude();
                 if (!matchedModule) {
-                    if (!programAnswers) programAnswers.emplace(program, analyzer);
+                    if (!programAnswers) {
+                        programAnswers.emplace(program, analyzer);
+                    }
                     sandbox->setProgram(&*programAnswers);
                 } else if (analyzer.importedInterfaces()) {
                     auto& answers = moduleAnswers[home];
-                    if (!answers)
-                        answers = hir::checkCompileTime(*matchedModule->program,
-                                                        analyzer.importedInterfaces());
+                    if (!answers) {
+                        answers = hir::checkCompileTime(
+                            *matchedModule->program, analyzer.importedInterfaces());
+                    }
                     sandbox->setProgram(&*answers->program);
                 }
                 result = sandbox->evaluateFunction(
@@ -641,25 +672,19 @@ auto validateTaggedLiterals(
         } catch (const interpreter::EvaluationTimeout&) {
             sandboxes.erase(home);
             semantic::Diagnostic diagnostic{
-                semantic::Diagnostic::Level::Error,
-                found->second.front()->location,
-                "Compile-time validator `" + companionKey +
-                    "` timed out after " +
+                semantic::Diagnostic::Level::Error, found->second.front()->location,
+                "Compile-time validator `" + companionKey + "` timed out after " +
                     std::to_string(timeout.count()) + " ms"};
-            diagnostic.notes.push_back({
-                use.expr->location,
-                "triggered by tagged literal `" + use.literal->tag + "`"});
+            diagnostic.notes.push_back(
+                {use.expr->location, "triggered by tagged literal `" + use.literal->tag + "`"});
             diagnostics.push_back(std::move(diagnostic));
         } catch (const std::exception& error) {
             sandboxes.erase(home);
             semantic::Diagnostic diagnostic{
-                semantic::Diagnostic::Level::Error,
-                found->second.front()->location,
-                "Compile-time validator `" + companionKey +
-                    "` crashed: " + error.what()};
-            diagnostic.notes.push_back({
-                use.expr->location,
-                "triggered by tagged literal `" + use.literal->tag + "`"});
+                semantic::Diagnostic::Level::Error, found->second.front()->location,
+                "Compile-time validator `" + companionKey + "` crashed: " + error.what()};
+            diagnostic.notes.push_back(
+                {use.expr->location, "triggered by tagged literal `" + use.literal->tag + "`"});
             diagnostics.push_back(std::move(diagnostic));
         }
     }

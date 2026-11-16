@@ -26,12 +26,15 @@ struct Space {
 
 // The constructors that together cover the type `constructor` builds, each
 // with its arity; none when no finite set does (an Integer literal's).
-using Siblings =
-    std::function<std::optional<std::vector<std::pair<std::string, std::size_t>>>(const std::string&)>;
+using Siblings = std::function<std::optional<std::vector<std::pair<std::string, std::size_t>>>(
+    const std::string&)>;
 
 // Values no row matches, as rows of `width` spaces, at most `limit` of them;
 // empty when the rows cover every value.
-auto uncovered(const std::vector<std::vector<Space>>& rows, std::size_t width,
-               const Siblings& siblings, std::size_t limit) -> std::vector<std::vector<Space>>;
+auto uncovered(
+    const std::vector<std::vector<Space>>& rows,
+    std::size_t width,
+    const Siblings& siblings,
+    std::size_t limit) -> std::vector<std::vector<Space>>;
 
 } // namespace kex::semantic::exhaustiveness

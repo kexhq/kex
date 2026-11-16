@@ -5,17 +5,20 @@ Standard: c++20
 IndentWidth: 4
 ContinuationIndentWidth: 4
 ColumnLimit: 100
+AlignAfterOpenBracket: AlwaysBreak
+BinPackParameters: OnePerLine
 AccessModifierOffset: -4
 NamespaceIndentation: None
 FixNamespaceComments: true
 PointerAlignment: Left
 ReferenceAlignment: Left
-AllowShortIfStatementsOnASingleLine: WithoutElse
-AllowShortLoopsOnASingleLine: true
-AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Empty
 AllowShortBlocksOnASingleLine: Empty
 AllowShortCaseLabelsOnASingleLine: true
 AllowShortLambdasOnASingleLine: All
+BreakTemplateDeclarations: Yes
 BreakBeforeBraces: Attach
 IndentCaseLabels: true
 SortIncludes: Never
@@ -25,4 +28,5 @@ Cpp11BracedListStyle: true
 BreakConstructorInitializers: BeforeColon
 PackConstructorInitializers: NextLine
 InsertNewlineAtEOF: true
+InsertBraces: true
 ...

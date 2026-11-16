@@ -70,12 +70,13 @@ struct CallSite {
 };
 
 inline constexpr TargetKind kTargetKinds[] = {
-    TargetKind::Imported,  TargetKind::Selected,        TargetKind::Constructor,
-    TargetKind::FieldRead, TargetKind::ModuleReference, TargetKind::TraitMethod,
-    TargetKind::ValueCall, TargetKind::Dispatch,
-    TargetKind::Conversion, TargetKind::TypeReference,
-    TargetKind::Builtin, TargetKind::Operator, TargetKind::OwnMethod,
-    TargetKind::ModuleFunction, TargetKind::Hidden, TargetKind::Foreign, TargetKind::Intrinsic, TargetKind::FunctionReference, TargetKind::Undecided,
+    TargetKind::Imported,      TargetKind::Selected,        TargetKind::Constructor,
+    TargetKind::FieldRead,     TargetKind::ModuleReference, TargetKind::TraitMethod,
+    TargetKind::ValueCall,     TargetKind::Dispatch,        TargetKind::Conversion,
+    TargetKind::TypeReference, TargetKind::Builtin,         TargetKind::Operator,
+    TargetKind::OwnMethod,     TargetKind::ModuleFunction,  TargetKind::Hidden,
+    TargetKind::Foreign,       TargetKind::Intrinsic,       TargetKind::FunctionReference,
+    TargetKind::Undecided,
 };
 
 } // namespace kex::hir

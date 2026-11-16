@@ -37,7 +37,6 @@ public:
     // the fiber has already finished.
     auto resume() -> void;
 
-
     // Called from inside the currently-running fiber to switch back to
     // whichever context called resume() on it.
     static auto yieldToScheduler() -> void;

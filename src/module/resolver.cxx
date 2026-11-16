@@ -27,7 +27,9 @@ auto entryFile() -> std::filesystem::path& {
 }
 
 auto isEntryFile(const std::filesystem::path& candidate) -> bool {
-    if (entryFile().empty()) return false;
+    if (entryFile().empty()) {
+        return false;
+    }
     std::error_code ec;
     return std::filesystem::equivalent(candidate, entryFile(), ec) && !ec;
 }
@@ -50,10 +52,10 @@ namespace {
 // file system that ignores case. This is the snake_case spelling with that
 // leading capital kept; empty for a part that is not numbered.
 auto numberedSnakeCased(const std::string& part) -> std::string {
-    if (part.size() < 2
-        || !kex::startsUppercase(part)
-        || !std::isdigit(static_cast<unsigned char>(part[1])))
+    if (part.size() < 2 || !kex::startsUppercase(part) ||
+        !std::isdigit(static_cast<unsigned char>(part[1]))) {
         return {};
+    }
     auto result = snakeCased(part);
     result[0] = part[0];
     return result;
@@ -62,26 +64,31 @@ auto numberedSnakeCased(const std::string& part) -> std::string {
 // Every file spelling a module name can take, most specific first. Each name
 // part contributes its own spellings, so `Web.MockData` reaches
 // `web/mock_data.kex` as readily as `web/mockdata.kex`.
-auto sourcePaths(const std::string& moduleName)
-    -> std::vector<std::filesystem::path> {
+auto sourcePaths(const std::string& moduleName) -> std::vector<std::filesystem::path> {
     std::vector<std::filesystem::path> paths{{}};
     std::stringstream parts(moduleName);
     std::string part;
     while (std::getline(parts, part, '.')) {
         std::vector<std::string> spellings{lowered(part)};
-        if (auto snake = snakeCased(part); snake != spellings.front())
+        if (auto snake = snakeCased(part); snake != spellings.front()) {
             spellings.push_back(std::move(snake));
-        if (auto numbered = numberedSnakeCased(part); !numbered.empty())
+        }
+        if (auto numbered = numberedSnakeCased(part); !numbered.empty()) {
             spellings.push_back(std::move(numbered));
+        }
 
         std::vector<std::filesystem::path> extended;
         extended.reserve(paths.size() * spellings.size());
-        for (const auto& prefix : paths)
-            for (const auto& spelling : spellings)
+        for (const auto& prefix : paths) {
+            for (const auto& spelling : spellings) {
                 extended.push_back(prefix / spelling);
+            }
+        }
         paths = std::move(extended);
     }
-    for (auto& path : paths) path += ".kex";
+    for (auto& path : paths) {
+        path += ".kex";
+    }
     return paths;
 }
 
@@ -91,7 +98,9 @@ auto candidates(const std::string& moduleName, std::string currentModule)
     while (!currentModule.empty()) {
         result.push_back(currentModule + "." + moduleName);
         const auto dot = currentModule.rfind('.');
-        if (dot == std::string::npos) break;
+        if (dot == std::string::npos) {
+            break;
+        }
         currentModule.resize(dot);
     }
     result.push_back(moduleName);
@@ -114,21 +123,28 @@ std::unordered_map<std::string, std::optional<Resolution>> g_resolutions;
 auto Resolver::setCaching(bool on) -> void {
     std::lock_guard lock(g_cacheMutex);
     g_caching = on;
-    if (!on) g_resolutions.clear();
+    if (!on) {
+        g_resolutions.clear();
+    }
 }
 
-auto Resolver::resolve(const std::string& moduleName,
-                       const std::string& currentModule) const -> std::optional<Resolution> {
+auto Resolver::resolve(const std::string& moduleName, const std::string& currentModule) const
+    -> std::optional<Resolution> {
     {
         std::lock_guard lock(g_cacheMutex);
-        if (!g_caching) return resolveUncached(moduleName, currentModule);
+        if (!g_caching) {
+            return resolveUncached(moduleName, currentModule);
+        }
     }
     std::string key = moduleName + '\x1f' + currentModule + '\x1f' + entryFile().string();
-    for (const auto& root : m_roots) key += '\x1f' + root;
+    for (const auto& root : m_roots) {
+        key += '\x1f' + root;
+    }
     {
         std::lock_guard lock(g_cacheMutex);
-        if (const auto found = g_resolutions.find(key); found != g_resolutions.end())
+        if (const auto found = g_resolutions.find(key); found != g_resolutions.end()) {
             return found->second;
+        }
     }
     auto resolution = resolveUncached(moduleName, currentModule);
     std::lock_guard lock(g_cacheMutex);
@@ -136,10 +152,11 @@ auto Resolver::resolve(const std::string& moduleName,
     return resolution;
 }
 
-auto Resolver::resolveUncached(const std::string& moduleName,
-                               const std::string& currentModule) const
-    -> std::optional<Resolution> {
-    if (isForeignNamespace(moduleName)) return std::nullopt;
+auto Resolver::resolveUncached(const std::string& moduleName, const std::string& currentModule)
+    const -> std::optional<Resolution> {
+    if (isForeignNamespace(moduleName)) {
+        return std::nullopt;
+    }
     // Relative module identities take precedence over absolute ones. Once an
     // identity has a winning source-root match, record any later matches so
     // callers can diagnose the shadowing without changing resolution order.
@@ -150,8 +167,7 @@ auto Resolver::resolveUncached(const std::string& moduleName,
             bool enclosing = false;
             for (const auto& relative : sourcePaths(candidateName)) {
                 auto direct = std::filesystem::path(root) / relative;
-                if (std::filesystem::is_regular_file(direct) &&
-                    !isEntryFile(direct)) {
+                if (std::filesystem::is_regular_file(direct) && !isEntryFile(direct)) {
                     matchedPath = direct.string();
                     break;
                 }
@@ -168,11 +184,12 @@ auto Resolver::resolveUncached(const std::string& moduleName,
             for (auto container = candidateName;
                  !matchedPath && container.rfind('.') != std::string::npos;) {
                 container.resize(container.rfind('.'));
-                if (container.size() <= prefixLength) break;
+                if (container.size() <= prefixLength) {
+                    break;
+                }
                 for (const auto& relative : sourcePaths(container)) {
                     auto path = std::filesystem::path(root) / relative;
-                    if (std::filesystem::is_regular_file(path) &&
-                        !isEntryFile(path)) {
+                    if (std::filesystem::is_regular_file(path) && !isEntryFile(path)) {
                         matchedPath = path.string();
                         enclosing = true;
                         break;
@@ -180,13 +197,18 @@ auto Resolver::resolveUncached(const std::string& moduleName,
                 }
             }
 
-            if (!matchedPath) continue;
-            if (!result)
+            if (!matchedPath) {
+                continue;
+            }
+            if (!result) {
                 result = Resolution{candidateName, *matchedPath, {}, enclosing};
-            else if (*matchedPath != result->path)
+            } else if (*matchedPath != result->path) {
                 result->shadowedPaths.push_back(*matchedPath);
+            }
         }
-        if (result) return result;
+        if (result) {
+            return result;
+        }
     }
     return std::nullopt;
 }

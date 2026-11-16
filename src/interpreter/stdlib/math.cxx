@@ -7,8 +7,12 @@ namespace kex::interpreter {
 namespace {
 
 auto toDouble(const ValuePtr& val) -> double {
-    if (auto* i = std::get_if<IntValue>(&val->data)) return static_cast<double>(i->value);
-    if (auto* f = std::get_if<FloatValue>(&val->data)) return f->value;
+    if (auto* i = std::get_if<IntValue>(&val->data)) {
+        return static_cast<double>(i->value);
+    }
+    if (auto* f = std::get_if<FloatValue>(&val->data)) {
+        return f->value;
+    }
     return 0.0;
 }
 
@@ -18,7 +22,9 @@ auto toDouble(const ValuePtr& val) -> double {
 // it covers every function here with one rule. std::runtime_error, not
 // RuntimeError, because an intrinsic has no source location to attach.
 auto finite(double v, const char* what) -> ValuePtr {
-    if (auto error = nonFiniteFloatError(v, what)) throw std::runtime_error(*error);
+    if (auto error = nonFiniteFloatError(v, what)) {
+        throw std::runtime_error(*error);
+    }
     return Value::floating(v);
 }
 
@@ -35,11 +41,14 @@ auto Evaluator::registerMathBuiltins() -> void {
         const auto low = toDouble(args.at(0));
         const auto high = toDouble(args.at(1));
         const auto unit = toDouble(args.at(2));
-        if (!std::isfinite(low) || !std::isfinite(high) || !(low < high))
+        if (!std::isfinite(low) || !std::isfinite(high) || !(low < high)) {
             throw std::runtime_error("Random.float: bounds must be finite and strictly ascending");
+        }
         const auto value = low * (1.0 - unit) + high * unit;
-        return Value::floating(value >= high ? std::nextafter(high, low)
-                                            : value < low ? low : value);
+        return Value::floating(
+            value >= high ? std::nextafter(high, low)
+            : value < low ? low
+                          : value);
     });
 
     reg("Math.sqrt", [](std::vector<ValuePtr> args) -> ValuePtr {
@@ -54,7 +63,9 @@ auto Evaluator::registerMathBuiltins() -> void {
         // BEAM runtime does the same (kex_intrinsic_math:cbrt/1), where the
         // pow-based computation is even likelier to land just off.
         const double rounded = std::round(root);
-        if (rounded * rounded * rounded == x) root = rounded;
+        if (rounded * rounded * rounded == x) {
+            root = rounded;
+        }
         return finite(root, "Math.cbrt");
     });
     reg("Math.sin", [](std::vector<ValuePtr> args) -> ValuePtr {
@@ -76,7 +87,9 @@ auto Evaluator::registerMathBuiltins() -> void {
         return finite(std::atan(args.empty() ? 0.0 : toDouble(args[0])), "Math.atan");
     });
     reg("Math.atan2", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::floating(0.0);
+        if (args.size() < 2) {
+            return Value::floating(0.0);
+        }
         return finite(std::atan2(toDouble(args[0]), toDouble(args[1])), "Math.atan2");
     });
     reg("Math.sinh", [](std::vector<ValuePtr> args) -> ValuePtr {
@@ -94,9 +107,13 @@ auto Evaluator::registerMathBuiltins() -> void {
     // Math.log(x) is natural log; Math.log(x, base) is log base `base` —
     // same two-arity shape as Ruby's Math.log.
     reg("Math.log", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::floating(0.0);
+        if (args.empty()) {
+            return Value::floating(0.0);
+        }
         auto x = std::log(toDouble(args[0]));
-        if (args.size() < 2) return finite(x, "Math.log");
+        if (args.size() < 2) {
+            return finite(x, "Math.log");
+        }
         return finite(x / std::log(toDouble(args[1])), "Math.log");
     });
     reg("Math.log2", [](std::vector<ValuePtr> args) -> ValuePtr {
@@ -106,11 +123,15 @@ auto Evaluator::registerMathBuiltins() -> void {
         return finite(std::log10(args.empty() ? 0.0 : toDouble(args[0])), "Math.log10");
     });
     reg("Math.hypot", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::floating(0.0);
+        if (args.size() < 2) {
+            return Value::floating(0.0);
+        }
         return finite(std::hypot(toDouble(args[0]), toDouble(args[1])), "Math.hypot");
     });
     reg("Math.pow", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::floating(0.0);
+        if (args.size() < 2) {
+            return Value::floating(0.0);
+        }
         return finite(std::pow(toDouble(args[0]), toDouble(args[1])), "Math.pow");
     });
 
@@ -118,8 +139,9 @@ auto Evaluator::registerMathBuiltins() -> void {
     // publishes its own private intrinsic identities. Do not reintroduce the
     // old bare-name bridge: Kex.Intrinsic.Math dispatch is category-qualified.
     for (const char* name : {"abs", "ceil", "floor"}) {
-        if (auto value = m_intrinsicEnv->get("Number." + std::string(name)))
+        if (auto value = m_intrinsicEnv->get("Number." + std::string(name))) {
             defineIntrinsic("Math." + std::string(name), value);
+        }
     }
 }
 

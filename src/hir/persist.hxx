@@ -19,13 +19,16 @@ auto nodeOrder(const ast::Program& program) -> std::vector<const ast::Expr*>;
 
 // `program`'s answers for `ast`, the tree `order` was taken from (`load`
 // reads them back against the same tree).
-auto save(const Program& program, const ast::Program& ast,
-          const std::vector<const ast::Expr*>& order) -> std::vector<uint8_t>;
+auto save(
+    const Program& program, const ast::Program& ast, const std::vector<const ast::Expr*>& order)
+    -> std::vector<uint8_t>;
 
 // The program `bytes` describe, answering for `ast`'s nodes in `order`; null
 // when the bytes are malformed, of another format, or of another program
 // (another node count).
-auto load(const ast::Program& ast, const std::vector<const ast::Expr*>& order,
-          const std::vector<uint8_t>& bytes) -> std::unique_ptr<Program>;
+auto load(
+    const ast::Program& ast,
+    const std::vector<const ast::Expr*>& order,
+    const std::vector<uint8_t>& bytes) -> std::unique_ptr<Program>;
 
 } // namespace kex::hir

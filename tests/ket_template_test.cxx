@@ -11,8 +11,7 @@ auto synText(const Translation& t, size_t index) -> std::string {
     return t.source.substr(seg.synStart, seg.synEnd - seg.synStart);
 }
 
-auto origText(const std::string& original, const Translation& t, size_t index)
-    -> std::string {
+auto origText(const std::string& original, const Translation& t, size_t index) -> std::string {
     const auto& seg = t.segments.at(index);
     return original.substr(seg.origStart, seg.origEnd - seg.origStart);
 }
@@ -21,8 +20,7 @@ int main() {
     describe("ket::translate — no frontmatter", []() {
         it("wraps a bodyless template in an empty render function", []() {
             auto t = translate("Hi there");
-            assertTrue(t.source.find("let __ket_render() do") !=
-                       std::string::npos, t.source);
+            assertTrue(t.source.find("let __ket_render() do") != std::string::npos, t.source);
             assertTrue(t.segments.empty());
         });
 
@@ -53,8 +51,7 @@ int main() {
         });
 
         it("copies a control tag's body verbatim as a statement", []() {
-            const std::string source =
-                "<% if admin %>\nWelcome back.\n<% end %>\n";
+            const std::string source = "<% if admin %>\nWelcome back.\n<% end %>\n";
             auto t = translate(source);
             assertEqual(t.segments.size(), size_t(2));
             assertEqual(synText(t, 0), std::string(" if admin "));
@@ -77,32 +74,29 @@ int main() {
 
     describe("ket::translate — frontmatter params", []() {
         it("declares typed and untyped parameters on the synthetic function", []() {
-            const std::string source =
-                "---\nparams: [name, library: Bool]\n---\n<%= name %>";
+            const std::string source = "---\nparams: [name, library: Bool]\n---\n<%= name %>";
             auto t = translate(source);
-            assertTrue(t.source.find(
-                "let __ket_render(name, library: Bool) do") !=
-                std::string::npos, t.source);
+            assertTrue(
+                t.source.find("let __ket_render(name, library: Bool) do") != std::string::npos,
+                t.source);
         });
 
         it("declares no parameters when params is absent", []() {
             auto t = translate("---\ntitle: Release notes\n---\nHi");
-            assertTrue(t.source.find("let __ket_render() do") !=
-                       std::string::npos, t.source);
+            assertTrue(t.source.find("let __ket_render() do") != std::string::npos, t.source);
         });
 
         it("keeps a bracketed type's own comma out of the split", []() {
-            const std::string source =
-                "---\nparams: [pairs: Map<String, Integer>, other]\n---\n";
+            const std::string source = "---\nparams: [pairs: Map<String, Integer>, other]\n---\n";
             auto t = translate(source);
-            assertTrue(t.source.find(
-                "let __ket_render(pairs: Map<String, Integer>, other) do") !=
-                std::string::npos, t.source);
+            assertTrue(
+                t.source.find("let __ket_render(pairs: Map<String, Integer>, other) do") !=
+                    std::string::npos,
+                t.source);
         });
 
         it("maps hole positions past the frontmatter block correctly", []() {
-            const std::string source =
-                "---\nparams: [name]\n---\n<%= name %>";
+            const std::string source = "---\nparams: [name]\n---\n<%= name %>";
             auto t = translate(source);
             assertEqual(t.segments.size(), size_t(1));
             assertEqual(origText(source, t, 0), std::string(" name "));

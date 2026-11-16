@@ -73,8 +73,9 @@ auto popenCapture(const std::string& cmd) -> std::string {
     if (pipe) {
         std::array<char, 4096> buf;
         size_t n;
-        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0) {
             result.append(buf.data(), n);
+        }
         pclose(pipe);
     }
     return result;
@@ -90,16 +91,16 @@ auto popenCapture(const std::string& cmd) -> std::string {
 // persistent `--compile -o dir` build, then a SEPARATE `erl` invocation —
 // the shape `tey`/a deployed release actually runs a compiled program in —
 // loads modules lazily, the only way to observe it.
-auto runKex(const fs::path& libRoot, const fs::path& entry, const fs::path& outDir)
-    -> std::string {
+auto runKex(const fs::path& libRoot, const fs::path& entry, const fs::path& outDir) -> std::string {
     std::string compileCmd = std::string(KEX_BINARY_PATH) +
-        " --compile --no-colors --source-root " + libRoot.string() +
-        " -o " + outDir.string() + " " + entry.string() + " 2>&1";
+                             " --compile --no-colors --source-root " + libRoot.string() + " -o " +
+                             outDir.string() + " " + entry.string() + " 2>&1";
     auto compileOutput = popenCapture(compileCmd);
-    if (!fs::exists(outDir / "kex_main.beam"))
+    if (!fs::exists(outDir / "kex_main.beam")) {
         return "compile failed:\n" + compileOutput;
-    std::string runCmd = "erl -pa " + outDir.string() +
-        " -noshell -eval 'kex_main:main(), halt().' 2>&1";
+    }
+    std::string runCmd =
+        "erl -pa " + outDir.string() + " -noshell -eval 'kex_main:main(), halt().' 2>&1";
     return popenCapture(runCmd);
 }
 
@@ -119,10 +120,11 @@ int main() {
             fs::create_directories(outDir);
 
             auto output = runKex(lib, entry, outDir);
-            assertEqual(output, std::string("5\n8\n"),
-                        "the very first slot call must dispatch correctly, "
-                        "not fall back to an unrelated same-named method "
-                        "elsewhere in the build");
+            assertEqual(
+                output, std::string("5\n8\n"),
+                "the very first slot call must dispatch correctly, "
+                "not fall back to an unrelated same-named method "
+                "elsewhere in the build");
 
             std::error_code ec;
             fs::remove_all(root, ec);

@@ -24,8 +24,7 @@ auto clonePattern(const Pattern& p, const Rename& rename = {}) -> PatternPtr;
 auto bindPattern(const Pattern& p, std::set<std::string>& bound) -> void;
 
 // The variables `e` reads that are bound outside it (not in `bound`).
-auto collectFree(const Expr& e, std::set<std::string> bound,
-                 std::set<std::string>& out) -> void;
+auto collectFree(const Expr& e, std::set<std::string> bound, std::set<std::string>& out) -> void;
 
 // Whether an early `return` in `e` leaves the function it is written in (one
 // inside a nested lambda leaves that lambda). Code holding one cannot move

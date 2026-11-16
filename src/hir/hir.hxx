@@ -23,7 +23,7 @@
 namespace kex::semantic {
 class Analyzer;
 struct Signature;
-}
+} // namespace kex::semantic
 
 namespace kex::hir {
 
@@ -57,7 +57,8 @@ struct Answers {
     std::unordered_map<const ast::Expr*, semantic::Signature> selected;
     semantic::ShownThrough shownThroughDistinct;
     // The trait defaults each `make` block inherits (inheritedDefaultsOf).
-    std::unordered_map<const ast::MakeDef*, std::vector<semantic::InheritedDefault>> inheritedDefaults;
+    std::unordered_map<const ast::MakeDef*, std::vector<semantic::InheritedDefault>>
+        inheritedDefaults;
     // The types each `make` block is for, by identity (makeTargetsOf).
     std::unordered_map<const ast::MakeDef*, std::vector<std::string>> makeTargets;
     // What a clause's successful value is wrapped in, by its last body
@@ -72,10 +73,10 @@ public:
     Program(const ast::Program& ast, const semantic::Analyzer& analysis);
     // A program whose answers were loaded (persist.hxx), not analysed here:
     // `targets` keyed by expression, `answers` owned.
-    Program(const ast::Program& ast,
-            const std::unordered_map<const ast::Expr*, Target>& targets,
-            std::unique_ptr<Answers> answers);
-
+    Program(
+        const ast::Program& ast,
+        const std::unordered_map<const ast::Expr*, Target>& targets,
+        std::unique_ptr<Answers> answers);
 
     // What `call` is; a Target of kind Undecided when nothing decided it.
     auto targetOf(const ast::Expr& call) const -> const Target&;
@@ -96,8 +97,7 @@ public:
     // `Type` record both backends build for it, or nullopt.
     auto typeValueOf(const ast::Expr& expr) const -> std::optional<semantic::StructuredType>;
     // The checker's compile-time answer to `Type.of(x)` at `call`, or null.
-    auto typeOfAnswer(const ast::MethodCall& call) const
-        -> const semantic::StaticTypeAnswer*;
+    auto typeOfAnswer(const ast::MethodCall& call) const -> const semantic::StaticTypeAnswer*;
     // The signature the checker selected for `call`, or null.
     auto selectedSignatureOf(const ast::Expr& call) const -> const semantic::Signature*;
     // The same, for the call node inside the expression (what lowering holds).
@@ -117,8 +117,7 @@ public:
     // The imported function the checker resolved `call` to, with its placed
     // arguments, defaults and trait dictionaries; null for any other call,
     // and for a loaded program.
-    auto resolvedTargetOf(const ast::MethodCall& call) const
-        -> const semantic::ResolvedCallTarget*;
+    auto resolvedTargetOf(const ast::MethodCall& call) const -> const semantic::ResolvedCallTarget*;
     // The type whose implementation answers a trait dictionary for `value`
     // (TypeChecker::dictionaryTypeOf); "" for a loaded program.
     auto dictionaryTypeOf(const ast::Expr& value) const -> std::string;
@@ -128,8 +127,7 @@ public:
     // The trait a type spelling written in module `scope` names, as the
     // checker resolved it there; "" for any other spelling, and for a loaded
     // program.
-    auto traitWrittenAs(const std::string& scope, const std::string& written) const
-        -> std::string;
+    auto traitWrittenAs(const std::string& scope, const std::string& written) const -> std::string;
     // The declaration a `make` method is for (`Culture.Culture` for a method
     // of `make Culture`), and the record a named record pattern names, as the
     // checker resolved them; "" otherwise, and for a loaded program.
@@ -190,7 +188,9 @@ public:
     auto forEachAnsweredNode(const std::function<void(const void*)>& visit) const -> void;
 
     // Every call site, in source order, with its target.
-    auto callSites() const -> const std::vector<CallSite>& { return m_sites; }
+    auto callSites() const -> const std::vector<CallSite>& {
+        return m_sites;
+    }
 
 private:
     auto collectSites() -> void;
@@ -225,13 +225,19 @@ public:
     }
     // `program` answers first from now on.
     auto push(const Program* program) -> void {
-        if (!program) return;
+        if (!program) {
+            return;
+        }
         m_programs.push_back(program);
         program->forEachAnsweredNode([&](const void* node) { m_owners[node] = program; });
     }
-    auto empty() const -> bool { return m_programs.empty(); }
+    auto empty() const -> bool {
+        return m_programs.empty();
+    }
     // Read after every pushed one: the prelude's, which outlives them all.
-    auto setBase(const Program* program) -> void { m_base = program; }
+    auto setBase(const Program* program) -> void {
+        m_base = program;
+    }
 
     // What any expression is decided as (a bare nullary constructor's
     // module, say), where the call forms below do not cover it.
@@ -242,8 +248,7 @@ public:
     auto typeOf(const ast::Expr& expr) const -> semantic::TypePtr;
     auto typeValueOf(const ast::Expr& expr) const -> std::optional<semantic::StructuredType>;
     auto receiverTypeOf(const ast::Expr& call) const -> std::string;
-    auto typeOfAnswer(const ast::MethodCall& call) const
-        -> const semantic::StaticTypeAnswer*;
+    auto typeOfAnswer(const ast::MethodCall& call) const -> const semantic::StaticTypeAnswer*;
     auto selectedSignatureOf(const ast::Expr& call) const -> const semantic::Signature*;
     auto shownThroughOf(const ast::Expr& call, std::size_t index) const -> const std::string*;
     auto inheritedDefaultsOf(const ast::MakeDef& make) const

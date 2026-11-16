@@ -104,16 +104,16 @@ struct ExpandOptions {
 // The roots expansion actually searches: `roots`, then every standard-library
 // root not already among them. Two option sets with the same effective roots
 // expand a program the same way.
-auto effectiveModuleRoots(const std::vector<std::string>& roots)
-    -> std::vector<std::string>;
+auto effectiveModuleRoots(const std::vector<std::string>& roots) -> std::vector<std::string>;
 
 // Returns false and appends to `diagnostics` if expansion failed; the program
 // is left in an unspecified state in that case and must not be compiled.
 // Diagnostics are anchored at the USER's source location, not inside whatever
 // template generated the code.
-auto expand(ast::Program& program,
-            std::vector<semantic::Diagnostic>& diagnostics,
-            const ExpandOptions& options = {}) -> bool;
+auto expand(
+    ast::Program& program,
+    std::vector<semantic::Diagnostic>& diagnostics,
+    const ExpandOptions& options = {}) -> bool;
 
 // Where compile-time evaluation spends its time, for KEX_TIMINGS: how many
 // sandboxed evaluators were started, how long starting them took (an empty
@@ -154,7 +154,9 @@ public:
     ~DependencyRecorder();
     DependencyRecorder(const DependencyRecorder&) = delete;
     auto operator=(const DependencyRecorder&) -> DependencyRecorder& = delete;
-    auto files() const -> const std::set<std::string>& { return m_files; }
+    auto files() const -> const std::set<std::string>& {
+        return m_files;
+    }
     // The innermost live recorder, or null.
     static auto current() -> DependencyRecorder*;
 

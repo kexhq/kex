@@ -54,8 +54,8 @@ namespace {
 struct Options {
     std::string kex = "./build/kex";
     std::string outDir = "/tmp/kex-lsp-sweep";
-    std::set<std::string> checks{"hover", "recall", "soundness", "diagnostics",
-                                 "definition", "crash"};
+    std::set<std::string> checks{"hover",       "recall",     "soundness",
+                                 "diagnostics", "definition", "crash"};
     std::size_t sample = 3;
     std::size_t maxSitesPerFile = 40;
     unsigned seed = 1;
@@ -68,21 +68,25 @@ struct Token {
     int line = 0;
     int column = 0;
     std::string text;
-    bool afterDot = false;  // `recv.text`, where recv is an expression
+    bool afterDot = false; // `recv.text`, where recv is an expression
 };
 
 struct Finding {
     std::string check;
     std::string file;
-    int line = 0;    // 1-based
-    int column = 0;  // 1-based
+    int line = 0;   // 1-based
+    int column = 0; // 1-based
     std::string detail;
 };
 
 std::vector<Finding> findings;
 
-auto report(const std::string& check, const std::string& file, int line,
-            int column, const std::string& detail) -> void {
+auto report(
+    const std::string& check,
+    const std::string& file,
+    int line,
+    int column,
+    const std::string& detail) -> void {
     findings.push_back({check, file, line + 1, column + 1, detail});
 }
 
@@ -101,8 +105,11 @@ auto writeFile(const std::string& path, const std::string& text) -> void {
 auto shellQuote(const std::string& text) -> std::string {
     std::string out = "'";
     for (const char c : text) {
-        if (c == '\'') out += "'\\''";
-        else out += c;
+        if (c == '\'') {
+            out += "'\\''";
+        } else {
+            out += c;
+        }
     }
     return out + "'";
 }
@@ -113,8 +120,9 @@ auto capture(const std::string& command) -> std::string {
     if (FILE* pipe = popen(command.c_str(), "r")) {
         char buffer[65536];
         std::size_t n = 0;
-        while ((n = std::fread(buffer, 1, sizeof buffer, pipe)) > 0)
+        while ((n = std::fread(buffer, 1, sizeof buffer, pipe)) > 0) {
             out.append(buffer, n);
+        }
         pclose(pipe);
     }
     return out;
@@ -144,8 +152,8 @@ auto isIdentChar(char c) -> bool {
 }
 
 auto asciiOnly(const std::string& line) -> bool {
-    return std::all_of(line.begin(), line.end(),
-                       [](char c) { return static_cast<unsigned char>(c) < 0x80; });
+    return std::all_of(
+        line.begin(), line.end(), [](char c) { return static_cast<unsigned char>(c) < 0x80; });
 }
 
 // The identifiers of `text` outside comments and string literals. Crude on
@@ -163,16 +171,22 @@ auto identifiers(const std::string& text) -> std::vector<Token> {
             inHeredoc = !inHeredoc;
             continue;
         }
-        if (inHeredoc || !asciiOnly(line)) continue;
+        if (inHeredoc || !asciiOnly(line)) {
+            continue;
+        }
         std::size_t i = 0;
         while (i < line.size()) {
             const char c = line[i];
-            if (c == '#') break;
+            if (c == '#') {
+                break;
+            }
             if (c == '"' || c == '`' || c == '\'') {
                 const char quote = c;
                 ++i;
                 while (i < line.size() && line[i] != quote) {
-                    if (line[i] == '\\') ++i;
+                    if (line[i] == '\\') {
+                        ++i;
+                    }
                     ++i;
                 }
                 ++i;
@@ -182,19 +196,25 @@ auto identifiers(const std::string& text) -> std::vector<Token> {
                 (i == 0 || !isIdentChar(line[i - 1]))) {
                 // An atom, `:name`: not an identifier.
                 i += 2;
-                while (i < line.size() && isIdentChar(line[i])) ++i;
+                while (i < line.size() && isIdentChar(line[i])) {
+                    ++i;
+                }
                 continue;
             }
             if (isIdentStart(c) && (i == 0 || !isIdentChar(line[i - 1]))) {
                 std::size_t end = i;
-                while (end < line.size() && isIdentChar(line[end])) ++end;
-                if (end < line.size() && (line[end] == '?' || line[end] == '!'))
+                while (end < line.size() && isIdentChar(line[end])) {
                     ++end;
+                }
+                if (end < line.size() && (line[end] == '?' || line[end] == '!')) {
+                    ++end;
+                }
                 Token token{ln, static_cast<int>(i), line.substr(i, end - i)};
                 if (i >= 2 && line[i - 1] == '.' &&
-                    (isIdentChar(line[i - 2]) || line[i - 2] == ')' ||
-                     line[i - 2] == ']' || line[i - 2] == '}'))
+                    (isIdentChar(line[i - 2]) || line[i - 2] == ')' || line[i - 2] == ']' ||
+                     line[i - 2] == '}')) {
                     token.afterDot = true;
+                }
                 // `BEAM.lists.reverse` names an Erlang module and function:
                 // no Kex declaration lists them, so nothing can be offered or
                 // checked there.
@@ -202,7 +222,9 @@ auto identifiers(const std::string& text) -> std::vector<Token> {
                     std::size_t root = i;
                     while (root >= 2 && line[root - 1] == '.' && isIdentChar(line[root - 2])) {
                         root -= 1;
-                        while (root > 0 && isIdentChar(line[root - 1])) --root;
+                        while (root > 0 && isIdentChar(line[root - 1])) {
+                            --root;
+                        }
                     }
                     if (line.compare(root, 5, "BEAM.") == 0 &&
                         (root == 0 || !isIdentChar(line[root - 1]))) {
@@ -222,12 +244,12 @@ auto identifiers(const std::string& text) -> std::vector<Token> {
 
 auto isKeyword(const std::string& word) -> bool {
     static const std::set<std::string> keywords{
-        "let", "var", "do", "end", "if", "else", "elsif", "unless", "then",
-        "match", "when", "case", "for", "in", "while", "return", "using",
-        "make", "trait", "type", "record", "true", "false", "and", "or",
-        "not", "foul", "main", "receive", "after", "compiled", "rescue",
-        "serving", "slot", "break", "next", "this", "module", "is", "as",
-        "where", "with", "test", "describe", "it", "expect", "spec", "self"};
+        "let",     "var",   "do",    "end",      "if",      "else",   "elsif",    "unless",
+        "then",    "match", "when",  "case",     "for",     "in",     "while",    "return",
+        "using",   "make",  "trait", "type",     "record",  "true",   "false",    "and",
+        "or",      "not",   "foul",  "main",     "receive", "after",  "compiled", "rescue",
+        "serving", "slot",  "break", "next",     "this",    "module", "is",       "as",
+        "where",   "with",  "test",  "describe", "it",      "expect", "spec",     "self"};
     return keywords.count(word) > 0;
 }
 
@@ -244,16 +266,21 @@ auto withVariablesRenamed(const std::string& type) -> std::string {
             continue;
         }
         std::size_t end = i;
-        while (end < type.size() && isIdentChar(type[end])) ++end;
+        while (end < type.size() && isIdentChar(type[end])) {
+            ++end;
+        }
         const auto word = type.substr(i, end - i);
         const bool variable =
             (word.size() == 1 && std::isupper(static_cast<unsigned char>(word[0]))) ||
             (word.size() > 1 && word[0] == 'T' &&
-             std::all_of(word.begin() + 1, word.end(),
-                         [](char c) { return std::isdigit(static_cast<unsigned char>(c)); }));
+             std::all_of(word.begin() + 1, word.end(), [](char c) {
+                 return std::isdigit(static_cast<unsigned char>(c));
+             }));
         if (variable) {
             auto [found, added] = names.try_emplace(word, "");
-            if (added) found->second = "#" + std::to_string(names.size());
+            if (added) {
+                found->second = "#" + std::to_string(names.size());
+            }
             out += found->second;
         } else {
             // The checker's `Unknown` is displayed as `Any`.
@@ -267,30 +294,33 @@ auto withVariablesRenamed(const std::string& type) -> std::string {
 // `kex -C -t`: the types the checker inferred, by 1-based line and column.
 struct CheckerView {
     std::map<std::pair<int, int>, std::vector<std::string>> types;
-    std::set<std::string> errors;  // "line:col: message"
+    std::set<std::string> errors; // "line:col: message"
 };
 
-auto checkerView(const Options& options, const std::string& path,
-                 const std::string& sourceRoot) -> CheckerView {
+auto checkerView(const Options& options, const std::string& path, const std::string& sourceRoot)
+    -> CheckerView {
     CheckerView view;
     const auto output = capture(
-        "timeout " + std::to_string(options.timeoutSeconds) + " " +
-        shellQuote(options.kex) + " -C -t --no-colors --source-root " +
-        shellQuote(sourceRoot) + " " + shellQuote(path) + " 2>&1");
+        "timeout " + std::to_string(options.timeoutSeconds) + " " + shellQuote(options.kex) +
+        " -C -t --no-colors --source-root " + shellQuote(sourceRoot) + " " + shellQuote(path) +
+        " 2>&1");
     for (const auto& line : splitLines(output)) {
         int ln = 0, col = 0, used = 0;
-        if (std::sscanf(line.c_str(), "%d:%d %n", &ln, &col, &used) == 2 &&
-            used > 0 && line.find(": error") == std::string::npos) {
+        if (std::sscanf(line.c_str(), "%d:%d %n", &ln, &col, &used) == 2 && used > 0 &&
+            line.find(": error") == std::string::npos) {
             auto type = line.substr(used);
-            while (!type.empty() && type.front() == ' ') type.erase(type.begin());
+            while (!type.empty() && type.front() == ' ') {
+                type.erase(type.begin());
+            }
             view.types[{ln, col}].push_back(type);
             continue;
         }
         const auto marker = path + ":";
         if (line.rfind(marker, 0) == 0) {
             const auto rest = line.substr(marker.size());
-            if (const auto at = rest.find(": error: "); at != std::string::npos)
+            if (const auto at = rest.find(": error: "); at != std::string::npos) {
                 view.errors.insert(rest.substr(0, at) + ": " + rest.substr(at + 9));
+            }
         }
     }
     return view;
@@ -313,14 +343,18 @@ struct Session {
     std::map<int, Token> tokenOf;
     std::map<int, std::string> purposeOf;
 
-    auto ask(const std::string& method, int line, int character,
-             const Token& token, const std::string& purpose) -> int {
+    auto
+    ask(const std::string& method,
+        int line,
+        int character,
+        const Token& token,
+        const std::string& purpose) -> int {
         const int id = nextId++;
-        requests += frame(R"({"jsonrpc":"2.0","id":)" + std::to_string(id) +
-                          R"(,"method":"textDocument/)" + method +
-                          R"(","params":{"textDocument":{"uri":)" + jsonString(uri) +
-                          R"(},"position":{"line":)" + std::to_string(line) +
-                          R"(,"character":)" + std::to_string(character) + "}}}");
+        requests += frame(
+            R"({"jsonrpc":"2.0","id":)" + std::to_string(id) + R"(,"method":"textDocument/)" +
+            method + R"(","params":{"textDocument":{"uri":)" + jsonString(uri) +
+            R"(},"position":{"line":)" + std::to_string(line) + R"(,"character":)" +
+            std::to_string(character) + "}}}");
         methodOf[id] = method;
         tokenOf[id] = token;
         purposeOf[id] = purpose;
@@ -332,19 +366,21 @@ struct SessionResult {
     bool completed = false;
     std::map<int, json::Value> results;
     std::map<int, std::string> errors;
-    std::vector<json::Value> diagnostics;  // the last publish for the document
+    std::vector<json::Value> diagnostics; // the last publish for the document
     std::string stderrTail;
 };
 
-auto runSession(const Options& options, Session& session,
-                const std::string& text, const std::string& workDir)
+auto runSession(
+    const Options& options, Session& session, const std::string& text, const std::string& workDir)
     -> SessionResult {
     std::string input;
-    input += frame(R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+    input += frame(
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
     input += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
-    input += frame(R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":)" +
-                   jsonString(session.uri) +
-                   R"(,"languageId":"kex","version":1,"text":)" + jsonString(text) + "}}}");
+    input += frame(
+        R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":)" +
+        jsonString(session.uri) + R"(,"languageId":"kex","version":1,"text":)" + jsonString(text) +
+        "}}}");
     input += session.requests;
     input += frame(R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
     input += frame(R"({"jsonrpc":"2.0","method":"exit"})");
@@ -352,9 +388,8 @@ auto runSession(const Options& options, Session& session,
     const auto errorPath = workDir + "/stderr.txt";
     writeFile(requestPath, input);
     const auto output = capture(
-        "timeout " + std::to_string(options.timeoutSeconds) + " " +
-        shellQuote(options.kex) + " --lsp < " + shellQuote(requestPath) +
-        " 2> " + shellQuote(errorPath));
+        "timeout " + std::to_string(options.timeoutSeconds) + " " + shellQuote(options.kex) +
+        " --lsp < " + shellQuote(requestPath) + " 2> " + shellQuote(errorPath));
 
     SessionResult result;
     const auto errors = readFile(errorPath);
@@ -362,10 +397,14 @@ auto runSession(const Options& options, Session& session,
     std::size_t cursor = 0;
     while (true) {
         const auto header = output.find("Content-Length:", cursor);
-        if (header == std::string::npos) break;
+        if (header == std::string::npos) {
+            break;
+        }
         const auto length = std::strtoul(output.c_str() + header + 15, nullptr, 10);
         const auto body = output.find("\r\n\r\n", header);
-        if (body == std::string::npos) break;
+        if (body == std::string::npos) {
+            break;
+        }
         const auto message = output.substr(body + 4, length);
         cursor = body + 4 + length;
         json::Value value;
@@ -374,38 +413,51 @@ auto runSession(const Options& options, Session& session,
         } catch (const std::exception&) {
             continue;
         }
-        if (!value.isObject()) continue;
+        if (!value.isObject()) {
+            continue;
+        }
         const auto& object = value.object();
         if (const auto* method = object.find("method");
-            method && method->isString() &&
-            method->string() == "textDocument/publishDiagnostics") {
+            method && method->isString() && method->string() == "textDocument/publishDiagnostics") {
             const auto& params = object.get("params").object();
-            if (params.get("uri").string() == session.uri)
+            if (params.get("uri").string() == session.uri) {
                 result.diagnostics = params.get("diagnostics").array();
+            }
             continue;
         }
         const auto* id = object.find("id");
-        if (!id || !id->isInteger()) continue;
-        if (id->integer() == 2) result.completed = true;
-        if (const auto* error = object.find("error"))
+        if (!id || !id->isInteger()) {
+            continue;
+        }
+        if (id->integer() == 2) {
+            result.completed = true;
+        }
+        if (const auto* error = object.find("error")) {
             result.errors[id->integer()] = json::stringify(*error);
-        else if (const auto* answer = object.find("result"))
+        } else if (const auto* answer = object.find("result")) {
             result.results[id->integer()] = *answer;
+        }
     }
     return result;
 }
 
 // The text a hover shows, with markdown fences removed.
 auto hoverText(const json::Value& hover) -> std::string {
-    if (!hover.isObject()) return {};
+    if (!hover.isObject()) {
+        return {};
+    }
     const auto* contents = hover.object().find("contents");
-    if (!contents) return {};
+    if (!contents) {
+        return {};
+    }
     std::string text;
-    if (contents->isString()) text = contents->string();
-    else if (contents->isObject())
-        if (const auto* value = contents->object().find("value");
-            value && value->isString())
+    if (contents->isString()) {
+        text = contents->string();
+    } else if (contents->isObject()) {
+        if (const auto* value = contents->object().find("value"); value && value->isString()) {
             text = value->string();
+        }
+    }
     return text;
 }
 
@@ -413,10 +465,15 @@ auto hoverText(const json::Value& hover) -> std::string {
 // line, or empty when the hover is not of that form.
 auto hoverType(const std::string& hover, const std::string& name) -> std::optional<std::string> {
     for (const auto& line : splitLines(hover)) {
-        if (line.rfind("```", 0) == 0 || line.empty()) continue;
-        for (const std::string& prefix : {"let " + name + ": ", "var " + name + ": ",
-                                         name + ": ", name + " : "})
-            if (line.rfind(prefix, 0) == 0) return line.substr(prefix.size());
+        if (line.rfind("```", 0) == 0 || line.empty()) {
+            continue;
+        }
+        for (const std::string& prefix :
+             {"let " + name + ": ", "var " + name + ": ", name + ": ", name + " : "}) {
+            if (line.rfind(prefix, 0) == 0) {
+                return line.substr(prefix.size());
+            }
+        }
         return std::nullopt;
     }
     return std::nullopt;
@@ -424,23 +481,30 @@ auto hoverType(const std::string& hover, const std::string& name) -> std::option
 
 auto completionLabels(const json::Value& answer) -> std::vector<std::string> {
     const json::Array* items = nullptr;
-    if (answer.isArray()) items = &answer.array();
-    else if (answer.isObject())
-        if (const auto* list = answer.object().find("items"); list && list->isArray())
+    if (answer.isArray()) {
+        items = &answer.array();
+    } else if (answer.isObject()) {
+        if (const auto* list = answer.object().find("items"); list && list->isArray()) {
             items = &list->array();
+        }
+    }
     std::vector<std::string> labels;
-    if (!items) return labels;
-    for (const auto& item : *items)
+    if (!items) {
+        return labels;
+    }
+    for (const auto& item : *items) {
         if (item.isObject()) {
             // What the item inserts, which is the name: a label may carry
             // decoration (`foul printLine`).
             const auto& object = item.object();
-            for (const char* key : {"filterText", "insertText", "label"})
+            for (const char* key : {"filterText", "insertText", "label"}) {
                 if (const auto* text = object.find(key); text && text->isString()) {
                     labels.push_back(text->string());
                     break;
                 }
+            }
         }
+    }
     return labels;
 }
 
@@ -448,21 +512,32 @@ auto completionLabels(const json::Value& answer) -> std::vector<std::string> {
 // inserts: `min : [A] -> A?` offers `min` for a `[A]`.
 auto offeredReceivers(const json::Value& answer) -> std::map<std::string, std::string> {
     const json::Array* items = nullptr;
-    if (answer.isArray()) items = &answer.array();
-    else if (answer.isObject())
-        if (const auto* list = answer.object().find("items"); list && list->isArray())
+    if (answer.isArray()) {
+        items = &answer.array();
+    } else if (answer.isObject()) {
+        if (const auto* list = answer.object().find("items"); list && list->isArray()) {
             items = &list->array();
+        }
+    }
     std::map<std::string, std::string> receivers;
-    if (!items) return receivers;
+    if (!items) {
+        return receivers;
+    }
     for (const auto& item : *items) {
-        if (!item.isObject()) continue;
+        if (!item.isObject()) {
+            continue;
+        }
         const auto& object = item.object();
         const auto* name = object.find("filterText");
         const auto* detail = object.find("detail");
-        if (!name || !name->isString() || !detail || !detail->isString()) continue;
+        if (!name || !name->isString() || !detail || !detail->isString()) {
+            continue;
+        }
         const auto& text = detail->string();
         const auto colon = text.find(" : ");
-        if (colon == std::string::npos) continue;
+        if (colon == std::string::npos) {
+            continue;
+        }
         const auto from = colon + 3;
         receivers[name->string()] = text.substr(from, text.find(" -> ", from) - from);
     }
@@ -473,28 +548,33 @@ auto offeredReceivers(const json::Value& answer) -> std::map<std::string, std::s
 // have been offered: unknown, not in scope, or — after a dot — not for this
 // receiver (its first argument refused). Arity errors and later arguments'
 // types are expected: the substitution keeps the original call's arguments.
-auto rejectsOffer(const std::string& message, const std::string& label, bool afterDot)
-    -> bool {
-    if (afterDot && message.rfind("`" + label + "` expects argument 1 to be", 0) == 0)
+auto rejectsOffer(const std::string& message, const std::string& label, bool afterDot) -> bool {
+    if (afterDot && message.rfind("`" + label + "` expects argument 1 to be", 0) == 0) {
         return true;
+    }
     // About another name first (`+` is not defined for Type<Type> and
     // String): the offered one is only its operand.
-    if (message.starts_with("`") && !message.starts_with("`" + label + "`")) return false;
+    if (message.starts_with("`") && !message.starts_with("`" + label + "`")) {
+        return false;
+    }
     if (message.find("`" + label + "`") == std::string::npos &&
         message.find("'" + label + "'") == std::string::npos &&
-        message.find(" " + label) == std::string::npos)
+        message.find(" " + label) == std::string::npos) {
         return false;
+    }
     // About the name itself: `UInt32` offered in place of a receiver draws
     // "`UInt32` has no function `biases`", which is about the member.
-    for (const char* marker : {"Undefined", "undefined", "not in scope", "not visible",
-                               "not defined", "not imported", "is private",
-                               "without `using"})
-        if (message.find(marker) != std::string::npos) return true;
+    for (const char* marker :
+         {"Undefined", "undefined", "not in scope", "not visible", "not defined", "not imported",
+          "is private", "without `using"}) {
+        if (message.find(marker) != std::string::npos) {
+            return true;
+        }
+    }
     return false;
 }
 
-auto sweepFile(const Options& options, const std::string& path, std::mt19937& rng)
-    -> void {
+auto sweepFile(const Options& options, const std::string& path, std::mt19937& rng) -> void {
     const auto absolute = fs::absolute(path).lexically_normal().string();
     const auto text = readFile(absolute);
     const auto lines = splitLines(text);
@@ -513,70 +593,92 @@ auto sweepFile(const Options& options, const std::string& path, std::mt19937& rn
     std::vector<Token> dotSites;
     std::vector<Token> bareSites;
     for (const auto& token : tokens) {
-        if (isKeyword(token.text)) continue;
+        if (isKeyword(token.text)) {
+            continue;
+        }
         const bool lower = std::islower(static_cast<unsigned char>(token.text[0]));
         // An assignment's target (`sql = sql + ...`) is where the checker
         // records the assignment, a Void, and not the name: it is no site.
         const auto rest = lines[token.line].substr(token.column + token.text.size());
         const auto next = rest.find_first_not_of(' ');
-        const bool assigned = next != std::string::npos && rest[next] == '=' &&
-                              (next + 1 >= rest.size() ||
-                               (rest[next + 1] != '=' && rest[next + 1] != '>'));
-        if (lower && !assigned && checker.types.count({token.line + 1, token.column + 1}))
+        const bool assigned =
+            next != std::string::npos && rest[next] == '=' &&
+            (next + 1 >= rest.size() || (rest[next + 1] != '=' && rest[next + 1] != '>'));
+        if (lower && !assigned && checker.types.count({token.line + 1, token.column + 1})) {
             hoverSites.push_back(token);
-        if (token.afterDot && lower) dotSites.push_back(token);
-        else if (lower) bareSites.push_back(token);
+        }
+        if (token.afterDot && lower) {
+            dotSites.push_back(token);
+        } else if (lower) {
+            bareSites.push_back(token);
+        }
     }
     auto sampleOf = [&](std::vector<Token> sites) {
         std::shuffle(sites.begin(), sites.end(), rng);
-        if (sites.size() > options.maxSitesPerFile) sites.resize(options.maxSitesPerFile);
+        if (sites.size() > options.maxSitesPerFile) {
+            sites.resize(options.maxSitesPerFile);
+        }
         return sites;
     };
-    if (options.checks.count("hover"))
-        for (const auto& token : sampleOf(hoverSites))
+    if (options.checks.count("hover")) {
+        for (const auto& token : sampleOf(hoverSites)) {
             session.ask("hover", token.line, token.column, token, "hover");
-    if (options.checks.count("definition"))
-        for (const auto& token : sampleOf(bareSites))
+        }
+    }
+    if (options.checks.count("definition")) {
+        for (const auto& token : sampleOf(bareSites)) {
             session.ask("definition", token.line, token.column, token, "definition");
+        }
+    }
     const auto dotSample = sampleOf(dotSites);
-    if (options.checks.count("recall"))
-        for (const auto& token : dotSample)
-            session.ask("completion", token.line,
-                        token.column + static_cast<int>(token.text.size()), token, "recall");
+    if (options.checks.count("recall")) {
+        for (const auto& token : dotSample) {
+            session.ask(
+                "completion", token.line, token.column + static_cast<int>(token.text.size()), token,
+                "recall");
+        }
+    }
     if (options.checks.count("soundness")) {
-        for (const auto& token : dotSample)
+        for (const auto& token : dotSample) {
             session.ask("completion", token.line, token.column, token, "sound-dot");
-        for (const auto& token : sampleOf(bareSites))
+        }
+        for (const auto& token : sampleOf(bareSites)) {
             session.ask("completion", token.line, token.column, token, "sound-bare");
+        }
     }
 
     const auto result = runSession(options, session, text, workDir);
     if (!result.completed) {
-        if (options.checks.count("crash"))
-            report("crash", path, 0, 0,
-                   "session did not reach shutdown: " + result.stderrTail);
+        if (options.checks.count("crash")) {
+            report("crash", path, 0, 0, "session did not reach shutdown: " + result.stderrTail);
+        }
         return;
     }
-    for (const auto& [id, error] : result.errors)
-        if (options.checks.count("crash"))
-            report("crash", path, session.tokenOf[id].line, session.tokenOf[id].column,
-                   session.methodOf[id] + " answered an error: " + error);
+    for (const auto& [id, error] : result.errors) {
+        if (options.checks.count("crash")) {
+            report(
+                "crash", path, session.tokenOf[id].line, session.tokenOf[id].column,
+                session.methodOf[id] + " answered an error: " + error);
+        }
+    }
 
     // Substitutions are checked after the session, in one batch per file.
     struct Substitution {
         Token token;
         std::string label;
         std::string purpose;
-        std::string receiver;  // the offered signature's first parameter
+        std::string receiver; // the offered signature's first parameter
     };
     std::vector<Substitution> substitutions;
 
     if (std::getenv("LSP_SWEEP_DUMP")) {
         std::ofstream dump(options.outDir + "/answers.txt", std::ios::app);
-        for (const auto& [id, answer] : result.results)
-            dump << path << ":" << session.tokenOf[id].line + 1 << ":" << session.tokenOf[id].column + 1
-                 << " " << session.purposeOf[id] << " `" << session.tokenOf[id].text << "` => "
-                 << json::stringify(answer).substr(0, 1500) << "\n";
+        for (const auto& [id, answer] : result.results) {
+            dump << path << ":" << session.tokenOf[id].line + 1 << ":"
+                 << session.tokenOf[id].column + 1 << " " << session.purposeOf[id] << " `"
+                 << session.tokenOf[id].text << "` => " << json::stringify(answer).substr(0, 1500)
+                 << "\n";
+        }
     }
     for (const auto& [id, answer] : result.results) {
         const auto& token = session.tokenOf[id];
@@ -585,12 +687,15 @@ auto sweepFile(const Options& options, const std::string& path, std::mt19937& rn
             const auto shown = hoverText(answer);
             const auto& inferred = checker.types.at({token.line + 1, token.column + 1});
             if (shown.empty()) {
-                report("hover", path, token.line, token.column,
-                       "no hover for `" + token.text + "` (checker: " + inferred.front() + ")");
+                report(
+                    "hover", path, token.line, token.column,
+                    "no hover for `" + token.text + "` (checker: " + inferred.front() + ")");
                 continue;
             }
             const auto type = hoverType(shown, token.text);
-            if (!type) continue;
+            if (!type) {
+                continue;
+            }
             // `(Integer -> Integer)` is `Integer -> Integer`: the parentheses a
             // function type is shown in say nothing about it.
             const auto unwrapped = [](std::string text) {
@@ -598,13 +703,16 @@ auto sweepFile(const Options& options, const std::string& path, std::mt19937& rn
                     int depth = 0;
                     bool wraps = true;
                     for (std::size_t i = 0; i < text.size(); ++i) {
-                        if (text[i] == '(') ++depth;
-                        else if (text[i] == ')' && --depth == 0 && i + 1 < text.size()) {
+                        if (text[i] == '(') {
+                            ++depth;
+                        } else if (text[i] == ')' && --depth == 0 && i + 1 < text.size()) {
                             wraps = false;
                             break;
                         }
                     }
-                    if (!wraps) break;
+                    if (!wraps) {
+                        break;
+                    }
                     text = text.substr(1, text.size() - 2);
                 }
                 return text;
@@ -615,25 +723,40 @@ auto sweepFile(const Options& options, const std::string& path, std::mt19937& rn
             };
             if (std::none_of(inferred.begin(), inferred.end(), same)) {
                 std::string known;
-                for (const auto& each : inferred) known += (known.empty() ? "" : " | ") + each;
-                report("hover", path, token.line, token.column,
-                       "`" + token.text + "` shown as " + *type + ", checker inferred " + known);
+                for (const auto& each : inferred) {
+                    known += (known.empty() ? "" : " | ") + each;
+                }
+                report(
+                    "hover", path, token.line, token.column,
+                    "`" + token.text + "` shown as " + *type + ", checker inferred " + known);
             }
         } else if (purpose == "definition") {
-            if (answer.isNull()) continue;
+            if (answer.isNull()) {
+                continue;
+            }
             const json::Value* location = &answer;
             if (answer.isArray()) {
-                if (answer.array().empty()) continue;
+                if (answer.array().empty()) {
+                    continue;
+                }
                 location = &answer.array().front();
             }
-            if (!location->isObject()) continue;
+            if (!location->isObject()) {
+                continue;
+            }
             const auto& object = location->object();
             const auto* uri = object.find("uri");
             const auto* range = object.find("range");
-            if (!uri || !range) uri = object.find("targetUri"), range = object.find("targetSelectionRange");
-            if (!uri || !range || !uri->isString()) continue;
+            if (!uri || !range) {
+                uri = object.find("targetUri"), range = object.find("targetSelectionRange");
+            }
+            if (!uri || !range || !uri->isString()) {
+                continue;
+            }
             auto targetPath = uri->string();
-            if (targetPath.rfind("file://", 0) == 0) targetPath = targetPath.substr(7);
+            if (targetPath.rfind("file://", 0) == 0) {
+                targetPath = targetPath.substr(7);
+            }
             const auto& start = range->object().get("start").object();
             const int line = start.get("line").integer();
             const int character = start.get("character").integer();
@@ -641,40 +764,49 @@ auto sweepFile(const Options& options, const std::string& path, std::mt19937& rn
                 targetPath == absolute ? lines : splitLines(readFile(targetPath));
             const auto at = line < static_cast<int>(targetLines.size()) &&
                                     character <= static_cast<int>(targetLines[line].size())
-                ? targetLines[line].substr(character, token.text.size()) : "";
-            if (at != token.text)
-                report("definition", path, token.line, token.column,
-                       "`" + token.text + "` goes to " + targetPath + ":" +
-                           std::to_string(line + 1) + ":" + std::to_string(character + 1) +
-                           ", which reads `" + at + "`");
+                                ? targetLines[line].substr(character, token.text.size())
+                                : "";
+            if (at != token.text) {
+                report(
+                    "definition", path, token.line, token.column,
+                    "`" + token.text + "` goes to " + targetPath + ":" + std::to_string(line + 1) +
+                        ":" + std::to_string(character + 1) + ", which reads `" + at + "`");
+            }
         } else if (purpose == "recall") {
             const auto labels = completionLabels(answer);
             // `push!` is `push` with the rebinding bang typed after it.
             auto offered = token.text;
-            if (offered.size() > 1 && offered.back() == '!') offered.pop_back();
-            if (std::find(labels.begin(), labels.end(), offered) == labels.end())
-                report("recall", path, token.line, token.column,
-                       "`" + token.text + "` not offered at `." + token.text + "|` (" +
-                           std::to_string(labels.size()) + " offered)");
+            if (offered.size() > 1 && offered.back() == '!') {
+                offered.pop_back();
+            }
+            if (std::find(labels.begin(), labels.end(), offered) == labels.end()) {
+                report(
+                    "recall", path, token.line, token.column,
+                    "`" + token.text + "` not offered at `." + token.text + "|` (" +
+                        std::to_string(labels.size()) + " offered)");
+            }
         } else if (purpose == "sound-dot" || purpose == "sound-bare") {
             auto labels = completionLabels(answer);
-            labels.erase(std::remove_if(labels.begin(), labels.end(),
-                                        [&](const std::string& label) {
-                                            // `after` is the testing DSL's hook and
-                                            // a keyword: `after()` is no call of it.
-                                            return label == token.text || label.empty() ||
-                                                   isKeyword(label) ||
-                                                   !isIdentStart(label[0]) ||
-                                                   label.find_first_of(" (<") != std::string::npos;
-                                        }),
-                         labels.end());
+            labels.erase(
+                std::remove_if(
+                    labels.begin(), labels.end(),
+                    [&](const std::string& label) {
+                        // `after` is the testing DSL's hook and
+                        // a keyword: `after()` is no call of it.
+                        return label == token.text || label.empty() || isKeyword(label) ||
+                               !isIdentStart(label[0]) ||
+                               label.find_first_of(" (<") != std::string::npos;
+                    }),
+                labels.end());
             std::shuffle(labels.begin(), labels.end(), rng);
-            if (labels.size() > options.sample) labels.resize(options.sample);
+            if (labels.size() > options.sample) {
+                labels.resize(options.sample);
+            }
             const auto receivers = offeredReceivers(answer);
             for (const auto& label : labels) {
                 const auto receiver = receivers.find(label);
-                substitutions.push_back({token, label, purpose,
-                                         receiver == receivers.end() ? "" : receiver->second});
+                substitutions.push_back(
+                    {token, label, purpose, receiver == receivers.end() ? "" : receiver->second});
             }
         }
     }
@@ -684,19 +816,25 @@ auto sweepFile(const Options& options, const std::string& path, std::mt19937& rn
         for (const auto& diagnostic : result.diagnostics) {
             const auto& object = diagnostic.object();
             if (const auto* severity = object.find("severity");
-                severity && severity->isInteger() && severity->integer() != 1)
+                severity && severity->isInteger() && severity->integer() != 1) {
                 continue;
+            }
             const auto& start = object.get("range").object().get("start").object();
-            published.insert(std::to_string(start.get("line").integer() + 1) + ":" +
-                             std::to_string(start.get("character").integer() + 1) + ": " +
-                             object.get("message").string());
+            published.insert(
+                std::to_string(start.get("line").integer() + 1) + ":" +
+                std::to_string(start.get("character").integer() + 1) + ": " +
+                object.get("message").string());
         }
-        for (const auto& error : checker.errors)
-            if (!published.count(error))
+        for (const auto& error : checker.errors) {
+            if (!published.count(error)) {
                 report("diagnostics", path, 0, 0, "kex -C reports, editor does not: " + error);
-        for (const auto& error : published)
-            if (!checker.errors.count(error))
+            }
+        }
+        for (const auto& error : published) {
+            if (!checker.errors.count(error)) {
                 report("diagnostics", path, 0, 0, "editor reports, kex -C does not: " + error);
+            }
+        }
     }
 
     // Soundness: what completion offered must at least resolve where it was
@@ -717,8 +855,9 @@ auto sweepFile(const Options& options, const std::string& path, std::mt19937& rn
         mutated[token.line] = mutated[token.line].substr(0, token.column) + substitution.label +
                               (asCall ? "()" : "") + after;
         std::string mutatedText;
-        for (std::size_t i = 0; i < mutated.size(); ++i)
+        for (std::size_t i = 0; i < mutated.size(); ++i) {
             mutatedText += mutated[i] + (i + 1 < mutated.size() ? "\n" : "");
+        }
         // A spec keeps its name and has its companion beside it, or
         // `wc.spec_3.kex` loads no `wc.kex` and every name of it is undefined.
         const auto fileName = fs::path(path).filename().string();
@@ -730,22 +869,27 @@ auto sweepFile(const Options& options, const std::string& path, std::mt19937& rn
         ++caseNumber;
         if (spec) {
             fs::create_directories(caseDir);
-            const auto companion = fs::path(path).parent_path() /
-                                   (fileName.substr(0, fileName.size() - 9) + ".kex");
+            const auto companion =
+                fs::path(path).parent_path() / (fileName.substr(0, fileName.size() - 9) + ".kex");
             std::error_code ignored;
-            fs::copy_file(companion, fs::path(caseDir) / companion.filename(),
-                          fs::copy_options::overwrite_existing, ignored);
+            fs::copy_file(
+                companion, fs::path(caseDir) / companion.filename(),
+                fs::copy_options::overwrite_existing, ignored);
         }
         writeFile(casePath, mutatedText);
         const auto view = checkerView(options, casePath, sourceRoot);
         for (const auto& error : view.errors) {
             int ln = 0;
-            if (std::sscanf(error.c_str(), "%d:", &ln) != 1 || ln != token.line + 1) continue;
-            if (checker.errors.count(error)) continue;
-            const auto message = error.substr(error.find(": ") + 2);
-            if (!rejectsOffer(message, substitution.label,
-                              substitution.purpose == "sound-dot"))
+            if (std::sscanf(error.c_str(), "%d:", &ln) != 1 || ln != token.line + 1) {
                 continue;
+            }
+            if (checker.errors.count(error)) {
+                continue;
+            }
+            const auto message = error.substr(error.find(": ") + 2);
+            if (!rejectsOffer(message, substitution.label, substitution.purpose == "sound-dot")) {
+                continue;
+            }
             // The original call's arguments can select another overload (`xs.map
             // { ... }` made `xs.min { ... }`, Comparable's `min(other)`): its
             // first parameter refusing the receiver says nothing of the one
@@ -753,18 +897,24 @@ auto sweepFile(const Options& options, const std::string& path, std::mt19937& rn
             const auto expected = "`" + substitution.label + "` expects argument 1 to be ";
             if (substitution.purpose == "sound-dot" && message.rfind(expected, 0) == 0 &&
                 !substitution.receiver.empty()) {
-                const auto refused = message.substr(expected.size(),
-                                                    message.find(", but got") - expected.size());
-                if (refused != substitution.receiver) continue;
+                const auto refused =
+                    message.substr(expected.size(), message.find(", but got") - expected.size());
+                if (refused != substitution.receiver) {
+                    continue;
+                }
             }
-            report("soundness", path, token.line, token.column,
-                   (substitution.purpose == "sound-dot" ? "after `.`" : "bare") +
-                       std::string(" offered `") + substitution.label + "` in place of `" +
-                       token.text + "`, checker: " + message);
+            report(
+                "soundness", path, token.line, token.column,
+                (substitution.purpose == "sound-dot" ? "after `.`" : "bare") +
+                    std::string(" offered `") + substitution.label + "` in place of `" +
+                    token.text + "`, checker: " + message);
             break;
         }
-        if (spec) fs::remove_all(caseDir);
-        else fs::remove(casePath);
+        if (spec) {
+            fs::remove_all(caseDir);
+        } else {
+            fs::remove(casePath);
+        }
     }
 }
 
@@ -773,24 +923,34 @@ auto parseOptions(int argc, char** argv) -> std::optional<Options> {
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto value = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
-        if (arg == "--kex") options.kex = value();
-        else if (arg == "--out") options.outDir = value();
-        else if (arg == "--sample") options.sample = std::stoul(value());
-        else if (arg == "--sites") options.maxSitesPerFile = std::stoul(value());
-        else if (arg == "--seed") options.seed = static_cast<unsigned>(std::stoul(value()));
-        else if (arg == "--timeout") options.timeoutSeconds = std::stoi(value());
-        else if (arg == "--checks") {
+        if (arg == "--kex") {
+            options.kex = value();
+        } else if (arg == "--out") {
+            options.outDir = value();
+        } else if (arg == "--sample") {
+            options.sample = std::stoul(value());
+        } else if (arg == "--sites") {
+            options.maxSitesPerFile = std::stoul(value());
+        } else if (arg == "--seed") {
+            options.seed = static_cast<unsigned>(std::stoul(value()));
+        } else if (arg == "--timeout") {
+            options.timeoutSeconds = std::stoi(value());
+        } else if (arg == "--checks") {
             options.checks.clear();
             std::stringstream list(value());
             std::string check;
-            while (std::getline(list, check, ',')) options.checks.insert(check);
+            while (std::getline(list, check, ',')) {
+                options.checks.insert(check);
+            }
         } else if (arg.rfind("--", 0) == 0) {
             return std::nullopt;
         } else {
             options.files.push_back(arg);
         }
     }
-    if (options.files.empty()) return std::nullopt;
+    if (options.files.empty()) {
+        return std::nullopt;
+    }
     return options;
 }
 
@@ -817,9 +977,8 @@ auto main(int argc, char** argv) -> int {
     });
     std::ofstream log(options->outDir + "/findings.txt");
     for (const auto& finding : findings) {
-        const auto line = finding.check + " " + finding.file + ":" +
-                          std::to_string(finding.line) + ":" + std::to_string(finding.column) +
-                          ": " + finding.detail;
+        const auto line = finding.check + " " + finding.file + ":" + std::to_string(finding.line) +
+                          ":" + std::to_string(finding.column) + ": " + finding.detail;
         std::cout << line << "\n";
         log << line << "\n";
     }

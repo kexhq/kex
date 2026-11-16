@@ -34,10 +34,14 @@ public:
     explicit Analyzer(const ImportedInterfaces* importedInterfaces = nullptr)
         : m_checker(importedInterfaces), m_importedInterfaces(importedInterfaces) {}
     // The interfaces it checks against (the prelude's, usually), or null.
-    auto importedInterfaces() const -> const ImportedInterfaces* { return m_importedInterfaces; }
+    auto importedInterfaces() const -> const ImportedInterfaces* {
+        return m_importedInterfaces;
+    }
     // The checker whose answers the analysis holds, read directly rather than
     // through a forward per answer.
-    auto checker() const -> const TypeChecker& { return m_checker; }
+    auto checker() const -> const TypeChecker& {
+        return m_checker;
+    }
     // What completion may offer after `receiver` at `at` (TypeChecker::
     // memberCompletions): probes the checker, so not const.
     auto memberCompletions(const TypePtr& receiver, const ast::Expr& at)
@@ -58,7 +62,9 @@ public:
     }
     // Whether such a `using` is an error (a build) or a warning (an editor,
     // where a dependency may not be fetched yet).
-    auto setMissingModuleIsError(bool error) -> void { m_missingModuleIsError = error; }
+    auto setMissingModuleIsError(bool error) -> void {
+        m_missingModuleIsError = error;
+    }
     // Keeps what tooling reads of the names (nameIndex), for the entry file.
     // A build does not ask.
     auto setIndexesNames(bool indexes) -> void {
@@ -68,12 +74,13 @@ public:
     // The program's symbols, the references to them and the names in scope
     // at each point of the entry file, from the checker's record of them
     // (empty unless setIndexesNames).
-    auto nameIndex() const -> const NameIndex& { return m_nameIndex; }
+    auto nameIndex() const -> const NameIndex& {
+        return m_nameIndex;
+    }
     // Where the build finds a module outside the program and its interfaces
     // (its source roots), for the rule that an exported module must exist.
     auto setModuleLocator(
-        std::function<bool(const std::string& module, const std::string& current)> locate)
-        -> void {
+        std::function<bool(const std::string& module, const std::string& current)> locate) -> void {
         m_moduleLocator = std::move(locate);
     }
     // The backend modules this build links, which lowering finds providers
@@ -100,17 +107,20 @@ public:
     }
     // The chain that explains one requirement, innermost first:
     //   {"deep", "stamp"}, {"stamp", ""}   for `deep requires Clock via stamp`.
-    auto capabilityChain(const std::string& name,
-                         const std::string& capability) const
+    auto capabilityChain(const std::string& name, const std::string& capability) const
         -> std::vector<std::pair<std::string, std::string>> {
         std::vector<std::pair<std::string, std::string>> chain;
         std::string at = name;
-        std::set<std::string> seen;   // a cyclic call graph must still finish
+        std::set<std::string> seen; // a cyclic call graph must still finish
         while (!at.empty() && seen.insert(at).second) {
             auto found = m_requiredCapabilities.find(at);
-            if (found == m_requiredCapabilities.end()) break;
+            if (found == m_requiredCapabilities.end()) {
+                break;
+            }
             auto entry = found->second.find(capability);
-            if (entry == found->second.end()) break;
+            if (entry == found->second.end()) {
+                break;
+            }
             chain.emplace_back(at, entry->second);
             at = entry->second;
         }
@@ -119,8 +129,7 @@ public:
     auto isTrait(const std::string& name) const -> bool {
         return m_checker.isTrait(name);
     }
-    auto traitRequires(const std::string& trait,
-                       const std::string& method) const -> bool {
+    auto traitRequires(const std::string& trait, const std::string& method) const -> bool {
         return m_checker.traitRequires(trait, method);
     }
     auto traitNeedsDictionary(const std::string& trait) const -> bool {
@@ -128,26 +137,24 @@ public:
     }
     auto functionSignatures(const ast::FunctionDef* function) const
         -> const std::vector<Signature>*;
-    auto displaySignature(const std::string& name,
-                          const Signature& signature) const -> std::string {
+    auto displaySignature(const std::string& name, const Signature& signature) const
+        -> std::string {
         return m_checker.displaySignature(name, signature);
     }
     auto resolvedCalls() const
         -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
     auto resolvedTraits() const
-        -> const std::unordered_map<const ast::MakeDef*,
-                                    std::vector<std::string>>& {
+        -> const std::unordered_map<const ast::MakeDef*, std::vector<std::string>>& {
         return m_checker.resolvedTraits();
     }
-    auto selectedCallSignatures() const
-        -> const std::unordered_map<const ast::Expr*, Signature>& {
+    auto selectedCallSignatures() const -> const std::unordered_map<const ast::Expr*, Signature>& {
         return m_checker.selectedCallSignatures();
     }
     auto shownThroughDistinct() const -> const ShownThrough& {
         return m_checker.shownThroughDistinct();
     }
-    auto decidedCalls() const -> const std::unordered_map<
-        const ast::Expr*, TypeChecker::DecidedCall>& {
+    auto decidedCalls() const
+        -> const std::unordered_map<const ast::Expr*, TypeChecker::DecidedCall>& {
         return m_checker.decidedCalls();
     }
     // The blocks whose body has no effect a fused loop could reorder
@@ -161,8 +168,7 @@ public:
         return found == m_checker.parameterTraits().end() ? std::string{} : found->second;
     }
     // The trait a type spelling written in module `scope` names, or "".
-    auto traitWrittenAs(const std::string& scope, const std::string& written) const
-        -> std::string {
+    auto traitWrittenAs(const std::string& scope, const std::string& written) const -> std::string {
         return m_checker.traitWrittenAs(scope, written);
     }
     // The module constant a bare name names, or "".
@@ -209,23 +215,22 @@ public:
     auto dictionaryTypeOf(const ast::Expr& value) const -> std::string {
         return m_checker.dictionaryTypeOf(value);
     }
-    auto patternBindings() const
-        -> const std::vector<TypeChecker::PatternBinding>& {
+    auto patternBindings() const -> const std::vector<TypeChecker::PatternBinding>& {
         return m_checker.patternBindings();
     }
     auto staticTypeOfCalls() const
         -> const std::unordered_map<const ast::MethodCall*, StaticTypeAnswer>& {
         return m_checker.staticTypeOfCalls();
     }
-    auto referencedModules() const
-        -> const std::unordered_set<std::string>& {
+    auto referencedModules() const -> const std::unordered_set<std::string>& {
         return m_checker.referencedModules();
     }
 
 private:
     // The purity walk: which effects run where, by the functions the checker
     // says each call runs, and where `break` and `next` may stand.
-    template <typename Item> auto analyzeItem(const Item& item) -> void;
+    template <typename Item>
+    auto analyzeItem(const Item& item) -> void;
     auto analyzeModule(const ast::ModuleDef& mod) -> void;
     auto analyzeFunctionDef(const ast::FunctionDef& def) -> void;
     auto analyzeExpr(const ast::Expr& expr) -> void;
@@ -236,7 +241,8 @@ private:
     auto recordPureBlocks(const ast::Program& program) -> void;
     // A record declared twice in one module (or at top level), or under a
     // type's name.
-    template <typename Items> auto reportDuplicateRecords(const Items& items) -> void;
+    template <typename Items>
+    auto reportDuplicateRecords(const Items& items) -> void;
 
     // Records which member of which module is foul, for the modules declared
     // in THIS compilation unit, so a call can be checked against a module
@@ -246,8 +252,7 @@ private:
     // Whether `module.member` is a foul function, consulting local modules
     // first and imported interfaces second. This is the ONLY purity question
     // asked about a qualified call — there is no module-level foulness.
-    auto isQualifiedCallFoul(const std::string& module,
-                             const std::string& member) const -> bool;
+    auto isQualifiedCallFoul(const std::string& module, const std::string& member) const -> bool;
     // The foul functions declared at top level, by name: what a guard's
     // `x.name` (UFCS) is checked against.
     std::unordered_set<std::string> m_topLevelFoul;
@@ -268,8 +273,7 @@ private:
     // enough to print the chain that explains an otherwise invisible
     // requirement — nothing is annotated, so the explanation is the only
     // place a reader can learn it.
-    std::map<std::string, std::map<std::string, std::string>>
-        m_requiredCapabilities;
+    std::map<std::string, std::map<std::string, std::string>> m_requiredCapabilities;
     // Set only while processFn walks one function's body.
     std::map<std::string, std::string>* m_capabilityTarget = nullptr;
 
@@ -305,8 +309,7 @@ private:
     // Foul members of modules declared in this unit, keyed by the module's
     // bare name — nested modules are addressed by their own name (`File`, not
     // `FS.File`), matching how imported interfaces register them.
-    std::unordered_map<std::string, std::unordered_set<std::string>>
-        m_localModuleFoulMembers;
+    std::unordered_map<std::string, std::unordered_set<std::string>> m_localModuleFoulMembers;
 };
 
 } // namespace kex::semantic

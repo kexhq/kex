@@ -26,7 +26,7 @@ auto preludeInterfaces() -> semantic::ImportedInterfaces {
     return {};
 }
 #endif
-}
+} // namespace
 
 auto check(const std::string& source) -> std::vector<semantic::Diagnostic> {
     Lexer lexer(source);
@@ -61,15 +61,20 @@ auto moduleRuleError(const std::string& source, const std::string& containing) -
     semantic::Analyzer analyzer;
     analyzer.setModuleLocator([](const std::string&, const std::string&) { return false; });
     analyzer.analyze(program);
-    for (const auto& diagnostic : analyzer.diagnostics())
-        if (diagnostic.message.find(containing) != std::string::npos) return true;
+    for (const auto& diagnostic : analyzer.diagnostics()) {
+        if (diagnostic.message.find(containing) != std::string::npos) {
+            return true;
+        }
+    }
     return false;
 }
 
 auto noErrors(const std::string& source) -> bool {
     auto diags = check(source);
     for (const auto& d : diags) {
-        if (d.level == semantic::Diagnostic::Level::Error) return false;
+        if (d.level == semantic::Diagnostic::Level::Error) {
+            return false;
+        }
     }
     return true;
 }
@@ -83,24 +88,24 @@ auto hasErrorWithInterfaces(
     auto program = parser.parseProgram();
     semantic::Analyzer analyzer(&interfaces);
     analyzer.analyze(program);
-    for (const auto& diagnostic : analyzer.diagnostics())
+    for (const auto& diagnostic : analyzer.diagnostics()) {
         if (diagnostic.level == semantic::Diagnostic::Level::Error &&
-            diagnostic.message.find(containing) != std::string::npos)
+            diagnostic.message.find(containing) != std::string::npos) {
             return true;
+        }
+    }
     return false;
 }
 
 auto noErrorsWithInterfaces(
-    const std::string& source,
-    const semantic::ImportedInterfaces& interfaces) -> bool {
+    const std::string& source, const semantic::ImportedInterfaces& interfaces) -> bool {
     Lexer lexer(source);
     Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
     semantic::Analyzer analyzer(&interfaces);
     analyzer.analyze(program);
     return std::none_of(
-        analyzer.diagnostics().begin(), analyzer.diagnostics().end(),
-        [](const auto& diagnostic) {
+        analyzer.diagnostics().begin(), analyzer.diagnostics().end(), [](const auto& diagnostic) {
             return diagnostic.level == semantic::Diagnostic::Level::Error;
         });
 }
@@ -141,18 +146,21 @@ int main() {
             for (std::size_t i = 0; i < order.size(); ++i) {
                 const auto& was = checked.targetOf(*firstOrder[i]);
                 const auto& is = loaded->targetOf(*order[i]);
-                assertTrue(was.kind == is.kind && was.module == is.module &&
-                           was.function == is.function && was.arity == is.arity &&
-                           was.owner == is.owner);
-                if (was.kind != hir::TargetKind::Undecided) decided++;
+                assertTrue(
+                    was.kind == is.kind && was.module == is.module && was.function == is.function &&
+                    was.arity == is.arity && was.owner == is.owner);
+                if (was.kind != hir::TargetKind::Undecided) {
+                    decided++;
+                }
                 const auto wasType = checked.typeOf(*firstOrder[i]);
                 const auto isType = loaded->typeOf(*order[i]);
-                assertTrue((!wasType && !isType) ||
-                           (wasType && isType &&
-                            semantic::typeToString(wasType) ==
-                                semantic::typeToString(isType)));
-                assertTrue((checked.selectedSignatureOf(*firstOrder[i]) != nullptr) ==
-                           (loaded->selectedSignatureOf(*order[i]) != nullptr));
+                assertTrue(
+                    (!wasType && !isType) ||
+                    (wasType && isType &&
+                     semantic::typeToString(wasType) == semantic::typeToString(isType)));
+                assertTrue(
+                    (checked.selectedSignatureOf(*firstOrder[i]) != nullptr) ==
+                    (loaded->selectedSignatureOf(*order[i]) != nullptr));
             }
             assertTrue(decided > 0);
         });
@@ -175,18 +183,21 @@ int main() {
     describe("Workspace — Modules", []() {
         it("resolves selectively imported names across indexed files", []() {
             lsp::Workspace db;
-            db.updateFile("util.kex",
-                "module Util\n"
-                "let twice(n) = n * 2\n");
-            db.updateFile("main.kex",
-                "using Util, only: [twice]\n"
-                "main do\n"
-                "  twice(21)\n"
-                "end\n");
+            db.updateFile(
+                "util.kex", "module Util\n"
+                            "let twice(n) = n * 2\n");
+            db.updateFile(
+                "main.kex", "using Util, only: [twice]\n"
+                            "main do\n"
+                            "  twice(21)\n"
+                            "end\n");
             resolveTogether(db, {"util.kex", "main.kex"});
             bool hasError = false;
-            for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
-                if (diagnostic.level == semantic::Diagnostic::Level::Error) hasError = true;
+            for (const auto& diagnostic : db.diagnosticsFor("main.kex")) {
+                if (diagnostic.level == semantic::Diagnostic::Level::Error) {
+                    hasError = true;
+                }
+            }
             assertFalse(hasError);
             auto* symbol = db.symbolInModule("Util", "twice");
             assertTrue(symbol != nullptr);
@@ -195,38 +206,40 @@ int main() {
 
         it("supports go-to-definition for an imported name across files", []() {
             lsp::Workspace db;
-            db.updateFile("util.kex",
-                "module Util\n"
-                "let twice(n) = n * 2\n");
-            db.updateFile("main.kex",
-                "using Util, only: [twice]\n"
-                "main do\n"
-                "  twice(21)\n"
-                "end\n");
+            db.updateFile(
+                "util.kex", "module Util\n"
+                            "let twice(n) = n * 2\n");
+            db.updateFile(
+                "main.kex", "using Util, only: [twice]\n"
+                            "main do\n"
+                            "  twice(21)\n"
+                            "end\n");
             resolveTogether(db, {"util.kex", "main.kex"});
             auto* definition = db.symbolInModule("Util", "twice");
             assertTrue(definition != nullptr);
             assertTrue(!definition->references.empty());
             const auto& reference = definition->references.back();
-            const auto* atReference = db.symbolAt(
-                std::string(reference.file), reference.line, reference.column);
+            const auto* atReference =
+                db.symbolAt(std::string(reference.file), reference.line, reference.column);
             assertTrue(atReference == definition);
             assertEqual(std::string(atReference->definition.file), std::string("util.kex"));
         });
 
         it("completes public module members but hides private ones", []() {
             lsp::Workspace db;
-            db.updateFile("util.kex",
-                "module Util\n"
-                "let visible() = 1\n"
-                "private do\n"
-                "  let hidden() = 2\n"
-                "end\n");
+            db.updateFile(
+                "util.kex", "module Util\n"
+                            "let visible() = 1\n"
+                            "private do\n"
+                            "  let hidden() = 2\n"
+                            "end\n");
             const auto completions = db.completionsFor("Util.");
-            assertTrue(std::find(completions.begin(), completions.end(), "Util.visible")
-                       != completions.end());
-            assertTrue(std::find(completions.begin(), completions.end(), "Util.hidden")
-                       == completions.end());
+            assertTrue(
+                std::find(completions.begin(), completions.end(), "Util.visible") !=
+                completions.end());
+            assertTrue(
+                std::find(completions.begin(), completions.end(), "Util.hidden") ==
+                completions.end());
         });
 
         it("rejects importing a private module symbol", []() {
@@ -265,11 +278,11 @@ int main() {
             }
             lsp::Workspace db;
             db.setModuleRoots({root.string()});
-            db.updateFile("main.kex",
-                "using Http.Router, only: [get]\n"
-                "main do\n"
-                "  get(\"/\")\n"
-                "end\n");
+            db.updateFile(
+                "main.kex", "using Http.Router, only: [get]\n"
+                            "main do\n"
+                            "  get(\"/\")\n"
+                            "end\n");
             // The modules a file names are loaded before it resolves, as the
             // language server loads those its analysis names.
             db.ensureModule("Http.Router");
@@ -277,25 +290,30 @@ int main() {
             fs::remove_all(root);
             assertTrue(db.hasModule("Http.Router"));
             bool hasError = false;
-            for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
-                if (diagnostic.level == semantic::Diagnostic::Level::Error) hasError = true;
+            for (const auto& diagnostic : db.diagnosticsFor("main.kex")) {
+                if (diagnostic.level == semantic::Diagnostic::Level::Error) {
+                    hasError = true;
+                }
+            }
             assertFalse(hasError);
         });
 
         it("rejects only: and except: together", []() {
             lsp::Workspace db;
-            db.updateFile("util.kex",
-                "module Util\n"
-                "let a() = 1\n"
-                "let b() = 2\n");
-            db.updateFile("main.kex",
-                "using Util, only: [a], except: [b]\n"
-                "main do\n  a()\nend\n");
+            db.updateFile(
+                "util.kex", "module Util\n"
+                            "let a() = 1\n"
+                            "let b() = 2\n");
+            db.updateFile(
+                "main.kex", "using Util, only: [a], except: [b]\n"
+                            "main do\n  a()\nend\n");
             resolveTogether(db, {"util.kex", "main.kex"});
             bool found = false;
-            for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
-                if (diagnostic.message.find("mutually exclusive") != std::string::npos)
+            for (const auto& diagnostic : db.diagnosticsFor("main.kex")) {
+                if (diagnostic.message.find("mutually exclusive") != std::string::npos) {
                     found = true;
+                }
+            }
             assertTrue(found);
         });
 
@@ -341,15 +359,16 @@ int main() {
             lsp::Workspace db;
             db.setModuleRoots({root.string()});
             // Index A first (it uses B which will be discovered on disk)
-            db.updateFile("a.kex",
-                "module A\nusing B\nlet fa() = 1\n");
+            db.updateFile("a.kex", "module A\nusing B\nlet fa() = 1\n");
             db.ensureModule("B");
             resolveTogether(db, {"a.kex", (root / "b.kex").string()});
             fs::remove_all(root);
             bool foundError = false;
-            for (const auto& diagnostic : db.diagnosticsFor((root / "b.kex").string()))
-                if (diagnostic.level == semantic::Diagnostic::Level::Error)
+            for (const auto& diagnostic : db.diagnosticsFor((root / "b.kex").string())) {
+                if (diagnostic.level == semantic::Diagnostic::Level::Error) {
                     foundError = true;
+                }
+            }
             assertFalse(foundError);
         });
     });
@@ -511,8 +530,7 @@ int main() {
                 "foul readFile(path: String) = path\n"
                 "main do\n"
                 "  readFile(\"test\")\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("rejects foul calls in pure functions", []() {
@@ -521,8 +539,7 @@ int main() {
                 "let pure_func(x: Int) do\n"
                 "  readFile(\"test\")\n"
                 "end\n",
-                "foul"
-            ));
+                "foul"));
         });
 
         it("allows foul calls in foul functions", []() {
@@ -530,8 +547,7 @@ int main() {
                 "foul readFile(path: String) = path\n"
                 "foul loadConfig(path: String) do\n"
                 "  readFile(path)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("rejects spawn in pure context", []() {
@@ -541,8 +557,7 @@ int main() {
                 "    x\n"
                 "  end\n"
                 "end\n",
-                "spawn"
-            ));
+                "spawn"));
         });
 
         it("allows spawn in foul context", []() {
@@ -552,8 +567,7 @@ int main() {
                 "    loop\n"
                 "    end\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("rejects spawn in main's inner pure function", []() {
@@ -563,8 +577,7 @@ int main() {
                 "    x\n"
                 "  end\n"
                 "end\n",
-                "spawn"
-            ));
+                "spawn"));
         });
 
         it("rejects foul namespace call in guard", []() {
@@ -575,8 +588,7 @@ int main() {
                 "    _ => \"\"\n"
                 "  end\n"
                 "end\n",
-                "guard"
-            ));
+                "guard"));
         });
 
         it("allows pure receiver call in guard", []() {
@@ -587,8 +599,7 @@ int main() {
                 "    s when s.count > 0 => s\n"
                 "    _ => \"\"\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("rejects transitively foul function in guard", []() {
@@ -601,8 +612,7 @@ int main() {
                 "    _ => \"\"\n"
                 "  end\n"
                 "end\n",
-                "transitively"
-            ));
+                "transitively"));
         });
 
         it("rejects multi-hop transitively foul in guard", []() {
@@ -617,8 +627,7 @@ int main() {
                 "    _ => \"\"\n"
                 "  end\n"
                 "end\n",
-                "transitively"
-            ));
+                "transitively"));
         });
 
         it("allows pure function chain in guard", []() {
@@ -630,8 +639,7 @@ int main() {
                 "    x when quadruple(x) > 10 => x\n"
                 "    _ => 0\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("rejects call to an imported foul export from pure context", []() {
@@ -642,32 +650,24 @@ int main() {
             db.backendModule = "kex_database";
             semantic::ImportedFunction query;
             query.sourceName = "query";
-            query.signature = {"query", {semantic::Type::string()},
-                               semantic::Type::string(), true};
+            query.signature = {"query", {semantic::Type::string()}, semantic::Type::string(), true};
             db.exports["query"].push_back(std::move(query));
             interfaces.modules["Database"] = std::move(db);
             assertTrue(hasErrorWithInterfaces(
-                "let check(sql: String) = Database.query(sql)\n",
-                interfaces, "foul"));
+                "let check(sql: String) = Database.query(sql)\n", interfaces, "foul"));
         });
 
-        it("rejects ambient ENV access from a pure function", []() {
-            assertTrue(hasError(
-                "let home() = ENV.get(\"HOME\")\n",
-                "foul"));
-        });
+        it("rejects ambient ENV access from a pure function",
+           []() { assertTrue(hasError("let home() = ENV.get(\"HOME\")\n", "foul")); });
 
-        it("allows pure access to an explicit environment map", []() {
-            assertTrue(noErrors(
-                "let home(env: {String: String}) = env.get(\"HOME\")\n"));
-        });
+        it("allows pure access to an explicit environment map",
+           []() { assertTrue(noErrors("let home(env: {String: String}) = env.get(\"HOME\")\n")); });
 
         it("allows Kex.Intrinsic calls from pure context", []() {
             assertTrue(noErrors(
                 "make Map<K, V> do\n"
                 "  let delete(key) = Kex.Intrinsic.Map.delete(this, key)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -678,8 +678,7 @@ int main() {
                 "  let x = 5\n"
                 "  x = 10\n"
                 "end\n",
-                "immutable"
-            ));
+                "immutable"));
         });
 
         it("allows assignment to var binding", []() {
@@ -687,8 +686,7 @@ int main() {
                 "main do\n"
                 "  var x = 5\n"
                 "  x = 10\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("rejects ! on let binding", []() {
@@ -697,8 +695,7 @@ int main() {
                 "  let list = [1, 2, 3]\n"
                 "  list.push!(4)\n"
                 "end\n",
-                "immutable"
-            ));
+                "immutable"));
         });
 
         it("allows ! on var binding", []() {
@@ -706,8 +703,7 @@ int main() {
                 "main do\n"
                 "  var list = [1, 2, 3]\n"
                 "  list.push!(4)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -716,24 +712,21 @@ int main() {
             assertTrue(noErrors(
                 "main do\n"
                 "  let x = 5 + 3\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("infers String for string literals", []() {
             assertTrue(noErrors(
                 "main do\n"
                 "  let x = \"hello\" + \" world\"\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("infers Float for float literals", []() {
             assertTrue(noErrors(
                 "main do\n"
                 "  let x = 3.14 * 2.0\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("infers Bool for boolean ops", []() {
@@ -741,8 +734,7 @@ int main() {
                 "main do\n"
                 "  let x = true && false\n"
                 "  let y = 5 > 3\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -768,11 +760,8 @@ int main() {
                 "foul tag"));
         });
 
-        it("resolves names inside interpolating backticks", []() {
-            assertTrue(hasError(
-                "let render() = $`hello ${missing}`\n",
-                "Undefined"));
-        });
+        it("resolves names inside interpolating backticks",
+           []() { assertTrue(hasError("let render() = $`hello ${missing}`\n", "Undefined")); });
 
         it("rejects foul calls inside interpolating backticks", []() {
             assertTrue(hasError(
@@ -788,8 +777,7 @@ int main() {
                 "main do\n"
                 "  let x = 5 + \"hello\"\n"
                 "end\n",
-                "Cannot add"
-            ));
+                "Cannot add"));
         });
 
         it("rejects Bool + Int", []() {
@@ -797,8 +785,7 @@ int main() {
                 "main do\n"
                 "  let x = true + 1\n"
                 "end\n",
-                "matching types"
-            ));
+                "matching types"));
         });
 
         it("rejects arithmetic on String", []() {
@@ -806,16 +793,14 @@ int main() {
                 "main do\n"
                 "  let x = \"hello\" - \"world\"\n"
                 "end\n",
-                "arithmetic"
-            ));
+                "arithmetic"));
         });
 
         it("accepts numeric exponentiation", []() {
             assertTrue(noErrors(
                 "main do\n"
                 "  let x = 2 ^ 10\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("rejects non-Bool in if condition", []() {
@@ -825,8 +810,7 @@ int main() {
                 "    \"oops\"\n"
                 "  end\n"
                 "end\n",
-                "Bool"
-            ));
+                "Bool"));
         });
 
         it("accepts Bool in if condition", []() {
@@ -835,8 +819,7 @@ int main() {
                 "  if true\n"
                 "    \"ok\"\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("rejects non-Bool in logical operators", []() {
@@ -844,8 +827,7 @@ int main() {
                 "main do\n"
                 "  let x = 5 && 3\n"
                 "end\n",
-                "Logical operator requires Bool"
-            ));
+                "Logical operator requires Bool"));
         });
     });
 
@@ -855,24 +837,21 @@ int main() {
                 "main do\n"
                 "  let x = [1, 2, \"three\"]\n"
                 "end\n",
-                "same type"
-            ));
+                "same type"));
         });
 
         it("accepts homogeneous list", []() {
             assertTrue(noErrors(
                 "main do\n"
                 "  let x = [1, 2, 3]\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("accepts string list", []() {
             assertTrue(noErrors(
                 "main do\n"
                 "  let x = [\"a\", \"b\", \"c\"]\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -883,8 +862,7 @@ int main() {
                 "  var x = 5\n"
                 "  x = \"hello\"\n"
                 "end\n",
-                "Type mismatch"
-            ));
+                "Type mismatch"));
         });
 
         it("accepts same-type var reassignment", []() {
@@ -892,8 +870,7 @@ int main() {
                 "main do\n"
                 "  var x = 5\n"
                 "  x = 10\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -902,8 +879,7 @@ int main() {
             assertTrue(noErrors(
                 "foul module IO do\n"
                 "  let print(msg: String) = msg\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("modules have isolated scopes", []() {
@@ -915,8 +891,7 @@ int main() {
                 "end\n"
                 "module Pure do\n"
                 "  let process(x: Int) = x\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("imports public nested modules for namespace calls", []() {
@@ -927,8 +902,7 @@ int main() {
                 "  end\n"
                 "end\n"
                 "using Protocol\n"
-                "let fetch -> String = HTTP.get(\"local\")\n"
-            ));
+                "let fetch -> String = HTTP.get(\"local\")\n"));
         });
 
         it("does not include a nested module excluded by using", []() {
@@ -940,8 +914,7 @@ int main() {
                 "end\n"
                 "using Protocol, except: [HTTP]\n"
                 "let fetch = HTTP.get(\"local\")\n",
-                "Unknown module"
-            ));
+                "Unknown module"));
         });
 
         it("checks the signature of an imported nested module", []() {
@@ -952,16 +925,14 @@ int main() {
                 "  end\n"
                 "end\n"
                 "using Protocol\n"
-                "let fetch = HTTP.get(42)\n"
-            ));
+                "let fetch = HTTP.get(42)\n"));
         });
 
         it("rejects named calls that omit a required overload argument", []() {
             assertTrue(hasError(
                 "let greet(name: String, from: String) -> String = name\n"
                 "let greet(name: String, from: String, mood: String?) -> String = name\n"
-                "let bad = greet(\"Ada\", mood: None)\n"
-            ));
+                "let bad = greet(\"Ada\", mood: None)\n"));
         });
 
         it("does not treat capitalized module values as namespaces", []() {
@@ -979,8 +950,7 @@ int main() {
                 "main do\n"
                 "  Temperature.Fahrenheit(212.0).to(String)\n"
                 "  Temperature.Freezing.to(String)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("does not resolve private intrinsic calls as public overloads", []() {
@@ -994,8 +964,7 @@ int main() {
                 "end\n"
                 "make List<A> do\n"
                 "  let join(sep) = Kex.Intrinsic.List.join(this, sep)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("checks qualified exports from imported interfaces", []() {
@@ -1005,13 +974,11 @@ int main() {
             numbers.backendModule = "kex_numbers";
             semantic::ImportedFunction doubled;
             doubled.sourceName = "doubled";
-            doubled.signature = {"doubled", {semantic::Type::integer()},
-                                 semantic::Type::integer()};
+            doubled.signature = {"doubled", {semantic::Type::integer()}, semantic::Type::integer()};
             numbers.exports["doubled"].push_back(std::move(doubled));
             interfaces.modules["Numbers"] = std::move(numbers);
             assertTrue(hasErrorWithInterfaces(
-                "main do Numbers.doubled(\"wrong\") end\n", interfaces,
-                "doubled"));
+                "main do Numbers.doubled(\"wrong\") end\n", interfaces, "doubled"));
         });
 
         it("uses imported ADTs for exhaustiveness checking", []() {
@@ -1030,8 +997,7 @@ int main() {
             semantic::ImportedInterfaces interfaces;
             semantic::TraitDef readable;
             readable.name = "Readable";
-            readable.requiredMethods.push_back(
-                {"read", {}, semantic::Type::string(), true});
+            readable.requiredMethods.push_back({"read", {}, semantic::Type::string(), true});
             interfaces.traits.push_back(std::move(readable));
             assertTrue(hasErrorWithInterfaces(
                 "record Document do title : String end\n"
@@ -1048,8 +1014,7 @@ int main() {
             function.backendModule = "Kex.Draw";
             function.backendFunction = "draw";
             function.backendArity = 2; // Includes the capability argument.
-            function.signature = {"draw", {semantic::Type::integer()},
-                                  semantic::Type::integer()};
+            function.signature = {"draw", {semantic::Type::integer()}, semantic::Type::integer()};
             compiled.modules["Draw"].exports["draw"].push_back(function);
 
             semantic::ImportedInterfaces source;
@@ -1057,15 +1022,14 @@ int main() {
             function.paramNames = {"limit"};
             function.signature.requiredParams = 0;
             source.modules["Draw"].exports["draw"].push_back(function);
-            auto merged = mergeSemanticInterfaces(std::move(compiled),
-                                                   std::move(source));
+            auto merged = mergeSemanticInterfaces(std::move(compiled), std::move(source));
             const auto& exports = merged.modules.at("Draw").exports.at("draw");
             assertTrue(exports.size() == 1);
             assertTrue(exports.front().backendArity == 2);
             assertTrue(exports.front().signature.requiredParams == 0);
             assertTrue(exports.front().paramNames == std::vector<std::string>{"limit"});
-            assertTrue(!hasErrorWithInterfaces(
-                "using Draw\nmain do Draw.draw() end\n", merged, ""));
+            assertTrue(
+                !hasErrorWithInterfaces("using Draw\nmain do Draw.draw() end\n", merged, ""));
         });
 
         it("does not import methods from an unrelated sibling module", []() {
@@ -1077,8 +1041,8 @@ int main() {
                 format.backendModule = std::string("Kex.") + owner;
                 format.backendFunction = "format";
                 format.backendArity = 1;
-                format.signature = {"format", {semantic::Type::integer()},
-                                    semantic::Type::string()};
+                format.signature = {
+                    "format", {semantic::Type::integer()}, semantic::Type::string()};
                 interfaces.modules[owner].sourceModule = owner;
                 interfaces.receiverFunctions["format"].push_back(format);
             }
@@ -1093,7 +1057,8 @@ int main() {
             visible.sourceModule = "Prelude";
             visible.backendModule = "kex_prelude";
             visible.paramNames = {"", "in"};
-            visible.signature = {"format",
+            visible.signature = {
+                "format",
                 {semantic::Type::named("Measure"), semantic::Type::unknown(),
                  semantic::Type::named("TimeUnit")},
                 semantic::Type::string()};
@@ -1121,23 +1086,27 @@ int main() {
             assertTrue(analyzer.analyze(program));
             const hir::Program checked(program, analyzer);
             std::vector<hir::CallSite> formatCalls;
-            for (const auto& site : checked.callSites())
-                if (site.callee == "format") formatCalls.push_back(site);
+            for (const auto& site : checked.callSites()) {
+                if (site.callee == "format") {
+                    formatCalls.push_back(site);
+                }
+            }
             assertEqual(formatCalls.size(), std::size_t{2});
             assertTrue(formatCalls[0].kind == hir::TargetKind::Hidden);
             assertEqual(formatCalls[0].target, std::string("Units.SI"));
             assertTrue(formatCalls[1].kind == hir::TargetKind::Imported);
 
-            Lexer genericLexer(
-                "let maybe(measure, unit) = measure.format(String, in: unit)\n");
+            Lexer genericLexer("let maybe(measure, unit) = measure.format(String, in: unit)\n");
             Parser genericParser(genericLexer.tokenizeAll());
             auto genericProgram = genericParser.parseProgram();
             semantic::Analyzer genericAnalyzer(&interfaces);
             assertTrue(genericAnalyzer.analyze(genericProgram));
             const hir::Program genericChecked(genericProgram, genericAnalyzer);
-            for (const auto& site : genericChecked.callSites())
-                if (site.callee == "format")
+            for (const auto& site : genericChecked.callSites()) {
+                if (site.callee == "format") {
                     assertTrue(site.kind != hir::TargetKind::Hidden);
+                }
+            }
         });
 
         it("decides a hidden local make overload beside a visible import", []() {
@@ -1147,7 +1116,8 @@ int main() {
             visible.sourceModule = "Prelude";
             visible.backendModule = "kex_prelude";
             visible.paramNames = {"", "in"};
-            visible.signature = {"format",
+            visible.signature = {
+                "format",
                 {semantic::Type::named("Measure"), semantic::Type::unknown(),
                  semantic::Type::named("TimeUnit")},
                 semantic::Type::string()};
@@ -1174,8 +1144,11 @@ int main() {
             assertTrue(analyzer.analyze(program));
             const hir::Program checked(program, analyzer);
             std::vector<hir::CallSite> calls;
-            for (const auto& site : checked.callSites())
-                if (site.callee == "format") calls.push_back(site);
+            for (const auto& site : checked.callSites()) {
+                if (site.callee == "format") {
+                    calls.push_back(site);
+                }
+            }
             assertEqual(calls.size(), std::size_t{2});
             assertTrue(calls[0].kind == hir::TargetKind::Hidden);
             assertEqual(calls[0].target, std::string("Patcher"));
@@ -1184,21 +1157,20 @@ int main() {
 
         it("records foreign make targets from source regardless of declaration order", []() {
             namespace fs = std::filesystem;
-            const auto file = fs::temp_directory_path() /
-                ("kex-semantic-foreign-target-" + std::to_string(
-                    std::chrono::steady_clock::now().time_since_epoch().count()) +
+            const auto file =
+                fs::temp_directory_path() /
+                ("kex-semantic-foreign-target-" +
+                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
                  ".kex");
             {
                 std::ofstream output(file);
-                output <<
-                    "module Demo.Cards do\n"
-                    "  make Card do let decorate -> String = \"card\" end\n"
-                    "  make Integer do let decorate -> String = \"number\" end\n"
-                    "  type Card = One | Two\n"
-                    "end\n";
+                output << "module Demo.Cards do\n"
+                          "  make Card do let decorate -> String = \"card\" end\n"
+                          "  make Integer do let decorate -> String = \"number\" end\n"
+                          "  type Card = One | Two\n"
+                          "end\n";
             }
-            const auto interfaces = sourceSemanticInterfaces(
-                {file.string()}, false, true);
+            const auto interfaces = sourceSemanticInterfaces({file.string()}, false, true);
             fs::remove(file);
             const auto found = interfaces.receiverFunctions.find("decorate");
             assertTrue(found != interfaces.receiverFunctions.end());
@@ -1214,8 +1186,8 @@ int main() {
             function.sourceName = "kind";
             function.sourceModule = "Measure";
             function.backendModule = "kex_prelude";
-            function.signature = {"kind", {semantic::Type::named("Measure")},
-                                  semantic::Type::atom()};
+            function.signature = {
+                "kind", {semantic::Type::named("Measure")}, semantic::Type::atom()};
             compiled.receiverFunctions["kind"].push_back(function);
             semantic::ImportedInterfaces source;
             function.sourceModule = "Units.SI";
@@ -1236,8 +1208,7 @@ int main() {
             doubled.backendModule = "Kex.Stdlib.Numbers";
             doubled.backendFunction = "stdlib_doubled";
             doubled.backendArity = 1;
-            doubled.signature = {
-                "doubled", {semantic::Type::integer()}, semantic::Type::integer()};
+            doubled.signature = {"doubled", {semantic::Type::integer()}, semantic::Type::integer()};
             numbers.exports["doubled"].push_back(std::move(doubled));
             interfaces.modules["Numbers"] = std::move(numbers);
 
@@ -1251,19 +1222,19 @@ int main() {
             semantic::Analyzer analyzer(&interfaces);
 
             assertTrue(analyzer.analyze(program));
-            assertTrue(analyzer.resolvedCalls().empty(),
-                       "local module call must not retain imported ownership");
+            assertTrue(
+                analyzer.resolvedCalls().empty(),
+                "local module call must not retain imported ownership");
         });
 
         it("checks only package-approved imported receiver functions", []() {
             semantic::ImportedInterfaces interfaces;
             semantic::ImportedFunction doubled;
             doubled.sourceName = "doubled";
-            doubled.signature = {"doubled", {semantic::Type::integer()},
-                                 semantic::Type::integer()};
+            doubled.signature = {"doubled", {semantic::Type::integer()}, semantic::Type::integer()};
             interfaces.receiverFunctions["doubled"].push_back(std::move(doubled));
-            assertTrue(hasErrorWithInterfaces(
-                "main do \"wrong\".doubled end\n", interfaces, "doubled"));
+            assertTrue(
+                hasErrorWithInterfaces("main do \"wrong\".doubled end\n", interfaces, "doubled"));
         });
 
         it("keeps opt-in receiver functions behind lexical using", []() {
@@ -1276,10 +1247,8 @@ int main() {
             semantic::ImportedFunction doubled;
             doubled.sourceName = "doubled";
             doubled.sourceModule = "Opt";
-            doubled.signature = {"doubled", {semantic::Type::integer()},
-                                 semantic::Type::integer()};
-            interfaces.receiverFunctions["doubled"].push_back(
-                std::move(doubled));
+            doubled.signature = {"doubled", {semantic::Type::integer()}, semantic::Type::integer()};
+            interfaces.receiverFunctions["doubled"].push_back(std::move(doubled));
 
             // Not imported: the call cannot reach `Opt.doubled` at all, so the
             // checker says so rather than leaving it to the runtime. Silence
@@ -1287,11 +1256,10 @@ int main() {
             // method on any receiver — `"hello".sha256` without `using Digest`
             // checked clean and then died with "Undefined method: sha256 for
             // String" (rodolfo docs/kex-issues.md #5).
+            assertTrue(
+                hasErrorWithInterfaces("main do \"wrong\".doubled end\n", interfaces, "doubled"));
             assertTrue(hasErrorWithInterfaces(
-                "main do \"wrong\".doubled end\n", interfaces, "doubled"));
-            assertTrue(hasErrorWithInterfaces(
-                "using Opt\nmain do \"wrong\".doubled end\n",
-                interfaces, "doubled"));
+                "using Opt\nmain do \"wrong\".doubled end\n", interfaces, "doubled"));
             assertTrue(hasErrorWithInterfaces(
                 "using Opt, only: [doubled]\n"
                 "let bad() = \"wrong\".doubled\n",
@@ -1320,11 +1288,10 @@ int main() {
 
             auto replace = interfaces.receiverFunctions.find("replace");
             assertTrue(replace != interfaces.receiverFunctions.end());
-            assertTrue(std::any_of(
-                replace->second.begin(), replace->second.end(),
-                [](const auto& function) {
-                    return function.sourceModule == "Regex";
-                }));
+            assertTrue(
+                std::any_of(
+                    replace->second.begin(), replace->second.end(),
+                    [](const auto& function) { return function.sourceModule == "Regex"; }));
         });
 
         it("registers FS constructors as opt-in module exports", []() {
@@ -1334,19 +1301,14 @@ int main() {
             assertFalse(fs->second.automaticImport);
             const auto read = fs->second.exports.find("Read");
             assertTrue(read != fs->second.exports.end());
-            assertTrue(std::any_of(
-                read->second.begin(), read->second.end(),
-                [](const auto& function) {
-                    return function.isConstructor &&
-                           function.signature.params.empty() &&
-                           semantic::typeToString(
-                               function.signature.result) == "Read";
+            assertTrue(
+                std::any_of(read->second.begin(), read->second.end(), [](const auto& function) {
+                    return function.isConstructor && function.signature.params.empty() &&
+                           semantic::typeToString(function.signature.result) == "Read";
                 }));
 
-            assertTrue(noErrors(
-                "main do FS.Read end\n"));
-            assertTrue(noErrors(
-                "using FS\nmain do Read end\n"));
+            assertTrue(noErrors("main do FS.Read end\n"));
+            assertTrue(noErrors("using FS\nmain do Read end\n"));
         });
 
         it("keeps qualified uppercase constants typed as constants", []() {
@@ -1404,10 +1366,11 @@ int main() {
             assertTrue(analyzer.analyze(program));
             assertTrue(analyzer.resolvedCalls().size() >= size_t(2));
             bool foundRegexReplace = false;
-            for (const auto& [_, target] : analyzer.resolvedCalls())
-                if (target.backendModule == "Kex.Regex" &&
-                    target.backendFunction == "replace")
+            for (const auto& [_, target] : analyzer.resolvedCalls()) {
+                if (target.backendModule == "Kex.Regex" && target.backendFunction == "replace") {
                     foundRegexReplace = true;
+                }
+            }
             assertTrue(foundRegexReplace);
         });
 
@@ -1421,8 +1384,7 @@ int main() {
             integerTarget.paramNames = {};
             integerTarget.signature = {
                 "describe", {semantic::Type::integer()}, semantic::Type::string()};
-            interfaces.receiverFunctions["describe"].push_back(
-                std::move(integerTarget));
+            interfaces.receiverFunctions["describe"].push_back(std::move(integerTarget));
 
             semantic::ImportedFunction stringTarget;
             stringTarget.sourceName = "describe";
@@ -1431,8 +1393,7 @@ int main() {
             stringTarget.backendArity = 1;
             stringTarget.signature = {
                 "describe", {semantic::Type::string()}, semantic::Type::string()};
-            interfaces.receiverFunctions["describe"].push_back(
-                std::move(stringTarget));
+            interfaces.receiverFunctions["describe"].push_back(std::move(stringTarget));
 
             Lexer lexer("main do 42.describe end\n");
             Parser parser(lexer.tokenizeAll());
@@ -1443,8 +1404,7 @@ int main() {
             assertEqual(analyzer.resolvedCalls().size(), size_t(1));
             const auto& target = analyzer.resolvedCalls().begin()->second;
             assertEqual(target.backendModule, std::string("Kex.Numbers"));
-            assertEqual(target.backendFunction,
-                        std::string("describe_integer"));
+            assertEqual(target.backendFunction, std::string("describe_integer"));
             assertEqual(target.backendArity, 1);
             assertTrue(target.passesReceiver);
             assertTrue(target.paramNames.empty());
@@ -1456,14 +1416,12 @@ int main() {
                 semantic::ImportedFunction doubled;
                 doubled.sourceName = "doubled";
                 doubled.backendModule = backend;
-                doubled.signature = {"doubled", {semantic::Type::integer()},
-                                     semantic::Type::integer()};
-                interfaces.receiverFunctions["doubled"].push_back(
-                    std::move(doubled));
+                doubled.signature = {
+                    "doubled", {semantic::Type::integer()}, semantic::Type::integer()};
+                interfaces.receiverFunctions["doubled"].push_back(std::move(doubled));
             }
             assertTrue(hasErrorWithInterfaces(
-                "main do 2.doubled end\n", interfaces,
-                "ambiguous imported receiver function"));
+                "main do 2.doubled end\n", interfaces, "ambiguous imported receiver function"));
         });
     });
 
@@ -1475,8 +1433,7 @@ int main() {
                 "    :msg => x\n"
                 "  end\n"
                 "end\n",
-                "receive"
-            ));
+                "receive"));
         });
 
         it("allows receive in foul context", []() {
@@ -1485,15 +1442,13 @@ int main() {
                 "  receive do\n"
                 "    :msg => x\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("pure function can call other pure functions", []() {
             assertTrue(noErrors(
                 "let double(n: Int) = n * 2\n"
-                "let quad(n: Int) = double(double(n))\n"
-            ));
+                "let quad(n: Int) = double(double(n))\n"));
         });
 
         it("foul propagates through call chain", []() {
@@ -1503,8 +1458,7 @@ int main() {
                 "let process(path: String) do\n"
                 "  load(path)\n"
                 "end\n",
-                "foul"
-            ));
+                "foul"));
         });
     });
 
@@ -1514,8 +1468,7 @@ int main() {
                 "let foo(x: Int) do\n"
                 "  x = 5\n"
                 "end\n",
-                "immutable"
-            ));
+                "immutable"));
         });
 
         it("allows var in loop", []() {
@@ -1524,8 +1477,7 @@ int main() {
                 "  var count = 0\n"
                 "  count = count + 1\n"
                 "  count = count + 1\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("rejects undefined variable assignment", []() {
@@ -1533,8 +1485,7 @@ int main() {
                 "main do\n"
                 "  unknown = 5\n"
                 "end\n",
-                "Undefined variable"
-            ));
+                "Undefined variable"));
         });
 
         it("rejects ! on function parameter", []() {
@@ -1542,73 +1493,48 @@ int main() {
                 "let process(list: [Int]) do\n"
                 "  list.push!(4)\n"
                 "end\n",
-                "immutable"
-            ));
+                "immutable"));
         });
     });
 
     describe("Semantic — Type Checking (Arithmetic)", []() {
-        it("accepts Int + Int", []() {
-            assertTrue(noErrors("main do\n  let x = 1 + 2\nend\n"));
-        });
+        it("accepts Int + Int", []() { assertTrue(noErrors("main do\n  let x = 1 + 2\nend\n")); });
 
-        it("accepts Float + Float", []() {
-            assertTrue(noErrors("main do\n  let x = 1.0 + 2.5\nend\n"));
-        });
+        it("accepts Float + Float",
+           []() { assertTrue(noErrors("main do\n  let x = 1.0 + 2.5\nend\n")); });
 
-        it("accepts Int * Int", []() {
-            assertTrue(noErrors("main do\n  let x = 3 * 4\nend\n"));
-        });
+        it("accepts Int * Int", []() { assertTrue(noErrors("main do\n  let x = 3 * 4\nend\n")); });
 
-        it("accepts Float / Float", []() {
-            assertTrue(noErrors("main do\n  let x = 10.0 / 3.0\nend\n"));
-        });
+        it("accepts Float / Float",
+           []() { assertTrue(noErrors("main do\n  let x = 10.0 / 3.0\nend\n")); });
 
-        it("rejects String * String", []() {
-            assertTrue(hasError(
-                "main do\n  let x = \"a\" * \"b\"\nend\n",
-                "arithmetic"
-            ));
-        });
+        it("rejects String * String",
+           []() { assertTrue(hasError("main do\n  let x = \"a\" * \"b\"\nend\n", "arithmetic")); });
 
-        it("rejects String - String", []() {
-            assertTrue(hasError(
-                "main do\n  let x = \"a\" - \"b\"\nend\n",
-                "arithmetic"
-            ));
-        });
+        it("rejects String - String",
+           []() { assertTrue(hasError("main do\n  let x = \"a\" - \"b\"\nend\n", "arithmetic")); });
 
-        it("accepts String + String", []() {
-            assertTrue(noErrors("main do\n  let x = \"a\" + \"b\"\nend\n"));
-        });
+        it("accepts String + String",
+           []() { assertTrue(noErrors("main do\n  let x = \"a\" + \"b\"\nend\n")); });
 
-        it("promotes Int to Float in mixed arithmetic", []() {
-            assertTrue(noErrors("main do\n  let x = 1 + 2.0\nend\n"));
-        });
+        it("promotes Int to Float in mixed arithmetic",
+           []() { assertTrue(noErrors("main do\n  let x = 1 + 2.0\nend\n")); });
     });
 
     describe("Semantic — Type Checking (Comparison)", []() {
-        it("accepts Int == Int", []() {
-            assertTrue(noErrors("main do\n  let x = 1 == 2\nend\n"));
-        });
+        it("accepts Int == Int",
+           []() { assertTrue(noErrors("main do\n  let x = 1 == 2\nend\n")); });
 
-        it("accepts String == String", []() {
-            assertTrue(noErrors("main do\n  let x = \"a\" == \"b\"\nend\n"));
-        });
+        it("accepts String == String",
+           []() { assertTrue(noErrors("main do\n  let x = \"a\" == \"b\"\nend\n")); });
 
-        it("accepts Int < Int", []() {
-            assertTrue(noErrors("main do\n  let x = 1 < 2\nend\n"));
-        });
+        it("accepts Int < Int", []() { assertTrue(noErrors("main do\n  let x = 1 < 2\nend\n")); });
 
-        it("accepts Int >= Int", []() {
-            assertTrue(noErrors("main do\n  let x = 5 >= 3\nend\n"));
-        });
+        it("accepts Int >= Int",
+           []() { assertTrue(noErrors("main do\n  let x = 5 >= 3\nend\n")); });
 
         it("rejects Bool < Bool", []() {
-            assertTrue(hasError(
-                "main do\n  let x = true < false\nend\n",
-                "Cannot compare Bool"
-            ));
+            assertTrue(hasError("main do\n  let x = true < false\nend\n", "Cannot compare Bool"));
         });
 
         it("comparison returns Bool", []() {
@@ -1618,68 +1544,47 @@ int main() {
                 "  if x\n"
                 "    1\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
     describe("Semantic — Type Checking (Logical)", []() {
-        it("accepts Bool && Bool", []() {
-            assertTrue(noErrors("main do\n  let x = true && false\nend\n"));
-        });
+        it("accepts Bool && Bool",
+           []() { assertTrue(noErrors("main do\n  let x = true && false\nend\n")); });
 
-        it("accepts Bool || Bool", []() {
-            assertTrue(noErrors("main do\n  let x = true || false\nend\n"));
-        });
+        it("accepts Bool || Bool",
+           []() { assertTrue(noErrors("main do\n  let x = true || false\nend\n")); });
 
         it("rejects Int && Int", []() {
-            assertTrue(hasError(
-                "main do\n  let x = 1 && 2\nend\n",
-                "Logical operator requires Bool"
-            ));
+            assertTrue(
+                hasError("main do\n  let x = 1 && 2\nend\n", "Logical operator requires Bool"));
         });
 
         it("rejects String || String", []() {
             assertTrue(hasError(
-                "main do\n  let x = \"a\" || \"b\"\nend\n",
-                "Logical operator requires Bool"
-            ));
+                "main do\n  let x = \"a\" || \"b\"\nend\n", "Logical operator requires Bool"));
         });
 
         it("rejects ! on non-Bool", []() {
-            assertTrue(hasError(
-                "main do\n  let x = !5\nend\n",
-                "Logical not '!' requires Bool"
-            ));
+            assertTrue(hasError("main do\n  let x = !5\nend\n", "Logical not '!' requires Bool"));
         });
 
-        it("accepts ! on Bool", []() {
-            assertTrue(noErrors("main do\n  let x = !true\nend\n"));
-        });
+        it("accepts ! on Bool", []() { assertTrue(noErrors("main do\n  let x = !true\nend\n")); });
 
         it("keeps primitive make receivers canonical", []() {
             assertTrue(noErrors(
                 "make Bool do\n"
                 "  let inverted = !this\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
     describe("Semantic — Type Checking (If/Elif)", []() {
-        it("rejects String as condition", []() {
-            assertTrue(hasError(
-                "main do\n  if \"yes\"\n    1\n  end\nend\n",
-                "Bool"
-            ));
-        });
+        it("rejects String as condition",
+           []() { assertTrue(hasError("main do\n  if \"yes\"\n    1\n  end\nend\n", "Bool")); });
 
-        it("rejects Float as condition", []() {
-            assertTrue(hasError(
-                "main do\n  if 3.14\n    1\n  end\nend\n",
-                "Bool"
-            ));
-        });
+        it("rejects Float as condition",
+           []() { assertTrue(hasError("main do\n  if 3.14\n    1\n  end\nend\n", "Bool")); });
 
         it("accepts comparison as condition", []() {
             assertTrue(noErrors(
@@ -1688,8 +1593,7 @@ int main() {
                 "  if n > 0\n"
                 "    n\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("accepts negation as condition", []() {
@@ -1699,40 +1603,25 @@ int main() {
                 "  if !done\n"
                 "    1\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
     describe("Semantic — Type Checking (Collections)", []() {
-        it("accepts empty list", []() {
-            assertTrue(noErrors("main do\n  let x = []\nend\n"));
-        });
+        it("accepts empty list", []() { assertTrue(noErrors("main do\n  let x = []\nend\n")); });
 
         it("rejects [Int, String] mix", []() {
-            assertTrue(hasError(
-                "main do\n  let x = [1, \"two\", 3]\nend\n",
-                "same type"
-            ));
+            assertTrue(hasError("main do\n  let x = [1, \"two\", 3]\nend\n", "same type"));
         });
 
-        it("accepts nested homogeneous list", []() {
-            assertTrue(noErrors(
-                "main do\n  let x = [[1, 2], [3, 4]]\nend\n"
-            ));
-        });
+        it("accepts nested homogeneous list",
+           []() { assertTrue(noErrors("main do\n  let x = [[1, 2], [3, 4]]\nend\n")); });
 
-        it("accepts map literal", []() {
-            assertTrue(noErrors(
-                "main do\n  let x = { \"a\": 1, \"b\": 2 }\nend\n"
-            ));
-        });
+        it("accepts map literal",
+           []() { assertTrue(noErrors("main do\n  let x = { \"a\": 1, \"b\": 2 }\nend\n")); });
 
-        it("accepts tuple with mixed types", []() {
-            assertTrue(noErrors(
-                "main do\n  let x = (1, \"hello\", true)\nend\n"
-            ));
-        });
+        it("accepts tuple with mixed types",
+           []() { assertTrue(noErrors("main do\n  let x = (1, \"hello\", true)\nend\n")); });
 
         it("rejects mismatched and unsupported range endpoints", []() {
             assertTrue(hasError("main do 1..2.5 end\n", "same type"));
@@ -1743,9 +1632,7 @@ int main() {
             assertTrue(noErrors("main do 'a'..'z' end\n"));
         });
 
-        it("accepts range", []() {
-            assertTrue(noErrors("main do\n  let x = 1..10\nend\n"));
-        });
+        it("accepts range", []() { assertTrue(noErrors("main do\n  let x = 1..10\nend\n")); });
     });
 
     describe("Semantic — Type Checking (Let Binding)", []() {
@@ -1754,8 +1641,7 @@ int main() {
                 "main do\n"
                 "  let x = 5\n"
                 "  let y = x + 3\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("detects type error after let binding", []() {
@@ -1764,8 +1650,7 @@ int main() {
                 "  let x = 5\n"
                 "  let y = x + \"hello\"\n"
                 "end\n",
-                "Cannot add"
-            ));
+                "Cannot add"));
         });
 
         it("propagates Bool type through let", []() {
@@ -1775,8 +1660,7 @@ int main() {
                 "  if flag\n"
                 "    1\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("propagates String type through let", []() {
@@ -1785,8 +1669,7 @@ int main() {
                 "  let name = \"Alice\"\n"
                 "  let x = name - 1\n"
                 "end\n",
-                "arithmetic"
-            ));
+                "arithmetic"));
         });
     });
 
@@ -1797,8 +1680,7 @@ int main() {
                 "  var x = 0\n"
                 "  x = \"oops\"\n"
                 "end\n",
-                "Type mismatch"
-            ));
+                "Type mismatch"));
         });
 
         it("rejects Bool var assigned Int", []() {
@@ -1807,8 +1689,7 @@ int main() {
                 "  var flag = true\n"
                 "  flag = 42\n"
                 "end\n",
-                "Type mismatch"
-            ));
+                "Type mismatch"));
         });
 
         it("accepts Int var assigned Int", []() {
@@ -1817,8 +1698,7 @@ int main() {
                 "  var x = 0\n"
                 "  x = 1\n"
                 "  x = 2\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("accepts String var assigned String", []() {
@@ -1826,8 +1706,7 @@ int main() {
                 "main do\n"
                 "  var name = \"hello\"\n"
                 "  name = \"world\"\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -1840,10 +1719,9 @@ int main() {
         });
 
         it("prints a union of atom literals member by member", []() {
-            auto union_ = std::make_shared<Type>(Type{UnionType{
-                {Type::atom("macos"), Type::atom("linux"), Type::atom("windows")}}});
-            assertEqual(typeToString(union_),
-                        std::string(":macos | :linux | :windows"));
+            auto union_ = std::make_shared<Type>(
+                Type{UnionType{{Type::atom("macos"), Type::atom("linux"), Type::atom("windows")}}});
+            assertEqual(typeToString(union_), std::string(":macos | :linux | :windows"));
         });
 
         it("keeps every atom literal interchangeable with Atom", []() {
@@ -1861,20 +1739,18 @@ int main() {
     describe("Types — numeric tower", []() {
         using namespace kex::semantic;
 
-        it("prints Integer for the arbitrary-precision default", []() {
-            assertEqual(typeToString(Type::integer()), std::string("Integer"));
-        });
+        it("prints Integer for the arbitrary-precision default",
+           []() { assertEqual(typeToString(Type::integer()), std::string("Integer")); });
 
-        it("prints Int (not Int64) for the 64-bit signed alias", []() {
-            assertEqual(typeToString(Type::int64()), std::string("Int"));
-        });
+        it("prints Int (not Int64) for the 64-bit signed alias",
+           []() { assertEqual(typeToString(Type::int64()), std::string("Int")); });
 
         it("prints sized integer names by table lookup", []() {
             assertEqual(typeToString(Type::byte()), std::string("Byte"));
             assertEqual(typeToString(Type::int8()), std::string("Int8"));
             assertEqual(typeToString(Type::int16()), std::string("Int16"));
             assertEqual(typeToString(Type::int32()), std::string("Int32"));
-            assertEqual(typeToString(Type::uint8()), std::string("Byte"));  // UInt8 == Byte
+            assertEqual(typeToString(Type::uint8()), std::string("Byte")); // UInt8 == Byte
             assertEqual(typeToString(Type::uint16()), std::string("UInt16"));
             assertEqual(typeToString(Type::uint32()), std::string("UInt32"));
             assertEqual(typeToString(Type::uint64()), std::string("UInt64"));
@@ -1887,8 +1763,7 @@ int main() {
 
         it("prints String and [Char] as the distinct types they are", []() {
             assertEqual(typeToString(Type::string()), std::string("String"));
-            assertEqual(typeToString(Type::list(Type::charT())),
-                        std::string("[Char]"));
+            assertEqual(typeToString(Type::list(Type::charT())), std::string("[Char]"));
         });
 
         it("prints [Char] verbatim for lists of non-Char types as [T]", []() {
@@ -1911,9 +1786,8 @@ int main() {
             assertTrue(typesEqual(Type::float64(), Type::float64()));
         });
 
-        it("does not equate Char with Integer", []() {
-            assertFalse(typesEqual(Type::charT(), Type::integer()));
-        });
+        it("does not equate Char with Integer",
+           []() { assertFalse(typesEqual(Type::charT(), Type::integer())); });
     });
 
     describe("Types — intersections", []() {
@@ -1926,15 +1800,14 @@ int main() {
                 semantic::Type::record({{"name", semantic::Type::string()}}),
                 semantic::Type::record({{"age", semantic::Type::integer()}}),
             });
-            assertEqual(semantic::typeToString(merged),
-                        std::string("{name: String, age: Integer}"));
+            assertEqual(
+                semantic::typeToString(merged), std::string("{name: String, age: Integer}"));
 
             auto impossible = semantic::Type::intersection({
                 semantic::Type::record({{"value", semantic::Type::string()}}),
                 semantic::Type::record({{"value", semantic::Type::integer()}}),
             });
-            assertTrue(std::holds_alternative<semantic::VoidType>(
-                impossible->kind));
+            assertTrue(std::holds_alternative<semantic::VoidType>(impossible->kind));
         });
 
         it("merges row members before checking field access", []() {
@@ -2010,12 +1883,13 @@ int main() {
         using namespace kex::semantic;
         auto traits = TraitRegistry::withBuiltins();
 
-        it("satisfies Number/Integer for every sized int and arbitrary-precision Integer", [traits]() {
-            assertTrue(traits.satisfies(Type::integer(), "Integer"));
-            assertTrue(traits.satisfies(Type::integer(), "Number"));
-            assertTrue(traits.satisfies(Type::int8(), "Integer"));
-            assertTrue(traits.satisfies(Type::byte(), "Number"));
-        });
+        it("satisfies Number/Integer for every sized int and arbitrary-precision Integer",
+           [traits]() {
+               assertTrue(traits.satisfies(Type::integer(), "Integer"));
+               assertTrue(traits.satisfies(Type::integer(), "Number"));
+               assertTrue(traits.satisfies(Type::int8(), "Integer"));
+               assertTrue(traits.satisfies(Type::byte(), "Number"));
+           });
 
         it("satisfies Float/Number for sized floats only", [traits]() {
             assertTrue(traits.satisfies(Type::float32(), "Float"));
@@ -2046,7 +1920,8 @@ int main() {
 
         it("satisfies Equatable for a list/tuple by recursing into element types", [traits]() {
             assertTrue(traits.satisfies(Type::list(Type::integer()), "Equatable"));
-            assertTrue(traits.satisfies(Type::tuple({Type::integer(), Type::boolean()}), "Equatable"));
+            assertTrue(
+                traits.satisfies(Type::tuple({Type::integer(), Type::boolean()}), "Equatable"));
         });
 
         it("does not satisfy Equatable for a list of an unregistered type", [traits]() {
@@ -2073,18 +1948,17 @@ int main() {
                 "end\n"
                 "main do\n"
                 "  let shapes = [Shape { area: 4.0 }, Shape { area: 12.5 }]\n";
-            assertTrue(noErrors(shapes +
-                "  let smallest = shapes.minBy { |shape| shape.area }\n"
-                "  let largest = shapes.maxBy { |shape| shape.area }\n"
-                "  let total = shapes.sum { |shape| shape.area }\n"
-                "end\n"
-            ));
+            assertTrue(noErrors(
+                shapes + "  let smallest = shapes.minBy { |shape| shape.area }\n"
+                         "  let largest = shapes.maxBy { |shape| shape.area }\n"
+                         "  let total = shapes.sum { |shape| shape.area }\n"
+                         "end\n"));
             // A list has no `min` taking a key: `min(other)` is Comparable's,
             // whose unannotated `other` let this check clean and fail at
             // run time on both backends.
-            assertTrue(hasError(shapes +
-                "  let smallest = shapes.min { |shape| shape.area }\n"
-                "end\n",
+            assertTrue(hasError(
+                shapes + "  let smallest = shapes.min { |shape| shape.area }\n"
+                         "end\n",
                 "`min` expects argument 1 to be Comparable"));
         });
 
@@ -2094,8 +1968,7 @@ int main() {
                 "  let text: String = \"ha\".repeat(3)\n"
                 "  let items: [Integer] = [1, 2].repeat(2)\n"
                 "  let total: Integer = 3.repeat(4)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("loads Foldable conformances for collection types", []() {
@@ -2106,8 +1979,7 @@ int main() {
                 "  accept(\"text\")\n"
                 "  accept({ a: 1 })\n"
                 "  accept(1..3)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("loads algebraic conformances", []() {
@@ -2122,8 +1994,7 @@ int main() {
                 "  acceptMonoid(left)\n"
                 "  let combined = left.combine(right)\n"
                 "  let repeated = combined.repeat(2)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("loads measures, durations, and numeric time constructors", []() {
@@ -2132,8 +2003,7 @@ int main() {
                 "  let measure: Measure = 2.5.second\n"
                 "  let duration: Duration = (measure.canonical).second\n"
                 "  let converted: Result<Measure, String> = measure.convert(Millisecond)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("loads Optional marker traits and conformances from the prelude", []() {
@@ -2161,16 +2031,14 @@ int main() {
                 "main do\n"
                 "  let x = 'c'.even?\n"
                 "end\n",
-                "even?"
-            ));
+                "even?"));
         });
 
         it("accepts 4.even?", []() {
             assertTrue(noErrors(
                 "main do\n"
                 "  let x = 4.even?\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("rejects a wrong-arity stdlib call", []() {
@@ -2178,8 +2046,7 @@ int main() {
                 "main do\n"
                 "  let x = even?(1, 2)\n"
                 "end\n",
-                "argument"
-            ));
+                "argument"));
         });
 
         it("does not check calls to unknown/user-defined functions", []() {
@@ -2187,8 +2054,7 @@ int main() {
                 "let myFunc(x) = x\n"
                 "main do\n"
                 "  myFunc(1)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("accepts an arg-less block for Integer#times", []() {
@@ -2197,8 +2063,7 @@ int main() {
                 "  3.times do\n"
                 "    IO.printLine(\"hi\")\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("still passes the index to Integer#times with a parameter block", []() {
@@ -2207,8 +2072,7 @@ int main() {
                 "  3.times do |i|\n"
                 "    IO.printLine(i)\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("accepts a Block<Void> overload alongside a handler overload", []() {
@@ -2223,8 +2087,7 @@ int main() {
                 "  repeat do |i|\n"
                 "    IO.printLine(i)\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("still requires a block argument for each", []() {
@@ -2234,15 +2097,15 @@ int main() {
                 "    IO.printLine(\"tick\")\n"
                 "  end\n"
                 "end\n",
-                "expects argument 2 to be"
-            ));
+                "expects argument 2 to be"));
         });
     });
 
     describe("Semantic — Match exhaustiveness", []() {
         it("rejects a user sum type match missing a constructor", []() {
             assertTrue(hasError(
-                "type Shape = Circle(Float) | Rectangle(Float, Float) | Triangle(Float, Float, Float)\n"
+                "type Shape = Circle(Float) | Rectangle(Float, Float) | "
+                "Triangle(Float, Float, Float)\n"
                 "main do\n"
                 "  let s = Circle(1.0)\n"
                 "  match s do\n"
@@ -2250,8 +2113,7 @@ int main() {
                 "    Rectangle(w, h) => w * h\n"
                 "  end\n"
                 "end\n",
-                "Non-exhaustive"
-            ));
+                "Non-exhaustive"));
         });
 
         it("says a payload constructor named bare is no value", []() {
@@ -2261,15 +2123,13 @@ int main() {
                 "main do\n"
                 "  IO.inspect([1, 2].map(Wrap))\n"
                 "end\n",
-                "`Wrap` is a constructor taking 1 value, not a value"
-            ));
+                "`Wrap` is a constructor taking 1 value, not a value"));
             assertTrue(noErrors(
                 "type Thing = Wrap(Integer) | Empty\n"
                 "main do\n"
                 "  IO.inspect([1, 2].map { |n| Wrap(n) })\n"
                 "  IO.inspect(Empty)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("accepts a fully-covered user sum type match", []() {
@@ -2281,21 +2141,20 @@ int main() {
                 "    Circle(r) => r\n"
                 "    Rectangle(w, h) => w * h\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("accepts a match covered by an unguarded wildcard clause", []() {
             assertTrue(noErrors(
-                "type Shape = Circle(Float) | Rectangle(Float, Float) | Triangle(Float, Float, Float)\n"
+                "type Shape = Circle(Float) | Rectangle(Float, Float) | "
+                "Triangle(Float, Float, Float)\n"
                 "main do\n"
                 "  let s = Circle(1.0)\n"
                 "  match s do\n"
                 "    Circle(r) => r\n"
                 "    _ => 0.0\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("rejects an Option match missing None", []() {
@@ -2306,8 +2165,7 @@ int main() {
                 "    Just(v) => v\n"
                 "  end\n"
                 "end\n",
-                "Non-exhaustive"
-            ));
+                "Non-exhaustive"));
         });
 
         it("accepts an Option match that does cover None", []() {
@@ -2322,8 +2180,7 @@ int main() {
                 "    Just(v) => v\n"
                 "    None => 0\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("does not count a guarded clause alone as covering its constructor", []() {
@@ -2336,8 +2193,7 @@ int main() {
                 "    Rectangle(w, h) => w * h\n"
                 "  end\n"
                 "end\n",
-                "Non-exhaustive"
-            ));
+                "Non-exhaustive"));
         });
 
         it("binds constructor pattern args so they're not flagged as undefined", []() {
@@ -2348,8 +2204,7 @@ int main() {
                 "  match p do\n"
                 "    Pair(a, b) => a + b\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -2360,8 +2215,7 @@ int main() {
                 "main do\n"
                 "  let x = greet(42)\n"
                 "end\n",
-                "greet"
-            ));
+                "greet"));
         });
 
         it("accepts a call matching a declared param annotation", []() {
@@ -2369,26 +2223,24 @@ int main() {
                 "let greet(name: String) = name\n"
                 "main do\n"
                 "  let x = greet(\"world\")\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("does not hard-error Int vs Integer — not runtime-distinguished yet", []() {
             assertTrue(noErrors(
                 "let double(n: Int) = n * 2\n"
-                "let quad(n: Int) = double(double(n))\n"
-            ));
+                "let quad(n: Int) = double(double(n))\n"));
         });
 
-        it("treats a single-letter param annotation as generic, usable at multiple call-site types", []() {
-            assertTrue(noErrors(
-                "let identity(a: A) = a\n"
-                "main do\n"
-                "  let x = identity(1)\n"
-                "  let y = identity(\"hi\")\n"
-                "end\n"
-            ));
-        });
+        it("treats a single-letter param annotation as generic, usable at multiple call-site types",
+           []() {
+               assertTrue(noErrors(
+                   "let identity(a: A) = a\n"
+                   "main do\n"
+                   "  let x = identity(1)\n"
+                   "  let y = identity(\"hi\")\n"
+                   "end\n"));
+           });
 
         it("accepts unrelated nominal records satisfying one open record", []() {
             assertTrue(noErrors(
@@ -2428,25 +2280,20 @@ int main() {
         });
 
         it("requires every member of a trait intersection", []() {
-            const std::string declarations =
-                "trait Left do left :> String end\n"
-                "trait Right do right :> String end\n"
-                "record Both do value : String end\n"
-                "make Both, implement: Left, Right do\n"
-                "  let left = @value\n"
-                "  let right = @value\n"
-                "end\n"
-                "record Half do value : String end\n"
-                "make Half, implement: Left do let left = @value end\n"
-                "accept : Left & Right -> String\n"
-                "let accept(value) = value.left + value.right\n";
-            assertTrue(noErrors(
-                declarations +
-                "main do accept(Both { value: \"ok\" }) end\n"));
-            assertTrue(hasError(
-                declarations +
-                "main do accept(Half { value: \"no\" }) end\n",
-                "accept"));
+            const std::string declarations = "trait Left do left :> String end\n"
+                                             "trait Right do right :> String end\n"
+                                             "record Both do value : String end\n"
+                                             "make Both, implement: Left, Right do\n"
+                                             "  let left = @value\n"
+                                             "  let right = @value\n"
+                                             "end\n"
+                                             "record Half do value : String end\n"
+                                             "make Half, implement: Left do let left = @value end\n"
+                                             "accept : Left & Right -> String\n"
+                                             "let accept(value) = value.left + value.right\n";
+            assertTrue(noErrors(declarations + "main do accept(Both { value: \"ok\" }) end\n"));
+            assertTrue(
+                hasError(declarations + "main do accept(Half { value: \"no\" }) end\n", "accept"));
         });
 
         it("checks open rows against imported generic record fields", []() {
@@ -2480,10 +2327,8 @@ int main() {
             audit.backendFunction = "audit";
             audit.backendModule = "external";
             audit.backendArity = 1;
-            auto row = semantic::Type::record(
-                {{"enabled", semantic::Type::boolean()}});
-            auto shape = semantic::Type::intersection(
-                {semantic::Type::typeVar(-1), row});
+            auto row = semantic::Type::record({{"enabled", semantic::Type::boolean()}});
+            auto shape = semantic::Type::intersection({semantic::Type::typeVar(-1), row});
             audit.signature = {"audit", {shape}, shape, true};
             external.exports["audit"].push_back(std::move(audit));
             interfaces.modules["External"] = std::move(external);
@@ -2504,16 +2349,14 @@ int main() {
                 "let laterFunc(s: String) = s\n"
                 "main do\n"
                 "  useIt(\"hello\")\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("forward references with type mismatches are caught", []() {
             assertTrue(hasError(
                 "let useIt(x: Int) = laterFunc(x)\n"
                 "let laterFunc(s: String) = s\n",
-                "laterFunc"
-            ));
+                "laterFunc"));
         });
 
         it("rejects a make-block method on the wrong receiver refinement", []() {
@@ -2525,8 +2368,7 @@ int main() {
                 "  let read = \"ok\"\n"
                 "end\n"
                 "let misuse(handle: Handle<Closed>) = handle.read()\n",
-                "read"
-            ));
+                "read"));
         });
 
         it("accepts a make-block method on its declared receiver refinement", []() {
@@ -2537,8 +2379,7 @@ int main() {
                 "  read :> String\n"
                 "  let read = \"ok\"\n"
                 "end\n"
-                "let use(handle: Handle<HandleState.Open>) = handle.read()\n"
-            ));
+                "let use(handle: Handle<HandleState.Open>) = handle.read()\n"));
         });
 
         it("checks make-block method arguments outside the implementation", []() {
@@ -2550,8 +2391,7 @@ int main() {
                 "main do\n"
                 "  5.describe(42)\n"
                 "end\n",
-                "String"
-            ));
+                "String"));
         });
 
         it("selects the FileHandle refinement from the exact open mode", []() {
@@ -2565,8 +2405,7 @@ int main() {
                 "  let both = FS.File.open(\"both.txt\", FS.ReadWrite).try\n"
                 "  both.read()\n"
                 "  both.print(\"ok\")\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("types open as a Result containing the refined handle", []() {
@@ -2576,8 +2415,7 @@ int main() {
                 "using FS\n"
                 "main do\n"
                 "  accepts(FS.File.open(\"output.txt\", FS.Write))\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("rejects writing through a read-only FileHandle", []() {
@@ -2587,8 +2425,7 @@ int main() {
                 "  let reader = FS.File.open(\"input.txt\", FS.Read).try\n"
                 "  reader.print(\"no\")\n"
                 "end\n",
-                "FileHandle"
-            ));
+                "FileHandle"));
         });
 
         it("rejects reading through a write-only FileHandle", []() {
@@ -2598,16 +2435,14 @@ int main() {
                 "  let writer = FS.File.open(\"output.txt\", FS.Write).try\n"
                 "  writer.getLine()\n"
                 "end\n",
-                "FileHandle"
-            ));
+                "FileHandle"));
         });
 
         it("allows an unparameterized receiver method on an inferred generic value", []() {
             assertTrue(noErrors(
                 "main do\n"
                 "  (1..3).items\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("preserves the inner Optional type through .try", []() {
@@ -2621,8 +2456,7 @@ int main() {
                 "    _ => 0\n"
                 "  end\n"
                 "end\n",
-                "String"
-            ));
+                "String"));
         });
 
         it("accepts .try on an explicitly annotated Optional", []() {
@@ -2630,8 +2464,7 @@ int main() {
                 "let unwrap(value: Optional<Integer>) -> Integer do\n"
                 "  value.try\n"
                 "rescue return 0\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("rejects .try on a non-Tryable concrete value", []() {
@@ -2643,26 +2476,25 @@ int main() {
                 "    _ => 0\n"
                 "  end\n"
                 "end\n",
-                "Result or Optional"
-            ));
+                "Result or Optional"));
         });
 
-        it("accepts calling a zero-arg top-level binding with arguments (auto-call-then-apply)", []() {
-            // Every top-level `let NAME = EXPR` is a 0-param function
-            // (Parser::parseFunctionDef) — referencing it auto-calls it
-            // (Evaluator::autoCallZeroArgConstant), so `hello("Alice")`
-            // means "call hello(), then apply 'Alice' to the result,"
-            // not "call hello with 1 argument" (a real arity mismatch).
-            assertTrue(noErrors(
-                "let makeGreeter(prefix: String) -> (String -> String) do\n"
-                "  return { |name| \"${prefix}, ${name}!\" }\n"
-                "end\n"
-                "let hello = makeGreeter(\"Hello\")\n"
-                "main do\n"
-                "  hello(\"Alice\")\n"
-                "end\n"
-            ));
-        });
+        it("accepts calling a zero-arg top-level binding with arguments (auto-call-then-apply)",
+           []() {
+               // Every top-level `let NAME = EXPR` is a 0-param function
+               // (Parser::parseFunctionDef) — referencing it auto-calls it
+               // (Evaluator::autoCallZeroArgConstant), so `hello("Alice")`
+               // means "call hello(), then apply 'Alice' to the result,"
+               // not "call hello with 1 argument" (a real arity mismatch).
+               assertTrue(noErrors(
+                   "let makeGreeter(prefix: String) -> (String -> String) do\n"
+                   "  return { |name| \"${prefix}, ${name}!\" }\n"
+                   "end\n"
+                   "let hello = makeGreeter(\"Hello\")\n"
+                   "main do\n"
+                   "  hello(\"Alice\")\n"
+                   "end\n"));
+           });
 
         it("counts a trailing do...end block as an argument toward arity", []() {
             assertTrue(noErrors(
@@ -2673,8 +2505,7 @@ int main() {
                 "  times(3) do\n"
                 "    IO.printLine(\"hello\")\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -2683,8 +2514,7 @@ int main() {
             assertTrue(noErrors(
                 "main(args) do\n"
                 "  IO.printLine(args)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -2696,18 +2526,17 @@ int main() {
                 "such as `build` for constructor functions"));
         });
 
-        it("does not reserve new as an effectful command name", []() {
-            assertTrue(noErrors(
-                "foul new(value: Integer) -> Integer = value\n"));
-        });
+        it("does not reserve new as an effectful command name",
+           []() { assertTrue(noErrors("foul new(value: Integer) -> Integer = value\n")); });
     });
 
     describe("Semantic — standalone type annotations", []() {
         it("rejects unknown types in bare declarations in every declaration scope", []() {
-            assertTrue(hasError("value : MissingType\nlet value = 1\n",
-                                "Unknown type `MissingType`"));
-            assertTrue(hasError("convert : MissingType -> Integer\nlet convert(x) = 1\n",
-                                "Unknown type `MissingType`"));
+            assertTrue(
+                hasError("value : MissingType\nlet value = 1\n", "Unknown type `MissingType`"));
+            assertTrue(hasError(
+                "convert : MissingType -> Integer\nlet convert(x) = 1\n",
+                "Unknown type `MissingType`"));
             assertTrue(hasError(
                 "module Example do\n"
                 "  value : MissingType\n"
@@ -2734,8 +2563,7 @@ int main() {
                 "let identity(value) = value\n"
                 "later : Later -> Later\n"
                 "let later(value) = value\n"
-                "type Later\n"
-            ));
+                "type Later\n"));
         });
 
         it("checks let and var annotations inside main and other functions", []() {
@@ -2757,9 +2585,7 @@ int main() {
                 "  retries : Integer = \"many\"\n"
                 "end\n",
                 "Type mismatch"));
-            assertTrue(hasError(
-                "let retry(count: Integer = \"many\") = count\n",
-                "Type mismatch"));
+            assertTrue(hasError("let retry(count: Integer = \"many\") = count\n", "Type mismatch"));
         });
 
         it("applies declarations inside module visibility blocks", []() {
@@ -2768,11 +2594,10 @@ int main() {
                 "  private do\n"
                 "    repeat : String -> Integer -> String\n"
                 "    let repeat(text, n) = "
-                    "if n == 0 then \"\" else text + repeat(text, n - 1) end\n"
+                "if n == 0 then \"\" else text + repeat(text, n - 1) end\n"
                 "  end\n"
                 "  let pad(text) = repeat(\" \", 2) + text\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("propagates annotated list element types into clause patterns", []() {
@@ -2780,8 +2605,7 @@ int main() {
                 "sort : [Integer] -> [Integer]\n"
                 "let sort([]) = []\n"
                 "let sort([pivot | rest]) = "
-                    "sort(rest.filter { |value| value < pivot })\n"
-            ));
+                "sort(rest.filter { |value| value < pivot })\n"));
         });
 
         it("prefers a known record field over an imported method collision", []() {
@@ -2793,8 +2617,7 @@ int main() {
                 "main do\n"
                 "  let version = Version { patch: 1 }\n"
                 "  IO.printLine(version.patch)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("applies module-owned annotations and contextual callback types", []() {
@@ -2805,26 +2628,25 @@ int main() {
                 "    insert :> Integer -> Tree\n"
                 "    let insert(@Empty, value) = Node(value, Empty, Empty)\n"
                 "    let insert(@Node(current, left, right), value) = "
-                    "Node(current, left, right)\n"
+                "Node(current, left, right)\n"
                 "    transform :> (Integer -> Integer) -> Tree\n"
                 "    let transform(@Empty, _) = Empty\n"
                 "    let transform(@Node(value, left, right), f) = "
-                    "Node(f(value), left, right)\n"
+                "Node(f(value), left, right)\n"
                 "    fold :> X -> (Integer -> X -> X -> X) -> X\n"
                 "    let fold(@Empty, emptyValue, _) = emptyValue\n"
                 "    let fold(@Node(value, _, _), emptyValue, combine) = "
-                    "combine(value, emptyValue, emptyValue)\n"
+                "combine(value, emptyValue, emptyValue)\n"
                 "  end\n"
                 "  fromList : [Integer] -> Tree\n"
                 "  let fromList(values) = values.reduce(Empty) { |tree, value| "
-                    "tree.insert(value) }\n"
+                "tree.insert(value) }\n"
                 "end\n"
                 "main do\n"
                 "  let tree = Trees.fromList([1, 2, 3])\n"
                 "  tree.transform({ |n| n * 2 })\n"
                 "  tree.fold(0, { |value, left, right| value + left + right })\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("accepts a function whose body matches the declared return type", []() {
@@ -2833,8 +2655,7 @@ int main() {
                 "let add(a, b) = a + b\n"
                 "main do\n"
                 "  IO.printLine(add(1, 2))\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("rejects a function whose body return type contradicts the annotation", []() {
@@ -2843,8 +2664,7 @@ int main() {
                 "let add(a, b) = a + b\n"
                 "main do\n"
                 "  IO.printLine(add(1, 2))\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("uses declared param types for call checking even without inline annotations", []() {
@@ -2855,8 +2675,7 @@ int main() {
                 "let add(a, b) = a + b\n"
                 "main do\n"
                 "  add(\"x\", 2)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -2871,12 +2690,13 @@ int main() {
                 "  let middleware = ~wrap\n"
                 "  let wrapped = middleware({ |n| n })\n"
                 "  wrapped(1)\n"
-                "end\n"
-            );
+                "end\n");
             std::string errors;
-            for (const auto& diagnostic : diagnostics)
-                if (diagnostic.level == semantic::Diagnostic::Level::Error)
+            for (const auto& diagnostic : diagnostics) {
+                if (diagnostic.level == semantic::Diagnostic::Level::Error) {
                     errors += diagnostic.message + "\n";
+                }
+            }
             assertTrue(errors.empty(), errors);
         });
 
@@ -2890,8 +2710,7 @@ int main() {
                 "end\n"
                 "main do\n"
                 "  log(:debug, \"hello\")\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("still rejects a clearly wrong type for an aliased param", []() {
@@ -2902,8 +2721,7 @@ int main() {
                 "end\n"
                 "main do\n"
                 "  log(42, \"hello\")\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -2914,8 +2732,7 @@ int main() {
                 "let doubled = base * 2\n"
                 "main do\n"
                 "  IO.printLine(doubled)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("top-level `let x = expr` is not confused with a function def", []() {
@@ -2925,8 +2742,7 @@ int main() {
                 "let greeting = \"hello\"\n"
                 "main do\n"
                 "  IO.printLine(greeting)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("still parses actual function defs correctly after the fix", []() {
@@ -2937,8 +2753,7 @@ int main() {
                 "main do\n"
                 "  let r = add(1, 2)\n"
                 "  IO.printLine(r)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -2948,8 +2763,7 @@ int main() {
                 "let impure(msg: String) do\n"
                 "  IO.printLine(msg)\n"
                 "end\n"
-                "main do impure(\"hi\") end\n"
-            ));
+                "main do impure(\"hi\") end\n"));
         });
 
         it("foul function calling IO is fine", []() {
@@ -2957,8 +2771,7 @@ int main() {
                 "foul doIO(msg: String) do\n"
                 "  IO.printLine(msg)\n"
                 "end\n"
-                "main do doIO(\"hi\") end\n"
-            ));
+                "main do doIO(\"hi\") end\n"));
         });
 
         it("IO in closure inside pure function is an error", []() {
@@ -2969,8 +2782,7 @@ int main() {
                 "    n * 2\n"
                 "  }\n"
                 "end\n"
-                "main do process([1,2,3]) end\n"
-            ));
+                "main do process([1,2,3]) end\n"));
         });
 
         it("IO.inspect is always allowed even in pure context", []() {
@@ -2979,16 +2791,14 @@ int main() {
                 "  IO.inspect(n)\n"
                 "  n * 2\n"
                 "end\n"
-                "main do IO.printLine(debug(5)) end\n"
-            ));
+                "main do IO.printLine(debug(5)) end\n"));
         });
 
         it("pure calling another pure is fine", []() {
             assertTrue(noErrors(
                 "let double(n) = n * 2\n"
                 "let quadruple(n) = double(double(n))\n"
-                "main do IO.printLine(quadruple(3)) end\n"
-            ));
+                "main do IO.printLine(quadruple(3)) end\n"));
         });
 
         it("pure calling user-defined foul is an error", []() {
@@ -3000,8 +2810,7 @@ int main() {
                 "  doSomething()\n"
                 "  n\n"
                 "end\n"
-                "main do pure(1) end\n"
-            ));
+                "main do pure(1) end\n"));
         });
     });
 
@@ -3014,8 +2823,7 @@ int main() {
                 "make Point, implement: Printable do\n"
                 "  let toString = \"a point\"\n"
                 "end\n"
-                "main do IO.printLine(\"ok\") end\n"
-            ));
+                "main do IO.printLine(\"ok\") end\n"));
         });
 
         it("missing required method is an error", []() {
@@ -3026,8 +2834,7 @@ int main() {
                 "make Point, implement: Printable do\n"
                 "  let other = 42\n"
                 "end\n"
-                "main do IO.printLine(\"ok\") end\n"
-            ));
+                "main do IO.printLine(\"ok\") end\n"));
         });
 
         it("unknown trait is an error", []() {
@@ -3035,8 +2842,7 @@ int main() {
                 "make Point, implement: NonExistentTrait do\n"
                 "  let foo = 1\n"
                 "end\n"
-                "main do IO.printLine(\"ok\") end\n"
-            ));
+                "main do IO.printLine(\"ok\") end\n"));
         });
 
         it("implementing multiple traits all satisfied passes", []() {
@@ -3051,8 +2857,7 @@ int main() {
                 "  let score = 1\n"
                 "  let label = \"hi\"\n"
                 "end\n"
-                "main do IO.printLine(\"ok\") end\n"
-            ));
+                "main do IO.printLine(\"ok\") end\n"));
         });
 
         it("foul trait method implemented as let is an error", []() {
@@ -3063,8 +2868,7 @@ int main() {
                 "make Doc, implement: Storable do\n"
                 "  let save = \"saved\"\n"
                 "end\n"
-                "main do IO.printLine(\"ok\") end\n"
-            ));
+                "main do IO.printLine(\"ok\") end\n"));
         });
 
         it("foul trait method implemented as foul passes", []() {
@@ -3075,8 +2879,7 @@ int main() {
                 "make Doc, implement: Storable do\n"
                 "  foul save = \"saved\"\n"
                 "end\n"
-                "main do IO.printLine(\"ok\") end\n"
-            ));
+                "main do IO.printLine(\"ok\") end\n"));
         });
 
         it("missing one of two required traits is an error", []() {
@@ -3090,8 +2893,7 @@ int main() {
                 "make Thing, implement: Scorable, Labelable do\n"
                 "  let score = 1\n"
                 "end\n"
-                "main do IO.printLine(\"ok\") end\n"
-            ));
+                "main do IO.printLine(\"ok\") end\n"));
         });
 
         it("This in param annotation resolves to implementing type", []() {
@@ -3106,8 +2908,7 @@ int main() {
                 "main do\n"
                 "  let p = Point { x: 1 }\n"
                 "  IO.printLine(p.compare(Point { x: 2 }))\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("trait-bounded param rejects non-implementing type", []() {
@@ -3121,8 +2922,8 @@ int main() {
                 "  let describe = \"dog\"\n"
                 "end\n"
                 "let showDescription(item: Describable) = item.describe()\n"
-                "main do IO.printLine(showDescription(Animal { name: \"Cat\" })) end\n"
-            , "expects argument 1 to be Describable"));
+                "main do IO.printLine(showDescription(Animal { name: \"Cat\" })) end\n",
+                "expects argument 1 to be Describable"));
         });
 
         it("trait method return type inferred from trait definition", []() {
@@ -3138,8 +2939,7 @@ int main() {
                 "main do\n"
                 "  let c = Cat { name: \"Whiskers\" }\n"
                 "  IO.printLine(extractName(c))\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("trait default method using this is callable without override", []() {
@@ -3156,8 +2956,7 @@ int main() {
                 "  let d = Dog { name: \"Rex\" }\n"
                 "  IO.printLine(d.describe)\n"
                 "  IO.printLine(d.shout)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("overriding a trait default method uses the override", []() {
@@ -3171,8 +2970,7 @@ int main() {
                 "  let describe = \"Cat: \" + @name\n"
                 "  let shout = \"MEOW: \" + @name.upperCase\n"
                 "end\n"
-                "main do IO.printLine(Cat { name: \"w\" }.shout) end\n"
-            ));
+                "main do IO.printLine(Cat { name: \"w\" }.shout) end\n"));
         });
 
         it("Comparison stdlib type: Less/Equal/Greater are available without declaration", []() {
@@ -3181,8 +2979,7 @@ int main() {
                 "  IO.printLine(Less)\n"
                 "  IO.printLine(Equal)\n"
                 "  IO.printLine(Greater)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -3191,24 +2988,22 @@ int main() {
             assertTrue(noErrors(
                 "let b(x) = a(x) + 1\n"
                 "let a(x) = x * 2\n"
-                "main do IO.printLine(b(5)) end\n"
-            ));
+                "main do IO.printLine(b(5)) end\n"));
         });
 
         it("type error in forward-declared function call is detected", []() {
             assertTrue(hasError(
                 "let b(x) = a(x) + \"world\"\n"
                 "let a(x) = x * 2\n"
-                "main do IO.printLine(b(5)) end\n"
-            , "Cannot add"));
+                "main do IO.printLine(b(5)) end\n",
+                "Cannot add"));
         });
 
         it("mutual recursion type checks correctly", []() {
             assertTrue(noErrors(
                 "let isEven(n) = if n == 0 then true else isOdd(n - 1) end\n"
                 "let isOdd(n) = if n == 0 then false else isEven(n - 1) end\n"
-                "main do IO.printLine(isEven(4)) end\n"
-            ));
+                "main do IO.printLine(isEven(4)) end\n"));
         });
     });
 
@@ -3219,8 +3014,7 @@ int main() {
                 "  let x = 5\n"
                 "  let r = if x > 3 then \"big\" else \"small\" end\n"
                 "  IO.printLine(r)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("branch type mismatch in inline if-then-else is an error", []() {
@@ -3229,23 +3023,22 @@ int main() {
                 "  let x = 5\n"
                 "  let r = if x > 3 then \"big\" else 42 end\n"
                 "  IO.printLine(r)\n"
-                "end\n"
-            , "Branch type mismatch"));
+                "end\n",
+                "Branch type mismatch"));
         });
 
         it("mutual recursion with inline if-then-else works", []() {
             assertTrue(noErrors(
                 "let isEven(n) = if n == 0 then true else isOdd(n - 1) end\n"
                 "let isOdd(n) = if n == 0 then false else isEven(n - 1) end\n"
-                "main do IO.printLine(isEven(4)) end\n"
-            ));
+                "main do IO.printLine(isEven(4)) end\n"));
         });
 
         it("inline if-then-elif-then-else parses and runs", []() {
             assertTrue(noErrors(
-                "let classify(n) = if n > 0 then \"pos\" elif n < 0 then \"neg\" else \"zero\" end\n"
-                "main do IO.printLine(classify(5)) end\n"
-            ));
+                "let classify(n) = if n > 0 then \"pos\" elif n < 0 then \"neg\" "
+                "else \"zero\" end\n"
+                "main do IO.printLine(classify(5)) end\n"));
         });
 
         it("inline elif chains can span multiple lines", []() {
@@ -3256,15 +3049,14 @@ int main() {
                 "  else :pos\n"
                 "  end\n"
                 "end\n"
-                "main do IO.printLine(classify(0)) end\n"
-            ));
+                "main do IO.printLine(classify(0)) end\n"));
         });
 
         it("inline elif branch type mismatch is an error", []() {
             assertTrue(hasError(
                 "let classify(n) = if n > 0 then \"pos\" elif n < 0 then 0 else \"zero\" end\n"
-                "main do IO.printLine(classify(5)) end\n"
-            , "Branch type mismatch"));
+                "main do IO.printLine(classify(5)) end\n",
+                "Branch type mismatch"));
         });
 
         it("if/elif without else need not agree: the conditional is Void", []() {
@@ -3277,8 +3069,7 @@ int main() {
                 "  end\n"
                 "  return x\n"
                 "end\n"
-                "main do IO.printLine(f(2, {})) end\n"
-            ));
+                "main do IO.printLine(f(2, {})) end\n"));
         });
     });
 
@@ -3289,8 +3080,7 @@ int main() {
                 "  let words = [\"hello world\", \"foo\"]\n"
                 "  let parts = words.map(&.split(\" \"))\n"
                 "  IO.printLine(parts.join(\", \"))\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("&.method on wrong element type is an error", []() {
@@ -3299,8 +3089,8 @@ int main() {
                 "  let nums = [1, 2, 3]\n"
                 "  let result = nums.map(&.split(\" \"))\n"
                 "  IO.printLine(result.join(\", \"))\n"
-                "end\n"
-            , "expects argument 1 to be String, but got Integer"));
+                "end\n",
+                "expects argument 1 to be String, but got Integer"));
         });
 
         it("~function on correct element type passes", []() {
@@ -3309,8 +3099,7 @@ int main() {
                 "  let nums = [1, 2, 3, 4]\n"
                 "  let evens = nums.filter(~even?)\n"
                 "  IO.printLine(evens.join(\", \"))\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("~function on wrong element type is an error", []() {
@@ -3319,8 +3108,8 @@ int main() {
                 "  let words = [\"a\", \"b\"]\n"
                 "  let evens = words.filter(~even?)\n"
                 "  IO.printLine(evens.join(\", \"))\n"
-                "end\n"
-            , "expects argument 1 to be Integer, but got String"));
+                "end\n",
+                "expects argument 1 to be Integer, but got String"));
         });
     });
 
@@ -3333,8 +3122,7 @@ int main() {
                 "    end\n"
                 "  end\n"
                 "  IO.printLine(result)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("Never return annotation is accepted for a diverging function", []() {
@@ -3344,8 +3132,7 @@ int main() {
                 "let crash(msg: String) -> Never do\n"
                 "  die(msg)\n"
                 "end\n"
-                "main do IO.printLine(\"before\") end\n"
-            ));
+                "main do IO.printLine(\"before\") end\n"));
         });
 
         it("if-else where one branch is die (Never) takes the other branch type", []() {
@@ -3353,8 +3140,7 @@ int main() {
                 "let safeDivide(a: Integer, b: Integer) do\n"
                 "  if b == 0 then die(\"div by zero\") else a end\n"
                 "end\n"
-                "main do IO.printLine(safeDivide(10, 2)) end\n"
-            ));
+                "main do IO.printLine(safeDivide(10, 2)) end\n"));
         });
 
         it("Void is the unit type ()", []() {
@@ -3364,8 +3150,7 @@ int main() {
                 "let noop() -> Void do\n"
                 "  return ()\n"
                 "end\n"
-                "main do noop() end\n"
-            ));
+                "main do noop() end\n"));
         });
     });
 
@@ -3376,8 +3161,7 @@ int main() {
                 "let render(value: Comparison) = value\n"
                 "main do\n"
                 "  [Less, Equal, Greater].each(~render)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("Ok pattern on Optional value errors", []() {
@@ -3386,8 +3170,7 @@ int main() {
                 "  let Ok((v, r)) = Integer.parsePrefix(\"42\")\n"
                 "  IO.printLine(v)\n"
                 "end\n",
-                "cannot match `Ok`"
-            ));
+                "cannot match `Ok`"));
         });
 
         it("Just pattern on Result value errors", []() {
@@ -3396,8 +3179,7 @@ int main() {
                 "  let Just(v) = Integer.parse(\"42\")\n"
                 "  IO.printLine(v)\n"
                 "end\n",
-                "cannot match `Just`"
-            ));
+                "cannot match `Just`"));
         });
 
         it("Ok pattern on Result value is ok", []() {
@@ -3405,8 +3187,7 @@ int main() {
                 "main do\n"
                 "  let Ok(n) = Integer.parse(\"42\")\n"
                 "  IO.printLine(n)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("Just pattern on Optional value is ok", []() {
@@ -3414,8 +3195,7 @@ int main() {
                 "main do\n"
                 "  let Just((v, r)) = Integer.parsePrefix(\"42\")\n"
                 "  IO.printLine(v)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -3434,8 +3214,7 @@ int main() {
                 "let show(n: Integer) = \"number\"\n"
                 "show : Printable -> String\n"
                 "let show(p: Printable) = \"printable\"\n"
-                "main do IO.printLine(show(42)) end\n"
-            ));
+                "main do IO.printLine(show(42)) end\n"));
         });
 
         it("unannotated overload loses to annotated when arg matches annotated param", []() {
@@ -3445,8 +3224,7 @@ int main() {
                 "len : String -> Int\n"
                 "let len(s: String) = s.length()\n"
                 "let len(x) = 0\n"
-                "main do IO.printLine(len(\"hi\")) end\n"
-            ));
+                "main do IO.printLine(len(\"hi\")) end\n"));
         });
 
         it("rejects distinct equally-specific overloads", []() {
@@ -3454,8 +3232,7 @@ int main() {
                 "let choose(value: Integer | String) = 1\n"
                 "let choose(value: Integer | Bool) = 2\n"
                 "main do IO.printLine(choose(1)) end\n",
-                "Ambiguous overload for `choose`"
-            ));
+                "Ambiguous overload for `choose`"));
         });
 
         it("rejects a bare first-class reference to an overload set", []() {
@@ -3466,8 +3243,7 @@ int main() {
                 "  let renderer = ~render\n"
                 "  IO.printLine(renderer(1))\n"
                 "end\n",
-                "Cannot reference overloaded function `render`"
-            ));
+                "Cannot reference overloaded function `render`"));
         });
 
         it("requires every overload to share purity", []() {
@@ -3475,8 +3251,7 @@ int main() {
                 "let process(value: String) = value\n"
                 "foul process(value: Integer) = IO.printLine(value)\n"
                 "main do process(\"ok\") end\n",
-                "Overloads of `process` must all have the same purity"
-            ));
+                "Overloads of `process` must all have the same purity"));
         });
 
         it("records exact local make-method overload signatures", []() {
@@ -3499,8 +3274,9 @@ int main() {
             bool integerTarget = false;
             for (const auto& [_, target] : analyzer.resolvedCalls()) {
                 if (target.backendFunction != "render" ||
-                    target.localDispatchTypes.size() != size_t(2))
+                    target.localDispatchTypes.size() != size_t(2)) {
                     continue;
+                }
                 stringTarget |= target.localDispatchTypes[1] == "String";
                 integerTarget |= target.localDispatchTypes[1] == "Integer";
             }
@@ -3518,29 +3294,29 @@ int main() {
     // on an `Input` resolved against Char's zero-arg contract instead
     // ("`string` expects 1 argument(s), got 2").
     describe("cross-type method name collisions (#251)", []() {
-        it("registers an unannotated method even when an unrelated type annotates the same name", []() {
-            assertTrue(noErrors(
-                "record Widget do x: Integer end\n"
-                "record Gadget do y: String end\n"
-                "\n"
-                "make Widget do\n"
-                "  greet :> String\n"
-                "  let greet = \"hi from widget\"\n"
-                "end\n"
-                "\n"
-                "make Gadget do\n"
-                "  let greet(name: String) -> String do\n"
-                "    \"hello \" + name\n"
-                "  end\n"
-                "end\n"
-                "\n"
-                "let useIt(g: Gadget) -> String = g.greet(\"world\")\n"
-                "\n"
-                "main do\n"
-                "  IO.printLine(useIt(Gadget { y: \"z\" }))\n"
-                "end\n"
-            ));
-        });
+        it("registers an unannotated method even when an unrelated type annotates the same name",
+           []() {
+               assertTrue(noErrors(
+                   "record Widget do x: Integer end\n"
+                   "record Gadget do y: String end\n"
+                   "\n"
+                   "make Widget do\n"
+                   "  greet :> String\n"
+                   "  let greet = \"hi from widget\"\n"
+                   "end\n"
+                   "\n"
+                   "make Gadget do\n"
+                   "  let greet(name: String) -> String do\n"
+                   "    \"hello \" + name\n"
+                   "  end\n"
+                   "end\n"
+                   "\n"
+                   "let useIt(g: Gadget) -> String = g.greet(\"world\")\n"
+                   "\n"
+                   "main do\n"
+                   "  IO.printLine(useIt(Gadget { y: \"z\" }))\n"
+                   "end\n"));
+           });
 
         it("still resolves a type's own annotated method correctly", []() {
             assertTrue(noErrors(
@@ -3553,8 +3329,7 @@ int main() {
                 "\n"
                 "main do\n"
                 "  IO.printLine(Widget { x: 1 }.greet)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("keeps sibling overloads on the SAME type registering after one is annotated", []() {
@@ -3575,8 +3350,7 @@ int main() {
                 "  let b = Meters { n: 1 } + Feet { n: 3 }\n"
                 "  IO.printLine(a.n)\n"
                 "  IO.printLine(b.n)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -3592,8 +3366,7 @@ int main() {
                 "  let p = startTyped()\n"
                 "  p.send(42)\n"
                 "end\n",
-                "`send` expects argument 2 to be String"
-            ));
+                "`send` expects argument 2 to be String"));
         });
 
         it("typed process accepts correct message type (method call)", []() {
@@ -3606,8 +3379,7 @@ int main() {
                 "main do\n"
                 "  let p = startTyped()\n"
                 "  p.send(\"hello\")\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("Process<Any> accepts any message type", []() {
@@ -3621,8 +3393,7 @@ int main() {
                 "  let d = startDynamic()\n"
                 "  d.send(\"anything\")\n"
                 "  d.send(42)\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("typed process rejects wrong message type (free function send)", []() {
@@ -3636,8 +3407,7 @@ int main() {
                 "  let p = startTyped()\n"
                 "  send(p, 42)\n"
                 "end\n",
-                "`send` expects argument 2 to be String"
-            ));
+                "`send` expects argument 2 to be String"));
         });
 
         it("typed process accepts correct message type (free function send)", []() {
@@ -3650,31 +3420,27 @@ int main() {
                 "main do\n"
                 "  let p = startTyped()\n"
                 "  send(p, \"hello\")\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("inline return type annotation is honoured for non-process types", []() {
             assertTrue(noErrors(
                 "let double -> Integer = 2 * 2\n"
-                "main do IO.printLine(double.to(String).or(\"\")) end\n"
-            ));
+                "main do IO.printLine(double.to(String).or(\"\")) end\n"));
         });
 
         it("relates an inline generic result to its parameter", []() {
             assertTrue(hasError(
                 "let wrap(value: A) -> A? = None\n"
                 "main do let bad: Integer? = wrap(\"text\") end\n",
-                "expected Integer?, got String?"
-            ));
+                "expected Integer?, got String?"));
         });
 
         it("inline return type mismatch is an error", []() {
             assertTrue(hasError(
                 "let getNum -> String = 42\n"
                 "main do IO.printLine(getNum()) end\n",
-                "declared to return"
-            ));
+                "declared to return"));
         });
     });
 
@@ -3683,12 +3449,15 @@ int main() {
             assertTrue(noErrors(
                 "using Net\n"
                 "main do\n"
-                "  let failure = NetError { kind: Timeout, operation: HTTPClient, message: \"timed out\" }\n"
-                "  let qualified = NetError { kind: Net.Timeout, operation: HTTPClient, message: \"timed out\" }\n"
+                "  let failure = NetError { kind: Timeout, operation: HTTPClient, "
+                "message: \"timed out\" }\n"
+                "  let qualified = NetError { kind: Net.Timeout, operation: "
+                "HTTPClient, message: \"timed out\" }\n"
                 "end\n"));
             assertTrue(hasError(
                 "using Net\n"
-                "let fromCall(error: CallError) = NetError { kind: error, operation: HTTPClient, message: \"timed out\" }\n",
+                "let fromCall(error: CallError) = NetError { kind: error, "
+                "operation: HTTPClient, message: \"timed out\" }\n",
                 "kind"));
         });
 
@@ -3697,8 +3466,10 @@ int main() {
                 "using Net.DNS\n"
                 "using Net.IP, only: [Address]\n"
                 "main do\n"
-                "  let server = Nameserver { address: Address.parse(\"127.0.0.1\").try, port: Net.Port.from(53).try }\n"
-                "  let resolver: Resolver = Resolver.custom(ResolverOptions { nameservers: [server], timeout: 100.millisecond }).try\n"
+                "  let server = Nameserver { address: "
+                "Address.parse(\"127.0.0.1\").try, port: Net.Port.from(53).try }\n"
+                "  let resolver: Resolver = Resolver.custom(ResolverOptions { "
+                "nameservers: [server], timeout: 100.millisecond }).try\n"
                 "  resolver.close\n"
                 "end\n"));
             assertTrue(hasError(

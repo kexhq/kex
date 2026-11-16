@@ -22,18 +22,25 @@ struct IndexedFile {
 };
 using IndexedFiles = std::vector<IndexedFile>;
 
-auto findSymbol(const IndexedFiles& files, const std::string& name,
-                const std::string& preferFile = "") -> SymbolInfo*;
-auto symbolInModule(const IndexedFiles& files, const std::string& moduleName,
-                    const std::string& name) -> SymbolInfo*;
-auto receiverSymbol(const IndexedFiles& files, const std::string& receiver,
-                    const std::string& name) -> const SymbolInfo*;
-auto symbolAt(const IndexedFiles& files, const std::string& file, uint32_t line,
-              uint32_t col) -> const SymbolInfo*;
-auto completionsFor(const IndexedFiles& files, const std::string& prefix,
-                    const ImportedInterfaces* imports) -> std::vector<std::string>;
-auto completionsAt(const IndexedFiles& files, const std::string& file, uint32_t line,
-                   uint32_t col, const std::string& prefix,
-                   const ImportedInterfaces* imports) -> std::vector<std::string>;
+auto findSymbol(
+    const IndexedFiles& files, const std::string& name, const std::string& preferFile = "")
+    -> SymbolInfo*;
+auto symbolInModule(
+    const IndexedFiles& files, const std::string& moduleName, const std::string& name)
+    -> SymbolInfo*;
+auto receiverSymbol(const IndexedFiles& files, const std::string& receiver, const std::string& name)
+    -> const SymbolInfo*;
+auto symbolAt(const IndexedFiles& files, const std::string& file, uint32_t line, uint32_t col)
+    -> const SymbolInfo*;
+auto completionsFor(
+    const IndexedFiles& files, const std::string& prefix, const ImportedInterfaces* imports)
+    -> std::vector<std::string>;
+auto completionsAt(
+    const IndexedFiles& files,
+    const std::string& file,
+    uint32_t line,
+    uint32_t col,
+    const std::string& prefix,
+    const ImportedInterfaces* imports) -> std::vector<std::string>;
 
 } // namespace kex::semantic
