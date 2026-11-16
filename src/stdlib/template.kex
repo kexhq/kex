@@ -170,8 +170,8 @@ end
 # Tuple`), even though the same code is fine on the tree-walking interpreter.
 record TagScan do
   node      : Node
-  leftTrim  : Bool
-  rightTrim : Bool
+  leftTrim?  : Bool
+  rightTrim? : Bool
 end
 
 # A scanned template: its frontmatter tags, and its body as a node list.
@@ -626,7 +626,7 @@ private do
     let afterTrim = leftTrim then opened.advance else opened
     let (kind, afterKind) = classifyTag(afterTrim)
     let (body, rightTrim, rest) = scanTagBody(afterKind).try
-    let scanned = TagScan { node: tagNode(kind, body.trim), leftTrim: leftTrim, rightTrim: rightTrim }
+    let scanned = TagScan { node: tagNode(kind, body.trim), leftTrim?: leftTrim, rightTrim?: rightTrim }
     Ok((scanned, rest))
   end
 
@@ -651,19 +651,19 @@ private do
       end
       let (tag, afterTag) = scanTag(afterText).try
       let alone = silent?(tag.node) && atLineStart?(text, lineStart) && blankToLineEnd?(afterTag)
-      let keptText = (tag.leftTrim || alone) then trimTrailingIndent(text) else text
+      let keptText = (tag.leftTrim? || alone) then trimTrailingIndent(text) else text
       if !keptText.empty?
         nodes.push!(Text(keptText))
       end
       nodes.push!(tag.node)
       cur = if alone
         skipBlankLineRest(afterTag)
-      elif tag.rightTrim
+      elif tag.rightTrim?
         skipOneNewline(afterTag)
       else
         afterTag
       end
-      lineStart = alone || tag.rightTrim
+      lineStart = alone || tag.rightTrim?
     end
   end
 end

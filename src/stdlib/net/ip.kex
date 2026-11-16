@@ -4,7 +4,7 @@
 #
 #   let address = Address.parse("192.0.2.42").try
 #   let network = Network.parse("192.0.2.0/24").try
-#   network.contains(address)   # => true
+#   network.contains?(address)   # => true
 module Net.IP
 
 # A canonical IPv4 or IPv6 address.
@@ -132,9 +132,9 @@ make Network do
   #
   # @example Checking an application allowlist
   #   let office = Network.parse("198.51.100.0/24").try
-  #   let allowed? = office.contains(requestAddress)
-  contains :> Address -> Bool
-  let contains(address: Address) -> Bool = Kex.Intrinsic.NetIP.contains?(this, address)
+  #   let allowed? = office.contains?(requestAddress)
+  contains? :> Address -> Bool
+  let contains?(address: Address) -> Bool = Kex.Intrinsic.NetIP.contains?(this, address)
 
   # Returns the number of fixed leading address bits.
   #

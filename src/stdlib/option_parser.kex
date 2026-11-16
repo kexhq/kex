@@ -82,7 +82,7 @@ record CommandSpec do
   # that runs its own OptionParser can only receive the option names the
   # outer tool does not itself declare, and a collision is silent — the
   # outer tool consumes the value and the subcommand sees nothing.
-  passthrough : Bool = false
+  passthrough? : Bool = false
 
   # The help heading this command is listed under. "" is the tool's own
   # `Commands:` block; anything else gets its own heading, in the order the
@@ -354,7 +354,7 @@ make OptionConfig do
                          handler: CommandHandler) -> OptionConfig do
     let spec = CommandSpec { name: name, description: description,
                              usage: usage, handler: handler,
-                             passthrough: true }
+                             passthrough?: true }
     New { commands: [...@commands, spec] }
   end
 
@@ -570,7 +570,7 @@ module OptionParser do
       None => false
       Just(pair) => do
         let (command, _) = pair
-        return command.passthrough
+        return command.passthrough?
       end
     end
   end

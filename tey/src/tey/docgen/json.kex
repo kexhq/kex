@@ -87,7 +87,7 @@ module Tey.Docgen.Json do
         kind: "make",
         name: entry.target,
         target: entry.target,
-        isFinal: entry.isFinal,
+        isFinal: entry.final?,
         implements: entry.implements,
         functions: entry.functions.map { |f| functionValue(f) },
         doc: docValue(entry.doc),
@@ -118,7 +118,7 @@ module Tey.Docgen.Json do
   end
 
   foul fieldValue(f: FieldEntry) -> Any do
-    return { name: f.name, "type": f.typeName, hasDefault: f.hasDefault }
+    return { name: f.name, "type": f.typeName, hasDefault: f.default? }
   end
 
   # A named helper so the lambda's element type comes from the [FieldEntry]
@@ -133,7 +133,7 @@ module Tey.Docgen.Json do
       name: f.name,
       qualifiedName: f.qualifiedName,
       signatures: f.signatures,
-      isFoul: f.isFoul,
+      isFoul: f.foul?,
       clauseCount: f.clauseCount,
       doc: docValue(f.doc),
       line: f.line

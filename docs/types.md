@@ -329,7 +329,7 @@ is a side effect:
 ```kex
 Type.of(helloWorld).to(String)    # Just("String -> String")
 Type.of(shout).to(String)         # Just("foul String -> String")
-Type.of(shout).pure           # false
+Type.of(shout).pure?              # false
 ```
 
 `Type.returnedBy` is answered by the compiler alone, so it needs the NAME of a

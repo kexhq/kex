@@ -4,7 +4,7 @@ using Tey.Cache, only: [fetch]
 using Tey.Git, only: [execute, pinRef, tags]
 using Tey.Lockfile, only: [LockState]
 using Tey.Manifest, only: [GitSource, ManifestPackage, PathSource, WorkspaceSource]
-using Tey.Semver, only: [highest, intersect, range?, satisfies, versionOf]
+using Tey.Semver, only: [highest, intersect, range?, satisfies?, versionOf]
 using Tey.Cache, only: [packagePath]
 using Tey.Manifest, only: [read]
 using Tey.Workspace, only: [Context, Member]
@@ -26,7 +26,7 @@ foul resolveWorkspaceWithInfo(context: Context,
                               toolchain: Tey.Toolchain.ToolchainInfo) -> LockState or! String do
   let incompatible = context.members.filter do |member|
     let manifest: ManifestPackage = member.memberManifest
-    !Tey.Semver.satisfies(Tey.Semver.release(toolchain.version),
+    !Tey.Semver.satisfies?(Tey.Semver.release(toolchain.version),
                           manifest.packageKexRequirement)
   end
   if !incompatible.empty?
@@ -113,9 +113,9 @@ foul resolvePackage(manifest: ManifestPackage) -> LockState or! String do
   end
   # A pre-release toolchain is checked as the release it leads to: `0.4.0-rc.1`
   # satisfies `>= 0.3.0`. Ranges never RESOLVE to a pre-release (see
-  # Tey.Semver.satisfies), but refusing to build a package on the rc you
+  # Tey.Semver.satisfies?), but refusing to build a package on the rc you
   # deliberately installed would make pre-releases untestable.
-  if !Tey.Semver.satisfies(Tey.Semver.release(toolchain.version), manifest.packageKexRequirement)
+  if !Tey.Semver.satisfies?(Tey.Semver.release(toolchain.version), manifest.packageKexRequirement)
     return Error("Kex ${toolchain.version} does not satisfy ${manifest.packageKexRequirement}")
   end
   # The OTP floor actually in force is the higher of what the package asks for
@@ -152,7 +152,7 @@ let chooseFromTags(name: String, tags: [String],
   let scoped = tags.filter { |tag| tag.startsWith?("${prefix}v") }
   let candidates = scoped.empty? then tags else scoped
   let matching = candidates.filter do |tag|
-    Tey.Semver.satisfies(Tey.Semver.versionOf(tag), requested)
+    Tey.Semver.satisfies?(Tey.Semver.versionOf(tag), requested)
   end
   let versions = Tey.Semver.newestFirst(
     matching.map { |tag| Tey.Semver.versionOf(tag) }
@@ -409,7 +409,7 @@ private do
           Just((_, "tag", value, _)) => Tey.Semver.range?(value)
           _ => false
         end
-        let met = Tey.Semver.satisfies(Tey.Semver.versionOf(pinnedRef), combined)
+        let met = Tey.Semver.satisfies?(Tey.Semver.versionOf(pinnedRef), combined)
         if checkable && !met
           return Error("cannot satisfy every constraint on `${name}`: ${combined}, asked by ${origin[name].or("?")} and ${requiredBy}, but it resolved to ${pinnedRef}")
         end

@@ -63,7 +63,7 @@ let stable?(text: String) -> Bool do
   end
 end
 
-let satisfies(versionText: String, requirement: String) -> Bool do
+let satisfies?(versionText: String, requirement: String) -> Bool do
   let parsed = Tey.Semver.parseVersion(versionText)
   return false if parsed == None
   let Just(version) = parsed
@@ -85,13 +85,13 @@ let satisfies(versionText: String, requirement: String) -> Bool do
   if version.preRelease != "" && !clauses.any? { |clause| clause.contains?("-") }
     return false
   end
-  clauses.all? { |clause| satisfiesClause(version, clause) }
+  clauses.all? { |clause| satisfiesClause?(version, clause) }
 end
 
 # The requirement satisfied only by versions satisfying BOTH, for when two
 # packages in one graph each ask for the same dependency.
 #
-# Concatenation, because `satisfies` already reads a requirement as a list of
+# Concatenation, because `satisfies?` already reads a requirement as a list of
 # space-separated clauses that must ALL hold: `~> 0.1` and `>= 0.1.5` intersect
 # to `~> 0.1 >= 0.1.5`, which is exactly the question "satisfies both". No
 # interval arithmetic, no second implementation of the operators to keep in
@@ -168,7 +168,7 @@ end
 # The highest tag that satisfies the requirement — the whole point of writing
 # a range instead of a version. None when nothing does.
 let highest(tags: [String], requirement: String) -> String? do
-  let matching = tags.filter { |tag| Tey.Semver.satisfies(tag, requirement) }
+  let matching = tags.filter { |tag| Tey.Semver.satisfies?(tag, requirement) }
   return None if matching.empty?
   return Tey.Semver.newestFirst(matching).first
 end
@@ -200,7 +200,7 @@ private do
     end
   end
 
-  let satisfiesClause(version: SemanticVersion, clause: String) -> Bool do
+  let satisfiesClause?(version: SemanticVersion, clause: String) -> Bool do
     var op = "="
     if clause.startsWith?(">=")
       op = ">="

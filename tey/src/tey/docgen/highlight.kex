@@ -87,7 +87,7 @@ module Tey.Docgen.Highlight do
       return (textOf(acc.reverse), cs)
     end
     let c = cs.first.or(' ')
-    if c == '"' || startsWithChars(cs, "$" + "{")
+    if c == '"' || startsWithChars?(cs, "$" + "{")
       return (textOf(acc.reverse), cs)
     end
     if c == '\\'
@@ -143,14 +143,14 @@ module Tey.Docgen.Highlight do
   end
 
   foul lexNumber(cs: [Char]) -> ([Tok], [Char]) do
-    if startsWithChars(cs, "0x") || startsWithChars(cs, "0X")
+    if startsWithChars?(cs, "0x") || startsWithChars?(cs, "0X")
       let digits = cs.drop(2).takeWhile { |ch| hexDigit?(ch) }
       let count = 2 + digits.count
       return ([Tok { cls: "number", text: textOf(cs.take(count)) }], cs.drop(count))
     end
     let intPart = cs.takeWhile { |ch| ch.digit? || ch == '_' }
     let afterInt = cs.drop(intPart.count)
-    let hasFrac = startsWithChars(afterInt, ".") && afterInt.drop(1).first.or(' ').digit?
+    let hasFrac = startsWithChars?(afterInt, ".") && afterInt.drop(1).first.or(' ').digit?
     let fracCount = if hasFrac
       1 + afterInt.drop(1).takeWhile { |ch| ch.digit? || ch == '_' }.count
     else
@@ -168,7 +168,7 @@ module Tey.Docgen.Highlight do
       return 0
     end
     let rest = cs.drop(1)
-    let signCount = if startsWithChars(rest, "+") || startsWithChars(rest, "-") then 1 else 0 end
+    let signCount = if startsWithChars?(rest, "+") || startsWithChars?(rest, "-") then 1 else 0 end
     let digits = rest.drop(signCount).takeWhile { |ch| ch.digit? }
     if digits.empty?
       return 0
@@ -184,7 +184,7 @@ module Tey.Docgen.Highlight do
     let span = cs.takeWhile { |ch| identChar?(ch) }
     let word = textOf(span)
     let rest = cs.drop(span.count)
-    let prevDot = previousIsDot(out)
+    let prevDot = previousDot?(out)
     let nextCh = rest.dropWhile { |ch| ch == ' ' || ch.codepoint == 9 }.first.or(' ')
     let cls = classifyWord(word, prevDot, nextCh)
     return ([Tok { cls: cls, text: word }], rest)
@@ -214,7 +214,7 @@ module Tey.Docgen.Highlight do
 
   # The most recent token that is not whitespace: out is newest-first, so a
   # plain find walks backwards in time.
-  foul previousIsDot(out: [Tok]) -> Bool do
+  foul previousDot?(out: [Tok]) -> Bool do
     match out.find { |t| !(t.cls == "plain" && t.text.trim.empty?) } do
       Just(t) => t.text == "."
       None => false
@@ -226,7 +226,7 @@ module Tey.Docgen.Highlight do
   end
 
   foul lexOperator(cs: [Char]) -> ([Tok], [Char]) do
-    if startsWithChars(cs, "...")
+    if startsWithChars?(cs, "...")
       return ([Tok { cls: "op", text: "..." }], cs.drop(3))
     end
     let two = twoCharOp(cs)
@@ -311,7 +311,7 @@ module Tey.Docgen.Highlight do
     return cs.map { |c| c.string }.join("")
   end
 
-  foul startsWithChars(cs: [Char], s: String) -> Bool do
+  foul startsWithChars?(cs: [Char], s: String) -> Bool do
     return cs.take(s.count) == s.chars
   end
 end

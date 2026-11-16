@@ -577,7 +577,7 @@ module Tey.Docgen.Html do
     name : String
     href : String
     summary : String
-    isFoul : Bool = false
+    foul? : Bool = false
   end
 
   foul indexRowsOf(functions: [FunctionEntry], owner: String) -> [IndexRow] do
@@ -587,11 +587,11 @@ module Tey.Docgen.Html do
   # Overloads share a row; the first of them with something to say says it.
   foul indexRowOf(overloads: [FunctionEntry], href: String, name: String) -> IndexRow do
     let summary = overloads.map { |f| firstSentence(f.doc.summary) }.find { |t| !t.empty? }.or("")
-    return IndexRow { name: name, href: href, summary: summary, isFoul: overloads.any? { |f| f.isFoul } }
+    return IndexRow { name: name, href: href, summary: summary, foul?: overloads.any? { |f| f.foul? } }
   end
 
   foul indexHtml(rows: [IndexRow], klass: String) -> String do
-    let items = rows.map { |r| "<div class=\"param\"><dt><a class=\"xref\" href=\"${esc(r.href)}\"><code>${esc(r.name)}</code></a>${foulTag(r.isFoul)}</dt><dd>${inlineCode(r.summary)}</dd></div>" }
+    let items = rows.map { |r| "<div class=\"param\"><dt><a class=\"xref\" href=\"${esc(r.href)}\"><code>${esc(r.name)}</code></a>${foulTag(r.foul?)}</dt><dd>${inlineCode(r.summary)}</dd></div>" }
     return "<dl class=\"params ${klass}\">\n${items.join("\n")}\n</dl>\n"
   end
 
@@ -683,7 +683,7 @@ module Tey.Docgen.Html do
   end
 
   foul fieldRow(f: Tey.Docgen.Model.FieldEntry, link: (String -> String)) -> String do
-    let opt = if f.hasDefault then " <span class=\"opt\">optional</span>" else "" end
+    let opt = if f.default? then " <span class=\"opt\">optional</span>" else "" end
     return "<div class=\"field\"><dt><code>${esc(f.name)}</code></dt><dd><code>${linkTypeText(link, f.typeName)}</code>${opt}</dd></div>"
   end
 
@@ -839,12 +839,12 @@ module Tey.Docgen.Html do
 
   foul memberIndexRow(same: [Entity], name: String) -> IndexRow do
     let summary = same.map { |c| firstSentence(summaryOf(c)) }.find { |t| !t.empty? }.or("")
-    return IndexRow { name: name, href: "#${same.map { |c| anchorOf(c) }.first.or("")}", summary: summary, isFoul: same.any? { |c| foulEntity?(c) } }
+    return IndexRow { name: name, href: "#${same.map { |c| anchorOf(c) }.first.or("")}", summary: summary, foul?: same.any? { |c| foulEntity?(c) } }
   end
 
   foul foulEntity?(e: Entity) -> Bool do
     match e do
-      FuncDecl(f) => f.isFoul
+      FuncDecl(f) => f.foul?
       _ => false
     end
   end
@@ -880,7 +880,7 @@ module Tey.Docgen.Html do
     let anchor = anchorOf(e)
     match e do
       FuncDecl(f) => do
-        let heading = "<h3><a class=\"self\" href=\"#${anchor}\"><code>${esc(f.name)}</code></a>${foulTag(f.isFoul)} ${permalinkHtml(anchor)}</h3>"
+        let heading = "<h3><a class=\"self\" href=\"#${anchor}\"><code>${esc(f.name)}</code></a>${foulTag(f.foul?)} ${permalinkHtml(anchor)}</h3>"
         "<div class=\"fn\" id=\"${anchor}\">\n${memberHeadHtml(heading, signaturesHtml(f, page, model), f.name)}${overloadBodyHtml(f, page, model)}\n</div>"
       end
       ConstDecl(c) => do
@@ -923,7 +923,7 @@ module Tey.Docgen.Html do
   foul functionGroupHtml(fs: [FunctionEntry], name: String, owner: String, level: Integer, implements: [String],
                          page: SourcePage, model: PackageModel) -> String do
     let anchor = memberAnchorOf(owner, name)
-    let tags = foulTag(fs.any? { |f| f.isFoul }) + traitTag(name, implements, page, model)
+    let tags = foulTag(fs.any? { |f| f.foul? }) + traitTag(name, implements, page, model)
     let head = "<h${level}><a class=\"self\" href=\"#${anchor}\"><code>${esc(name)}</code></a>${tags} ${permalinkHtml(anchor)}</h${level}>"
     # The first overload's signature heads the card; the others follow
     # with theirs, each above its own prose.

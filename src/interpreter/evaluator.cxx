@@ -4260,7 +4260,7 @@ auto Evaluator::structuredTypeValue(const semantic::StructuredType& type)
     return Value::record("Type", {
         {"name", Value::string(type.name)},
         {"args", Value::list(std::move(args))},
-        {"pure", Value::boolean(type.pure)},
+        {"pure?", Value::boolean(type.pure)},
     });
 }
 

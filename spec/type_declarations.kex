@@ -63,7 +63,7 @@ main do
 
   let effectful = Type.of(readLoudly)
   let pure = Type.of(helloWorld)
-  IO.printLine("${effectful.pure} ${pure.pure}")
+  IO.printLine("${effectful.pure?} ${pure.pure?}")
   IO.printLine("${pure.args.count} ${pure.name}")
 
   IO.printLine("")

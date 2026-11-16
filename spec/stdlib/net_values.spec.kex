@@ -32,8 +32,8 @@ describe("network value APIs") do
     let address = Address.parse("2001:0db8::42").try
     let network = Network.parse("2001:db8::/32").try
     assert(address.string == "2001:db8::42")
-    assert(network.contains(address))
-    assert(!network.contains(Address.parse("2001:dead::1").try))
+    assert(network.contains?(address))
+    assert(!network.contains?(Address.parse("2001:dead::1").try))
   end
 
   it("preserves header order and duplicates with insensitive lookup") do

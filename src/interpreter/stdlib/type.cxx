@@ -11,7 +11,7 @@ auto namedType(const std::string& name, std::vector<ValuePtr> args = {})
     return Value::record("Type", {
         {"name", Value::string(name)},
         {"args", Value::list(std::move(args))},
-        {"pure", Value::boolean(true)},
+        {"pure?", Value::boolean(true)},
     });
 }
 

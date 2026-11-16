@@ -51,7 +51,7 @@ foul parser -> OptionConfig do
     # an argument overrides that, for a checkout whose directory name is not
     # the package name.
     .command("init", "[<name>]", "create a Kex package in this directory") do |options|
-      Tey.Commands.init(options.arguments.first.or(""), Tey.Cli.libraryChoice(options),
+      Tey.Commands.init(options.arguments.first.or(""), Tey.Cli.library?(options),
                         !options.flagEnabled?("skip-agent"))
     end
     .command("add", "<name> --git <url>", "add a Git dependency and update tey.lock") do |options|
@@ -452,13 +452,13 @@ private do
   # End-of-input answers "application": a pipe, a CI job or `tey new x
   # </dev/null` cannot answer, and a question nobody is there to read must not
   # hang or fail the command.
-  foul libraryChoice(options: ParsedOptions) -> Bool do
+  foul library?(options: ParsedOptions) -> Bool do
     return true if options.flagEnabled?("lib")
     return false if options.flagEnabled?("app")
-    return Tey.Cli.askLibrary
+    return Tey.Cli.askLibrary?
   end
 
-  foul askLibrary -> Bool do
+  foul askLibrary? -> Bool do
     IO.print("Create a ${Console.BOLD}library${Console.RESET}? [y/${Console.CYAN}N${Console.RESET}] ")
     # End of input, a read error and a bare Enter all mean "the default", so
     # they need no telling apart.
@@ -468,13 +468,13 @@ private do
     IO.printLine("") if choice == ""
     return true if choice == "y" || choice == "yes"
     return false if choice == "" || choice == "n" || choice == "no"
-    Tey.Cli.askLibrary
+    Tey.Cli.askLibrary?
   end
 
   foul newPackage(options: ParsedOptions) -> Integer do
     match options.arguments.first do
       None => Tey.Cli.incomplete("new", "<name>")
-      Just(name) => Tey.Commands.new(name, Tey.Cli.libraryChoice(options),
+      Just(name) => Tey.Commands.new(name, Tey.Cli.library?(options),
                                      !options.flagEnabled?("skip-agent"))
     end
   end

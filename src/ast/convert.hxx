@@ -147,7 +147,7 @@ public:
                 : m_builder.none()},
             {"type", param.type ? m_builder.just(typeRef(**param.type))
                                 : m_builder.none()},
-            {"hasDefault", m_builder.boolean(param.defaultValue.has_value())},
+            {"default?", m_builder.boolean(param.defaultValue.has_value())},
         });
     }
 
@@ -164,7 +164,7 @@ public:
             {"rescueInfo", clause.rescue
                 ? m_builder.just(rescueInfo(*clause.rescue))
                 : m_builder.none()},
-            {"hasParamList", m_builder.boolean(clause.hasParamList)},
+            {"paramList?", m_builder.boolean(clause.hasParamList)},
         });
     }
 
@@ -176,8 +176,8 @@ public:
         auto info = m_builder.record("FunctionInfo", {
             {"name", m_builder.string(def.name)},
             {"doc", optionalString(doc)},
-            {"isFoul", m_builder.boolean(def.isFoul)},
-            {"predicate", m_builder.boolean(def.isPredicate)},
+            {"foul?", m_builder.boolean(def.isFoul)},
+            {"predicate?", m_builder.boolean(def.isPredicate)},
             {"clauses", m_builder.list(std::move(clauses))},
             {"location", location(def.location, filename)},
         });
@@ -191,7 +191,7 @@ public:
             {"name", m_builder.string(annotation.name)},
             {"type", typeRef(*annotation.type)},
             {"doc", optionalString(doc)},
-            {"implicitThis", m_builder.boolean(annotation.implicitThis)},
+            {"implicitThis?", m_builder.boolean(annotation.implicitThis)},
             {"location", location(annotation.location, filename)},
         });
         return nodeVariant("TypeAnnotation", {std::move(info)});
@@ -237,7 +237,7 @@ public:
             fields.push_back(m_builder.record("FieldInfo", {
                 {"name", m_builder.string(field.name)},
                 {"type", typeRef(*field.type)},
-                {"hasDefault",
+                {"default?",
                  m_builder.boolean(field.defaultValue.has_value())},
             }));
         }
@@ -296,7 +296,7 @@ public:
         auto info = m_builder.record("MakeInfo", {
             {"target", typeRef(*def.target)},
             {"doc", optionalString(docAt(docs, def.location.line))},
-            {"isFinal", m_builder.boolean(def.isFinal)},
+            {"final?", m_builder.boolean(def.isFinal)},
             {"implements", m_builder.list(std::move(implements))},
             {"body", m_builder.list(std::move(body))},
             {"location", location(def.location, filename)},
@@ -395,7 +395,7 @@ public:
                 items.push_back(std::move(converted));
         }
         auto info = m_builder.record("VisibilityInfo", {
-            {"isPublic", m_builder.boolean(block.isPublic)},
+            {"public?", m_builder.boolean(block.isPublic)},
             {"items", m_builder.list(std::move(items))},
             {"location", location(block.location, filename)},
         });
@@ -625,7 +625,7 @@ public:
                     fields.push_back(m_builder.record("PatternField", {
                         {"name", m_builder.string(field.name)},
                         {"pattern", optionalPattern(field.pattern)},
-                        {"stringKey", m_builder.boolean(field.isStringKey)},
+                        {"stringKey?", m_builder.boolean(field.isStringKey)},
                     }));
                 }
                 return patternVariant("RecordPattern", {
@@ -1107,7 +1107,7 @@ private:
                     }, item));
                 }
                 auto info = m_builder.record("GeneratedMakeInfo", {
-                    {"isFinal", m_builder.boolean(node->isFinal)},
+                    {"final?", m_builder.boolean(node->isFinal)},
                     {"implements", m_builder.list(std::move(implements))},
                     {"body", m_builder.list(std::move(body))},
                     {"location", location(node->location, "")},

@@ -39,14 +39,14 @@ module Tey.Docgen.Cli do
       .integer("port", None, "HTTP port for serve", Just("4322"), false)
       .command("build", "--out <dir> [--source <dir>] [options]",
                "generate a package's reference from its .kex sources") do |parsed|
-        strict(parsed) then Tey.Docgen.Index.buildCommand(parsed) else 1
+        strict?(parsed) then Tey.Docgen.Index.buildCommand(parsed) else 1
       end
       .command("prose", "--source <md-dir> --out <dir> --package <name> --release <v>",
                "render a tree of Markdown pages into the same site") do |parsed|
-        strict(parsed) then Tey.Docgen.Prose.proseCommand(parsed) else 1
+        strict?(parsed) then Tey.Docgen.Prose.proseCommand(parsed) else 1
       end
       .command("serve", "--out <dir> [--port <n>]", "serve a generated site locally") do |parsed|
-        strict(parsed) then Tey.Docgen.Serve.serveCommand(parsed) else 1
+        strict?(parsed) then Tey.Docgen.Serve.serveCommand(parsed) else 1
       end
   end
 
@@ -60,7 +60,7 @@ module Tey.Docgen.Cli do
   # These three have none beyond the options above, so one left over is a
   # typo — and `--sorce src` silently documenting the wrong directory is
   # worse than an error.
-  foul strict(parsed: ParsedOptions) -> Bool do
+  foul strict?(parsed: ParsedOptions) -> Bool do
     match parsed.arguments.find { |argument| argument.startsWith?("-") } do
       None => true
       Just(option) => do

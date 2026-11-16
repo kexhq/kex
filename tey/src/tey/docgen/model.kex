@@ -43,7 +43,7 @@ module Tey.Docgen.Model do
   record FieldEntry do
     name : String
     typeName : String
-    hasDefault : Bool
+    default? : Bool
   end
 
   record TypeEntry do
@@ -76,7 +76,7 @@ module Tey.Docgen.Model do
 
   record MakeEntry do
     target : String
-    isFinal : Bool
+    final? : Bool
     implements : [String]
     functions : [FunctionEntry]
     doc : Doc
@@ -104,7 +104,7 @@ module Tey.Docgen.Model do
     returnType : String = ""
     # Declared `foul`: it may touch the outside world, and only foul code
     # may call it.
-    isFoul : Bool = false
+    foul? : Bool = false
   end
 
   record ConstantEntry do

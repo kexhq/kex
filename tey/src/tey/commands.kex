@@ -1437,7 +1437,7 @@ private do
                           approveAll?: Bool) -> LockState or! String do
     let bindings = Tey.Commands.directPluginBindings(context, state).try
     let incompatible = bindings.filter do |binding|
-      !Tey.Semver.satisfies(Tey.Version.number,
+      !Tey.Semver.satisfies?(Tey.Version.number,
                            binding.declaration.pluginTeyRequirement)
     end
     if !incompatible.empty?
