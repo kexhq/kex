@@ -112,7 +112,7 @@ auto matchSuffix(const Map& candidates, const std::string& suffix)
     return match;
 }
 
-// Devirtualization spelling (Phase 4). The BEAM emitter mangles a
+// Devirtualization spelling. The BEAM emitter mangles a
 // colliding make-block method as `name/Type`, but the interface only
 // carries the plain dispatcher name. The consumer re-derives the
 // mangled spelling when it can PROVE the definition exists from

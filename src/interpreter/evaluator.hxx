@@ -102,7 +102,7 @@ class Evaluator {
 public:
     // Every module loaded at run time (the prelude's own loads included) is
     // checked as its own unit against `interfaces` before it runs, and its
-    // answers are read like the entry program's (Stage 4). By default the
+    // answers are read like the entry program's. By default the
     // prelude's, from the prebuilt runtime; null where those interfaces are
     // themselves being built.
     Evaluator();

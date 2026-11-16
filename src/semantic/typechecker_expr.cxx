@@ -5582,8 +5582,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         return Type::unknown();
     }
 
-    // `This` (the trait placeholder — see Surface syntax for declaring a
-    // trait in the plan) has no substitution mechanism implemented yet, so
+    // `This` (the trait placeholder) has no substitution mechanism implemented yet, so
     // it can leak through as a literal NamedType("This") from a `param :
     // This` annotation inside a `make` block. A call involving it can't be
     // meaningfully checked against any signature here — reporting a

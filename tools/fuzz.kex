@@ -744,7 +744,7 @@ let targetedCases() -> [String] do
   # method: first for List"), because the compile path never learned
   # top-level or structural aliases (risk #1). The second pins
   # top-level `using M do ... end` bodies, which BEAM dropped while
-  # the walker ran them (Phase 2 step 2). The third pins a `when` guard
+  # the walker ran them. The third pins a `when` guard
   # on a typed pattern over a mistyped value: BEAM evaluated the guard
   # comparison before the type test and raised `Cannot compare ...`
   # where the walker falls through (risk #8). The fourth pins `when`

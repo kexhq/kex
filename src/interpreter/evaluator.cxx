@@ -469,7 +469,7 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
         // The files its expansion read (compiled::DependencyRecorder),
         // repeated to whoever loads it from here instead.
         std::set<std::string> dependencies;
-        // The module checked, once per process (Stage 4, step 2): the walker
+        // The module checked, once per process: the walker
         // reads its answers as it reads the entry program's.
         std::shared_ptr<hir::CheckedProgram> checked;
     };

@@ -33,7 +33,7 @@ public:
     auto loadUnit(const std::string& beamPath) -> std::vector<LoadError>;
 
     // A unit made in this process, its chunks in hand rather than read from
-    // .beam files (docs/plan_separate_compilation.md): checked and described,
+    // .beam files: checked and described,
     // not yet compiled, so there is nothing on disk to validate it against.
     auto registerUnit(LoadedUnit unit) -> void;
 

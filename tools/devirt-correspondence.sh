@@ -1,5 +1,5 @@
 #!/bin/sh
-# Devirt correspondence check (Phase 4): every imported `name/Head`
+# Devirt correspondence check: every imported `name/Head`
 # spelling the compiler applies must exist in the defining beam's
 # exports at the called arity. Runs the spec corpus through
 # --emit-core with KEX_DEVIRT_AUDIT, then checks each distinct

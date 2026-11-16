@@ -886,7 +886,7 @@ auto Lowering::lowerResolvedCall(const ast::MethodCall& n,
     // A trait-default→dispatcher demotion used to rewrite
     // `backendFunction` here (`showValue/Showable` → `showValue`)
     // so unpinned-receiver calls reached the dispatcher's
-    // variant arms. The Phase 2 trust audit removed it: with the
+    // variant arms. An audit removed it: with the
     // rewrite disabled, spec-beam, the 400-case fuzzer, and four
     // targeted probes (literal/bound/typed/unpinned Optional
     // interpolation, custom Showable instance) all agree, and

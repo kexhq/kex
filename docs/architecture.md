@@ -161,6 +161,4 @@ make lsp-sweep     # the language server asked about every name of examples/;
                   # each answer held to the checker's (hover type, completion,
                   # diagnostics, definition)
 make test-devirt  # devirtualized names exist in the emitted modules
-make dup-audit    # duplication and re-derivation counts may only fall
-make bench-slick  # performance on ../slick, a real application
 ```

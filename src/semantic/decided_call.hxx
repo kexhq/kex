@@ -1,8 +1,8 @@
 #pragma once
 // What the type checker decided a call-shaped expression is, when that is
 // neither a call with a selected signature nor an imported method (those
-// have tables of their own). Stage 2 of the pass restructure records every
-// such decision, so no later pass resolves the call again (src/hir/); kept
+// have tables of their own). Every such decision is recorded,
+// so no later pass resolves the call again (src/hir/); kept
 // apart from typechecker.hxx so lowering can read it without the checker.
 #include <string>
 

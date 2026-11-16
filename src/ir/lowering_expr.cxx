@@ -307,11 +307,8 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
             // through the runtime eq, which promotes numbers and compares
             // quantities (kex_intrinsic_number:eq).
             // What the checker knows the operands are (decideOperators).
-            // KEX_NO_OP_DEVIRT=1 (before/after measurement, emergency use)
-            // takes the checked runtime operation for every operator.
             using semantic::BuiltinOperands;
-            const auto operands = std::getenv("KEX_NO_OP_DEVIRT")
-                ? BuiltinOperands::Checked : decision.operands;
+            const auto operands = decision.operands;
             const bool integers = operands == BuiltinOperands::Integer;
             auto builtinOp = [&](ExprPtr a, ExprPtr b) -> ExprPtr {
                 Op op = opOf(n.op);

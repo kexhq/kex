@@ -1,7 +1,6 @@
 #include "resolve_core.hxx"
 #include "../common/well_known.hxx"
 #include <algorithm>
-#include <cstdlib>
 #include <string_view>
 #include <variant>
 
@@ -188,9 +187,6 @@ auto staticReceiverHead(
     const ImportedFunction& winner, const TypePtr& receiverType,
     const ImportedInterfaces& ifaces, AliasExpander expandAlias)
     -> std::optional<std::string> {
-    // Emergency disable (and before/after measurement): with
-    // KEX_NO_DEVIRT set, every imported call keeps the dispatcher.
-    if (std::getenv("KEX_NO_DEVIRT")) return std::nullopt;
     // (0): a pure make-block winner with a receiver. Module
     // functions (`isReceiverMethod == false`) keep the bare name —
     // their `name/T` belongs to a same-headed make block, if one

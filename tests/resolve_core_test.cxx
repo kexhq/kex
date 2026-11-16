@@ -321,22 +321,6 @@ int main() {
         // Which head a value reaches through a dispatcher (shadowed owners,
         // wider guards, definitions merged ahead) is the emitter's record now
         // (`implementationHead`), tested in codegen_test's "dispatcher routes".
-        it("honors KEX_NO_DEVIRT", []() {
-            const auto winner =
-                receiverFn("first", "kex_prelude", 1,
-                           Type::list(Type::typeVar(-1)));
-            const std::vector<ImportedFunction> candidates = {
-                winner,
-                receiverFn("first", "kex_prelude", 1, Type::integer()),
-            };
-            const ImportedInterfaces ifaces;
-            setenv("KEX_NO_DEVIRT", "1", 1);
-            const auto spelling = staticReceiverHead(
-                winner, Type::list(Type::integer()),
-                ifaces, {});
-            unsetenv("KEX_NO_DEVIRT");
-            assertFalse(spelling.has_value());
-        });
         it("fires for a sole covering head in a collision", []() {
             auto winner =
                 receiverFn("first", "kex_prelude", 1,

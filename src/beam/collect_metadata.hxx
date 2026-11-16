@@ -41,7 +41,7 @@ auto collectMetadata(const kex::ast::Program& program,
 // methods and record fields — replaced by what `qualify` makes of it. A
 // signature written `deps : [Dependency]` names the module's own
 // `Dependency` or the one a `using` brought in, but read on its own, by
-// another unit, a bare name says neither (docs/plan_separate_compilation.md).
+// another unit, a bare name says neither.
 // `method`'s per-type implementation among `emitted`: `name/Head` (the head
 // its `make` target is written as, qualified or as its module wrote it) at
 // the method's arity, or "".

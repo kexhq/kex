@@ -268,7 +268,7 @@ public:
     auto shownThroughDistinct() const -> const ShownThrough& { return m_shownThroughDistinct; }
     // What a call-shaped expression turned out to be, when that is neither a
     // call with a selected signature nor an imported method (the two tables
-    // above). Stage 2 of the pass restructure records every such decision
+    // above). Every such decision is recorded
     // here, so no later pass has to resolve the call again (src/hir/).
     using CallKind = semantic::CallKind;
     using DecidedCall = semantic::DecidedCall;

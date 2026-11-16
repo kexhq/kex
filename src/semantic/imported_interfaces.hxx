@@ -45,7 +45,7 @@ struct ImportedFunction {
     // Reached through its receiver wherever that type is, whatever the
     // caller imports: the rule for a `make` function of a unit of the same
     // build, as it is in a program checked whole. The standard library's
-    // stay behind their `using` (docs/plan_separate_compilation.md).
+    // stay behind their `using`.
     bool visibleByReceiver = false;
     // As KexiMethod::foreignTarget: a `make` for a type its module does not
     // declare, so never visible by its receiver alone.

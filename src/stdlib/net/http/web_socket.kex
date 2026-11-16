@@ -125,7 +125,7 @@ make Connection do
   #   connection.send(Text(JSON.stringify({ action: "subscribe", topic: topic }))).try
   foul send(message: Message) -> Result<Void, NetError> = Kex.Intrinsic.NetWebSocket.send(this, message)
   # `receive` is a Kex process keyword, so the public function spells out the
-  # operation while preserving the plan's high-level message semantics.
+  # operation, with the same high-level message semantics.
   # Reassembles fragments, validates UTF-8, and automatically answers pings.
   #
   # A +CloseMessage+ is returned once so the application can inspect the peer's

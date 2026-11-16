@@ -1,5 +1,5 @@
 #pragma once
-// The checked program — Stage 2's HIR. Built once from a parsed program and
+// The checked program (HIR). Built once from a parsed program and
 // the type checker's analysis of it, it answers the two questions every later
 // pass asks: what each call is (`targetOf`) and what type each expression has
 // (`typeOf`). Lowering, `--dump-hir` and `--verify-hir` read it; the walker

@@ -123,8 +123,7 @@ struct Binding {
 } // namespace kex::ir::detail
 
 // Module-assembly helpers in kex::ir, shared by lower.cxx and the lowering
-// TUs. Moved verbatim from lowering.hxx's tail in the Phase 1 split;
-// `static` became `inline` so every TU shares one instance (a `static`
+// TUs. `inline` rather than `static`, so every TU shares one instance (a `static`
 // mutable global would have silently diverged per TU).
 namespace kex::ir {
 

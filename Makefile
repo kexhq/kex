@@ -1,5 +1,5 @@
 .PHONY: docs
-.PHONY: build-tey spec-tey build test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-examples spec-examples-beam check-examples spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz bench test-bench bench-slick dup-audit
+.PHONY: build-tey spec-tey build test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-examples spec-examples-beam check-examples spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
@@ -75,17 +75,6 @@ help:
 	@echo "  make spec-wasm    Same, but through the wasm-built kex CLI via Node"
 	@echo "                    (requires build-wasm; expected to match closely,"
 	@echo "                    since it's the same tree-walker as native)."
-	@echo "  make bench        Repeat-and-median benchmark (compile warm/"
-	@echo "                    cold-kex/dev-loop, fib, loop; informational only,"
-	@echo "                    per docs/compiler-refactor-plan.md). Override with"
-	@echo "                    BENCH_RUNS / BENCH_FIB_N / BENCH_LOOP_N / KEX."
-	@echo "  make test-bench   Smoke-test the bench harness itself (1 run,"
-	@echo "                    small scenarios; checks it runs and reports)."
-	@echo "  make bench-slick  Benchmark on ../slick, a real app (cold/no-op/"
-	@echo "                    incremental/dev-loop tey build, its specs). Compare"
-	@echo "                    compilers with BENCH_KEX=\"main=/path/kex branch=build/kex\"."
-	@echo "  make dup-audit    Count duplicate helpers, literal compares, hand-written"
-	@echo "                    Type/Expr recursions; fails if any rises over baseline."
 	@echo ""
 
 # Configure quietly, but NEVER quietly: piping cmake into `tail` discarded its
@@ -209,26 +198,6 @@ LSP_SWEEP_OUTDIR ?= /tmp/kex-lsp-sweep
 LSP_SWEEP_SEED ?= 1
 lsp-sweep: build
 	@"$(BUILD_DIR)/lsp_sweep" --kex "$(KEX)" --out "$(LSP_SWEEP_OUTDIR)" --seed "$(LSP_SWEEP_SEED)" $(LSP_SWEEP_FILES)
-
-# Informational benchmark harness (see tools/bench.sh and the plan's
-# measurement methodology). Not a gate: reports median + IQR, exits 0.
-bench: build
-	@tools/bench.sh $(BENCH_SCENARIOS)
-
-# The harness's own smoke test — that it runs, times, and reports — with
-# one run of the two cheapest scenarios, fib shrunk to stay quick.
-test-bench: build
-	@BENCH_RUNS=1 BENCH_FIB_N=25 tools/bench.sh compile-warm fib
-
-# Slick (a real application with dependencies) through tey: the numbers perf
-# claims are judged on. See tools/bench-slick.sh for scenarios and knobs.
-bench-slick: build
-	@tools/bench-slick.sh $(BENCH_SLICK_SCENARIOS)
-
-# Duplication / magic-constant audit (tools/dup-audit.sh). Fails when a count
-# rises above tools/dup-audit.baseline; `tools/dup-audit.sh --record` lowers it.
-dup-audit:
-	@tools/dup-audit.sh --check
 
 SHELL := /bin/bash
 

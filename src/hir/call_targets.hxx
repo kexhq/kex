@@ -1,6 +1,5 @@
 #pragma once
-// Stage 2 of the pass restructure: what semantic analysis decided about each
-// call site. The checker records an answer for some calls only — imported
+// What semantic analysis decided about each call site. The checker records an answer for some calls only — imported
 // method calls get a full ResolvedCallTarget, overloaded ones a selected
 // Signature — and lowering and the walker re-derive the rest, three times
 // over. This lists every call site with what (if anything) was decided, so

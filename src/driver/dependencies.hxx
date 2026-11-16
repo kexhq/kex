@@ -66,7 +66,7 @@ extern BuildProgress buildProgress;
 // "1 module", "160 modules": what BuildProgress counts.
 auto moduleCount(std::size_t count, const char* kind = "") -> std::string;
 
-// The program as units (docs/plan_separate_compilation.md): its files grouped
+// The program as units, compiled separately: its files grouped
 // into the strongly connected components of what each one uses, so that a
 // cycle of modules is one unit and every other module one of its own. In build
 // order, a unit after every unit it uses, with the entry program, written as
