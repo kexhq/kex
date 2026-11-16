@@ -270,7 +270,10 @@ foul uninstallProgram(name: String) -> Integer do
     end
     ()
   end
-  return Tey.Commands.fail("could not remove ${FS.Path.join(Tey.Programs.directory, name)}") if !Tey.Programs.remove(name)
+  match Tey.Programs.remove(name) do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(_) => ()
+  end
   IO.printLine("${Console.GREEN}Uninstalled${Console.RESET} ${name}")
   return 0
 end
@@ -681,7 +684,7 @@ foul releaseTarget(owner: String, name: String) -> Void or! String do
     Just(value) => value
   end
   let remaining = other.targets.filter { |target| target != name }
-  if remaining.empty? && !Tey.Programs.remove(owner)
+  if remaining.empty? && Tey.Programs.remove(owner).error?
     return Error("could not remove the receipt of ${owner}")
   end
   Tey.Programs.save(Receipt { ...other, targets: remaining }).try if !remaining.empty?
@@ -1253,7 +1256,7 @@ private do
   # that wants the child's captured stdout/stderr rather than its output
   # streamed live.
   foul runAt(directory: String, command: String,
-            arguments: [String]) -> Process.ProcessResult or! String do
+            arguments: [String]) -> ProcessResult or! String do
     return Process.run("sh", ["-c",
       "cd \"$1\" || exit 1; shift; exec \"$@\"", "tey", directory,
       command, ...arguments])
@@ -1273,7 +1276,7 @@ private do
   let collectClosure(state: LockState, pending: [String],
                      found: [String]) -> [String] do
     return found if pending.empty?
-    let name = pending.first.try
+    let Just(name) = pending.first
     return Tey.Commands.collectClosure(state, pending.drop(1), found) if found.contains?(name)
     let edges = match state.lockedDependencies.find { |dependency| dependency.name == name } do
       Just(dependency) => dependency.dependencies
@@ -1300,7 +1303,8 @@ private do
   foul buildLayers(layers: [[Member]], jobs: Integer,
                    state: WorkspaceRunState) -> WorkspaceRunState do
     return state if layers.empty?
-    let (ready, prepared) = Tey.Commands.readyMembers(layers.first.try, state)
+    let Just(layer) = layers.first
+    let (ready, prepared) = Tey.Commands.readyMembers(layer, state)
     let layerState = Tey.Commands.buildChunks(ready, jobs, prepared)
     return Tey.Commands.buildLayers(layers.drop(1), jobs, layerState)
   end
@@ -1335,7 +1339,8 @@ private do
                   interpret?: Bool, json?: Bool, list?: Bool, only: String,
                   state: WorkspaceRunState) -> WorkspaceRunState do
     return state if layers.empty?
-    let (ready, prepared) = Tey.Commands.readyMembers(layers.first.try, state)
+    let Just(layer) = layers.first
+    let (ready, prepared) = Tey.Commands.readyMembers(layer, state)
     let layerState = Tey.Commands.testChunks(ready, jobs, requested,
                                              interpret?, json?, list?, only,
                                              prepared)
@@ -1435,7 +1440,7 @@ private do
                           approveAll?: Bool) -> LockState or! String do
     let bindings = Tey.Commands.directPluginBindings(context, state).try
     let incompatible = bindings.filter do |binding|
-      !Tey.Semver.satisfies(Tey.Version.number,
+      !Tey.Semver.satisfies?(Tey.Version.number,
                            binding.declaration.pluginTeyRequirement)
     end
     if !incompatible.empty?
@@ -1600,10 +1605,9 @@ private do
       status = outcome if outcome != 0
       let output = "${Tey.Commands.outputDirectory}/${target.name}"
       if outcome == 0
-        if Tey.Commands.writeEscript(staging, output, target.entrypoint)
-          IO.printLine("  ${Console.GREEN}Target${Console.RESET}  ${output}")
-        else
-          status = Tey.Commands.fail("could not write ${output}")
+        match Tey.Commands.writeEscript(staging, output, target.entrypoint) do
+          Ok(_) => IO.printLine("  ${Console.GREEN}Target${Console.RESET}  ${output}")
+          Error(error) => status = Tey.Commands.fail(error)
         end
       end
       ()
@@ -1634,10 +1638,9 @@ private do
       status = outcome if outcome != 0
       let output = "${outputDirectory}/${target.name}"
       if outcome == 0
-        if Tey.Commands.writeEscript(staging, output, target.entrypoint)
-          IO.printLine("  ${Console.GREEN}Target${Console.RESET}  ${output}")
-        else
-          status = Tey.Commands.fail("could not write ${output}")
+        match Tey.Commands.writeEscript(staging, output, target.entrypoint) do
+          Ok(_) => IO.printLine("  ${Console.GREEN}Target${Console.RESET}  ${output}")
+          Error(error) => status = Tey.Commands.fail(error)
         end
       end
       ()
@@ -1663,14 +1666,15 @@ private do
   # (kexhq/kex#406). `-kex_entry` names the program's module, which is
   # `kex_<stem>` for the entrypoint's file — `kex_main` only when that file
   # is `main.kex`.
-  foul writeEscript(from: String, output: String, entrypoint: String) -> Bool do
+  foul writeEscript(from: String, output: String, entrypoint: String) -> Void or! String do
     let entry = "kex_${FS.Path.stem(entrypoint)}"
     let script = "{ok,Fs}=file:list_dir(\"${from}\"), B=[{F, element(2, file:read_file(\"${from}/\"++F))} || F <- Fs, lists:suffix(\".beam\",F)], ok=escript:create(\"${output}\", [shebang, {emu_args,\"-escript main kex_escript -kex_entry ${entry}\"}, {archive,B,[]}]), halt()."
     match Process.run(Tey.Toolchain.erl, ["-noshell", "-eval", script]) do
-      Error(_) => return false
+      Error(_) => return Error("could not run erl to write ${output}")
       Ok(result) => do
-        return false if result.exitCode != 0
-        return Tey.Commands.runStatus("chmod", ["+x", output]) == 0
+        return Error("could not write ${output}") if result.exitCode != 0
+        return Error("could not make ${output} executable") if Tey.Commands.runStatus("chmod", ["+x", output]) != 0
+        return Ok(())
       end
     end
   end
@@ -1754,31 +1758,31 @@ private do
   # both with the scaffold's, silently, with no way to get them back. Keeping
   # the file and saying so is the only safe default; the scaffold's version is
   # a starting point, and the one on disk is somebody's work.
-  foul writeCreated(directory: String, path: String, contents: String) -> Bool do
+  foul writeCreated(directory: String, path: String, contents: String) -> Void or! String do
     match FS.File.read(path) do
       Ok(existing) => do
         Tey.Commands.report(existing == contents then "exist" else "skip", directory, path)
-        return true
+        return Ok(())
       end
       Error(_) => ()
     end
-    return false if FS.File.write(path, contents).error?
+    return Error("could not write ${path}") if FS.File.write(path, contents).error?
     Tey.Commands.report("create", directory, path)
-    true
+    Ok(())
   end
 
   # The same for a directory, so the tree appears in the order it is built
   # rather than as a set of files whose parents were never mentioned. An
   # existing directory is not a collision: a scaffold writing INTO `src/` is
   # exactly what `tey init` on a source tree should do.
-  foul createDirectory(directory: String, path: String) -> Bool do
+  foul createDirectory(directory: String, path: String) -> Void or! String do
     if FS.Directory.directory?(path)
       Tey.Commands.report("exist", directory, path)
-      return true
+      return Ok(())
     end
-    return false if !FS.Directory.create(path).ok?
+    return Error("could not create ${path}") if !FS.Directory.create(path).ok?
     Tey.Commands.report("create", directory, path)
-    true
+    Ok(())
   end
 
   # Writes a package into `directory`. Shared by `new` and `init` so the two
@@ -1788,7 +1792,7 @@ private do
                 agentFiles: Bool) -> Integer do
     let sources = Tey.Commands.createDirectory(directory, "${directory}/src")
     let specs = Tey.Commands.createDirectory(directory, "${directory}/spec")
-    if !sources || !specs
+    if sources.error? || specs.error?
       return Tey.Commands.fail("could not create project '${name}'")
     end
     let moduleName = Tey.Commands.moduleNameFor(name)
@@ -1815,13 +1819,13 @@ private do
     let sourcePath = library then "${directory}/src/${moduleFile}.kex" else "${directory}/src/main.kex"
     let wroteManifest = Tey.Commands.writeCreated(directory, "${directory}/package.kex", manifestText)
     let wroteSource = Tey.Commands.writeCreated(directory, sourcePath, source)
-    if !wroteManifest || !wroteSource
+    if wroteManifest.error? || wroteSource.error?
       return Tey.Commands.fail("could not write project '${name}'")
     end
     if library
       let librarySpec = Template.text(Kex.embed("templates/library.spec.kex.ket"))
       let spec = librarySpec(moduleName)
-      if !Tey.Commands.writeCreated(directory, "${directory}/spec/${moduleFile}.spec.kex", spec)
+      if Tey.Commands.writeCreated(directory, "${directory}/spec/${moduleFile}.spec.kex", spec).error?
         return Tey.Commands.fail("could not write project '${name}'")
       end
     end
@@ -1830,8 +1834,8 @@ private do
     # IS the distribution: there is no registry rendering a description
     # somewhere else. Generated with the manifest's own description so the two
     # start out saying the same thing.
-    if !Tey.Commands.writeCreated(directory, "${directory}/README.md",
-                                  Tey.Commands.readme(name, moduleName, library))
+    if Tey.Commands.writeCreated(directory, "${directory}/README.md",
+                                 Tey.Commands.readme(name, moduleName, library)).error?
       return Tey.Commands.fail("could not write project '${name}'")
     end
     Tey.Commands.writeCreated(directory, "${directory}/.gitattributes", "tey.lock merge=tey\n")
@@ -1866,8 +1870,8 @@ private do
     let skill = Kex.embed("templates/agent-skill.md")
     let skillPath = "${skillDirectory}/SKILL.md"
     let madeSkillDirectory = FS.Directory.create(skillDirectory).ok?
-    let wroteSkill = madeSkillDirectory && Tey.Commands.writeCreated(directory, skillPath, skill)
-    return 0 if wroteInstructions && wroteImport && wroteSkill
+    let wroteSkill = madeSkillDirectory && Tey.Commands.writeCreated(directory, skillPath, skill).ok?
+    return 0 if wroteInstructions.ok? && wroteImport.ok? && wroteSkill
     Tey.Commands.fail("could not write the agent files for '${name}'")
   end
 

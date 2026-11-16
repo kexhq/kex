@@ -1,0 +1,30 @@
+# kex: check-only
+# A trait's requirement fixes how many values its call takes, whichever type
+# answers it and wherever the call is: a default's `this.combine()` and an
+# implementer's `word.combine()` both lack the value `combine` requires.
+# Both were accepted, and failed at run time (found by
+# `make metamorphic-search`).
+
+trait Joinable do
+  combine : This -> This
+  label : () -> String
+  let twice -> This = this.combine()
+  let loud -> String = this.label.upperCase
+end
+
+record Word do
+  text : String
+end
+
+make Word, implement: Joinable do
+  let combine(other: Word) -> Word = Word { text: @text + other.text }
+  let label -> String = @text
+end
+
+main do
+  let word = Word { text: "ab" }
+  IO.printLine(word.combine().text)
+  IO.printLine(word.combine(word, word).text)
+  IO.printLine(word.label(1))
+  IO.printLine(word.combine(word).loud)
+end

@@ -1,0 +1,28 @@
+# kex: check-only
+# Two `using`s that bring in the same bare name from different modules are
+# refused where the second is written, whether or not the name is ever
+# called: nothing says which module a bare `pick` would mean. An `only:`
+# list takes the name for its module, and so settles it.
+
+module Left do
+  let pick(x: Integer) -> Integer = x + 1
+end
+
+module Right do
+  let pick(x: Integer) -> Integer = x + 2
+  let other(x: Integer) -> Integer = x
+end
+
+module Settled do
+  using Left
+  using Right, only: [pick]
+
+  let chosen() -> Integer = pick(1)
+end
+
+using Left
+using Right
+
+main do
+  IO.printLine(1)
+end

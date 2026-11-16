@@ -49,11 +49,11 @@ trait Monoid do
 
   # Combines this value with itself +n+ times.
   #
-  # Repeating zero times gives the identity: +""+ for a string, +0+ for an
-  # integer, +[]+ for a list. A negative count is invalid and ends the
-  # program.
+  # Repeating zero times, or a negative number of times, gives the identity:
+  # +""+ for a string, +0+ for an integer, +[]+ for a list. Ruby spells the
+  # string case +*+.
   #
-  # @param n [Integer] how many copies to combine; must not be negative
+  # @param n [Integer] how many copies to combine
   # @return [This] the repeated value
   #
   # @example
@@ -64,11 +64,15 @@ trait Monoid do
   #
   # @example Drawing a separator line
   #   IO.printLine("-".repeat(40))
-  let repeat(0) = this.identity
   let repeat(n: Integer) -> This do
-    die("repeat count cannot be negative") if n < 0
+    return this.identity if n <= 0
 
-    this.combine(this.repeat(n - 1))
+    # Half the copies combined with themselves (associativity, a Monoid law):
+    # logarithmic depth, so a long repeat neither exhausts a stack nor
+    # combines one copy at a time.
+    let half = this.repeat(n.div(2))
+    let doubled = half.combine(half)
+    n.modulo(2) == 0 then doubled else doubled.combine(this)
   end
 end
 

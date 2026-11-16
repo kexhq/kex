@@ -51,8 +51,8 @@ describe("Type") do
     # This suite runs --no-check, so a function value can only report its
     # kind; the signature-backed answers are asserted in
     # spec/type_declarations.kex, which runs checked.
-    assert(Type.of(42).pure)
-    assert(Type.named("String").pure)
+    assert(Type.of(42).pure?)
+    assert(Type.named("String").pure?)
   end
 
   it("converts through a Type value") do

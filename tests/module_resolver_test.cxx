@@ -240,7 +240,7 @@ int main() {
             assertEqual(groups[2].size(), kex::kPreludeTier2.size());
             assertEqual(groups[3].size(), kex::kPreludeTier3.size());
             assertEqual(fs::path(groups[2].back()).filename().string(),
-                        std::string("filehandle.kex"));
+                        std::string("file_handle.kex"));
 
             manifest.push_back((base / "manifest/undeclared.kex").string());
             bool rejected = false;

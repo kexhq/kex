@@ -217,7 +217,8 @@ module Random do
       while !pool.empty? && selected.count < count do
         let (index, advanced) = below(generator, pool.count)
         generator = advanced
-        selected.push!(pool.at(index).try)
+        let Just(picked) = pool.at(index)
+        selected.push!(picked)
         pool = pool.take(index) + pool.drop(index + 1)
       end
       (selected, generator)

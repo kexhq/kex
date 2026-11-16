@@ -536,15 +536,11 @@ module_attribute(Module, Name) ->
     catch _:_ -> []
     end.
 
-%% A record's tag is its qualified name inside a module (`Store.Counter`),
-%% while the compiler keys serving metadata by the name as written.
+%% A record's tag is its identity (`Store.Counter` inside a module), the
+%% name the compiler keys serving metadata by.
 state_type(State) when is_tuple(State), tuple_size(State) > 0,
                        is_atom(element(1, State)) ->
-    Name = atom_to_binary(element(1, State)),
-    case binary:split(Name, <<".">>, [global]) of
-        [Name] -> element(1, State);
-        Parts -> binary_to_atom(lists:last(Parts))
-    end;
+    element(1, State);
 state_type(_) -> undefined.
 
 attribute_slots(undefined, _State) -> [];

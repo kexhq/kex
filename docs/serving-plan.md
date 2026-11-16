@@ -316,7 +316,7 @@ closest correspondence to Erlang, where `handle_call` clauses *are* the pattern
 match — except here the message type is declared and checked.
 
 The shared signature goes on a `:>` annotation line, exactly as in a `make`
-block (`filehandle.kex` uses this form), and the clauses follow:
+block (`file_handle.kex` uses this form), and the clauses follow:
 
 ```kex
 type Command = Deposit(Integer) | Withdraw(Integer) | Balance

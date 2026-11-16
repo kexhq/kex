@@ -1,0 +1,564 @@
+# Calendar days. A +Date+ is a year, a month and a day, with no time and no
+# zone; +Weekday+ names its day of the week. The time of day is in time.kex,
+# the instant in date_time.kex, and calendar spans in period.kex.
+
+# Weekday names in ISO order (Monday is day 1).
+type Weekday = Monday | Tuesday | Wednesday | Thursday | Friday
+             | Saturday | Sunday
+
+
+# A calendar day: a year, a month and a day, with no time and no zone.
+#
+#   let due = Date.of(2026, 7, 30).try
+#   due.iso              # => "2026-07-30"
+#   due.weekday.name     # => "Thursday"
+#   (due + 10.day).iso  # => "2026-08-09"
+#
+# Build one with +Date.of+, which validates, rather than with the record
+# literal, which does not.
+record Date do
+  # The calendar year.
+  year : Integer
+
+  # The month, 1 through 12.
+  month : Integer
+
+  # The day of the month, 1 through the length of that month.
+  day : Integer
+end
+
+# Building calendar dates, and asking what today is.
+module Date do
+  # Builds a +DateFormat+ from a CLDR pattern, for +to(String, format)+ on a
+  # +Date+, a +Time+ or a +DateTime+.
+  #
+  # A pattern that does not fit makes +to(String, format)+ answer +None+;
+  # +DateFormat.parse+ says where it goes wrong, and +validateFormat+ is the
+  # companion check for the tagged literal. Letters are fields, repeated for width; quote literal letters, as in
+  # +'at'+, and write +''+ for a quote itself. Anything else is written as
+  # it stands.
+  #
+  # - +yyyy+ the year, +yy+ its last two digits
+  # - +M+ / +MM+ the month number, +MMM+ / +MMMM+ its short / full name
+  # - +d+ / +dd+ the day of the month
+  # - +EEE+ / +EEEE+ the short / full weekday name
+  # - +H+ / +HH+ the hour 0-23, +h+ / +hh+ the hour 1-12, +a+ AM or PM
+  # - +m+ / +mm+ minutes, +s+ / +ss+ seconds, +S+ up to +SSSSSSSSS+ the
+  #   fraction of a second
+  # - +XXX+ the offset as +-05:00+, or +Z+ for UTC; +xxx+ the same without +Z+
+  #   (+XX+ / +xx+ write +-0500+, and one letter writes +-05+)
+  #
+  # Names come from the culture passed to +to(String, format, culture:)+,
+  # English without one.
+  #
+  # @param parts [[String]] the literal pieces of the tagged literal
+  # @param values [[Any]] the interpolated values
+  # @return [DateFormat] the format
+  #
+  # @example
+  #   let d = Date.of(2026, 11, 7).try
+  #   d.to(String, Date.format`yyyy-MM-dd`)        # => Just("2026-11-07")
+  #   d.to(String, Date.format`EEE, d MMM yyyy`)   # => Just("Sat, 7 Nov 2026")
+  #   d.to(String, Date.format`d MMMM yyyy`, culture: Culture.of("HU_HU").or(Culture.DEFAULT))
+  #   # => Just("7 november 2026")
+  format : [String] -> [Any] -> DateFormat
+  let format(parts, values) do
+    let rest = values.zip(parts.rest).map { |value, part| "${value}${part}" }
+    return DateFormat { pattern: parts.first.or("") + rest.join("") }
+  end
+
+  # Checks a +Date.format+ pattern during compilation, pointing at the first
+  # character that does not fit.
+  #
+  # @param source [String] the pattern
+  # @return [[TaggedValidation.Issue]] the problem found, if any
+  let validateFormat(source: String) -> [TaggedValidation.Issue] do
+    match DateFormat.pieces(source) do
+      Ok(_) => return []
+      Error((index, message)) => return [TaggedValidation.fatalAt(source.take(index).byteSize, message)]
+    end
+  end
+
+  # Builds a validated calendar date.
+  #
+  # The month and the day are both range-checked, and the day is checked
+  # against that month's actual length, so February 30th is an +Error+, and a
+  # +Date+ you hold is always a real day. The record literal `Date { ... }`
+  # bypasses this, so prefer it for anything derived from input.
+  #
+  # @param year [Integer] the calendar year
+  # @param month [Integer] the month, 1 through 12
+  # @param day [Integer] the day of the month
+  # @return [Result<Date, TimeError>] the date, or why it is not one
+  #
+  # @example
+  #   Date.of(2026, 7, 30).map { |d| d.iso }   # => Ok("2026-07-30")
+  #   Date.of(2026, 13, 1)                     # => Error(InvalidDate(2026, 13, 1))
+  #   Date.of(2023, 2, 29)                     # => Error(InvalidDate(2023, 2, 29))
+  #
+  # @example Taking the date or failing loudly
+  #   let due = Date.of(year, month, day).try
+  let of(year: Integer, month: Integer, day: Integer) -> Result<Date, TimeError> do
+    return Error(InvalidDate(year, month, day)) if month < 1 || month > 12
+    return Error(InvalidDate(year, month, day)) if day < 1
+    return Error(InvalidDate(year, month, day)) if day > Time.daysInValidMonth(year, month)
+    return Ok(Date { year: year, month: month, day: day })
+  end
+
+  # The calendar date a count of days since 1970-01-01 lands on, negative
+  # before it.
+  #
+  # @param day [Integer] days since the Unix epoch
+  # @return [Date] the calendar date
+  #
+  # @example
+  #   Date.fromEpochDay(0).iso       # => "1970-01-01"
+  #   Date.fromEpochDay(20664).iso   # => "2026-07-30"
+  let fromEpochDay(day: Integer) -> Date = Time.civilFromDays(day)
+
+  # Parses an ISO 8601 calendar date, +2026-07-30+.
+  #
+  # The result is validated as well as parsed, so a well-formed but impossible
+  # date is +InvalidDate+ rather than +InvalidFormat+.
+  #
+  # @param text [String] the text to parse
+  # @return [Result<Date, TimeError>] the date, or why it could not be read
+  #
+  # @example
+  #   Date.parse("2026-07-30").map { |d| d.iso }   # => Ok("2026-07-30")
+  #   Date.parse("nope")                           # => Error(InvalidFormat("nope"))
+  #   Date.parse("2026-02-30")                     # => Error(InvalidDate(2026, 2, 30))
+  let parse(text: String) -> Result<Date, TimeError> do
+    let parts = text.split("-")
+    # A leading "-" would be a negative year, which this deliberately rejects.
+    return Error(InvalidFormat(text)) if parts.count != 3
+    # At least four year digits (a wider year renders as-is, so it parses
+    # back); exactly two for the month and the day.
+    let yearText = parts.at(0).or("")
+    return Error(InvalidFormat(text)) if yearText.count < 4
+    let year = Time.digitsIn(yearText, text).try
+    let month = Time.fixedDigitsIn(parts.at(1).or(""), 2, text).try
+    let day = Time.fixedDigitsIn(parts.at(2).or(""), 2, text).try
+    return Date.of(year, month, day)
+  end
+
+  # Today's date, in this machine's zone. The same as +Date.today()+.
+  #
+  # +Date.today()+ reads better in most code; +now+ exists so every type in
+  # this file answers the same question the same way: +Date.now()+,
+  # +Time.now()+ and +DateTime.now()+.
+  #
+  # @return [Date] today's date
+  #
+  # @example
+  #   Date.now().iso   # => "2026-07-30"
+  foul now() -> Date do
+    let moment = DateTime.now()
+    return moment.date
+  end
+
+  # Today's date, in this machine's zone.
+  #
+  # Pinned by replacing +Time.Clock+ in a test, like everything else that
+  # reads the clock.
+  #
+  # @return [Date] today's date
+  #
+  # @example
+  #   Date.today().iso   # => "2026-07-30"
+  #
+  # @example Testing code that depends on today
+  #   with Time.Clock = Mock.Clock { at: DateTime.parse("2026-07-30T00:00:00Z").try } do
+  #     Assert.equal(Date.today().iso, "2026-07-30")
+  #   end
+  foul today() -> Date do
+    let moment = DateTime.now()
+    return moment.date
+  end
+
+  # The day after today, in this machine's zone.
+  #
+  # @return [Date] tomorrow's date
+  #
+  # @example
+  #   Date.tomorrow().iso   # => "2026-07-31"
+  foul tomorrow() -> Date do
+    let moment = DateTime.now()
+    return moment.date.addDays(1)
+  end
+
+  # The day before today, in this machine's zone.
+  #
+  # @return [Date] yesterday's date
+  #
+  # @example
+  #   Date.yesterday().iso   # => "2026-07-29"
+  foul yesterday() -> Date do
+    let moment = DateTime.now()
+    return moment.date.addDays(0 - 1)
+  end
+
+  # Today's date in UTC, whatever this machine's zone is. The same as
+  # +Date.utcToday()+, under the name every type in this file shares.
+  #
+  # @return [Date] today's UTC date
+  #
+  # @example
+  #   Date.utcNow().iso   # => "2026-07-30"
+  foul utcNow() -> Date do
+    let moment = DateTime.utcNow()
+    return moment.date
+  end
+
+  # Today's date in UTC, whatever this machine's zone is.
+  #
+  # @return [Date] today's UTC date
+  #
+  # @example
+  #   Date.utcToday().iso   # => "2026-07-30"
+  foul utcToday() -> Date do
+    let moment = DateTime.utcNow()
+    return moment.date
+  end
+end
+
+make Date, implement: Inspectable, Showable do
+  # Renders the date structurally, for debugging output.
+  #
+  # @param colors [Bool] whether to include ANSI color escapes
+  # @return [String] the rendered date
+  let inspectValue(colors: Bool) -> String = Kex.Intrinsic.Kex.inspect(this, colors)
+
+  # Renders the date in ISO form, so interpolation and +IO.printLine+ show
+  # +2026-07-30+.
+  #
+  # @return [String] the ISO 8601 date
+  #
+  # @example
+  #   "due ${Date.of(2026, 7, 30).try}"   # => "due 2026-07-30"
+  let showValue -> String = this.iso
+
+  # Days since 1970-01-01, negative before it.
+  #
+  # The date's identity as a number: comparison and day arithmetic go through
+  # it.
+  #
+  # @return [Integer] days since the Unix epoch
+  #
+  # @example
+  #   Date.of(1970, 1, 1).try.epochDay    # => 0
+  #   Date.of(2026, 7, 30).try.epochDay   # => 20664
+  let epochDay -> Integer = Time.daysFromCivil(this.year, this.month, this.day)
+
+  # The day of the week this date falls on.
+  #
+  # @return [Weekday] the day of the week
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.weekday        # => Thursday
+  #   Date.of(2026, 7, 30).try.weekday.name   # => "Thursday"
+  let weekday -> Weekday = Time.weekdayFromEpochDay(this.epochDay)
+
+  # The day's position in its year, counting from 1 on January 1st.
+  #
+  # @return [Integer] the day of the year
+  #
+  # @example
+  #   Date.of(2026, 1, 1).try.dayOfYear    # => 1
+  #   Date.of(2026, 7, 30).try.dayOfYear   # => 211
+  let dayOfYear -> Integer = this.epochDay - Time.daysFromCivil(this.year, 1, 1) + 1
+
+  # Returns +true+ when this date falls in a leap year.
+  #
+  # @return [Bool] +true+ in a leap year
+  #
+  # @example
+  #   Date.of(2024, 1, 1).try.leapYear?   # => true
+  #   Date.of(2026, 1, 1).try.leapYear?   # => false
+  let leapYear? -> Bool = Time.leapYear?(this.year)
+
+  # The number of days in THIS date's month.
+  #
+  # No Result: a Date's month is in range by construction, unlike
+  # `Time.daysInMonth`'s two loose integers.
+  #
+  # @return [Integer] the length of this month
+  #
+  # @example
+  #   Date.of(2024, 2, 1).try.daysInMonth   # => 29
+  #   Date.of(2026, 7, 1).try.daysInMonth   # => 31
+  let daysInMonth -> Integer = Time.daysInValidMonth(this.year, this.month)
+
+  # Advances the date by a fixed span, whole days only.
+  #
+  # A Duration with a sub-day remainder truncates toward zero, so
+  # +date + 36.hour+ advances exactly one day. Use a +Period+ when the
+  # calendar should get a say.
+  #
+  # @param span [Duration] the elapsed span to add
+  # @return [Date] the later date
+  #
+  # @example
+  #   (Date.of(2026, 7, 30).try + 10.day).iso   # => "2026-08-09"
+  #   (Date.of(2026, 7, 30).try + 36.hour).iso  # => "2026-07-31"
+  let +(span: Duration) -> Date = Date.fromEpochDay(this.epochDay + span.wholeDays)
+
+  # Moves the date back by a fixed span, whole days only.
+  #
+  # @param span [Duration] the elapsed span to subtract
+  # @return [Date] the earlier date
+  #
+  # @example
+  #   (Date.of(2026, 7, 30).try - 10.day).iso   # => "2026-07-20"
+  let -(span: Duration) -> Date = Date.fromEpochDay(this.epochDay - span.wholeDays)
+
+  # Advances the date by a calendar span, so the month length decides the
+  # answer.
+  #
+  # January 31st plus one month is the last day of February. Months are
+  # applied before days, and years and months together as one count of
+  # months: applying years first would clamp twice and make
+  # `2024-02-29 + 1.year + 1.month` land a day off from `+ 13.month`.
+  #
+  # @param span [Period] the calendar span to add
+  # @return [Date] the later date
+  #
+  # @example
+  #   (Date.of(2026, 7, 30).try + 1.month).iso   # => "2026-08-30"
+  #   (Date.of(2026, 1, 31).try + 1.month).iso   # => "2026-02-28"
+  #   (Date.of(2024, 2, 29).try + 1.year).iso    # => "2025-02-28"
+  let +(span: Period) -> Date = this.addMonths(span.totalMonths).addDays(span.days)
+
+  # Moves the date back by a calendar span, with the same clamping as +++.
+  #
+  # @param span [Period] the calendar span to subtract
+  # @return [Date] the earlier date
+  #
+  # @example
+  #   (Date.of(2026, 3, 31).try - 1.month).iso   # => "2026-02-28"
+  let -(span: Period) -> Date = this.addMonths(0 - span.totalMonths).addDays(0 - span.days)
+
+  # The date +count+ days later. A negative count moves backwards.
+  #
+  # @param count [Integer] how many days to add
+  # @return [Date] the shifted date
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.addDays(1).iso    # => "2026-07-31"
+  #   Date.of(2026, 7, 30).try.addDays(-1).iso   # => "2026-07-29"
+  let addDays(count: Integer) -> Date = Date.fromEpochDay(this.epochDay + count)
+
+  # The date +count+ weeks later. A negative count moves backwards.
+  #
+  # @param count [Integer] how many weeks to add
+  # @return [Date] the shifted date
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.addWeeks(2).iso   # => "2026-08-13"
+  let addWeeks(count: Integer) -> Date = this.addDays(count * 7)
+
+  # No `date.tomorrow`/`date.yesterday` functions: on BEAM a make-block function
+  # flattens onto the same name as the `Date.tomorrow()`/`Date.yesterday()`
+  # module functions above and one of the two has to win. The module
+  # functions win: `Date.tomorrow()` is the spelling people reach for, and
+  # `date.addDays(1)` already says the rest.
+
+  # The date +count+ calendar months later, with the day clamped into the
+  # target month.
+  #
+  # One month after January 31st is the last day of February, not March 3rd.
+  # A negative count moves backwards.
+  #
+  # @param count [Integer] how many months to add
+  # @return [Date] the shifted date
+  #
+  # @example
+  #   Date.of(2026, 1, 31).try.addMonths(1).iso    # => "2026-02-28"
+  #   Date.of(2026, 7, 30).try.addMonths(-1).iso   # => "2026-06-30"
+  let addMonths(count: Integer) -> Date do
+    let total = this.year * 12 + (this.month - 1) + count
+    let month = total.modulo(12) + 1
+    let year = (total - total.modulo(12)) / 12
+    let last = Time.daysInValidMonth(year, month)
+    let day = this.day > last then last else this.day
+    return Date { year: year, month: month, day: day }
+  end
+
+  # The date +count+ calendar years later, with the day clamped: February
+  # 29th plus one year is February 28th.
+  #
+  # @param count [Integer] how many years to add
+  # @return [Date] the shifted date
+  #
+  # @example
+  #   Date.of(2024, 2, 29).try.addYears(1).iso   # => "2025-02-28"
+  let addYears(count: Integer) -> Date = this.addMonths(count * 12)
+
+  # The first day of this date's month.
+  #
+  # @return [Date] the first of the month
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.startOfMonth.iso   # => "2026-07-01"
+  let startOfMonth -> Date = Date { year: this.year, month: this.month, day: 1 }
+
+  # The last day of this date's month, whatever its length.
+  #
+  # @return [Date] the last of the month
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.endOfMonth.iso   # => "2026-07-31"
+  #   Date.of(2024, 2, 1).try.endOfMonth.iso    # => "2024-02-29"
+  let endOfMonth -> Date = Date { year: this.year, month: this.month, day: this.daysInMonth }
+
+  # January 1st of this date's year.
+  #
+  # @return [Date] the first of the year
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.startOfYear.iso   # => "2026-01-01"
+  let startOfYear -> Date = Date { year: this.year, month: 1, day: 1 }
+
+  # December 31st of this date's year.
+  #
+  # @return [Date] the last of the year
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.endOfYear.iso   # => "2026-12-31"
+  let endOfYear -> Date = Date { year: this.year, month: 12, day: 31 }
+
+  # The Monday of this date's week.
+  #
+  # The week runs Monday to Sunday, matching the ISO weekday numbering
+  # +weekday.number+ reports.
+  #
+  # @return [Date] the Monday of this week
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.startOfWeek.iso   # => "2026-07-27"
+  let startOfWeek -> Date = this.addDays(1 - Time.weekdayNumber(this.weekday))
+
+  # The Sunday of this date's week.
+  #
+  # @return [Date] the Sunday of this week
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.endOfWeek.iso   # => "2026-08-02"
+  let endOfWeek -> Date = this.addDays(7 - Time.weekdayNumber(this.weekday))
+
+  # Whole days from this date to +other+, negative when +other+ is earlier.
+  #
+  # @param other [Date] the date to measure to
+  # @return [Integer] the number of days
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.daysUntil(Date.of(2026, 8, 9).try)   # => 10
+  #   Date.of(2026, 8, 9).try.daysUntil(Date.of(2026, 7, 30).try)   # => -10
+  let daysUntil(other: Date) -> Integer = other.epochDay - this.epochDay
+
+  # The span from this date to +other+, as a +Duration+ of whole days.
+  #
+  # @param other [Date] the date to measure to
+  # @return [Duration] the elapsed span
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.until(Date.of(2026, 8, 9).try).wholeDays   # => 10
+  let until(other: Date) -> Duration = (this.daysUntil(other)).day
+
+  # Whole calendar months from this date to +other+, negative when +other+ is
+  # earlier.
+  #
+  # Truncated, not rounded: a partial month does not count, so January 15th to
+  # February 14th is 0 months.
+  #
+  # The count is the exact inverse of `addMonths`, which is why the correction
+  # below asks `addMonths` rather than comparing day-of-month fields: January
+  # 31st plus one month IS February 28th, so January 31st to February 28th is
+  # one month, even though 28 < 31. Comparing the day fields answers 0 there
+  # and contradicts the addition this same file performs.
+  #
+  # @param other [Date] the date to measure to
+  # @return [Integer] the number of whole months
+  #
+  # @example
+  #   Date.of(2026, 1, 15).try.monthsUntil(Date.of(2026, 2, 14).try)   # => 0
+  #   Date.of(2026, 1, 31).try.monthsUntil(Date.of(2026, 2, 28).try)   # => 1
+  let monthsUntil(other: Date) -> Integer do
+    return 0 - other.monthsUntil(this) if other.before?(this)
+    let gross = (other.year * 12 + other.month) - (this.year * 12 + this.month)
+    return gross - 1 if gross > 0 && this.addMonths(gross).after?(other)
+    return gross
+  end
+
+  # Whole calendar years from this date to +other+, negative when +other+ is
+  # earlier. Truncated, like +monthsUntil+.
+  #
+  # This is how to compute an age.
+  #
+  # @param other [Date] the date to measure to
+  # @return [Integer] the number of whole years
+  #
+  # @example
+  #   Date.of(2020, 1, 1).try.yearsUntil(Date.of(2026, 7, 30).try)   # => 6
+  #
+  # @example Someone's age today
+  #   born.yearsUntil(Date.today())
+  let yearsUntil(other: Date) -> Integer do
+    let months = this.monthsUntil(other)
+    return (months - months.modulo(12)) / 12 if months >= 0
+    return 0 - ((0 - months) - (0 - months).modulo(12)) / 12
+  end
+
+  # Returns +true+ when this date is earlier than +other+.
+  #
+  # @param other [Date] the date to compare against
+  # @return [Bool] +true+ when this date comes first
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.before?(Date.of(2026, 8, 1).try)   # => true
+  let before?(other: Date) -> Bool = this.epochDay < other.epochDay
+
+  # Returns +true+ when this date is later than +other+.
+  #
+  # @param other [Date] the date to compare against
+  # @return [Bool] +true+ when this date comes second
+  #
+  # @example
+  #   Date.of(2026, 8, 1).try.after?(Date.of(2026, 7, 30).try)   # => true
+  let after?(other: Date) -> Bool = this.epochDay > other.epochDay
+
+  # Orders this date against another.
+  #
+  # @param other [Date] the date to compare against
+  # @return [Ordering] +Less+, +Equal+ or +Greater+
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.compareTo(Date.of(2026, 8, 1).try)   # => Less
+  #
+  # @example Sorting dates
+  #   dates.sort { |a, b| a.compareTo(b) == Less }
+  let compareTo(other: Date) -> Ordering do
+    return Less if this.epochDay < other.epochDay
+    return Greater if this.epochDay > other.epochDay
+    return Equal
+  end
+
+  # The date as ISO 8601 text, +2026-07-30+.
+  #
+  # @return [String] the ISO 8601 date
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.iso   # => "2026-07-30"
+  let iso -> String = Time.formatDate(this)
+
+  # This date at a given time of day and offset, as a +DateTime+.
+  #
+  # @param time [Time] the time of day
+  # @param offset [Duration] the offset from UTC
+  # @return [DateTime] the instant
+  #
+  # @example
+  #   Date.of(2026, 7, 30).try.at(Time.of(9, 0, 0).try, Duration.zero()).iso
+  #   # => "2026-07-30T09:00:00Z"
+  let at(time: Time, offset: Duration) -> DateTime = DateTime { date: this, time: time, offset: offset }
+end

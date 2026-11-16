@@ -1,0 +1,86 @@
+describe("metamorphic") do
+  it("emits every relation as two losslessly parsed programs") do
+    var seed = 0
+    while seed < 33 do
+      let item = relation(seed)
+      assert(syntaxOk(item.original, "Program"), "original seed ${seed}: ${item.name}")
+      assert(syntaxOk(item.changed, "Program"), "changed seed ${seed}: ${item.name}")
+      seed += 1
+    end
+  end
+
+  it("places the binder inside the generated loop") do
+    let item = relation(1)
+    let tree = Kex.AST.parseSyntax(item.changed).try
+    assert(syntaxHas(tree, "WhileExpr"))
+    assert(syntaxHas(tree, "IfExpr"))
+    assert(item.changed.contains?("IO.printLine(value)"))
+  end
+
+  it("turns a valid annotation into a checker rejection") do
+    let item = relation(6)
+    assert(item.rejectChanged)
+    assert(item.original.contains?("let value: Integer"))
+    assert(item.changed.contains?("Just("))
+  end
+
+  it("uses an existing spec as a seed") do
+    let item = relation(8)
+    assert(item.original.contains?("# if let"))
+    assert(item.changed.contains?("metamorphicUnused"))
+  end
+
+  it("selects a literal node from an existing spec") do
+    let item = relation(10)
+    assert(item.changed.contains?("let METAMORPHIC_LITERAL = "))
+    assert(item.changed.contains?("METAMORPHIC_LITERAL"))
+  end
+
+  it("moves a function to a separate source module") do
+    let item = relation(9)
+    assert(item.moduleSource.contains?("module MetamorphicHelper"))
+    assert(item.changed.contains?("MetamorphicHelper.double"))
+  end
+
+  it("rewrites a plain call with an extra argument or none") do
+    assert(extraArgument("add(1, 2)") == ["add(1, 2, 0)"])
+    assert(extraArgument("Time.now()") == ["Time.now(0)"])
+    assert(extraArgument("items.map { |x| x }") == [])
+    assert(droppedArguments("add(1, 2)") == ["add()"])
+    assert(droppedArguments("IO.printLine(1)") == [])
+  end
+
+  it("wraps, unwraps and retypes literals") do
+    assert(wrappedInJust("7") == ["Just(7)"])
+    assert(otherLiteral("\"a\"") == ["7"])
+    assert(otherLiteral("7") == ["\"kex\""])
+    assert(unwrappedJust("Just(x + 1)") == ["x + 1"])
+  end
+
+  it("drops one single-line arm of a match at a time") do
+    let text = ["match n do", "  0 => \"zero\"", "  1 => \"one\"", "  _ => \"many\"", "end"].join("\n")
+    let variants = withoutAnArm(text)
+    assert(variants.count == 3)
+    assert(!variants.first.or("").contains?("0 =>"))
+    assert(variants.first.or("").contains?("_ =>"))
+    assert(withoutAnArm(["match n do", "  _ => 1", "end"].join("\n")) == [])
+  end
+
+  it("finds runnable specs and a site for every mutation") do
+    let files = corpus
+    assert(files.count > 100)
+    assert(!files.any? { |path| path.contains?("/error_") })
+    var seed = 0
+    while seed < mutations.count do
+      assert(mutationCase(seed, files).set?, "no site for mutation ${seed}")
+      seed += 1
+    end
+  end
+
+  it("leaves known-open relations out without repeating a case") do
+    let seeds = (0..43).items.map { |seed| searchedRelation(seed, false) }
+    assert(!seeds.any? { |seed| knownOpen.contains?(seed % relationCount) })
+    assert(seeds.uniq.count == seeds.count)
+    assert(searchedRelation(11, true) == 11)
+  end
+end

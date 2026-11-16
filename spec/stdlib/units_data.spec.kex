@@ -134,13 +134,9 @@ describe("Units.Data") do
   end
 
   it("adds data measures using canonical bytes") do
-    match 1.megabyte + 500.kilobyte do
-      Ok(total) => do
-        assert(total.canonical == 1500000.0)
-        assert(total.value == 1.5)
-      end
-      Error(_) => assert(false)
-    end
+    let total = 1.megabyte + 500.kilobyte
+    assert(total.canonical == 1500000.0)
+    assert(total.value == 1.5)
   end
 
   it("rejects converting a non-data measure") do

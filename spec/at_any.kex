@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 main do
   (0..8).each do |n|
     assert(n.truthy?, "should be truthy")

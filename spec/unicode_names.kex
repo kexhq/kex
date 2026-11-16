@@ -1,0 +1,23 @@
+# Names written outside ASCII follow the same case rule as ASCII ones: `Φ` is
+# an uppercase name, a constant here exactly as `PHI` is; `árvíztűrő` and a
+# caseless `名前` are values; and an atom may be spelled `:árvíz`.
+main do
+  let Φ = 1.618
+  let ΦΦ = 2
+  let árvíztűrő = "tükörfúrógép"
+  let 名前 = 3
+
+  IO.printLine(Φ)
+  IO.printLine(ΦΦ)
+  IO.printLine(árvíztűrő)
+  IO.printLine(名前 + 1)
+
+  var ő = 1
+  ő = ő + 1
+  IO.printLine(ő)
+
+  IO.printLine(:árvíz)
+  IO.printLine([:abc, :abcé, :名前])
+  IO.printLine(:árvíz == :árvíz)
+  IO.printLine("${:árvíz}")
+end

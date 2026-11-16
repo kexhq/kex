@@ -13,6 +13,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <chrono>
 #include <random>
 #include <unordered_map>
@@ -133,7 +134,7 @@ namespace kex::interpreter {
 // builtins: Process.self and pid.send(msg).
 auto Evaluator::registerProcessBuiltins() -> void {
 
-    defineIntrinsic("Retry::randomUnit", [](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("Retry.randomUnit", [](std::vector<ValuePtr>) -> ValuePtr {
         std::random_device source;
         std::uniform_real_distribution<double> distribution(0.0, 1.0);
         return Value::floating(distribution(source));
@@ -143,25 +144,25 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // space, so a process-wide map is what persistent_term is on the BEAM.
     // A handle is the slot's name.
     static std::unordered_map<std::string, ValuePtr> sharedValues;
-    defineIntrinsic("Shared::named", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Shared.named", [](std::vector<ValuePtr> args) -> ValuePtr {
         return Value::string(args.empty() ? std::string{} : args[0]->toString());
     });
-    defineIntrinsic("Shared::put", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Shared.put", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() == 2) sharedValues[args[0]->toString()] = args[1];
         return Value::unit();
     });
-    defineIntrinsic("Shared::get", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Shared.get", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto found = sharedValues.find(args[0]->toString());
         return found == sharedValues.end() ? Value::none() : Value::just(found->second);
     });
-    defineIntrinsic("Shared::delete", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Shared.delete", [](std::vector<ValuePtr> args) -> ValuePtr {
         return Value::boolean(!args.empty() && sharedValues.erase(args[0]->toString()) > 0);
     });
 
     // Random.secureBytes: the OS CSPRNG through getentropy(3), which serves
     // at most 256 bytes per call (kexhq/kex#404).
-    defineIntrinsic("Random::secureBytes", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Random.secureBytes", [](std::vector<ValuePtr> args) -> ValuePtr {
         const auto* count = args.empty() ? nullptr : std::get_if<IntValue>(&args[0]->data);
         std::vector<uint8_t> bytes(count && count->value > 0 ? static_cast<size_t>(count->value) : 0);
 #if defined(__EMSCRIPTEN__)
@@ -179,17 +180,34 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::binary(std::move(bytes));
     });
 
-    defineIntrinsic("Task::sleep", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Task.sleep", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
+        // A Duration is a time Measure (units.kex): its canonical value is
+        // the span in seconds.
         auto* duration = std::get_if<RecordValue>(&args[0]->data);
-        if (!duration || duration->typeName != "Duration") return Value::unit();
-        auto found = duration->fields.find("seconds");
+        if (!duration || duration->typeName != names::kMeasureRecord) return Value::unit();
+        auto found = duration->fields.find(names::kMeasureCanonical);
         if (found == duration->fields.end()) return Value::unit();
         double seconds = 0.0;
         if (auto* value = std::get_if<FloatValue>(&found->second->data)) seconds = value->value;
         else if (auto* value = std::get_if<IntValue>(&found->second->data)) seconds = value->value;
-        if (seconds > 0.0)
-            std::this_thread::sleep_for(std::chrono::duration<double>(seconds));
+        if (seconds <= 0.0) return Value::unit();
+        // Inside a process the sleep yields to the scheduler, as a BEAM
+        // process's does: blocking the thread stopped every other process,
+        // so a task sleeping 2s held up the one awaiting it with a 10ms
+        // timeout until the task had finished (spec/task_await_timeout).
+        const auto deadline = std::chrono::steady_clock::now() +
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(seconds));
+        if (m_scheduler && m_scheduler->inProcess()) {
+            // A message arriving wakes the sleeper early: sleep on.
+            for (auto now = std::chrono::steady_clock::now(); now < deadline;
+                 now = std::chrono::steady_clock::now())
+                m_scheduler->sleepFor(std::max<int64_t>(
+                    1, std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count()));
+            return Value::unit();
+        }
+        std::this_thread::sleep_until(deadline);
         return Value::unit();
     });
 
@@ -198,7 +216,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // the same convention used by the remaining public-native namespaces.
     defineModule("Process");
 
-    defineIntrinsic("Process::run", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process.run", [](std::vector<ValuePtr> args) -> ValuePtr {
 #ifdef __EMSCRIPTEN__
         return Value::error(Value::string("process execution is unavailable in wasm"));
 #else
@@ -436,7 +454,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     //
     // Nothing is captured, by definition. Callers that need the text keep
     // using `run`; callers that need a person to watch progress use this.
-    defineIntrinsic("Process::stream", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process.stream", [](std::vector<ValuePtr> args) -> ValuePtr {
 #ifdef __EMSCRIPTEN__
         return Value::error(Value::string("process execution is unavailable in wasm"));
 #else
@@ -498,11 +516,11 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // Walker-native scheduler fallback. This can be called from concurrently
     // scheduled processes, where entering a Kex wrapper would mutate the
     // evaluator's shared environment frame.
-    defineDual("Process::self", [this](std::vector<ValuePtr>) -> ValuePtr {
+    defineDual("Process.self", [this](std::vector<ValuePtr>) -> ValuePtr {
         return Value::process(m_scheduler->currentProcessId(), m_scheduler.get());
     });
 
-    defineIntrinsic("Process::register", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process.register", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::unit();
         auto* process = std::get_if<ProcessValue>(&args[0]->data);
         auto* name = std::get_if<AtomValue>(&args[1]->data);
@@ -510,7 +528,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::unit();
     });
 
-    defineIntrinsic("Process::whereIs", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process.whereIs", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* name = std::get_if<AtomValue>(&args[0]->data);
         if (!name) return Value::none();
@@ -518,20 +536,20 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return id ? Value::just(Value::process(*id, m_scheduler.get())) : Value::none();
     });
 
-    defineDual("Process::spawn", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("Process.spawn", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         return Value::server(m_scheduler->startServer(args[0]), m_scheduler.get());
     });
 
-    defineIntrinsic("Process::reply", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process.reply", [](std::vector<ValuePtr> args) -> ValuePtr {
         return Value::record("Reply", {{"reply", args.empty() ? Value::unit() : args[0]}});
     });
 
-    defineIntrinsic("Process::cast", [](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("Process.cast", [](std::vector<ValuePtr>) -> ValuePtr {
         return Value::unit();
     });
 
-    defineIntrinsic("Process::replyFrom", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process.replyFrom", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::unit();
         auto* from = std::get_if<RecordValue>(&args[0]->data);
         if (!from || from->typeName != "From") return Value::unit();
@@ -546,7 +564,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::unit();
     });
 
-    defineIntrinsic("Process::fromPid", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process.fromPid", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* from = std::get_if<RecordValue>(&args[0]->data);
         if (!from) return Value::none();
@@ -556,7 +574,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
 
     // Private receiver primitives. The public methods are defined by
     // process.kex and call these category-qualified identities.
-    defineIntrinsic("Process::send", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process.send", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::unit();
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
         if (!p) return Value::unit();
@@ -564,7 +582,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::unit();
     });
 
-    defineIntrinsic("Process::sendFrom", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process.sendFrom", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::unit();
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
         if (!p) return Value::unit();
@@ -578,14 +596,14 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // the receiver's spawner) to the receiver pid. Passive bookkeeping
     // only — see Scheduler::link's doc comment for why this deliberately
     // doesn't carry BEAM's signal-propagation semantics.
-    defineIntrinsic("Process::link", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process.link", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
         if (!p) return Value::unit();
         p->scheduler->link(p->pid);
         return Value::unit();
     });
-    defineIntrinsic("Process::unlink", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process.unlink", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
         if (!p) return Value::unit();
@@ -596,7 +614,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // pid.alive?() — true until that process's fiber has finished (whether
     // by a normal return or an uncaught exception caught by its own
     // fiber's outer handler — see Scheduler::spawn/runToCompletion).
-    defineIntrinsic("Process::alive?", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process.alive?", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(false);
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
         if (!p) return Value::boolean(false);
@@ -610,7 +628,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // as last positional arg" handling in eval()).
     // Walker-native scheduler fallback. Starting a child while a Kex wrapper's
     // shared evaluator frame is active can corrupt later process execution.
-    defineDual("Task::start", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("Task.start", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         auto pid = m_scheduler->startTask(args[0]);
         return Value::task(pid, m_scheduler.get());
@@ -624,7 +642,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // shape (TaskError isn't a distinct type here, just whatever reason
     // atom/value ends up in Error(...) — no separate error ADT to keep
     // this from growing beyond what the interpreter needs).
-    NativeFunc await = [this](std::vector<ValuePtr> args) -> ValuePtr {
+    NativeFunc await = [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(Value::string("not a task"));
         auto* t = std::get_if<TaskValue>(&args[0]->data);
         if (!t) return Value::error(Value::string("not a task"));
@@ -652,7 +670,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // The source declaration still calls the qualified identity (used by
     // direct intrinsic calls and kept ABI-aligned with BEAM), while ordinary
     // walker receiver dispatch intentionally selects the bare fallback above.
-    defineIntrinsic("Process::await", std::move(await));
+    defineIntrinsic("Process.await", std::move(await));
 
     // Task.awaitAll([tasks]) — awaits each task in order, no timeout
     // (matches Task::start's counterpart having no bulk-timeout variant in
@@ -663,7 +681,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // both dispatch to the same surface syntax, camelCase like every other
     // multi-word Kex builtin (was briefly registered as "await_all" here,
     // the one snake_case outlier — fixed to match).
-    defineDual("Task::awaitAll", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("Task.awaitAll", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         auto* lst = std::get_if<ListValue>(&args[0]->data);
         if (!lst) return Value::list({});
@@ -702,7 +720,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // `spawn` and return the child's pid) into a spec Supervisor.start can
     // both call now (to start it) and recall later (to restart it, from the
     // exact same start function).
-    defineIntrinsic("Supervisor::worker", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Supervisor.worker", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         return Value::tuple({Value::atom("worker"), args[0]});
     });
@@ -711,7 +729,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // `Supervisor.supervisor(restart:) do ... end`, a nested supervisor spec. The
     // interpreter's polling supervisor can't nest; Supervisor.start rejects
     // a spec carrying this tag with an Error(...).
-    defineIntrinsic("Supervisor::nested", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Supervisor.nested", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::unit();
         return Value::tuple({Value::atom("supervisor"), args[1]});
     });
@@ -727,7 +745,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // for the same reason as Task.start. Only :only_crashed is supported —
     // anything else is a clear Error(...) pointing at the BEAM backend
     // instead of a silent wrong behavior.
-    defineDual("Supervisor::start", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("Supervisor.start", [this](std::vector<ValuePtr> args) -> ValuePtr {
         ValuePtr specsVal;
         std::string strategy = "only_crashed";
         for (const auto& arg : args) {

@@ -1,0 +1,6 @@
+spec/error_argument_fixes_unknown.kex:18:16: error: `strs` expects argument 1 to be [String], but got [Integer]
+
+strs : [String] -> Integer
+spec/error_argument_fixes_unknown.kex:25:3: error: `count` expects argument 1 to be Process<Integer>, but got Process<String>
+
+count : Process<Integer> -> Void

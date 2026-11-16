@@ -1,0 +1,27 @@
+# A measure is its quantity: equality
+# and ordering compare the canonical value within one dimension, whatever unit
+# each was written in. Mixing dimensions is a type error
+# (error_measure_mixed_dimensions.kex).
+using Units.SI
+
+describe "Measure equality" do
+  it "compares quantities, not the units they were written in" do
+    assert(1.minute == 60.second)
+    assert(1.hour == 3600.second)
+    assert(1.kilometer == 1000.meter)
+    assert(1.hour != 59.minute)
+    assert(!(1.minute != 60.second))
+  end
+end
+
+describe "Measure ordering" do
+  it "orders by quantity" do
+    assert(90.second > 1.minute)
+    assert(1.minute < 1.hour)
+    assert(60.second <= 1.minute)
+    assert(1.minute >= 60.second)
+    assert(1.kilometer > 999.meter)
+    Assert.equal(90.second.compare(1.minute), Greater)
+    Assert.equal([3.minute, 1.hour, 10.second].sort.map { |m| m.showValue }, ["10.0 s", "3.0 min", "1.0 h"])
+  end
+end

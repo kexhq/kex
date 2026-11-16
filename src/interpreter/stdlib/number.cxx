@@ -8,7 +8,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     // asInteger/integerResult (value.hxx) treat IntValue and BigIntValue
     // uniformly, so modulo/abs work the same on a value that's overflowed
     // into the bignum representation as on a plain Int.
-    defineIntrinsic("Integer::modulo", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Integer.modulo", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::integer(0);
         auto a = asInteger(args[0]);
         auto b = asInteger(args[1]);
@@ -25,7 +25,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return Value::integer(0);
     });
 
-    defineIntrinsic("Number::abs", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number.abs", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto i = asInteger(args[0])) return integerResult(abs(*i));
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
@@ -33,7 +33,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return args[0];
     });
 
-    defineIntrinsic("Number::sqrt", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number.sqrt", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::floating(0.0);
         if (auto* i = std::get_if<IntValue>(&args[0]->data)) return Value::floating(std::sqrt(static_cast<double>(i->value)));
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
@@ -46,7 +46,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     // arguments — call it empty rather than routing an index into a callable
     // (e.g. a named zero-arg function) that cannot accept one. Lambdas
     // tolerate the extra argument either way; named callables do not.
-    defineIntrinsic("Integer::times", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Integer.times", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return args.empty() ? Value::none() : args[0];
         auto* n = std::get_if<IntValue>(&args[0]->data);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -63,7 +63,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return args[0];
     });
 
-    defineIntrinsic("Number::floor", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number.floor", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto i = asInteger(args[0])) return integerResult(*i);
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
@@ -71,7 +71,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return Value::integer(0);
     });
 
-    defineIntrinsic("Number::ceil", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number.ceil", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto i = asInteger(args[0])) return integerResult(*i);
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
@@ -82,7 +82,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     // Truncate toward zero, a no-op on integers. Matches
     // kex_intrinsic_number:toInteger/1, which number.kex's `Float.toInteger`
     // has always called on BEAM — the interpreter simply never defined it.
-    defineIntrinsic("Number::toInteger", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number.toInteger", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto i = asInteger(args[0])) return integerResult(*i);
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
@@ -90,7 +90,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return Value::integer(0);
     });
 
-    defineIntrinsic("Number::round", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number.round", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto i = asInteger(args[0])) return integerResult(*i);
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
@@ -121,7 +121,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     auto noVal = []() { return Value::none(); };  // no value parsed
 
     defineModule("Float");
-    defineIntrinsic("Float::formatFixed", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Float.formatFixed", [](std::vector<ValuePtr> args) -> ValuePtr {
         const auto places = args.size() > 1 ? asInteger(args[1]) : std::nullopt;
         if (args.size() != 2 || !std::holds_alternative<FloatValue>(args[0]->data) ||
             !places || *places < 0 || *places > 15)
@@ -145,7 +145,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         if (value < 0 && rounded != 0) result.insert(0, 1, '-');
         return Value::string(result);
     });
-    defineIntrinsic("Float::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Float.parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::error(parseError("", 0, noVal(), "Float.parse expects a String", ""));
         size_t consumed = 0;
@@ -168,7 +168,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     });
 
     // Float.parsePrefix(s) -> Just((Float, String)) | None
-    defineIntrinsic("Float::parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Float.parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::none();
         size_t consumed = 0;
@@ -182,7 +182,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     });
 
     defineModule("Integer");
-    defineIntrinsic("Integer::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Integer.parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::error(parseError("", 0, noVal(), "Integer.parse expects a String", ""));
 
@@ -229,7 +229,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     });
 
     // Integer.parsePrefix(s) -> Just((Integer, String)) | None
-    defineIntrinsic("Integer::parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Integer.parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::none();
         size_t consumed = 0;
@@ -250,7 +250,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     });
 
     defineModule("Number");
-    defineIntrinsic("Number::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number.parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::error(parseError("", 0, noVal(), "Number.parse expects a String", ""));
         size_t consumed = 0;

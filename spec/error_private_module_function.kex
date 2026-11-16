@@ -1,0 +1,12 @@
+# A module's private function is refused through the module's path, as it is
+# by its bare name. The checker said nothing here, the walker refused it at
+# run time and BEAM ran it: three answers for one program.
+module Vault do
+  private do
+    let secret(x) = x
+  end
+end
+
+main do
+  IO.printLine("${Vault.secret(1)}")
+end

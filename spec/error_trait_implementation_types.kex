@@ -1,0 +1,35 @@
+# kex: check-only
+# A `make` block implementing a trait is held to the trait's signatures, with
+# `This` read as the block's type (kexhq/kex#642): a result the member does
+# not declare is the one the trait requires, and an annotated parameter must
+# take what the trait passes it. `area` answering a String was accepted, and
+# failed at run time with `Cannot add String and Float`.
+
+trait Shape do
+  area :> Float
+  scale :> Float -> This
+end
+
+record Square do
+  side : Float
+end
+
+make Square, implement: Shape do
+  let area = "not a number"
+  let scale(by: String) -> Square = Square { side: @side }
+end
+
+record Dot do
+  x : Integer
+end
+
+make Dot, implement: Shape do
+  let area = 0.0
+  let scale(by: Float) -> Dot = this
+end
+
+let total(s: Shape) -> Float = s.area + 1.0
+
+main do
+  IO.printLine("${total(Square { side: 2.0 })} ${total(Dot { x: 1 })}")
+end

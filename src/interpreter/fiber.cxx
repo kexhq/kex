@@ -1,5 +1,7 @@
 #include "fiber.hxx"
 
+#include <algorithm>
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten/fiber.h>
 #include <vector>
@@ -21,6 +23,26 @@ namespace {
 // design) — named thread_local defensively, in case this ever runs on a
 // worker-thread-per-tab wasm setup later.
 thread_local Fiber* g_currentFiber = nullptr;
+}
+
+// Stack kept back for whatever runs between two checks: a native function, a
+// deep `inspect`, the error's own unwinding.
+constexpr std::size_t kStackMargin = 512 * 1024;
+
+// The body runs near the top of its stack, which grows down on every target
+// Kex runs on (native and wasm alike).
+auto Fiber::markStackTop() -> void {
+    char top = 0;
+    const auto here = reinterpret_cast<std::uintptr_t>(&top);
+    const auto margin = std::min(kStackMargin, m_stackSize / 4);
+    m_stackLimit = here > m_stackSize ? here - m_stackSize + margin : 0;
+}
+
+auto Fiber::stackExhausted() -> bool {
+    const Fiber* self = g_currentFiber;
+    if (!self || self->m_stackLimit == 0) return false;
+    char probe = 0;
+    return reinterpret_cast<std::uintptr_t>(&probe) < self->m_stackLimit;
 }
 
 #ifndef __EMSCRIPTEN__
@@ -63,7 +85,8 @@ auto g_yieldSlot() -> ctx::fiber*& {
 }
 
 Fiber::Fiber(EntryFn entry, std::size_t stackSize)
-    : m_impl(std::make_unique<Impl>()), m_entry(std::move(entry)) {
+    : m_entry(std::move(entry)), m_impl(std::make_unique<Impl>()) {
+    m_stackSize = stackSize;
     Impl* implPtr = m_impl.get();
     m_impl->intoFiber = ctx::fiber(
         std::allocator_arg, ctx::fixedsize_stack(stackSize),
@@ -80,7 +103,7 @@ Fiber::Fiber(EntryFn entry, std::size_t stackSize)
             g_yieldSlot() = &callerSlot;
             trampolineBody();
             implPtr->selfSlot = nullptr;
-            return std::move(callerSlot);
+            return callerSlot;
         });
 }
 
@@ -123,6 +146,7 @@ auto Fiber::yieldToScheduler() -> void {
 }
 
 auto Fiber::trampolineBody() -> void {
+    markStackTop();
     m_entry();
     m_finished = true;
 }
@@ -177,6 +201,7 @@ auto fiberTrampoline(void* arg) -> void {
 
 Fiber::Fiber(EntryFn entry, std::size_t stackSize)
     : m_impl(std::make_unique<Impl>()), m_entry(std::move(entry)) {
+    m_stackSize = stackSize;
     m_impl->stack.resize(stackSize);
     // Emscripten's own asyncify scratch buffer, separate from the C stack —
     // see emscripten_fiber_init's signature.
@@ -223,6 +248,7 @@ auto Fiber::yieldToScheduler() -> void {
 }
 
 auto Fiber::trampolineBody() -> void {
+    markStackTop();
     m_entry();
     m_finished = true;
     if (m_impl->callerContext)

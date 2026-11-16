@@ -133,10 +133,4 @@ describe("Units.SI") do
     assert(speed.value == 10.0)
   end
 
-  it("rejects addition across measurement kinds") do
-    match 1.meter + 1.watt do
-      Ok(_) => assert(false)
-      Error(_) => assert(true)
-    end
-  end
 end

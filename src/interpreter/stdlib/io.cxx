@@ -105,7 +105,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     defineModule("IO");
 
     // IO.printLine(msg...) — stringify args, write to stdout, trailing newline.
-    defineDual("IO::printLine", [this, protocolText](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("IO.printLine", [this, protocolText](std::vector<ValuePtr> args) -> ValuePtr {
         std::string out;
         for (const auto& arg : args) out += protocolText(arg, "showValue");
         out += "\n";
@@ -119,7 +119,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     });
 
     // IO.print(msg...) — like printLine but without the trailing newline.
-    defineDual("IO::print", [this, protocolText](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("IO.print", [this, protocolText](std::vector<ValuePtr> args) -> ValuePtr {
         std::string out;
         for (const auto& arg : args) out += protocolText(arg, "showValue");
         m_output += out;
@@ -152,7 +152,7 @@ auto Evaluator::registerIOBuiltins() -> void {
         }
         return val;
     };
-    defineDual("IO::inspect", inspectValue);
+    defineDual("IO.inspect", inspectValue);
     definePublic("inspect", inspectValue);
 
     // The rendering half, for the Kex-level `inspect` in kex.kex: the caller
@@ -161,7 +161,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     // along; the walker never did, because its `IO.inspect` is native and the
     // Kex body was dead code there (kexhq/kex#143). Mock.IO capture is applied
     // here too, so a mocked run sees `.inspect` output like any other.
-    defineIntrinsic("IO::inspectRendered", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("IO.inspectRendered", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         const auto& val = args[0];
         const std::string rendered =
@@ -179,11 +179,11 @@ auto Evaluator::registerIOBuiltins() -> void {
     });
 
     // IO.put/IO.putLine — aliases of IO.print/IO.printLine.
-    aliasDual("IO::put", "IO::print");
-    aliasDual("IO::putLine", "IO::printLine");
+    aliasDual("IO.put", "IO.print");
+    aliasDual("IO.putLine", "IO.printLine");
 
     // IO.printError(msg) — write a line to stderr (no exit).
-    defineDual("IO::printError", [this, protocolText](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("IO.printError", [this, protocolText](std::vector<ValuePtr> args) -> ValuePtr {
         std::string out;
         for (const auto& a : args) out += protocolText(a, "showValue");
         out += "\n";
@@ -199,7 +199,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     // IO.printErrorRaw(msg) — stderr without the trailing newline. Not part
     // of the IO capability's surface; it is what `IO.error.print(x)` needs,
     // since `printError` is the newline-terminated one.
-    defineIntrinsic("IO::printErrorRaw", [this, protocolText](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("IO.printErrorRaw", [this, protocolText](std::vector<ValuePtr> args) -> ValuePtr {
         std::string out;
         for (const auto& a : args) out += protocolText(a, "showValue");
         m_output += out;
@@ -224,16 +224,16 @@ auto Evaluator::registerIOBuiltins() -> void {
             return handle;
         };
     };
-    defineDual("IO::stdout", standardHandle(kStdoutPath));
-    defineDual("IO::stderr", standardHandle(kStderrPath));
-    defineDual("IO::stdin", standardHandle(kStdinPath));
+    defineDual("IO.stdout", standardHandle(kStdoutPath));
+    defineDual("IO.stderr", standardHandle(kStderrPath));
+    defineDual("IO.stdin", standardHandle(kStdinPath));
 
     // IO.warn / IO.warning — aliases for printError.
-    aliasDual("IO::warn", "IO::printError");
-    aliasDual("IO::warning", "IO::printError");
+    aliasDual("IO.warn", "IO.printError");
+    aliasDual("IO.warning", "IO.printError");
 
     // System.exit(code) — terminate with the given numeric exit code.
-    defineIntrinsic("System::exit", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("System.exit", [](std::vector<ValuePtr> args) -> ValuePtr {
         int code = 0;
         if (!args.empty()) {
             if (auto* i = std::get_if<IntValue>(&args[0]->data)) code = static_cast<int>(i->value);
@@ -245,7 +245,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     // OS union (system.kex). Both backends answer with the same atom for the
     // same machine, and anything unmodelled is `:unknown` rather than a name
     // the union does not cover.
-    defineIntrinsic("System::os", [this](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("System.os", [](std::vector<ValuePtr>) -> ValuePtr {
 #if defined(_WIN32)
         return Value::atom("windows");
 #elif defined(__EMSCRIPTEN__)
@@ -267,7 +267,7 @@ auto Evaluator::registerIOBuiltins() -> void {
 
     // System.bitWidth() — the machine's pointer width in bits. The BEAM
     // answers from its word size; here it IS the pointer size.
-    defineIntrinsic("System::bitWidth", [this](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("System.bitWidth", [](std::vector<ValuePtr>) -> ValuePtr {
         return Value::integer(static_cast<int64_t>(sizeof(void*) * 8));
     });
 
@@ -284,12 +284,12 @@ auto Evaluator::registerIOBuiltins() -> void {
             std::exit(1);
         };
         definePublic("die", fn);
-        defineIntrinsic("System::die", std::move(fn));
+        defineIntrinsic("System.die", std::move(fn));
     }
 
     // The stdin read behind IO.getLine (through FileHandle.getLine on IO.in,
     // which wraps it in a Result) — reads one line from stdin or mock input.
-    // An intrinsic only, not also a global: a global `IO::getLine` would
+    // An intrinsic only, not also a global: a global `IO.getLine` would
     // shadow io.kex's own definition.
     //
     // `String?` here: `Just(line)` or `None` at EOF. The line
@@ -297,7 +297,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     // `match ... Just(x)` matched nothing on either backend — only `.or(...)`
     // worked, because `Optional.or`'s catch-all returns whatever it is given
     // (kexhq/kex#197).
-    defineIntrinsic("IO::getLine", [this](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("IO.getLine", [this](std::vector<ValuePtr>) -> ValuePtr {
         if (m_mockIO) {
             if (m_mockIOInputLines.empty()) return Value::none();
             auto line = m_mockIOInputLines.front();
@@ -328,7 +328,7 @@ auto Evaluator::registerIOBuiltins() -> void {
 
     // IO.get() — reads a single character from stdin (or mock input).
     // `String?` on the same terms as `getLine` above (kexhq/kex#197).
-    defineIntrinsic("IO::get", [this](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("IO.get", [this](std::vector<ValuePtr>) -> ValuePtr {
         if (m_mockIO) {
             if (m_mockIOInputLines.empty()) return Value::none();
             auto& front = m_mockIOInputLines.front();
@@ -415,12 +415,12 @@ auto Evaluator::registerIOBuiltins() -> void {
     // The fixed-arity Mock.IO controls are source-owned. `input` alone stays
     // public-native because its existing API is variadic while Kex function
     // declarations currently have fixed arity.
-    defineDual("Mock::IO::input", mockInput);
-    defineIntrinsic("IO::ioMockStart", std::move(mockStart));
-    defineIntrinsic("IO::ioMockInput", std::move(mockInput));
-    defineIntrinsic("IO::ioMockOutput", std::move(mockOutput));
-    defineIntrinsic("IO::ioMockClear", std::move(mockClear));
-    defineIntrinsic("IO::ioMockStop", std::move(mockStop));
+    defineDual("Mock.IO.input", mockInput);
+    defineIntrinsic("IO.ioMockStart", std::move(mockStart));
+    defineIntrinsic("IO.ioMockInput", std::move(mockInput));
+    defineIntrinsic("IO.ioMockOutput", std::move(mockOutput));
+    defineIntrinsic("IO.ioMockClear", std::move(mockClear));
+    defineIntrinsic("IO.ioMockStop", std::move(mockStop));
 }
 
 } // namespace kex::interpreter

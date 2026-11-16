@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 main do
   let Ok(a) = Task.start { 1 }.await
   let Ok(b) = Task.start { 2 }.await(timeout: 1000)

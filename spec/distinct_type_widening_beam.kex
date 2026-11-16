@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # The BEAM twin of distinct_type_widening.kex.
 
 distinct type UserId = String

@@ -1,6 +1,11 @@
 #pragma once
 
 #include "types.hxx"
+
+namespace kex::ast {
+struct Expr;
+struct FunctionClause;
+}
 #include <optional>
 #include <set>
 #include <string>
@@ -41,7 +46,21 @@ struct Signature {
     // table holds every module's functions, so a plain call keeps only the
     // ones its module may see (kexhq/kex#496, #494).
     std::string declaringModule;
+    // The clause it was made from, for a signature of a FunctionDef: lowering
+    // places a call's arguments into it (hir::Program::selectedSignatureOf).
+    const ast::FunctionClause* clause = nullptr;
 };
+
+// By call: each argument position given for a `Showable` parameter with a
+// value of a distinct type, and that type (TypeChecker::shownThroughDistinct).
+using ShownThrough =
+    std::unordered_map<const ast::Expr*, std::vector<std::pair<std::size_t, std::string>>>;
+
+// Do two signatures take the same parameters? One declaration registered
+// twice must read as one: a parameter declared `Any` is Unknown, which
+// `typesEqual` never equates, so it counts as equal to another Unknown here.
+auto sameParameters(const Signature& left, const Signature& right) -> bool;
+
 
 struct TraitDef {
     std::string name;                        // "Number", "Comparable", user-defined names too
@@ -51,6 +70,10 @@ struct TraitDef {
     // without this list `bot.shout` (an inherited default) is indistinguishable
     // from a call to a method that does not exist.
     std::vector<std::string> defaultMethods;
+    // The defaults the trait's BODY defines, a subset of `defaultMethods`:
+    // emitted with each implementor (KexiTraitDef::defaultBodies). The rest
+    // are functions over the trait, implemented once where they are declared.
+    std::vector<std::string> defaultBodies;
 };
 
 // Open, name-keyed registry of traits and which types implement them.
@@ -91,8 +114,20 @@ public:
     // Does any trait `type` implements declare `method` — as a requirement or
     // as a default body? An inherited default has no per-type signature, so
     // this is the only way to know the call is legitimate.
+    // Whether `type`'s own module implements `method`: a method a trait it
+    // claims requires, or a default from that trait's body.
+    auto implementsInHome(const std::string& type, const std::string& method) const -> bool;
     auto declaresMethod(const std::string& type, const std::string& method) const
         -> bool;
+    // The method a trait `type` claims requires under `method`'s name, and
+    // that trait; nulls when no claimed trait requires one.
+    auto requiredMethod(const TypePtr& type, const std::string& method) const
+        -> std::pair<const TraitDef*, const Signature*>;
+    // Every method the traits `type` claims require under `method`'s name:
+    // a capability can require same-arity overloads (`take(text: String)`
+    // beside `take(count: Integer)`), and each implementation answers one.
+    auto requiredOverloads(const TypePtr& type, const std::string& method) const
+        -> std::vector<const Signature*>;
 
     // A registry with Number/Integer/Float/Equatable/Comparable/Showable
     // pre-registered, plus implementations for built-in primitive/sized types.
@@ -105,6 +140,9 @@ public:
     }
 
     auto implementorKey(const TypePtr& type) const -> std::string;
+    // The name a type's family registers conformances under (`List`, `Float`
+    // for a sized float, ...), or "".
+    static auto familyKey(const TypePtr& type) -> std::string;
     auto hasConformances(const std::string& key) const -> bool {
         return m_implementations.count(key) > 0;
     }

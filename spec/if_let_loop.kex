@@ -1,0 +1,20 @@
+# Pattern bindings in a loop branch remain visible through its body and
+# continuation, on both the walker and BEAM.
+main do
+  var i = 0
+  while i < 2 do
+    if let Ok(value) = Ok(i + 7)
+      IO.printLine(value)
+    end
+    i += 1
+  end
+
+  var j = 0
+  loop do
+    if let Just(value) = Just(j + 10)
+      IO.printLine(value)
+    end
+    j += 1
+    break if j == 2
+  end
+end

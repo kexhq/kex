@@ -28,7 +28,7 @@ inline auto qualifierFromBefore(const std::string& before) -> std::string {
 
 // Result of resolving a completion query from the readline context.
 struct CompletionQuery {
-    std::string dbQuery;     // passed to SemanticDB::completionsFor()
+    std::string dbQuery;     // passed to completionsFor()
     std::string rewriteFrom; // prefix to remove from each result  (e.g. "List.")
     std::string rewriteTo;   // prefix to insert in its place       (e.g. "[1,2,3].")
 };
@@ -115,14 +115,6 @@ inline auto rewriteCompletions(std::vector<std::string> raw,
             out.push_back(std::move(s));
     }
     return out;
-}
-
-// Convenience: strip a prefix (rewriteTo = "").
-inline auto stripCompletionPrefix(std::vector<std::string> raw,
-                                  const std::string& prefix)
-    -> std::vector<std::string>
-{
-    return rewriteCompletions(std::move(raw), prefix, "");
 }
 
 } // namespace kex

@@ -345,12 +345,12 @@ module Kex.AST do
 
   # One field inside a record or map-shaped pattern.
   #
-  # +pattern+ is +None+ for shorthand such as +{ name }+. +stringKey+ keeps
+  # +pattern+ is +None+ for shorthand such as +{ name }+. +stringKey?+ keeps
   # +{"name": value}+ distinct from the atom-key spelling +{ name: value }+.
   record PatternField do
     name : String
     pattern : PatternRef?
-    stringKey : Bool
+    stringKey? : Bool
   end
 
   # Renders a +PatternRef+ back to the way it is written in source.
@@ -374,7 +374,7 @@ module Kex.AST do
   let patternRefText(ThisPattern(inner)) -> String = "@${Kex.AST.patternRefText(inner)}"
   let patternRefText(WildcardPattern) -> String = "_"
 
-  let patternFieldText(PatternField { name, pattern, stringKey }) -> String = Kex.AST.patternFieldText(name, pattern, stringKey)
+  let patternFieldText(PatternField { name, pattern, stringKey?: stringKey }) -> String = Kex.AST.patternFieldText(name, pattern, stringKey)
   let patternFieldText(name, None, false) -> String = name
   let patternFieldText(name, None, true) -> String = "\"${name}\""
   let patternFieldText(name, Just(pattern), false) -> String = "${name}: ${Kex.AST.patternRefText(pattern)}"
@@ -532,7 +532,7 @@ module Kex.AST do
 
   # The fixed portion of a generated +make+ declaration.
   record GeneratedMakeInfo do
-    isFinal : Bool
+    final? : Bool
     implements : [TypeRef]
     body : [CompiledItem]
     location : Location
@@ -550,12 +550,12 @@ module Kex.AST do
   # One declared function parameter.
   #
   # +name+ is absent for a destructuring parameter; +pattern+ preserves that
-  # destructuring shape. +hasDefault+ records whether an initializer appeared.
+  # destructuring shape. +default?+ records whether an initializer appeared.
   record ParamInfo do
     name : String?
     pattern : PatternRef?
     type : TypeRef?
-    hasDefault : Bool
+    default? : Bool
   end
 
   # One clause of a function, including its patterns and body.
@@ -567,7 +567,7 @@ module Kex.AST do
     body : [Expression]
     returnType : TypeRef?
     rescueInfo : RescueInfo?
-    hasParamList : Bool
+    paramList? : Bool
   end
 
   # A named function and all of its pattern-matching clauses.
@@ -578,21 +578,21 @@ module Kex.AST do
   record FunctionInfo do
     name : String
     doc : String?
-    isFoul : Bool
-    predicate : Bool
+    foul? : Bool
+    predicate? : Bool
     clauses : [ClauseInfo]
     location : Location
   end
 
   # A standalone function type signature.
   #
-  # +implicitThis+ distinguishes +:>+ receiver signatures from module-level +:+ signatures
+  # +implicitThis?+ distinguishes +:>+ receiver signatures from module-level +:+ signatures
   # without making a tool inspect punctuation in the original source.
   record AnnotationInfo do
     name : String
     type : TypeRef
     doc : String?
-    implicitThis : Bool
+    implicitThis? : Bool
     location : Location
   end
 
@@ -619,7 +619,7 @@ module Kex.AST do
   record FieldInfo do
     name : String
     type : TypeRef
-    hasDefault : Bool
+    default? : Bool
   end
 
   # A record declaration with fields in source order.
@@ -647,7 +647,7 @@ module Kex.AST do
   record MakeInfo do
     target : TypeRef
     doc : String?
-    isFinal : Bool
+    final? : Bool
     implements : [TypeRef]
     body : [Node]
     location : Location
@@ -678,7 +678,7 @@ module Kex.AST do
 
   # A +public+ or +private+ section and the declarations it contains.
   record VisibilityInfo do
-    isPublic : Bool
+    public? : Bool
     items : [Node]
     location : Location
   end

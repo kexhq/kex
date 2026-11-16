@@ -1,0 +1,10 @@
+# kex: check-only
+# `using FS` brings in FS's names, among them its nested module `Path`. The
+# members of `Path` are reached through it (`Path.separator`), not bare:
+# a bare `separator` checked clean and ran on BEAM while the walker refused it.
+using FS
+
+main do
+  IO.printLine(Path.separator)
+  IO.printLine(separator)
+end

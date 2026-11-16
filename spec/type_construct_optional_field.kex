@@ -1,0 +1,18 @@
+# `Type.construct` takes a present value for an optional field as that value:
+# decoded JSON has no `Just` to write, so `{"endLine": 3}` could not fill an
+# `endLine : Integer?` (kexhq/kex#561). A missing field is `None`, as before,
+# and so is a JSON `null`.
+using JSON
+
+record Finding do
+  file    : String
+  endLine : Integer?
+end
+
+main do
+  let finding = Type.named("Finding")
+  IO.printLine(finding.construct(JSON.parse("{\"file\": \"a\", \"endLine\": 3}").or({})))
+  IO.printLine(finding.construct(JSON.parse("{\"file\": \"b\"}").or({})))
+  IO.printLine(finding.construct(JSON.parse("{\"file\": \"c\", \"endLine\": null}").or({})))
+  IO.printLine(finding.construct(JSON.parse("{\"file\": \"d\", \"endLine\": \"x\"}").or({})))
+end

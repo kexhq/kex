@@ -144,7 +144,12 @@ make Integer do
   #   end
   times :> (Integer -> Void) -> Void
   times :> Block<Void> -> Void
-  let times(block) = Kex.Intrinsic.Integer.times(this, block)
+  let times(block) do
+    match Kex.Intrinsic.Kex.backend() do
+      Kex.Interpreter => Kex.Intrinsic.Integer.times(this, block)
+      _ => 0.countTo(this, block)
+    end
+  end
 
   # Returns the integer unchanged. Present so that code written against
   # +Number+ works whichever half of the tower it is handed.
@@ -284,6 +289,18 @@ make Integer do
   #   0.negative?   # => false
   negative? :> Bool
   let negative? = this < 0
+
+  private do
+    # +times+ when compiled: +block+ applied to each index from this one up
+    # to +limit+, a recursion the specialize-blocks pass copies into the
+    # caller with the block in place.
+    let countTo(limit, block) do
+      if this < limit
+        block(this)
+        (this + 1).countTo(limit, block)
+      end
+    end
+  end
 end
 
 # Double-precision floating-point numbers.
@@ -526,10 +543,10 @@ module Integer do
         Ok(normalized) => do
           match Integer.parse(normalized) do
             Ok(v) => best = Just((v, s.drop(length)))
-            Error(_) => None
+            Error(_) => ()
           end
         end
-        Error(_) => None
+        Error(_) => ()
       end
       length = length + 1
     end
@@ -618,10 +635,10 @@ module Float do
         Ok(normalized) => do
           match Float.parse(normalized) do
             Ok(v) => best = Just((v, s.drop(length)))
-            Error(_) => None
+            Error(_) => ()
           end
         end
-        Error(_) => None
+        Error(_) => ()
       end
       length = length + 1
     end

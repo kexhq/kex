@@ -1,0 +1,18 @@
+# kex: check-only
+# An optional never stands for its payload (kexhq/kex#611): `Just(0)` is no
+# Integer, nor is `None`, nor a lookup's `Integer?`. An optional fits only
+# where an optional is expected.
+
+let pick(n: Integer) -> Integer = n
+
+let firstOf(list: [Integer]) -> Integer = list.first
+
+main do
+  let a: Integer = Just(0)
+  let b: Integer = None
+  IO.printLine(pick(Just(5)))
+  let c: Integer? = Just(1)
+  let d: Integer = c
+  let e: Integer? = c
+  IO.inspect((a, b, d, e, firstOf([1])))
+end

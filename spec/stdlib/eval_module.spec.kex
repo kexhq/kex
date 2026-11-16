@@ -70,3 +70,41 @@ describe("Evaluator.runExpression") do
     end
   end
 end
+
+describe("EvaluatorOptions") do
+  it("stops a runaway program at maxSteps") do
+    let program = "let spin(n) = n == 0 then 0 else spin(n - 1)\nmain do\nspin(100000)\nend"
+    match Evaluator.run(program, EvaluatorOptions { maxDepth: 1_000_000, maxSteps: 500 }) do
+      Ok(_) => assert(false, "should stop at the step limit")
+      Error(msg) => assert(msg.contains?("maxSteps: 500"), msg)
+    end
+  end
+
+  it("stops deep recursion at maxDepth") do
+    match Evaluator.run("let down(n) = down(n + 1)\nmain do\ndown(0)\nend") do
+      Ok(_) => assert(false, "should stop at the depth limit")
+      Error(msg) => assert(msg.contains?("maxDepth: 256"), msg)
+    end
+  end
+
+  it("runs recursion that stays inside the limits") do
+    match Evaluator.run("let spin(n) = n == 0 then 0 else spin(n - 1)\nmain do\nspin(50)\nend") do
+      Ok(result) => assert(result == 0)
+      Error(msg) => assert(false, msg)
+    end
+  end
+
+  it("refuses a built-in outside the allow list") do
+    match Evaluator.runExpression("IO.printLine(1)") do
+      Ok(_) => assert(false, "IO is not allowed by default")
+      Error(msg) => assert(msg.contains?("IO.printLine is not allowed"), msg)
+    end
+  end
+
+  it("allows a built-in the allow list names") do
+    match Evaluator.runExpression("ENV.get(\"HOME\").present?", EvaluatorOptions { allow: [:ENV] }) do
+      Ok(_) => assert(true)
+      Error(msg) => assert(false, msg)
+    end
+  end
+end

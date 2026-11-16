@@ -10,7 +10,7 @@ module Tey.Docgen.Serve do
     path : String
   end
 
-  foul serveCommand(parsed: OptionParser.ParsedOptions) -> Integer do
+  foul serveCommand(parsed: ParsedOptions) -> Integer do
     let out = parsed.values.get("out").or("")
     let port = Integer.parse(parsed.values.get("port").or("4322")).or(4322)
     if out.empty?

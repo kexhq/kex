@@ -4,6 +4,19 @@
 
 namespace kex::semantic {
 
+auto sameParameters(const Signature& left, const Signature& right) -> bool {
+    if (left.params.size() != right.params.size()) return false;
+    for (std::size_t i = 0; i < left.params.size(); ++i) {
+        const auto& a = left.params[i];
+        const auto& b = right.params[i];
+        if (a && b && std::holds_alternative<UnknownType>(a->kind) &&
+            std::holds_alternative<UnknownType>(b->kind))
+            continue;
+        if (!typesEqual(a, b)) return false;
+    }
+    return true;
+}
+
 auto TraitRegistry::define(TraitDef def) -> void {
     m_traits[def.name] = std::move(def);
 }
@@ -127,20 +140,36 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
     if (it != m_implementations.end() && it->second.count(traitName) > 0)
         return true;
 
-    // Compound types: check the base type name for conformances registered
-    // under "List", "Map", "Optional" (from `make [X], implement: Trait`).
-    if (std::holds_alternative<ListType>(type->kind)) {
-        auto li = m_implementations.find("List");
-        if (li != m_implementations.end() && li->second.count(traitName) > 0)
-            return true;
-    } else if (std::holds_alternative<MapType>(type->kind)) {
-        auto mi = m_implementations.find("Map");
-        if (mi != m_implementations.end() && mi->second.count(traitName) > 0)
-            return true;
-    } else if (std::holds_alternative<OptionalType>(type->kind)) {
-        auto oi = m_implementations.find("Optional");
-        if (oi != m_implementations.end() && oi->second.count(traitName) > 0)
-            return true;
+    // The family it belongs to claims it too: a list, map or optional what
+    // `make [X], implement: Trait` claims, a sized number what `make Float`
+    // or `make Integer` does (`1.5.present?`, a Float64, is Blankable).
+    const auto family = familyKey(type);
+    if (family.empty()) return false;
+    const auto claims = m_implementations.find(family);
+    return claims != m_implementations.end() && claims->second.count(traitName) > 0;
+}
+
+// The name a type's family registers conformances under, or "".
+auto TraitRegistry::familyKey(const TypePtr& type) -> std::string {
+    if (std::holds_alternative<ListType>(type->kind)) return "List";
+    if (std::holds_alternative<MapType>(type->kind)) return "Map";
+    if (std::holds_alternative<OptionalType>(type->kind)) return "Optional";
+    if (isNumericType(type))
+        return std::holds_alternative<SizedFloatType>(type->kind) ? "Float" : "Integer";
+    return "";
+}
+
+auto TraitRegistry::implementsInHome(const std::string& type,
+                                     const std::string& method) const -> bool {
+    auto implemented = m_implementations.find(type);
+    if (implemented == m_implementations.end()) return false;
+    for (const auto& traitName : implemented->second) {
+        auto trait = m_traits.find(traitName);
+        if (trait == m_traits.end()) continue;
+        for (const auto& required : trait->second.requiredMethods)
+            if (required.name == method) return true;
+        for (const auto& body : trait->second.defaultBodies)
+            if (body == method) return true;
     }
     return false;
 }
@@ -158,6 +187,31 @@ auto TraitRegistry::declaresMethod(const std::string& type,
             if (defaulted == method) return true;
     }
     return false;
+}
+
+auto TraitRegistry::requiredMethod(const TypePtr& type, const std::string& method) const
+    -> std::pair<const TraitDef*, const Signature*> {
+    auto implemented = m_implementations.find(implementorKey(type));
+    if (implemented == m_implementations.end()) return {nullptr, nullptr};
+    for (const auto& traitName : implemented->second) {
+        auto trait = m_traits.find(traitName);
+        if (trait == m_traits.end()) continue;
+        for (const auto& required : trait->second.requiredMethods)
+            if (required.name == method) return {&trait->second, &required};
+    }
+    return {nullptr, nullptr};
+}
+
+auto TraitRegistry::requiredOverloads(const TypePtr& type, const std::string& method) const
+    -> std::vector<const Signature*> {
+    std::vector<const Signature*> overloads;
+    auto implemented = m_implementations.find(implementorKey(type));
+    if (implemented == m_implementations.end()) return overloads;
+    for (const auto& traitName : implemented->second)
+        if (auto trait = m_traits.find(traitName); trait != m_traits.end())
+            for (const auto& required : trait->second.requiredMethods)
+                if (required.name == method) overloads.push_back(&required);
+    return overloads;
 }
 
 auto TraitRegistry::commonTrait(const TypePtr& a, const TypePtr& b) const -> std::string {

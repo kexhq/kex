@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A keyword may name a `make` function, follow `.`, and `after` may name a
 # parameter and label an argument (kexhq/kex#508). A `make` function is only
 # reached after `.`, so `insert.record(1)` cannot mean anything else.

@@ -18,10 +18,10 @@ let isPrime?(n: Int) do
 end
 
 main do
-  let naturals = Sequence(from: 0) { |n| n + 1 }
+  let naturals = Stream.from(0) { |n| n + 1 }
   IO.printLine(naturals.take(10))
 
-  let powers = Sequence(from: 1) { |n| n * 2 }
+  let powers = Stream.from(1) { |n| n * 2 }
   IO.printLine(powers.take(8))
 
   IO.printLine(naturals.drop(5).take(5))
@@ -30,7 +30,7 @@ main do
   IO.printLine((1..100).sum)
   IO.printLine((1..10).filter(~even?))
 
-  let primes = Sequence(from: 2) { |n| n + 1 }
+  let primes = Stream.from(2) { |n| n + 1 }
     .filter(~isPrime?)
   IO.printLine(primes.take(10))
 end

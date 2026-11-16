@@ -16,13 +16,13 @@ constexpr auto issueTypes =
     "  type ByteSpan = At(Integer) | Between(Integer, Integer)\n"
     "  type Issue = Fatal(ByteSpan?, String) | Warn(ByteSpan?, String)\n"
     "  let fatal(message) -> Issue = Fatal(None, message)\n"
-    "  let fatalAt(offset, message) -> Issue = Fatal(At(offset), message)\n"
+    "  let fatalAt(offset, message) -> Issue = Fatal(Just(At(offset)), message)\n"
     "  let fatalBetween(start, finish, message) -> Issue = "
-    "Fatal(Between(start, finish), message)\n"
+    "Fatal(Just(Between(start, finish)), message)\n"
     "  let warn(message) -> Issue = Warn(None, message)\n"
-    "  let warnAt(offset, message) -> Issue = Warn(At(offset), message)\n"
+    "  let warnAt(offset, message) -> Issue = Warn(Just(At(offset)), message)\n"
     "  let warnBetween(start, finish, message) -> Issue = "
-    "Warn(Between(start, finish), message)\n"
+    "Warn(Just(Between(start, finish)), message)\n"
     "end\n";
 
 auto validate(

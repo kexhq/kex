@@ -160,20 +160,20 @@ int main() {
     describe("REPL — Streams", []() {
         it("creates and takes from streams", []() {
             ReplSession repl;
-            repl.eval("let naturals = Sequence(from: 0) { |n| n + 1 }");
+            repl.eval("let naturals = Stream.from(0) { |n| n + 1 }");
             assertEqual(repl.eval("naturals.take(5)"), std::string("[0, 1, 2, 3, 4]"));
         });
 
         it("maps streams lazily", []() {
             ReplSession repl;
-            repl.eval("let squares = Sequence(from: 1) { |n| n + 1 }\n  .map { |n| n * n }");
+            repl.eval("let squares = Stream.from(1) { |n| n + 1 }\n  .map { |n| n * n }");
             assertEqual(repl.eval("squares.take(4)"), std::string("[1, 4, 9, 16]"));
         });
 
         it("filters streams lazily", []() {
             ReplSession repl;
             repl.eval("let even?(n: Int) = n.modulo(2) == 0");
-            repl.eval("let evens = Sequence(from: 1) { |n| n + 1 }\n  .filter(~even?)");
+            repl.eval("let evens = Stream.from(1) { |n| n + 1 }\n  .filter(~even?)");
             assertEqual(repl.eval("evens.take(5)"), std::string("[2, 4, 6, 8, 10]"));
         });
     });

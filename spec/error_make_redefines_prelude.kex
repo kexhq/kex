@@ -1,0 +1,29 @@
+# kex: check-only
+# A `make` that gives a type a function the prelude already gives it, taking
+# arguments the two cannot tell apart, defines it twice. The backends
+# disagreed on which one runs: the walker kept the prelude's `abs`, BEAM the
+# program's own (kexhq/kex#637). An overload on another argument type is a
+# different function, and a name the prelude does not give the type is new.
+
+record Celsius do
+  degrees : Float
+end
+
+make Result do
+  let or(@Ok(x), _) = x
+  let or(@Error(_), fallback) = "custom ${fallback}"
+end
+
+make Integer do
+  let abs = 42
+  let multipleOf?(other: Integer) -> Bool = this.modulo(other) == 0
+  let +(other: Celsius) -> Celsius = Celsius { degrees: other.degrees + 1.0 }
+end
+
+main do
+  let failed: Result<String, String> = Error("e")
+  IO.printLine(failed.or("world"))
+  IO.printLine((-3).abs)
+  IO.printLine(10.multipleOf?(5))
+  IO.printLine((1 + Celsius { degrees: 2.5 }).degrees)
+end

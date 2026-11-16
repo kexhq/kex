@@ -1,0 +1,20 @@
+# A constructor declared in a module: qualified it needs no `using` (the
+# build pulls the module in), and `using` brings the bare name into scope.
+module Shades do
+  type Shade = Light | Dark
+end
+
+let describe(shade: Shades.Shade) -> String = shade == Shades.Light then "light" else "dark"
+
+main do
+  let path = "/tmp/kex-module-constructor-spelled-out.txt"
+  let handle = FS.File.open(path, FS.Write).try
+  handle.printLine("qualified")
+  handle.close
+  IO.printLine(FS.File.read(path).or("").trim)
+  IO.printLine(describe(Shades.Dark))
+  using Shades do
+    IO.printLine(describe(Light))
+  end
+  FS.File.delete(path)
+end

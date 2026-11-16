@@ -1,0 +1,10 @@
+# `using M, only: [name]` naming nothing M declares is refused.
+module Vault do
+  let open() = "open"
+end
+
+using Vault, only: [missing]
+
+main do
+  IO.printLine("unreached")
+end

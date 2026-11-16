@@ -3,7 +3,7 @@
 # method name, so `Maths.sqrt(4.0)` quietly answered 2.0 via the global `sqrt`
 # while BEAM rejected it. Both backends now refuse it, identically.
 # kex: no-check
-# kex: run-beam
+# kex: skip-wasm
 
 main do
   IO.printLine("before")

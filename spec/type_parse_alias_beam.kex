@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A field declared with an alias is read as what the alias stands for: its
 # `valueType` names that type, and `Type.Field.parse` and `Type.construct`
 # take what it takes (kexhq/kex#530).

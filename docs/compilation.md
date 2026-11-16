@@ -24,7 +24,7 @@ Directions considered but not built:
 > Capability inference and pragmas below describe intended design and are **not
 > yet implemented** — `foul` tracking is enforced at the semantic pass, but
 > capability declarations are not read. Compiled metaprogramming IS built; see
-> `docs/compiled-status.md`.
+> `docs/compiled-eval.md`.
 
 ## Capability Requirements
 

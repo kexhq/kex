@@ -170,7 +170,7 @@ end
 def kex_duration(seconds)
   return "Duration.zero()" if seconds.zero?
 
-  "Duration.seconds(#{seconds})"
+  "#{kex_integer(seconds)}.second"
 end
 
 # ── The spec ──────────────────────────────────────────────────────────────
@@ -358,8 +358,10 @@ describe "date arithmetic (vs Ruby)" do
     CASES.times do
       date = random_clock_date
       time = random_time
-      instant = CalendarRef.format_date_time(date, time, 0)
-      assert_eq("(with Time.Clock = Mock.Clock { onNow: Just({ DateTime.parse(#{instant.inspect}).try }) } " \
+      # Built from its epoch seconds, which cannot fail: a `.try` here would
+      # make the rule a `DateTime or! TimeError`, not the `DateTime` it gives.
+      seconds = Time.utc(*date, *time).to_i
+      assert_eq("(with Time.Clock = Mock.Clock { onNow: Just({ DateTime.fromEpochSeconds(#{seconds}) }) } " \
                 "do Date.utcToday().iso end)",
                 CalendarRef.format_date(*date))
     end
@@ -391,10 +393,10 @@ describe "date operators (vs Ruby)" do
       date = random_date
       count = RNG.rand(-2000..2000)
       shifted = CalendarRef.format_date(*CalendarRef.add_days(*date, count))
-      # Parenthesised: `-5.days` parses as unary minus applied to a Duration,
-      # which has no operator. `(-5).days` builds the negative span directly.
-      assert_eq("(#{kex_date(*date)} + (#{count}).days).iso", shifted)
-      assert_eq("(#{kex_date(*date)} - (#{-count}).days).iso", shifted)
+      # Parenthesised: `-5.day` parses as unary minus applied to a Duration,
+      # which has no operator. `(-5).day` builds the negative span directly.
+      assert_eq("(#{kex_date(*date)} + (#{count}).day).iso", shifted)
+      assert_eq("(#{kex_date(*date)} - (#{-count}).day).iso", shifted)
     end
   end
 end
@@ -573,8 +575,8 @@ describe "calendar spans (vs Ruby)" do
   it "builds periods from Integer" do
     CASES.times do
       count = RNG.rand(-24..24)
-      assert_eq("#{kex_integer(count)}.months.iso", CalendarRef.period_iso(0, count, 0))
-      assert_eq("#{kex_integer(count)}.years.iso", CalendarRef.period_iso(count, 0, 0))
+      assert_eq("#{kex_integer(count)}.month.iso", CalendarRef.period_iso(0, count, 0))
+      assert_eq("#{kex_integer(count)}.year.iso", CalendarRef.period_iso(count, 0, 0))
     end
   end
 
@@ -738,11 +740,11 @@ describe "durations (vs Ruby)" do
   it "builds the same span from every spelling" do
     CASES.times do
       count = RNG.rand(1..1000)
-      { "milliseconds" => 0.001, "seconds" => 1.0, "minutes" => 60.0,
-        "hours" => 3600.0, "days" => 86_400.0, "weeks" => 604_800.0 }.each do |unit, factor|
+      { "millisecond" => 0.001, "second" => 1.0, "minute" => 60.0,
+        "hour" => 3600.0, "day" => 86_400.0, "week" => 604_800.0 }.each do |unit, factor|
         expected = (count * factor).truncate
         assert_eq("#{count}.#{unit}.wholeSeconds", expected)
-        assert_eq("Duration.#{unit}(#{count}).wholeSeconds", expected)
+        assert_eq("#{count}.#{unit}.wholeSeconds", expected)
         assert_eq("#{count}.0.#{unit}.wholeSeconds", expected)
       end
     end

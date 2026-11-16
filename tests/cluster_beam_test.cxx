@@ -86,7 +86,7 @@ record Greeting do
   times : Integer
 end
 
-type Request = Ping(Pid, Greeting) | GetCounter(Pid) | Stop
+type Request = Ping(Process<(Atom, Atom, String)>, Greeting) | GetCounter(Process<Server<Counter>>) | Stop
 )KEX";
 
 constexpr const char* kNodeA = R"KEX(
@@ -125,7 +125,7 @@ foul awaitNode(a: Atom, tries: Integer) -> Bool do
   if tries == 0
     return false
   end
-  if Node.connect(a) && Node.whereIs(a, :requests).present?
+  if Node.connect(a).ok? && Node.whereIs(a, :requests).present?
     return true
   end
   pause(100)
@@ -247,6 +247,10 @@ int main() {
                 if (store.find("stopping") != std::string::npos) break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
+            // A client that failed never stopped the store, which would then
+            // hold the test open until ctest's timeout.
+            if (store.find("stopping") == std::string::npos)
+                std::system("pkill -f 'sname store --cookie kexexample' 2>/dev/null");
             std::error_code ec;
             fs::remove_all(root, ec);
             if (client.find("Start this node with a name") != std::string::npos ||

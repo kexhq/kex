@@ -1,0 +1,2 @@
+spec/error_try_needs_holder.kex:19:28: error: `.try` can fail, and `registered` returns User, which cannot hold the failure: return a Result or an Optional, or handle it with `trying` or a `rescue`
+spec/error_try_needs_holder.kex:23:53: error: `.try` can fail, and `shouted` returns String, which cannot hold the failure: return a Result or an Optional, or handle it with `trying` or a `rescue`

@@ -73,11 +73,11 @@ module Tey.Docgen.Fragments do
     title : String
     anchor : String
     kind : String
-    nested : Bool
+    nested? : Bool
   end
 
   foul tocValue(t: TocEntry) -> Any do
-    let value: Any = { title: t.title, anchor: t.anchor, kind: t.kind, nested: t.nested }
+    let value: Any = { title: t.title, anchor: t.anchor, kind: t.kind, nested: t.nested? }
     return value
   end
 
@@ -92,7 +92,7 @@ module Tey.Docgen.Fragments do
 
   foul tocClass(t: TocEntry) -> String do
     return " class=\"toc-member\"" if t.kind == MemberKind
-    return t.nested then " class=\"toc-nested\"" else ""
+    return t.nested? then " class=\"toc-nested\"" else ""
   end
 
   # "/prelude/0.4.0/": where the unit is mounted.
@@ -131,7 +131,7 @@ module Tey.Docgen.Fragments do
   # declares stands at the top level of the rail.
   foul tocAt(entities: [Entity], nested: Bool, page: SourcePage, model: PackageModel) -> [TocEntry] do
     return Tey.Docgen.Html.sectionEntities(entities).flatMap { |e|
-      let own = TocEntry { title: tocTitle(e), anchor: anchorOf(e), kind: kindOf(e), nested: nested }
+      let own = TocEntry { title: tocTitle(e), anchor: anchorOf(e), kind: kindOf(e), nested?: nested }
       match e do
         ModuleDecl(entry) => do
           let declared = entry.children.reject { |c| Tey.Docgen.Html.memberEntity?(c) }
@@ -169,7 +169,7 @@ module Tey.Docgen.Fragments do
   end
 
   foul memberEntry(name: String, anchor: String) -> TocEntry do
-    return TocEntry { title: name, anchor: anchor, kind: MemberKind, nested: true }
+    return TocEntry { title: name, anchor: anchor, kind: MemberKind, nested?: true }
   end
 
   foul tocTitle(e: Entity) -> String do

@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # Text-oriented Unix helpers: string paths.
 
@@ -6,7 +6,7 @@ using Net.Socket
 
 main do
   match Unix.Address.path("relative.sock") do
-    Error(error) => assert(error.kind == Parse)
+    Error(error) => assert(error.kind == Net.Parse)
     Ok(_) => assert(false, "relative path must fail")
   end
 

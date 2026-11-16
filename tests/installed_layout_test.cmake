@@ -17,7 +17,7 @@ file(WRITE "${program}"
     "using Units.Data\n"
     "\n"
     "main do\n"
-    "  IO.printLine(Stream.Sequence(from: 1) { |n| n + 1 }.take(2))\n"
+    "  IO.printLine(Stream.from(1) { |n| n + 1 }.take(2))\n"
     "  IO.printLine(Units.Data.megabyte(2).canonical)\n"
     "end\n")
 

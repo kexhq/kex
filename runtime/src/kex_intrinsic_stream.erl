@@ -19,8 +19,16 @@
          toFeed/1, of_list/1]).
 
 %% make/2 — infinite stream from a seed and a successor function.
+%%
+%% Every block here is applied through kex_intrinsic_fun:applyItem, which
+%% spreads a tuple element across a block of as many parameters, as the list
+%% functions and the walker do: `Stream.iterate((0, 1)) { |a, b| (b, a + b) }`
+%% died `badarity` when the block was applied to the tuple whole
+%% (kexhq/kex#610).
 make(Seed, Succ) ->
-    {'Stream', fun() -> {Seed, make(Succ(Seed), Succ)} end}.
+    {'Stream', fun() -> {Seed, make(apply_block(Succ, Seed), Succ)} end}.
+
+apply_block(F, V) -> kex_intrinsic_fun:applyItem(F, V).
 
 generate(Seed, Succ) -> make(Seed, Succ).
 
@@ -52,7 +60,7 @@ map({'Stream', T}, F) ->
     {'Stream', fun() ->
         case T() of
             done      -> done;
-            {V, Next} -> {F(V), map(Next, F)}
+            {V, Next} -> {apply_block(F, V), map(Next, F)}
         end
     end}.
 
@@ -66,7 +74,7 @@ next_match(T, Pred) ->
     case T() of
         done -> done;
         {V, Next} ->
-            case Pred(V) of
+            case apply_block(Pred, V) of
                 true  -> {V, filter(Next, Pred)};
                 false -> {'Stream', NextT} = Next, next_match(NextT, Pred)
             end
@@ -77,7 +85,7 @@ next_match(T, Pred) ->
 each({'Stream', T}, F) ->
     case T() of
         done      -> 'unit';
-        {V, Next} -> F(V), each(Next, F)
+        {V, Next} -> apply_block(F, V), each(Next, F)
     end.
 
 %% toFeed/1 — hand the stream to a one-shot cursor.

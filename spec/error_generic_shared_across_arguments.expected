@@ -1,0 +1,6 @@
+spec/error_generic_shared_across_arguments.kex:17:19: error: `same` expects argument 2 to be Integer, but got String
+
+same : A -> A -> Bool
+spec/error_generic_shared_across_arguments.kex:18:19: error: `put` expects argument 2 to be Integer, but got String
+
+put : Box<A> -> A -> Bool

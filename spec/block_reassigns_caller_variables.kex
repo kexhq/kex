@@ -1,0 +1,78 @@
+# A block that reassigns variables of the code it is written in, passed to
+# any function: the BEAM threads those variables through as state (a copy of
+# the callee carrying it, or the runtime's fallback), so both backends see
+# every reassignment the block made once the call returns.
+
+let twice(f: Integer -> Integer) -> Integer = f(f(1))
+
+let applyAll(items: [Integer], f: Integer -> Integer) -> [Integer] do
+  match items do
+    [] => []
+    [x | rest] => [f(x)] + applyAll(rest, f)
+  end
+end
+
+main do
+  var seen = 0
+  let doubled = [1, 2, 3].map { |x| seen += 1; x * 2 }
+  IO.printLine("${doubled} ${seen}")
+  var n = 0
+  let r = [1, 2, 3].reduce(0) { |acc, x| n += 1; acc + x }
+  IO.printLine("${r} ${n}")
+  var calls = 0
+  IO.printLine(twice { |x| calls += 1; x + 1 })
+  IO.printLine(calls)
+  # Two variables, a function of this program, the block's last value.
+  var count = 0
+  var last = 0
+  IO.printLine(applyAll([4, 5]) { |x| count += 1; last = x; x * 10 })
+  IO.printLine("${count} ${last}")
+  # The iterations: lists, ranges, counts, maps, characters, empty ones.
+  var total = 0
+  [1, 2, 3].each { |x| total += x }
+  (1..4).each { |x| total += x }
+  3.times { |i| total += i }
+  3.times { total += 100 }
+  { a: 1, b: 2 }.each { |k, v| total += v }
+  ('a'..'c').each { |c| total += 1 }
+  "xyz".each { |c| total += 1 }
+  IO.printLine(total)
+  var empty = 0
+  let none: [Integer] = []
+  none.each { |x| empty += x }
+  (5..1).each { |x| empty += 1 }
+  0.times { empty += 1 }
+  IO.printLine(empty)
+  # Nested, and inside a loop that threads state of its own.
+  var product = 0
+  var log = ""
+  (1..3).each do |i|
+    [10, 20].each { |j| product += i * j }
+    log = log + "${i}"
+  end
+  IO.printLine("${product} ${log}")
+  var k = 0
+  while k < 3 do
+    2.times { k += 1 }
+  end
+  IO.printLine(k)
+  # Reassigned in a `let` and in an assignment of its own.
+  var steps = 0
+  steps = [1, 2].reduce(steps) { |acc, x| steps += 10; acc + x }
+  IO.printLine(steps)
+  # Several such blocks in one statement share the variables: each sees what
+  # the one before it left, in the order the calls run them.
+  var trail = 0
+  let kept = [1, 2, 3].map do |x|
+    trail = trail * 10 + x
+    x
+  end.filter do |x|
+    trail = trail * 10 + 9
+    x > 1
+  end
+  IO.printLine("${kept} ${trail}")
+  var sum = 0
+  var latest = 0
+  [1, 2].map { |x| latest = x; x * 2 }.each { |x| sum += x + latest }
+  IO.printLine("${sum} ${latest}")
+end

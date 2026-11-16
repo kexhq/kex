@@ -9,7 +9,14 @@
 
 namespace kex {
 
+// Every REPL command, for dispatch. `None` is ordinary input to evaluate.
+enum class ReplCommandKind {
+  None, Exit, Clear, Help, Set, Unset, Complete, Load, Unload, Reload, Reset,
+  With, Without,
+};
+
 struct ReplCommand {
+  ReplCommandKind kind;
   std::string name;
   std::string alias;
   std::string arg;
@@ -17,19 +24,21 @@ struct ReplCommand {
 };
 
 inline auto replCommands() -> const std::vector<ReplCommand> & {
+  using K = ReplCommandKind;
   static const std::vector<ReplCommand> cmds = {
-      {"exit", "", "", "Exit the REPL"},
-      {"/clear", "", "", "Clear the terminal screen"},
-      {"/help", "/h", "", "Show this help"},
-      {"/set", "", "<opt>", "Enable a feature"},
-      {"/unset", "", "<opt>", "Disable a feature"},
-      {"/complete", "", "<p>", "Show completions for prefix p"},
-      {"/load", "", "<file>", "Load a module from file"},
-      {"/unload", "", "<mod>", "Unload a previously loaded module"},
-      {"/reload", "", "", "Reload all loaded modules"},
-      {"/reset", "", "", "Clear all bindings"},
-      {"/with", "", "<C> = <v>", "Replace capability C with v for the session"},
-      {"/without", "", "<C>", "Stop replacing capability C"},
+      {K::Exit, "exit", "", "", "Exit the REPL"},
+      {K::Clear, "/clear", "", "", "Clear the terminal screen"},
+      {K::Help, "/help", "/h", "", "Show this help"},
+      {K::Set, "/set", "", "<opt>", "Enable a feature"},
+      {K::Unset, "/unset", "", "<opt>", "Disable a feature"},
+      {K::Complete, "/complete", "", "<p>", "Show completions for prefix p"},
+      {K::Load, "/load", "", "<file>", "Load a module from file"},
+      {K::Unload, "/unload", "", "<mod>", "Unload a previously loaded module"},
+      {K::Reload, "/reload", "", "", "Reload all loaded modules"},
+      {K::Reset, "/reset", "", "", "Clear all bindings"},
+      {K::With, "/with", "", "<C> = <v>",
+       "Replace capability C with v for the session"},
+      {K::Without, "/without", "", "<C>", "Stop replacing capability C"},
   };
   return cmds;
 }
@@ -67,6 +76,34 @@ inline auto replCommandCompletions(const std::string &prefix)
 inline auto isReplExit(const std::string &input) -> bool {
   return input == "exit" || input == "/exit" || input == "/quit" ||
          input == "/q";
+}
+
+// A line typed at a REPL prompt, read as a command: which one, and the text
+// after the command word with its outer whitespace trimmed. Every REPL (the
+// BEAM one, the walker's, the browser's) dispatches on this instead of
+// matching the spellings itself.
+struct ParsedReplCommand {
+  ReplCommandKind kind = ReplCommandKind::None;
+  std::string argument;
+};
+
+inline auto parseReplCommand(const std::string &input) -> ParsedReplCommand {
+  if (isReplExit(input)) return {ReplCommandKind::Exit, ""};
+  if (input.empty() || input[0] != '/') return {};
+  const auto wordEnd = input.find_first_of(" \t");
+  const auto word = input.substr(0, wordEnd);
+  for (const auto &cmd : replCommands()) {
+    if (word != cmd.name && (cmd.alias.empty() || word != cmd.alias)) continue;
+    std::string argument;
+    if (wordEnd != std::string::npos) {
+      const auto first = input.find_first_not_of(" \t", wordEnd);
+      const auto last = input.find_last_not_of(" \t\r\n");
+      if (first != std::string::npos && last >= first)
+        argument = input.substr(first, last - first + 1);
+    }
+    return {cmd.kind, std::move(argument)};
+  }
+  return {};
 }
 
 // ANSI sequence: clear the visible screen and its scrollback, then move the

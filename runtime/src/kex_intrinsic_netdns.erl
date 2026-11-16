@@ -22,20 +22,20 @@ addresses(Name = {'Net.DNS.Name', _, _}) ->
     end.
 
 resolverDefault() ->
-    resolver({'Net.DNS.CacheOptions', 1024, {'Duration', 3600.0},
-              {'Duration', 30.0}}).
+    resolver({'Net.DNS.CacheOptions', 1024, kex_intrinsic_time:seconds(3600.0),
+              kex_intrinsic_time:seconds(30.0)}).
 
-resolver({'Net.DNS.CacheOptions', Entries, {'Duration', MaximumTtl},
-          {'Duration', NegativeTtl}})
+resolver({'Net.DNS.CacheOptions', Entries, {'Measure', MaximumTtl, _, _},
+          {'Measure', NegativeTtl, _, _}})
   when is_integer(Entries), Entries > 0, is_number(MaximumTtl), MaximumTtl >= 0,
        is_number(NegativeTtl), NegativeTtl >= 0 ->
     start_resolver(Entries, MaximumTtl, NegativeTtl, [], [], 2, 5000);
 resolver(_) -> error_value('Parse', <<"invalid DNS cache options">>).
 
 resolverWith({'Net.DNS.ResolverOptions',
-              {'Net.DNS.CacheOptions', Entries, {'Duration', MaximumTtl},
-               {'Duration', NegativeTtl}}, Nameservers, Search, Retries,
-              {'Duration', Timeout}})
+              {'Net.DNS.CacheOptions', Entries, {'Measure', MaximumTtl, _, _},
+               {'Measure', NegativeTtl, _, _}}, Nameservers, Search, Retries,
+              {'Measure', Timeout, _, _}})
   when is_integer(Entries), Entries > 0, is_number(MaximumTtl), MaximumTtl >= 0,
        is_number(NegativeTtl), NegativeTtl >= 0, is_list(Nameservers),
        Nameservers =/= [], is_list(Search), is_integer(Retries), Retries > 0,

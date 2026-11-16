@@ -1,0 +1,12 @@
+# `Process.spawn` takes a server's initial state. Its argument written as the
+# state's type NAME checked as a clean `Server<Counter>` and the server died
+# on its first `@field`, its state the atom `Counter`; the check says how to
+# write the state instead (the `Process::spawn` intrinsic's check).
+record Counter do
+  n: Integer = 0
+end
+
+main do
+  let server = Process.spawn(Counter)
+  IO.printLine(server.to(String))
+end

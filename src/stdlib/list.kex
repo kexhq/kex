@@ -238,11 +238,55 @@ make [X], implement: Enumerable, Foldable do
   #   [1, 2, 3].reduce(0) { |acc, x| acc + x }   # => 6
   #   [1, 2, 3].reduce(1) { |acc, x| acc * x }   # => 6
   reduce :> A -> (A -> X -> A) -> A
-  let reduce(acc, f) = Kex.Intrinsic.List.foldLeft(this, acc, f)
 
-  let map(f) = Kex.Intrinsic.List.map(this, f)
-  let filter(pred) = Kex.Intrinsic.List.filter(this, pred)
-  let each(f) = Kex.Intrinsic.List.each(this, f)
+  # +reduce+, +map+, +filter+ and +each+ recurse in Kex when compiled: the
+  # specialize-blocks pass copies them into a caller with its block in place,
+  # a loop with no closure call per element. The interpreter keeps its native
+  # loops, which it runs much faster than this recursion, and without the
+  # call depth +map+ needs.
+  let reduce(acc, f) do
+    match Kex.Intrinsic.Kex.backend() do
+      Kex.Interpreter => Kex.Intrinsic.List.foldLeft(this, acc, f)
+      _ => match this do
+        [] => acc
+        [x | rest] => rest.reduce(f(acc, x), f)
+      end
+    end
+  end
+
+  let map(f) do
+    match Kex.Intrinsic.Kex.backend() do
+      Kex.Interpreter => Kex.Intrinsic.List.map(this, f)
+      _ => match this do
+        [] => []
+        [x | rest] => [f(x) | rest.map(f)]
+      end
+    end
+  end
+
+  let filter(pred) do
+    match Kex.Intrinsic.Kex.backend() do
+      Kex.Interpreter => Kex.Intrinsic.List.filter(this, pred)
+      _ => match this do
+        [] => []
+        [x | rest] => pred(x) then [x | rest.filter(pred)] else rest.filter(pred)
+      end
+    end
+  end
+
+  let each(f) do
+    match Kex.Intrinsic.Kex.backend() do
+      Kex.Interpreter => Kex.Intrinsic.List.each(this, f)
+      _ => match this do
+        [] => ()
+        [x | rest] => do
+          f(x)
+          rest.each(f)
+        end
+      end
+    end
+  end
+
   let find(pred) = Kex.Intrinsic.List.find(this, pred)
   let flatMap(f) = Kex.Intrinsic.List.flatMap(this, f)
   let reject(pred) = Kex.Intrinsic.List.reject(this, pred)

@@ -10,14 +10,14 @@
 start({'Net.Socket.TCP.Endpoint', Host, {'Net.Port', Port}},
       Router = {'Net.HTTP.Router', _}) ->
     start({'Net.Socket.TCP.Endpoint', Host, {'Net.Port', Port}}, Router,
-          {'Net.HTTP.ServerOptions', 1024, 128, {'Duration', 10.0}, 10485760});
+          {'Net.HTTP.ServerOptions', 1024, 128, kex_intrinsic_time:seconds(10.0), 10485760});
 start(_, _) -> net_error('Parse', <<"invalid HTTP server configuration">>).
 
 %% `MaximumBody` is the request body limit of every route that does not set
 %% its own (kexhq/kex#488).
 start({'Net.Socket.TCP.Endpoint', Host, {'Net.Port', Port}},
       Router = {'Net.HTTP.Router', _},
-      {'Net.HTTP.ServerOptions', MaximumHandlers, Backlog, {'Duration', GraceSeconds},
+      {'Net.HTTP.ServerOptions', MaximumHandlers, Backlog, {'Measure', GraceSeconds, _, _},
        MaximumBody})
   when is_integer(MaximumHandlers), MaximumHandlers > 0,
        is_integer(Backlog), Backlog > 0, is_number(GraceSeconds), GraceSeconds >= 0,
@@ -52,7 +52,7 @@ serve(Endpoint, Router, Options) ->
 
 stop({'Net.HTTP.Server.Running', Pid, _, Grace}) -> stop_owner(Pid, Grace);
 stop({'Net.HTTP.Server.Running', Pid, _}) -> stop_owner(Pid, 10000).
-stop({'Net.HTTP.Server.Running', Pid, _, _}, {'Duration', Seconds})
+stop({'Net.HTTP.Server.Running', Pid, _, _}, {'Measure', Seconds, _, _})
   when is_number(Seconds), Seconds >= 0 -> stop_owner(Pid, trunc(Seconds * 1000));
 stop(_, _) -> net_error('Parse', <<"invalid graceful shutdown duration">>).
 

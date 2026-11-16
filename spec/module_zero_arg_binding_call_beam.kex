@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A module-scoped `let name = <closure>` — a plain value binding, not a
 # `let name(params) = ...` function definition — called with arguments both
 # from WITHIN its own module and QUALIFIED from outside it. Found via

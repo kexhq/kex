@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # Trait methods bypass `with` substitution: `close` is a `Closeable`
 # method, not a capability member, so it keeps working on real handles

@@ -8,7 +8,7 @@ main do
       let Just(now) = Time.now().iso.split(".").first
       IO.print(Console.CLEAR)
       IO.printLine(now.enclose(Console.BLUE + Console.BOLD, Console.RESET))
-      Task.sleep(1.seconds)
+      Task.sleep(1.second)
     end
   end
 

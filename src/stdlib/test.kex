@@ -42,12 +42,14 @@
 #       end
 #     end
 #   end
-describe : String -> Block<Void> -> Void
+describe : String -> Block<Result<Void, Any>> -> Void
 
 # Defines a single test case, and runs it.
 #
 # The block runs, and anything thrown inside it: typically a failed +assert+:
-# marks the test failed without aborting the rest of the suite. This is a foul
+# marks the test failed without aborting the rest of the suite. A
+# failing +.try+ in the block is its result, and fails the test the same way:
+# the body needs no +Ok+ or +rescue+ of its own. This is a foul
 # function: it prints.
 #
 # @param label [String] what this case establishes, phrased as a claim
@@ -68,7 +70,7 @@ describe : String -> Block<Void> -> Void
 #   it "trims trailing whitespace" do
 #     Assert.equal("hi  ".trim, "hi")
 #   end
-it : String -> Block<Void> -> Void
+it : String -> Block<Result<Void, Any>> -> Void
 
 # Registers setup to run before the current group's tests.
 #
@@ -89,7 +91,7 @@ it : String -> Block<Void> -> Void
 #       Assert.equal(FS.File.readLines("input.txt").or([]).count, 2)
 #     end
 #   end
-before : Block<Void> -> Void
+before : Block<Result<Void, Any>> -> Void
 
 # Registers setup with an explicit scope: +:each+ before every test in the
 # group, +:all+ once before the first.
@@ -109,7 +111,7 @@ before : Block<Void> -> Void
 #   before(:each) do
 #     counter = 0
 #   end
-before : Atom -> Block<Void> -> Void
+before : Atom -> Block<Result<Void, Any>> -> Void
 
 # Registers cleanup to run after the current group's tests.
 #
@@ -123,7 +125,7 @@ before : Atom -> Block<Void> -> Void
 #   after do
 #     FS.File.delete("tmp/out.txt")
 #   end
-after : Block<Void> -> Void
+after : Block<Result<Void, Any>> -> Void
 
 # Registers cleanup with an explicit scope: +:each+ after every test in the
 # group, +:all+ once when the group finishes.
@@ -136,7 +138,7 @@ after : Block<Void> -> Void
 #   after(:all) do
 #     FS.Directory.deleteAll("tmp")
 #   end
-after : Atom -> Block<Void> -> Void
+after : Atom -> Block<Result<Void, Any>> -> Void
 
 # Fails the enclosing +it+ when +value+ is falsy.
 #

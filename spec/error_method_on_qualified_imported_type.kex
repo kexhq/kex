@@ -1,0 +1,14 @@
+# Net.HTTP's `Server.localAddress` returns a `Net.Socket.TCP.Endpoint`. Its
+# interface, read from the source, cut that to a bare `Endpoint` no program
+# could resolve, so `.port` on it was Unknown and a misspelled method after it
+# passed the check. `Server.Running` resolves through the `using`.
+using Net.HTTP
+
+foul show(server: Server.Running) do
+  let port = server.localAddress.port
+  IO.printLine(port.nmuber)
+end
+
+main do
+  IO.printLine("x")
+end

@@ -1,0 +1,2 @@
+spec/error_module_constructor_unqualified.kex:6:64: error: `Write` is a constructor of FS.FileMode, declared in module FS: write `FS.Write`, or bring it in with `using FS`
+Aborted: 1 type error — fix before running (use --no-check to skip).

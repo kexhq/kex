@@ -1,0 +1,3 @@
+spec/error_dependency_top_level.kex:12:16: error: Undefined function: `shelves` — pantry.kex declares it outside its module, for itself
+spec/error_dependency_top_level.kex:13:16: error: Undefined function: `Full` — pantry.kex declares it outside its module, for itself
+spec/error_dependency_top_level.kex:14:16: error: Undefined constructor or type: `Empty` — pantry.kex declares it outside its module, for itself

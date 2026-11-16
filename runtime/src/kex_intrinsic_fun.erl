@@ -10,7 +10,48 @@
 %% the index.
 -module(kex_intrinsic_fun).
 -export([applyFlexible/2, applyItem/2, applyIndexed/3, applyPredicate/2, truthy/1,
-         convertTo/2, convertTo/3, items/1]).
+         patternMismatch/2,
+         convertTo/2, convertTo/3, items/1, threadState/3, threadStates/3]).
+
+%% A statement passing a block that reassigns variables of the code it is
+%% written in, for a callee the compiler did not copy (ir/passes/specialize):
+%% `Block` takes those variables' values after its own arguments and answers
+%% {Value, State}; `Statement` runs the call, given the block as the callee
+%% calls it. The state lives in this process's dictionary for the call.
+%% Answers {StatementValue, FinalState}.
+threadState(Block, Initial, Statement) ->
+    threadStates([Block], Initial, Statement).
+
+%% The same for a statement passing several such blocks (`xs.map { … }.each
+%% { … }`, each reassigning): every block takes the union of their variables
+%% and they share one state, so each sees what the one before it left, in the
+%% order the callees run them. `Statement` takes the blocks in `Blocks`' order.
+threadStates(Blocks, Initial, Statement) ->
+    Key = make_ref(),
+    put(Key, Initial),
+    Called = [stateStep(Block, Key) || Block <- Blocks],
+    try apply(Statement, Called) of
+        Value -> {Value, get(Key)}
+    after
+        erase(Key)
+    end.
+
+stateStep(Block, Key) ->
+    {arity, Arity} = erlang:fun_info(Block, arity),
+    Step = fun(Args) ->
+        {Value, State} = apply(Block, Args ++ [get(Key)]),
+        put(Key, State),
+        Value
+    end,
+    case Arity - 1 of
+        0 -> fun() -> Step([]) end;
+        1 -> fun(A) -> Step([A]) end;
+        2 -> fun(A, B) -> Step([A, B]) end;
+        3 -> fun(A, B, C) -> Step([A, B, C]) end;
+        4 -> fun(A, B, C, D) -> Step([A, B, C, D]) end;
+        5 -> fun(A, B, C, D, E) -> Step([A, B, C, D, E]) end;
+        6 -> fun(A, B, C, D, E, F) -> Step([A, B, C, D, E, F]) end
+    end.
 
 %% A `Type` VALUE names its target too: `x.to(Type.of(y))`. Its name is a
 %% binary, so it routes back through the atom-keyed clauses below.
@@ -70,6 +111,8 @@ convertTo(_, _) -> 'None'.
 %% Base-aware Integer <-> String, `.to(String, radix: 16)`. Only that pair is
 %% base dependent; anything else with a radix is a conversion that was not
 %% meant, so it fails rather than silently ignoring the base.
+convertTo(V, {'Type', Name, _Args, _Pure}, Radix) ->
+    convertTo(V, binary_to_atom(Name, utf8), Radix);
 convertTo(V, 'String', Radix)
   when is_integer(V), is_integer(Radix), Radix >= 2, Radix =< 36 ->
     %% integer_to_list/2 uppercases digits above 9; the walker's GMP get_str
@@ -111,6 +154,13 @@ applyFlexible(F, Args) when is_function(F) ->
                 true -> erlang:apply(F, tuple_to_list(Only));
                 false -> partial(F, Args, N - Count)
             end;
+        %% A block of no parameters ignores what it is handed (`3.times { … }`),
+        %% unless what it answers is a function to feed the arguments to.
+        N =:= 0 ->
+            case F() of
+                G when is_function(G) -> applyFlexible(G, Args);
+                Value -> Value
+            end;
         Count > N ->
             {Now, Rest} = lists:split(N, Args),
             applyFlexible(erlang:apply(F, Now), Rest);
@@ -130,6 +180,11 @@ partial(F, Got, 6) ->
 partial(F, Got, _) ->
     erlang:error({badarity, {F, Got}}).
 
+%% A block of one parameter takes the whole item, whatever it is: nothing to
+%% look up. This is the case nearly every `map`, `filter` and `each` is, once
+%% per element.
+applyItem(F, Item) when is_function(F, 1) ->
+    F(Item);
 applyItem(F, Item) ->
     {arity, N} = erlang:fun_info(F, arity),
     case spreadable(Item, N) of
@@ -137,6 +192,8 @@ applyItem(F, Item) ->
         false -> F(Item)
     end.
 
+applyIndexed(F, Item, _I) when is_function(F, 1) ->
+    F(Item);
 applyIndexed(F, Item, I) ->
     {arity, N} = erlang:fun_info(F, arity),
     case spreadable(Item, N - 1) of
@@ -144,6 +201,12 @@ applyIndexed(F, Item, I) ->
         false when N =:= 1 -> F(Item);
         false -> F(Item, I)
     end.
+
+%% A value a `let` pattern does not match (`let Ok(x) = ...` handed an
+%% `Error`): a fault that says what the value was, as the walker's does.
+patternMismatch(Where, Value) ->
+    Shown = unicode:characters_to_binary(kex_io:inspect_plain(Value)),
+    erlang:error(<<Where/binary, "runtime error: pattern mismatch — got "/utf8, Shown/binary>>).
 
 %% Kex truthiness (Crystal semantics, see src/stdlib/truthyable.kex): only
 %% `false`, `None` and `()` are falsy — every other value is truthy. The tree
@@ -194,7 +257,8 @@ is_variant_term(Item) ->
     end.
 
 %% Normalize an Enumerable receiver to the item representation used by Kex
-%% callbacks. Maps yield {Key, Value} pairs; lists and strings retain the same
-%% coercion used by the HOF helpers above.
+%% callbacks. Maps yield {Key, Value} pairs, a String its Chars, a Range its
+%% items.
 items(M) when is_map(M) -> maps:to_list(M);
+items(S) when is_binary(S) -> kex_intrinsic_string:chars(S);
 items(L) -> kex_intrinsic_list:as_list(L).

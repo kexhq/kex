@@ -1,0 +1,13 @@
+# A program's own `assert` is its own. The testing DSL's builtins are what the
+# checker decides a bare call is (names::TestBuiltin), not what it is spelled:
+# both backends used to run the prelude's `assert` here, and the failed
+# assertion ended the program.
+foul assert(ok: Bool) -> Bool do
+  IO.printLine("own assert: ${ok}")
+  ok
+end
+
+main do
+  assert(false)
+  IO.printLine("after")
+end

@@ -1,0 +1,5 @@
+spec/error_atom_outside_set.kex:5:1: error: Type mismatch: expected :ok | :error, got :banana
+spec/error_atom_outside_set.kex:11:10: error: Type mismatch: expected :yes | :no, got :maybe
+spec/error_atom_outside_set.kex:18:16: error: `check` expects argument 1 to be :ok | :error, but got Atom
+
+check : :ok | :error -> String

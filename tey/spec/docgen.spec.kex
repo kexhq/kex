@@ -2,7 +2,7 @@ using Tey.Docgen.Model
 using Tey.Docgen.Markdown
 using Tey.Docgen.Nav, only: [buildModules, buildLinks, resolve, segmentsOf, hrefFrom, isIdentChar?, parentTitleOf, topLevelPages, childPages, descendantPages]
 using Tey.Docgen.Html, only: [packageNames, latestVersion, packageRedirectHtml, packageVersionsHtml, rootIndexHtml, linkType, linkTypeText, preludePaths]
-using Tey.Docgen.Extract, only: [isConstantBinding, pageTitle, functionEntries]
+using Tey.Docgen.Extract, only: [constantBinding?, pageTitle, functionEntries]
 using Tey.Docgen.Index, only: [upsertVersion]
 using Tey.Docgen.Rdoc, only: [parseDoc]
 
@@ -80,7 +80,7 @@ describe("Tey.Docgen.Nav.buildLinks") do
 
   it("links a make under its base name, parameters stripped") do
     let mapMake = MakeDecl(MakeEntry {
-      target: "Map<K, V>", isFinal: false, implements: [],
+      target: "Map<K, V>", final?: false, implements: [],
       functions: [], doc: emptyDoc(), line: 1
     })
     let links = buildLinks([aPage([mapMake], "map")])
@@ -366,20 +366,20 @@ describe("Tey.Docgen.Html.preludePaths") do
   end
 end
 
-describe("Tey.Docgen.Extract.isConstantBinding") do
+describe("Tey.Docgen.Extract.constantBinding?") do
   it("calls a pure no-argument binding a constant") do
     # `let out = Kex.Intrinsic.IO.stdout` — always the same handle.
-    assert(isConstantBinding(aBinding("out", false)))
+    assert(constantBinding?(aBinding("out", false)))
   end
 
   it("calls a foul one a function") do
     # `foul getLine = ...` reads a new line every time it is named, so it is
     # a zero-argument function Kex auto-calls, not a constant.
-    assert(!isConstantBinding(aBinding("getLine", true)))
+    assert(!constantBinding?(aBinding("getLine", true)))
   end
 
   it("calls anything with a parameter list a function") do
-    assert(!isConstantBinding(aClause("printLine", false, true)))
+    assert(!constantBinding?(aClause("printLine", false, true)))
   end
 end
 
@@ -392,14 +392,14 @@ let aModel(preludeModules: [String], pages: [SourcePage]) -> PackageModel do
   }
 end
 
-let aBinding(name: String, isFoul: Bool) -> Kex.AST.FunctionInfo = aClause(name, isFoul, false)
+let aBinding(name: String, effectful: Bool) -> Kex.AST.FunctionInfo = aClause(name, effectful, false)
 
-let aClause(name: String, isFoul: Bool, hasParamList: Bool) -> Kex.AST.FunctionInfo do
+let aClause(name: String, effectful: Bool, paramList: Bool) -> Kex.AST.FunctionInfo do
   let clause = Kex.AST.ClauseInfo {
-    params: [], body: [], returnType: None, rescueInfo: None, hasParamList: hasParamList
+    params: [], body: [], returnType: None, rescueInfo: None, paramList?: paramList
   }
   return Kex.AST.FunctionInfo {
-    name: name, doc: None, isFoul: isFoul, predicate: false,
+    name: name, doc: None, foul?: effectful, predicate?: false,
     clauses: [clause], location: noLocation()
   }
 end
@@ -448,7 +448,7 @@ end
 describe("Tey.Docgen function terminology") do
   it("labels receiver functions consistently in HTML and Markdown") do
     let entry = MakeEntry {
-      target: "Sample", isFinal: false, implements: [],
+      target: "Sample", final?: false, implements: [],
       functions: [], doc: emptyDoc(), line: 1
     }
     let page = aPage([MakeDecl(entry)], "sample")

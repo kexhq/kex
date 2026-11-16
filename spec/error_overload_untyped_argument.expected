@@ -1,0 +1,3 @@
+spec/error_overload_untyped_argument.kex:15:16: error: `show` expects argument 1 to be Integer | String, but got Float64
+
+show : Integer | String -> String

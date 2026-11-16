@@ -466,7 +466,7 @@ foul uninstall(version: String) -> String or! String do
   return Ok(prefix)
 end
 
-foul use(version: String) -> Bool do
+foul use(version: String) -> Void or! String do
   let home = Tey.Toolchain.home
   # Naming the bundled Kex selects it, taking the copy into the Tey
   # home on the way — the one place an install happens without being typed as
@@ -475,19 +475,19 @@ foul use(version: String) -> Bool do
   # refusing a version that is demonstrably present, which is how someone who
   # installed a second Kex lost the one their package manager gave them.
   if !Tey.Toolchain.installed?(version)
-    return false if Tey.Toolchain.bundledVersion != Just(version)
+    return Error("Kex ${version} is not installed") if Tey.Toolchain.bundledVersion != Just(version)
     # installBundled writes `current` and relinks itself, so there is nothing
     # left to do here.
     match Tey.Toolchain.installBundled do
-      Error(_) => return false
-      Ok(_) => return true
+      Error(error) => return Error(error)
+      Ok(_) => return Ok(())
     end
   end
-  return false if FS.File.write("${home}/current", "${version}\n").error?
+  return Error("could not write ${home}/current") if FS.File.write("${home}/current", "${version}\n").error?
   # Best effort: the selection is recorded either way, and `tey` itself reads
   # the record rather than the shim. Only a user's bare `kex` needs the link.
   Tey.Toolchain.link(version)
-  return true
+  return Ok(())
 end
 
 # The archive download/verify/hash/tag/publish helpers below are public because
@@ -760,13 +760,13 @@ private do
   # Points the shim at a version's binary, creating the bin directory the
   # first time. A symlink rather than a copy: `kex` finds its stdlib and
   # runtime relative to the REAL path, which the link preserves.
-  foul link(version: String) -> Bool do
-    return false if !FS.Directory.create(Tey.Toolchain.binDirectory).ok?
+  foul link(version: String) -> Void or! String do
+    return Error("could not create ${Tey.Toolchain.binDirectory}") if !FS.Directory.create(Tey.Toolchain.binDirectory).ok?
     let target = Tey.Toolchain.binaryOf(version)
-    return false if !FS.File.file?(target)
+    return Error("Kex ${version} has no binary at ${target}") if !FS.File.file?(target)
     match Process.run("ln", ["-sfn", target, Tey.Toolchain.shimPath]) do
-      Error(_) => return false
-      Ok(result) => return result.exitCode == 0
+      Error(_) => return Error("could not run ln")
+      Ok(result) => return result.exitCode == 0 then Ok(()) else Error("could not link ${Tey.Toolchain.shimPath}")
     end
   end
 

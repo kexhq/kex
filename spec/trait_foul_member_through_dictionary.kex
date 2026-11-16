@@ -1,0 +1,32 @@
+# kexhq/kex#635: a trait-typed parameter reaches the implementation through
+# a dictionary. When the implementation is foul, the dictionary has to hand
+# it the capability context, both for a foul default (`say`) that calls the
+# required member and for the required member called directly (`emit`).
+trait Sink do
+  emit :> Binary -> Integer
+  foul say(content: Showable) -> Void do
+    this.emit(Binary.fromBytes(content.showValue.bytes))
+    return ()
+  end
+end
+
+record Box do
+  n : Integer
+end
+
+make Box, implement: Sink do
+  emit :> Binary -> Integer
+  foul emit(x) do
+    IO.printLine(@n + x.count)
+    return x.count
+  end
+end
+
+foul report(s: Sink) -> Void = s.say(7)
+
+foul direct(s: Sink) -> Integer = s.emit(Binary.fromBytes([1, 2, 3]))
+
+main do
+  report(Box { n: 4 })
+  IO.printLine(direct(Box { n: 10 }))
+end

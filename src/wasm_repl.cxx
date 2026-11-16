@@ -10,17 +10,17 @@
 // visible/alive on the next, matching what a real REPL user expects.
 #include "common/color.hxx"
 #include "semantic/completion_at.hxx"
+#include "common/prelude_interfaces.hxx"
 #include "common/prelude_loader.hxx"
+#include "hir/repl_input.hxx"
 #include "common/repl_commands.hxx"
 #include "common/version.hxx"
 #include "lexer/lexer.hxx"
 #include "parser/parser.hxx"
+#include "compiled/expand.hxx"
 #include "interpreter/evaluator.hxx"
-// db.hxx only forward-declares Diagnostic; SemanticDB's FileState member
-// needs the complete type to be destructible, so this include is load-
-// bearing even though nothing here names Diagnostic directly.
 #include "semantic/analyzer.hxx"
-#include "semantic/db.hxx"
+#include "semantic/symbol_info.hxx"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -30,7 +30,7 @@
 
 #include <algorithm>
 #include <memory>
-#include <new>
+#include <new>  // IWYU pragma: keep (the standard declares placement new here)
 #include <sstream>
 #include <string>
 #include <vector>
@@ -49,18 +49,16 @@ std::vector<std::unique_ptr<kex::ast::Program>> g_programs;
 } // namespace
 
 struct KexReplSession {
-    kex::interpreter::Evaluator evaluator;
+    kex::interpreter::Evaluator evaluator{&kex::preludeSemanticInterfaces("")};
     std::string lastResult;
-    // Mirrors main.cxx's real REPL `replDb`/`replAccumSource` pair exactly
-    // (see its "SemanticDB for REPL: prelude loaded once, updated on each
-    // input" comment) so tab completion in the browser sees the same
-    // prelude- and user-defined names the native REPL's <TAB> does.
-    kex::semantic::SemanticDB replDb;
+    // As main.cxx's REPL: the prelude's names, read once, and the session's
+    // definitions, spliced into what completion checks, so tab completion in
+    // the browser sees the names the native REPL's <TAB> does.
+    std::vector<kex::semantic::SymbolInfo> preludeSymbols;
     std::string replAccumSource;
     // Local bindings entered so far, replayed ahead of the line being
     // completed so `x.` is typed by analysis (see kex_repl_complete).
     std::string replBindings;
-    kex::semantic::SemanticDB analysisDb;
     std::string lastCompletions;
 };
 
@@ -100,7 +98,8 @@ KexReplSession* kex_repl_create() {
     session->evaluator.setModuleRoots(kex::standardLibraryModuleRoots());
     // The unified stdlib is embedded into MEMFS at /stdlib. Its prelude.kex
     // manifest selects the files indexed automatically.
-    kex::loadPrelude(session->replDb, "/stdlib");
+    session->preludeSymbols = kex::semantic::symbolsOfFiles(
+        kex::preludeFilesFromRoot("/stdlib"), kex::standardLibraryModuleRoots());
     return session;
 }
 
@@ -158,49 +157,47 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
 
     std::string source(sourceIn ? sourceIn : "");
 
-    if (kex::isReplExit(source)) {
+    using Command = kex::ReplCommandKind;
+    const auto command = kex::parseReplCommand(source);
+    if (command.kind == Command::Exit) {
         session->lastResult = "";
         return;
     }
-    if (!source.empty() && source[0] == '/') {
-        if (source == "/help" || source == "/h") {
-            std::ostringstream os;
-            kex::printReplHelp(os);
-            session->lastResult = os.str();
-            return;
-        }
-        if (source == "/clear") {
-            // xterm.js renders the same ANSI clear sequence as a real terminal.
-            session->lastResult = kex::replClearScreenSequence();
-            return;
-        }
-        if (source == "/reset") {
-            // Evaluator owns a Scheduler that keeps a reference back to its
-            // Evaluator. Move-assignment from a temporary would leave that
-            // reference pointing at the destroyed temporary, so rebuild the
-            // evaluator in place instead.
-            session->evaluator.~Evaluator();
-            new (&session->evaluator) kex::interpreter::Evaluator();
-            session->evaluator.setReplMode(true);
-            session->evaluator.setMocksAllowed(true);
-            session->evaluator.setModuleRoots(kex::standardLibraryModuleRoots());
-            session->replAccumSource.clear();
-            session->replBindings.clear();
-            g_programs.clear();
-            session->lastResult = "  (bindings cleared)\n";
-            return;
-        }
-        if (source.substr(0, 5) == "/set " || source == "/set" ||
-            source.substr(0, 7) == "/unset " || source == "/with" ||
-            source.substr(0, 6) == "/with " ||
-            source.substr(0, 9) == "/without ") {
-            session->lastResult = "  not yet implemented in the web REPL\n";
-            return;
-        }
-        if (source.substr(0, 6) == "/load " || source == "/reload") {
-            session->lastResult = "  not available in the web REPL (no filesystem)\n";
-            return;
-        }
+    if (command.kind == Command::Help) {
+        std::ostringstream os;
+        kex::printReplHelp(os);
+        session->lastResult = os.str();
+        return;
+    }
+    if (command.kind == Command::Clear) {
+        // xterm.js renders the same ANSI clear sequence as a real terminal.
+        session->lastResult = kex::replClearScreenSequence();
+        return;
+    }
+    if (command.kind == Command::Reset) {
+        // Evaluator owns a Scheduler that keeps a reference back to its
+        // Evaluator. Move-assignment from a temporary would leave that
+        // reference pointing at the destroyed temporary, so rebuild the
+        // evaluator in place instead.
+        session->evaluator.~Evaluator();
+        new (&session->evaluator) kex::interpreter::Evaluator();
+        session->evaluator.setReplMode(true);
+        session->evaluator.setMocksAllowed(true);
+        session->evaluator.setModuleRoots(kex::standardLibraryModuleRoots());
+        session->replAccumSource.clear();
+        session->replBindings.clear();
+        g_programs.clear();
+        session->lastResult = "  (bindings cleared)\n";
+        return;
+    }
+    if (command.kind == Command::Set || command.kind == Command::Unset ||
+        command.kind == Command::With || command.kind == Command::Without) {
+        session->lastResult = "  not yet implemented in the web REPL\n";
+        return;
+    }
+    if (command.kind == Command::Load || command.kind == Command::Reload) {
+        session->lastResult = "  not available in the web REPL (no filesystem)\n";
+        return;
     }
 
     bool isDef = looksLikeTopLevelDef(source);
@@ -214,18 +211,38 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
         g_programs.push_back(std::make_unique<ast::Program>(parser.parseProgram()));
         ast::Program* program = g_programs.back().get();
 
+        // An expression is checked as the statements that run, against the
+        // session's definitions and bindings (hir::checkReplInput), and runs
+        // on the checker's decisions as main.cxx's REPL does. This REPL has
+        // never refused an input the checker rejects, so one that fails the
+        // check still runs, on the values alone.
+        std::optional<hir::CheckedInput> checked;
+        if (!isDef) try {
+            Lexer sessionLexer(session->replAccumSource + "main do\n" +
+                                   session->replBindings + "end\n",
+                               "<repl>");
+            Parser sessionParser(sessionLexer.tokenizeAll(), "<repl>");
+            checked = hir::checkReplInput(
+                std::make_unique<ast::Program>(sessionParser.parseProgram()),
+                *program, {}, nullptr, &preludeSemanticInterfaces(""));
+        } catch (...) {
+            checked.reset();  // a session history that does not re-parse
+        }
+        session->evaluator.setProgram(
+            checked && checked->program ? checked->program.get() : nullptr);
+        struct Unset {
+            interpreter::Evaluator& evaluator;
+            ~Unset() { evaluator.setProgram(nullptr); }
+        } unset{session->evaluator};
+
         size_t outputBefore = session->evaluator.output().size();
         auto value = session->evaluator.execute(*program);
         result = session->evaluator.output().substr(outputBefore);
 
-        // Matches main.cxx's real REPL exactly (see its "Accumulate and
-        // re-index so all prior definitions stay visible for tab
-        // completion" comment) — only definitions get indexed, since a bare
-        // expression like `1 + 2` isn't a name anything else can reference.
-        if (isDef) {
-            session->replAccumSource += source + "\n";
-            session->replDb.updateFile("<repl>", session->replAccumSource);
-        }
+        // As main.cxx's REPL: only definitions accumulate for completion,
+        // since a bare expression like `1 + 2` isn't a name anything else
+        // can reference.
+        if (isDef) session->replAccumSource += source + "\n";
         else if (source.rfind("let ", 0) == 0 || source.rfind("var ", 0) == 0)
             session->replBindings += source + "\n";
 
@@ -300,16 +317,32 @@ const char* kex_repl_complete(KexReplSession* session, const char* lineIn,
     std::string text(textIn ? textIn : "");
     const auto wordStart = std::min(static_cast<size_t>(std::max(start, 0)),
                                     line.size());
-    const auto prefix =
-        session->replAccumSource + "main do\n" + session->replBindings;
-    const auto program = prefix + line + semantic::completionClosers(line) +
-                         "\nend\n";
-    auto completion = semantic::completeAt(
-        session->replDb, session->analysisDb, "<repl-completion>", program,
-        prefix.size() + std::min(wordStart + text.size(), line.size()),
+    // Checked as the wasm REPL runs an input: parsed, expanded and analyzed,
+    // against no prebuilt interfaces.
+    const semantic::CompletionChecker check =
+        [](const std::string& path, const std::string& source)
+        -> std::optional<semantic::CheckedSource> {
+        auto program = std::make_shared<ast::Program>();
+        Lexer lexer(source, path);
+        Parser parser(lexer.tokenizeAll(), path);
+        *program = parser.parseProgram();
+        std::vector<semantic::Diagnostic> diagnostics;
+        compiled::ExpandOptions options;
+        options.sourcePath = path;
+        options.moduleRoots = standardLibraryModuleRoots();
+        options.interfaces = &preludeSemanticInterfaces("");
+        compiled::expand(*program, diagnostics, options);
+        auto analyzer = std::make_shared<semantic::Analyzer>();
+        analyzer->setEntryFiles({path});
+        analyzer->setIndexesNames(true);
+        analyzer->analyze(*program);
+        return semantic::CheckedSource{program, analyzer, nullptr};
+    };
+    auto completion = semantic::completeReplInput(
+        session->preludeSymbols, check, session->replAccumSource,
+        session->replBindings, line, line, wordStart + text.size(), false,
         nullptr);
-    const auto replaceFrom =
-        std::max(completion.replaceFrom - prefix.size(), wordStart);
+    const auto replaceFrom = std::max(completion.replaceFrom, wordStart);
     const auto lead = line.substr(wordStart, replaceFrom - wordStart);
 
     std::string joined;

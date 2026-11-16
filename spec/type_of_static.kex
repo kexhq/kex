@@ -33,7 +33,7 @@ main do
   # reports a bare `Function`.
   let effectful = Type.of(loudly)
   let doubler = Type.of(double)
-  IO.printLine("${effectful.pure} ${doubler.args.count}")
+  IO.printLine("${effectful.pure?} ${doubler.args.count}")
 
   # A computed alias is an ordinary type: it annotates, and it is enforced.
   let greeting: Greeting = double(2)

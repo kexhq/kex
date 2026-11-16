@@ -299,8 +299,14 @@ jobs:
       - name: Fuzzer regression checks
         run: make -o build test-fuzz
 
+      - name: Metamorphic compiler checks
+        run: make -o build test-metamorphic
+
       - name: BEAM spec runner regression checks
         run: make -o build test-spec-beam-runner
+
+      - name: Devirt correspondence checks
+        run: make -o build test-devirt
 
       # Fresh programs each workflow run; reruns keep the seed for replay.
       # Local `make fuzz` still defaults to 42. The fuzzer logs the seed and
@@ -310,6 +316,15 @@ jobs:
           FUZZ_SEED: ${{ github.run_id }}
         run: make -o build fuzz
 
+      # The same for the metamorphic search: relations and type-breaking
+      # mutations of the spec programs, from this run's seed. Known-open
+      # relations are left out, so a failure here is a new finding.
+      - name: Metamorphic search
+        env:
+          METAMORPHIC_SEED: ${{ github.run_id }}
+          METAMORPHIC_CASES: "40"
+        run: make -o build metamorphic-search
+
       - name: Upload findings
         if: failure()
         uses: actions/upload-artifact@v4
@@ -318,6 +333,9 @@ jobs:
           path: |
             /tmp/kex-fuzz/fail_*
             /tmp/kex-fuzz/run.txt
+            /tmp/kex-metamorphic/*/finding.txt
+            /tmp/kex-metamorphic/*/*.kex
+            /tmp/kex-metamorphic/run.txt
 
   # musl is a supported platform, and glibc passing says nothing about it:
   # the spec suite pins float formatting, and that is exactly where libm

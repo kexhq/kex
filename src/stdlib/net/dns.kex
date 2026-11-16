@@ -46,8 +46,8 @@ end
 # configured nameserver on every request.
 record CacheOptions do
   entries : Integer = 1024
-  maximumTtl : Duration = Duration.hours(1)
-  negativeTtl : Duration = Duration.seconds(30)
+  maximumTtl : Duration = 1.hour
+  negativeTtl : Duration = 30.second
 end
 
 # One DNS server used by a custom resolver.
@@ -63,7 +63,7 @@ record ResolverOptions do
   nameservers : [Nameserver]
   search : [Name] = []
   retries : Integer = 2
-  timeout : Duration = 2.seconds
+  timeout : Duration = 2.second
 end
 
 # Lifetime cache counters. +clear+ empties entries but keeps these counters.
@@ -137,7 +137,7 @@ module Resolver do
   #   }
   #   Resolver.custom(ResolverOptions {
   #     nameservers: [nameserver],
-  #     timeout: 100.milliseconds
+  #     timeout: 100.millisecond
   #   }).try
   foul custom(options: ResolverOptions) -> Result<Resolver, NetError> = Kex.Intrinsic.NetDNS.resolverWith(options)
 end

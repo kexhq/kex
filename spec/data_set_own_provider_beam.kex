@@ -1,0 +1,14 @@
+# kex: skip-wasm
+# Foldable methods on an opt-in `Data.Set`: the prelude's generic `any?`
+# must not take a call the Set module provides for its own type. The
+# checker now records no prelude target there; lowering used to override
+# it by reading the receiver's type back.
+
+using Data.Set
+
+main do
+  let s = Set.from([1, 2, 3])
+  IO.printLine(s.any? { |x| x > 2 })
+  IO.printLine(s.all? { |x| x > 0 })
+  IO.printLine(s.count)
+end

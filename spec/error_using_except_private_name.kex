@@ -1,0 +1,15 @@
+# An `except:` list may not name a private member: it is not importable to
+# begin with, so excluding it says nothing true.
+module Vault do
+  let open() = "open"
+
+  private do
+    let secret() = "secret"
+  end
+end
+
+using Vault, except: [secret]
+
+main do
+  IO.printLine(open())
+end

@@ -12,7 +12,7 @@ main do
   end
 
   # An injected failure comes back untouched, so tests can script errors.
-  let injected = NetError { kind: MockEmpty, operation: DNS, message: "boom" }
+  let injected = NetError { kind: Net.MockEmpty, operation: DNS, message: "boom" }
   with Net.Socket.TCP = Mock.TCP { failure: Just(injected) } do
     match TCP.connectTo("127.0.0.1:9") do
       Error(error) => IO.printLine("tcp injected: ${error.message}")

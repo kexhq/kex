@@ -86,6 +86,19 @@ parentheses:
 using Vector, only: [magnitude, (+), (==)]
 ```
 
+A type brings its constructors along. After `using Shades, only: [Shade]`,
+`Shade`'s constructors (`Light`, `Tint`) can be named bare, both to build a
+value and in a pattern. `except: [Shade]` leaves them out. Without a `using`
+that brings it in, a module's constructor is written with its module,
+`Shades.Light` or `Shades.Tint(2)`, in a pattern as well:
+
+```kex
+match shade do
+  Shades.Light => "light"
+  Shades.Tint(level) => "tint ${level}"
+end
+```
+
 Prefer a short `only:` list to a bare `using`: it says what this scope borrowed,
 and a name added to the module later cannot appear here without an edit. See
 [STYLE.md](../STYLE.md) §7 for the full ladder — qualified call, `as:`,
@@ -135,6 +148,27 @@ A bare name is looked up in the module it is written in, then in the modules
 enclosing it, then in what its `using` lines brought in. A top-level `using`
 covers the rest of **its own file**: a module merged in from another file does
 not see the entry file's imports.
+
+What a module's file declares outside the module is that file's own. The
+module may use it; a program that brings the module in with `using` gets the
+module's names, not the file's:
+
+```kex
+# lib/pantry.kex
+module Pantry do
+  let stocked() -> Integer = shelves() * 2
+end
+
+let shelves() -> Integer = 3     # this file's own
+
+# main.kex
+using Pantry
+
+main do
+  IO.printLine(stocked())        # 6
+  IO.printLine(shelves())        # error: pantry.kex declares it for itself
+end
+```
 
 A qualified name means what it spells. `Net.HTTP.Request<Binary>` written
 inside a module that declares its own `Request` is Net.HTTP's, and so is

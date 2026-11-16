@@ -26,7 +26,7 @@ record Type do
   # Functions only: false when calling it is a side effect: the question
   # `foul` answers in source, phrased positively because everything in Kex is
   # pure by default. True for every other type.
-  pure : Bool
+  pure? : Bool
 end
 
 # Building and obtaining +Type+ values.
@@ -52,9 +52,8 @@ module Type do
   #   IO.printError("expected a list, got ${Type.of(value).to(String)}")
   #
   # @example Taking a type from the caller
-  #   let select(as: T) -> Result<[T], String> do
-  #     let model = Type.of(as)        # the caller's record type
-  #     ...                            # rows decoded with model.construct
+  #   let select(as: Type<T>) -> Result<[T], String> do
+  #     ...                            # rows decoded with as.construct
   #   end
   #   select(as: User)                 # => Result<[User], String>
   let of(value: Any) -> Type = Kex.Intrinsic.Type.ofValue(value)
@@ -70,7 +69,7 @@ module Type do
   #
   # @example Checking that a value came back as expected
   #   Type.of(parsed) == Type.named("Date")
-  let named(name: String) -> Type = Type { name: name, args: [], pure: true }
+  let named(name: String) -> Type = Type { name: name, args: [], pure?: true }
 
   # Builds a type that takes arguments, from its name and those arguments.
   #
@@ -80,7 +79,7 @@ module Type do
   #
   # @example
   #   Type.of([1]) == Type.generic("List", [Type.named("Integer")])   # => true
-  let generic(name: String, args: [Type]) -> Type = Type { name: name, args: args, pure: true }
+  let generic(name: String, args: [Type]) -> Type = Type { name: name, args: args, pure?: true }
 
   # Builds a function type from its parameter types and its result type: in
   # the order a signature is written.
@@ -92,7 +91,7 @@ module Type do
   # @example
   #   Type.function([Type.named("String")], Type.named("String")).to(String)
   #   # => "String -> String"
-  let function(params: [Type], result: Type) -> Type = Type { name: "Function", args: params + [result], pure: true }
+  let function(params: [Type], result: Type) -> Type = Type { name: "Function", args: params + [result], pure?: true }
 
   # Returns the type a named function returns, as answered by the compiler.
   #
@@ -403,7 +402,7 @@ make Type do
     if this.name == "Function" && this.args.count > 0
       let arrow = this.args.map(&.showValue).join(" -> ")
       let signature = this.args.count == 1 then "() -> ${arrow}" else arrow
-      return "foul ${signature}" if this.pure == false
+      return "foul ${signature}" if this.pure? == false
       return signature
     end
     return this.name if this.args.count == 0

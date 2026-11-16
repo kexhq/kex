@@ -1,0 +1,3 @@
+spec/error_compare_unrelated.kex:10:20: error: Cannot compare Integer and String
+spec/error_compare_unrelated.kex:12:26: error: Cannot compare Integer and String
+spec/error_compare_unrelated.kex:19:29: error: `take` expects 2 argument(s), got 1

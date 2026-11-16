@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A private function in one module does not stand in for a same-named function
 # elsewhere: `Ledger`'s `table` is the `Shapes.table` it imported, whatever
 # `Logs` keeps privately, and the program's own foul `failed` is still called

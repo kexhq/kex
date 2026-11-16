@@ -31,7 +31,7 @@ auto Evaluator::registerMathBuiltins() -> void {
         defineIntrinsic(name, std::move(fn));
     };
 
-    reg("Float::scaleUnit", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Float.scaleUnit", [](std::vector<ValuePtr> args) -> ValuePtr {
         const auto low = toDouble(args.at(0));
         const auto high = toDouble(args.at(1));
         const auto unit = toDouble(args.at(2));
@@ -42,10 +42,10 @@ auto Evaluator::registerMathBuiltins() -> void {
                                             : value < low ? low : value);
     });
 
-    reg("Math::sqrt", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.sqrt", [](std::vector<ValuePtr> args) -> ValuePtr {
         return finite(std::sqrt(args.empty() ? 0.0 : toDouble(args[0])), "Math.sqrt");
     });
-    reg("Math::cbrt", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.cbrt", [](std::vector<ValuePtr> args) -> ValuePtr {
         const double x = args.empty() ? 0.0 : toDouble(args[0]);
         double root = std::cbrt(x);
         // Snap a perfect cube to its exact root. libm implementations differ
@@ -57,59 +57,59 @@ auto Evaluator::registerMathBuiltins() -> void {
         if (rounded * rounded * rounded == x) root = rounded;
         return finite(root, "Math.cbrt");
     });
-    reg("Math::sin", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.sin", [](std::vector<ValuePtr> args) -> ValuePtr {
         return finite(std::sin(args.empty() ? 0.0 : toDouble(args[0])), "Math.sin");
     });
-    reg("Math::cos", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.cos", [](std::vector<ValuePtr> args) -> ValuePtr {
         return finite(std::cos(args.empty() ? 0.0 : toDouble(args[0])), "Math.cos");
     });
-    reg("Math::tan", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.tan", [](std::vector<ValuePtr> args) -> ValuePtr {
         return finite(std::tan(args.empty() ? 0.0 : toDouble(args[0])), "Math.tan");
     });
-    reg("Math::asin", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.asin", [](std::vector<ValuePtr> args) -> ValuePtr {
         return finite(std::asin(args.empty() ? 0.0 : toDouble(args[0])), "Math.asin");
     });
-    reg("Math::acos", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.acos", [](std::vector<ValuePtr> args) -> ValuePtr {
         return finite(std::acos(args.empty() ? 0.0 : toDouble(args[0])), "Math.acos");
     });
-    reg("Math::atan", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.atan", [](std::vector<ValuePtr> args) -> ValuePtr {
         return finite(std::atan(args.empty() ? 0.0 : toDouble(args[0])), "Math.atan");
     });
-    reg("Math::atan2", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.atan2", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::floating(0.0);
         return finite(std::atan2(toDouble(args[0]), toDouble(args[1])), "Math.atan2");
     });
-    reg("Math::sinh", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.sinh", [](std::vector<ValuePtr> args) -> ValuePtr {
         return finite(std::sinh(args.empty() ? 0.0 : toDouble(args[0])), "Math.sinh");
     });
-    reg("Math::cosh", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.cosh", [](std::vector<ValuePtr> args) -> ValuePtr {
         return finite(std::cosh(args.empty() ? 0.0 : toDouble(args[0])), "Math.cosh");
     });
-    reg("Math::tanh", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.tanh", [](std::vector<ValuePtr> args) -> ValuePtr {
         return finite(std::tanh(args.empty() ? 0.0 : toDouble(args[0])), "Math.tanh");
     });
-    reg("Math::exp", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.exp", [](std::vector<ValuePtr> args) -> ValuePtr {
         return finite(std::exp(args.empty() ? 0.0 : toDouble(args[0])), "Math.exp");
     });
     // Math.log(x) is natural log; Math.log(x, base) is log base `base` —
     // same two-arity shape as Ruby's Math.log.
-    reg("Math::log", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.log", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::floating(0.0);
         auto x = std::log(toDouble(args[0]));
         if (args.size() < 2) return finite(x, "Math.log");
         return finite(x / std::log(toDouble(args[1])), "Math.log");
     });
-    reg("Math::log2", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.log2", [](std::vector<ValuePtr> args) -> ValuePtr {
         return finite(std::log2(args.empty() ? 0.0 : toDouble(args[0])), "Math.log2");
     });
-    reg("Math::log10", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.log10", [](std::vector<ValuePtr> args) -> ValuePtr {
         return finite(std::log10(args.empty() ? 0.0 : toDouble(args[0])), "Math.log10");
     });
-    reg("Math::hypot", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.hypot", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::floating(0.0);
         return finite(std::hypot(toDouble(args[0]), toDouble(args[1])), "Math.hypot");
     });
-    reg("Math::pow", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Math.pow", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::floating(0.0);
         return finite(std::pow(toDouble(args[0]), toDouble(args[1])), "Math.pow");
     });
@@ -118,8 +118,8 @@ auto Evaluator::registerMathBuiltins() -> void {
     // publishes its own private intrinsic identities. Do not reintroduce the
     // old bare-name bridge: Kex.Intrinsic.Math dispatch is category-qualified.
     for (const char* name : {"abs", "ceil", "floor"}) {
-        if (auto value = m_intrinsicEnv->get("Number::" + std::string(name)))
-            defineIntrinsic("Math::" + std::string(name), value);
+        if (auto value = m_intrinsicEnv->get("Number." + std::string(name)))
+            defineIntrinsic("Math." + std::string(name), value);
     }
 }
 

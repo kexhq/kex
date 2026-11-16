@@ -1,0 +1,636 @@
+# Metamorphic compiler checks. Two kinds of case, both replayable from a seed:
+#
+# - A relation relates two programs whose observable behavior must agree, or
+#   turns a valid program into one the checker must reject.
+# - A mutation takes a spec program that runs (spec/*.kex with a golden) and
+#   breaks it the way a type error would: an argument added or dropped, a
+#   value wrapped in `Just` or unwrapped, a literal of another type, a match
+#   arm deleted. The checker must then reject the program, or the program
+#   must still run cleanly and alike on both backends. Accepted and then
+#   failing at run time (`badfun`, "Cannot add", no matching clause, ...) is
+#   a finding: the checker let a wrong program through.
+#
+# make test-metamorphic gates the relations that pass. make
+# metamorphic-search runs the relations and the mutations from a seed: a
+# fresh one from the clock unless METAMORPHIC_SEED is given, printed first so
+# a run replays. It leaves out the relations whose failure is an open bug
+# (knownOpen), so a failing search is always news; METAMORPHIC_MODE=search-all
+# runs them too. Every case and what each step answered are saved under the
+# output directory; a finding also writes finding.txt there.
+#
+# The runner uses the walker so a BEAM lowering bug cannot break the test
+# driver itself.
+
+using FS
+using Kex.AST
+
+main(args) do
+  let seedText = args.at(0).or("")
+  let clock = "${DateTime.now().epochSeconds}"
+  let seed = Integer.parse(seedText.empty? then clock else seedText).or(-1)
+  let count = Integer.parse(args.at(1).or("11")).or(0)
+  let budget = Integer.parse(args.at(4).or("15000")).or(0)
+  let mode = args.at(5).or("search")
+  let badMode = !modes.contains?(mode) || (mode == "gate" && count > gateSeeds.count)
+  if seed < 0 || count < 1 || budget < 1 || args.count > 6 || badMode
+    let modeList = modes.join("|")
+    IO.printError("usage: metamorphic [seed] [cases] [kex] [out dir] [timeout ms] [${modeList}]")
+    return System.exit(2)
+  end
+  let run = Run {
+    kex: args.at(2).or("./build/kex"),
+    outDir: args.at(3).or("/tmp/kex-metamorphic"),
+    budget: budget,
+    files: mode == "gate" then [] else corpus
+  }
+  System.exit(drive(run, seed, count, mode))
+end
+
+# Where a run's cases go, and what runs them.
+record Run do
+  kex    : String
+  outDir : String
+  budget : Integer
+  files  : [String] = []
+end
+
+let modes -> [String] = ["search", "search-all", "gate"]
+
+# The relations the gate runs, by seed: every one but the known-open ones.
+let gateSeeds -> [Integer] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+# Relations whose failure is an open bug, left out of `search` so a failing
+# search is always news; `search-all` runs them too. 0: assignment as a
+# value (kexhq/kex#614).
+let knownOpen -> [Integer] = [0]
+
+# Runs +count+ cases from +seed+ and answers the exit status: 0 when every
+# case held, 1 on a finding, 2 when the run could not start.
+foul drive(run: Run, seed: Integer, count: Integer, mode: String) -> Integer do
+  recordRun(run, seed, count, mode).try
+  IO.printLine("metamorphic ${mode}: seed ${seed}, ${count} cases")
+  var failed = 0
+  var index = 0
+  while index < count do
+    failed += 1 if !caseHolds?(run, seed + index, index, mode)
+    index += 1
+  end
+  IO.printLine("${count} cases, ${failed} findings (seed ${seed})")
+  failed == 0 then 0 else 1
+rescue |error|
+  IO.printError("metamorphic: cannot start: ${error}")
+  return 2
+end
+
+# The run's metadata, after checking that the compiler answers at all.
+foul recordRun(run: Run, seed: Integer, count: Integer, mode: String) -> Void or! String do
+  let version = Process.run(run.kex, ["--version"], run.budget)
+  return Error("${run.kex} --version failed") if !succeeded?(version)
+  ensureDirectory(run.outDir).mapError { |error| "${error}" }.try
+  let metadata = [
+    "seed=${seed}",
+    "cases=${count}",
+    "mode=${mode}",
+    "compiler=${run.kex}",
+    ...outcomeLines(version)
+  ]
+  FS.File.write("${run.outDir}/run.txt", metadata.join("\n")).mapError { |error| "${error}" }
+end
+
+# One case: in the gate, the next fixed relation; in a search, relations and
+# mutations by turns.
+foul caseHolds?(run: Run, caseSeed: Integer, index: Integer, mode: String) -> Bool do
+  return relationHolds?(run, gateSeeds.at(index).or(1)) if mode == "gate"
+  return mutationHandled?(run, caseSeed / 2) if caseSeed % 2 == 1
+  relationHolds?(run, searchedRelation(caseSeed / 2, mode == "search-all"))
+end
+
+# The relation seed a search case runs. Leaving the known-open relations
+# out, each seed maps to its own relation seed whose relation is one of the
+# others, so no two cases of a run repeat one.
+let searchedRelation(seed: Integer, all: Bool) -> Integer do
+  return seed if all
+  let allowed = (0..relationCount - 1).items.reject { |r| knownOpen.contains?(r) }
+  seed / allowed.count * relationCount + allowed.at(seed % allowed.count).or(1)
+end
+
+# --- Relations ---------------------------------------------------------------
+
+record Relation do
+  name          : String
+  original      : String
+  changed       : String
+  rejectChanged : Bool    = false
+  moduleSource  : String  = ""
+  eligibleSites : Integer = 1
+end
+
+let relationCount -> Integer = 11
+
+# The relation a seed picks, over an expression the seed picks too.
+foul relation(seed: Integer) -> Relation do
+  let value = expressionAt(seed)
+  match seed % relationCount do
+    0  => assignmentAsValue(value)
+    1  => ifLetInLoop(value)
+    2  => introducedBinding(value)
+    3  => annotatedParameter(value)
+    4  => explicitDefault(value)
+    5  => reorderedDeclarations(value)
+    6  => optionalForPayload(value)
+    7  => braceAndDoBlock(value)
+    9  => movedIntoModule(value)
+    10 => literalBinding(seed)
+    _  => unusedDeclaration(seed)
+  end
+end
+
+let expressions -> [String] = ["7", "2 + 5", "(3 * 4) - 5", "[2, 5].at(1).or(0)"]
+
+let expressionAt(seed: Integer) -> String = expressions.at(seed % expressions.count).or("7")
+
+# +lines+ as the body of a `main` block, after +declarations+.
+let program(lines: [String], declarations: [String] = []) -> String do
+  [...declarations, "main do", ...indented(lines), "end", ""].join("\n")
+end
+
+let indented(lines: [String]) -> [String] = lines.map { |line| "  ${line}" }
+
+let assignmentAsValue(value: String) -> Relation do
+  Relation {
+    name: "assignment as value",
+    original: program(["var value = 0", "value = ${value}", "IO.printLine(value)"]),
+    changed: program(["var value = 0", "IO.printLine(value = ${value})"])
+  }
+end
+
+let ifLetInLoop(value: String) -> Relation do
+  let ifLet = ["if let Ok(value) = Ok(${value})", "  IO.printLine(value)", "end"]
+  let looped = [
+    "var once = true",
+    "while once do",
+    ...indented(ifLet),
+    "  once = false",
+    "end"
+  ]
+  Relation { name: "if let in one iteration", original: program(ifLet), changed: program(looped) }
+end
+
+let introducedBinding(value: String) -> Relation do
+  Relation {
+    name: "introduce binding",
+    original: program(["IO.printLine(${value})"]),
+    changed: program(["let metamorphicValue = ${value}", "IO.printLine(metamorphicValue)"])
+  }
+end
+
+let annotatedParameter(value: String) -> Relation do
+  let body = ["IO.printLine(increment(${value}))"]
+  Relation {
+    name: "annotate inferred parameter",
+    original: program(body, declarations: ["let increment(value) = value + 1"]),
+    changed: program(body, declarations: ["let increment(value: Integer) = value + 1"])
+  }
+end
+
+let explicitDefault(value: String) -> Relation do
+  let add = ["let add(a: Integer, b: Integer = 3) = a + b"]
+  Relation {
+    name: "supply default explicitly",
+    original: program(["IO.printLine(add(${value}))"], declarations: add),
+    changed: program(["IO.printLine(add(${value}, 3))"], declarations: add)
+  }
+end
+
+let reorderedDeclarations(value: String) -> Relation do
+  let first = "let first(value: Integer) = value + 1"
+  let second = "let second(value: Integer) = value * 2"
+  let body = ["IO.printLine(first(second(${value})))"]
+  Relation {
+    name: "reorder independent declarations",
+    original: program(body, declarations: [first, second]),
+    changed: program(body, declarations: [second, first])
+  }
+end
+
+let optionalForPayload(value: String) -> Relation do
+  Relation {
+    name: "incompatible optional substitution",
+    original: program(["let value: Integer = ${value}", "IO.printLine(value)"]),
+    changed: program(["let value: Integer = Just(${value})", "IO.printLine(value)"]),
+    rejectChanged: true
+  }
+end
+
+let braceAndDoBlock(value: String) -> Relation do
+  let pairs = "[(\"C\", ${value} + 1)]"
+  Relation {
+    name: "brace and do block",
+    original: program(["${pairs}.each { |label, number| IO.printLine(number) }"]),
+    changed: program(["${pairs}.each do |label, number|", "  IO.printLine(number)", "end"])
+  }
+end
+
+let movedIntoModule(value: String) -> Relation do
+  let double = "let double(value: Integer) = value * 2"
+  Relation {
+    name: "move function into module",
+    original: program(["IO.printLine(double(${value}))"], declarations: [double]),
+    changed: program(["IO.printLine(MetamorphicHelper.double(${value}))"],
+                     declarations: ["using MetamorphicHelper"]),
+    moduleSource: ["module MetamorphicHelper", double, ""].join("\n")
+  }
+end
+
+# A literal of an example bound to a name first, where the literal's text
+# occurs once in the file.
+foul literalBinding(seed: Integer) -> Relation do
+  let sourcePath = literalSource(seed)
+  let source = FS.File.read(sourcePath).or("")
+  let candidates = syntaxTexts(source, ["IntLiteral"]).filter { |text| unique?(source, text) }
+  let literal = candidates.first.or("")
+  let bound = [
+    "let METAMORPHIC_LITERAL = ${literal}",
+    source.replace(literal, "METAMORPHIC_LITERAL")
+  ]
+  Relation {
+    name: "bind unique literal in ${sourcePath}",
+    original: source,
+    changed: literal.empty? then "" else bound.join("\n"),
+    eligibleSites: candidates.count
+  }
+end
+
+let literalSource(seed: Integer) -> String do
+  match seed % 33 do
+    10 => "examples/fizzbuzz_simple.kex"
+    21 => "examples/fizzbuzz_functional.kex"
+    _  => "examples/qsort_part.kex"
+  end
+end
+
+# A spec with a function nothing calls declared above it.
+foul unusedDeclaration(seed: Integer) -> Relation do
+  let sourcePath = unusedSource(seed)
+  let source = FS.File.read(sourcePath).or("")
+  let original = Kex.AST.parseSyntax(source).map(~Kex.AST.toSource).or("")
+  let unused = "let metamorphicUnused(text: String) = text.contains?(\"x\")"
+  Relation {
+    name: "unused declaration in ${sourcePath}",
+    original: original,
+    changed: [unused, original].join("\n")
+  }
+end
+
+let unusedSource(seed: Integer) -> String do
+  match seed % 33 do
+    8  => "spec/if_let.kex"
+    19 => "spec/if_let_binding_scope.kex"
+    _  => "spec/record_pattern_named.kex"
+  end
+end
+
+# A relation's programs: both checked, and unless the changed one must be
+# refused, both run on both backends to the same output.
+foul relationHolds?(run: Run, seed: Integer) -> Bool do
+  let item = relation(seed)
+  let root = "${run.outDir}/case_${seed}"
+  writeRelation(root, item).try
+  let before = "${root}/before.kex"
+  let after = "${root}/after.kex"
+  let checks = [invoke(run, before, "-C", root), invoke(run, after, "-C", root)]
+  let refusedAsMeant = item.rejectChanged == !succeeded?(checks.at(1).try)
+  let checked = wellFormed?(item) && succeeded?(checks.at(0).try) && refusedAsMeant
+  let runs = item.rejectChanged then [] else bothBackends(run, [before, after], root)
+  let label = "seed ${seed}: ${item.name}"
+  return passes(label, "${item.eligibleSites} eligible") if checked && runsAgree?(runs)
+  let steps = [("before check", checks.at(0).try), ("after check", checks.at(1).try), ...runs]
+  let header = ["seed=${seed}", "rule=${item.name}", "eligibleSites=${item.eligibleSites}"]
+  fails(label, root, [...header, ...detailsOf(steps)])
+rescue |error|
+  IO.printError("metamorphic: cannot write case ${seed}: ${error}")
+  return false
+end
+
+foul writeRelation(root: String, item: Relation) -> Void or! FS.FileError do
+  prepare(root).try
+  FS.File.write("${root}/before.kex", item.original).try
+  FS.File.write("${root}/after.kex", item.changed).try
+  return Ok(()) if item.moduleSource.empty?
+  FS.File.write("${root}/metamorphichelper.kex", item.moduleSource)
+end
+
+let wellFormed?(item: Relation) -> Bool do
+  let helperOk = item.moduleSource.empty? || syntaxOk(item.moduleSource, "Program")
+  let programs = syntaxOk(item.original, "Program") && syntaxOk(item.changed, "Program")
+  helperOk && programs && item.eligibleSites > 0
+end
+
+# Each of +paths+ on the walker and on BEAM, named for the finding.
+foul bothBackends(run: Run, paths: [String], root: String) -> [(String, Outcome)] do
+  paths.flatMap do |path|
+    let side = path.endsWith?("before.kex") then "before" else "after"
+    [("${side} walker", invoke(run, path, "--run-walker", root)),
+     ("${side} beam", invoke(run, path, "--run", root))]
+  end
+end
+
+let runsAgree?(runs: [(String, Outcome)]) -> Bool do
+  let results = runs.map { |_, result| result }
+  let outputs = results.map(~output).uniq
+  results.all?(~succeeded?) && outputs.count <= 1
+end
+
+# --- Mutations ---------------------------------------------------------------
+
+# One way to break a program: the kinds of node it rewrites, and the
+# replacements it offers for a node's text (none where it does not apply).
+record Mutation do
+  name    : String
+  kinds   : [String]
+  rewrite : String -> [String]
+end
+
+let literalKinds -> [String] = ["IntLiteral", "StringLiteral"]
+
+let callKinds -> [String] = ["FunctionCall", "MethodCall"]
+
+let mutations -> [Mutation] = [
+  Mutation { name: "wrap in Just", kinds: literalKinds, rewrite: ~wrappedInJust },
+  Mutation { name: "literal of another type", kinds: literalKinds, rewrite: ~otherLiteral },
+  Mutation { name: "extra argument", kinds: callKinds, rewrite: ~extraArgument },
+  Mutation { name: "drop arguments", kinds: callKinds, rewrite: ~droppedArguments },
+  Mutation { name: "unwrap Just", kinds: ["FunctionCall"], rewrite: ~unwrappedJust },
+  Mutation { name: "drop a match arm", kinds: ["MatchExpr"], rewrite: ~withoutAnArm }
+]
+
+let wrappedInJust(text: String) -> [String] = ["Just(${text})"]
+
+let otherLiteral(text: String) -> [String] = [text.startsWith?("\"") then "7" else "\"kex\""]
+
+let extraArgument(text: String) -> [String] do
+  return [] if !plainCall?(text)
+  return ["${calleeOf(text)}(0)"] if argumentsOf(text).trim.empty?
+  ["${text.take(text.count - 1)}, 0)"]
+end
+
+# All the arguments of a call dropped; not `IO.printLine(x)`, whose
+# `IO.printLine()` is as valid as it.
+let droppedArguments(text: String) -> [String] do
+  return [] if !plainCall?(text) || argumentsOf(text).trim.empty? || text.startsWith?("IO.")
+  ["${calleeOf(text)}()"]
+end
+
+let unwrappedJust(text: String) -> [String] do
+  text.startsWith?("Just(") && plainCall?(text) then [argumentsOf(text)] else []
+end
+
+# `f(a, b)` with its arguments in one pair of parentheses: no block after it,
+# no call nested in the callee.
+let plainCall?(text: String) -> Bool do
+  let open = text.indexOf("(").or(-1)
+  let shaped = open > 0 && text.endsWith?(")") && identifierLike?(text.take(open))
+  shaped && !text.contains?("\n") && !text.contains?("{") && !text.contains?(" do")
+end
+
+let identifierLike?(text: String) -> Bool = !text.empty? && text.chars.all?(~nameChar?)
+
+let nameChar?(c: Char) -> Bool = c.alpha? || c.digit? || ['_', '.', '?', '!'].contains?(c)
+
+let calleeOf(text: String) -> String = text.take(text.indexOf("(").or(0))
+
+let argumentsOf(text: String) -> String do
+  let open = text.indexOf("(").or(0)
+  text.drop(open + 1).take(text.count - open - 2)
+end
+
+# A match with one of its single-line arms deleted, one variant per arm;
+# none for a match of fewer than two such arms.
+let withoutAnArm(text: String) -> [String] do
+  let lines = text.split("\n")
+  let arms = droppableArms(lines)
+  return [] if arms.count < 2
+  arms.map { |dropped| withoutLine(lines, dropped) }
+end
+
+let withoutLine(lines: [String], dropped: Integer) -> String do
+  indicesOf(lines).reject { |i| i == dropped }.map { |i| lines.at(i).or("") }.join("\n")
+end
+
+# Lines of single-line arms (`pattern => value`) at the arms' indentation,
+# each followed by another arm or by the match's end.
+let droppableArms(lines: [String]) -> [Integer] do
+  let arms = indicesOf(lines).filter { |i| lines.at(i).or("").contains?(" => ") }
+  let armIndent = arms.map { |i| indentAt(lines, i) }.min.or(0)
+  arms.filter { |i| indentAt(lines, i) == armIndent && indentAt(lines, i + 1) <= armIndent }
+end
+
+let indentAt(lines: [String], i: Integer) -> Integer do
+  let line = lines.at(i).or("")
+  line.count - line.trimStart.count
+end
+
+let indicesOf(items: [String]) -> [Integer] = items.empty? then [] else (0..items.count - 1).items
+
+# Spec programs that run and check clean on their own: a golden beside
+# them, no `# kex:` mode line, not an error fixture, not a spec suite.
+foul corpus -> [String] do
+  FS.Directory.list("spec").or([]).sort.filter(~runnableSpec?).map { |name| "spec/${name}" }
+end
+
+foul runnableSpec?(name: String) -> Bool do
+  return false if !name.endsWith?(".kex") || name.endsWith?(".spec.kex")
+  return false if name.startsWith?("error_")
+  let golden = FS.File.file?("spec/${name.take(name.count - 4)}.expected")
+  golden && !FS.File.read("spec/${name}").or("# kex:").contains?("# kex:")
+end
+
+record MutationCase do
+  name    : String
+  path    : String
+  site    : String
+  changed : String
+end
+
+# The seed picks a mutation, a file, and one of the sites the mutation
+# offers in it. A file with no site falls through to the next file; a large
+# odd stride spreads neighbouring seeds over the corpus.
+foul mutationCase(seed: Integer, files: [String]) -> MutationCase? do
+  let mutation = mutations.at(seed % mutations.count).try
+  let start = seed / mutations.count * 7919
+  var attempt = 0
+  while attempt < files.count do
+    let path = files.at((start + attempt) % files.count).or("")
+    let source = FS.File.read(path).or("")
+    let sites = sitesIn(source, mutation)
+    if !sites.empty?
+      let (site, rewritten) = sites.at(seed / mutations.count * 104729 % sites.count).try
+      let shown = "${site}  ->  ${rewritten}"
+      return Just(MutationCase {
+        name: mutation.name,
+        path: path,
+        site: shown,
+        changed: source.replace(site, rewritten)
+      })
+    end
+    attempt += 1
+  end
+  None
+end
+
+# Each node text of +source+ the mutation can rewrite, with its rewriting,
+# where the text occurs once in the file.
+let sitesIn(source: String, mutation: Mutation) -> [(String, String)] do
+  let texts = syntaxTexts(source, mutation.kinds).filter { |text| unique?(source, text) }
+  texts.flatMap do |text|
+    mutation.rewrite(text)
+      .reject { |rewritten| rewritten == text }
+      .map { |rewritten| (text, rewritten) }
+  end
+end
+
+# A mutated spec: refused by the checker, or run alike on both backends
+# without crashing. The spec suite has already run the original.
+foul mutationHandled?(run: Run, seed: Integer) -> Bool do
+  if let Just(item) = mutationCase(seed, run.files)
+    return mutationVerdict(run, seed, item)
+  end
+  IO.printLine("SKIP mutation ${seed}: no site in the corpus")
+  true
+end
+
+foul mutationVerdict(run: Run, seed: Integer, item: MutationCase) -> Bool do
+  let root = "${run.outDir}/mutation_${seed}"
+  let after = "${root}/after.kex"
+  prepare(root).try
+  FS.File.write(after, item.changed).try
+  let label = "mutation ${seed}: ${item.name} in ${item.path}"
+  let check = invoke(run, after, "-C", "spec")
+  return passes(label, "rejected") if !succeeded?(check)
+  let runs = bothBackends(run, [after], "spec")
+  let crashed = runs.any? { |_, result| typeCrash?(result) }
+  let ranClean = runs.all? { |_, result| succeeded?(result) }
+  return passes(label, "accepted, runs") if !crashed && (!ranClean || runsAgree?(runs))
+  let verdict = crashed then "accepted by the checker, then crashed" else "backends disagree"
+  let header = [
+    "seed=${seed}",
+    "rule=${item.name}",
+    "file=${item.path}",
+    "site=${item.site}",
+    "verdict=${verdict}"
+  ]
+  let steps = [("check", check), ...runs]
+  fails("${label}: ${verdict}", root, [...header, ...detailsOf(steps)])
+rescue |error|
+  IO.printError("metamorphic: cannot write mutation ${seed}: ${error}")
+  return false
+end
+
+# --- Running -----------------------------------------------------------------
+
+foul invoke(run: Run, path: String, mode: String, root: String) -> Outcome do
+  Process.run(run.kex, [mode, "--no-colors", "--source-root", root, path], run.budget)
+end
+
+foul ensureDirectory(path: String) -> Void or! FS.FileError do
+  return Ok(()) if FS.Directory.exists?(path)
+  FS.Directory.create(path)
+end
+
+# A case's directory, without the finding of an earlier run.
+foul prepare(root: String) -> Void or! FS.FileError do
+  ensureDirectory(root).try
+  let finding = "${root}/finding.txt"
+  return Ok(()) if !FS.File.file?(finding)
+  FS.File.delete(finding)
+end
+
+foul passes(label: String, note: String) -> Bool do
+  IO.printLine("PASS ${label} (${note})")
+  true
+end
+
+# A finding: its details saved beside the case, and the case named.
+foul fails(label: String, root: String, details: [String]) -> Bool do
+  if !FS.File.write("${root}/finding.txt", details.join("\n")).ok?
+    IO.printError("metamorphic: cannot write ${root}/finding.txt")
+  end
+  IO.printLine("FAIL ${label} (${root})")
+  false
+end
+
+# What one invocation answered: its result, or why it could not run. (The
+# long name: `or!` does not reach into a type alias.)
+type Outcome = Result<ProcessResult, String>
+
+# An outcome as the lines of a finding.
+outcomeLines : Outcome -> [String]
+let outcomeLines(Ok(value))    = processLines(value)
+let outcomeLines(Error(error)) = ["error=${error}"]
+
+let processLines(value: ProcessResult) -> [String] do
+  ["exit=${value.exitCode}", "stdout:", value.stdout, "stderr:", value.stderr]
+end
+
+let detailsOf(steps: [(String, Outcome)]) -> [String] do
+  steps.flatMap { |name, result| ["${name}:", ...outcomeLines(result)] }
+end
+
+succeeded? : Outcome -> Bool
+let succeeded?(Ok(value)) = value.exitCode == 0
+let succeeded?(Error(_))  = false
+
+output : Outcome -> String
+let output(Ok(value)) = value.stdout
+let output(Error(_))  = ""
+
+# What a run that a type error should have stopped fails with, on either
+# backend: a crash, not a program reporting its own error.
+let typeCrashMarkers -> [String] = [
+  "badfun", "badarith", "badarg", "badmatch", "badmap", "badrecord",
+  "case_clause", "function_clause", "if_clause", "try_clause", "undef",
+  "no matching clause", "No matching clause", "Undefined method",
+  "Undefined function", "Undefined variable", "Cannot add", "Cannot subtract",
+  "Cannot multiply", "Cannot divide", "Cannot compare", "Cannot call",
+  "Internal error", "pattern mismatch"
+]
+
+typeCrash? : Outcome -> Bool
+let typeCrash?(Ok(value)) = value.exitCode != 0 && crashText?(value.stdout + value.stderr)
+let typeCrash?(Error(_))  = false
+
+let crashText?(text: String) -> Bool = typeCrashMarkers.any? { |marker| text.contains?(marker) }
+
+# --- Syntax ------------------------------------------------------------------
+
+# Every node of the lossless tree whose kind is one of +kinds+.
+let nodesOf(node: SyntaxNode, kinds: [String]) -> [SyntaxNode] do
+  let own = kinds.contains?(node.kind) then [node] else []
+  [...own, ...node.children.flatMap { |element| nodesUnder(element, kinds) }]
+end
+
+nodesUnder : SyntaxElement -> [String] -> [SyntaxNode]
+let nodesUnder(NodeElement(child), kinds) = nodesOf(child, kinds)
+let nodesUnder(TokenElement(_), _)        = []
+
+# The text of every node of +kinds+ in +source+; none when it does not parse.
+let syntaxTexts(source: String, kinds: [String]) -> [String] do
+  Kex.AST.parseSyntax(source).map { |tree| nodesOf(tree, kinds).map(~nodeText) }.or([])
+end
+
+let nodeText(node: SyntaxNode) -> String = Kex.AST.toSource(node).trim
+
+let syntaxHas(node: SyntaxNode, wanted: String) -> Bool = !nodesOf(node, [wanted]).empty?
+
+# +source+ parses, prints back unchanged, and holds a node of kind +wanted+.
+let syntaxOk(source: String, wanted: String) -> Bool do
+  Kex.AST.parseSyntax(source).map { |tree| roundTrips?(tree, source, wanted) }.or(false)
+end
+
+let roundTrips?(tree: SyntaxNode, source: String, wanted: String) -> Bool do
+  Kex.AST.toSource(tree) == source && (wanted.empty? || syntaxHas(tree, wanted))
+end
+
+# A text is a safe site to replace only when it occurs once in the file, so
+# a source replacement cannot change a comment, another literal or a name.
+let unique?(source: String, text: String) -> Bool = !text.empty? && source.split(text).count == 2

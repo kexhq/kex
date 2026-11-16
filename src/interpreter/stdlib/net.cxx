@@ -375,7 +375,7 @@ auto renderIP(const IPValue& value) -> std::string {
 } // namespace
 
 auto Evaluator::registerNetBuiltins() -> void {
-    defineIntrinsic("URI::parse", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("URI.parse", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty() || !textOf(args[0])) return uriError("InvalidSyntax", "URI must be text");
         const auto& source = *textOf(args[0]);
         size_t bad = 0;
@@ -384,7 +384,7 @@ auto Evaluator::registerNetBuiltins() -> void {
         if (!parseURI(source, true)) return uriError("InvalidSyntax", "malformed URI reference");
         return Value::ok(uriRecord("URI.URI", source));
     });
-    defineIntrinsic("URL::parse", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("URL.parse", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty() || !textOf(args[0])) return uriError("InvalidSyntax", "URL must be text");
         const auto& source = *textOf(args[0]);
         auto parsed = parseURI(source, true);
@@ -393,7 +393,7 @@ auto Evaluator::registerNetBuiltins() -> void {
         if (!parsed->hasAuthority) return uriError("MissingAuthority", "URL requires an authority");
         return Value::ok(uriRecord("URI.URL", source));
     });
-    defineIntrinsic("URI::fromIRI", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("URI.fromIRI", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty() || !textOf(args[0])) return uriError("InvalidSyntax", "IRI must be text");
         const auto& input = *textOf(args[0]);
         std::string encoded; size_t authority = input.find("://"), hostStart = authority == std::string::npos ? std::string::npos : authority + 3;
@@ -408,7 +408,7 @@ auto Evaluator::registerNetBuiltins() -> void {
         if (!parseURI(encoded, true)) return uriError("InvalidSyntax", "malformed IRI reference");
         return Value::ok(uriRecord("URI.URI", encoded));
     });
-    defineIntrinsic("URL::build", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("URL.build", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 4 || !textOf(args[0]) || !textOf(args[1])) return uriError("InvalidSyntax", "URL.build requires scheme, host, path, and query");
         auto scheme = lowerASCII(*textOf(args[0])); auto host = lowerASCII(*textOf(args[1]));
         if (scheme.empty() || host.empty()) return uriError("MissingAuthority", "URL requires scheme and host");
@@ -419,11 +419,11 @@ auto Evaluator::registerNetBuiltins() -> void {
         auto parsed = parseURI(source, true); if (!parsed) return uriError("InvalidSyntax", "built URL is invalid");
         return Value::ok(uriRecord("URI.URL", source));
     });
-    defineIntrinsic("URI::normalize", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("URI.normalize", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto text = args.empty() ? nullptr : textOf(args[0]); auto parsed = text ? parseURI(*text, false) : std::nullopt;
         return uriRecord("URI.URI", parsed ? normalized(*parsed) : "");
     });
-    defineIntrinsic("URL::normalize", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("URL.normalize", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto text = args.empty() ? nullptr : textOf(args[0]); auto parsed = text ? parseURI(*text, false) : std::nullopt;
         return uriRecord("URI.URL", parsed ? normalized(*parsed) : "");
     });
@@ -431,8 +431,8 @@ auto Evaluator::registerNetBuiltins() -> void {
         auto text = args.empty() ? nullptr : textOf(args[0]); auto parsed = text ? parseURI(*text, false) : std::nullopt;
         return parsed && !parsed->scheme.empty() ? Value::just(Value::string(parsed->scheme)) : Value::none();
     };
-    defineIntrinsic("URI::scheme", scheme);
-    defineIntrinsic("URL::scheme", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("URI.scheme", scheme);
+    defineIntrinsic("URL.scheme", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto text = args.empty() ? nullptr : textOf(args[0]); auto parsed = text ? parseURI(*text, false) : std::nullopt;
         return Value::string(parsed ? parsed->scheme : "");
     });
@@ -443,29 +443,29 @@ auto Evaluator::registerNetBuiltins() -> void {
         auto value = Value::record("URI.Host", {{"display", Value::string(parsed->host)}, {"ascii", Value::string(ascii)}});
         return optional ? Value::just(value) : value;
     };
-    defineIntrinsic("URI::host", [host](std::vector<ValuePtr> args) { return host(std::move(args), true); });
-    defineIntrinsic("URL::host", [host](std::vector<ValuePtr> args) { return host(std::move(args), false); });
+    defineIntrinsic("URI.host", [host](std::vector<ValuePtr> args) { return host(std::move(args), true); });
+    defineIntrinsic("URL.host", [host](std::vector<ValuePtr> args) { return host(std::move(args), false); });
     auto query = [](std::vector<ValuePtr> args) -> ValuePtr {
         auto text = args.empty() ? nullptr : textOf(args[0]); auto parsed = text ? parseURI(*text, false) : std::nullopt;
         if (!parsed || !parsed->hasQuery) return Value::none();
         auto result = queryValue(parsed->query, false); auto* ok = std::get_if<VariantValue>(&result->data);
         return ok && !ok->args.empty() ? Value::just(ok->args[0]) : Value::none();
     };
-    defineIntrinsic("URI::query", query); defineIntrinsic("URL::query", query);
-    defineIntrinsic("URI::redacted", [](std::vector<ValuePtr> args) {
+    defineIntrinsic("URI.query", query); defineIntrinsic("URL.query", query);
+    defineIntrinsic("URI.redacted", [](std::vector<ValuePtr> args) {
         auto text = args.empty() ? nullptr : textOf(args[0]);
         return Value::string(text ? redactedURI(*text) : "<invalid URI>");
     });
-    defineIntrinsic("URI::queryParse", [](std::vector<ValuePtr> args) { return queryValue(args.empty() || !textOf(args[0]) ? "" : *textOf(args[0]), false); });
-    defineIntrinsic("URI::formParse", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("URI.queryParse", [](std::vector<ValuePtr> args) { return queryValue(args.empty() || !textOf(args[0]) ? "" : *textOf(args[0]), false); });
+    defineIntrinsic("URI.formParse", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto parsed = queryValue(args.empty() || !textOf(args[0]) ? "" : *textOf(args[0]), true);
         auto* result = std::get_if<VariantValue>(&parsed->data);
         if (!result || result->tag != "Ok" || result->args.empty()) return parsed;
         auto* query = std::get_if<RecordValue>(&result->args[0]->data);
         return Value::ok(Value::record("URI.Form", {{"entries", query->fields.at("entries")}}));
     });
-    defineIntrinsic("URI::queryEncode", [](std::vector<ValuePtr> args) { return Value::string(args.empty() ? "" : queryEncode(args[0], false)); });
-    defineIntrinsic("URI::formFrom", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("URI.queryEncode", [](std::vector<ValuePtr> args) { return Value::string(args.empty() ? "" : queryEncode(args[0], false)); });
+    defineIntrinsic("URI.formFrom", [](std::vector<ValuePtr> args) -> ValuePtr {
         std::vector<ValuePtr> entries;
         if (!args.empty()) if (auto* list = std::get_if<ListValue>(&args[0]->data)) for (auto& item : list->elements) {
             auto* tuple = std::get_if<TupleValue>(&item->data); if (!tuple || tuple->elements.size() != 2) continue;
@@ -473,8 +473,8 @@ auto Evaluator::registerNetBuiltins() -> void {
         }
         return Value::record("URI.Form", {{"entries", Value::list(std::move(entries))}});
     });
-    defineIntrinsic("URI::formEncode", [](std::vector<ValuePtr> args) { return Value::string(args.empty() ? "" : queryEncode(args[0], true)); });
-    defineIntrinsic("URI::resolve", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("URI.formEncode", [](std::vector<ValuePtr> args) { return Value::string(args.empty() ? "" : queryEncode(args[0], true)); });
+    defineIntrinsic("URI.resolve", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2 || !textOf(args[0]) || !textOf(args[1])) return uriError("InvalidSyntax", "resolve requires two URIs");
         auto base = parseURI(*textOf(args[0]), false), ref = parseURI(*textOf(args[1]), false);
         if (!base || !ref || base->scheme.empty()) return uriError("NotAbsolute", "base URI must be absolute");
@@ -487,7 +487,7 @@ auto Evaluator::registerNetBuiltins() -> void {
         }
         return Value::ok(uriRecord("URI.URI", normalized(target)));
     });
-    defineIntrinsic("URL::resolve", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("URL.resolve", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2 || !textOf(args[0]) || !textOf(args[1])) return uriError("InvalidSyntax", "resolve requires URL and URI");
         auto base = parseURI(*textOf(args[0]), false), ref = parseURI(*textOf(args[1]), false);
         if (!base || !ref) return uriError("InvalidSyntax", "malformed URI");
@@ -497,13 +497,13 @@ auto Evaluator::registerNetBuiltins() -> void {
         return Value::ok(uriRecord("URI.URL", normalized(target)));
     });
 
-    defineIntrinsic("Net::port", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Net.port", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return netError("Parse", "Connect", "port must be between 0 and 65535");
         auto value = asInteger(args[0]);
         if (!value || *value < 0 || *value > 65535) return netError("Parse", "Connect", "port must be between 0 and 65535");
         return Value::ok(Value::record("Net.Port", {{"value", integerResult(*value)}}));
     });
-    defineIntrinsic("Net::support", [](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("Net.support", [](std::vector<ValuePtr>) -> ValuePtr {
         auto support = [](bool compiled, bool usable) { return Value::record("Net.SupportValue", {{"compiled?", Value::boolean(compiled)}, {"usable?", Value::boolean(usable)}}); };
         return Value::record("Net.SupportReport", {
             {"dns", support(false, false)}, {"tcp", support(false, false)}, {"udp", support(false, false)},
@@ -512,37 +512,37 @@ auto Evaluator::registerNetBuiltins() -> void {
             {"webSocketClient", support(false, false)}, {"webSocketServer", support(false, false)},
         });
     });
-    defineIntrinsic("Net::unsupported", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Net.unsupported", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto operation = args.empty() || !textOf(args[0]) ? std::string("Backend") : *textOf(args[0]);
         return netError("UnsupportedBackend", operation, operation + " is not available on this backend");
     });
-    defineIntrinsic("NetDNS::name", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("NetDNS.name", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty() || !textOf(args[0])) return netError("Parse", "DNS", "DNS name must be text");
         auto display = *textOf(args[0]); auto ascii = idnaHost(display);
         if (!ascii) return netError("Parse", "DNS", "invalid DNS name");
         for (size_t start = 0; start < ascii->size();) { auto dot = ascii->find('.', start); auto label = ascii->substr(start, dot == std::string::npos ? std::string::npos : dot - start); if (label.front() == '-' || label.back() == '-' || !std::all_of(label.begin(), label.end(), [](unsigned char c){ return std::isalnum(c) || c == '-'; })) return netError("Parse", "DNS", "invalid DNS label"); if (dot == std::string::npos) break; start = dot + 1; }
         return Value::ok(Value::record("Net.DNS.Name", {{"display", Value::string(display)}, {"ascii", Value::string(*ascii)}}));
     });
-    defineIntrinsic("NetDNS::addresses", [](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("NetDNS.addresses", [](std::vector<ValuePtr>) -> ValuePtr {
         return netError("UnsupportedBackend", "DNS", "DNS is available only through a mock on the tree-walking backend");
     });
-    for (const char* name : {"NetDNS::resolverDefault", "NetDNS::resolver", "NetDNS::resolverWith",
-                             "NetDNS::resolverAddresses", "NetDNS::lookup"})
+    for (const char* name : {"NetDNS.resolverDefault", "NetDNS.resolver", "NetDNS.resolverWith",
+                             "NetDNS.resolverAddresses", "NetDNS.lookup"})
         defineIntrinsic(name, [](std::vector<ValuePtr>) -> ValuePtr {
             return netError("UnsupportedBackend", "DNS",
                             "DNS is available only through a mock on the tree-walking backend");
         });
-    defineIntrinsic("NetDNS::clear", [](std::vector<ValuePtr>) { return Value::unit(); });
-    defineIntrinsic("NetDNS::close", [](std::vector<ValuePtr>) { return Value::unit(); });
-    defineIntrinsic("NetDNS::statistics", [](std::vector<ValuePtr>) {
+    defineIntrinsic("NetDNS.clear", [](std::vector<ValuePtr>) { return Value::unit(); });
+    defineIntrinsic("NetDNS.close", [](std::vector<ValuePtr>) { return Value::unit(); });
+    defineIntrinsic("NetDNS.statistics", [](std::vector<ValuePtr>) {
         return Value::record("Net.DNS.CacheStatistics", {{"entries", Value::integer(0)},
                                                    {"hits", Value::integer(0)},
                                                    {"misses", Value::integer(0)},
                                                    {"negativeHits", Value::integer(0)},
                                                    {"evictions", Value::integer(0)}});
     });
-    for (const char* name : {"NetWebSocket::connect", "NetWebSocket::send",
-                             "NetWebSocket::receiveMessage"})
+    for (const char* name : {"NetWebSocket.connect", "NetWebSocket.send",
+                             "NetWebSocket.receiveMessage"})
         defineIntrinsic(name, [](std::vector<ValuePtr>) -> ValuePtr {
             return netError("UnsupportedBackend", "WebSocketClient",
                             "WebSocket clients are unavailable on the tree-walking backend");
@@ -552,7 +552,7 @@ auto Evaluator::registerNetBuiltins() -> void {
     // reports its unavailability the same way a real server would answer an
     // unsupported request, rather than as a typed error the caller can't
     // actually get back (nothing here calls `.try` on a plain Response).
-    defineIntrinsic("NetWebSocket::upgrade", [](std::vector<ValuePtr>) -> ValuePtr {
+    defineIntrinsic("NetWebSocket.upgrade", [](std::vector<ValuePtr>) -> ValuePtr {
         std::string message = "WebSocket server upgrades are unavailable on the tree-walking backend\n";
         return Value::record("Net.HTTP.Response", {
             {"status", Value::record("Net.HTTP.Status", {{"code", Value::integer(501)}})},
@@ -560,20 +560,20 @@ auto Evaluator::registerNetBuiltins() -> void {
             {"body", Value::binary({message.begin(), message.end()})},
         });
     });
-    defineIntrinsic("NetWebSocket::session", [](std::vector<ValuePtr>) {
+    defineIntrinsic("NetWebSocket.session", [](std::vector<ValuePtr>) {
         return Value::record("Net.HTTP.WebSocket.Session", {{"subprotocol", Value::none()}});
     });
-    defineIntrinsic("NetWebSocket::close", [](std::vector<ValuePtr>) { return Value::unit(); });
-    defineIntrinsic("NetWebSocket::closed?", [](std::vector<ValuePtr>) { return Value::boolean(true); });
+    defineIntrinsic("NetWebSocket.close", [](std::vector<ValuePtr>) { return Value::unit(); });
+    defineIntrinsic("NetWebSocket.closed?", [](std::vector<ValuePtr>) { return Value::boolean(true); });
 
 #ifndef _WIN32
-    defineIntrinsic("NetIP::address", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("NetIP.address", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty() || !textOf(args[0])) return netError("Parse", "Connect", "address must be text");
         auto parsed = parseIP(*textOf(args[0]));
         if (!parsed) return netError("Parse", "Connect", "invalid IP address");
         return Value::ok(uriRecord("Net.IP.Address", renderIP(*parsed)));
     });
-    defineIntrinsic("NetIP::network", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("NetIP.network", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty() || !textOf(args[0])) return netError("Parse", "Connect", "network must be text");
         auto source = *textOf(args[0]); auto slash = source.rfind('/');
         if (slash == std::string::npos) return netError("Parse", "Connect", "network requires a prefix length");
@@ -584,28 +584,28 @@ auto Evaluator::registerNetBuiltins() -> void {
         return Value::ok(uriRecord("Net.IP.Network", renderIP(*ip) + "/" + std::to_string(prefix)));
     });
     auto parsedAddressArg = [](const ValuePtr& value) { auto text = textOf(value); return text ? parseIP(*text) : std::optional<IPValue>{}; };
-    defineIntrinsic("NetIP::addressString", [parsedAddressArg](std::vector<ValuePtr> args) { auto ip = args.empty() ? std::optional<IPValue>{} : parsedAddressArg(args[0]); return Value::string(ip ? renderIP(*ip) : ""); });
-    defineIntrinsic("NetIP::networkString", [](std::vector<ValuePtr> args) { return Value::string(args.empty() || !textOf(args[0]) ? "" : *textOf(args[0])); });
-    defineIntrinsic("NetIP::version", [parsedAddressArg](std::vector<ValuePtr> args) { auto ip = args.empty() ? std::optional<IPValue>{} : parsedAddressArg(args[0]); return Value::integer(ip && ip->family == AF_INET6 ? 6 : 4); });
-    defineIntrinsic("NetIP::loopback?", [parsedAddressArg](std::vector<ValuePtr> args) { auto ip = args.empty() ? std::optional<IPValue>{} : parsedAddressArg(args[0]); return Value::boolean(ip && ((ip->family == AF_INET && ip->bytes[0] == 127) || (ip->family == AF_INET6 && std::all_of(ip->bytes.begin(), ip->bytes.end() - 1, [](auto b){ return b == 0; }) && ip->bytes[15] == 1))); });
-    defineIntrinsic("NetIP::private?", [parsedAddressArg](std::vector<ValuePtr> args) { auto ip = args.empty() ? std::optional<IPValue>{} : parsedAddressArg(args[0]); bool yes = ip && ((ip->family == AF_INET && (ip->bytes[0] == 10 || (ip->bytes[0] == 172 && ip->bytes[1] >= 16 && ip->bytes[1] <= 31) || (ip->bytes[0] == 192 && ip->bytes[1] == 168))) || (ip->family == AF_INET6 && (ip->bytes[0] & 0xfe) == 0xfc)); return Value::boolean(yes); });
-    defineIntrinsic("NetIP::unspecified?", [parsedAddressArg](std::vector<ValuePtr> args) { auto ip = args.empty() ? std::optional<IPValue>{} : parsedAddressArg(args[0]); return Value::boolean(ip && std::all_of(ip->bytes.begin(), ip->bytes.begin() + (ip->family == AF_INET ? 4 : 16), [](auto b){ return b == 0; })); });
-    defineIntrinsic("NetIP::multicast?", [parsedAddressArg](std::vector<ValuePtr> args) { auto ip = args.empty() ? std::optional<IPValue>{} : parsedAddressArg(args[0]); return Value::boolean(ip && ((ip->family == AF_INET && ip->bytes[0] >= 224 && ip->bytes[0] <= 239) || (ip->family == AF_INET6 && ip->bytes[0] == 0xff))); });
-    defineIntrinsic("NetIP::prefix", [](std::vector<ValuePtr> args) { auto text = args.empty() ? nullptr : textOf(args[0]); return Value::integer(text ? std::stoi(text->substr(text->rfind('/') + 1)) : 0); });
-    defineIntrinsic("NetIP::contains?", [](std::vector<ValuePtr> args) { if (args.size() < 2 || !textOf(args[0]) || !textOf(args[1])) return Value::boolean(false); auto networkText=*textOf(args[0]); auto slash=networkText.rfind('/'); auto net=parseIP(networkText.substr(0,slash)), ip=parseIP(*textOf(args[1])); if(!net||!ip||net->family!=ip->family)return Value::boolean(false); int prefix=std::stoi(networkText.substr(slash+1)); for(int bit=0;bit<prefix;++bit)if((net->bytes[bit/8]&(1u<<(7-bit%8)))!=(ip->bytes[bit/8]&(1u<<(7-bit%8))))return Value::boolean(false); return Value::boolean(true); });
+    defineIntrinsic("NetIP.addressString", [parsedAddressArg](std::vector<ValuePtr> args) { auto ip = args.empty() ? std::optional<IPValue>{} : parsedAddressArg(args[0]); return Value::string(ip ? renderIP(*ip) : ""); });
+    defineIntrinsic("NetIP.networkString", [](std::vector<ValuePtr> args) { return Value::string(args.empty() || !textOf(args[0]) ? "" : *textOf(args[0])); });
+    defineIntrinsic("NetIP.version", [parsedAddressArg](std::vector<ValuePtr> args) { auto ip = args.empty() ? std::optional<IPValue>{} : parsedAddressArg(args[0]); return Value::integer(ip && ip->family == AF_INET6 ? 6 : 4); });
+    defineIntrinsic("NetIP.loopback?", [parsedAddressArg](std::vector<ValuePtr> args) { auto ip = args.empty() ? std::optional<IPValue>{} : parsedAddressArg(args[0]); return Value::boolean(ip && ((ip->family == AF_INET && ip->bytes[0] == 127) || (ip->family == AF_INET6 && std::all_of(ip->bytes.begin(), ip->bytes.end() - 1, [](auto b){ return b == 0; }) && ip->bytes[15] == 1))); });
+    defineIntrinsic("NetIP.private?", [parsedAddressArg](std::vector<ValuePtr> args) { auto ip = args.empty() ? std::optional<IPValue>{} : parsedAddressArg(args[0]); bool yes = ip && ((ip->family == AF_INET && (ip->bytes[0] == 10 || (ip->bytes[0] == 172 && ip->bytes[1] >= 16 && ip->bytes[1] <= 31) || (ip->bytes[0] == 192 && ip->bytes[1] == 168))) || (ip->family == AF_INET6 && (ip->bytes[0] & 0xfe) == 0xfc)); return Value::boolean(yes); });
+    defineIntrinsic("NetIP.unspecified?", [parsedAddressArg](std::vector<ValuePtr> args) { auto ip = args.empty() ? std::optional<IPValue>{} : parsedAddressArg(args[0]); return Value::boolean(ip && std::all_of(ip->bytes.begin(), ip->bytes.begin() + (ip->family == AF_INET ? 4 : 16), [](auto b){ return b == 0; })); });
+    defineIntrinsic("NetIP.multicast?", [parsedAddressArg](std::vector<ValuePtr> args) { auto ip = args.empty() ? std::optional<IPValue>{} : parsedAddressArg(args[0]); return Value::boolean(ip && ((ip->family == AF_INET && ip->bytes[0] >= 224 && ip->bytes[0] <= 239) || (ip->family == AF_INET6 && ip->bytes[0] == 0xff))); });
+    defineIntrinsic("NetIP.prefix", [](std::vector<ValuePtr> args) { auto text = args.empty() ? nullptr : textOf(args[0]); return Value::integer(text ? std::stoi(text->substr(text->rfind('/') + 1)) : 0); });
+    defineIntrinsic("NetIP.contains?", [](std::vector<ValuePtr> args) { if (args.size() < 2 || !textOf(args[0]) || !textOf(args[1])) return Value::boolean(false); auto networkText=*textOf(args[0]); auto slash=networkText.rfind('/'); auto net=parseIP(networkText.substr(0,slash)), ip=parseIP(*textOf(args[1])); if(!net||!ip||net->family!=ip->family)return Value::boolean(false); int prefix=std::stoi(networkText.substr(slash+1)); for(int bit=0;bit<prefix;++bit)if((net->bytes[bit/8]&(1u<<(7-bit%8)))!=(ip->bytes[bit/8]&(1u<<(7-bit%8))))return Value::boolean(false); return Value::boolean(true); });
     auto networkEdge = [](std::vector<ValuePtr> args, bool last) -> ValuePtr { if(args.empty()||!textOf(args[0]))return uriRecord("Net.IP.Address",""); auto text=*textOf(args[0]); auto slash=text.rfind('/'); auto ip=parseIP(text.substr(0,slash)); int prefix=std::stoi(text.substr(slash+1)); int bits=ip->family==AF_INET?32:128; if(last)for(int bit=prefix;bit<bits;++bit)ip->bytes[bit/8]|=static_cast<unsigned char>(1u<<(7-bit%8)); return uriRecord("Net.IP.Address",renderIP(*ip)); };
-    defineIntrinsic("NetIP::first", [networkEdge](std::vector<ValuePtr> args){return networkEdge(std::move(args),false);});
-    defineIntrinsic("NetIP::last", [networkEdge](std::vector<ValuePtr> args){return networkEdge(std::move(args),true);});
+    defineIntrinsic("NetIP.first", [networkEdge](std::vector<ValuePtr> args){return networkEdge(std::move(args),false);});
+    defineIntrinsic("NetIP.last", [networkEdge](std::vector<ValuePtr> args){return networkEdge(std::move(args),true);});
 #endif
 
-    defineIntrinsic("NetHTTP::headers", [](std::vector<ValuePtr> args) -> ValuePtr { auto entries=args.empty()?std::vector<std::pair<std::string,std::string>>{}:headerEntries(Value::record("Net.HTTP.Headers",{{"entries",args[0]}})); for(auto& [n,v]:entries)if(!validHeader(n,v))return netError("Parse","HTTPClient","invalid HTTP header"); return Value::ok(headersValue(entries)); });
-    defineIntrinsic("NetHTTP::parseHeaders", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("NetHTTP.headers", [](std::vector<ValuePtr> args) -> ValuePtr { auto entries=args.empty()?std::vector<std::pair<std::string,std::string>>{}:headerEntries(Value::record("Net.HTTP.Headers",{{"entries",args[0]}})); for(auto& [n,v]:entries)if(!validHeader(n,v))return netError("Parse","HTTPClient","invalid HTTP header"); return Value::ok(headersValue(entries)); });
+    defineIntrinsic("NetHTTP.parseHeaders", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty() || !textOf(args[0])) return netError("Parse", "HTTPClient", "headers must be text");
         std::vector<std::pair<std::string, std::string>> entries; std::istringstream input(*textOf(args[0])); std::string line;
         while (std::getline(input, line)) { if (!line.empty() && line.back() == '\r') line.pop_back(); if (line.empty()) continue; if (line.front() == ' ' || line.front() == '\t') return netError("Parse", "HTTPClient", "obsolete folded headers are rejected"); auto colon = line.find(':'); if (colon == std::string::npos) return netError("Parse", "HTTPClient", "header line requires a colon"); auto name=line.substr(0,colon), value=line.substr(colon+1); while(!value.empty()&&(value.front()==' '||value.front()=='\t'))value.erase(value.begin()); while(!value.empty()&&(value.back()==' '||value.back()=='\t'))value.pop_back(); if(!validHeader(name,value))return netError("Parse","HTTPClient","invalid HTTP header"); entries.emplace_back(name,value); }
         return Value::ok(headersValue(entries));
     });
-    defineIntrinsic("NetHTTP::addHeader", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("NetHTTP.addHeader", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 3 || !textOf(args[1]) || !textOf(args[2]) ||
             !validHeader(*textOf(args[1]), *textOf(args[2])))
             return netError("Parse", "HTTPClient", "invalid HTTP header");
@@ -613,13 +613,14 @@ auto Evaluator::registerNetBuiltins() -> void {
         entries.emplace_back(*textOf(args[1]), *textOf(args[2]));
         return Value::ok(headersValue(entries));
     });
-    defineIntrinsic("NetHTTP::removeHeader", [](std::vector<ValuePtr> args) { auto entries=headerEntries(args[0]); if(args.size()>1&&textOf(args[1])){auto key=lowerASCII(*textOf(args[1]));entries.erase(std::remove_if(entries.begin(),entries.end(),[&](auto&e){return lowerASCII(e.first)==key;}),entries.end());} return headersValue(entries); });
-    defineIntrinsic("NetHTTP::getAllHeaders", [](std::vector<ValuePtr> args) { std::vector<ValuePtr> out; if(args.size()>1&&textOf(args[1])){auto key=lowerASCII(*textOf(args[1]));for(auto&[n,v]:headerEntries(args[0]))if(lowerASCII(n)==key)out.push_back(Value::string(v));}return Value::list(std::move(out)); });
-    defineIntrinsic("NetHTTP::getHeader", [](std::vector<ValuePtr> args) { if(args.size()>1&&textOf(args[1])){auto key=lowerASCII(*textOf(args[1]));for(auto&[n,v]:headerEntries(args[0]))if(lowerASCII(n)==key)return Value::just(Value::string(v));}return Value::none(); });
-    defineIntrinsic("NetHTTP::redactedHeaders", [](std::vector<ValuePtr> args) {
+    defineIntrinsic("NetHTTP.removeHeader", [](std::vector<ValuePtr> args) { auto entries=headerEntries(args[0]); if(args.size()>1&&textOf(args[1])){auto key=lowerASCII(*textOf(args[1]));entries.erase(std::remove_if(entries.begin(),entries.end(),[&](auto&e){return lowerASCII(e.first)==key;}),entries.end());} return headersValue(entries); });
+    defineIntrinsic("NetHTTP.getAllHeaders", [](std::vector<ValuePtr> args) { std::vector<ValuePtr> out; if(args.size()>1&&textOf(args[1])){auto key=lowerASCII(*textOf(args[1]));for(auto&[n,v]:headerEntries(args[0]))if(lowerASCII(n)==key)out.push_back(Value::string(v));}return Value::list(std::move(out)); });
+    defineIntrinsic("NetHTTP.getHeader", [](std::vector<ValuePtr> args) { if(args.size()>1&&textOf(args[1])){auto key=lowerASCII(*textOf(args[1]));for(auto&[n,v]:headerEntries(args[0]))if(lowerASCII(n)==key)return Value::just(Value::string(v));}return Value::none(); });
+    defineIntrinsic("NetHTTP.redactedHeaders", [](std::vector<ValuePtr> args) {
         std::ostringstream out; out << "Headers { "; bool first = true;
         if (!args.empty()) for (const auto& [name, value] : headerEntries(args[0])) {
-            if (!first) out << ", "; first = false;
+            if (!first) out << ", ";
+            first = false;
             auto key = lowerASCII(name);
             const bool sensitive = key == "authorization" || key == "proxy-authorization" ||
                                    key == "cookie" || key == "set-cookie";
@@ -627,26 +628,26 @@ auto Evaluator::registerNetBuiltins() -> void {
         }
         out << " }"; return Value::string(out.str());
     });
-    defineIntrinsic("NetHTTP::status", [](std::vector<ValuePtr> args) -> ValuePtr { auto code=args.empty()?std::optional<mpz_class>{}:asInteger(args[0]); if(!code||*code<100||*code>599)return netError("Parse","HTTPClient","HTTP status must be between 100 and 599"); return Value::ok(Value::record("Net.HTTP.Status",{{"code",integerResult(*code)}})); });
-    defineIntrinsic("NetHTTP::responseBinary", [](std::vector<ValuePtr> args) { return Value::record("Net.HTTP.Response", {{"status", Value::record("Net.HTTP.Status", {{"code", args[0]}})}, {"headers", args[2]}, {"body", args[1]}}); });
-    defineIntrinsic("NetHTTP::responseText", [](std::vector<ValuePtr> args) { auto text = *textOf(args[1]); return Value::record("Net.HTTP.Response", {{"status", Value::record("Net.HTTP.Status", {{"code", args[0]}})}, {"headers", headersValue({{"Content-Type", "text/plain; charset=utf-8"}})}, {"body", Value::binary({text.begin(), text.end()})}}); });
-    defineIntrinsic("NetHTTP::responseEmpty", [](std::vector<ValuePtr> args) { return Value::record("Net.HTTP.Response", {{"status", Value::record("Net.HTTP.Status", {{"code", args[0]}})}, {"headers", headersValue({})}, {"body", Value::binary({})}}); });
-    defineIntrinsic("NetHTTP::get", [](std::vector<ValuePtr>) { return netError("UnsupportedBackend","HTTPClient","HTTP client is not available on the tree-walking backend"); });
-    defineIntrinsic("NetHTTP::request", [](std::vector<ValuePtr>) { return netError("UnsupportedBackend","HTTPClient","HTTP client is not available on the tree-walking backend"); });
-    for (const char* name : {"NetHTTPServer::start", "NetHTTPServer::serve",
-                             "NetHTTPServer::stop", "NetHTTPServer::join"})
+    defineIntrinsic("NetHTTP.status", [](std::vector<ValuePtr> args) -> ValuePtr { auto code=args.empty()?std::optional<mpz_class>{}:asInteger(args[0]); if(!code||*code<100||*code>599)return netError("Parse","HTTPClient","HTTP status must be between 100 and 599"); return Value::ok(Value::record("Net.HTTP.Status",{{"code",integerResult(*code)}})); });
+    defineIntrinsic("NetHTTP.responseBinary", [](std::vector<ValuePtr> args) { return Value::record("Net.HTTP.Response", {{"status", Value::record("Net.HTTP.Status", {{"code", args[0]}})}, {"headers", args[2]}, {"body", args[1]}}); });
+    defineIntrinsic("NetHTTP.responseText", [](std::vector<ValuePtr> args) { auto text = *textOf(args[1]); return Value::record("Net.HTTP.Response", {{"status", Value::record("Net.HTTP.Status", {{"code", args[0]}})}, {"headers", headersValue({{"Content-Type", "text/plain; charset=utf-8"}})}, {"body", Value::binary({text.begin(), text.end()})}}); });
+    defineIntrinsic("NetHTTP.responseEmpty", [](std::vector<ValuePtr> args) { return Value::record("Net.HTTP.Response", {{"status", Value::record("Net.HTTP.Status", {{"code", args[0]}})}, {"headers", headersValue({})}, {"body", Value::binary({})}}); });
+    defineIntrinsic("NetHTTP.get", [](std::vector<ValuePtr>) { return netError("UnsupportedBackend","HTTPClient","HTTP client is not available on the tree-walking backend"); });
+    defineIntrinsic("NetHTTP.request", [](std::vector<ValuePtr>) { return netError("UnsupportedBackend","HTTPClient","HTTP client is not available on the tree-walking backend"); });
+    for (const char* name : {"NetHTTPServer.start", "NetHTTPServer.serve",
+                             "NetHTTPServer.stop", "NetHTTPServer.join"})
         defineIntrinsic(name, [](std::vector<ValuePtr>) { return netError("UnsupportedBackend","HTTPServer","HTTP server is not available on the tree-walking backend"); });
-    defineIntrinsic("NetHTTPServer::running?", [](std::vector<ValuePtr>) { return Value::boolean(false); });
-    defineIntrinsic("NetHTTPServer::localAddress", [](std::vector<ValuePtr>) { return Value::unit(); });
-    for (const char* name : {"NetHTTPClient::open", "NetHTTPClient::request",
-                             "NetHTTPClient::get", "NetHTTPClient::post"})
+    defineIntrinsic("NetHTTPServer.running?", [](std::vector<ValuePtr>) { return Value::boolean(false); });
+    defineIntrinsic("NetHTTPServer.localAddress", [](std::vector<ValuePtr>) { return Value::unit(); });
+    for (const char* name : {"NetHTTPClient.open", "NetHTTPClient.request",
+                             "NetHTTPClient.get", "NetHTTPClient.post"})
         defineIntrinsic(name, [](std::vector<ValuePtr>) { return netError("UnsupportedBackend","HTTPClient","HTTP client is not available on the tree-walking backend"); });
-    defineIntrinsic("NetHTTPClient::statistics", [](std::vector<ValuePtr>) {
+    defineIntrinsic("NetHTTPClient.statistics", [](std::vector<ValuePtr>) {
         return Value::record("Net.HTTP.ClientStatistics", {{"openConnections", Value::integer(0)},
                                                     {"requests", Value::integer(0)},
                                                     {"reusedConnections", Value::integer(0)}});
     });
-    defineIntrinsic("NetHTTPClient::close", [](std::vector<ValuePtr>) {
+    defineIntrinsic("NetHTTPClient.close", [](std::vector<ValuePtr>) {
         return Value::ok(Value::record("Net.HTTP.ClientCloseReport", {{"closedConnections", Value::integer(0)}}));
     });
 
@@ -656,26 +657,26 @@ auto Evaluator::registerNetBuiltins() -> void {
                             operation + " is available only through a mock on the tree-walking backend");
         };
     };
-    for (const char* name : {"NetTCP::connect", "NetTCP::connectWith", "NetTCP::listen", "NetTCP::listenWith", "NetTCP::accept", "NetTCP::acceptWithin",
-                             "NetTCP::sendAll", "NetTCP::receiveChunk",
-                             "NetTCP::receiveChunkWithin", "NetTCP::receiveExactly", "NetTCP::receiveExactlyWithin", "NetTCP::receiveUntil", "NetTCP::receiveUntilWithin", "NetTCP::receiveLine", "NetTCP::receiveLineWithin",
-                             "NetTCP::shutdownWrite", "NetTCP::localAddress",
-                             "NetTCP::peerAddress"})
+    for (const char* name : {"NetTCP.connect", "NetTCP.connectWith", "NetTCP.listen", "NetTCP.listenWith", "NetTCP.accept", "NetTCP.acceptWithin",
+                             "NetTCP.sendAll", "NetTCP.receiveChunk",
+                             "NetTCP.receiveChunkWithin", "NetTCP.receiveExactly", "NetTCP.receiveExactlyWithin", "NetTCP.receiveUntil", "NetTCP.receiveUntilWithin", "NetTCP.receiveLine", "NetTCP.receiveLineWithin",
+                             "NetTCP.shutdownWrite", "NetTCP.localAddress",
+                             "NetTCP.peerAddress"})
         defineIntrinsic(name, unsupportedSocket("TCP"));
-    for (const char* name : {"NetUDP::bind", "NetUDP::bindWith", "NetUDP::sendTo", "NetUDP::receiveFrom",
-                             "NetUDP::localAddress", "NetUDP::joinMulticast", "NetUDP::leaveMulticast"})
+    for (const char* name : {"NetUDP.bind", "NetUDP.bindWith", "NetUDP.sendTo", "NetUDP.receiveFrom",
+                             "NetUDP.localAddress", "NetUDP.joinMulticast", "NetUDP.leaveMulticast"})
         defineIntrinsic(name, unsupportedSocket("UDP"));
-    for (const char* name : {"NetUnix::connect", "NetUnix::connectWith", "NetUnix::listen", "NetUnix::listenWith", "NetUnix::accept",
-                             "NetUnix::sendAll", "NetUnix::receiveChunk", "NetUnix::receiveExactly",
-                             "NetUnix::receiveUntil", "NetUnix::receiveLine", "NetUnix::shutdownWrite"})
+    for (const char* name : {"NetUnix.connect", "NetUnix.connectWith", "NetUnix.listen", "NetUnix.listenWith", "NetUnix.accept",
+                             "NetUnix.sendAll", "NetUnix.receiveChunk", "NetUnix.receiveExactly",
+                             "NetUnix.receiveUntil", "NetUnix.receiveLine", "NetUnix.shutdownWrite"})
         defineIntrinsic(name, unsupportedSocket("Unix"));
-    for (const char* name : {"NetTLS::connect", "NetTLS::sendAll", "NetTLS::receiveChunk"})
+    for (const char* name : {"NetTLS.connect", "NetTLS.sendAll", "NetTLS.receiveChunk"})
         defineIntrinsic(name, unsupportedSocket("TLS"));
-    for (const char* name : {"NetTCP::close", "NetUDP::close", "NetUnix::close", "NetTLS::close"})
+    for (const char* name : {"NetTCP.close", "NetUDP.close", "NetUnix.close", "NetTLS.close"})
         defineIntrinsic(name, [](std::vector<ValuePtr>) { return Value::unit(); });
-    for (const char* name : {"NetTCP::closed?", "NetUDP::closed?", "NetUnix::closed?", "NetTLS::closed?"})
+    for (const char* name : {"NetTCP.closed?", "NetUDP.closed?", "NetUnix.closed?", "NetTLS.closed?"})
         defineIntrinsic(name, [](std::vector<ValuePtr>) { return Value::boolean(true); });
-    defineIntrinsic("NetUnix::address", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("NetUnix.address", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty() || !textOf(args[0]) || textOf(args[0])->empty() || textOf(args[0])->front() != '/')
             return netError("Parse", "Unix", "Unix socket path must be absolute");
         return Value::ok(Value::record("Net.Socket.Unix.Address", {{"path", Value::string(*textOf(args[0]))}}));

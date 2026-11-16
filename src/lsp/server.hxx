@@ -7,7 +7,7 @@ namespace kex::lsp {
 
 // Runs a Language Server Protocol session using Content-Length framed JSON-RPC
 // messages. Diagnostics and completion are backed by the compiler's live
-// SemanticDB, so open (unsaved) buffers never need temporary files.
+// Workspace, so open (unsaved) buffers never need temporary files.
 //
 // `runtimeBeamDir` is the compiled standard library the CLI already locates.
 // Passing it matters: without it the checker falls back to reading interfaces

@@ -37,7 +37,7 @@ main do
 
   site.put(Site { title: "Replaced", pages: [] })
   IO.printLine("replaced: ${site.get.map { |s| s.title }.or("")}")
-  IO.printLine("deleted: ${site.delete} ${site.delete}")
+  IO.printLine("deleted: ${site.delete.map { |s| s.title }.or("none")} ${site.delete.none?}")
   IO.printLine("after delete: ${site.get.none?}")
 
   # A stored server keeps its type, so its slots can be called.

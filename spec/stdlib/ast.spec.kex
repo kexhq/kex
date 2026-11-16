@@ -235,11 +235,11 @@ describe("Kex.AST") do
               [BindPattern("head")], Just(BindPattern("tail"))
             )))
             assert(recordParam.pattern == Just(RecordPattern(Just("Point"), [
-              PatternField { name: "x", pattern: None, stringKey: false },
+              PatternField { name: "x", pattern: None, stringKey?: false },
               PatternField {
                 name: "label",
                 pattern: Just(BindPattern("name")),
-                stringKey: true
+                stringKey?: true
               }
             ])))
             assert(rangeParam.pattern == Just(RangePattern(
@@ -307,12 +307,12 @@ describe("Kex.AST") do
     match program.items do
       [FunctionDef(valueInfo), FunctionDef(computeInfo), MainDef(mainInfo)] => do
         match valueInfo.clauses do
-          [clause] => assert(!clause.hasParamList)
+          [clause] => assert(!clause.paramList?)
           _ => assert(false, "expected value clause")
         end
         match computeInfo.clauses do
           [clause] => do
-            assert(clause.hasParamList)
+            assert(clause.paramList?)
             match clause.rescueInfo do
               Just(rescueInfo) => do
                 assert(rescueInfo.catchAllName == Just("error"))
@@ -337,7 +337,7 @@ describe("Kex.AST") do
         GeneratedNode(FunctionDef(functionInfo))
       ) => match functionInfo.clauses do
         [clause] => do
-          assert(clause.hasParamList)
+          assert(clause.paramList?)
           assert(clause.body == [LitInt(1)])
         end
         _ => assert(false, "generated function clause was dropped")
@@ -376,7 +376,7 @@ describe("Kex.AST") do
     match program.items do
       [ModuleDef(moduleInfo)] => match moduleInfo.items do
         [Visibility(visibility), UsingDef(usingInfo), ExportDef(exportInfo), Compiled(compiledInfo)] => do
-          assert(!visibility.isPublic)
+          assert(!visibility.public?)
           match visibility.items do
             [FunctionDef(functionInfo)] => assert(functionInfo.name == "hidden")
             _ => assert(false, "private declaration was dropped")

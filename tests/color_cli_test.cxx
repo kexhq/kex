@@ -114,9 +114,9 @@ const std::string CRASHING_VALIDATION_SRC =
     "let demo(parts: [String], values: [Any]) -> String = "
     "parts.first.or(\"\")\n"
     "let validateDemo(source: String) -> [TaggedValidation.Issue] do\n"
-    "  match source do\n"
-    "    \"never\" => []\n"
-    "  end\n"
+    "  let zero = source.length - source.length\n"
+    "  let ratio = 10 / zero\n"
+    "  ratio > 0 then [] else []\n"
     "end\n"
     "main do demo`abcde` end\n";
 

@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A record field whose name is also a `foul` function of another arity
 # (kexhq/kex#191).
 #

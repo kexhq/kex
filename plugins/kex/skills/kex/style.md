@@ -115,7 +115,7 @@ end
   front: `empty?`, `admin?`.
 - Name a function for what it gives back, not `getX` or `computeX`: `parent`,
   `count`, `total`. Keep verbs for effects: `write`, `send`.
-- File names are lower case with no separators: `optionparser.kex`.
+- File names are snake_case, after the module: `option_parser.kex` for `OptionParser`.
 
 ## Shape
 

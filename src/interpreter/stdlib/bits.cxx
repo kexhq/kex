@@ -43,31 +43,31 @@ auto position(const std::vector<ValuePtr>& args, size_t index, const char* what)
 auto Evaluator::registerBitsBuiltins() -> void {
     defineModule("Bits");
 
-    defineIntrinsic("Bits::and", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Bits.and", [](std::vector<ValuePtr> args) -> ValuePtr {
         mpz_class out;
         mpz_and(out.get_mpz_t(), operand(args, 0, "Bits.and").get_mpz_t(),
                 operand(args, 1, "Bits.and").get_mpz_t());
         return integerResult(std::move(out));
     });
-    defineIntrinsic("Bits::or", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Bits.or", [](std::vector<ValuePtr> args) -> ValuePtr {
         mpz_class out;
         mpz_ior(out.get_mpz_t(), operand(args, 0, "Bits.or").get_mpz_t(),
                 operand(args, 1, "Bits.or").get_mpz_t());
         return integerResult(std::move(out));
     });
-    defineIntrinsic("Bits::xor", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Bits.xor", [](std::vector<ValuePtr> args) -> ValuePtr {
         mpz_class out;
         mpz_xor(out.get_mpz_t(), operand(args, 0, "Bits.xor").get_mpz_t(),
                 operand(args, 1, "Bits.xor").get_mpz_t());
         return integerResult(std::move(out));
     });
-    defineIntrinsic("Bits::not", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Bits.not", [](std::vector<ValuePtr> args) -> ValuePtr {
         mpz_class out;
         mpz_com(out.get_mpz_t(), operand(args, 0, "Bits.not").get_mpz_t());
         return integerResult(std::move(out));
     });
 
-    defineIntrinsic("Bits::shiftLeft", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Bits.shiftLeft", [](std::vector<ValuePtr> args) -> ValuePtr {
         mpz_class out;
         mpz_mul_2exp(out.get_mpz_t(), operand(args, 0, "Bits.shiftLeft").get_mpz_t(),
                      position(args, 1, "Bits.shiftLeft"));
@@ -75,29 +75,29 @@ auto Evaluator::registerBitsBuiltins() -> void {
     });
     // Arithmetic (sign-propagating) shift, matching Erlang's bsr: -8 >> 1 is
     // -4, not a huge positive number.
-    defineIntrinsic("Bits::shiftRight", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Bits.shiftRight", [](std::vector<ValuePtr> args) -> ValuePtr {
         mpz_class out;
         mpz_fdiv_q_2exp(out.get_mpz_t(), operand(args, 0, "Bits.shiftRight").get_mpz_t(),
                         position(args, 1, "Bits.shiftRight"));
         return integerResult(std::move(out));
     });
 
-    defineIntrinsic("Bits::test?", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Bits.test?", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto value = operand(args, 0, "Bits.test?");
         return Value::boolean(
             mpz_tstbit(value.get_mpz_t(), position(args, 1, "Bits.test?")) != 0);
     });
-    defineIntrinsic("Bits::set", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Bits.set", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto out = operand(args, 0, "Bits.set");
         mpz_setbit(out.get_mpz_t(), position(args, 1, "Bits.set"));
         return integerResult(std::move(out));
     });
-    defineIntrinsic("Bits::clear", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Bits.clear", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto out = operand(args, 0, "Bits.clear");
         mpz_clrbit(out.get_mpz_t(), position(args, 1, "Bits.clear"));
         return integerResult(std::move(out));
     });
-    defineIntrinsic("Bits::toggle", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Bits.toggle", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto out = operand(args, 0, "Bits.toggle");
         mpz_combit(out.get_mpz_t(), position(args, 1, "Bits.toggle"));
         return integerResult(std::move(out));
@@ -106,13 +106,13 @@ auto Evaluator::registerBitsBuiltins() -> void {
     // A negative value has infinitely many set bits under two's complement, so
     // both of these are defined only for non-negative input rather than
     // returning something arbitrary.
-    defineIntrinsic("Bits::count", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Bits.count", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto value = operand(args, 0, "Bits.count");
         if (value < 0)
             throw std::runtime_error("Bits.count is undefined for a negative Integer");
         return Value::integer(static_cast<int64_t>(mpz_popcount(value.get_mpz_t())));
     });
-    defineIntrinsic("Bits::width", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Bits.width", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto value = operand(args, 0, "Bits.width");
         if (value < 0)
             throw std::runtime_error("Bits.width is undefined for a negative Integer");

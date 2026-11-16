@@ -18,19 +18,21 @@ inline constexpr std::array<std::string_view, 15> kPreludeTier0 = {
     "algebra.kex", "comparable.kex", "console.kex", "errorable.kex",
     "io.kex", "kex.kex", "math.kex", "optional.kex", "process.kex",
     "range.kex", "stream.kex", "feed.kex", "system.kex", "test.kex",
-    "taggedvalidation.kex",
+    "tagged_validation.kex",
 };
 inline constexpr std::array<std::string_view, 7> kPreludeTier1 = {
     "atom.kex", "binary.kex", "blankable.kex", "env.kex",
     "number.kex", "string.kex", "truthyable.kex",
 };
 inline constexpr std::array<std::string_view, 2> kPreludeTier2 = {
-    "enumerable.kex", "filehandle.kex",
+    "enumerable.kex", "file_handle.kex",
 };
-// time.kex comes after units.kex: Date/Time/DateTime are built on the
-// Duration record the unit system declares.
-inline constexpr std::array<std::string_view, 5> kPreludeTier3 = {
-    "list.kex", "map.kex", "units.kex", "time.kex", "type.kex",
+// The time files come after units.kex: Date/Time/DateTime are built on the
+// Duration measure the unit system declares. They name each other, so they
+// resolve together in one tier.
+inline constexpr std::array<std::string_view, 10> kPreludeTier3 = {
+    "list.kex", "map.kex", "units.kex", "time.kex", "date.kex",
+    "date_time.kex", "period.kex", "duration.kex", "date_format.kex", "type.kex",
 };
 
 inline auto orderPreludeSourcesByTier(const std::vector<std::string>& files)

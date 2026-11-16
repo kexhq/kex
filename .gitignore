@@ -1,6 +1,7 @@
 # Build output
 build/
 build-wasm/
+build-metamorphic-coverage/
 out/
 node_modules/
 *.vsix

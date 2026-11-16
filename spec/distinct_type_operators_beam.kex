@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: skip-wasm
 # A distinct type is erased at run time: a Tuplex is a bare pair there, and
 # nothing tells it from any other. Its operators and its `showValue` are found
 # by its static type instead, on both backends. `This` in a `:>` signature is

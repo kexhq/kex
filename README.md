@@ -333,9 +333,9 @@ end
 Ranges and streams share collection-style operations. Infinite streams stay lazy until consumed.
 
 ```rb
-let naturals = Stream.Sequence(from: 0) { |n| n + 1 }
+let naturals = Stream.from(0) { |n| n + 1 }
 
-let primes = Stream.Sequence(from: 2) { |n| n + 1 }
+let primes = Stream.from(2) { |n| n + 1 }
   .filter do |n|
     (2..n - 1).all? { |d| n.modulo(d) != 0 }
   end

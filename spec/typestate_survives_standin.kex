@@ -17,6 +17,7 @@ using FS
 foul writeToReader(path: String) -> Void do
   let reader = FS.File.open(path, FS.Read).try
   return reader.print("no")
+rescue return Void
 end
 
 foul readFromWriter(path: String) -> Result<String, ReadError> do

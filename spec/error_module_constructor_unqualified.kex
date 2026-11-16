@@ -1,0 +1,8 @@
+# A constructor is named the way it was declared. `Write` is declared inside
+# `module FS`, so without `using FS` it is `FS.Write`; the bare spelling is
+# an error, not a name the backends each resolve their own way (the walker
+# rejected it, BEAM ran it as the atom).
+main do
+  let handle = FS.File.open("/tmp/kex-module-constructor.txt", Write).try
+  handle.printLine("never")
+end

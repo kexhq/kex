@@ -124,7 +124,7 @@ describe("File — lines and feed (mocked)") do
 
   it("feed produces a stream of lines") do
     Mock.FS.File("nums.txt", "1\n2\n3")
-    let s = FS.File.feed("nums.txt").or(Stream.Sequence(from: 0) { |_| "" })
+    let s = FS.File.feed("nums.txt").or(Stream.from(0) { |_| "" })
     assert(s.take(3).count == 3)
   end
 

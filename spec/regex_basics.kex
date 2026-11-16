@@ -26,77 +26,77 @@ main do
   end
 
   # Positional groups; 0 is the whole match.
-  match "order #4271 shipped".matches(regex("#(\\d+)").or(0)) do
+  match "order #4271 shipped".matches(re`#(\d+)`) do
     Just(m) => IO.printLine("${m.get(0, "")} / ${m.get(1, "")}")
     None    => IO.printLine("no match")
   end
 
   # A named group is reachable under BOTH its name and its number.
-  match "on 2026-07-28".matches(regex("(?<year>\\d{4})-(?<month>\\d{2})").or(0)) do
+  match "on 2026-07-28".matches(re`(?<year>\d{4})-(?<month>\d{2})`) do
     Just(m) => IO.printLine("${m.get(:year, "?")}/${m.get(:month, "?")} = ${m.get(1, "?")}")
     None    => IO.printLine("no date")
   end
 
   # A group that did not participate is an absent key (None); a group that
   # matched the empty string is present as Just(""). These must not collapse.
-  match "ac".matches(regex("(a)(b)?(c)").or(0)) do
+  match "ac".matches(regex("(a)(b)?(c)").or(re`x`)) do
     Just(m) => show("did not participate", m.get(2))
     None    => IO.printLine("no match")
   end
-  match "ac".matches(regex("(a)(x*)(c)").or(0)) do
+  match "ac".matches(regex("(a)(x*)(c)").or(re`x`)) do
     Just(m) => show("matched empty", m.get(2))
     None    => IO.printLine("no match")
   end
 
   # A zero-width match is still a match, and group 0 is always present.
-  match "abc".matches(regex("x*").or(0)) do
+  match "abc".matches(regex("x*").or(re`x`)) do
     Just(m) => show("zero-width whole match", m.get(0))
     None    => IO.printLine("no match")
   end
 
   # matches? is unanchored — "does the pattern occur anywhere".
-  IO.printLine("substring: ${"xhellox".matches?(regex("hello").or(0))}")
-  IO.printLine("anchored:  ${"xhellox".matches?(regex("^hello$").or(0))}")
+  IO.printLine("substring: ${"xhellox".matches?(regex("hello").or(re`x`))}")
+  IO.printLine("anchored:  ${"xhellox".matches?(regex("^hello$").or(re`x`))}")
 
   # Unicode/UCP is pinned on, so \d covers non-ASCII digits.
-  IO.printLine("ucp: ${"٤٢".matches?(regex("^\\d+$").or(0))}")
+  IO.printLine("ucp: ${"٤٢".matches?(regex("^\\d+$").or(re`x`))}")
 
   # quote escapes metacharacters so the text matches literally.
   IO.printLine(Regex.quote("a.b*c"))
-  IO.printLine("a.b*c".matches?(regex(Regex.quote("a.b*c")).or(0)))
-  IO.printLine("aXbYc".matches?(regex(Regex.quote("a.b*c")).or(0)))
+  IO.printLine("a.b*c".matches?(regex(Regex.quote("a.b*c")).or(re`x`)))
+  IO.printLine("aXbYc".matches?(regex(Regex.quote("a.b*c")).or(re`x`)))
 
   # scan returns [Match] whether or not the pattern has groups, so adding a
   # group never changes the type flowing out of it.
-  IO.printLine("a1b2".scan(regex("\\d").or(0)).count)
-  IO.printLine("cat=1, dog=2".scan(regex("(\\w+)=(\\d+)").or(0)).map do |m|
+  IO.printLine("a1b2".scan(regex("\\d").or(re`x`)).count)
+  IO.printLine("cat=1, dog=2".scan(regex("(\\w+)=(\\d+)").or(re`x`)).map do |m|
     "${m.get(1, "")}:${m.get(2, "")}"
   end.join("|"))
   # Zero-width matches are reported, as in every engine: "" at each position.
-  IO.printLine("a1b2".scan(regex("\\d*").or(0)).count)
+  IO.printLine("a1b2".scan(regex("\\d*").or(re`x`)).count)
 
   # replace is global (gsub, not sub); the replacement is literal, with no
   # $1/\1 syntax — captures come from the block's Match instead.
   # The String overload remains selected even while Regex is in lexical scope.
   IO.printLine("a-b-c".replace("-", "+"))
   IO.printLine("abc".replace("", "-"))
-  IO.printLine("a-b-c".replace(regex("-").or(0), "+"))
-  IO.printLine("abc".replace(regex("x*").or(0), "-"))
-  IO.printLine("2026-7-4".replace(regex("(\\d+)-(\\d+)-(\\d+)").or(0)) do |m|
+  IO.printLine("a-b-c".replace(regex("-").or(re`x`), "+"))
+  IO.printLine("abc".replace(regex("x*").or(re`x`), "-"))
+  IO.printLine("2026-7-4".replace(regex("(\\d+)-(\\d+)-(\\d+)").or(re`x`)) do |m|
     "${m.get(1, "")}/${m.get(2, "")}/${m.get(3, "")}"
   end)
 
   # split follows Ruby: trailing empties dropped, leading kept, captures
   # interleaved, and a zero-width pattern splits into characters.
-  IO.printLine("a, b ,c".split(regex("\\s*,\\s*").or(0)).join("|"))
-  IO.printLine("a,b,,".split(regex(",").or(0)).join("|"))
-  IO.printLine(",a".split(regex(",").or(0)).join("|"))
-  IO.printLine("a1b2c".split(regex("(\\d)").or(0)).join("|"))
-  IO.printLine("abc".split(regex("").or(0)).join("|"))
+  IO.printLine("a, b ,c".split(regex("\\s*,\\s*").or(re`x`)).join("|"))
+  IO.printLine("a,b,,".split(regex(",").or(re`x`)).join("|"))
+  IO.printLine(",a".split(regex(",").or(re`x`)).join("|"))
+  IO.printLine("a1b2c".split(regex("(\\d)").or(re`x`)).join("|"))
+  IO.printLine("abc".split(regex("").or(re`x`)).join("|"))
   # The limit form has its own name: the Regex module must not export `split`,
   # or it would capture every .split call on BEAM (see src/stdlib/regex.kex).
-  IO.printLine(Regex.splitLimit("a,b,,", regex(",").or(0), -1).join("|"))
-  IO.printLine(Regex.splitLimit("a,b,c", regex(",").or(0), 2).join("|"))
+  IO.printLine(Regex.splitLimit("a,b,,", regex(",").or(re`x`), -1).join("|"))
+  IO.printLine(Regex.splitLimit("a,b,c", regex(",").or(re`x`), 2).join("|"))
   # A String separator still takes the literal path.
   IO.printLine("a,b,c".split(",").join("|"))
 

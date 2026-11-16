@@ -53,7 +53,7 @@ end
 
 # Current non-colored presentation for the primitive and standard compound
 # types registered as Showable. Domain types can replace this with what their
-# users care about (Time, Date, and DateTime do so in time.kex).
+# users care about (Time, Date, and DateTime do so in their own files).
 make Showable do
   let showValue -> String = Kex.Intrinsic.Kex.show(this)
   let to(String) = Just(this.showValue)

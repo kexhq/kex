@@ -97,8 +97,9 @@ end
 - A file that is one module starts with `module Name` on its own line, with no
   `do` and no `end`; the rest of the file is the module. Nested modules use
   `module Name do ... end`.
-- File names are lower case with no separators: `module OptionParser` lives in
-  `optionparser.kex`, `module Net.HTTP` in `net/http.kex`.
+- File names are snake_case, as `using` finds a module by its name: `module
+  OptionParser` lives in `option_parser.kex`, `module Net.HTTP.WebSocket` in
+  `net/http/web_socket.kex`.
 - `using M` brings in every public name; `using M, only: [f, g]` brings in
   those; `using M, as: Short` only shortens the prefix. Put `using` in the
   narrowest place that needs it: a function body may start with one.

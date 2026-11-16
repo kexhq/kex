@@ -3,9 +3,9 @@
 using FS
 
 # Pure streams — infinite lazy sequences
-let naturals = Stream.Sequence(from: 0) { |n| n + 1 }
-let evens = Stream.Sequence(from: 0) { |n| n + 2 }
-let powers = Stream.Sequence(from: 1) { |n| n * 2 }
+let naturals = Stream.from(0) { |n| n + 1 }
+let evens = Stream.from(0) { |n| n + 2 }
+let powers = Stream.from(1) { |n| n * 2 }
 
 # Range is Enumerable — finite, lazy until consumed
 let oneToTen = 1..10
@@ -60,7 +60,7 @@ module FileReader do
 end
 
 # Infinite stream processing
-let primes = Stream.Sequence(from: 2) { |n| n + 1 }
+let primes = Stream.from(2) { |n| n + 1 }
   .filter do |n|
     (2..n - 1).all? { |d| n.modulo(d) != 0 }
   end

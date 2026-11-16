@@ -1,0 +1,18 @@
+# Pure code may pass a capture of a foul function by name to another
+# module's parameter whose function type is foul, as it may by position
+# (spec/foul_capture_into_handler, #640). The call is checked before the
+# module's own definitions, and named arguments still find their parameters.
+using Hooks
+
+foul shout(s: String) -> String do
+  IO.printLine(s)
+  s
+end
+
+let positional(label: String) -> String = register("/${label}", ~shout)
+let named(label: String) -> String = register("/${label}", hook: ~shout)
+
+main do
+  IO.printLine(positional("a"))
+  IO.printLine(named("b"))
+end

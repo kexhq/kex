@@ -245,6 +245,36 @@ end
             assertEqual(result.exitCode, 1);
         });
 
+        it("reports the syntax error that drops an entry file's own module", []() {
+            // tool.kex is where `module Tool` belongs; the syntax error drops
+            // it. The check said "module `Tool` is declared in a file whose
+            // path names `Tool`... name it `module Tool`" and lost the error.
+            auto package = makePackage("module Web\n", "");
+            const auto entry = package->root / "tool.kex";
+            writeFile(entry, R"KEX(module Tool do
+  let first(pair: (Integer, Integer)) -> Integer = pair.0
+end
+
+main do
+  IO.printLine(Tool.first((1, 2)))
+end
+)KEX");
+            const auto outPath = package->root / "check.out";
+            const std::string command = std::string(KEX_BINARY_PATH) + " -C --no-colors " +
+                                        entry.string() + " > " + outPath.string() + " 2>&1";
+            const int status = std::system(command.c_str());
+            std::ifstream file(outPath);
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            const auto output = buffer.str();
+            assertTrue(output.find("Expected method or module name after '.'") !=
+                           std::string::npos,
+                       "the syntax error was not reported: " + output);
+            assertTrue(output.find("name it `module Tool`") == std::string::npos,
+                       "told to rename `module Tool` to itself: " + output);
+            assertEqual(WIFEXITED(status) ? WEXITSTATUS(status) : -1, 1);
+        });
+
         // A file checked on its own — what the language server does with
         // every file it opens — reaches another module only through the names
         // it writes. Each case below names a module in one way and no other,

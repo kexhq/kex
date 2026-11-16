@@ -7,12 +7,15 @@
 // than silently generating invalid Core Erlang.
 #include "ir.hxx"
 #include "../ast/ast.hxx"
-#include "../semantic/imported_interfaces.hxx"
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+namespace kex::hir {
+class Program;
+}
 
 namespace kex::ir {
 
@@ -45,17 +48,20 @@ struct ExternalModules {
         // (kexhq/kex#181).
         bool isFoul = false;
         // Provided by one of this build's own units, lowered apart from the
-        // unit calling it (KEX_SEPARATE): for its own types it comes before
+        // unit calling it: for its own types it comes before
         // the prelude's generic function and its structural `==`.
         bool compiledApart = false;
+        // As KexiMethod::foreignTarget: reached only where its module is
+        // `using`-imported.
+        bool foreignTarget = false;
     };
 
     std::unordered_map<std::string, std::string> nameToAtom;
     std::unordered_map<std::string, std::string> exportToBeamFn;
     std::unordered_map<std::string, int> exportArity;
     std::unordered_map<std::string, std::vector<std::string>> exportParamNames;
-    // Imported exports' defaults as source text, for one compiled apart
-    // (KexiExport::defaultSources), by the same key.
+    // Imported exports' defaults as source text (KexiExport::defaultSources),
+    // by the same key: which parameters have one, for the sentinel.
     std::unordered_map<std::string, std::vector<std::string>> exportDefaults;
     // Imported exports that are `foul`. A foul function takes the capability
     // context, so a call into one has to append it — without this a consumer
@@ -71,7 +77,7 @@ struct ExternalModules {
     // (KexiStructuralMetadata::capabilityMembers); otherwise its foul exports
     // stand for them.
     std::unordered_map<std::string, std::unordered_set<std::string>> capabilityMembers;
-    // The source modules of this build's own units lowered apart (KEX_SEPARATE):
+    // The source modules of this build's own units lowered apart:
     // `using` one makes its functions callable by UFCS and as tags, as a
     // module merged into the program is.
     std::unordered_set<std::string> compiledApartModules;
@@ -89,15 +95,6 @@ struct ExternalModules {
 // A variant tag declared outside the module being compiled (the prelude, or
 // a loaded unit). Only display registration needs these: without them a
 // compiled program printed prelude ADTs as raw tuples/atoms.
-// `Type.of(x)` sites the checker typed concretely — see
-// TypeChecker::staticTypeOfCalls. Lowering emits the recorded shape as a
-// literal `Type` record; without an entry the call reaches the runtime
-// fallback, which asks the value.
-using StaticTypeOfCalls =
-    std::unordered_map<const ast::MethodCall*, semantic::StaticTypeAnswer>;
-using ExpressionTypes =
-    std::unordered_map<const ast::Expr*, semantic::TypePtr>;
-
 struct ExternalVariantTag {
     std::string tag;
     int arity = 0;
@@ -122,46 +119,46 @@ struct ExternalRecordLayout {
     std::string declaringModule;
 };
 
+// Everything lowering is told besides the program itself. One struct, with
+// named fields, rather than a run of positional pointers: the entry points
+// used to take the same nine in two different orders.
+struct LowerContext {
+    // The file being lowered, for locations in runtime errors.
+    std::string sourcePath;
+    // What other modules (the prelude, dependencies compiled apart) declare.
+    const ExternalModules* externals = nullptr;
+    const std::vector<ExternalRecordLayout>* externalRecords = nullptr;
+    const std::vector<ExternalVariantTag>* externalVariants = nullptr;
+    // The prelude itself is being lowered (see Lowering::lowersPrelude).
+    bool lowersPrelude = false;
+    // The checked program: what each call is and what type each expression
+    // has (src/hir/), and every other answer of its check. Required.
+    const hir::Program* hir = nullptr;
+};
+
+// `base` with every entry of `overrides` laid over it: the prelude's
+// externals beside those of the units a build links.
+auto mergeExternalModules(const ExternalModules& base, const ExternalModules& overrides)
+    -> ExternalModules;
+
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
-                  const std::string& sourcePath = "",
-                  const ExternalModules* externals = nullptr,
-                  const std::vector<ExternalRecordLayout>* externalRecords = nullptr,
-                  const std::unordered_map<const ast::MethodCall*,
-                      semantic::ResolvedCallTarget>* resolvedCalls = nullptr,
-                  bool preferExternalReceivers = false,
-                  const std::vector<ExternalVariantTag>* externalVariants = nullptr,
-                  const StaticTypeOfCalls* staticTypeOfCalls = nullptr,
-                  const ExpressionTypes* expressionTypes = nullptr)
-    -> Module;
+                  const LowerContext& context = {}) -> Module;
 
 // Lower a compilation unit using the module-system BEAM mapping. The first
 // result is the file-local Kex.Global module; every explicit Kex module is a
 // separate `Kex.<Name>` module.
 auto lowerModules(const ast::Program& prog, const std::string& fileStem,
-                  const std::string& sourcePath = "",
-                  const std::vector<ExternalRecordLayout>* externalRecords = nullptr,
-                  const ExternalModules* externals = nullptr,
-                  const std::unordered_map<const ast::MethodCall*,
-                      semantic::ResolvedCallTarget>* resolvedCalls = nullptr,
-                  bool preferExternalReceivers = false,
-                  const std::vector<ExternalVariantTag>* externalVariants = nullptr,
-                  const StaticTypeOfCalls* staticTypeOfCalls = nullptr,
-                  const ExpressionTypes* expressionTypes = nullptr)
-    -> std::vector<Module>;
+                  const LowerContext& context = {}) -> std::vector<Module>;
 
 // Lower the prelude with per-tier awareness. The full AST is used for the
 // pre-pass (records, types, method owners); items are logically partitioned
 // into tiers by tierBounds. Currently produces one merged module; future
 // versions will produce separate modules per tier.
-auto lowerProgramTiered(
-    const ast::Program& prog,
-    const std::array<size_t, 5>& tierBounds,
-    const std::string& fileStem,
-    const std::string& sourcePath = "",
-    const ExternalModules* externals = nullptr,
-    const std::vector<ExternalRecordLayout>* externalRecords = nullptr,
-    const std::unordered_map<const ast::MethodCall*,
-        semantic::ResolvedCallTarget>* resolvedCalls = nullptr,
-    bool preferExternalReceivers = false) -> Module;
+// The prelude's tiers: lowered as one module, with all of `context`,
+// the checked program (`hir`) included.
+auto lowerProgramTiered(const ast::Program& prog,
+                        const std::array<size_t, 5>& tierBounds,
+                        const std::string& fileStem,
+                        const LowerContext& context = {}) -> Module;
 
 } // namespace kex::ir

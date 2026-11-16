@@ -207,6 +207,26 @@ auto runBeamFile(const std::string& source, const std::string& argument,
 } // namespace
 
 int main() {
+    describe("metamorphic file and REPL execution", []() {
+        it("preserves output when statements are entered separately", []() {
+            const std::array<std::string, 2> bodies = {
+                "var value = 7\nvalue += 1\nIO.printLine(value)\n",
+                "let twice(value: Integer) = value * 2\n"
+                "IO.printLine(twice(7))\n",
+            };
+            for (const auto& body : bodies) {
+                const auto file = "main do\n" + body + "end\n";
+                const auto walker = runWalkerFile(file);
+                const auto beam = runBeamFile(file, "");
+                assertEqual(beam, walker, "file backends disagree");
+                assertTrue(runRepl(body).find("\n" + walker) != std::string::npos,
+                           "walker REPL differs from file: " + body);
+                assertTrue(runBeamRepl(body).find("\n" + beam) != std::string::npos,
+                           "BEAM REPL differs from file: " + body);
+            }
+        });
+    });
+
     describe("CLI — qualified source-module discovery", []() {
         it("loads qualified-only dependencies transitively for BEAM", []() {
             namespace fs = std::filesystem;
@@ -584,7 +604,7 @@ int main() {
             const auto program = root / "installed.kex";
             std::ofstream(program)
                 << "main do\n"
-                   "  IO.printLine(Stream.Sequence(from: 1) { |n| n + 1 }.take(2))\n"
+                   "  IO.printLine(Stream.from(1) { |n| n + 1 }.take(2))\n"
                    "end\n";
 
             const auto interpreterOutput = runCommand(
@@ -670,6 +690,34 @@ int main() {
         it("prints persisted let bindings", []() {
             auto out = runRepl("let x = 5\nx + 3\n");
             assertTrue(out.find("=> 8 : Int") != std::string::npos, out);
+        });
+
+        // An input is checked as the statements that run, so the walker reads
+        // the checker's decisions for them as it does for a file: a
+        // `Process.Shared` is an erased String at run time, and without them
+        // `site.put` went to String ("Undefined method: put for String").
+        // A definition is checked as it is defined; its body runs on those
+        // decisions when a later input calls it.
+        it("runs a definition's body on the checker's decisions", []() {
+            auto out = runRepl(
+                "foul stash(text: String) -> String do\n"
+                "  let site : Process.Shared<String> = Process.Shared.named(\"repl.def\")\n"
+                "  site.put(text)\n"
+                "  site.get.or(\"\")\n"
+                "end\n"
+                "stash(\"kept\")\n");
+            assertTrue(out.find("=> \"kept\" : String") != std::string::npos, out);
+            assertTrue(out.find("Undefined method") == std::string::npos, out);
+        });
+
+        it("runs an input on the checker's decisions", []() {
+            auto out = runRepl(
+                "let site : Process.Shared<String> = Process.Shared.named(\"repl.site\")\n"
+                "site.put(\"hi\")\n"
+                "site.get\n");
+            assertTrue(out.find("=> Just(\"hi\") : Optional<String>") != std::string::npos,
+                       out);
+            assertTrue(out.find("Undefined method") == std::string::npos, out);
         });
 
         it("persists var bindings, reassignment, and ! mutation", []() {
@@ -925,6 +973,30 @@ int main() {
     });
 
     describe("REPL CLI — loaded definitions", []() {
+        // A loaded file is checked as the definitions that run, so a call into
+        // it reads the checker's decisions: `site.put` on a `Process.Shared`
+        // (an erased String at run time) went to String.
+        it("runs a loaded definition on the checker's decisions", []() {
+            char sourcePath[] = "/tmp/kex_repl_load_test_XXXXXX.kex";
+            int fd = mkstemps(sourcePath, 4);
+            assertTrue(fd >= 0, "mkstemps should create a Kex source file");
+            {
+                std::ofstream f(sourcePath);
+                f << "foul stash(text: String) -> String do\n"
+                     "  let site : Process.Shared<String> = "
+                     "Process.Shared.named(\"repl.load\")\n"
+                     "  site.put(text)\n"
+                     "  site.get.or(\"\")\n"
+                     "end\n";
+            }
+            close(fd);
+            auto out = runRepl(std::string("/load ") + sourcePath +
+                               "\nstash(\"loaded\")\n");
+            std::remove(sourcePath);
+            assertTrue(out.find("=> \"loaded\" : String") != std::string::npos, out);
+            assertTrue(out.find("Undefined method") == std::string::npos, out);
+        });
+
         it("keeps a loaded module's AST alive for later bindings", []() {
             char sourcePath[] = "/tmp/kex_repl_load_test_XXXXXX.kex";
             int fd = mkstemps(sourcePath, 4);
@@ -993,6 +1065,35 @@ int main() {
                 inputPath);
             std::remove(inputPath);
             assertTrue(out.find("true") != std::string::npos, out);
+        });
+
+        // Everything after the program's file is the program's (kexhq/kex#654):
+        // kex's option parsing went on past the file, so `-n` was taken as
+        // `--no-check`, `-v` printed kex's version, and an option kex does not
+        // know (`--limit`) aborted the run before the program started.
+        it("hands options after the file to the program", []() {
+            const std::string program = "main(args) do\n  IO.printLine(args)\nend\n";
+            auto out = runBeamFile(program, "x -n 3 -v --limit 3 -- -q");
+            assertTrue(out.find("[x, -n, 3, -v, --limit, 3, --, -q]") != std::string::npos,
+                       "the program did not receive its options: " + out);
+            // One `--` directly after the file only separates, as before:
+            // Tey runs every program as `kex app.kex -- args`.
+            auto separated = runBeamFile(program, "-- -v --force");
+            assertTrue(separated.find("[-v, --force]") != std::string::npos,
+                       "a `--` after the file was not taken as the separator: " + separated);
+            char sourcePath[] = "/tmp/kex_walker_arg_test_XXXXXX.kex";
+            int fd = mkstemps(sourcePath, 4);
+            assertTrue(fd >= 0, "mkstemps should create a Kex source file");
+            {
+                std::ofstream f(sourcePath);
+                f << program;
+            }
+            close(fd);
+            auto walked = runCommand(std::string(KEX_BINARY_PATH) + " -R --no-colors " +
+                                     sourcePath + " x -n 3 --limit 3 2>&1");
+            std::remove(sourcePath);
+            assertTrue(walked.find("[x, -n, 3, --limit, 3]") != std::string::npos,
+                       "the walker's program did not receive its options: " + walked);
         });
     });
 
@@ -1650,7 +1751,7 @@ int main() {
                 "let p = spawn do echo() end\n"
                 "1\n2\n3\n"
                 "p.send(\"one\")\n"
-                "Task.sleep(100.milliseconds)\n"
+                "Task.sleep(100.millisecond)\n"
                 "p.alive?\n");
             assertTrue(out.find("got one") != std::string::npos, out);
             assertTrue(out.find("=> true : Bool") != std::string::npos, out);
@@ -1661,7 +1762,7 @@ int main() {
             // compile's diagnostics and dropped.
             auto out = runBeamRepl(
                 "spawn do IO.printLine(\"from child\") end\n"
-                "Task.sleep(100.milliseconds)\n"
+                "Task.sleep(100.millisecond)\n"
                 "1\n");
             assertTrue(out.find("from child") != std::string::npos, out);
         });
@@ -1852,6 +1953,49 @@ int main() {
             assertTrue(out.find("status=1") != std::string::npos &&
                            out.find("takes no file") != std::string::npos,
                        "expected --eval to refuse a file: " + out);
+        });
+
+        // A record a pattern binds from a module under a source root: the
+        // name replayed untyped into the next input, which then read its
+        // field by name at run time, where nothing answered it ("Undefined
+        // method: id for Shop.Cart.Cart", kexhq/kex#575).
+        it("reads a field of a record bound by a pattern in an earlier input", [kex]() {
+            const auto root = std::filesystem::temp_directory_path() /
+                              ("kex_repl_575_" + std::to_string(::getpid()));
+            std::filesystem::create_directories(root / "shop");
+            {
+                std::ofstream cart(root / "shop" / "cart.kex");
+                cart << "module Shop.Cart\n\nrecord Cart do\n  id : String\n"
+                        "  items : Integer\nend\n\n"
+                        "let carts() -> [Cart] do\n"
+                        "  return [Cart { id: \"c1\", items: 2 }]\nend\n";
+            }
+            auto out = runCommand("cd " + root.string() + " && echo 'cart.id' | " + kex +
+                                  " --source-root ." +
+                                  " -e 'let Just(cart) = Shop.Cart.carts.first' 2>&1");
+            std::filesystem::remove_all(root);
+            assertTrue(out.find("=> \"c1\" : String") != std::string::npos,
+                       "the field of the bound record was not read: " + out);
+        });
+
+        // Names outside ASCII: the BEAM REPL found a binding's name with an
+        // ASCII-only scan, so `let árvíz = 2` lost its name ("Unexpected
+        // token: )"); `let Φ = 1.618` showed the constant's function on both;
+        // and `名前` reached erlc as a variable no name may start with.
+        it("binds and shows names written outside ASCII in both REPLs", [kex]() {
+            for (const std::string repl : {"", " -i"}) {
+                auto out = runCommand(
+                    "echo ':árvíz' | " + kex + repl +
+                    " -e 'let árvíztűrő = \"tükörfúrógép\"' -e 'var ő = 1'"
+                    " -e 'ő = ő + 1' -e 'let 名前 = ő + 1' -e 'let Φ = 1.618'"
+                    " -e 'IO.printLine(\"${árvíztűrő} ${ő} ${名前} ${Φ}\")' 2>&1");
+                assertTrue(out.find("tükörfúrógép 2 3 1.618") != std::string::npos,
+                           "the bindings did not hold their values (repl'" + repl +
+                               "'): " + out);
+                assertTrue(out.find("=> :árvíz : Atom") != std::string::npos,
+                           "the atom was not shown as written (repl'" + repl +
+                               "'): " + out);
+            }
         });
     });
 

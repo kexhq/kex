@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — Kex.load loads a compiled .beam
 #
 # `Kex.load` and `Kex.LoadedModule.call` (kexhq/kex#399): loading a module
 # compiled with `kex --compile` into the running program and calling it,

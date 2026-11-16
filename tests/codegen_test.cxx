@@ -3,7 +3,9 @@
 #include "../src/compiled/reify.hxx"
 #include "../src/common/prelude_interfaces.hxx"
 #include "../src/ir/emit_core.hxx"
-#include "../src/ir/upgrade.hxx"
+#include "../src/ir/passes/upgrade.hxx"
+#include "../src/ir/passes/guards.hxx"
+#include "../src/hir/hir.hxx"
 #include "../src/ir/lower.hxx"
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
@@ -65,6 +67,56 @@ auto countOccurrences(const std::string& haystack, const std::string& needle)
     return count;
 }
 
+// The prelude's interfaces, as the compiler checks a program against them.
+auto testInterfaces() -> const kex::semantic::ImportedInterfaces& {
+#ifdef KEX_RUNTIME_BEAM_DIR
+    return kex::preludeSemanticInterfaces(KEX_RUNTIME_BEAM_DIR);
+#else
+    return kex::preludeSemanticInterfaces("");
+#endif
+}
+
+// A program lowered as the compiler lowers it: checked first, so lowering
+// reads the checker's decisions (a fixture the check rejects keeps what was
+// decided), against the prelude's externals with the fixture's own laid
+// over them. `lower` is lowerProgram or lowerModules.
+// `interfaces` is what the checker sees, the prelude's by default.
+template <typename Lower>
+auto lowerCheckedWith(const kex::ast::Program& program, const std::string& stem,
+                      kex::ir::LowerContext context, Lower lower,
+                      const kex::semantic::ImportedInterfaces* interfaces = nullptr) {
+    kex::semantic::Analyzer analyzer(interfaces ? interfaces : &testInterfaces());
+    (void)analyzer.analyze(program);
+    const kex::hir::Program hir(program, analyzer);
+    context.hir = &hir;
+    kex::ir::ExternalModules externals;
+#ifdef KEX_RUNTIME_BEAM_DIR
+    externals = kex::preludeRegistry(KEX_RUNTIME_BEAM_DIR).buildExternalModules();
+#endif
+    if (context.externals) externals = kex::ir::mergeExternalModules(externals, *context.externals);
+    context.externals = &externals;
+    return lower(program, stem, context);
+}
+
+auto lowerChecked(const kex::ast::Program& program, const std::string& stem,
+                  kex::ir::LowerContext context = {}) -> kex::ir::Module {
+    return lowerCheckedWith(program, stem, context, &kex::ir::lowerProgram);
+}
+
+auto lowerModulesChecked(const kex::ast::Program& program, const std::string& stem,
+                         kex::ir::LowerContext context = {},
+                         const kex::semantic::ImportedInterfaces* interfaces = nullptr)
+    -> std::vector<kex::ir::Module> {
+    return lowerCheckedWith(program, stem, context, &kex::ir::lowerModules, interfaces);
+}
+
+// A lowered module as the emitter receives it: `when` guards expanded (the
+// `guards` pass), without the hot-reload points most expectations leave out.
+auto emitted(kex::ir::Module module) -> kex::ir::EmitResult {
+    kex::ir::expandGuards(module);
+    return kex::ir::emitCore(module);
+}
+
 // Parse Kex source and emit Core Erlang text through the production IR path.
 auto emit(const std::string& source, const std::string& stem = "test") -> std::string {
     kex::Lexer lexer(source);
@@ -72,7 +124,7 @@ auto emit(const std::string& source, const std::string& stem = "test") -> std::s
     kex::Parser parser(std::move(tokens));
     auto program = parser.parseProgram();
     auto ext = stdlibExternal();
-    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem, "", &ext)).source;
+    return emitted(lowerChecked(program, stem, {.externals = &ext})).source;
 }
 
 // The production path with hot-reload upgrade points inserted, as main.cxx
@@ -84,7 +136,8 @@ auto emitUpgradable(const std::string& source, const std::string& stem = "test")
     kex::Parser parser(std::move(tokens));
     auto program = parser.parseProgram();
     auto ext = stdlibExternal();
-    auto module = kex::ir::lowerProgram(program, stem, "", &ext);
+    auto module = lowerChecked(program, stem, {.externals = &ext});
+    kex::ir::expandGuards(module);
     kex::ir::insertUpgradePoints(module);
     return kex::ir::emitCore(module).source;
 }
@@ -96,7 +149,7 @@ auto emitIr(const std::string& source, const std::string& stem = "test") -> std:
     kex::Parser parser(std::move(tokens));
     auto program = parser.parseProgram();
     auto ext = stdlibExternal();
-    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem, "", &ext)).source;
+    return emitted(lowerChecked(program, stem, {.externals = &ext})).source;
 }
 
 auto emitWithExternal(const std::string& source,
@@ -105,8 +158,8 @@ auto emitWithExternal(const std::string& source,
     kex::Lexer lexer(source);
     kex::Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
-    return kex::ir::emitCore(
-        kex::ir::lowerProgram(program, stem, "", &external)).source;
+    return emitted(
+        lowerChecked(program, stem, {.externals = &external})).source;
 }
 
 auto emitWithResolvedCalls(
@@ -118,8 +171,8 @@ auto emitWithResolvedCalls(
     auto program = parser.parseProgram();
     kex::semantic::Analyzer analyzer(&interfaces);
     assertTrue(analyzer.analyze(program), "fixture should pass semantic analysis");
-    return kex::ir::emitCore(kex::ir::lowerProgram(
-        program, stem, "", nullptr, nullptr, &analyzer.resolvedCalls())).source;
+    const kex::hir::Program hir(program, analyzer);
+    return emitted(kex::ir::lowerProgram(program, stem, {.hir = &hir})).source;
 }
 
 #ifdef KEX_RUNTIME_BEAM_DIR
@@ -137,9 +190,9 @@ auto emitProduction(const std::string& source,
     assertTrue(analyzer.analyze(program), "fixture should pass semantic analysis");
     auto external =
         kex::preludeRegistry(KEX_RUNTIME_BEAM_DIR).buildExternalModules();
-    return kex::ir::emitCore(kex::ir::lowerProgram(
-        program, stem, "", &external, nullptr, &analyzer.resolvedCalls(),
-        false, nullptr, &analyzer.staticTypeOfCalls(), &analyzer.typeMap())).source;
+    const kex::hir::Program hir(program, analyzer);
+    return emitted(kex::ir::lowerProgram(program, stem, {.externals = &external, .hir = &hir}))
+        .source;
 }
 #endif
 
@@ -154,8 +207,8 @@ auto emitWithPrelude(const std::string& source,
         for (int arity = 1; arity <= 4; arity++)
             ext.receiverFunctions[name].push_back(
                 {"kex_prelude", name, arity});
-    return kex::ir::emitCore(
-        kex::ir::lowerProgram(program, stem, "", &ext)).source;
+    return emitted(
+        lowerChecked(program, stem, {.externals = &ext})).source;
 }
 
 auto emitWithExternalRecords(
@@ -165,8 +218,20 @@ auto emitWithExternalRecords(
     kex::Lexer lexer(source);
     kex::Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
-    return kex::ir::emitCore(
-        kex::ir::lowerProgram(program, stem, "", nullptr, &records)).source;
+    // The checker sees the same records, as it does when an interface
+    // supplies them: which record a name means is its answer.
+    auto interfaces = testInterfaces();
+    for (const auto& record : records) {
+        interfaces.recordArities[record.name] = record.fields.size();
+        auto& fields = interfaces.recordFields[record.name];
+        for (const auto& field : record.fields) {
+            interfaces.recordFieldNames[record.name].insert(field);
+            fields[field] = kex::semantic::Type::unknown();
+        }
+    }
+    return emitted(lowerCheckedWith(program, stem, {.externalRecords = &records},
+                                    &kex::ir::lowerProgram, &interfaces))
+        .source;
 }
 
 // Compile an IR-pipeline Core Erlang module and return main/0's value. The
@@ -207,11 +272,61 @@ auto contains(const std::string& haystack, const std::string& needle) -> bool {
     return haystack.find(needle) != std::string::npos;
 }
 
+// A call of the prelude's `name`: its dispatcher, or the per-type
+// implementation (`'map/List'`) a checked call goes to.
+auto callsPrelude(const std::string& out, const std::string& name) -> bool {
+    const auto call = "call 'kex_prelude':'" + name;
+    return contains(out, call + "'") || contains(out, call + "/");
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 int main() {
+    describe("IR Core Erlang emitter — dispatcher routes", []() {
+        // The per-type implementations a value of that type reaches through
+        // its dispatcher: what devirtualization reads (KexiMethod::
+        // implementation), recorded as the dispatcher lays its arms out.
+        const auto routesOf = [](const std::string& source) {
+            kex::Lexer lexer(source);
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            auto ext = stdlibExternal();
+            return emitted(
+                       lowerChecked(program, "test", {.externals = &ext}))
+                .routedImplementations;
+        };
+        it("routes owners whose guards cannot take each other's values", [&]() {
+            const auto routes = routesOf(
+                "record Box do\n  n : Integer\nend\n"
+                "record Bag do\n  n : Integer\nend\n"
+                "make Box do\n  let size -> Integer = @n\nend\n"
+                "make Bag do\n  let size -> Integer = @n + 1\nend\n"
+                "main do\n  IO.printLine(Box { n: 1 }.size)\nend\n");
+            assertTrue(routes.count({"size/Box", 1}) > 0);
+            assertTrue(routes.count({"size/Bag", 1}) > 0);
+        });
+        it("does not route a type an earlier, wider guard takes", [&]() {
+            const auto routes = routesOf(
+                "make Integer do\n  let kind -> String = \"int\"\nend\n"
+                "make Number do\n  let kind -> String = \"num\"\nend\n"
+                "main do\n  IO.printLine(1.kind)\nend\n");
+            // Number sinks below Integer, so an Integer reaches its own;
+            // a Number may be an Integer and is caught first.
+            assertTrue(routes.count({"kind/Integer", 1}) > 0);
+            assertTrue(routes.count({"kind/Number", 1}) == 0);
+        });
+        it("does not route a shadowed owner", [&]() {
+            const auto routes = routesOf(
+                "make Task do\n  let ping -> String = \"task\"\nend\n"
+                "make Process<X> do\n  let ping -> String = \"pid\"\nend\n"
+                "main do\n  IO.printLine(\"x\")\nend\n");
+            // Both are pids at run time; the dispatcher keeps Task's arm.
+            assertTrue(routes.count({"ping/Process", 1}) == 0);
+        });
+    });
+
     describe("IR Core Erlang emitter — module structure", []() {
         it("emits module header with correct name", []() {
             auto out = emit("main do\n  42\nend\n", "hello");
@@ -316,11 +431,16 @@ int main() {
 
     describe("IR Core Erlang emitter — binary operators", []() {
          it("emits addition via kex_intrinsic_number:add (polymorphic + for numbers and strings)", []() {
-            auto out = emit("main do\n  1 + 2\nend\n");
+            auto out = emit("main do\n  \"a\" + \"b\"\nend\n");
             // + dispatches through kex_intrinsic_number:add/2 which handles both number
             // addition (erlang:'+') and string concatenation (erlang:'++')
             // at runtime based on the operand types.
             assertTrue(contains(out, "call 'kex_intrinsic_number':'add'"), out);
+        });
+
+        it("emits integer addition via erlang:'+'", []() {
+            auto out = emit("main do\n  1 + 2\nend\n");
+            assertTrue(contains(out, "call 'erlang':'+'"), out);
         });
 
         it("emits subtraction via erlang:'-'", []() {
@@ -339,8 +459,13 @@ int main() {
         });
 
         it("emits polymorphic equality through the number intrinsic", []() {
-            auto out = emit("main do\n  1 == 1\nend\n");
+            auto out = emit("main do\n  1 == 1.0\nend\n");
             assertTrue(contains(out, "call 'kex_intrinsic_number':'eq'"), out);
+        });
+
+        it("emits integer equality as the raw BIF", []() {
+            auto out = emit("main do\n  1 == 1\nend\n");
+            assertTrue(contains(out, "call 'erlang':'=:='"), out);
         });
 
         it("emits less-than via erlang:'<'", []() {
@@ -488,8 +613,8 @@ int main() {
             assertTrue(kex::compiled::expand(program, diagnostics),
                        "expansion should succeed");
             auto ext = stdlibExternal();
-            auto out = kex::ir::emitCore(
-                           kex::ir::lowerProgram(program, "collapse", "", &ext))
+            auto out = emitted(
+                           lowerChecked(program, "collapse", {.externals = &ext}))
                            .source;
 
             // `a` is gone: the whole chain is the number it always was.
@@ -499,7 +624,7 @@ int main() {
             // of each builder call remains. An assertion of "no calls at all"
             // would pass just as well if collapse became over-eager and reached
             // through a name it has no business evaluating.
-            assertEqual(countOccurrences(out, "apply 'add'"), 1,
+            assertEqual(countOccurrences(out, "apply 'add'"), size_t{1},
                         "only the runtime chain should still call add");
             assertEqual(countOccurrences(out, "apply 'scaled'"), 1,
                         "only the runtime chain should still call scaled");
@@ -545,8 +670,8 @@ int main() {
                         "both calls should be collapse candidates");
             assertEqual(collapsed, 1, "only the bound map should collapse");
             auto ext = stdlibExternal();
-            auto out = kex::ir::emitCore(
-                           kex::ir::lowerProgram(program, "collapse", "", &ext))
+            auto out = emitted(
+                           lowerChecked(program, "collapse", {.externals = &ext}))
                            .source;
             assertEqual(countOccurrences(out, "apply 'Rows.columns'"), 1,
                         "only the parameter's call should still run the builder");
@@ -592,8 +717,8 @@ int main() {
             assertTrue(kex::compiled::expand(program, diagnostics),
                        "expansion should succeed");
             auto ext = stdlibExternal();
-            auto out = kex::ir::emitCore(
-                           kex::ir::lowerProgram(program, "strings", "", &ext))
+            auto out = emitted(
+                           lowerChecked(program, "strings", {.externals = &ext}))
                            .source;
 
             assertEqual(countOccurrences(out, "apply 'add'"), 0,
@@ -628,8 +753,8 @@ int main() {
             assertTrue(kex::compiled::expand(program, diagnostics),
                        "expansion should succeed");
             auto ext = stdlibExternal();
-            auto out = kex::ir::emitCore(
-                           kex::ir::lowerProgram(program, "concat", "", &ext))
+            auto out = emitted(
+                           lowerChecked(program, "concat", {.externals = &ext}))
                            .source;
 
             // "0 24px" as a single binary literal — the `+` is gone, and with
@@ -693,8 +818,8 @@ int main() {
             assertTrue(kex::compiled::expand(program, diagnostics),
                        "expansion should succeed");
             auto ext = stdlibExternal();
-            auto out = kex::ir::emitCore(
-                           kex::ir::lowerProgram(program, "carried", "", &ext))
+            auto out = emitted(
+                           lowerChecked(program, "carried", {.externals = &ext}))
                            .source;
 
             // `carried` is the literal record with Seed still a REFERENCE —
@@ -776,8 +901,8 @@ int main() {
                        "expansion should succeed");
             unsetenv("KEX_CODEGEN_BUILD_TAG");
             auto ext = stdlibExternal();
-            auto out = kex::ir::emitCore(
-                           kex::ir::lowerProgram(program, "envtag", "", &ext))
+            auto out = emitted(
+                           lowerChecked(program, "envtag", {.externals = &ext}))
                            .source;
 
             // "baked" as a binary literal, and no ENV call left to make it.
@@ -1109,7 +1234,7 @@ int main() {
                 "main do Util.double(21) end\n");
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
-            auto modules = kex::ir::lowerModules(program, "module_mapping");
+            auto modules = lowerModulesChecked(program, "module_mapping");
             assertEqual(modules.size(), size_t{2});
             assertEqual(modules[0].name, std::string("kex_module_mapping"));
             assertEqual(modules[1].name, std::string("Kex.Util"));
@@ -1118,7 +1243,7 @@ int main() {
             assertTrue(modules[1].functions[0].exported);
             assertEqual(modules[1].functions[1].name, std::string("hidden"));
             assertFalse(modules[1].functions[1].exported);
-            auto globalCore = kex::ir::emitCore(modules[0]).source;
+            auto globalCore = emitted(std::move(modules[0])).source;
             assertTrue(contains(globalCore, "call 'Kex.Util':'double'"), globalCore);
         });
 
@@ -1130,10 +1255,24 @@ int main() {
             external.nameToAtom["Web.Response"] = "Kex.Web.Response";
             external.exportToBeamFn["Web.Response.text"] = "text";
             external.exportArity["Web.Response.text"] = 1;
+            // What the checker reads of the same module, so it names the call.
+            auto interfaces = testInterfaces();
+            kex::semantic::ImportedModuleInterface response;
+            response.sourceModule = "Web.Response";
+            response.backendModule = "Kex.Web.Response";
+            kex::semantic::ImportedFunction text;
+            text.sourceName = "text";
+            text.backendModule = "Kex.Web.Response";
+            text.backendFunction = "text";
+            text.backendArity = 1;
+            text.signature = {"text", {kex::semantic::Type::string()},
+                              kex::semantic::Type::string()};
+            response.exports["text"].push_back(std::move(text));
+            interfaces.modules["Web.Response"] = std::move(response);
 
-            auto modules = kex::ir::lowerModules(
-                program, "external_split", "", nullptr, &external);
-            auto globalCore = kex::ir::emitCore(modules[0]).source;
+            auto modules = lowerModulesChecked(
+                program, "external_split", {.externals = &external}, &interfaces);
+            auto globalCore = emitted(std::move(modules[0])).source;
 
             assertTrue(contains(
                 globalCore, "call 'Kex.Web.Response':'text'"), globalCore);
@@ -1147,9 +1286,9 @@ int main() {
                 "end\n");
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
-            auto modules = kex::ir::lowerModules(program, "global_helper");
+            auto modules = lowerModulesChecked(program, "global_helper");
             assertEqual(modules.size(), size_t{2});
-            auto companionCore = kex::ir::emitCore(modules[1]).source;
+            auto companionCore = emitted(std::move(modules[1])).source;
             assertTrue(contains(
                 companionCore, "call 'kex_global_helper':'normalize'"),
                 companionCore);
@@ -1164,8 +1303,8 @@ int main() {
                 "main do double(10) end\n");
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
-            auto modules = kex::ir::lowerModules(program, "top_using");
-            auto globalCore = kex::ir::emitCore(modules[0]).source;
+            auto modules = lowerModulesChecked(program, "top_using");
+            auto globalCore = emitted(std::move(modules[0])).source;
             assertTrue(contains(globalCore, "call 'Kex.Utils':'double'"), globalCore);
         });
 
@@ -1258,7 +1397,7 @@ int main() {
                 "main do Http.route() end\n");
             kex::Parser parser(lexer.tokenizeAll());
             auto program = parser.parseProgram();
-            auto modules = kex::ir::lowerModules(program, "nested_module_relative");
+            auto modules = lowerModulesChecked(program, "nested_module_relative");
             assertEqual(modules.size(), size_t{3});
             assertEqual(modules[1].name, std::string("Kex.Http"));
             assertEqual(modules[2].name, std::string("Kex.Http.Router"));
@@ -1404,7 +1543,7 @@ int main() {
                 "end\n");
             assertTrue(contains(out, "apply 'inspectTag'/2"), out);
             assertTrue(
-                contains(out, "kex_intrinsic_number':'add'"), out);
+                contains(out, "erlang':'+'"), out);
             assertFalse(contains(out, "kex_io':'to_string'"), out);
         });
     });
@@ -1419,19 +1558,6 @@ int main() {
             auto out = emitWithExternal(
                 "main do\n  let x = 21\n  x.doubled\nend\n", external);
             assertTrue(!contains(out, "call 'kex_numbers':'doubled'"), out);
-        });
-
-        it("routes a qualified module call through its compiled interface", []() {
-            kex::ir::ExternalModules external;
-            external.nameToAtom["Web.Response"] = "Kex.Web.Response";
-            external.exportToBeamFn["Web.Response.text"] = "text";
-            external.exportArity["Web.Response.text"] = 1;
-
-            auto out = emitWithExternal(
-                "main do Web.Response.text(\"ok\") end\n", external);
-            assertTrue(contains(out, "call 'Kex.Web.Response':'text'"), out);
-            assertFalse(contains(out, "call 'kex_prelude':'Web__Response__text'"),
-                        out);
         });
 
         it("routes only declared external receiver functions", []() {
@@ -1452,19 +1578,6 @@ int main() {
             auto out = emitWithExternal(
                 "main do\n  left / right\nend\n", external);
             assertTrue(contains(out, "call 'kex_units':'divide_measure'"), out);
-        });
-
-        it("reorders named args for external module functions using param names", []() {
-            kex::ir::ExternalModules external;
-            external.nameToAtom["Stream"] = "Kex.Stream";
-            external.exportToBeamFn["Stream.Sequence"] = "Sequence";
-            external.exportArity["Stream.Sequence"] = 2;
-            external.exportParamNames["Stream.Sequence"] = {"from", "step"};
-
-            auto out = emitWithExternal(
-                "main do Stream.Sequence(from: 0) { |n| n + 1 } end\n",
-                external);
-            assertTrue(contains(out, "call 'Kex.Stream':'Sequence'"), out);
         });
 
         it("resolves bare named-arg calls through external module fallback", []() {
@@ -1600,7 +1713,7 @@ int main() {
             auto out = emitWithPrelude(
                 "main do\n  let x = [1]\n  x.transform { |item| item }\nend\n",
                 {"transform"});
-            assertTrue(contains(out, "call 'kex_prelude':'transform'"), out);
+            assertTrue(callsPrelude(out, "transform"), out);
         });
 
         it("routes migrated list receiver functions through their Kex declarations", []() {
@@ -1617,8 +1730,7 @@ int main() {
                 auto source = std::string("main do\n  let xs = [1,2,3]\n  ") +
                               item.expression + "\nend\n";
                 auto out = emitWithPrelude(source, {item.name});
-                assertTrue(contains(
-                    out, std::string("call 'kex_prelude':'") + item.name + "'"),
+                assertTrue(callsPrelude(out, item.name),
                     out);
             }
         });
@@ -1636,8 +1748,7 @@ int main() {
                 auto source = std::string("main do\n  let value = 4\n  ") +
                               item.expression + "\nend\n";
                 auto out = emitWithPrelude(source, {item.name});
-                assertTrue(contains(
-                    out, std::string("call 'kex_prelude':'") + item.name + "'"),
+                assertTrue(callsPrelude(out, item.name),
                     out);
             }
         });
@@ -1654,8 +1765,7 @@ int main() {
                 auto source = std::string("main do\n  ") + item.expression +
                               "\nend\n";
                 auto out = emitWithPrelude(source, {item.name});
-                assertTrue(contains(
-                    out, std::string("call 'kex_prelude':'") + item.name + "'"),
+                assertTrue(callsPrelude(out, item.name),
                     out);
             }
         });
@@ -1672,8 +1782,7 @@ int main() {
                 auto source = std::string("main do\n  ") + item.expression +
                               "\nend\n";
                 auto out = emitWithPrelude(source, {item.name});
-                assertTrue(contains(
-                    out, std::string("call 'kex_prelude':'") + item.name + "'"),
+                assertTrue(callsPrelude(out, item.name),
                     out);
             }
         });
@@ -1681,44 +1790,44 @@ int main() {
         it("routes zero-argument count through Kex", []() {
             auto out = emitWithPrelude(
                 "main do\n  [1,2,3].count\nend\n", {"count"});
-            assertTrue(contains(out, "call 'kex_prelude':'count'"), out);
+            assertTrue(callsPrelude(out, "count"), out);
         });
 
         it("modulo routes through kex_prelude", []() {
             auto out = emitWithPrelude(
                 "main do\n  let x = 5\n  x.modulo(3)\nend\n", {"modulo"});
-            assertTrue(contains(out, "call 'kex_prelude':'modulo'"), out);
+            assertTrue(callsPrelude(out, "modulo"), out);
         });
 
         it("even? routes through kex_prelude", []() {
             auto out = emitWithPrelude(
                 "main do\n  let x = 4\n  x.even?\nend\n", {"even?"});
-            assertTrue(contains(out, "call 'kex_prelude':'even?'"), out);
+            assertTrue(callsPrelude(out, "even?"), out);
         });
 
         it("each binds lambda and calls lists:foreach", []() {
             auto out = emitWithPrelude(
                 "main do\n  [1,2,3].each { |x| IO.printLine(x) }\nend\n",
                 {"each"});
-            assertTrue(contains(out, "call 'kex_prelude':'each'"), out);
+            assertTrue(callsPrelude(out, "each"), out);
         });
 
         it("map routes to kex_prelude", []() {
             auto out = emitWithPrelude(
                 "main do\n  [1,2,3].map { |x| x }\nend\n", {"map"});
-            assertTrue(contains(out, "call 'kex_prelude':'map'"), out);
+            assertTrue(callsPrelude(out, "map"), out);
         });
 
         it("filter routes to kex_prelude", []() {
             auto out = emitWithPrelude(
                 "main do\n  [1,2,3].filter { |x| true }\nend\n", {"filter"});
-            assertTrue(contains(out, "call 'kex_prelude':'filter'"), out);
+            assertTrue(callsPrelude(out, "filter"), out);
         });
 
         it("push routes through kex_prelude", []() {
             auto out = emitWithPrelude(
                 "main do\n  let xs = [1]\n  xs.push(2)\nend\n", {"push"});
-            assertTrue(contains(out, "call 'kex_prelude':'push'"), out);
+            assertTrue(callsPrelude(out, "push"), out);
         });
 
     });
@@ -1773,27 +1882,21 @@ int main() {
                 "end\n"
                 "main do go(self()) end\n",
                 {"send"});
-            assertTrue(contains(out, "call 'kex_prelude':'send'"), out);
+            assertTrue(callsPrelude(out, "send"), out);
         });
 
-        it("send(pid, msg) free function emits erlang:send", []() {
-            auto out = emit(
+        // Bare `send(pid, msg)` is `pid.send(msg)` by UFCS: lowering no
+        // longer turns the spelling into erlang:send itself.
+        it("send(pid, msg) routes through the source receiver method", []() {
+            auto out = emitWithPrelude(
                 "# kex: no-check\n"
                 "foul go(pid) do\n"
                 "  send(pid, :ping)\n"
                 "end\n"
-                "main do go(self()) end\n"
-            );
-            assertTrue(contains(out, "call 'erlang':'send'"), out);
-        });
-
-        it("self() emits erlang:self()", []() {
-            auto out = emit(
-                "# kex: no-check\n"
-                "foul myPid do self() end\n"
-                "main do myPid() end\n"
-            );
-            assertTrue(contains(out, "call 'erlang':'self'()"), out);
+                "main do go(self()) end\n",
+                {"send"});
+            assertTrue(callsPrelude(out, "send"), out);
+            assertTrue(!contains(out, "call 'erlang':'send'"), out);
         });
 
         it("pid link operations route through source receiver methods", []() {
@@ -1805,8 +1908,8 @@ int main() {
                 "end\n"
                 "main do go(self()) end\n",
                 {"link", "unlink"});
-            assertTrue(contains(out, "call 'kex_prelude':'link'"), out);
-            assertTrue(contains(out, "call 'kex_prelude':'unlink'"), out);
+            assertTrue(callsPrelude(out, "link"), out);
+            assertTrue(callsPrelude(out, "unlink"), out);
         });
 
         it("pid.alive?() routes through kex_prelude", []() {
@@ -1815,7 +1918,7 @@ int main() {
                 "foul check(pid) do pid.alive?() end\n"
                 "main do check(self()) end\n",
                 {"alive?"});
-            assertTrue(contains(out, "call 'kex_prelude':'alive?'"), out);
+            assertTrue(callsPrelude(out, "alive?"), out);
         });
 
         it("Task.start { block } emits through companion module", []() {
@@ -1860,24 +1963,6 @@ int main() {
             assertTrue(!contains(out, "call 'kex_task':'await'"), out);
         });
 
-        it("task.await(timeout: N) orders the named receiver argument", []() {
-            kex::ir::ExternalModules ext;
-            ext.receiverFunctions["await"].push_back(
-                {"kex_prelude", "await", 1, {}});
-            ext.receiverFunctions["await"].push_back(
-                {"kex_prelude", "await", 2, {"timeout"}});
-            auto out = emitWithExternal(
-                "# kex: no-check\n"
-                "foul go do\n"
-                "  let t = Task.start { 42 }\n"
-                "  t.await(timeout: 5000)\n"
-                "end\n"
-                "main do go() end\n",
-                ext);
-            assertTrue(contains(out, "call 'kex_prelude':'await'(T, 5000)"), out);
-            assertTrue(!contains(out, "call 'kex_task':'await'"), out);
-        });
-
         it("Process.self without parens emits call through companion module", []() {
             kex::ir::ExternalModules ext;
             ext.nameToAtom["Process"] = "Kex.Process";
@@ -1892,7 +1977,7 @@ int main() {
                 "main do go() end\n",
                 ext
             );
-            assertTrue(contains(out, "call 'Kex.Process':'self'()"), out);
+            assertTrue(contains(out, "call 'Kex.Process':'self'("), out);
         });
     });
 

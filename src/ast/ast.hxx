@@ -1,6 +1,8 @@
 #pragma once
 
 #include "../lexer/token.hxx"
+#include "../common/name_case.hxx"
+#include "../common/string_utils.hxx"
 #include <cctype>
 #include <memory>
 #include <optional>
@@ -22,6 +24,9 @@ using TypeExprPtr = std::unique_ptr<TypeExpr>;
 
 struct TypeName {
     std::vector<std::string> parts; // e.g. ["Html", "Element"]
+
+    // The name as written: `Html.Element`.
+    auto dotted() const -> std::string { return kex::join(parts, "."); }
 };
 
 struct GenericType {
@@ -144,6 +149,9 @@ struct ThisPattern {
 struct ConstructorPattern {
     std::string name;
     std::vector<PatternPtr> args;
+    // The module path written before it (`Shades` of `Shades.Light`), "" when
+    // it is named bare. Only the checker reads it: the name is the tag.
+    std::string module = {};
 };
 
 struct FieldPattern {
@@ -243,6 +251,9 @@ struct MethodCall {
     // The literal is kept (without its values, which are the call's second
     // argument) so the compile-time validator can still find and check it.
     std::shared_ptr<const TaggedLiteral> tagged;
+    // Where the method's name is written (the call's own location is past
+    // it), for tooling that answers for the name.
+    SourceLocation methodLocation = {};
 };
 
 struct FunctionCall {
@@ -272,6 +283,8 @@ struct RecordEntry {
     // `Point { ...p, x: 1 }`. Entries remain ordered because later fields and
     // spreads override earlier ones.
     bool spread = false;
+    // Where the key is written (`x` in `x: 1`); line 0 for a spread.
+    SourceLocation keyLocation;
 };
 
 struct RecordConstruction {
@@ -418,6 +431,9 @@ struct RescueBlock {
 struct LambdaParam {
     std::string name;
     std::optional<TypeExprPtr> type;
+    // The name as written in `|name|`; unset for a parameter the compiler
+    // made (`&.name`, a named function's).
+    SourceLocation location;
 };
 
 struct Lambda {
@@ -438,12 +454,17 @@ struct Lambda {
 
 // `&.method` / `&.method(args)` — receiver shorthand. Capturing a named
 // function or an operator is spelled with `~` (CurryExpr), never `&`.
+// `lambda` is what it means, `{ |__shorthand| __shorthand.method(args) }`,
+// which every pass but reflection reads; the call holds the arguments.
 struct ShorthandLambda {
     enum class Kind { Method, MethodWithArgs };
     Kind kind;
     std::string name;
-    std::vector<ExprPtr> args;
+    ExprPtr lambda;
 };
+
+// The call inside a shorthand's lambda: `__shorthand.method(args)`.
+inline auto shorthandCall(const ShorthandLambda& shorthand) -> const MethodCall&;
 
 struct SpreadExpr {
     ExprPtr inner;
@@ -595,6 +616,9 @@ struct Param {
     std::optional<std::string> name;
     std::optional<TypeExprPtr> type;
     std::optional<ExprPtr> defaultValue;
+    // Where the name is written (`width` in `let area(width: Integer)`); line
+    // 0 for a pattern. Tooling reads the binding there.
+    SourceLocation location;
     // The type this parameter gets from a preceding standalone signature line
     // (`speak : Cat -> String` above `let speak(c) = ...`), when the parameter
     // itself is unannotated. NON-OWNING: the `TypeAnnotation` item in the same
@@ -629,6 +653,9 @@ struct FunctionClause {
 struct FunctionDef {
     SourceLocation location;
     std::string name;
+    // Where the name itself is written (`area` in `let area(r) = ...`), which
+    // tooling points at; `location` is the declaration's first token.
+    SourceLocation nameLocation;
     // Set only while parsing `let %{expr}(...)`: the compile-time expression
     // that computes this declaration's name. Transient — parseLetExpr moves it
     // into a GeneratedDecl and clears it, so it never reaches a real
@@ -706,6 +733,9 @@ struct MakeDef {
     bool isFinal = false;
     bool isServing = false;
     std::vector<std::string> implements;  // trait names claimed by this block
+    // Where each of `implements` is written, at its last segment (`Pricing`
+    // in `Shop.Pricing`), where a reader points at it.
+    std::vector<SourceLocation> implementLocations;
     // ExprPtr is only ever produced for a GENERATED `make %name do ... end`,
     // where the body may hold a driver loop declaring methods
     // (`OPS.each do |op| let %op(...) ... end end`). Expansion evaluates those
@@ -799,6 +829,15 @@ struct ModuleDef {
     bool isCapability = false;
 };
 
+// The qualified path of a module written as `name` inside `parent` ("" at the
+// top): `module Inner` in `Outer` is `Outer.Inner`, and a name already
+// written under its parent (`module Outer.Inner`) stays as written.
+inline auto nestedModulePath(const std::string& parent, const std::string& name)
+    -> std::string {
+    return parent.empty() || name.starts_with(parent + ".") ? name
+                                                            : parent + "." + name;
+}
+
 using TopLevelItem = std::variant<
     std::unique_ptr<ModuleDef>,
     std::unique_ptr<TypeDef>,
@@ -812,6 +851,14 @@ using TopLevelItem = std::variant<
     std::unique_ptr<Pragma>,
     std::unique_ptr<TypeAnnotation>
 >;
+
+// The node a top-level or module item holds; null once it has been moved out.
+// What lends an item to another program finds it by (hir::checkReplInput,
+// hir::checkCompileTime).
+template <typename Item>
+auto heldNode(const Item& item) -> const void* {
+    return std::visit([](const auto& node) -> const void* { return node.get(); }, item);
+}
 
 struct Program {
     std::vector<TopLevelItem> items;
@@ -836,10 +883,14 @@ inline auto isLocalConstantBind(const PatternPtr& pattern, const ExprPtr& value)
     if (!pattern || !value) return false;
     const auto* varPat = std::get_if<VarPattern>(&pattern->kind);
     if (!varPat || varPat->name.empty() ||
-        !std::isupper(static_cast<unsigned char>(varPat->name.front())))
+        !kex::startsUppercase(varPat->name))
         return false;
     const auto* lambda = std::get_if<Lambda>(&value->kind);
     return lambda && lambda->namedFunction && lambda->params.empty();
+}
+
+inline auto shorthandCall(const ShorthandLambda& shorthand) -> const MethodCall& {
+    return std::get<MethodCall>(std::get<Lambda>(shorthand.lambda->kind).body.front()->kind);
 }
 
 } // namespace kex::ast

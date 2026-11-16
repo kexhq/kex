@@ -1,0 +1,22 @@
+# Importing a type brings its constructors in with it: `using Shades, only:
+# [Shade]` makes `Light` and `Tint` usable bare, in a pattern and in an
+# expression alike (decided 2026-11-13). Both backends bind them by the
+# module the checker resolved, not by their own reading of the `using`.
+
+module Shades do
+  type Shade = Light | Tint(Integer)
+end
+
+using Shades, only: [Shade]
+
+let describe(shade: Shade) -> String do
+  match shade do
+    Light => "light"
+    Tint(n) => "tint ${n}"
+  end
+end
+
+main do
+  IO.printLine(describe(Tint(2)))
+  IO.printLine(describe(Light))
+end

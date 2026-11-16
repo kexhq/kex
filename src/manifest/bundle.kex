@@ -48,20 +48,34 @@ end
 let plugin(namespace: String, tey: String, body: Block<Void>) -> Void do
 end
 
+# Something a plugin may be granted: what +capabilities+ lists. The three
+# kinds below are different types, so one list of them shares this trait.
+trait Capability do
+end
+
 # A file-system resource a plugin is granted, which Tey asks the developer to
 # approve when the package is installed.
 record PluginCapability do
   kind : String
 end
 
+make PluginCapability, implement: Capability do
+end
+
 # `Process.Run([...])`: running the programs listed.
 module Process do
   type Grant = Run([String])
+
+  make Grant, implement: Capability do
+  end
 end
 
 # `Net.Connect([...])`: connecting to the hosts listed.
 module Net do
   type Grant = Connect([String])
+
+  make Grant, implement: Capability do
+  end
 end
 
 # What a plugin may touch, once, inside its block: `FS.Read.package` (the
@@ -71,14 +85,14 @@ end
 #
 # @example
 #   capabilities([FS.Write.workspace, Process.Run(["git"])])
-let capabilities(granted: [Any]) -> Void do
+let capabilities(granted: [Capability]) -> Void do
 end
 
 # `FS.Read.package`: reading the plugin's own package.
-let package(mode: FS.FileModes) -> PluginCapability = PluginCapability { kind: "FS.Read.package" }
+let package(mode: FS.FileMode) -> PluginCapability = PluginCapability { kind: "FS.Read.package" }
 
 # `FS.Write.workspace`: writing inside the package the plugin runs in.
-let workspace(mode: FS.FileModes) -> PluginCapability = PluginCapability { kind: "FS.Write.workspace" }
+let workspace(mode: FS.FileMode) -> PluginCapability = PluginCapability { kind: "FS.Write.workspace" }
 
 # A plugin command that writes files, run as `tey generate NAMESPACE:NAME`.
 # Its block declares its options with +option+.

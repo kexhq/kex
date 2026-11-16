@@ -235,6 +235,15 @@ auto Lexer::scanToken() -> Token {
             }
             if (match('>')) return makeToken(TokenType::TypeAnnotation);
             if (isLowerAlpha(peek())) return lexAtom();
+            // A letter outside ASCII starts one too, unless it is uppercase
+            // (`:Φ` is no more an atom than `:Some`): `:árvíz` as `:arviz`.
+            if (static_cast<unsigned char>(peek()) >= 0x80) {
+                int width = 1;
+                if (identContinues(m_pos, width) &&
+                    !utf8::categories::inRanges(utf8::categories::upperRanges,
+                                                identCodepointAt(m_pos, width)))
+                    return lexAtom();
+            }
             // `:"a@host.example.com"` — an atom no bare spelling can reach,
             // as in Ruby. Only where an expression can START: after `name`
             // it stays a label colon before a string, so `f(sep:"x")` keeps
@@ -739,9 +748,16 @@ auto Lexer::lexAtom() -> Token {
     // so a short node name is spelled bare: `:b@localhost`. `@` only ever
     // STARTS an `@field` shorthand, so nothing written adjacent to an atom
     // meant anything else. A name with dots still needs `:"a@host.example"`.
-    while (!atEnd() && (isIdentChar(peek()) ||
-                        (peek() == '@' && isIdentChar(peekNext())))) {
-        atom += advance();
+    // Its letters are an identifier's, outside ASCII included.
+    int width = 1;
+    while (!atEnd()) {
+        if (identContinues(m_pos, width)) {
+            for (int i = 0; i < width && !atEnd(); ++i) atom += advance();
+        } else if (peek() == '@' && isIdentChar(peekNext())) {
+            atom += advance();
+        } else {
+            break;
+        }
     }
     return makeToken(TokenType::Atom, atom);
 }

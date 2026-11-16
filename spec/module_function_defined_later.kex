@@ -1,0 +1,19 @@
+# A module function is callable, qualified, above its definition even when
+# the caller has the same name and arity: `Clock.now` calling `Source.now`
+# was rejected with "`Source` has no function `now`", because the bare `now`
+# that `Clock.now` registered first hid `Source.now`'s qualified entry.
+
+module Clock do
+  foul now() -> Integer do
+    let reading = Source.now()
+    return reading + 1
+  end
+end
+
+module Source do
+  foul now() -> Integer = 41
+end
+
+main do
+  IO.printLine("${Clock.now()}")
+end

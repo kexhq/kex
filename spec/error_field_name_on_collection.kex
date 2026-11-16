@@ -1,0 +1,7 @@
+# A list, map or tuple has no fields: a name some record declares as a field
+# (the prelude's FS.FileInfo has `size`) is still no function of theirs.
+
+main do
+  let xs = [1, 2]
+  IO.printLine(xs.size)
+end

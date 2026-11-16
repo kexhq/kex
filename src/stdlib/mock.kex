@@ -92,7 +92,7 @@ module Mock do
   # still runs, which code measuring elapsed time needs: a frozen clock makes
   # every interval zero.
   #
-  #   with Time.Clock = Mock.Clock { onNow: Just({ DateTime.now() + 3.days }) } do
+  #   with Time.Clock = Mock.Clock { onNow: Just({ DateTime.now() + 3.day }) } do
   #     let started = DateTime.epochNanos()
   #     runTheThing()
   #     assert(DateTime.epochNanos() > started)
@@ -389,23 +389,23 @@ module Mock do
 
     foul read(path) = match this.cannedRead(path) do
       Just(content) => Ok(content)
-      None => Error(ReadFailed(path))
+      None => Error(FS.ReadFailed(path))
     end
     foul readBytes(path) = match this.cannedRead(path) do
       Just(content) => Ok(content.to(Binary).try)
-      None => Error(ReadFailed(path))
+      None => Error(FS.ReadFailed(path))
     end
     foul readLines(path) = match this.cannedRead(path) do
       Just(content) => Ok(content.lines)
-      None => Error(ReadFailed(path))
+      None => Error(FS.ReadFailed(path))
     end
     foul feed(path) = match this.cannedRead(path) do
       Just(content) => Ok(Feed.Elements(content.lines))
-      None => Error(ReadFailed(path))
+      None => Error(FS.ReadFailed(path))
     end
     foul size(path) = match this.cannedRead(path) do
       Just(content) => Ok(content.bytes.count)
-      None => Error(ReadFailed(path))
+      None => Error(FS.ReadFailed(path))
     end
     foul exists?(path) = this.cannedRead(path) != None
     foul file?(path) = this.cannedRead(path) != None
@@ -413,26 +413,26 @@ module Mock do
     foul absolute(path) = Ok(path)
     foul canonical(path) = match this.cannedRead(path) do
       Just(_) => Ok(path)
-      None => Error(ReadFailed(path))
+      None => Error(FS.ReadFailed(path))
     end
     foul symlink?(path) = false
     foul info(path) = match this.cannedRead(path) do
       Just(content) => Ok(FS.FileInfo { kind: :file, size: content.bytes.count, modified: DateTime.fromEpochSeconds(0) })
-      None => Error(ReadFailed(path))
+      None => Error(FS.ReadFailed(path))
     end
 
     # A fake is a value, so there is nowhere for a write to go. Refusing is
     # the honest answer and the useful one: a test that did not expect a
     # write sees it fail rather than silently succeed.
-    foul open(path, mode) = Error(OpenFailed(path))
-    foul write(path, content) = Error(WriteFailed(path))
-    foul writeBytes(path, content) = Error(WriteFailed(path))
-    foul append(path, content) = Error(WriteFailed(path))
-    foul delete(path) = Error(DeleteFailed(path))
-    foul copy(src, dst) = Error(CopyFailed(src, dst))
-    foul rename(src, dst) = Error(RenameFailed(src, dst))
-    foul changePermission(path, permissions) = Error(ModeFailed(path))
-    foul changeMode(path, mode) = Error(ModeFailed(path))
+    foul open(path, mode) = Error(FS.OpenFailed(path))
+    foul write(path, content) = Error(FS.WriteFailed(path))
+    foul writeBytes(path, content) = Error(FS.WriteFailed(path))
+    foul append(path, content) = Error(FS.WriteFailed(path))
+    foul delete(path) = Error(FS.DeleteFailed(path))
+    foul copy(src, dst) = Error(FS.CopyFailed(src, dst))
+    foul rename(src, dst) = Error(FS.RenameFailed(src, dst))
+    foul changePermission(path, permissions) = Error(FS.ModeFailed(path))
+    foul changeMode(path, mode) = Error(FS.ModeFailed(path))
   end
 
   make Env, implement: ENV do

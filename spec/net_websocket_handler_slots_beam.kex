@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
 #
 # An upgraded WebSocket must not keep holding one of the server's
 # `maximumHandlers` HTTP handler slots (kexhq/kex#390). With the slot held
@@ -21,6 +21,7 @@ end
 foul echoAndContinue(socket: Connection, text: String) -> Void do
   socket.send(Text(text)).try
   echoUntilClosed(socket)
+rescue return Void
 end
 
 foul socketRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |_handshake|
@@ -34,6 +35,7 @@ foul openSockets(port: Integer, count: Integer) -> [Connection] do
   else
     [WebSocket.connect("ws://127.0.0.1:${port}/socket").try] + openSockets(port, count - 1)
   end
+rescue return []
 end
 
 foul echoed?(socket: Connection, text: String) -> Bool do
@@ -42,6 +44,7 @@ foul echoed?(socket: Connection, text: String) -> Bool do
     Text(reply) => reply == text
     _ => false
   end
+rescue return false
 end
 
 foul pingRoute(_request: Request<Binary>, _context: Context) -> Response<Binary> = Response.text(200, "pong")
@@ -52,7 +55,7 @@ main do
   let server = Server.start(endpoint, router, ServerOptions {
     maximumHandlers: 2,
     backlog: 16,
-    gracefulShutdown: Duration.seconds(1)
+    gracefulShutdown: 1.second
   }).try
   let port = server.localAddress.port.value
 

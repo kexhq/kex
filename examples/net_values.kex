@@ -8,7 +8,7 @@ main do
 
   let network = Network.parse("10.0.0.0/8").try
   let address = Address.parse("10.20.30.40").try
-  IO.printLine("${address.string} private=${address.private?} in-network=${network.contains(address)}")
+  IO.printLine("${address.string} private=${address.private?} in-network=${network.contains?(address)}")
 
   let headers = Headers.empty
     .add("Accept", "application/json").try

@@ -1,10 +1,20 @@
 #include "completion_at.hxx"
+#include "../common/well_known.hxx"
+#include "symbol_queries.hxx"
+#include "collect_pass.hxx"
+#include "../compiled/expand.hxx"
+#include "../ast/walk.hxx"
+#include "../lexer/lexer.hxx"
+#include "../parser/parser.hxx"
+#include <fstream>
+#include <iterator>
 
 
 #include <algorithm>
 #include <cctype>
 #include <string_view>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 
@@ -19,8 +29,13 @@ auto completionQualifierForType(const TypePtr& type) -> std::string {
         else if constexpr (std::is_same_v<T, OptionalType>)
             return "Optional";
         else if constexpr (std::is_same_v<T, NamedType>)
-            return value.typeArgs.empty() ? value.name
-                                          : typeToString(type);
+        {
+            // A type named before a dot (`List.ma`) is a namespace there:
+            // complete what it holds, not its `Type` record's fields.
+            if (value.name == kex::names::kTypeRecord && value.typeArgs.size() == 1)
+                return completionQualifierForType(value.typeArgs.front());
+            return value.typeArgs.empty() ? value.name : typeToString(type);
+        }
         else if constexpr (std::is_same_v<T, PrimitiveType> ||
                            std::is_same_v<T, SizedIntType> ||
                            std::is_same_v<T, SizedFloatType>)
@@ -34,10 +49,39 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
     const auto isWord = [](unsigned char c) {
         return std::isalnum(c) || c == '_' || c == '?' || c == '!';
     };
+    // Where the comment on the line ending at `end` starts, if it has one: a
+    // `#` outside a string.
+    const auto commentStart = [&](size_t end) -> size_t {
+        size_t lineStart = end;
+        while (lineStart > 0 && source[lineStart - 1] != '\n') --lineStart;
+        char quote = 0;
+        for (size_t j = lineStart; j < end; ++j) {
+            const char c = source[j];
+            if (quote) {
+                if (c == '\\') ++j;
+                else if (c == quote) quote = 0;
+            } else if (c == '"' || c == '\'') {
+                quote = c;
+            } else if (c == '#') {
+                return j;
+            }
+        }
+        return std::string::npos;
+    };
+    // Back over white space, and over the comment ending a line above: a
+    // `.` that ends `# ... a note.` continues no chain (`make lsp-sweep`).
     const auto skipSpaceBack = [&](size_t i) {
-        while (i > 0 && std::isspace(static_cast<unsigned char>(source[i - 1])))
-            --i;
-        return i;
+        for (;;) {
+            bool crossedLine = false;
+            while (i > 0 && std::isspace(static_cast<unsigned char>(source[i - 1]))) {
+                crossedLine = crossedLine || source[i - 1] == '\n';
+                --i;
+            }
+            if (!crossedLine) return i;
+            const auto comment = commentStart(i);
+            if (comment == std::string::npos) return i;
+            i = comment;
+        }
     };
     // Offset of the delimiter opening the group that ends just before `end`.
     const auto matchOpen = [&](size_t end, char close, char open) -> size_t {
@@ -60,8 +104,20 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
     if (i == 0 || source[i - 1] != '.') return {};
     const size_t dot = i - 1;
 
+    // `&.text` in `items.map(&.text)`: the shorthand block's parameter is the
+    // receiver (recoveredReceiverQualifier types it).
+    if (dot > 0 && source[dot - 1] == '&')
+        return {.start = dot - 1, .dot = dot, .callOpen = 0, .valid = true};
+    // Where the outermost expression is recorded is decided by how the
+    // receiver ENDS: a call or a block at its `(` / `{`, a member of
+    // something by its name (MethodCall::methodLocation). Only the last link says
+    // this — `a.f(x).g` is the member `g`, not the call `f(x)` met first
+    // going back; taking that call, or the chain's start, completed against
+    // the wrong link (`layer.biases.` offered Layer's fields).
     size_t callOpen = 0;
     i = skipSpaceBack(dot);
+    size_t member = 0;
+    bool atEnd = true;
     while (i > 0) {
         const char c = source[i - 1];
         // A group is never the whole receiver: `makeBox(3)` continues into the
@@ -69,7 +125,8 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
         if (c == ')' || c == ']') {
             const size_t open = matchOpen(i, c, c == ')' ? '(' : '[');
             if (open == std::string::npos) return {};
-            if (c == ')' && callOpen == 0) callOpen = open;
+            if (c == ')' && atEnd) callOpen = open;
+            atEnd = false;
             i = open;
             continue;
         }
@@ -79,7 +136,8 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
         if (c == '}') {
             const size_t open = matchOpen(i, '}', '{');
             if (open == std::string::npos) return {};
-            if (callOpen == 0) callOpen = open;
+            if (atEnd) callOpen = open;
+            atEnd = false;
             const size_t before = skipSpaceBack(open);
             if (before > 0 &&
                 (isWord(static_cast<unsigned char>(source[before - 1])) ||
@@ -112,66 +170,226 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
         // A dot here means the chain continues leftwards: `Web.Server.new(0)`.
         const size_t before = skipSpaceBack(i);
         if (before == 0 || source[before - 1] != '.') break;
+        // Lowercase: a capitalized name after a dot is a namespace or a
+        // constructor (`FS.File`), not a member call.
+        if (atEnd && std::islower(static_cast<unsigned char>(source[i]))) member = i;
+        atEnd = false;
         i = skipSpaceBack(before - 1);
     }
     if (i >= dot) return {};
-    return {.start = i, .dot = dot, .callOpen = callOpen, .valid = true};
+    return {.start = i, .dot = dot, .callOpen = callOpen, .member = member, .valid = true};
 }
 
-auto recoveredReceiverQualifier(SemanticDB& analysisDb,
-                                const std::string& source,
-                                const std::string& path,
-                                const DotReceiver& receiver, size_t cursor,
-                                const ImportedInterfaces* interfaces)
-    -> std::string {
-    if (!receiver.valid || cursor < receiver.dot) return {};
-    // Deleting through the cursor rather than just the dot is what makes
-    // `makeBox(3).g` parse again.
-    auto recovered = source;
-    recovered.erase(receiver.dot, cursor - receiver.dot);
-    // Through a SemanticDB with the file's own module roots, not a bare
-    // parse: `using Web` is resolved by loading that module's source, and
-    // without it every type from an opt-in module came back `unknown` — so a
-    // builder chain on `Web.Server` completed to nothing while the same shape
-    // on a local record worked.
-    analysisDb.updateFile(path, recovered);
-    auto* state = analysisDb.fileState(path);
-    if (!state) return {};
-    Analyzer analyzer(interfaces);
-    analyzer.analyze(state->ast);
+auto bareCallReceiver(const std::string& source, const DotReceiver& receiver) -> bool {
+    if (!receiver.valid || !receiver.callOpen || receiver.callOpen <= receiver.start) return false;
+    return std::all_of(source.begin() + static_cast<std::ptrdiff_t>(receiver.start),
+                       source.begin() + static_cast<std::ptrdiff_t>(receiver.callOpen),
+                       [](char c) {
+                           return std::isalnum(static_cast<unsigned char>(c)) || c == '_' ||
+                                  c == '?' || c == '!';
+                       });
+}
 
-    // Everything before the deletion keeps its position, so the receiver's
-    // line/column are the ones it had in the original buffer. A CALL is
-    // recorded at its argument list's `(`, so a builder chain
-    // (`Web.Server.new(0).get(…).post(…)`) has nothing at all at the start of
-    // the receiver — that position is where `Web` is, and the chain's own type
-    // lives at the last call's paren.
-    const auto positionOf = [&](size_t offset) {
+auto receiverTypeOf(const Analyzer& analyzer, const ast::Expr* expression) -> TypePtr {
+    if (!expression) return nullptr;
+    // `new.age = ...`: the value written, not the assignment's own Unit.
+    if (const auto* assignment = std::get_if<ast::AssignExpr>(&expression->kind);
+        assignment && !assignment->path.empty())
+        return analyzer.assignmentTargetTypeOf(expression);
+    return analyzer.displayTypeOf(expression);
+}
+
+auto checkedReceiver(const CompletionChecker& check, const std::string& source,
+                     const std::string& path, const DotReceiver& receiver,
+                     size_t cursor) -> std::optional<CheckedReceiver> {
+    if (!receiver.valid || cursor < receiver.dot) return std::nullopt;
+    // The 1-based line and column of `offset` in `text`.
+    const auto positionOf = [](const std::string& text, size_t offset) {
         int line = 1;
         size_t lineStart = 0;
         for (size_t i = 0; i < offset; ++i)
-            if (source[i] == '\n') { ++line; lineStart = i + 1; }
-        return std::pair<int, int>{
-            line, static_cast<int>(offset - lineStart) + 1};
+            if (text[i] == '\n') { ++line; lineStart = i + 1; }
+        return std::pair<int, int>{line, static_cast<int>(offset - lineStart) + 1};
     };
-    std::vector<std::pair<int, int>> candidates;
-    if (receiver.callOpen) candidates.push_back(positionOf(receiver.callOpen));
-    candidates.push_back(positionOf(receiver.start));
-
-    // Several expressions can start at one column — `makeBox` the identifier
-    // and `makeBox(3)` the call both start at `m`. Only the call has a type
-    // worth completing against, so take the first that yields a qualifier.
-    for (const auto& [candidateLine, candidateColumn] : candidates)
+    // The typed expression the analysis records at a position. Several can
+    // share one — `makeBox` the identifier and `makeBox(3)` the call both
+    // start at `m` — and only one has a type to complete against.
+    const auto typedAt = [](const Analyzer& analyzer, std::pair<int, int> position,
+                            bool plainName = false) -> const ast::Expr* {
+        // One that names a type to complete members of first (a namespace
+        // path's `FS.File`), then any typed one (a `Number`).
+        const ast::Expr* qualified = nullptr;
+        const ast::Expr* typed = nullptr;
+        const ast::Expr* name = nullptr;
+        const auto better = [plainName](const ast::Expr* held, const ast::Expr& candidate) {
+            // An operator is recorded where its right operand is: in `n !=
+            // args.` the comparison shared `args`'s position, and when it came
+            // first the receiver was a Bool (`make lsp-sweep`). It is never the
+            // receiver.
+            const bool candidateOperator = std::holds_alternative<ast::BinaryOp>(candidate.kind);
+            if (held && std::holds_alternative<ast::BinaryOp>(held->kind))
+                return !candidateOperator;
+            if (candidateOperator) return !held;
+            const bool candidateCall = std::holds_alternative<ast::MethodCall>(candidate.kind) ||
+                                       std::holds_alternative<ast::FunctionCall>(candidate.kind);
+            // A receiver written as a plain name is that name, not a chain
+            // starting with it: in `"in-order: " + tree.inOrder.to(String)`
+            // the chain shares `tree`'s position and is a String.
+            // The name itself wins outright: `@minor < other.minor then Less
+            // else Greater` records the conditional at `other`'s position too,
+            // and which of the two came first was the map's order.
+            if (plainName) {
+                if (std::holds_alternative<ast::Identifier>(candidate.kind)) return true;
+                if (held && std::holds_alternative<ast::Identifier>(held->kind)) return false;
+                return !held || !candidateCall;
+            }
+            // A call over the identifier it starts with.
+            return !held || std::holds_alternative<ast::MethodCall>(candidate.kind) ||
+                   std::holds_alternative<ast::FunctionCall>(candidate.kind);
+        };
         for (const auto& [expression, _] : analyzer.typeMap()) {
-            if (!expression || expression->location.line != candidateLine ||
-                expression->location.column != candidateColumn)
+            if (!expression || expression->location.line != position.first ||
+                expression->location.column != position.second)
                 continue;
-            if (auto qualifier =
-                    completionQualifierForType(analyzer.displayTypeOf(expression));
-                !qualifier.empty())
-                return qualifier;
+            if (std::holds_alternative<ast::Identifier>(expression->kind)) name = expression;
+            const auto type = receiverTypeOf(analyzer, expression);
+            if (!type || std::holds_alternative<UnknownType>(type->kind)) continue;
+            if (better(typed, *expression)) typed = expression;
+            if (!completionQualifierForType(type).empty() && better(qualified, *expression))
+                qualified = expression;
         }
-    return {};
+        // A plain name is the receiver even when the checker could not type
+        // it: otherwise the chain sharing its position, a String in
+        // `"in-order: " + tree.inOrder`, was completed instead.
+        if (plainName && name) return name;
+        return qualified ? qualified : typed;
+    };
+    // The shorthand `&.`: its parameter is a block's, typed by the call the
+    // block is passed to. Written out as `{ |kexItem| kexItem }`, the
+    // checker types it, and the body's `kexItem` is the receiver.
+    if (source[receiver.start] == '&') {
+        const std::string opening = "{ |kexItem| ";
+        auto rewritten = source.substr(0, receiver.start) + opening + "kexItem }" +
+                         source.substr(cursor);
+        auto checked = check(path, rewritten);
+        if (!checked) return std::nullopt;
+        const auto* expression =
+            typedAt(*checked->analyzer, positionOf(rewritten, receiver.start + opening.size()));
+        return CheckedReceiver{std::move(*checked), expression};
+    }
+    // Deleting through the cursor rather than just the dot is what makes
+    // `makeBox(3).g` parse again. Checked as a build checks it, not a bare
+    // parse: `using Web` is resolved by loading that module's source, and
+    // without it every type from an opt-in module came back `unknown`.
+    // A name already after the cursor (asking at `c.|area()`) is a member the
+    // buffer has: it parses as it is, and deleting only the dot would fuse
+    // the two (`carea()`).
+    // So does a name already typed (`scores.fi|nd { ... }`, `"s".sh|`): an
+    // unknown one is a type error, not a parse error, and deleting it would
+    // hand a following block to the receiver (`scores { ... }`). Only a bare
+    // trailing dot is removed.
+    auto recovered = source;
+    const bool memberFollows =
+        cursor < source.size() &&
+        (std::isalnum(static_cast<unsigned char>(source[cursor])) || source[cursor] == '_');
+    const bool memberTyped = std::any_of(
+        source.begin() + static_cast<std::ptrdiff_t>(receiver.dot) + 1,
+        source.begin() + static_cast<std::ptrdiff_t>(cursor),
+        [](char c) { return !std::isspace(static_cast<unsigned char>(c)); });
+    if (!memberFollows && !memberTyped) recovered.erase(receiver.dot, cursor - receiver.dot);
+    auto checked = check(path, recovered);
+    if (!checked) return std::nullopt;
+    // Everything before the deletion keeps its position. The receiver is
+    // recorded where its outermost expression is: a member by its name, a
+    // call at its `(`. A chain's start is its root's (`layer` in
+    // `layer.biases`), never the chain's own, so only a receiver that is one
+    // expression is asked there.
+    if (receiver.member) {
+        const auto [line, column] = positionOf(source, receiver.member);
+        for (const auto& [expression, _] : checked->analyzer->typeMap())
+            if (const auto* call = expression
+                    ? std::get_if<ast::MethodCall>(&expression->kind) : nullptr;
+                call && call->methodLocation.line == line &&
+                call->methodLocation.column == column &&
+                expression->location.file == path)
+                return CheckedReceiver{std::move(*checked), expression};
+        // `listener.localAddress.try.`: the `.try` is no call. The parser
+        // records it at the token after the keyword, up to the dot asked at.
+        if (source.compare(receiver.member, 3, "try") == 0) {
+            const auto from = positionOf(source, receiver.member);
+            const auto to = positionOf(source, receiver.dot);
+            for (const auto& [expression, _] : checked->analyzer->typeMap())
+                if (expression && std::holds_alternative<ast::TryExpr>(expression->kind) &&
+                    expression->location.file == path) {
+                    const std::pair<int, int> at{expression->location.line,
+                                                 expression->location.column};
+                    if (from <= at && at <= to)
+                        return CheckedReceiver{std::move(*checked), expression};
+                }
+        }
+        return CheckedReceiver{std::move(*checked), nullptr};
+    }
+    // A parenthesized receiver, `(1..10).` or `(a + b).`: the group is no
+    // node, so nothing is recorded at its `(`, and an operator is recorded at
+    // its right operand. The receiver is the outermost expression recorded
+    // inside it: the one no other one there contains.
+    if (receiver.callOpen && receiver.callOpen == receiver.start && source[receiver.start] == '(') {
+        int depth = 0;
+        size_t close = receiver.start;
+        for (; close < receiver.dot; ++close) {
+            if (source[close] == '(') ++depth;
+            else if (source[close] == ')' && --depth == 0) break;
+        }
+        const auto from = positionOf(source, receiver.start + 1);
+        const auto to = positionOf(source, close);
+        std::vector<const ast::Expr*> inside;
+        for (const auto& [expression, _] : checked->analyzer->typeMap()) {
+            if (!expression || expression->location.file != path) continue;
+            const std::pair<int, int> at{expression->location.line, expression->location.column};
+            if (from <= at && at < to) inside.push_back(expression);
+        }
+        std::unordered_set<const ast::Expr*> nested;
+        const auto markNested = [&](const auto& self, const ast::Expr& parent) -> void {
+            ast::forEachChild(parent, [&](const ast::ExprPtr& child) {
+                if (child && nested.insert(child.get()).second) self(self, *child);
+            });
+        };
+        for (const auto* expression : inside) markNested(markNested, *expression);
+        const ast::Expr* outermost = nullptr;
+        for (const auto* expression : inside)
+            if (!nested.contains(expression)) {
+                if (outermost) {
+                    outermost = nullptr;
+                    break;
+                }
+                outermost = expression;
+            }
+        return CheckedReceiver{std::move(*checked), outermost};
+    }
+    // `@timeout.` is the field read, which shares the `@` with the implicit
+    // `this`: the receiver is the read (a call), not the plain `this`, which
+    // completed Conf's members instead of Integer's.
+    const bool fieldShorthand = source[receiver.start] == '@';
+    const auto* expression = typedAt(
+        *checked->analyzer,
+        positionOf(source, receiver.callOpen ? receiver.callOpen : receiver.start),
+        !receiver.callOpen && !fieldShorthand);
+    // A bare call (`words()`) is recorded where its name is, not at its `(`:
+    // there the receiver's start is the call itself.
+    if (!expression && receiver.callOpen && bareCallReceiver(source, receiver))
+        expression = typedAt(*checked->analyzer, positionOf(source, receiver.start));
+    return CheckedReceiver{std::move(*checked), expression};
+}
+
+auto recoveredReceiverQualifier(const CompletionChecker& check,
+                                const std::string& source,
+                                const std::string& path,
+                                const DotReceiver& receiver, size_t cursor,
+                                const ImportedInterfaces*)
+    -> std::string {
+    const auto found = checkedReceiver(check, source, path, receiver, cursor);
+    if (!found || !found->expression) return {};
+    return completionQualifierForType(receiverTypeOf(*found->checked.analyzer, found->expression));
 }
 
 auto completionClosers(const std::string& text) -> std::string {
@@ -216,10 +434,25 @@ auto completionClosers(const std::string& text) -> std::string {
     return closers;
 }
 
-auto completeAt(const SemanticDB& db, SemanticDB& analysisDb,
+auto completeAt(const std::vector<SymbolInfo>& base, const CompletionChecker& check,
                 const std::string& path, const std::string& source,
                 size_t cursor, const ImportedInterfaces* interfaces)
     -> CompletionAt {
+    // The names completion reads: `base`'s, and those a checked program
+    // declares with the names in scope at each point of it.
+    auto baseSymbols = base;
+    const auto namesIn = [&](const std::optional<CheckedSource>& checked) {
+        IndexedFiles files{{"<base>", &baseSymbols}};
+        if (checked)
+            files.push_back({path, const_cast<std::vector<SymbolInfo>*>(
+                                        &checked->analyzer->nameIndex().symbols),
+                             &checked->analyzer->nameIndex().completionScopes});
+        return files;
+    };
+    const auto globalCompletions = [&](const std::string& prefix,
+                                       const std::optional<CheckedSource>& checked) {
+        return completionsFor(namesIn(checked), prefix, interfaces);
+    };
     const auto isWord = [](unsigned char c) {
         return std::isalnum(c) || c == '_' || c == '?' || c == '!';
     };
@@ -235,10 +468,10 @@ auto completeAt(const SemanticDB& db, SemanticDB& analysisDb,
     // A member of an expression the analyzer can type.
     if (const auto receiver = scanDotReceiver(source, cursor); receiver.valid) {
         result.qualifier = recoveredReceiverQualifier(
-            analysisDb, source, path, receiver, cursor, interfaces);
+            check, source, path, receiver, cursor, interfaces);
         if (!result.qualifier.empty()) {
             const auto qualified = result.qualifier + ".";
-            for (auto& match : db.completionsFor(qualified + word))
+            for (auto& match : globalCompletions(qualified + word, check(path, source)))
                 if (match.rfind(qualified, 0) == 0)
                     result.matches.push_back(match.substr(qualified.size()));
             return result;
@@ -254,7 +487,7 @@ auto completeAt(const SemanticDB& db, SemanticDB& analysisDb,
         --pathStart;
     if (pathStart < wordStart) {
         const auto qualified = source.substr(pathStart, wordStart - pathStart);
-        for (auto& match : db.completionsFor(qualified + word))
+        for (auto& match : globalCompletions(qualified + word, check(path, source)))
             if (match.rfind(qualified, 0) == 0)
                 result.matches.push_back(match.substr(qualified.size()));
         return result;
@@ -262,21 +495,68 @@ auto completeAt(const SemanticDB& db, SemanticDB& analysisDb,
 
     // A bare name: the index's global names plus the bindings in scope at the
     // cursor, which only an analysis of the surrounding program knows.
-    result.matches = db.completionsFor(word);
-    analysisDb.updateFile(path, source);
+    const auto checked = check(path, source);
     int line = 1;
     size_t lineStart = 0;
     for (size_t i = 0; i < wordStart; ++i)
         if (source[i] == '\n') { ++line; lineStart = i + 1; }
-    for (auto& name : analysisDb.completionsAt(
-             path, static_cast<uint32_t>(line),
-             static_cast<uint32_t>(wordStart - lineStart + 1), word))
-        result.matches.push_back(std::move(name));
+    result.matches = completionsAt(namesIn(checked), path, static_cast<uint32_t>(line),
+                                   static_cast<uint32_t>(wordStart - lineStart + 1), word,
+                                   interfaces);
     std::sort(result.matches.begin(), result.matches.end());
     result.matches.erase(
         std::unique(result.matches.begin(), result.matches.end()),
         result.matches.end());
     return result;
+}
+
+auto completeReplInput(const std::vector<SymbolInfo>& base, const CompletionChecker& check,
+                       const std::string& definitions,
+                       const std::string& bindings,
+                       const std::string& input, const std::string& line,
+                       size_t point, bool declaration,
+                       const ImportedInterfaces* interfaces) -> CompletionAt {
+    const auto prefix =
+        definitions + (declaration ? "" : "main do\n" + bindings);
+    const auto program = prefix + input + completionClosers(input) +
+                         (declaration ? "\n" : "\nend\n");
+    const size_t lineStart = prefix.size() + (input.size() - line.size());
+    auto completion = completeAt(base, check, "<repl-completion>", program,
+                                 lineStart + std::min(point, line.size()),
+                                 interfaces);
+    completion.replaceFrom -= lineStart;
+    return completion;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto symbolsOfSource(const std::string& path, std::string source,
+                     const std::vector<std::string>& roots) -> std::vector<SymbolInfo> {
+    Lexer lexer(std::move(source), path);
+    Parser parser(lexer.tokenizeAll(), path);
+    auto program = parser.parseProgram();
+    std::vector<Diagnostic> diagnostics;
+    compiled::ExpandOptions options;
+    options.sourcePath = path;
+    options.moduleRoots = roots;
+    compiled::expand(program, diagnostics, options);
+    return collectSymbols(program, path);
+}
+
+auto symbolsOfFiles(const std::vector<std::string>& paths,
+                    const std::vector<std::string>& roots) -> std::vector<SymbolInfo> {
+    std::vector<SymbolInfo> symbols;
+    for (const auto& path : paths) {
+        std::ifstream input(path, std::ios::binary);
+        if (!input) continue;
+        std::string source((std::istreambuf_iterator<char>(input)),
+                           std::istreambuf_iterator<char>());
+        for (auto& symbol : symbolsOfSource(path, std::move(source), roots))
+            symbols.push_back(std::move(symbol));
+    }
+    return symbols;
 }
 
 } // namespace kex::semantic

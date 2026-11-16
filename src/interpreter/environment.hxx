@@ -21,8 +21,6 @@ public:
     // immutable so callers don't need a separate existence check.
     auto isMutable(const std::string& name) const -> bool;
     auto parent() const -> std::shared_ptr<Environment>;
-    // Copy all bindings from `other` into this environment.
-    auto importAll(const Environment& other) -> void;
     // Names bound directly in this environment (not parents).
     auto names() const -> std::vector<std::string>;
     // The function call a `return` evaluated in this scope leaves: the

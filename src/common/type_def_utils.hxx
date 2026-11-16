@@ -6,6 +6,8 @@
 #include <set>
 #include <unordered_map>
 #include <string>
+#include <type_traits>
+#include <variant>
 #include <vector>
 
 namespace kex {
@@ -110,9 +112,7 @@ auto collectScopeUsings(const Items& items,
     for (const auto& item : items) {
         if (auto* block = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item);
             block && *block && (*block)->body.empty()) {
-            std::string module;
-            for (const auto& part : (*block)->module.parts)
-                module += (module.empty() ? "" : ".") + part;
+            std::string module = (*block)->module.dotted();
             out[modulePath].insert(std::move(module));
         } else if (auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
                    nested && *nested) {
@@ -170,6 +170,29 @@ auto forEachTraitDef(const Items& items, const Visit& visit,
     }
 }
 
+// Every `type` a program declares, at the top level, inside any module, or
+// in a visibility block, with the path of the module declaring it.
+template <typename Items, typename Visit>
+auto forEachTypeDef(const Items& items, const Visit& visit,
+                    const std::string& modulePath = "") -> void {
+    for (const auto& item : items)
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
+                if (node) visit(*node, modulePath);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                if (node) forEachTypeDef(node->items, visit, modulePath);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (!node) return;
+                const auto& name = node->name;
+                const bool qualified =
+                    !modulePath.empty() && name.rfind(modulePath + ".", 0) == 0;
+                forEachTypeDef(node->body, visit,
+                               modulePath.empty() || qualified ? name : modulePath + "." + name);
+            }
+        }, item);
+}
+
 // The dispatch names a `make` target covers. Normally one, but a union target
 // (`make Float | Integer do ... end`) applies the block to every member, so
 // each gets its own registration under the same method names. Nested unions
@@ -204,6 +227,26 @@ inline auto collectDeclaredTypeNames(const Items& items,
     }
 }
 
+// Every trait name the program declares, nested modules and visibility
+// blocks included: a trait is a type annotations may name.
+template <typename Items>
+inline auto collectDeclaredTraitNames(const Items& items, std::set<std::string>& out) -> void {
+    for (const auto& item : items) {
+        std::visit([&out](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
+                if (node) out.insert(node->name);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) collectDeclaredTraitNames(node->body, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
+                if (node) collectDeclaredTraitNames(node->items, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                if (node) collectDeclaredTraitNames(node->items, out);
+            }
+        }, item);
+    }
+}
+
 template <typename Items>
 inline auto collectDeclaredRecordNames(const Items& items,
                                        std::set<std::string>& out) -> void {
@@ -219,6 +262,40 @@ inline auto collectDeclaredRecordNames(const Items& items,
             }
         }, item);
     }
+}
+
+// Whether a `make` block's structural target (`make [T]`, `make {K: V}`)
+// counts as the named `List` / `Map` for a caller.
+enum class StructuralTarget { Excluded, Named };
+
+// The name a `make` block's target is written with: the parts of `Box` for
+// `make Box` and `make Box<T>`, and with StructuralTarget::Named, `List` for
+// `make [T]` and `Map` for `make {K: V}`. nullopt for any other target. Each
+// caller then takes what it needs — the dotted spelling, the last segment —
+// instead of re-deriving the name from the target's kinds.
+inline auto writtenMakeTarget(const ast::TypeExprPtr& target,
+                              StructuralTarget structural = StructuralTarget::Named)
+    -> std::optional<ast::TypeName> {
+    if (!target) return std::nullopt;
+    if (const auto* name = std::get_if<ast::TypeName>(&target->kind))
+        return name->parts.empty() ? std::nullopt : std::optional(*name);
+    if (const auto* generic = std::get_if<ast::GenericType>(&target->kind))
+        return generic->name.parts.empty() ? std::nullopt
+                                           : std::optional(generic->name);
+    if (structural == StructuralTarget::Named) {
+        if (std::holds_alternative<ast::ListType>(target->kind))
+            return ast::TypeName{{"List"}};
+        if (std::holds_alternative<ast::MapType>(target->kind))
+            return ast::TypeName{{"Map"}};
+    }
+    return std::nullopt;
+}
+
+// The last segment of that name ("" when there is none): the type a make
+// block extends, as the receiver tables key it.
+inline auto makeTargetLeaf(const ast::TypeExprPtr& target) -> std::string {
+    const auto name = writtenMakeTarget(target);
+    return name ? name->parts.back() : std::string{};
 }
 
 inline auto makeTargetNames(const ast::TypeExprPtr& target,
@@ -240,20 +317,12 @@ inline auto makeTargetNames(const ast::TypeExprPtr& target,
             return;
         }
         if (const auto* tn = std::get_if<ast::TypeName>(&t->kind)) {
-            std::string name;
-            for (const auto& part : tn->parts) {
-                if (!name.empty()) name += ".";
-                name += part;
-            }
+            std::string name = kex::join(tn->parts, ".");
             add(std::move(name));
             return;
         }
         if (const auto* gt = std::get_if<ast::GenericType>(&t->kind)) {
-            std::string name;
-            for (const auto& part : gt->name.parts) {
-                if (!name.empty()) name += ".";
-                name += part;
-            }
+            std::string name = gt->name.dotted();
             add(std::move(name));
             return;
         }
@@ -263,6 +332,28 @@ inline auto makeTargetNames(const ast::TypeExprPtr& target,
     walk(walk, target);
     return names;
 }
+
+// Every type a `make` block targets, nested modules and visibility blocks
+// included: `make Box do` makes `Box` a type annotations may name.
+template <typename Items>
+inline auto collectMakeTargetNames(const Items& items, std::set<std::string>& out) -> void {
+    for (const auto& item : items) {
+        std::visit([&out](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                if (node)
+                    for (const auto& name : makeTargetNames(node->target)) out.insert(name);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) collectMakeTargetNames(node->body, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
+                if (node) collectMakeTargetNames(node->items, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                if (node) collectMakeTargetNames(node->items, out);
+            }
+        }, item);
+    }
+}
+
 
 inline auto typeConstructors(const ast::TypeDef& def)
     -> std::optional<std::vector<TypeConstructorInfo>> {

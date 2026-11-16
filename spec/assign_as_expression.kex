@@ -1,0 +1,50 @@
+# kexhq/kex#614: an assignment is an expression whose value is the one
+# assigned, in an argument, an interpolation, a literal or an operand, and
+# what is evaluated after it sees the new value.
+foul summer(parent: Process<Integer>) -> Void do
+  var total = 0
+  loop do
+    receive do
+      0 => break
+      i => parent.send(total = total + i)
+    end
+  end
+  parent.send(-total)
+end
+
+main do
+  var x = 1
+  IO.printLine(x = 41)
+  IO.printLine(x)
+  IO.printLine(x += 2)
+
+  var running = 0
+  [1, 2, 3].each do |i|
+    IO.printLine("running ${running = running + i}")
+  end
+  IO.printLine(running)
+
+  var y = 5
+  IO.printLine((y = y + 1, y, y = y * 2))
+  IO.printLine(y)
+
+  var z = 1
+  let seen = [z, z = z + 1, z]
+  IO.printLine(seen)
+
+  if y > 2
+    IO.printLine("in branch ${y = y * 10}")
+  end
+  IO.printLine(y)
+
+  let me = Process.self
+  let pid = spawn do
+    summer(me)
+  end
+  [4, 5, 6, 0].each { |n| pid.send(n) }
+  4.times do
+    receive do
+      n => IO.printLine(n)
+    end
+  end
+end

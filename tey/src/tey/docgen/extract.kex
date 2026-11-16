@@ -8,6 +8,7 @@
 # both sides.
 
 module Tey.Docgen.Extract do
+  using Kex.AST, only: [Node, TypeRef, PatternRef]
   using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, SourcePage, Doc, nameOf, qualifiedNameOf]
 
   foul fileEntities(items: [Kex.AST.Node]) -> [Entity] do
@@ -111,7 +112,7 @@ module Tey.Docgen.Extract do
       return primaries.first.or("")
     end
     # Several declarations, so nothing is obviously THE one — but a file named
-    # filehandle.kex that declares `FileHandle` is about FileHandle, and the
+    # file_handle.kex that declares `FileHandle` is about FileHandle, and the
     # source's own spelling beats a title-cased file name ("Filehandle").
     let stem = stripExt(source)
     let named = entities.map { |e| baseSpelling(nameOf(e)) }.filter { |name|
@@ -178,7 +179,7 @@ module Tey.Docgen.Extract do
     # The return type a clause declares inline (`-> This`), if any.
     returnType : String = ""
     # Whether any clause is declared `foul`.
-    isFoul : Bool = false
+    foul? : Bool = false
   end
 
   # One parameter as a clause declares it. `named` is false for a pattern
@@ -187,8 +188,8 @@ module Tey.Docgen.Extract do
   record ParamSig do
     name : String
     typeName : String
-    named : Bool
-    hasDefault : Bool
+    named? : Bool
+    default? : Bool
   end
 
   foul bodyEntities(body: [Kex.AST.Node], prefix: String, accum: [Pending]) -> [Pending] do
@@ -239,7 +240,7 @@ module Tey.Docgen.Extract do
     match e do
       MakeDecl(first) => MakeDecl(MakeEntry {
         target: first.target,
-        isFinal: first.isFinal || later.isFinal,
+        final?: first.final? || later.final?,
         implements: (first.implements + later.implements).uniq,
         functions: first.functions + later.functions,
         doc: first.doc.summary.empty? then later.doc else first.doc,
@@ -284,7 +285,7 @@ module Tey.Docgen.Extract do
       qualifiedName: qualify(prefix, info.name),
       typeParams: info.typeParams,
       fields: info.fields.map { |f|
-        FieldEntry { name: f.name, typeName: fieldTypeName(f), hasDefault: f.hasDefault }
+        FieldEntry { name: f.name, typeName: fieldTypeName(f), default?: f.default? }
       },
       doc: Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
       line: info.location.line
@@ -305,7 +306,7 @@ module Tey.Docgen.Extract do
   foul makeEntity(info: Kex.AST.MakeInfo) -> Entity do
     return MakeDecl(MakeEntry {
       target: typeText(info.target),
-      isFinal: info.isFinal,
+      final?: info.final?,
       implements: info.implements.map { |t| typeText(t) },
       # Members are qualified by the type they extend, so search shows
       # `List.first` rather than `[X].first`.
@@ -391,7 +392,7 @@ module Tey.Docgen.Extract do
           doc: doc,
           line: fn.line,
           returnType: fn.returnType,
-          isFoul: fn.isFoul
+          foul?: fn.foul?
         })
       end
       _ => p
@@ -403,7 +404,7 @@ module Tey.Docgen.Extract do
     # function whose clause has NO parameter list — that, not arity, is what
     # distinguishes it from `foul f() = ...` (empty list, but present).
     # Document it as the constant it is.
-    if isConstantBinding(info)
+    if constantBinding?(info)
       return noteConstant(accum, info, prefix)
     end
     let lists = info.clauses.map { |c| clauseParams(c) }
@@ -417,7 +418,7 @@ module Tey.Docgen.Extract do
         doc: Tey.Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
         line: info.location.line,
         returnType: returnTypeText(info),
-        isFoul: info.isFoul
+        foul?: info.foul?
       })]
       Just(_) => accum.map { |p| addClause(p, info, lists) }
     end
@@ -428,12 +429,12 @@ module Tey.Docgen.Extract do
   # a handle that is always the same one; `IO.getLine` reads a new line every
   # time it is named, and calling that a constant is a lie about both what it
   # does and when it happens.
-  foul isConstantBinding(info: Kex.AST.FunctionInfo) -> Bool do
-    if info.isFoul
+  foul constantBinding?(info: Kex.AST.FunctionInfo) -> Bool do
+    if info.foul?
       return false
     end
     match info.clauses.first do
-      Just(clause) => !clause.hasParamList
+      Just(clause) => !clause.paramList?
       None => false
     end
   end
@@ -473,7 +474,7 @@ module Tey.Docgen.Extract do
             doc: fn.doc,
             line: fn.line,
             returnType: fn.returnType,
-            isFoul: fn.isFoul || info.isFoul
+            foul?: fn.foul? || info.foul?
           })
         end
         let doc = if fn.doc.summary.empty?
@@ -528,7 +529,7 @@ module Tey.Docgen.Extract do
           doc: doc,
           line: fn.line,
           returnType: fn.returnType.empty? then declared else fn.returnType,
-          isFoul: fn.isFoul || info.isFoul
+          foul?: fn.foul? || info.foul?
         })
       end
       _ => p
@@ -560,7 +561,7 @@ module Tey.Docgen.Extract do
       line: fn.line,
       types: functionTypes(fn),
       returnType: declaredReturn(fn),
-      isFoul: fn.isFoul
+      foul?: fn.foul?
     }
   end
 
@@ -652,7 +653,7 @@ module Tey.Docgen.Extract do
     end
     let shown = params.mapIndexed { |p, i|
       let typeName = p.typeName.empty? then docParamType(fn.doc, displayName(p, i, fn)) else p.typeName
-      paramText(displayName(p, i, fn), typeName, p.hasDefault)
+      paramText(displayName(p, i, fn), typeName, p.default?)
     }
     let tail = result.empty? then "" else " -> ${result}"
     return "${fn.name}(${shown.join(", ")})${tail}"
@@ -668,7 +669,7 @@ module Tey.Docgen.Extract do
         match flattenToArity(ref, params.count) do
           FunctionType(types, result) => do
             let shown = params.mapIndexed { |p, i|
-              paramText(displayName(p, i, fn), signatureParamText(types.at(i).or(AnyType)), p.hasDefault)
+              paramText(displayName(p, i, fn), signatureParamText(types.at(i).or(Kex.AST.AnyType)), p.default?)
             }
             return "${info.name}(${shown.join(", ")}) -> ${signatureTypeText(result)}"
           end
@@ -689,7 +690,7 @@ module Tey.Docgen.Extract do
       FunctionType(types, result) => do
         return plain if types.count != arity
         let shown = doc.params.mapIndexed { |p, i|
-          paramText(p.name, signatureParamText(types.at(i).or(AnyType)), false)
+          paramText(p.name, signatureParamText(types.at(i).or(Kex.AST.AnyType)), false)
         }
         return "${name}(${shown.join(", ")}) -> ${signatureTypeText(result)}"
       end
@@ -701,7 +702,7 @@ module Tey.Docgen.Extract do
   # it, sigil included: `:>` is what says the receiver is implied, and a
   # plain `:` in its place would describe a function that takes no receiver.
   foul annotationSigil(info: Kex.AST.AnnotationInfo) -> String do
-    return info.implicitThis then ":>" else ":"
+    return info.implicitThis? then ":>" else ":"
   end
 
   # A function with nothing to name its parameters by still reads as a
@@ -714,9 +715,9 @@ module Tey.Docgen.Extract do
     end
   end
 
-  foul paramText(name: String, typeName: String, hasDefault: Bool) -> String do
+  foul paramText(name: String, typeName: String, optional: Bool) -> String do
     let base = typeName.empty? then name else "${name}: ${parenthesized(typeName)}"
-    return hasDefault then "${base} = …" else base
+    return optional then "${base} = …" else base
   end
 
   # A function type inside a parameter list reads as the parameter's type
@@ -729,7 +730,7 @@ module Tey.Docgen.Extract do
   # A pattern parameter (`repeat(0)`) shows the name its @param tag gives
   # that position, or `_` — never the literal, which reads as an argument.
   foul displayName(p: ParamSig, index: Integer, fn: PendingFunction) -> String do
-    return p.name if p.named || (fn.name == ConversionName && typeArgument?(p.name))
+    return p.name if p.named? || (fn.name == ConversionName && typeArgument?(p.name))
     match fn.doc.params.at(index) do
       Just(tag) => tag.name
       None => "_"
@@ -768,7 +769,7 @@ module Tey.Docgen.Extract do
   end
 
   foul namedCount(list: [ParamSig]) -> Integer do
-    return list.filter { |p| p.named }.count
+    return list.filter { |p| p.named? }.count
   end
 
   foul withPeerType(p: ParamSig, index: Integer, peers: [[ParamSig]]) -> ParamSig do
@@ -807,14 +808,14 @@ module Tey.Docgen.Extract do
   end
 
   foul matchingParamList(ref: Kex.AST.TypeRef, paramLists: [[ParamSig]]) -> [ParamSig]? do
-    return paramLists.find { |names| paramsMatch(ref, names) }
+    return paramLists.find { |names| paramsMatch?(ref, names) }
   end
 
   foul matchingParamLists(ref: Kex.AST.TypeRef, paramLists: [[ParamSig]]) -> [[ParamSig]] do
-    return paramLists.filter { |names| paramsMatch(ref, names) }
+    return paramLists.filter { |names| paramsMatch?(ref, names) }
   end
 
-  foul paramsMatch(ref: Kex.AST.TypeRef, names: [ParamSig]) -> Bool do
+  foul paramsMatch?(ref: Kex.AST.TypeRef, names: [ParamSig]) -> Bool do
     match flattenToArity(ref, names.count) do
       FunctionType(params, _) => params.count == names.count
       _ => names.empty?
@@ -861,7 +862,7 @@ module Tey.Docgen.Extract do
       Kex.AST.ParamInfo { name: Just(_) } => true
       _ => false
     end
-    return ParamSig { name: paramName(p), typeName: typeName, named: named, hasDefault: p.hasDefault }
+    return ParamSig { name: paramName(p), typeName: typeName, named?: named, default?: p.default? }
   end
 
   foul paramName(p: Kex.AST.ParamInfo) -> String do

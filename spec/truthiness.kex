@@ -24,24 +24,24 @@ end
 
 main do
   # The three falsy values, and only these.
-  show("false ", if false then true else false end)
-  show("None  ", if None then true else false end)
+  show("false ", false then true else false)
+  show("None  ", None then true else false)
 
   # Everything else is truthy, including the ones other languages call falsy.
-  show("zero  ", if 0 then true else false end)
-  show("empty ", if "" then true else false end)
-  show("nil-l ", if [] then true else false end)
-  show("true  ", if true then true else false end)
-  show("Ok    ", if Ok(1) then true else false end)
-  show("Just  ", if Just(0) then true else false end)
+  show("zero  ", 0 then true else false)
+  show("empty ", "" then true else false)
+  show("nil-l ", [] then true else false)
+  show("true  ", true then true else false)
+  show("Ok    ", Ok(1) then true else false)
+  show("Just  ", Just(0) then true else false)
 
   # A real comparison still takes the direct path — this is the common case and
   # must not pay for the check above.
-  show("cmp   ", if 1 > 2 then true else false end)
+  show("cmp   ", 1 > 2 then true else false)
 
   # Trailing `if` and `then/else` go through the same lowering.
   IO.printLine("trailing" if Ok(1))
-  IO.printLine(if None then "unreachable" else "then-else" end)
+  IO.printLine(None then "unreachable" else "then-else")
 
   # List predicates take the block's result as a condition, so they need the
   # same rule — this is where `bad_filter` came from.
@@ -51,5 +51,5 @@ main do
   IO.printLine("${[1, 2].reject { |n| None }}")
   IO.printLine("${[1, 2].count { |n| Ok(n) }}")
   IO.printLine("${[1, 2].all? { |n| Just(n) }} ${[1, 2].any? { |n| None }}")
-  IO.printLine("${[1, 2].partition { |n| if n > 1 then Ok(n) else None end }}")
+  IO.printLine("${[1, 2].partition { |n| n > 1 then Ok(n) else None }}")
 end

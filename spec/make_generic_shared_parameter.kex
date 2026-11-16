@@ -1,0 +1,26 @@
+# A `make` block's own type parameter (the `D` of `make Qty<D>`) is the
+# receiver's, per call: a method whose parameter says `Qty<D>` takes only a
+# `Qty` of the receiver's `D`, whether the method is annotated (`:>`) or a
+# plain `let`. Both used to wave a `Qty<Length>` through for a `Qty<Time>`
+# receiver; spec/error_make_generic_shared_parameter.kex has the errors.
+record Time do
+end
+record Length do
+end
+
+record Qty<D> do
+  canonical: Float
+end
+
+make Qty<D> do
+  let plus(other: Qty<D>) -> Qty<D> = Qty { canonical: @canonical + other.canonical }
+  let <(other: Qty<D>) -> Bool = @canonical < other.canonical
+end
+
+let seconds(n: Float) -> Qty<Time> = Qty { canonical: n }
+let meters(n: Float) -> Qty<Length> = Qty { canonical: n }
+
+main do
+  IO.printLine("${seconds(1.0).plus(seconds(2.0)).canonical} ${seconds(1.0) < seconds(2.0)}")
+  IO.printLine("${meters(5.0).plus(meters(1.0)).canonical} ${meters(5.0) < meters(1.0)}")
+end

@@ -82,3 +82,65 @@ end
 
 Use `match`, `or`, or `flatMap` when handling a single missing value or failure
 is clearer at the call site.
+
+A failure that nothing handles leaves the function with the failure as the
+function's result. So a function that declares its result must be able to hold
+one: `.try` is refused in a function whose declared result is neither a
+`Result` nor an `Optional`, unless the function has a `rescue` or the `.try`
+is inside `trying`.
+
+```kex
+# Refused: a caller would get an `Error` where a `User` was promised.
+let registered(name: String) -> User do
+  let user = find(name).try
+  user
+end
+
+# The failure is the function's own result.
+let registered(name: String) -> User or! String do
+  let user = find(name).try
+  Ok(user)
+end
+
+# Or the function answers for it.
+let registered(name: String) -> User do
+  find(name).try
+rescue |reason|
+  User { name: "nobody" }
+end
+```
+
+A function that declares no result takes the failure into the result it
+infers. `.try` on an `Optional` makes the result `T?`; `.try` on a
+`Result<T, E>` makes it `T or! E`. The success comes back wrapped as `Just(v)`
+or `Ok(v)`:
+
+```kex
+let initial(names: [String]) = names.first.try.upperCase   # String?
+```
+
+When the body already produces an `Optional` or a `Result`, that is the
+result as it is. The checker refuses the inference in two cases: when one
+function mixes `.try` on an `Optional` with `.try` on a `Result`, and when the
+function also leaves early with `return`. Declare the result there instead.
+
+A block is a function too, so the same holds for it. A block whose `.try`
+can fail gives `T?` or `T or! E`, and `map` hands back each element's
+outcome:
+
+```kex
+let parsed = ["1", "x"].map { |text| Integer.parse(text).try }
+# [Ok(1), Error(ParseError { ... })]
+```
+
+Where the block is passed as a function that must give a plain value, the
+call is refused like any other block of the wrong type. A block that mixes an
+Optional's `.try` with a Result's keeps its own result type, because most
+such blocks (`it`, `Task.start`) are not read.
+
+Where a value cannot be missing, bind it by its pattern instead; a mismatch is
+a fault, not a result:
+
+```kex
+let Just(first) = names.first
+```

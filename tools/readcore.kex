@@ -93,8 +93,8 @@ main(args) do
           body = sliceFunction(body, fnName.try)
         end
 
-        if needle.present?
-          body = body.lines.filter(&.contains?(needle)).join("\n")
+        if let Just(text) = needle
+          body = body.lines.filter(&.contains?(text)).join("\n")
         end
 
         IO.printLine("==> ${path} <==") if files.count > 1

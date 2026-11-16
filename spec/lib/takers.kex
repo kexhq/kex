@@ -1,0 +1,7 @@
+module Takers
+
+# Two same-arity overloads of one substitutable member (kexhq/kex#623).
+capability Take do
+  foul take(text: String) -> String = "string:${text}"
+  foul take(count: Integer) -> String = "integer:${count}"
+end

@@ -5,7 +5,8 @@
            to_string_bin/1, env_map/0, register_display/2,
            mock_start/0, mock_input/1, mock_output/0, mock_clear/0,
            mock_stop/0, value_type_name/1, call_field_or_fail/4,
-           register_method_owners/1, dispatch_method/3]).
+           register_method_owners/1, dispatch_method/3, dispatch_method/4,
+           method_owner/1]).
 
 %% register_method_owners/1 — each compiled unit reports which BEAM module
 %% owns the methods of the record tags it defines. Capability substitution
@@ -18,45 +19,81 @@ register_method_owners(Owners) when is_map(Owners) ->
                                    Owners)),
     ok.
 
+%% method_owner/1 — the module a unit registered as owning the methods of
+%% this value's record tag, or `undefined`. A call whose receiver type is only
+%% known at run time picks, by it, between dispatchers of several units.
+method_owner(Receiver) when is_tuple(Receiver), tuple_size(Receiver) > 0 ->
+    maps:get(element(1, Receiver), persistent_term:get(kex_method_owners, #{}), undefined);
+method_owner(_) ->
+    undefined.
+
 %% dispatch_method/3 — apply a method to a value whose implementing module is
 %% only known at runtime. The failure message matches the one every other
 %% dispatch path raises, so the two backends stay identical.
-dispatch_method(Receiver, Method, Args)
-  when is_tuple(Receiver), tuple_size(Receiver) > 0 ->
-    Tag = element(1, Receiver),
-    case maps:get(Tag, persistent_term:get(kex_method_owners, #{}), undefined) of
+dispatch_method(Receiver, Method, Args) ->
+    dispatch_method(Receiver, Method, Args, <<>>).
+
+%% dispatch_method/4 — the same, for a call the checker resolved to one of
+%% several same-arity overloads: `Key` spells that overload's parameter types
+%% (`String`), and the stand-in's implementation of it is named after its type
+%% and those (`take/FakeTake,String`). Without it two such overloads had no
+%% runtime name to tell them apart, and the call died `undef`
+%% (kexhq/kex#623).
+dispatch_method(Receiver, Method, Args, Key) ->
+    case receiver_tag(Receiver) of
         undefined -> undefined_method(Receiver, Method, <<>>);
-        Module ->
-            Arity = length(Args) + 1,
-            Plain = binary_to_atom(Method, utf8),
-            %% A method name several record types share is compiled once per
-            %% type (`size/Files`), behind one dispatcher that lives in just
-            %% ONE of their modules, not necessarily this record's: adding
-            %% `FS.FileInfo`'s `size` field moved `size`'s dispatcher into
-            %% `Kex.FS`, and a `with FS.File = Mock.Files {...}` call died
-            %% `undef` in `Kex.Mock`. The type's own implementation is always
-            %% in its module, so use it when the plain name is not there.
-            %%
-            %% That implementation is named after the type's qualified
-            %% identity, which is the record's tag (`size/Mock.Files`): two
-            %% modules may each declare a `Files`, and the short name alone
-            %% would not say whose `size` this is (kexhq/kex#476). A type
-            %% that is still named by its last segment alone is looked for
-            %% under that name next.
-            _ = code:ensure_loaded(Module),
-            Qualified = atom_to_binary(Tag, utf8),
-            Short = lists:last(binary:split(Qualified, <<".">>, [global])),
-            Candidates = [Plain | [binary_to_atom(<<Method/binary, "/", Type/binary>>, utf8)
-                                   || Type <- [Qualified, Short]]],
-            Name = case [Candidate || Candidate <- Candidates,
-                                      erlang:function_exported(Module, Candidate, Arity)] of
-                [Found | _] -> Found;
-                [] -> Plain
-            end,
-            erlang:apply(Module, Name, [Receiver | Args])
-    end;
-dispatch_method(Receiver, Method, _Args) ->
-    undefined_method(Receiver, Method, <<>>).
+        Tag ->
+            case maps:get(Tag, persistent_term:get(kex_method_owners, #{}), undefined) of
+                undefined -> undefined_method(Receiver, Method, <<>>);
+                Module -> apply_owned(Module, Tag, Receiver, Method, Args, Key)
+            end
+    end.
+
+%% A record's tag: its first element, or the atom itself for a record with
+%% no fields (`FakeTake {}` is just `'FakeTake'`).
+receiver_tag(Receiver) when is_tuple(Receiver), tuple_size(Receiver) > 0 ->
+    element(1, Receiver);
+receiver_tag(Receiver) when is_atom(Receiver), Receiver =/= true,
+                            Receiver =/= false, Receiver =/= undefined ->
+    Receiver;
+receiver_tag(_) ->
+    undefined.
+
+apply_owned(Module, Tag, Receiver, Method, Args, Key) ->
+    Arity = length(Args) + 1,
+    Plain = binary_to_atom(Method, utf8),
+    %% A method name several record types share is compiled once per
+    %% type (`size/Files`), behind one dispatcher that lives in just
+    %% ONE of their modules, not necessarily this record's: adding
+    %% `FS.FileInfo`'s `size` field moved `size`'s dispatcher into
+    %% `Kex.FS`, and a `with FS.File = Mock.Files {...}` call died
+    %% `undef` in `Kex.Mock`. The type's own implementation is always
+    %% in its module, so use it when the plain name is not there.
+    %%
+    %% That implementation is named after the type's qualified
+    %% identity, which is the record's tag (`size/Mock.Files`): two
+    %% modules may each declare a `Files`, and the short name alone
+    %% would not say whose `size` this is (kexhq/kex#476). A type
+    %% that is still named by its last segment alone is looked for
+    %% under that name next. The selected overload's own
+    %% implementation, when the call names one, comes first.
+    _ = code:ensure_loaded(Module),
+    Qualified = atom_to_binary(Tag, utf8),
+    Short = lists:last(binary:split(Qualified, <<".">>, [global])),
+    Overloads = case Key of
+        <<>> -> [];
+        _ -> [binary_to_atom(<<Method/binary, "/", Type/binary, ",", Key/binary>>, utf8)
+              || Type <- [Qualified, Short]]
+    end,
+    Candidates = Overloads ++
+        [Plain | [binary_to_atom(<<Method/binary, "/", Type/binary>>, utf8)
+                  || Type <- [Qualified, Short]]],
+    Name = case [Candidate || Candidate <- Candidates,
+                              erlang:function_exported(Module, Candidate, Arity)] of
+        [Found | _] -> Found;
+        [] -> Plain
+    end,
+    erlang:apply(Module, Name, [Receiver | Args]).
 
 %% call_field_or_fail/4 — the receiver dispatcher's last resort. A record field
 %% may hold a function, and `d.fetch(url)` should call it; the method keeps
@@ -469,16 +506,16 @@ inspect_real('None') ->
               ++ " " ++ ?CYAN ++ "Optional" ++ ?RESET ++ "~n"), 'None';
 inspect_real(X) when is_atom(X) ->
     Name = atom_to_list(X),
-    case Name of
-        [C | _] when C >= $A, C =< $Z ->
+    case upper_initial(Name) of
+        true ->
             inspect_format("~ts"
                       ++ " " ++ ?GRAY ++ ":" ++ ?RESET
                       ++ " " ++ ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
                       [Name, nullary_type_name(X)]);
         _ ->
-            inspect_format(":~ts"
+            inspect_format("~ts"
                       ++ " " ++ ?GRAY ++ ":" ++ ?RESET
-                      ++ " " ++ ?CYAN ++ "Atom" ++ ?RESET ++ "~n", [Name])
+                      ++ " " ++ ?CYAN ++ "Atom" ++ ?RESET ++ "~n", [atom_literal(Name)])
     end,
     X;
 inspect_real(X) when is_binary(X) ->
@@ -557,6 +594,10 @@ inspect_string(X) when is_atom(X) ->
         {0, _Owner} -> atom_to_list(X);
         _ -> ?GREEN ++ atom_literal(atom_to_list(X)) ++ ?RESET
     end;
+%% A range shows as it is written, `1..10`, as the walker shows it; the
+%% generic tuple clauses below printed its representation, `(:Range, 1, 10)`.
+inspect_string({'Range', _, _} = R) ->
+    to_string(R);
 inspect_string({'FileHandle', _Device, Path}) ->
     "<FileHandle: " ++ inspect_string(Path) ++ ">";
 inspect_string({'Binary', Bin}) when is_binary(Bin) ->
@@ -606,6 +647,9 @@ map_key_string(K) when is_atom(K), K =/= true, K =/= false, K =/= 'None' ->
     ?GREEN ++ atom_to_list(K) ++ ?RESET;
 map_key_string(K) -> inspect_string(K).
 
+%% `()`, the value a `Void` function answers (Map's `each`), has no tag to look
+%% up: it is the empty tuple, written as such.
+inspect_tuple_string({}) -> "()";
 inspect_tuple_string(X) ->
     Tag = element(1, X),
     Arity = tuple_size(X) - 1,
@@ -670,6 +714,8 @@ value_type_name({'Just', V}) -> "Optional<" ++ value_type_name(V) ++ ">";
 value_type_name({'Some', V}) -> "Optional<" ++ value_type_name(V) ++ ">";
 value_type_name({'Ok', V}) -> "Result<" ++ value_type_name(V) ++ ", ?>";
 value_type_name({'Error', V}) -> "Result<?, " ++ value_type_name(V) ++ ">";
+%% `()`: no tag to look up (the interpreter names it the same).
+value_type_name({}) -> "Tuple";
 value_type_name(X) when is_tuple(X) ->
     Tag = element(1, X),
     Arity = tuple_size(X) - 1,
@@ -744,9 +790,9 @@ to_string('false')              -> "false";
 % of `:database` (spec/optional_parens_do.kex).
 to_string(X) when is_atom(X) ->
     S = atom_to_list(X),
-    case S of
-        [C | _] when C >= $a, C =< $z -> atom_literal(S);
-        _ -> S
+    case lower_initial(S) of
+        true -> atom_literal(S);
+        false -> S
     end;
 to_string(X) when is_integer(X) -> integer_to_list(X);
 to_string(X) when is_float(X)   -> format_float(X);
@@ -901,11 +947,41 @@ split_env_entry(E) ->
 %% A Kex atom as it is written: `:name` (or `:b@localhost`) when a bare atom
 %% can spell it, and `:"b@host.example.com"` when it takes the quoted form (the lexer's
 %% lexAtom / lexQuotedAtom). Matches the walker's AtomValue display.
+
+%% Case as the lexer reads it (src/common/name_case.hxx): Unicode letter
+%% categories, not just ASCII, so `:árvíz` is an atom spelled bare and `Φ` a
+%% constructor's name, as they are in source.
+%% `unicode_util:category/1` is newer than OTP 27, which Kex supports; where it
+%% is missing, case mapping says whether a letter is uppercase (`Φ` lowercases
+%% to `φ`), and any character outside ASCII counts as a letter, as the lexer
+%% takes one in a name.
+is_letter(C) ->
+    case has_categories() of
+        true -> element(1, unicode_util:category(C)) =:= letter;
+        false -> C >= 128
+    end.
+
+has_categories() ->
+    _ = code:ensure_loaded(unicode_util),
+    erlang:function_exported(unicode_util, category, 1).
+
+upper_initial([C | _]) when C < 128 -> C >= $A andalso C =< $Z;
+upper_initial([C | _]) ->
+    case has_categories() of
+        true -> unicode_util:category(C) =:= {letter, uppercase};
+        false -> string:lowercase([C]) =/= [C]
+    end;
+upper_initial([]) -> false.
+
+lower_initial([C | _]) when C < 128 -> C >= $a andalso C =< $z;
+lower_initial([C | _] = S) -> is_letter(C) andalso not upper_initial(S);
+lower_initial([]) -> false.
 atom_literal(S) ->
     Bare = lists:all(fun(C) -> (C >= $a andalso C =< $z) orelse
                               (C >= $A andalso C =< $Z) orelse
                               (C >= $0 andalso C =< $9) orelse
-                              C =:= $_ orelse C =:= $@
+                              C =:= $_ orelse C =:= $@ orelse
+                              (C >= 128 andalso is_letter(C))
                      end, S)
            andalso lists:last(S) =/= $@
            andalso string:find(S, "@@") =:= nomatch,

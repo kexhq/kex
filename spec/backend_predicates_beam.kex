@@ -1,4 +1,4 @@
-# kex: run-beam
+# kex: run-beam — asserts the BEAM answers of the backend predicates
 
 main do
   IO.printLine(Kex.BACKEND.interpreted?)

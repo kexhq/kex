@@ -1,0 +1,16 @@
+# kex: check-only
+# `after timeout:` waits a number of milliseconds, an Integer. Anything else
+# checked clean, then BEAM raised `timeout_value` and the walker never woke
+# (found by `make metamorphic-search`).
+
+main do
+  receive do
+  after timeout: Just(70)
+  end
+  receive do
+  after timeout: "kex"
+  end
+  receive do
+  after timeout: 70
+  end
+end

@@ -1,0 +1,7 @@
+module using body
+42
+top using body
+42
+bare before
+main
+bare after

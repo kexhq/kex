@@ -111,7 +111,7 @@ let decode(text: String) -> LockState or! String do
         groups: Tey.Lockfile.lockStrings(raw["groups"]),
         dependencies: Tey.Lockfile.lockStrings(raw["dependencies"]),
         pluginFingerprints: Tey.Lockfile.lockMap(raw["plugins"]),
-        workspace?: Tey.Lockfile.lockBool(raw["workspace"])
+        workspace?: Tey.Lockfile.lockBool?(raw["workspace"])
       }
     end
     None => []
@@ -157,17 +157,15 @@ private do
   let lockStrings(None) -> [String] = []
   let lockStrings(Just(values)) -> [String] = values.map { |value| "${value}" }
 
-  let lockBool(None) -> Bool = false
-  let lockBool(Just(value)) -> Bool = "${value}" == "true"
+  let lockBool?(None) -> Bool = false
+  let lockBool?(Just(value)) -> Bool = "${value}" == "true"
 
   let lockMap(None) -> {String: String} = {}
   let lockMap(Just(values)) -> {String: String} do
-    var decoded: {String: String} = {}
-    values.entries.each do |key, value|
-      decoded.put!("${key}", "${value}")
-      ()
+    values.entries.reduce({}) do |decoded, entry|
+      let (key, value) = entry
+      decoded.put("${key}", "${value}")
     end
-    return decoded
   end
 
   let complete?(dep: Dependency) -> Bool do

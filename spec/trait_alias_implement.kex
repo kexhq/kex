@@ -1,0 +1,27 @@
+# `implement:` through a module alias (`using Geo, as: Geo2` then
+# `implement: Geo2.Shape`, kexhq/kex#627). The checker resolves the alias and
+# decides which defaults the type inherits; both backends follow that answer
+# instead of re-resolving the name, which dropped them with
+# `Undefined method: describe for Circle`.
+module Geo do
+  trait Shape do
+    area :> Float
+
+    let describe = "area=${this.area}"
+  end
+end
+
+record Circle do
+  radius: Float
+end
+
+using Geo, as: Geo2
+
+make Circle, implement: Geo2.Shape do
+  let area = 3.0 * @radius
+end
+
+main do
+  let c = Circle { radius: 2.0 }
+  IO.printLine(c.describe)
+end
