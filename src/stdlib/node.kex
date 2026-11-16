@@ -68,26 +68,32 @@ module Node do
 
   # Stops distribution: the node drops its name and every connection.
   #
-  # @return [Bool] whether it was distributed and has now stopped
-  stop : Bool
-  foul stop = Kex.Intrinsic.Node.stop
+  # @return [Result<Void, String>] +Ok+ once stopped; an +Error+ when the node
+  #   was not distributed
+  stop : Result<Void, String>
+  foul stop = Kex.Intrinsic.Node.stop then Ok(()) else Error("this node is not distributed")
 
   # Connects to the node named +node+. Both nodes must share a cookie.
   #
   # @param node [Atom] the node to connect to
-  # @return [Bool] whether the connection is up
+  # @return [Result<Void, String>] +Ok+ once the connection is up, or why it is not
   #
   # @example
-  #   Node.connect(:b@myhost)   # => true
-  connect : Atom -> Bool
-  foul connect(node) = Kex.Intrinsic.Node.connect(node)
+  #   Node.connect(:b@myhost)   # => Ok(())
+  connect : Atom -> Result<Void, String>
+  foul connect(node) do
+    Kex.Intrinsic.Node.connect(node) then Ok(()) else Error("could not connect to ${node}")
+  end
 
   # Drops the connection to +node+.
   #
   # @param node [Atom] the node to disconnect from
-  # @return [Bool] whether a connection was dropped
-  disconnect : Atom -> Bool
-  foul disconnect(node) = Kex.Intrinsic.Node.disconnect(node)
+  # @return [Result<Void, String>] +Ok+ once dropped; an +Error+ when there was no
+  #   connection to drop
+  disconnect : Atom -> Result<Void, String>
+  foul disconnect(node) do
+    Kex.Intrinsic.Node.disconnect(node) then Ok(()) else Error("not connected to ${node}")
+  end
 
   # Sets the cookie this node presents when connecting. Nodes connect only
   # when their cookies match.

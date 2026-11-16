@@ -1631,7 +1631,7 @@ int main() {
                            completion.find("whereIs") != std::string::npos,
                        "Node members missing from completion: " + completion);
             const auto hover = responseForId(result, 3);
-            assertTrue(hover.find("connect : Atom -> Bool") != std::string::npos,
+            assertTrue(hover.find("connect : Atom -> Result<Void, String>") != std::string::npos,
                        "Node.connect hover lacks its signature: " + hover);
         });
 

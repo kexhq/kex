@@ -1157,12 +1157,16 @@ time with `badarg`. A list, map, tuple, optional or function has no fields
      type's name's length from there, which covered `me`. Parameters carry
      their position and are bound at it; a constructor's reference spans what
      is written.
-   - Still open, checker bugs: #640 (a pure function capturing a foul one:
-     refusing every capture broke the documented idiom of registering foul
-     handlers from pure configuration, `command(run: ~addNote)`,
-     `get("/", ~home)`; telling those from `xs.map(~shout)` needs effect
-     types, #142), #644 for a signature written apart (`f :> A -> A`), which needs
-     bounded type variables first (#651).
+   - #640, a pure function capturing a foul one, is fixed (2026-11-16) by
+     foul-aware function types: a capture of a foul function is refused in
+     pure code unless it flows into a parameter, field, binding or list
+     element whose function type is foul, which is how `command(run:
+     ~addNote)` and `get("/", ~home)` register handlers
+     (`spec/error_capture_foul_in_pure`, `spec/foul_capture_into_handler`).
+     Left: a capture passed BY NAME to an imported function is still refused,
+     imported signatures carrying no parameter names.
+   - Still open, checker bug: #644 for a signature written apart (`f :> A ->
+     A`), which needs bounded type variables first (#651).
      No backend bug from the list is open.
 
 ## Why

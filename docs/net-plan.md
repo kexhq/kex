@@ -256,7 +256,7 @@ using Net.DNS
 
 let address = Address.parse("2001:db8::42").try
 let network = Network.parse("2001:db8::/32").try
-IO.printLine("${network.contains(address)}")
+IO.printLine("${network.contains?(address)}")
 IO.printLine("${address.private?} ${address.loopback?}")
 
 let resolver = Resolver.system(CacheOptions {

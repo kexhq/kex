@@ -125,7 +125,7 @@ foul awaitNode(a: Atom, tries: Integer) -> Bool do
   if tries == 0
     return false
   end
-  if Node.connect(a) && Node.whereIs(a, :requests).present?
+  if Node.connect(a).ok? && Node.whereIs(a, :requests).present?
     return true
   end
   pause(100)

@@ -333,9 +333,13 @@ module Process do
 
     # Empties the slot.
     #
-    # @return [Bool] +true+ when it held a value
-    delete :> Bool
-    foul delete = Kex.Intrinsic.Shared.delete(this)
+    # @return [X?] the value it held, or +None+ when it held none
+    delete :> X?
+    foul delete do
+      let held = this.get
+      Kex.Intrinsic.Shared.delete(this)
+      held
+    end
   end
 end
 

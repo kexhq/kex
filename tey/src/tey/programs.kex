@@ -129,7 +129,7 @@ foul stage(root: String, destination: String) -> Void or! String do
   let lock = FS.File.file?(FS.Path.join(root, "tey.lock")) then ["tey.lock"] else []
   let files = [...Tey.Snapshot.sourceFiles(root), ...lock]
   let failed = files.find do |relative|
-    !Tey.Programs.copyInto(root, relative, destination)
+    Tey.Programs.copyInto(root, relative, destination).error?
   end
   match failed do
     Just(relative) => return Error("could not copy ${relative} from ${root}")
@@ -137,12 +137,12 @@ foul stage(root: String, destination: String) -> Void or! String do
   end
 end
 
-foul copyInto(root: String, relative: String, destination: String) -> Bool do
+foul copyInto(root: String, relative: String, destination: String) -> Void or! String do
   let target = FS.Path.join(destination, relative)
-  return false if !FS.Directory.create(FS.Path.dirname(target)).ok?
+  return Error("could not create ${FS.Path.dirname(target)}") if !FS.Directory.create(FS.Path.dirname(target)).ok?
   match Process.run("cp", ["-a", "--", FS.Path.join(root, relative), target]) do
-    Ok(result) => return result.exitCode == 0
-    Error(_) => return false
+    Ok(result) => return result.exitCode == 0 then Ok(()) else Error("could not copy ${relative} from ${root}")
+    Error(_) => return Error("could not run cp")
   end
 end
 
@@ -286,8 +286,9 @@ foul save(receipt: Receipt) -> Void or! String do
   return Ok(())
 end
 
-foul remove(name: String) -> Bool do
-  return FS.Directory.deleteAll(FS.Path.join(Tey.Programs.directory, name)).ok?
+foul remove(name: String) -> Void or! String do
+  let path = FS.Path.join(Tey.Programs.directory, name)
+  return FS.Directory.deleteAll(path).ok? then Ok(()) else Error("could not remove ${path}")
 end
 
 # Whether `path` is an escript Tey's own target build wrote: its emulator

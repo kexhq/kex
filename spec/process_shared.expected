@@ -2,7 +2,7 @@ empty: true
 title: Docs
 from a task: 2
 replaced: Replaced
-deleted: true false
+deleted: Replaced true
 after delete: true
 slot: 6
 after a cast: 7

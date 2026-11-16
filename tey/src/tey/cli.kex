@@ -746,17 +746,20 @@ private do
         # it — and a line that said only "Using Kex 0.3.2" would hide that a
         # copy had just been made.
         let alreadyInstalled = Tey.Toolchain.installed?(version)
-        if Tey.Toolchain.use(version)
-          if alreadyInstalled
-            IO.printLine("${Console.GREEN}Using${Console.RESET} Kex ${Console.BOLD}${version}${Console.RESET}")
-          else
-            IO.printLine("${Console.GREEN}Using${Console.RESET} Kex ${Console.BOLD}${version}${Console.RESET} ${Console.DIM}installed from the bundled copy${Console.RESET}")
+        match Tey.Toolchain.use(version) do
+          Ok(_) => do
+            if alreadyInstalled
+              IO.printLine("${Console.GREEN}Using${Console.RESET} Kex ${Console.BOLD}${version}${Console.RESET}")
+            else
+              IO.printLine("${Console.GREEN}Using${Console.RESET} Kex ${Console.BOLD}${version}${Console.RESET} ${Console.DIM}installed from the bundled copy${Console.RESET}")
+            end
+            Tey.Cli.reportShim(version)
+            0
           end
-          Tey.Cli.reportShim(version)
-          0
-        else
-          IO.printError("${Console.RED}error:${Console.RESET} Kex ${version} is not installed")
-          1
+          Error(error) => do
+            IO.printError("${Console.RED}error:${Console.RESET} ${error}")
+            1
+          end
         end
       end
     end
