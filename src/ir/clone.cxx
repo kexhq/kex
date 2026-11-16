@@ -83,7 +83,7 @@ struct Cloner {
             } else if constexpr (std::is_same_v<T, Lambda>) {
                 std::vector<std::string> params;
                 for (const auto& p : n.params) params.push_back(renamed(p));
-                out->node = Lambda{std::move(params), maybe(n.body), n.ownReturnScope};
+                out->node = Lambda{std::move(params), maybe(n.body), n.ownReturnScope, n.pure};
             } else if constexpr (std::is_same_v<T, Return>) {
                 out->node = Return{maybe(n.value)};
             } else if constexpr (std::is_same_v<T, TryThrow>) {

@@ -1,0 +1,35 @@
+# A chain of `map`, `filter`, `reduce` and `each` over a list, its blocks pure:
+# the BEAM walks the list once (the fuse-lists pass), building no list in
+# between. It must answer what the chain did stage by stage. A block with an
+# effect keeps the chain as written: every `map` block before any `filter`
+# block, on both backends.
+
+let scaledSum(items: [Integer], k: Integer) -> Integer do
+  items.map { |x| x * k }.filter { |x| x % 3 == 0 }.reduce(0) { |acc, x| acc + x }
+end
+
+main do
+  let xs = (1..10).items
+  let k = 3
+  IO.printLine(scaledSum(xs, k))
+  IO.printLine(xs.map { |x| x + 1 }.map { |x| x * 2 })
+  IO.printLine(xs.filter { |x| x.even? }.map { |x| x * k })
+  IO.printLine(xs.map { |x| x * k }.filter { |x| x > 20 }.filter { |x| x < 28 })
+  var total = 0
+  xs.map { |x| x * 2 }.each { |x| total += x }
+  IO.printLine(total)
+  let none: [Integer] = []
+  IO.printLine(none.map { |x| x * k }.filter { |x| x > 0 }.reduce(7) { |acc, x| acc + x })
+  let pairs = [(1, 2), (3, 4), (5, 6)]
+  IO.printLine(pairs.map { |a, b| a + b }.filter { |s| s > 3 })
+  # An effect in a block: the order it runs in is the program's.
+  let logged = [1, 2, 3].map do |x|
+    IO.printLine("map ${x}")
+    x * 10
+  end.filter do |x|
+    IO.printLine("filter ${x}")
+    x > 10
+  end
+  IO.printLine(logged)
+  IO.printLine((1..200_000).items.map { |x| x * 2 }.filter { |x| x % 4 == 0 }.reduce(0) { |a, x| a + x })
+end

@@ -3,7 +3,7 @@
 // ir::Module is the unit, as a Function is in LLVM. Every rewrite
 // of a lowered module is a pass here, registered by name, and every module is
 // emitted through the same pipeline:
-// `specialize-blocks,guards,upgrade-points,verify` unless
+// `specialize-blocks,fuse-lists,guards,upgrade-points,verify` unless
 // `kex --passes='...module(...)'` says otherwise.
 #include "ir.hxx"
 #include "../pass/pass_registry.hxx"
@@ -37,6 +37,14 @@ struct SpecializeBlocksPass : pass::PassInfoMixin<SpecializeBlocksPass> {
     auto run(Module& module, ModuleAnalysisManager& analyses) -> pass::PreservedAnalyses;
 };
 
+// A copy whose list only another copy walks, made one walk (passes/fuse.hxx).
+struct FuseListsPass : pass::PassInfoMixin<FuseListsPass> {
+    static constexpr std::string_view kName = "fuse-lists";
+    static constexpr std::string_view kDescription =
+        "walk a list once where one pure copy's list is only another's input";
+    auto run(Module& module, ModuleAnalysisManager& analyses) -> pass::PreservedAnalyses;
+};
+
 // `when` guards out of BEAM guard position, before any pass reads the control
 // flow they become.
 struct GuardsPass : pass::PassInfoMixin<GuardsPass> {
@@ -65,7 +73,7 @@ struct VerifierPass : pass::PassInfoMixin<VerifierPass> {
 // Every module pass, by name.
 auto modulePassRegistry() -> const pass::PassRegistry<Module>&;
 inline constexpr std::string_view kDefaultModulePipeline =
-    "specialize-blocks,guards,upgrade-points,verify";
+    "specialize-blocks,fuse-lists,guards,upgrade-points,verify";
 // The module pipeline to run: the user's (`--passes`), or the default. A
 // pipeline that does not parse is a usage error, reported as one.
 auto buildModulePipeline() -> ModulePassManager;

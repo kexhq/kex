@@ -320,7 +320,7 @@ describe("Tey.Docgen.Html namespaced pages") do
     let model = modelOf([parsePage("data/bag.kex", namespacedSource())])
     let toc = tocOf(model.pages.first.try, model).reject { |t| t.kind == "member" }
     Assert.equal(toc.map { |t| t.title }, ["Bag", "Data.Bag"])
-    assert(toc.all? { |t| !t.nested })
+    assert(toc.all? { |t| !t.nested? })
   end
 end
 

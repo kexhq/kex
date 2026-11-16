@@ -170,6 +170,9 @@ struct Lambda {
     ExprPtr body;
     // A named local function rather than a block: its own return scope.
     bool ownReturnScope = false;
+    // A block with no effect a fused loop could reorder (hir::Program::
+    // pureBlock): the list passes may run it in another order.
+    bool pure = false;
 };
 
 // ---- Control --------------------------------------------------------------
@@ -291,6 +294,11 @@ struct FunDef {
     // field anywhere in the program, and a `caption(kind)` in some module
     // (kexhq/kex#448). `mergeDuplicateFunctions` ejects it the same way.
     bool isFieldAccessor = false;
+    // A copy specialize-blocks made with a pure block in place, of a callee that
+    // calls nothing but itself and Erlang's BIFs: no effect a fused loop
+    // could reorder (passes/fuse). Never serialized: copies are made per
+    // module.
+    bool pureCopy = false;
 };
 
 struct Module {

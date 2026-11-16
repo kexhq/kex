@@ -239,7 +239,7 @@ make [X], implement: Enumerable, Foldable do
   #   [1, 2, 3].reduce(1) { |acc, x| acc * x }   # => 6
   reduce :> A -> (A -> X -> A) -> A
 
-  # +reduce+, +map+ and +each+ recurse in Kex when compiled: the
+  # +reduce+, +map+, +filter+ and +each+ recurse in Kex when compiled: the
   # specialize-blocks pass copies them into a caller with its block in place,
   # a loop with no closure call per element. The interpreter keeps its native
   # loops, which it runs much faster than this recursion, and without the
@@ -264,7 +264,15 @@ make [X], implement: Enumerable, Foldable do
     end
   end
 
-  let filter(pred) = Kex.Intrinsic.List.filter(this, pred)
+  let filter(pred) do
+    match Kex.Intrinsic.Kex.backend() do
+      Kex.Interpreter => Kex.Intrinsic.List.filter(this, pred)
+      _ => match this do
+        [] => []
+        [x | rest] => pred(x) then [x | rest.filter(pred)] else rest.filter(pred)
+      end
+    end
+  end
 
   let each(f) do
     match Kex.Intrinsic.Kex.backend() do

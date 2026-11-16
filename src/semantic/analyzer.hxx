@@ -150,6 +150,11 @@ public:
         const ast::Expr*, TypeChecker::DecidedCall>& {
         return m_checker.decidedCalls();
     }
+    // The blocks whose body has no effect a fused loop could reorder
+    // (recordPureBlocks): what the list passes may run in another order.
+    auto pureBlocks() const -> const std::unordered_set<const ast::Lambda*>& {
+        return m_pureBlocks;
+    }
     // The trait a parameter is declared as, or "".
     auto parameterTraitOf(const ast::Param& param) const -> std::string {
         const auto found = m_checker.parameterTraits().find(&param);
@@ -228,6 +233,7 @@ private:
     // Whether a bare call, tagged literal or bare zero-parameter function
     // runs a foul function, by the declaration the checker chose for it.
     auto callsFoul(const ast::Expr& call) const -> bool;
+    auto recordPureBlocks(const ast::Program& program) -> void;
     // A record declared twice in one module (or at top level), or under a
     // type's name.
     template <typename Items> auto reportDuplicateRecords(const Items& items) -> void;
@@ -294,6 +300,7 @@ private:
     // enriched by enrichEffectsFromResolvedCalls after type checking.
     std::unordered_map<std::string, std::set<std::string>> m_callGraph;
     std::unordered_set<std::string> m_transitivelyFoul;
+    std::unordered_set<const ast::Lambda*> m_pureBlocks;
 
     // Foul members of modules declared in this unit, keyed by the module's
     // bare name — nested modules are addressed by their own name (`File`, not

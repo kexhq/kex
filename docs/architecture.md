@@ -48,7 +48,7 @@ The build (`src/driver/build_ir.hxx`, `build_passes.cxx`):
 ```
 spec-base,load-dependencies,run-cache,
 unit(unit-cache,assemble,check,lower,load-order,companion-forwards,
-     receiver-forwards,module(specialize-blocks,guards,upgrade-points,verify),emit-core,
+     receiver-forwards,module(specialize-blocks,fuse-lists,guards,upgrade-points,verify),emit-core,
      describe,store-unit,return-items),
 merge-dependencies
 ```

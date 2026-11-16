@@ -196,6 +196,24 @@ auto foldConstantMatches(ExprPtr& e) -> void {
     }
 }
 
+// Whether every call `fn` makes is its own recursion or one of Erlang's
+// BIFs: with a pure block in place, a copy of it has no effect at all.
+auto callsOnlyItselfAndErlang(const FunDef& fn) -> bool {
+    std::function<bool(const Expr&)> pure = [&](const Expr& e) -> bool {
+        if (const auto* call = std::get_if<Call>(&e.node)) {
+            // A raise ends the loop whatever it says (the no-match message).
+            if (call->module == "erlang" && call->name == "error") return true;
+            const bool itself = call->module.empty() && call->name == fn.name && call->arity == fn.arity;
+            if (!itself && call->module != "erlang") return false;
+        }
+        return !anyChild(e, [&](const ExprPtr& c) { return !pure(*c); });
+    };
+    for (const auto& clause : fn.clauses)
+        if (!clause.body || !pure(*clause.body) || (clause.guard && *clause.guard && !pure(**clause.guard)))
+            return false;
+    return true;
+}
+
 auto readsVar(const Expr& e, const std::string& name) -> bool {
     if (const auto* v = std::get_if<Var>(&e.node); v && v->name == name) return true;
     return anyChild(e, [&](const ExprPtr& c) { return readsVar(*c, name); });
@@ -589,6 +607,7 @@ private:
         copy.exported = false;
         copy.isFreeFunction = callee.isFreeFunction;
         copy.declaringModule = home.empty() ? callee.declaringModule : std::string{};
+        copy.pureCopy = !threaded && lambda.pure && callsOnlyItselfAndErlang(callee);
         for (std::size_t c = 0; c < callee.clauses.size(); ++c) {
             const auto& clause = callee.clauses[c];
             const auto& param = (*names)[c];

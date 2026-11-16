@@ -733,6 +733,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
             // Params shadow outer bindings: resolve to themselves inside.
             auto snap = subst;
             Lambda lam;
+            lam.pure = hir->pureBlock(n);
             for (const auto& p : n.params) {
                 // `_` is an ordinary variable in Core Erlang, so two of
                 // them in one head (`{ |key, _, _| key }`) were a

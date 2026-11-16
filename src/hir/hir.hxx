@@ -82,6 +82,9 @@ public:
     auto targetOf(const ast::MethodCall& call) const -> const Target&;
     auto targetOf(const ast::FunctionCall& call) const -> const Target&;
     auto targetOf(const ast::BinaryOp& op) const -> const Target&;
+    // Whether a block has no effect a fused loop could reorder (the analysis'
+    // pureBlocks); false for a program loaded rather than analysed here.
+    auto pureBlock(const ast::Lambda& block) const -> bool;
     // The nominal type a method call was decided on, without type arguments:
     // an OwnMethod's owner, else the receiver of the signature the checker
     // selected (`Process.Shared` for `site.get`) when the call's receiver is

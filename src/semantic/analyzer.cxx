@@ -89,6 +89,7 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
     // Foul calls through a value receiver or a trait, which only the
     // checker's resolved targets show.
     enrichEffectsFromResolvedCalls(program);
+    recordPureBlocks(program);
 
     return std::none_of(m_diagnostics.begin(), m_diagnostics.end(),
         [](const Diagnostic& d) { return d.level == Diagnostic::Level::Error; });
@@ -595,6 +596,73 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
     });
 }
 
+
+// The blocks whose body has no effect a fused loop could reorder: no foul call
+// (by the checker's decisions, through a value receiver too), no `inspect`
+// (exempt from purity, but it prints), no spawn or receive, and no call whose
+// effect is decided only when it runs: through a function value, a run-time
+// dispatch, a trait, a builtin (`send`) or another language. Conservative: a
+// block left out only keeps its own order.
+auto Analyzer::recordPureBlocks(const ast::Program& program) -> void {
+    m_pureBlocks.clear();
+    const auto& resolved = m_checker.resolvedCalls();
+    const auto& decided = m_checker.decidedCalls();
+    std::function<bool(const ast::Expr&)> effectful = [&](const ast::Expr& e) -> bool {
+        if (std::holds_alternative<ast::SpawnExpr>(e.kind) ||
+            std::holds_alternative<ast::ReceiveExpr>(e.kind))
+            return true;
+        if (callsFoul(e)) return true;
+        if (const auto* call = std::get_if<ast::FunctionCall>(&e.kind);
+            call && m_transitivelyFoul.contains(call->name))
+            return true;
+        if (const auto* ident = std::get_if<ast::Identifier>(&e.kind);
+            ident && m_transitivelyFoul.contains(ident->name))
+            return true;
+        if (const auto* method = std::get_if<ast::MethodCall>(&e.kind)) {
+            if (method->method == "inspect" || m_transitivelyFoul.contains(method->method))
+                return true;
+            if (const auto found = resolved.find(method);
+                found != resolved.end() && found->second.isFoul)
+                return true;
+            const auto module = method->receiver ? receiverModuleName(*method->receiver)
+                                                 : std::string{};
+            if (!module.empty() && isQualifiedCallFoul(module, method->method)) return true;
+        }
+        // An operator's decision is how it computes, not what it calls.
+        const bool isCall = std::holds_alternative<ast::MethodCall>(e.kind) ||
+                            std::holds_alternative<ast::FunctionCall>(e.kind) ||
+                            std::holds_alternative<ast::Identifier>(e.kind);
+        if (const auto found = decided.find(&e); isCall && found != decided.end()) {
+            switch (found->second.kind) {
+            case CallKind::ValueCall:
+            case CallKind::Dispatch:
+            case CallKind::TraitMethod:
+            case CallKind::Builtin:
+            case CallKind::Foreign:
+            case CallKind::Hidden:
+                return true;
+            default:
+                break;
+            }
+        }
+        bool found = false;
+        ast::forEachChild(e, [&](const ast::ExprPtr& child) {
+            found = found || (child && effectful(*child));
+        });
+        return found;
+    };
+    std::function<void(const ast::Expr&)> visit = [&](const ast::Expr& e) {
+        if (const auto* lambda = std::get_if<ast::Lambda>(&e.kind)) {
+            const bool pure = std::none_of(lambda->body.begin(), lambda->body.end(),
+                                           [&](const ast::ExprPtr& s) { return s && effectful(*s); });
+            if (pure) m_pureBlocks.insert(lambda);
+        }
+        ast::forEachChild(e, [&](const ast::ExprPtr& child) {
+            if (child) visit(*child);
+        });
+    };
+    ast::forEachBodyExpr(program, visit);
+}
 auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> void {
     const auto& resolved = m_checker.resolvedCalls();
     // No early return on an empty `resolved` map: the trait-receiver check

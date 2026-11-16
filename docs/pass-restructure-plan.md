@@ -869,6 +869,39 @@ and `lowerIteration` deleted with its name test (`kEachFunction`,
 - `spec/block_reassigns_caller_variables` covers map, reduce, a program's
   own functions, two variables, every iteration, empty ones, nesting, and a
   loop around it, on both backends.
+Step 4 DONE (2026-11-16, the user chose pure blocks only): list fusion.
+- `xs.map { … }.filter { … }.reduce(0) { … }` built a list per stage. The
+  `fuse-lists` module pass, after `specialize-blocks`, makes one function of
+  two copies where one's result is only the list the other walks: the first
+  list walked once, each element the first would have kept handed straight
+  to the second's step. It repeats along a chain.
+- What a copy is, its shape says (no name): it walks its first parameter in
+  a `[]` and a `[head | rest]` clause, `rest` read only by its recursion. A
+  producer answers `[]` for none and, per element, `[e | its recursion]` or
+  its recursion alone (`map`, `filter`, which recurses in Kex when compiled
+  now, as `map` does); any such copy can follow one.
+- Only pure copies fuse (`FunDef::pureCopy`): the block pure, by the
+  analysis (`Analyzer::recordPureBlocks`: no foul call, no `inspect`, no
+  spawn or receive, no call through a function value, a dispatch, a trait, a
+  builtin or another language; `hir::Program::pureBlock`, `ir::Lambda::pure`),
+  and the callee calling nothing but itself and Erlang's BIFs. Fused, the
+  second stage's block runs between the first's, element by element; with
+  nothing to observe it, only the time changes. A chain with a block that
+  prints keeps its order (`spec/list_chain_fusion`).
+- Measured, `map |> filter |> reduce` over 2,000,000 integers, 20 rounds:
+  4.15 s → 0.65 s, 0.6 s of it building the input list.
+- Not fused yet: a stage whose block reassigns a variable (a threaded copy
+  is not marked pure).
+
+Stdlib traits (the user's "later" item, 2026-11-16): nothing left to remove.
+`String`'s own `repeat` beside `Monoid`'s went earlier, and `String` no
+longer defines `alpha?` and its kin beside `Char`'s; `upperCase` and
+`lowerCase` on both mean the same for each receiver. Every trait default is
+defined once; what overrides one does it for a reason: a native loop
+(List), a result of the receiver's own type (`Map.filter`, `String.filter`,
+Set's), a loop a copy can be made of (`Map.each`, `String.each`), or another
+function of the same name (`count` with no argument is a size).
+
 Found with it: the checker accepted `xs.size` on a list (and `.modified` on
 a tuple, any name some record declares as a field), which BEAM failed at run
 time with `badarg`. A list, map, tuple, optional or function has no fields

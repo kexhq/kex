@@ -128,6 +128,10 @@ auto Program::collectSites() -> void {
     ast::forEachBodyExpr(ast, [&](const ast::Expr& expr) { visit(visit, expr); });
 }
 
+auto Program::pureBlock(const ast::Lambda& block) const -> bool {
+    return m_analysis && m_analysis->pureBlocks().contains(&block);
+}
+
 auto Program::targetOf(const ast::Expr& call) const -> const Target& {
     if (const auto* node = callNodeOf(call))
         if (const auto found = m_targets.find(node); found != m_targets.end())

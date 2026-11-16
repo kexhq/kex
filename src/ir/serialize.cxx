@@ -15,7 +15,7 @@ using beam::Term;
 using beam::TermPtr;
 
 // Bumped whenever a node's shape below changes.
-constexpr int64_t kFormat = 1;
+constexpr int64_t kFormat = 2;
 
 auto str(const std::string& s) -> TermPtr { return Term::binary(s); }
 auto boolean(bool b) -> TermPtr { return Term::boolean(b); }
@@ -90,7 +90,7 @@ auto encodeExpr(const ExprPtr& e) -> TermPtr {
             return Term::tuple({Term::atom("field"), encodeExpr(n.record), integer(n.position), str(n.fieldName)});
         } else if constexpr (std::is_same_v<T, Lambda>) {
             return Term::tuple({Term::atom("lambda"), strings(n.params), encodeExpr(n.body),
-                                boolean(n.ownReturnScope)});
+                                boolean(n.ownReturnScope), boolean(n.pure)});
         } else if constexpr (std::is_same_v<T, Return>) {
             return Term::tuple({Term::atom("return"), encodeExpr(n.value)});
         } else if constexpr (std::is_same_v<T, TryThrow>) {
@@ -224,7 +224,7 @@ auto decodeExpr(const TermPtr& t) -> ExprPtr {
     } else if (kind == "field") {
         e->node = FieldGet{decodeExpr(at(f, 1)), static_cast<int>(at(f, 2)->asInt()), text(at(f, 3))};
     } else if (kind == "lambda") {
-        e->node = Lambda{decodeStrings(at(f, 1)), decodeExpr(at(f, 2)), flag(at(f, 3))};
+        e->node = Lambda{decodeStrings(at(f, 1)), decodeExpr(at(f, 2)), flag(at(f, 3)), flag(at(f, 4))};
     } else if (kind == "return") {
         e->node = Return{decodeExpr(at(f, 1))};
     } else if (kind == "throw") {
