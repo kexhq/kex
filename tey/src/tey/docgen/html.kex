@@ -663,7 +663,7 @@ module Tey.Docgen.Html do
   end
 
   # Other modules that add functions to this type: `make Integer` in
-  # time.kex is where `5.seconds` comes from.
+  # period.kex is where `1.month` comes from.
   foul elsewhereHtml(name: String, page: SourcePage, model: PackageModel) -> String do
     match Tey.Docgen.Relations.typeFactsFor(model, name) do
       None => return ""

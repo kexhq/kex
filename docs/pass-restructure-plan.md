@@ -2602,7 +2602,7 @@ reaches.
   Passing the answers (`withCheckerAnswers(..., &analyzer)`) breaks three BEAM
   specs (`capability_time_clock(_direct).spec.kex`, `mock_gate_standin.kex`):
   checking the merged prelude resolves `parts.count` / `parts.at(0)` in
-  `DateTime.parse` (`src/stdlib/time.kex`) to `Kex.Mock:count` /
+  `DateTime.parse` (`src/stdlib/date_time.kex`) to `Kex.Mock:count` /
   `Kex.Mock:at`, so outside a spec the Mock gate refuses. Likely cause: the
   checker picks the right method (`List`'s `count`), but a resolved make-method
   target records only `count/1` with no owner. Lowering then re-decides the

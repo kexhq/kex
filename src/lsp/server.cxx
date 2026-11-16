@@ -1275,7 +1275,7 @@ auto documentationBeforeSource(std::string_view source,
         // A section banner separates groups of declarations for a reader; it
         // documents none of them. Collected as documentation it became the
         // first line of a hover — the type `Integer` answered with a rule and
-        // a paragraph about durations, because time.kex's `make Integer do`
+        // a paragraph about durations, because period.kex's `make Integer do`
         // sits under one. A banner ends the walk rather than joining it.
         const auto isBanner = [](std::string_view text) {
             size_t rule = 0;
@@ -1455,7 +1455,7 @@ auto sourceDocumentation(const std::string& source)
             // A section banner documents nothing — it separates groups of
             // declarations for a reader. Kept, it became the opening line of a
             // hover: the type `Integer` answered with a rule and a paragraph
-            // about durations, because time.kex's `make Integer do` sits under
+            // about durations, because period.kex's `make Integer do` sits under
             // one. Anything gathered above it belongs to the previous section.
             if (isDocumentationBanner(comment)) {
                 pending.clear();
@@ -2043,7 +2043,7 @@ auto receiverQualifier(const Document& document, const DotReceiver& receiver,
     const auto text = document.text.substr(receiver.start,
                                            receiver.dot - receiver.start);
     // A literal receiver needs no analysis to type: `36.hours` is an Integer
-    // with a method on it, and time.kex is full of them. They were the bulk of
+    // with a method on it, and the time files are full of them. They were the bulk of
     // the misses that fell through to re-analysis.
     if (!text.empty()) {
         if (text.front() == '"') return "String";

@@ -1253,7 +1253,7 @@ private do
   # that wants the child's captured stdout/stderr rather than its output
   # streamed live.
   foul runAt(directory: String, command: String,
-            arguments: [String]) -> Process.ProcessResult or! String do
+            arguments: [String]) -> ProcessResult or! String do
     return Process.run("sh", ["-c",
       "cd \"$1\" || exit 1; shift; exec \"$@\"", "tey", directory,
       command, ...arguments])

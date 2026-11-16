@@ -3559,7 +3559,7 @@ int main() {
 
         it("keeps sibling overloads on the SAME type registering after one is annotated", []() {
             // A type overloading one name by arity (Date's own `+(Duration)`
-            // and `+(Period)` in time.kex) must not have the second
+            // and `+(Period)` in date.kex) must not have the second
             // overload's registration blocked by the first's presence.
             assertTrue(noErrors(
                 "record Meters do n: Integer end\n"

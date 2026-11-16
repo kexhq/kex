@@ -1,0 +1,373 @@
+# Writing dates, times of day and instants by a CLDR pattern: the +DateFormat+
+# record and module, and +to(String, format)+ on +Date+, +Time+ and
+# +DateTime+.
+
+# How +to(String, format)+ writes a date, a time of day or an instant: a
+# CLDR pattern such as +"yyyy-MM-dd HH:mm"+, described at +Date.format+.
+# Build one with the +Date.format+ tagged literal, or with +DateFormat.parse+,
+# which says where a pattern known only at run time goes wrong.
+record DateFormat do
+  # The CLDR pattern, such as +"yyyy-MM-dd"+.
+  pattern : String
+end
+
+module DateFormat do
+  using Time, only: [number]
+
+  # One piece of a pattern: a field letter written +width+ times, or text
+  # written as it stands.
+  type Piece = PatternField(Char, Integer) | PatternText(String)
+
+  # Checks a pattern known only at run time. +Date.format+ describes the
+  # patterns.
+  #
+  # @param pattern [String] the pattern
+  # @return [Result<DateFormat, ParseError>] the format, or where the
+  #   pattern goes wrong
+  #
+  # @example
+  #   DateFormat.parse("yyyy-MM-dd")   # => Ok(DateFormat { pattern: "yyyy-MM-dd" })
+  #   DateFormat.parse("yyyy-QQ")      # => Error(ParseError { position: 5, ... })
+  parse : String -> Result<DateFormat, ParseError>
+  let parse(pattern) do
+    match DateFormat.pieces(pattern) do
+      Ok(_) => return Ok(DateFormat { pattern: pattern })
+      Error((index, message)) => return Error(ParseError {
+        input: pattern,
+        position: pattern.take(index).byteSize,
+        value: None,
+        message: message,
+        rest: pattern.drop(index)
+      })
+    end
+  end
+
+  # Splits a pattern into its fields and its literal text. Otherwise the
+  # index of its first problem, and what that problem is.
+  #
+  # @param pattern [String] the pattern
+  # @return [Result<[Piece], (Integer, String)>] the pieces, or the problem
+  #
+  # @example
+  #   DateFormat.pieces("d MMM")   # => Ok([PatternField('d', 1), PatternText(" "), PatternField('M', 3)])
+  pieces : String -> Result<[Piece], (Integer, String)>
+  let pieces(pattern) = scanPattern(pattern.chars, 0, [])
+
+  # Writes +date+, +time+ and +offset+ (whichever the value has) by the
+  # pieces of a pattern, with +culture+'s names. +None+ when the pattern
+  # asks for a field the value does not have, such as an hour of a +Date+.
+  #
+  # The +to(String, format)+ functions on +Date+, +Time+ and +DateTime+ are
+  # the way to reach this.
+  #
+  # @param format [DateFormat] the pattern
+  # @param date [Date?] the calendar date, when the value has one
+  # @param time [Time?] the time of day, when the value has one
+  # @param offset [Duration?] the offset from UTC, when the value has one
+  # @param culture [Culture] where month, weekday and day-period names come from
+  # @return [String?] the text, or +None+
+  renderParts : DateFormat -> Date? -> Time? -> Duration? -> Culture.Culture -> String?
+  let renderParts(format, date, time, offset, culture) do
+    match DateFormat.pieces(format.pattern) do
+      Error(_) => return None
+      Ok(pieces) => do
+        let names = Culture.timeNames(culture)
+        let parts = pieces.map { |piece| renderPiece(piece, date, time, offset, names) }
+        return parts.all?(~set?) then Just(parts.map { |part| part.or("") }.join) else None
+      end
+    end
+  end
+
+  # The pattern a culture writes its dates in: year, month and day in its
+  # order, joined by its date separator. ISO order without a time section.
+  #
+  # @param culture [Culture] the culture
+  # @return [String] the pattern, such as +"dd.MM.yyyy"+
+  #
+  # @example
+  #   DateFormat.dateLayout(Culture.of("DE_DE").or(Culture.DEFAULT))   # => "dd.MM.yyyy"
+  dateLayout : Culture.Culture -> String
+  let dateLayout(culture) do
+    match culture.time do
+      None => return "yyyy-MM-dd"
+      Just(settings) => do
+        let fields = settings.dateOrder.map { |field| fieldPattern(field) }
+        return fields.join(quoted("${settings.dateSeparator}"))
+      end
+    end
+  end
+
+  # The pattern a culture writes a time of day in: hours, minutes and
+  # seconds joined by its time separator, on a 12-hour clock with a day
+  # period where the culture reads time that way.
+  #
+  # @param culture [Culture] the culture
+  # @return [String] the pattern, such as +"HH:mm:ss"+ or +"h:mm:ss a"+
+  #
+  # @example
+  #   DateFormat.timeLayout(Culture.of("EN_US").or(Culture.DEFAULT))   # => "h:mm:ss a"
+  timeLayout : Culture.Culture -> String
+  let timeLayout(culture) do
+    match culture.time do
+      None => return "HH:mm:ss"
+      Just(settings) => do
+        let separator = quoted("${settings.timeSeparator}")
+        return "h${separator}mm${separator}ss a" if settings.twelveHour?
+        return "HH${separator}mm${separator}ss"
+      end
+    end
+  end
+
+  private do
+    # A text piece safe to splice into a pattern: letters are quoted.
+    let quoted(text: String) -> String do
+      let special = text.chars.any? { |c| c.in?('a'..'z') || c.in?('A'..'Z') || c == '\'' }
+      return special then "'${text.replace("'", "''")}'" else text
+    end
+
+    let fieldPattern(field: Atom) -> String do
+      return "yyyy" if field == :year
+      return "MM" if field == :month
+      return "dd" if field == :day
+      return ""
+    end
+
+    # Letters are fields, a quote starts literal text, and anything else is
+    # written as it stands.
+    let scanPattern(chars: [Char], index: Integer, acc: [Piece]) -> Result<[Piece], (Integer, String)> do
+      match chars.first do
+        None => return Ok(acc.reverse)
+        Just(c) => do
+          return quotedText(chars.rest, index + 1, index, "", acc) if c == '\''
+          if c.in?('a'..'z') || c.in?('A'..'Z')
+            let width = chars.takeWhile { |x| x == c }.count
+            if let Just(problem) = fieldProblem(c, width)
+              return Error((index, problem))
+            end
+            return scanPattern(chars.drop(width), index + width, [PatternField(c, width) | acc])
+          end
+          return scanPattern(chars.rest, index + 1, [PatternText(c.string) | acc])
+        end
+      end
+    end
+
+    # Inside +'...'+: +''+ is one quote, and a lone +'+ closes the text. An
+    # empty +''+ outside any text is a quote of its own.
+    let quotedText(chars: [Char], index: Integer, start: Integer, text: String, acc: [Piece]) -> Result<[Piece], (Integer, String)> do
+      match chars.first do
+        None => return Error((start, "quoted text needs its closing `'`"))
+        Just(c) => do
+          if c == '\''
+            if chars.second == Just('\'')
+              return quotedText(chars.drop(2), index + 2, start, text + "'", acc)
+            end
+            let piece = text.empty? then "'" else text
+            return scanPattern(chars.rest, index + 1, [PatternText(piece) | acc])
+          end
+          return quotedText(chars.rest, index + 1, start, text + c.string, acc)
+        end
+      end
+    end
+
+    let fieldProblem(c: Char, width: Integer) -> String? do
+      match widestField(c) do
+        None => return Just("`${c}` is not a date or time field; quote literal text, as in `'at'`")
+        Just(most) => return width > most then Just("`${c}` takes at most ${most} letters") else None
+      end
+    end
+
+    let widestField(c: Char) -> Integer? do
+      return Just(9) if c == 'y' || c == 'S'
+      return Just(4) if c == 'M' || c == 'E'
+      return Just(3) if c == 'X' || c == 'x'
+      return Just(1) if c == 'a'
+      return Just(2) if "dHhms".chars.contains?(c)
+      return None
+    end
+
+    let renderPiece(piece: Piece, date: Date?, time: Time?, offset: Duration?, names: Culture.TimeNames) -> String? do
+      match piece do
+        PatternText(text) => return Just(text)
+        PatternField(c, width) => do
+          return date.map { |d| dateField(c, width, d, names) } if "yMdE".chars.contains?(c)
+          return time.map { |t| timeField(c, width, t, names) } if "HhmsSa".chars.contains?(c)
+          return offset.map { |o| offsetField(c, width, o) }
+        end
+      end
+    end
+
+    let digits(value: Integer, width: Integer) -> String = "${value}".padLeft(width, "0")
+
+    let dateField(c: Char, width: Integer, date: Date, names: Culture.TimeNames) -> String do
+      return (width == 2 then digits(date.year.modulo(100), 2) else digits(date.year, width)) if c == 'y'
+      return digits(date.day, width) if c == 'd'
+      if c == 'M'
+        return names.months.get(date.month - 1, "") if width == 4
+        return names.shortMonths.get(date.month - 1, "") if width == 3
+        return digits(date.month, width)
+      end
+      let weekday = date.weekday.number - 1
+      return width == 4 then names.weekdays.get(weekday, "") else names.shortWeekdays.get(weekday, "")
+    end
+
+    let timeField(c: Char, width: Integer, time: Time, names: Culture.TimeNames) -> String do
+      return digits(time.hour, width) if c == 'H'
+      return digits(time.minute, width) if c == 'm'
+      return digits(time.second, width) if c == 's'
+      return digits(time.nanosecond, 9).take(width) if c == 'S'
+      let (am, pm) = names.dayPeriods
+      return (time.hour < 12 then am else pm) if c == 'a'
+      let twelve = time.hour.modulo(12)
+      return digits(twelve == 0 then 12 else twelve, width)
+    end
+
+    # +X+ writes UTC as +Z+, +x+ as +00+; one letter is +HH+ (with +mm+ only
+    # when the minutes are not zero), two +HHmm+, three +HH:mm+.
+    let offsetField(c: Char, width: Integer, offset: Duration) -> String do
+      let total = offset.wholeSeconds
+      return "Z" if total == 0 && c == 'X'
+      let sign = total < 0 then "-" else "+"
+      let magnitude = total.abs
+      let hours = digits(magnitude / 3600, 2)
+      let minutes = digits(magnitude.modulo(3600) / 60, 2)
+      return "${sign}${hours}:${minutes}" if width == 3
+      return "${sign}${hours}${minutes}" if width == 2
+      return minutes == "00" then "${sign}${hours}" else "${sign}${hours}${minutes}"
+    end
+  end
+end
+
+make Date do
+  # Writes the date by a CLDR pattern, with English month and weekday names.
+  # Patterns are described at +Date.format+.
+  #
+  # @param String [Type] the target type
+  # @param format [DateFormat] the pattern
+  # @return [String?] the text, or +None+ when the pattern asks for a time
+  #   field, which a date does not have
+  #
+  # @example
+  #   Date.of(2026, 11, 7).try.to(String, Date.format`yyyy-MM-dd`)   # => Just("2026-11-07")
+  #   Date.of(2026, 11, 7).try.to(String, Date.format`EEEE, d MMMM yyyy`)
+  #   # => Just("Saturday, 7 November 2026")
+  let to(String, format: DateFormat) -> String? do
+    return DateFormat.renderParts(format, Just(this), None, None, Culture.DEFAULT)
+  end
+
+  # Writes the date by a CLDR pattern, with +culture+'s month and weekday
+  # names (English names for a culture that carries none).
+  #
+  # @param String [Type] the target type
+  # @param format [DateFormat] the pattern
+  # @param culture [Culture] where the names come from
+  # @return [String?] the text, or +None+
+  #
+  # @example
+  #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
+  #   Date.of(2026, 11, 7).try.to(String, Date.format`yyyy. MMMM d.`, culture: hu)
+  #   # => Just("2026. november 7.")
+  let to(String, format: DateFormat, culture: Culture) -> String? do
+    return DateFormat.renderParts(format, Just(this), None, None, culture)
+  end
+
+  # Writes the date the way +culture+ writes dates: its field order and its
+  # separator, with two-digit months and days.
+  #
+  # @param String [Type] the target type
+  # @param culture [Culture] the culture to write it for
+  # @return [String?] the text
+  #
+  # @example
+  #   Date.of(2026, 11, 7).try.to(String, culture: Culture.of("DE_DE").or(Culture.DEFAULT))
+  #   # => Just("07.11.2026")
+  let to(String, culture: Culture) -> String? do
+    let layout = DateFormat { pattern: DateFormat.dateLayout(culture) }
+    return DateFormat.renderParts(layout, Just(this), None, None, culture)
+  end
+end
+
+make Time do
+  # Writes the time of day by a CLDR pattern. Patterns are described at
+  # +Date.format+.
+  #
+  # @param String [Type] the target type
+  # @param format [DateFormat] the pattern
+  # @return [String?] the text, or +None+ when the pattern asks for a date
+  #   or an offset field, which a time of day does not have
+  #
+  # @example
+  #   Time.of(14, 3, 0).try.to(String, Date.format`HH:mm`)     # => Just("14:03")
+  #   Time.of(14, 3, 0).try.to(String, Date.format`h:mm a`)    # => Just("2:03 PM")
+  let to(String, format: DateFormat) -> String? do
+    return DateFormat.renderParts(format, None, Just(this), None, Culture.DEFAULT)
+  end
+
+  # Writes the time of day by a CLDR pattern, with +culture+'s day-period
+  # names.
+  #
+  # @param String [Type] the target type
+  # @param format [DateFormat] the pattern
+  # @param culture [Culture] where the names come from
+  # @return [String?] the text, or +None+
+  let to(String, format: DateFormat, culture: Culture) -> String? do
+    return DateFormat.renderParts(format, None, Just(this), None, culture)
+  end
+
+  # Writes the time of day the way +culture+ does: its separator, on a
+  # 12-hour clock where the culture reads time that way.
+  #
+  # @param String [Type] the target type
+  # @param culture [Culture] the culture to write it for
+  # @return [String?] the text
+  #
+  # @example
+  #   Time.of(14, 3, 0).try.to(String, culture: Culture.of("EN_US").or(Culture.DEFAULT))
+  #   # => Just("2:03:00 PM")
+  let to(String, culture: Culture) -> String? do
+    let layout = DateFormat { pattern: DateFormat.timeLayout(culture) }
+    return DateFormat.renderParts(layout, None, Just(this), None, culture)
+  end
+end
+
+make DateTime do
+  # Writes the instant by a CLDR pattern, as read at its own offset.
+  # Patterns are described at +Date.format+.
+  #
+  # @param String [Type] the target type
+  # @param format [DateFormat] the pattern
+  # @return [String?] the text, or +None+ for a pattern that is not valid
+  #
+  # @example
+  #   DateTime.parse("2026-07-30T14:03:00+02:00").try.to(String, Date.format`yyyy-MM-dd HH:mm XXX`)
+  #   # => Just("2026-07-30 14:03 +02:00")
+  let to(String, format: DateFormat) -> String? do
+    return DateFormat.renderParts(format, Just(this.date), Just(this.time), Just(this.offset), Culture.DEFAULT)
+  end
+
+  # Writes the instant by a CLDR pattern, with +culture+'s names.
+  #
+  # @param String [Type] the target type
+  # @param format [DateFormat] the pattern
+  # @param culture [Culture] where the names come from
+  # @return [String?] the text, or +None+
+  let to(String, format: DateFormat, culture: Culture) -> String? do
+    return DateFormat.renderParts(format, Just(this.date), Just(this.time), Just(this.offset), culture)
+  end
+
+  # Writes the instant the way +culture+ writes a date and a time of day,
+  # separated by a space. The offset is not written.
+  #
+  # @param String [Type] the target type
+  # @param culture [Culture] the culture to write it for
+  # @return [String?] the text
+  #
+  # @example
+  #   DateTime.parse("2026-07-30T14:03:00Z").try.to(String, culture: Culture.of("DE_DE").or(Culture.DEFAULT))
+  #   # => Just("30.07.2026 14:03:00")
+  let to(String, culture: Culture) -> String? do
+    let layout = DateFormat {
+      pattern: "${DateFormat.dateLayout(culture)} ${DateFormat.timeLayout(culture)}"
+    }
+    return DateFormat.renderParts(layout, Just(this.date), Just(this.time), Just(this.offset), culture)
+  end
+end

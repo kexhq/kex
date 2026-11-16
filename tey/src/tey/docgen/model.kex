@@ -137,7 +137,7 @@ module Tey.Docgen.Model do
 
   # One `make` block seen from the type it extends: where it is, what it
   # adds, and which traits it declares. A type's methods are spread over
-  # many files (`make Integer` lives in number.kex, time.kex, units.kex and
+  # many files (`make Integer` lives in number.kex, period.kex, units.kex and
   # algebra.kex), and these rows are what put them back together.
   record Extension do
     target : String

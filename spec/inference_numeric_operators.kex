@@ -8,7 +8,7 @@
 # and a trait-bounded variable was treated as a CONCRETE receiver by operator
 # resolution — so `n * ...` was free to match any operator overload whose
 # parameter a constrained type satisfies, and `make Period`'s
-# `*(factor: Integer) -> Period` (src/stdlib/time.kex) is one of those.
+# `*(factor: Integer) -> Period` (src/stdlib/period.kex) is one of those.
 # Nothing in the program mentions time.
 
 # The golden records what inference CURRENTLY concludes, which is not the same
