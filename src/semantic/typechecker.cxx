@@ -5394,7 +5394,7 @@ auto TypeChecker::importedCandidateSignatures(const std::string& name) const
     return result;
 }
 
-auto TypeChecker::importedCandidates(const std::string& name) const
+auto TypeChecker::importedCandidates(const std::string& name, const TypePtr& receiver) const
     -> std::vector<const ImportedFunction*> {
     std::vector<const ImportedFunction*> result;
     if (!m_importedInterfaces) return result;
@@ -5409,7 +5409,8 @@ auto TypeChecker::importedCandidates(const std::string& name) const
     if (auto functions = m_importedInterfaces->receiverFunctions.find(name);
         functions != m_importedInterfaces->receiverFunctions.end())
         for (const auto& function : functions->second)
-            if (importedFunctionVisible(function)) result.push_back(&function);
+            if (importedFunctionVisible(function, /*throughReceiver=*/true, receiver))
+                result.push_back(&function);
     for (const auto& [_, module] : m_importedInterfaces->modules) {
         if (!module.automaticImport) continue;
         if (auto functions = module.exports.find(name);
@@ -5438,7 +5439,7 @@ auto TypeChecker::usingImportedMethods(const std::string& name, bool asMethod) c
 }
 
 auto TypeChecker::importedFunctionVisible(
-    const ImportedFunction& function, bool throughReceiver) const -> bool {
+    const ImportedFunction& function, bool throughReceiver, const TypePtr& receiver) const -> bool {
     if (function.sourceModule.empty() || function.visibleByReceiver) return true;
     if (m_importedInterfaces) {
         if (auto module = m_importedInterfaces->modules.find(function.sourceModule);
@@ -5464,6 +5465,14 @@ auto TypeChecker::importedFunctionVisible(
             // A qualified receiver carries access to its own companion's
             // methods, even when obtained without a using declaration.
             if (throughReceiver && named->name == function.sourceModule) return true;
+            // A value of a type its module declares (not foreignTarget) reaches
+            // that type's `make` functions, as checked: the receiver's type
+            // is the one the function was declared for (`URI.URI`).
+            if (throughReceiver && receiver && function.isReceiverMethod &&
+                !function.foreignTarget)
+                if (const auto* actual = std::get_if<NamedType>(&resolve(receiver)->kind);
+                    actual && actual->name == named->name)
+                    return true;
             const auto dot = named->name.rfind('.');
             const auto bare = dot == std::string::npos
                 ? named->name : named->name.substr(dot + 1);

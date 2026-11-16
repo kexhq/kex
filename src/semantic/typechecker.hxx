@@ -611,8 +611,9 @@ private:
     // `Module.name`, and automatic-import module exports otherwise.
     auto importedCandidateSignatures(const std::string& name) const
         -> std::vector<Signature>;
-    // The same, as the imported functions that carry them.
-    auto importedCandidates(const std::string& name) const
+    // The same, as the imported functions that carry them; `receiver`, the
+    // checked type of the value a dot call or an operator goes through.
+    auto importedCandidates(const std::string& name, const TypePtr& receiver = nullptr) const
         -> std::vector<const ImportedFunction*>;
     // The functions named `name` of the modules `using` brings in from units
     // compiled apart; `asMethod`, only those with a first parameter to be
@@ -621,9 +622,11 @@ private:
         -> std::vector<const ImportedFunction*>;
     // `throughReceiver`: the call goes through a value of the function's
     // receiver type (`set.add(x)`), which reaches its own type's functions
-    // without a `using`; a bare call (`add(set, x)`) does not.
+    // without a `using`; a bare call (`add(set, x)`) does not. `receiver`,
+    // that value's checked type when the call site has it.
     auto importedFunctionVisible(const ImportedFunction& function,
-                                 bool throughReceiver = true) const -> bool;
+                                 bool throughReceiver = true,
+                                 const TypePtr& receiver = nullptr) const -> bool;
     // Whether a `using` in scope brings `module`'s `member` in; `bare`, for
     // a call by the bare name, which `using M, as: A` alone does not.
     auto moduleMemberImported(const std::string& module, const std::string& member,

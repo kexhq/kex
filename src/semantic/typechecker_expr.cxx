@@ -1013,8 +1013,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             }();
             if (!operatorName.empty()) {
                 auto& visible = m_operatorImports[&expr];
-                visible[operatorName] = importedCandidates(operatorName);
-                if (node.op == TokenType::NotEq) visible["=="] = importedCandidates("==");
+                visible[operatorName] = importedCandidates(operatorName, leftType);
+                if (node.op == TokenType::NotEq)
+                    visible["=="] = importedCandidates("==", leftType);
             }
             // Operators share make-method signatures with UFCS. Prefer a
             // matching receiver/RHS overload, but leave ordinary operators on
@@ -1055,7 +1056,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     auto declaredFor = [&](const std::string& name) {
                         std::vector<Signature> signatures;
                         for (auto& overload :
-                             operatorOverloadsFor(leftType, name, importedCandidates(name)))
+                             operatorOverloadsFor(leftType, name, importedCandidates(name, leftType)))
                             signatures.push_back(std::move(overload.signature));
                         return signatures;
                     };
@@ -4777,7 +4778,8 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (auto functions = m_importedInterfaces->receiverFunctions.find(name);
                 functions != m_importedInterfaces->receiverFunctions.end())
                 for (const auto& function : functions->second)
-                    if (importedFunctionVisible(function))
+                    if (importedFunctionVisible(function, /*throughReceiver=*/true,
+                                                argTypes.empty() ? nullptr : argTypes[0]))
                         importedFunctions.push_back(&function);
             // A function of a module `using` brings in from a unit compiled
             // apart is a method on its first parameter, as one merged into
