@@ -1,5 +1,5 @@
 .PHONY: docs
-.PHONY: build-tey spec-tey build test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-examples spec-examples-beam check-examples spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz
+.PHONY: build-tey spec-tey build format format-check test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-examples spec-examples-beam check-examples spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
@@ -37,6 +37,8 @@ help:
 	@echo "Kex Language Compiler"
 	@echo ""
 	@echo "  make build        Build the compiler"
+	@echo "  make format       Reformat all C++ sources with clang-format"
+	@echo "  make format-check Fail if any C++ source is not clang-formatted"
 	@echo "  make test         Run all unit tests (C++ test binaries)"
 	@echo "  make spec         Run spec programs and verify output"
 	@echo "  make test-all     Run unit tests + spec suites, incl. BEAM (used by CI)"
@@ -93,6 +95,18 @@ build:
 		exit 1; \
 	}; echo "$$output" | tail -1
 	@cmake --build $(BUILD_DIR) $(CMAKE_BUILD_JOBS)
+
+# C++ formatting, per .clang-format. Every tracked .cxx/.hxx outside
+# third_party/. Pinned to clang-format 20: other major versions disagree on
+# details, and CI's `format` job runs `format-check` with that version.
+CLANG_FORMAT ?= clang-format
+FORMAT_FILES = git ls-files -z '*.cxx' '*.hxx' ':!:third_party/**'
+
+format:
+	@$(FORMAT_FILES) | xargs -0 $(CLANG_FORMAT) -i
+
+format-check:
+	@$(FORMAT_FILES) | xargs -0 $(CLANG_FORMAT) --dry-run --Werror
 
 test: build
 	@ctest --test-dir $(BUILD_DIR) --output-on-failure
