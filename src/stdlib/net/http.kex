@@ -92,7 +92,11 @@ end
 # request body limit.
 record ServerOptions do
   maximumHandlers : Integer = 1024
-  backlog : Integer = 128
+  # Connections the kernel queues before the server accepts them. 1,024, as
+  # Cowboy's Ranch and Bandit's Thousand Island use: at 128, a burst of a
+  # thousand clients connecting at once overflows it, and the ones dropped
+  # retry a second later. Linux caps it at net.core.somaxconn.
+  backlog : Integer = 1024
   gracefulShutdown : Duration = 10.second
   # The largest request body a route reads, in bytes, unless the route sets
   # its own. A request declaring a longer +Content-Length+ is answered

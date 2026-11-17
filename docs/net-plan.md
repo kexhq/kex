@@ -859,7 +859,7 @@ Centralize and document overridable conservative defaults:
 | Stream chunk | 64 KiB |
 | WebSocket message | 16 MiB |
 | TCP framed read | 1 MiB unless overridden |
-| Server backlog | 128 |
+| Server backlog | 1,024 |
 | Concurrent stream handlers | 1,024 |
 | UDP workers | 64 |
 | Header deadline | 10 seconds |

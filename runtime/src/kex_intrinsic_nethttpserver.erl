@@ -10,7 +10,7 @@
 start({'Net.Socket.TCP.Endpoint', Host, {'Net.Port', Port}},
       Router = {'Net.HTTP.Router', _}) ->
     start({'Net.Socket.TCP.Endpoint', Host, {'Net.Port', Port}}, Router,
-          {'Net.HTTP.ServerOptions', 1024, 128, kex_intrinsic_time:seconds(10.0), 10485760});
+          {'Net.HTTP.ServerOptions', 1024, 1024, kex_intrinsic_time:seconds(10.0), 10485760});
 start(_, _) -> net_error('Parse', <<"invalid HTTP server configuration">>).
 
 %% `MaximumBody` is the request body limit of every route that does not set
