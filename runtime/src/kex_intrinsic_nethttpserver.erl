@@ -234,10 +234,10 @@ connection_wait() ->
     after 5000 -> ok
     end.
 
-handle_connection(Socket, Service = {Router, _}, Buffered, Owner) ->
+handle_connection(Socket, Service, Buffered, Owner) ->
     case read_request(Socket, Buffered, Service) of
-        {ok, Request, Method, Path, Rest, KeepAlive} ->
-            case dispatch(Request, Method, Path, Router) of
+        {ok, Request, Method, Found, Rest, KeepAlive} ->
+            case dispatch(Request, Method, Found) of
                 {'Net.HTTP.WebSocket.UpgradeResponse', Response, HandlerFun, Selected} ->
                     case send_upgrade_response(Socket, Response) of
                         ok ->
@@ -258,8 +258,10 @@ handle_connection(Socket, Service = {Router, _}, Buffered, Owner) ->
         {error, _} -> send_response(Socket, response(400, <<"Bad Request\n">>), <<"GET">>, false), error
     end.
 
-dispatch(Request, Method, Path, {'Net.HTTP.Router', Routes}) ->
-    case find_route(Method, Path, Routes) of
+%% `Found` is find_route's answer for the request line, worked out once in
+%% build_request, where it also chose the body limit.
+dispatch(Request, Method, Found) ->
+    case Found of
         {route, {'Net.HTTP.Route', _, _, Handler, _}, Parameters} ->
             Context = {'Net.HTTP.Context', {'Net.HTTP.RouteContext', Parameters}},
             try Handler(Request, Context) of
@@ -358,15 +360,18 @@ build_request(Socket, Method, Target, Version, Lines, Buffered, Service) ->
       true -> case parse_headers(Lines, []) of
         {ok, Headers} ->
             Path = hd(binary:split(Target, <<"?">>)),
-            BodyLimit = body_limit(Method, Path, Service),
-            case valid_host(Version, Headers) andalso body_length(Headers) of
+            Found = find_route(Method, Path, routes(Service)),
+            BodyLimit = body_limit(Found, Service),
+            %% Names lowercased once, for every lookup below.
+            Lowered = [{string:lowercase(K), V} || {K, V} <- Headers],
+            case valid_host(Version, Lowered) andalso body_length(Lowered) of
                 Length when is_integer(Length), Length >= 0, Length =< BodyLimit ->
                     case read_body(Socket, Buffered, Length) of
                         {ok, Body, Rest} ->
                             Request = {'Net.HTTP.Request', Method, {'URI.URI', Target},
                                        {'Net.HTTP.Headers', Headers}, {'Binary', Body}},
-                            {ok, Request, Method, Path, Rest,
-                             keep_alive(Version, Headers)};
+                            {ok, Request, Method, Found, Rest,
+                             keep_alive(Version, Lowered)};
                         Error -> Error
                     end;
                 Length when is_integer(Length), Length > BodyLimit -> {error, too_large};
@@ -378,17 +383,19 @@ build_request(Socket, Method, Target, Version, Lines, Buffered, Service) ->
 %% The route that will answer is known from the request line alone, so its
 %% own limit applies before a byte of the body is read; any other request,
 %% routed or not, gets the server's.
-body_limit(Method, Path, {{'Net.HTTP.Router', Routes}, ServerLimit}) ->
-    case find_route(Method, Path, Routes) of
+body_limit(Found, {_Router, ServerLimit}) ->
+    case Found of
         {route, {'Net.HTTP.Route', _, _, _, {'Just', RouteLimit}}, _} -> RouteLimit;
         _ -> ServerLimit
     end.
+
+routes({{'Net.HTTP.Router', Routes}, _ServerLimit}) -> Routes.
 
 parse_headers([], Acc) -> {ok, lists:reverse(Acc)};
 parse_headers([Line | Rest], Acc) ->
     case binary:split(Line, <<":">>) of
         [Name, Value] when Name =/= <<>> ->
-            Trimmed = string:trim(Value),
+            Trimmed = trim_ows(Value),
             case valid_token(Name) andalso valid_field_value(Trimmed) of
                 true -> parse_headers(Rest, [{Name, Trimmed} | Acc]);
                 false -> {error, invalid_header}
@@ -405,20 +412,41 @@ body_length(Headers) ->
         _ -> invalid
     end.
 
-values(Name, Headers) -> [V || {K, V} <- Headers, string:lowercase(K) =:= Name].
+%% `Lowered` has its names lowercased already (build_request).
+values(Name, Lowered) -> [V || {K, V} <- Lowered, K =:= Name].
 valid_host(<<"HTTP/1.1">>, Headers) -> length(values(<<"host">>, Headers)) =:= 1;
 valid_host(<<"HTTP/1.0">>, _) -> true.
 valid_target(<<"*">>) -> true;
 valid_target(<<"/", _/binary>>) -> true;
 valid_target(_) -> false.
-valid_token(Value) when is_binary(Value), byte_size(Value) > 0 ->
-    lists:all(fun(C) -> C > 32 andalso C < 127 andalso
-                        not lists:member(C, "()<>@,;:\\\"/[]?={} ") end,
-              binary:bin_to_list(Value));
+%% A token is visible ASCII without the separators (RFC 9110 §5.6.2).
+%% Checked byte by byte on the binary, building no list.
+valid_token(Value) when is_binary(Value), byte_size(Value) > 0 -> token_bytes(Value);
 valid_token(_) -> false.
-valid_field_value(Value) ->
-    lists:all(fun(C) -> C =:= 9 orelse C >= 32 andalso C =/= 127 end,
-              binary:bin_to_list(Value)).
+token_bytes(<<>>) -> true;
+token_bytes(<<C, Rest/binary>>) when C > 32, C < 127 ->
+    case separator(C) of
+        true -> false;
+        false -> token_bytes(Rest)
+    end;
+token_bytes(_) -> false.
+separator(C) -> lists:member(C, "()<>@,;:\\\"/[]?={} ").
+valid_field_value(<<>>) -> true;
+valid_field_value(<<9, Rest/binary>>) -> valid_field_value(Rest);
+valid_field_value(<<C, Rest/binary>>) when C >= 32, C =/= 127 -> valid_field_value(Rest);
+valid_field_value(_) -> false.
+
+%% Optional whitespace around a field value is spaces and tabs only (RFC 9110
+%% §5.6.3), so it is trimmed byte-wise rather than with Unicode's notion.
+trim_ows(Value) -> trim_trailing(trim_leading(Value)).
+trim_leading(<<C, Rest/binary>>) when C =:= $\s; C =:= $\t -> trim_leading(Rest);
+trim_leading(Value) -> Value.
+trim_trailing(<<>>) -> <<>>;
+trim_trailing(Value) ->
+    case binary:last(Value) of
+        C when C =:= $\s; C =:= $\t -> trim_trailing(binary:part(Value, 0, byte_size(Value) - 1));
+        _ -> Value
+    end.
 read_body(_, Buffered, Length) when byte_size(Buffered) >= Length ->
     {ok, binary:part(Buffered, 0, Length),
      binary:part(Buffered, Length, byte_size(Buffered) - Length)};

@@ -578,12 +578,13 @@ frame_header(Opcode, MaskBit, Length) when Length < 126 -> <<1:1, 0:3, Opcode:4,
 frame_header(Opcode, MaskBit, Length) when Length =< 65535 -> <<1:1, 0:3, Opcode:4, MaskBit:1, 126:7, Length:16/big>>;
 frame_header(Opcode, MaskBit, Length) -> <<1:1, 0:3, Opcode:4, MaskBit:1, 127:7, 0:1, Length:63/big>>.
 
-mask(Data, <<A, B, C, D>>) ->
-    list_to_binary(mask_bytes(binary:bin_to_list(Data), [A,B,C,D], 0, [])).
-mask_bytes([], _, _, Acc) -> lists:reverse(Acc);
-mask_bytes([Byte | Rest], Key, Index, Acc) ->
-    mask_bytes(Rest, Key, Index + 1,
-               [Byte bxor lists:nth((Index rem 4) + 1, Key) | Acc]).
+%% XOR with the 4-byte key repeated over the payload (RFC 6455 §5.3), as one
+%% crypto:exor of two binaries rather than a list walk per byte: it runs on
+%% every frame a server receives.
+mask(<<>>, _Key) -> <<>>;
+mask(Data, Key) ->
+    Size = byte_size(Data),
+    crypto:exor(Data, binary:part(binary:copy(Key, (Size + 3) div 4), 0, Size)).
 
 handshake(Transport, Target, Host, Protocols) ->
     Key = base64:encode(crypto:strong_rand_bytes(16)),
@@ -696,7 +697,9 @@ valid_protocol(_) -> false.
 valid_header(Name, Value) -> valid_protocol(Name) andalso
     lists:all(fun(C) -> C =:= 9 orelse C >= 32 andalso C =/= 127 end,
               binary:bin_to_list(Value)).
-valid_utf8(Text) -> case unicode:characters_to_list(Text) of Value when is_list(Value) -> true; _ -> false end.
+%% characters_to_binary answers the binary itself for valid UTF-8 and an
+%% error or incomplete tuple otherwise, without building a list of it.
+valid_utf8(Text) -> is_binary(unicode:characters_to_binary(Text)).
 valid_close_code(Code) -> Code >= 1000 andalso Code < 5000 andalso not lists:member(Code, [1004,1005,1006,1015]).
 headers_have_token(Name, Headers, Token) ->
     lists:member(Token, [string:trim(Part) || Value <- header_values(Name, Headers),
