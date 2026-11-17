@@ -1046,10 +1046,12 @@ make String, implement: Enumerable, Foldable do
 
     # The words of an identifier, read one character at a time: `previous`
     # is the character before `chars`, `current` the word being read.
+    # `words` is kept newest first, since on BEAM `[w | words]` is cheap and
+    # `words + [w]` copies them all, and is reversed once at the end.
     identifierWords :> [Char] -> Char? -> String -> [String] -> [String]
     let identifierWords(chars, previous, current, words) do
       match chars do
-        [] => current.empty? then words else words + [current]
+        [] => (current.empty? then words else [current | words]).reverse
         [c | rest] => do
           let afterLower = match previous do
             Just(p) => p.lower? || p.digit?
@@ -1060,9 +1062,9 @@ make String, implement: Enumerable, Foldable do
             _ => false
           end
           if c == '_' || c == '-' || c == ' '
-            identifierWords(rest, Just(c), "", current.empty? then words else words + [current])
+            identifierWords(rest, Just(c), "", current.empty? then words else [current | words])
           elif c.upper? && (afterLower || endsCapitals) && !current.empty?
-            identifierWords(rest, Just(c), "${c}", words + [current])
+            identifierWords(rest, Just(c), "${c}", [current | words])
           else
             identifierWords(rest, Just(c), "${current}${c}", words)
           end

@@ -40,6 +40,12 @@ describe("Kex.AST.parseSyntax") do
     assert(Kex.AST.commentsBefore(tree, index) == ["# about y"])
   end
 
+  it("keeps several comments above a declaration in order, trimmed") do
+    let tree = Kex.AST.parseSyntax("let x = 1\n# one\n  # two\n# three\nlet y = 2\n").try
+    let index = nodeIndex(tree.children, "let y", 0)
+    assert(Kex.AST.commentsBefore(tree, index) == ["# one", "# two", "# three"])
+  end
+
   it("counts the blank lines above a declaration") do
     let tree = Kex.AST.parseSyntax("let x = 1\n\n\n# c\nlet y = 2\n").try
     let index = nodeIndex(tree.children, "let y", 0)

@@ -222,12 +222,7 @@ module Kex.AST do
   #   Kex.AST.commentsBefore(tree, 3)   # => ["# about y"]
   commentsBefore : SyntaxNode -> Integer -> [String]
   let commentsBefore(parent, index) do
-    var comments: [String] = []
-    Kex.AST.linesBefore(parent, index).each do |line|
-      let text = line.trim
-      comments = comments + [text] if text.startsWith?("#")
-    end
-    return comments
+    Kex.AST.linesBefore(parent, index).map(~trim).filter { |text| text.startsWith?("#") }
   end
 
   # How many blank lines separate the child at +index+ from what precedes it.

@@ -248,6 +248,13 @@ describe("String — identifier case conversion") do
     assert("PascalCase".camelCase == "pascalCase")
   end
 
+  it("keeps the words of a long identifier in order") do
+    assert("oneTwo_three-fourFIVESix seven".snakeCase == "one_two_three_four_five_six_seven")
+    assert("a_b_c_d_e_f_g_h".camelCase == "aBCDEFGH")
+    let long = (1..200).map { |i| "w${i}" }.join("_")
+    assert(long.camelCase.snakeCase == long)
+  end
+
   it("leaves other characters in their word") do
     assert("empty?".snakeCase == "empty?")
     assert("".camelCase == "")
