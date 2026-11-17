@@ -210,6 +210,39 @@ make Box, implement: Showable do
   let showValue -> String = "box ${@label}"
 end
 )KEX");
+        // A module named like the record it declares, whose `make` functions
+        // another unit calls through the module (`Team.handle?(text)`): they
+        // are the interface's receiver functions, not its exports. Its
+        // constant gives it exports, so the alias is read as the module.
+        write("lib/teams/team.kex", R"KEX(module Teams.Team
+
+record Team do
+  handle : String
+end
+
+let LONGEST_HANDLE = 30
+
+make Team do
+  handle? : String -> Bool
+  let handle?(text) = text.length >= 2
+
+  handled : String -> String
+  let handled(name) = name.lowerCase
+end
+)KEX");
+        // ...beside a constructor of the same name from another unit.
+        write("lib/team_events.kex", R"KEX(module TeamEvents
+
+type TeamEvent = Joined | Team
+)KEX");
+        write("lib/team_users.kex", R"KEX(module TeamUsers
+
+using Teams.Team, only: [Team]
+using Teams.Team, as: Team
+using TeamEvents, only: [TeamEvent]
+
+let checked() -> String = "handle ${Team.handle?("ab")} ${Team.handled("AB")}"
+)KEX");
         write("lib/crates.kex", R"KEX(module Crates
 
 record Crate do
@@ -422,6 +455,7 @@ using Two.Widget
 using Notes
 using Marks
 using Boxes, only: [Box]
+using TeamUsers
 using Crates, only: [Crate]
 using Bags
 using Ids, only: [UserId]
@@ -484,6 +518,7 @@ main do
   IO.printLine("hey".exclaimed)
   IO.printLine(presented(Box { label: "b" }))
   IO.printLine(Box.named("named").label)
+  IO.printLine(TeamUsers.checked())
   IO.printLine(presented(Crate { count: 3 }))
   IO.printLine("bag ${Bags.bag([1, 2, 3]).any? { |x| x > 2 }}")
   IO.printLine(presented(7))
@@ -544,6 +579,9 @@ foul timed(server: Server<Counter>) = server.reset(within: 10)
                 ran.find("error") == std::string::npos && !ran.empty(),
                 "the build did not run: " + ran);
             assertEqual(separate, ran);
+            assertTrue(
+                ran.find("\nhandle true ab\n") != std::string::npos,
+                "a make function of a module named like its type did not run: " + ran);
             assertTrue(
                 ran.find("\nbag true\n") != std::string::npos,
                 "a trait default another unit's type inherits did not run: " + ran);

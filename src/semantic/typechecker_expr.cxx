@@ -1996,6 +1996,19 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     }
                     return true;
                 };
+                // A function of a `make` block the imported module declares (`make
+                // Team do let handle?(text)`, called `Team.handle?(text)` from a
+                // unit compiled apart) is filed with the receiver functions, not
+                // the exports.
+                const auto declaredInMake = [&](const std::string& name) {
+                    const auto functions = m_importedInterfaces->receiverFunctions.find(name);
+                    return functions != m_importedInterfaces->receiverFunctions.end() &&
+                           std::any_of(
+                               functions->second.begin(), functions->second.end(),
+                               [&](const ImportedFunction& function) {
+                                   return function.sourceModule == *importedPath;
+                               });
+                };
                 if (isImportedNamespace && !isLocalNamespace && unambiguousImport()) {
                     const auto& module = m_importedInterfaces->modules.at(*importedPath);
                     // Only a module's OWN interface is complete. A `using` also
@@ -2026,7 +2039,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                             [&](const auto& entry) { return entry.first.ends_with("." + name); });
                     };
                     if (module.sourceModule == *importedPath && !compileTimeForm &&
-                        (!moduleNamesType(*importedPath) || !namedAnywhere(node.method)) &&
+                        (!moduleNamesType(*importedPath) ||
+                         !(namedAnywhere(node.method) || declaredInMake(node.method))) &&
                         !module.exports.count(node.method)) {
                         std::vector<std::string> exported;
                         for (const auto& [name, _] : module.exports) {
@@ -2059,6 +2073,31 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // (`Parser.parse(text)`) takes the type as its receiver, as both
                 // backends run it: an ordinary method call, not a namespace one.
                 bool throughTypeName = false;
+                TypePtr aliasedType;
+                // The same through an alias read as the module (`Team.handle?(text)`
+                // under `using App.Models.Team, as: Team`): a module named like its
+                // type, the function its `make` block's, not an export.
+                if (isNamespaceCall && isImportedNamespace && !isLocalNamespace &&
+                    std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind) &&
+                    moduleNamesType(*importedPath) &&
+                    !m_importedInterfaces->modules.at(*importedPath).exports.count(node.method) &&
+                    declaredInMake(node.method) &&
+                    namesType(std::get<ast::UpperIdentifier>(node.receiver->kind).name)) {
+                    isImportedNamespace = false;
+                    isNamespaceCall = false;
+                    throughTypeName = true;
+                    // The alias names the module, so its type: never a
+                    // constructor the same name also reaches (`Command` of
+                    // another module's `EventKind`).
+                    for (const auto& function :
+                         m_importedInterfaces->receiverFunctions.at(node.method)) {
+                        if (function.sourceModule == *importedPath &&
+                            !function.signature.params.empty()) {
+                            aliasedType = function.signature.params.front();
+                            break;
+                        }
+                    }
+                }
                 if (isNamespaceCall && !isImportedNamespace && !isLocalNamespace &&
                     std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind)) {
                     const auto& written = std::get<ast::UpperIdentifier>(node.receiver->kind).name;
@@ -2155,7 +2194,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
 
                 std::vector<TypePtr> argTypes;
-                if (!isNamespaceCall) {
+                if (aliasedType) {
+                    // The type, as through its own name below: the backends
+                    // evaluate the receiver as that type, not a same-named
+                    // constructor.
+                    m_typeMap[node.receiver.get()] = aliasedType;
+                    argTypes.push_back(aliasedType);
+                } else if (!isNamespaceCall) {
                     auto receiver = node.receiver ? inferExpr(*node.receiver) : Type::unknown();
                     // Through the type's name the receiver is the type, not its
                     // `Type` record: `Response.ok(body)` is a Response method.
