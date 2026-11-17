@@ -17,18 +17,24 @@ namespace fs = std::filesystem;
 auto base() -> std::optional<fs::path> {
     if (const char* configured = std::getenv("KEX_CACHE")) {
         const std::string_view value = configured;
-        if (value.empty() || value == "off" || value == "0") return std::nullopt;
+        if (value.empty() || value == "off" || value == "0") {
+            return std::nullopt;
+        }
         return fs::path{value};
     }
-    if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg && *xdg)
+    if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg && *xdg) {
         return fs::path{xdg} / "kex";
-    if (const char* home = std::getenv("HOME"); home && *home)
+    }
+    if (const char* home = std::getenv("HOME"); home && *home) {
         return fs::path{home} / ".cache" / "kex";
+    }
     return std::nullopt;
 }
 
 auto directory(std::string_view subdirectory) -> std::optional<fs::path> {
-    if (auto root = base()) return *root / subdirectory;
+    if (auto root = base()) {
+        return *root / subdirectory;
+    }
     return std::nullopt;
 }
 
@@ -40,9 +46,8 @@ auto fileStamp(const fs::path& path) -> std::string {
     std::error_code ec;
     const auto size = fs::file_size(path, ec);
     const auto modified = fs::last_write_time(path, ec).time_since_epoch().count();
-    return path.string() + "|" +
-           std::to_string(static_cast<unsigned long long>(ec ? 0 : size)) + "|" +
-           std::to_string(static_cast<long long>(ec ? 0 : modified));
+    return path.string() + "|" + std::to_string(static_cast<unsigned long long>(ec ? 0 : size)) +
+           "|" + std::to_string(static_cast<long long>(ec ? 0 : modified));
 }
 
 } // namespace
@@ -50,20 +55,25 @@ auto fileStamp(const fs::path& path) -> std::string {
 auto toolchainFingerprint() -> const std::string& {
     static const std::string fingerprint = [] {
         std::string text = kex::versionNumber() + "\n" + kex::kGitRevision + "\n";
-        if (const auto exe = kex::executablePath(); !exe.empty())
+        if (const auto exe = kex::executablePath(); !exe.empty()) {
             text += "self:" + fileStamp(exe) + "\n";
-        for (const auto& file : kex::preludeSourceFiles())
+        }
+        for (const auto& file : kex::preludeSourceFiles()) {
             text += fileStamp(file) + "\n";
-        for (const auto& file : kex::standardLibrarySourceFiles())
+        }
+        for (const auto& file : kex::standardLibrarySourceFiles()) {
             text += fileStamp(file) + "\n";
+        }
         // A compiled program may hold copies of the standard library's
         // functions (ir/passes/specialize), taken from its build.
-        if (const auto runtime = kex::prebuiltRuntimeBeamDir(); !runtime.empty())
+        if (const auto runtime = kex::prebuiltRuntimeBeamDir(); !runtime.empty()) {
             text += fileStamp(fs::path(runtime) / "kex_prelude.beam") + "\n";
+        }
         // A pipeline other than the default makes different code: what one
         // caches is not another's.
-        for (const auto& [level, pipeline] : kex::pass::passOptions().pipelines)
+        for (const auto& [level, pipeline] : kex::pass::passOptions().pipelines) {
             text += "pipeline:" + level + "=" + pipeline + "\n";
+        }
         return text;
     }();
     return fingerprint;
@@ -77,8 +87,7 @@ auto stagingSuffix() -> std::string {
         return (static_cast<unsigned long long>(device()) << 32) ^ device();
     }();
     static std::atomic<unsigned long long> counter{0};
-    return ".tmp." + std::to_string(process) + "." +
-           std::to_string(counter.fetch_add(1));
+    return ".tmp." + std::to_string(process) + "." + std::to_string(counter.fetch_add(1));
 }
 
 namespace {
@@ -89,7 +98,9 @@ template <typename Fill>
 auto publish(const fs::path& path, Fill&& fill) -> bool {
     std::error_code ec;
     fs::create_directories(path.parent_path(), ec);
-    if (ec) return false;
+    if (ec) {
+        return false;
+    }
     auto staging = path;
     staging += stagingSuffix();
     if (!fill(staging)) {
@@ -109,7 +120,9 @@ auto publish(const fs::path& path, Fill&& fill) -> bool {
 auto atomicWrite(const fs::path& path, std::string_view bytes) -> bool {
     return publish(path, [&](const fs::path& staging) {
         std::ofstream output(staging, std::ios::binary | std::ios::trunc);
-        if (!output) return false;
+        if (!output) {
+            return false;
+        }
         output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
         output.close();
         return static_cast<bool>(output);

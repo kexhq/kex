@@ -20,20 +20,26 @@ auto Lowering::traitIdentityOf(const std::string& written) const -> std::string 
 
 // The identities the checker gives the types a module declares, by the names
 // they are declared under.
-auto ownTypeIdentities(const hir::Program& hir, const std::string& module,
-                       const std::set<std::string>& declared) -> std::unordered_set<std::string> {
+auto ownTypeIdentities(
+    const hir::Program& hir, const std::string& module, const std::set<std::string>& declared)
+    -> std::unordered_set<std::string> {
     std::unordered_set<std::string> identities;
-    for (const auto& name : declared)
+    for (const auto& name : declared) {
         identities.insert(hir.typeTestOf(module, name).writtenIdentity);
+    }
     return identities;
 }
 
-auto methodSignatureTypes(const hir::Program& hir, const ast::FunctionDef& method,
-                          const std::string& receiver) -> std::vector<std::string> {
+auto methodSignatureTypes(
+    const hir::Program& hir, const ast::FunctionDef& method, const std::string& receiver)
+    -> std::vector<std::string> {
     std::vector<std::string> types{receiver};
-    if (method.clauses.empty()) return types;
-    for (const auto& param : method.clauses.front().params)
+    if (method.clauses.empty()) {
+        return types;
+    }
+    for (const auto& param : method.clauses.front().params) {
         types.push_back(param.type && *param.type ? hir.annotationSpelling(**param.type) : "Any");
+    }
     return types;
 }
 
@@ -41,8 +47,7 @@ auto Lowering::typeTestOf(const std::string& written) const -> semantic::TypeTes
     return hir->typeTestOf(currentModulePath, written);
 }
 
-auto Lowering::identityOf(const std::string& scope, const std::string& name) const
-    -> std::string {
+auto Lowering::identityOf(const std::string& scope, const std::string& name) const -> std::string {
     auto identity = hir->typeTestOf(scope, name).writtenIdentity;
     return identity.empty() ? name : identity;
 }
@@ -66,7 +71,9 @@ auto Lowering::prefixCall(const std::string& name, std::vector<ExprPtr> args) ->
 // exactly what it did before. Going unconditional needs imported foulness
 // at the call site first — a consumer cannot know that the prelude's
 // `Task.start` became start/2 without it — see kexhq/kex#181.
-auto Lowering::threadsCapabilities() const -> bool { return true; }
+auto Lowering::threadsCapabilities() const -> bool {
+    return true;
+}
 
 // `Mod.Tag` for an ADT declared inside a module (e.g. `Kex.FS`). A tag is
 // just an atom at runtime, so the qualifier has no representation here —
@@ -75,10 +82,13 @@ auto Lowering::threadsCapabilities() const -> bool { return true; }
 // so an unknown name still falls through to the usual error.
 auto Lowering::qualifiedVariantTag(const std::string& name) const -> std::string {
     auto dot = name.rfind('.');
-    if (dot == std::string::npos) return "";
-    auto tag = name.substr(dot + 1);
-    if (tag.empty() || !kex::startsUppercase(tag))
+    if (dot == std::string::npos) {
         return "";
+    }
+    auto tag = name.substr(dot + 1);
+    if (tag.empty() || !kex::startsUppercase(tag)) {
+        return "";
+    }
     return (variantTagSet.count(tag) || variantOwner.count(tag)) ? tag : "";
 }
 
@@ -86,7 +96,9 @@ auto Lowering::qualifiedVariantTag(const std::string& name) const -> std::string
 // stands for — a tagged tuple, the same shape a record literal lowers to.
 auto Lowering::structuredTypeLiteral(const semantic::StructuredType& type) -> ExprPtr {
     std::vector<ExprPtr> args;
-    for (const auto& arg : type.args) args.push_back(structuredTypeLiteral(arg));
+    for (const auto& arg : type.args) {
+        args.push_back(structuredTypeLiteral(arg));
+    }
     auto list = std::make_unique<Expr>();
     list->node = MakeList{std::move(args), std::nullopt};
     auto record = std::make_unique<Expr>();
@@ -102,22 +114,23 @@ auto Lowering::structuredTypeLiteral(const semantic::StructuredType& type) -> Ex
 // prefixed with the current source location.
 auto Lowering::runtimeError(const std::string& msg) -> ExprPtr {
     std::string loc;
-    if (currentLoc) loc = std::string(currentLoc->file) + ":"
-        + std::to_string(currentLoc->line) + ":"
-        + std::to_string(currentLoc->column) + ": ";
-    return callE("erlang", "error", 1, one(lit(LitKind::String,
-        loc + "runtime error: " + msg)));
+    if (currentLoc) {
+        loc = std::string(currentLoc->file) + ":" + std::to_string(currentLoc->line) + ":" +
+              std::to_string(currentLoc->column) + ": ";
+    }
+    return callE("erlang", "error", 1, one(lit(LitKind::String, loc + "runtime error: " + msg)));
 }
 
 // The same dispatch where the arguments are already lowered — the
 // qualified-call path builds its argument slots before it knows the
 // target is a capability.
 auto Lowering::capabilityDispatchLowered(
-    const std::string& capability, const std::string& method,
-    std::vector<ExprPtr> loweredArgs, std::vector<Binding>& binds,
+    const std::string& capability,
+    const std::string& method,
+    std::vector<ExprPtr> loweredArgs,
+    std::vector<Binding>& binds,
     const std::function<ExprPtr(std::vector<ExprPtr>)>& directCall,
-    const std::string& overloadKey)
-    -> ExprPtr {
+    const std::string& overloadKey) -> ExprPtr {
     std::vector<std::string> argVars;
     for (auto& a : loweredArgs) {
         auto name = fresh("CapArg");
@@ -126,7 +139,9 @@ auto Lowering::capabilityDispatchLowered(
     }
     auto varsOf = [&]() {
         std::vector<ExprPtr> out;
-        for (const auto& v : argVars) out.push_back(var(v));
+        for (const auto& v : argVars) {
+            out.push_back(var(v));
+        }
         return out;
     };
     std::vector<ExprPtr> getArgs;
@@ -159,11 +174,11 @@ auto Lowering::capabilityDispatchLowered(
     dispatchArgs.push_back(var(impl));
     dispatchArgs.push_back(lit(LitKind::String, method));
     dispatchArgs.push_back(std::move(passedList));
-    if (!overloadKey.empty())
+    if (!overloadKey.empty()) {
         dispatchArgs.push_back(lit(LitKind::String, overloadKey));
+    }
     const int dispatchArity = static_cast<int>(dispatchArgs.size());
-    replaced.body =
-        callE("kex_io", "dispatch_method", dispatchArity, std::move(dispatchArgs));
+    replaced.body = callE("kex_io", "dispatch_method", dispatchArity, std::move(dispatchArgs));
     m.clauses.push_back(std::move(replaced));
 
     auto chosen = std::make_unique<Expr>();
@@ -174,8 +189,7 @@ auto Lowering::capabilityDispatchLowered(
 // Is this name a capability, declared here or imported?
 auto Lowering::isCapabilityModule(const std::string& name) const -> bool {
     return capabilityModules.count(name) > 0 ||
-           (externalModules &&
-            externalModules->capabilityModules.count(name) > 0);
+           (externalModules && externalModules->capabilityModules.count(name) > 0);
 }
 
 // Is `method` part of `capability`'s substitutable INTERFACE? Only its
@@ -185,23 +199,21 @@ auto Lowering::isCapabilityModule(const std::string& name) const -> bool {
 // `IO.inspect(v)` lost the trait dictionary its `Inspectable` parameter
 // needs and rendered structurally instead of calling the user's
 // `inspectValue` (kexhq/kex#143).
-auto Lowering::capabilityInterfaceHas(const std::string& capability,
-                            const std::string& method) const -> bool {
+auto Lowering::capabilityInterfaceHas(
+    const std::string& capability, const std::string& method) const -> bool {
     // `foulExports` records exactly the foul exports, one entry per
     // overload as `Module.member/arity` — which is the interface.
-    if (externalModules &&
-        externalModules->capabilityModules.count(capability)) {
+    if (externalModules && externalModules->capabilityModules.count(capability)) {
         // Its own members, where its interface lists them: a foul helper
         // of the module beside it (`Vault.stored`) is a plain call.
         if (auto members = externalModules->capabilityMembers.find(capability);
-            members != externalModules->capabilityMembers.end())
+            members != externalModules->capabilityMembers.end()) {
             return members->second.count(method) > 0;
+        }
         const auto prefix = capability + "." + method + "/";
-        return std::any_of(externalModules->foulExports.begin(),
-                           externalModules->foulExports.end(),
-                           [&](const std::string& entry) {
-                               return entry.rfind(prefix, 0) == 0;
-                           });
+        return std::any_of(
+            externalModules->foulExports.begin(), externalModules->foulExports.end(),
+            [&](const std::string& entry) { return entry.rfind(prefix, 0) == 0; });
     }
     // Declared in this unit: its own foul members. A module of the same
     // name may add helpers beside them (`capability Storage` next to
@@ -209,9 +221,9 @@ auto Lowering::capabilityInterfaceHas(const std::string& capability,
     // capability is replaced — routed to the replacement, they were
     // `undef` (the replacement does not define them).
     if (capabilityModules.count(capability)) {
-        if (auto members = capabilityMembers.find(capability);
-            members != capabilityMembers.end())
+        if (auto members = capabilityMembers.find(capability); members != capabilityMembers.end()) {
             return members->second.count(method) > 0;
+        }
         return foulFns.count(method) > 0;
     }
     return true;
@@ -220,7 +232,9 @@ auto Lowering::capabilityInterfaceHas(const std::string& capability,
 // The context to hand a callee: whatever this function holds, or an empty
 // map where there is none (a pure caller, or top level).
 auto Lowering::currentContext() -> ExprPtr {
-    if (!currentContextVar.empty()) return var(currentContextVar);
+    if (!currentContextVar.empty()) {
+        return var(currentContextVar);
+    }
     return callE("maps", "new", 0, {});
 }
 
@@ -236,13 +250,19 @@ auto Lowering::currentContext() -> ExprPtr {
 // real `name/1` is defined, no accessor is emitted, and if that function
 // is foul the call still takes its context.
 auto Lowering::callNeedsContext(const std::string& name, int arity) const -> bool {
-    if (!threadsCapabilities() || foulFns.count(name) == 0) return false;
-    if (arity == 1 && accessorFields.count(name) &&
-        !moduleReceiverNames.count(name))
+    if (!threadsCapabilities() || foulFns.count(name) == 0) {
         return false;
+    }
+    if (arity == 1 && accessorFields.count(name) && !moduleReceiverNames.count(name)) {
+        return false;
+    }
     const auto key = name + "/" + std::to_string(arity);
-    if (topLevelFoulArities.count(key)) return true;
-    if (pureFnArities.count(key)) return false;
+    if (topLevelFoulArities.count(key)) {
+        return true;
+    }
+    if (pureFnArities.count(key)) {
+        return false;
+    }
     return true;
 }
 
@@ -261,22 +281,27 @@ auto Lowering::externalConstant(const ast::Expr& reference, const std::string& n
     // The constant the checker resolved the name to, when one of a unit
     // compiled apart.
     const auto qualKey = hir->referencedConstantOf(reference);
-    if (!externalModules || subst.count(name) || qualKey.empty() || moduleFunctions.count(qualKey))
+    if (!externalModules || subst.count(name) || qualKey.empty() ||
+        moduleFunctions.count(qualKey)) {
         return nullptr;
+    }
     const auto arity = externalModules->exportArity.find(qualKey);
     const auto function = externalModules->exportToBeamFn.find(qualKey);
-    const auto atom = externalModules->nameToAtom.find(
-        qualKey.substr(0, qualKey.rfind('.')));
+    const auto atom = externalModules->nameToAtom.find(qualKey.substr(0, qualKey.rfind('.')));
     if (arity == externalModules->exportArity.end() || arity->second != 0 ||
         function == externalModules->exportToBeamFn.end() ||
-        atom == externalModules->nameToAtom.end())
+        atom == externalModules->nameToAtom.end()) {
         return nullptr;
+    }
     return externalCallExpr(qualKey, atom->second, function->second, 0, {});
 }
 
-auto Lowering::externalCallExpr(const std::string& qualKey, const std::string& atom,
-                      const std::string& beamFunction, int arity,
-                      std::vector<ExprPtr> args) -> ExprPtr {
+auto Lowering::externalCallExpr(
+    const std::string& qualKey,
+    const std::string& atom,
+    const std::string& beamFunction,
+    int arity,
+    std::vector<ExprPtr> args) -> ExprPtr {
     // The context is NOT appended here yet. Doing so is only correct once
     // the unit being called also threads — the prelude declares no
     // capability today, so its foul functions are still at their original
@@ -288,26 +313,26 @@ auto Lowering::externalCallExpr(const std::string& qualKey, const std::string& a
     return callE(atom, beamFunction, arity, std::move(args));
 }
 
-auto Lowering::localCallExpr(const std::string& name, std::vector<ExprPtr> args)
-    -> ExprPtr {
+auto Lowering::localCallExpr(const std::string& name, std::vector<ExprPtr> args) -> ExprPtr {
     auto e = std::make_unique<Expr>();
     e->node = localCall(name, std::move(args));
     return e;
 }
 
 // Does `typeName`'s make block define `method` in this compilation unit?
-auto Lowering::ownsMethod(const std::string& typeName,
-                const std::string& method) const -> bool {
+auto Lowering::ownsMethod(const std::string& typeName, const std::string& method) const -> bool {
     auto owners = methodOwners.find(method);
-    if (owners == methodOwners.end()) return false;
-    return std::find(owners->second.begin(), owners->second.end(),
-                     typeName) != owners->second.end();
+    if (owners == methodOwners.end()) {
+        return false;
+    }
+    return std::find(owners->second.begin(), owners->second.end(), typeName) !=
+           owners->second.end();
 }
 
-auto Lowering::localCall(const std::string& name, std::vector<ExprPtr> args)
-    -> Call {
-    if (callNeedsContext(name, static_cast<int>(args.size())))
+auto Lowering::localCall(const std::string& name, std::vector<ExprPtr> args) -> Call {
+    if (callNeedsContext(name, static_cast<int>(args.size()))) {
         args.push_back(currentContext());
+    }
     const int arity = static_cast<int>(args.size());
     return Call{"", name, arity, std::move(args), false};
 }
@@ -317,24 +342,24 @@ auto Lowering::localCall(const std::string& name, std::vector<ExprPtr> args)
 // call is unresolved is that lowering does not know it), so the message is
 // built as an iolist the same way the receiver dispatcher builds its own.
 // `hint` follows the receiver's type name in the message.
-auto Lowering::undefinedMethod(const std::string& method, ExprPtr receiver,
-                     const std::string& hint ) -> ExprPtr {
+auto Lowering::undefinedMethod(const std::string& method, ExprPtr receiver, const std::string& hint)
+    -> ExprPtr {
     std::string loc;
-    if (currentLoc) loc = std::string(currentLoc->file) + ":"
-        + std::to_string(currentLoc->line) + ":"
-        + std::to_string(currentLoc->column) + ": ";
+    if (currentLoc) {
+        loc = std::string(currentLoc->file) + ":" + std::to_string(currentLoc->line) + ":" +
+              std::to_string(currentLoc->column) + ": ";
+    }
     std::vector<ExprPtr> parts;
-    parts.push_back(lit(LitKind::String,
-                        loc + "runtime error: Undefined method: " +
-                        method + " for "));
-    parts.push_back(callE("kex_io", "value_type_name", 1,
-                          one(std::move(receiver))));
-    if (!hint.empty()) parts.push_back(lit(LitKind::String, hint));
+    parts.push_back(
+        lit(LitKind::String, loc + "runtime error: Undefined method: " + method + " for "));
+    parts.push_back(callE("kex_io", "value_type_name", 1, one(std::move(receiver))));
+    if (!hint.empty()) {
+        parts.push_back(lit(LitKind::String, hint));
+    }
     auto list = std::make_unique<Expr>();
     list->node = MakeList{std::move(parts), std::nullopt};
-    return callE("erlang", "error", 1,
-                 one(callE("erlang", "iolist_to_binary", 1,
-                           one(std::move(list)))));
+    return callE(
+        "erlang", "error", 1, one(callE("erlang", "iolist_to_binary", 1, one(std::move(list)))));
 }
 
 // Same message, but a record field holding a function gets to answer
@@ -343,18 +368,23 @@ auto Lowering::undefinedMethod(const std::string& method, ExprPtr receiver,
 // walker's dispatch fallback does the same (kexhq/kex#176). The field is
 // read by name at runtime because the reason this call is unresolved is
 // that lowering does not know the receiver's type.
-auto Lowering::undefinedMethodOrField(const ast::MethodCall& n, ExprPtr receiver)
-    -> ExprPtr {
+auto Lowering::undefinedMethodOrField(const ast::MethodCall& n, ExprPtr receiver) -> ExprPtr {
     std::string loc;
-    if (currentLoc) loc = std::string(currentLoc->file) + ":"
-        + std::to_string(currentLoc->line) + ":"
-        + std::to_string(currentLoc->column) + ": ";
+    if (currentLoc) {
+        loc = std::string(currentLoc->file) + ":" + std::to_string(currentLoc->line) + ":" +
+              std::to_string(currentLoc->column) + ": ";
+    }
     std::vector<Binding> binds;
     std::vector<ExprPtr> callArgs;
-    for (const auto& a : n.args) callArgs.push_back(atomize(a, binds));
-    for (const auto& [_, value] : n.namedArgs)
+    for (const auto& a : n.args) {
+        callArgs.push_back(atomize(a, binds));
+    }
+    for (const auto& [_, value] : n.namedArgs) {
         callArgs.push_back(atomize(value, binds));
-    if (n.block) callArgs.push_back(atomize(*n.block, binds));
+    }
+    if (n.block) {
+        callArgs.push_back(atomize(*n.block, binds));
+    }
     auto argList = std::make_unique<Expr>();
     argList->node = MakeList{std::move(callArgs), std::nullopt};
     std::vector<ExprPtr> args;
@@ -362,8 +392,7 @@ auto Lowering::undefinedMethodOrField(const ast::MethodCall& n, ExprPtr receiver
     args.push_back(lit(LitKind::String, n.method));
     args.push_back(std::move(argList));
     args.push_back(lit(LitKind::String, loc));
-    return wrapLets(binds, callE("kex_io", "call_field_or_fail", 4,
-                                 std::move(args)));
+    return wrapLets(binds, callE("kex_io", "call_field_or_fail", 4, std::move(args)));
 }
 
 // A named argument no clause of the target declares. Dropping it would run
@@ -373,80 +402,97 @@ auto Lowering::undefinedMethodOrField(const ast::MethodCall& n, ExprPtr receiver
 // still compiles. When another module does declare that label, name it:
 // that is nearly always a missing `using`. Mirrors the walker's
 // Evaluator::callFunction message exactly.
-auto Lowering::unknownNamedArgument(const std::string& qualified,
-                          const std::string& label) -> ExprPtr {
-    auto message = "unknown named argument `" + label + ":` for `" +
-                   sourceName(qualified) + "`";
+auto Lowering::unknownNamedArgument(const std::string& qualified, const std::string& label)
+    -> ExprPtr {
+    auto message = "unknown named argument `" + label + ":` for `" + sourceName(qualified) + "`";
     const auto plain = kex::mangle::memberOf(qualified);
     // A module named `Mod.fn` whose `fn` declares this label. Three places
     // hold that, depending on where the module came from: compiled in this
     // same unit (`Units.SI` is, since the program names it), imported as an
     // ordinary export, or registered as a provider's receiver function.
-    const auto owningModule =
-        [&](const std::string& qualifiedName,
-            const auto& params) -> std::string {
+    const auto owningModule = [&](const std::string& qualifiedName,
+                                  const auto& params) -> std::string {
         auto dot = qualifiedName.rfind('.');
-        if (dot == std::string::npos ||
-            qualifiedName.substr(dot + 1) != plain)
+        if (dot == std::string::npos || qualifiedName.substr(dot + 1) != plain) {
             return {};
-        if (std::find(params.begin(), params.end(), label) == params.end())
+        }
+        if (std::find(params.begin(), params.end(), label) == params.end()) {
             return {};
+        }
         return qualifiedName.substr(0, dot);
     };
     std::string module;
     for (const auto& [qualifiedLocal, params] : fnParamNames) {
         module = owningModule(qualifiedLocal, params);
-        if (!module.empty()) break;
+        if (!module.empty()) {
+            break;
+        }
     }
     if (externalModules) {
-        if (module.empty())
-            for (const auto& [qualifiedExport, params] :
-                 externalModules->exportParamNames) {
+        if (module.empty()) {
+            for (const auto& [qualifiedExport, params] : externalModules->exportParamNames) {
                 module = owningModule(qualifiedExport, params);
-                if (!module.empty()) break;
+                if (!module.empty()) {
+                    break;
+                }
             }
-        if (module.empty())
+        }
+        if (module.empty()) {
             if (auto found = externalModules->receiverFunctions.find(plain);
-                found != externalModules->receiverFunctions.end())
+                found != externalModules->receiverFunctions.end()) {
                 for (const auto& candidate : found->second) {
-                    if (std::find(candidate.paramNames.begin(),
-                                  candidate.paramNames.end(),
-                                  label) == candidate.paramNames.end())
+                    if (std::find(
+                            candidate.paramNames.begin(), candidate.paramNames.end(), label) ==
+                        candidate.paramNames.end()) {
                         continue;
-                    for (const auto& [name, atom] :
-                         externalModules->nameToAtom)
+                    }
+                    for (const auto& [name, atom] : externalModules->nameToAtom) {
                         if (atom == candidate.moduleAtom) {
                             module = name;
                             break;
                         }
-                    if (!module.empty()) break;
+                    }
+                    if (!module.empty()) {
+                        break;
+                    }
                 }
+            }
+        }
     }
-    if (!module.empty())
-        message += " — `" + module + "` defines a matching `" + plain +
-                   "`; add `using " + module + "`";
+    if (!module.empty()) {
+        message +=
+            " — `" + module + "` defines a matching `" + plain + "`; add `using " + module + "`";
+    }
     return runtimeError(message);
 }
 
 auto Lowering::opSymbol(TokenType t) -> std::string {
     switch (t) {
-        case TokenType::Plus: return "+";     case TokenType::Minus: return "-";
-        case TokenType::Star: return "*";     case TokenType::Slash: return "/";
-        case TokenType::Percent: return "%";  case TokenType::Caret: return "^";
+        case TokenType::Plus: return "+";
+        case TokenType::Minus: return "-";
+        case TokenType::Star: return "*";
+        case TokenType::Slash: return "/";
+        case TokenType::Percent: return "%";
+        case TokenType::Caret: return "^";
         case TokenType::EqEq: return "==";
-        case TokenType::NotEq: return "!=";   case TokenType::LessThan: return "<";
-        case TokenType::GreaterThan: return ">"; case TokenType::LessEq: return "<=";
-        case TokenType::GreaterEq: return ">="; default: return "";
+        case TokenType::NotEq: return "!=";
+        case TokenType::LessThan: return "<";
+        case TokenType::GreaterThan: return ">";
+        case TokenType::LessEq: return "<=";
+        case TokenType::GreaterEq: return ">=";
+        default: return "";
     }
 }
 
 auto Lowering::makeTargetNameList(const hir::Program& hir, const ast::MakeDef& make)
     -> std::vector<std::string> {
-    if (const auto* owners = hir.makeTargetsOf(make); owners && !owners->empty()) return *owners;
+    if (const auto* owners = hir.makeTargetsOf(make); owners && !owners->empty()) {
+        return *owners;
+    }
     return {""};
 }
 
-auto Lowering::fresh(const std::string& hint ) -> std::string {
+auto Lowering::fresh(const std::string& hint) -> std::string {
     return "_ir_" + hint + std::to_string(counter++);
 }
 
@@ -457,17 +503,27 @@ auto Lowering::currentName(const std::string& kexName) -> std::string {
 
 auto Lowering::snap(const ExprPtr& e) -> AtomicRef {
     if (e) {
-        if (auto* v = std::get_if<Var>(&e->node)) return {v->name, std::nullopt};
-        if (auto* l = std::get_if<Lit>(&e->node)) return {"", *l};
+        if (auto* v = std::get_if<Var>(&e->node)) {
+            return {v->name, std::nullopt};
+        }
+        if (auto* l = std::get_if<Lit>(&e->node)) {
+            return {"", *l};
+        }
     }
     return {"_snap_null", std::nullopt};
 }
 
-auto Lowering::clone(const ExprPtr& e, const char* site ) -> ExprPtr {
-    if (!e) throw LowerError(std::string("IR lower: clone of null expr [") + site + "]");
-    if (auto* v = std::get_if<Var>(&e->node)) return var(v->name);
+auto Lowering::clone(const ExprPtr& e, const char* site) -> ExprPtr {
+    if (!e) {
+        throw LowerError(std::string("IR lower: clone of null expr [") + site + "]");
+    }
+    if (auto* v = std::get_if<Var>(&e->node)) {
+        return var(v->name);
+    }
     if (auto* l = std::get_if<Lit>(&e->node)) {
-        auto out = std::make_unique<Expr>(); out->node = *l; return out;
+        auto out = std::make_unique<Expr>();
+        out->node = *l;
+        return out;
     }
     if (auto* c = std::get_if<Construct>(&e->node)) {
         if (c->args.empty()) {
@@ -476,8 +532,9 @@ auto Lowering::clone(const ExprPtr& e, const char* site ) -> ExprPtr {
             return out;
         }
     }
-    throw LowerError(std::string("IR lower: clone of non-atomic expr (index ")
-        + std::to_string(e->node.index()) + ") [" + site + "]");
+    throw LowerError(
+        std::string("IR lower: clone of non-atomic expr (index ") +
+        std::to_string(e->node.index()) + ") [" + site + "]");
 }
 
 // Wrap `body` in the accumulated let-bindings, evaluated left-to-right
@@ -500,7 +557,9 @@ auto Lowering::isAtomic(const Expr& e) -> bool {
 // through untouched. This is the ANF normalization step.
 auto Lowering::atomize(const ast::ExprPtr& e, std::vector<Binding>& binds) -> ExprPtr {
     auto ir = lower(e);
-    if (isAtomic(*ir)) return ir;
+    if (isAtomic(*ir)) {
+        return ir;
+    }
     auto name = fresh();
     binds.push_back({name, std::move(ir)});
     return var(name);
@@ -522,8 +581,7 @@ auto Lowering::opOf(TokenType t) -> Op {
         case TokenType::GreaterEq: return Op::Gte;
         case TokenType::AmpAmp: return Op::And;
         case TokenType::PipePipe: return Op::Or;
-        default:
-            throw LowerError("IR lower: unsupported binary operator");
+        default: throw LowerError("IR lower: unsupported binary operator");
     }
 }
 
@@ -533,19 +591,19 @@ auto Lowering::isOrderingOp(Op op) -> bool {
 
 auto Lowering::orderingFunction(Op op) -> std::string {
     switch (op) {
-        case Op::Lt:  return "lt";
-        case Op::Gt:  return "gt";
+        case Op::Lt: return "lt";
+        case Op::Gt: return "gt";
         case Op::Lte: return "lte";
-        default:      return "gte";
+        default: return "gte";
     }
 }
 
 // A field default, lowered in its declaring module rather than in the one
 // doing the constructing.
-auto Lowering::lowerFieldDefault(const RecordInfo& info, const ast::ExprPtr& e)
-    -> ExprPtr {
-    if (info.owner.empty() || info.owner == currentModulePath)
+auto Lowering::lowerFieldDefault(const RecordInfo& info, const ast::ExprPtr& e) -> ExprPtr {
+    if (info.owner.empty() || info.owner == currentModulePath) {
         return lower(e);
+    }
     auto savedPath = currentModulePath;
     currentModulePath = info.owner;
     auto result = lower(e);
@@ -561,8 +619,9 @@ auto Lowering::constantSymbolOf(const ast::Expr& reference) const -> std::string
     const auto constant = hir->referencedConstantOf(reference);
     const auto emitted = moduleFunctions.find(constant);
     if (emitted == moduleFunctions.end() || !moduleZeroArgFns.count(constant) ||
-        emitted->second == currentFunctionSymbol)
+        emitted->second == currentFunctionSymbol) {
         return {};
+    }
     return emitted->second;
 }
 

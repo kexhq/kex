@@ -24,25 +24,31 @@ namespace kex::semantic::detail {
 // The name in `candidates` a misspelt `name` most likely meant: one differing
 // only in case (a renamed `whereis` is now `whereIs`) first, then the closest
 // within two edits. Empty when nothing is close.
-inline auto closestName(const std::string& name,
-                        const std::vector<std::string>& candidates)
+inline auto closestName(const std::string& name, const std::vector<std::string>& candidates)
     -> std::string {
     auto lower = [](std::string text) {
-        for (auto& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        for (auto& c : text) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
         return text;
     };
-    for (const auto& candidate : candidates)
-        if (lower(candidate) == lower(name)) return candidate;
+    for (const auto& candidate : candidates) {
+        if (lower(candidate) == lower(name)) {
+            return candidate;
+        }
+    }
     auto distance = [](const std::string& a, const std::string& b) {
         std::vector<size_t> row(b.size() + 1);
-        for (size_t j = 0; j <= b.size(); ++j) row[j] = j;
+        for (size_t j = 0; j <= b.size(); ++j) {
+            row[j] = j;
+        }
         for (size_t i = 1; i <= a.size(); ++i) {
             size_t diagonal = row[0];
             row[0] = i;
             for (size_t j = 1; j <= b.size(); ++j) {
                 const size_t above = row[j];
-                row[j] = std::min({row[j] + 1, row[j - 1] + 1,
-                                   diagonal + (a[i - 1] == b[j - 1] ? 0 : 1)});
+                row[j] = std::min(
+                    {row[j] + 1, row[j - 1] + 1, diagonal + (a[i - 1] == b[j - 1] ? 0 : 1)});
                 diagonal = above;
             }
         }
@@ -50,11 +56,12 @@ inline auto closestName(const std::string& name,
     };
     std::string best;
     size_t bestDistance = 3;
-    for (const auto& candidate : candidates)
+    for (const auto& candidate : candidates) {
         if (const auto d = distance(name, candidate); d < bestDistance) {
             bestDistance = d;
             best = candidate;
         }
+    }
     return best;
 }
 
@@ -64,11 +71,12 @@ inline auto closestName(const std::string& name,
 // the first segment (`a.kex`), so without the owner a file that names the
 // declaration only this way never gets `a/b.kex` loaded. Whichever of the
 // two is not a module, the resolver drops.
-inline auto recordWithOwner(std::unordered_set<std::string>& references,
-                            const std::string& qualified) -> void {
+inline auto
+recordWithOwner(std::unordered_set<std::string>& references, const std::string& qualified) -> void {
     const auto dot = qualified.rfind('.');
-    if (dot != std::string::npos && qualified.find('.') < dot)
+    if (dot != std::string::npos && qualified.find('.') < dot) {
         references.insert(qualified.substr(0, dot));
+    }
     references.insert(qualified);
 }
 
@@ -76,39 +84,49 @@ inline auto recordWithOwner(std::unordered_set<std::string>& references,
 // single-part name) if it's a bare `Name` or `Name(Args...)` — anything
 // else (tuple/list/function/union/atom type exprs) means the TypeDef is a
 // type alias, not a real ADT, and the whole def is skipped for exhaustiveness.
-inline auto extractConstructorName(const ast::TypeExprPtr& variant)
-    -> std::optional<std::string> {
-    if (!variant) return std::nullopt;
+inline auto extractConstructorName(const ast::TypeExprPtr& variant) -> std::optional<std::string> {
+    if (!variant) {
+        return std::nullopt;
+    }
     if (auto* tn = std::get_if<ast::TypeName>(&variant->kind)) {
-        if (tn->parts.size() == 1) return tn->parts[0];
+        if (tn->parts.size() == 1) {
+            return tn->parts[0];
+        }
     }
     if (auto* gt = std::get_if<ast::GenericType>(&variant->kind)) {
-        if (gt->name.parts.size() == 1) return gt->name.parts[0];
+        if (gt->name.parts.size() == 1) {
+            return gt->name.parts[0];
+        }
     }
     return std::nullopt;
 }
 
 inline auto headShapeOf(const TypePtr& type) -> TypePtr {
-    if (!type) return type;
-    if (auto* named = std::get_if<NamedType>(&type->kind))
+    if (!type) {
+        return type;
+    }
+    if (auto* named = std::get_if<NamedType>(&type->kind)) {
         return Type::named(named->name);
+    }
     return type;
 }
 
-inline auto substituteInterfaceGenerics(const TypePtr& type,
-                                        const std::vector<TypePtr>& args)
+inline auto substituteInterfaceGenerics(const TypePtr& type, const std::vector<TypePtr>& args)
     -> TypePtr {
-    if (!type) return type;
+    if (!type) {
+        return type;
+    }
     if (auto* var = std::get_if<TypeVar>(&type->kind)) {
         if (var->id < 0) {
             auto index = static_cast<size_t>(-var->id - 1);
-            if (index < args.size()) return args[index];
+            if (index < args.size()) {
+                return args[index];
+            }
         }
         return type;
     }
-    return mapTypeChildren(type, [&](const TypePtr& child) {
-        return substituteInterfaceGenerics(child, args);
-    });
+    return mapTypeChildren(
+        type, [&](const TypePtr& child) { return substituteInterfaceGenerics(child, args); });
 }
 
 // How many type parameters a record has, read back off its registered field
@@ -118,19 +136,23 @@ inline auto substituteInterfaceGenerics(const TypePtr& type,
 // IMPORTED records on one code path: the KexI reader assigns the same
 // negative ids when it rebuilds an imported record's fields, and neither
 // KexiRecord nor ImportedInterfaces carries a parameter LIST to consult.
-inline auto recordTypeParamCount(
-    const std::unordered_map<std::string, TypePtr>& fields) -> size_t {
+inline auto recordTypeParamCount(const std::unordered_map<std::string, TypePtr>& fields) -> size_t {
     size_t count = 0;
     std::function<void(const TypePtr&)> scan = [&](const TypePtr& type) {
-        if (!type) return;
+        if (!type) {
+            return;
+        }
         if (auto* var = std::get_if<TypeVar>(&type->kind)) {
-            if (var->id < 0)
+            if (var->id < 0) {
                 count = std::max(count, static_cast<size_t>(-var->id));
+            }
             return;
         }
         forEachTypeChild(type, scan);
     };
-    for (const auto& [_, fieldType] : fields) scan(fieldType);
+    for (const auto& [_, fieldType] : fields) {
+        scan(fieldType);
+    }
     return count;
 }
 
@@ -138,36 +160,46 @@ inline auto recordTypeParamCount(
 // for it, recording what each parameter slot was filled with. First binding
 // wins, so two fields disagreeing about `A` leave the first one's answer
 // rather than silently taking the last.
-inline auto bindRecordTypeParams(const TypePtr& declared, const TypePtr& actual,
-                                 std::unordered_map<int, TypePtr>& slots)
+inline auto bindRecordTypeParams(
+    const TypePtr& declared, const TypePtr& actual, std::unordered_map<int, TypePtr>& slots)
     -> void {
-    if (!declared || !actual) return;
+    if (!declared || !actual) {
+        return;
+    }
     if (auto* var = std::get_if<TypeVar>(&declared->kind)) {
-        if (var->id >= 0) return;
+        if (var->id >= 0) {
+            return;
+        }
         // An open actual says nothing about the slot — `Box { items: [] }`
         // must stay `Box<Any>` rather than pinning A to the empty list's
         // placeholder variable.
         if (std::holds_alternative<UnknownType>(actual->kind) ||
-            std::holds_alternative<TypeVar>(actual->kind))
+            std::holds_alternative<TypeVar>(actual->kind)) {
             return;
+        }
         slots.try_emplace(var->id, actual);
         return;
     }
     if (auto* named = std::get_if<NamedType>(&declared->kind)) {
         auto* other = std::get_if<NamedType>(&actual->kind);
-        if (!other || other->typeArgs.size() != named->typeArgs.size()) return;
-        for (size_t i = 0; i < named->typeArgs.size(); ++i)
+        if (!other || other->typeArgs.size() != named->typeArgs.size()) {
+            return;
+        }
+        for (size_t i = 0; i < named->typeArgs.size(); ++i) {
             bindRecordTypeParams(named->typeArgs[i], other->typeArgs[i], slots);
+        }
         return;
     }
     if (auto* list = std::get_if<ListType>(&declared->kind)) {
-        if (auto* other = std::get_if<ListType>(&actual->kind))
+        if (auto* other = std::get_if<ListType>(&actual->kind)) {
             bindRecordTypeParams(list->element, other->element, slots);
+        }
         return;
     }
     if (auto* optional = std::get_if<OptionalType>(&declared->kind)) {
-        if (auto* other = std::get_if<OptionalType>(&actual->kind))
+        if (auto* other = std::get_if<OptionalType>(&actual->kind)) {
             bindRecordTypeParams(optional->inner, other->inner, slots);
+        }
         return;
     }
     if (auto* map = std::get_if<MapType>(&declared->kind)) {
@@ -179,16 +211,22 @@ inline auto bindRecordTypeParams(const TypePtr& declared, const TypePtr& actual,
     }
     if (auto* tuple = std::get_if<TupleType>(&declared->kind)) {
         auto* other = std::get_if<TupleType>(&actual->kind);
-        if (!other || other->elements.size() != tuple->elements.size()) return;
-        for (size_t i = 0; i < tuple->elements.size(); ++i)
+        if (!other || other->elements.size() != tuple->elements.size()) {
+            return;
+        }
+        for (size_t i = 0; i < tuple->elements.size(); ++i) {
             bindRecordTypeParams(tuple->elements[i], other->elements[i], slots);
+        }
         return;
     }
     if (auto* fn = std::get_if<FuncType>(&declared->kind)) {
         auto* other = std::get_if<FuncType>(&actual->kind);
-        if (!other || other->params.size() != fn->params.size()) return;
-        for (size_t i = 0; i < fn->params.size(); ++i)
+        if (!other || other->params.size() != fn->params.size()) {
+            return;
+        }
+        for (size_t i = 0; i < fn->params.size(); ++i) {
             bindRecordTypeParams(fn->params[i], other->params[i], slots);
+        }
         bindRecordTypeParams(fn->result, other->result, slots);
         return;
     }
@@ -207,14 +245,20 @@ inline auto primitiveNumberTrait(const std::string& trait) -> bool {
 // Whether `known` already offers `function`'s parameters: the prelude serves
 // a module's functions as receiver functions too (`Parsing.Input.peekAt` from
 // `kex_prelude`), and the same function from both was "ambiguous".
-inline auto offeredAlready(const std::vector<const ImportedFunction*>& known,
-                           const ImportedFunction& function) -> bool {
+inline auto
+offeredAlready(const std::vector<const ImportedFunction*>& known, const ImportedFunction& function)
+    -> bool {
     return std::any_of(known.begin(), known.end(), [&](const ImportedFunction* other) {
         const auto& left = other->signature.params;
         const auto& right = function.signature.params;
-        if (left.size() != right.size()) return false;
-        for (size_t i = 0; i < left.size(); ++i)
-            if (typeToString(left[i]) != typeToString(right[i])) return false;
+        if (left.size() != right.size()) {
+            return false;
+        }
+        for (size_t i = 0; i < left.size(); ++i) {
+            if (typeToString(left[i]) != typeToString(right[i])) {
+                return false;
+            }
+        }
         return true;
     });
 }
@@ -232,7 +276,9 @@ inline auto offeredAlready(const std::vector<const ImportedFunction*>& known,
 template <typename Call>
 auto passBlockByLabel(const Call& node, const std::string& label) -> void {
     auto& call = const_cast<Call&>(node);
-    if (label.empty() || !call.block || !call.namedArgs.empty()) return;
+    if (label.empty() || !call.block || !call.namedArgs.empty()) {
+        return;
+    }
     call.namedArgs.emplace_back(label, std::move(*call.block));
     call.block.reset();
 }
@@ -244,18 +290,22 @@ auto passBlockByLabel(const Call& node, const std::string& label) -> void {
 // `found.map { |x, y| … }` over a record was accepted as if it destructured a
 // tuple: BEAM handed back a partial application where the walker ran it.
 template <typename Resolve>
-auto bindHintVars(const TypePtr& sigP, const TypePtr& argRaw,
-                  std::unordered_map<int, TypePtr>& sub,
-                  const Resolve& resolve) -> void {
+auto bindHintVars(
+    const TypePtr& sigP,
+    const TypePtr& argRaw,
+    std::unordered_map<int, TypePtr>& sub,
+    const Resolve& resolve) -> void {
     const auto argT = resolve(argRaw);
     if (auto* tv = std::get_if<TypeVar>(&sigP->kind)) {
         sub.emplace(tv->id, argT);
     } else if (auto* list = std::get_if<ListType>(&sigP->kind)) {
-        if (auto* argList = std::get_if<ListType>(&argT->kind))
+        if (auto* argList = std::get_if<ListType>(&argT->kind)) {
             bindHintVars(list->element, argList->element, sub, resolve);
+        }
     } else if (auto* opt = std::get_if<OptionalType>(&sigP->kind)) {
-        if (auto* argOpt = std::get_if<OptionalType>(&argT->kind))
+        if (auto* argOpt = std::get_if<OptionalType>(&argT->kind)) {
             bindHintVars(opt->inner, argOpt->inner, sub, resolve);
+        }
     } else if (auto* map = std::get_if<MapType>(&sigP->kind)) {
         if (auto* argMap = std::get_if<MapType>(&argT->kind)) {
             bindHintVars(map->key, argMap->key, sub, resolve);
@@ -263,17 +313,19 @@ auto bindHintVars(const TypePtr& sigP, const TypePtr& argRaw,
         }
     } else if (auto* tuple = std::get_if<TupleType>(&sigP->kind)) {
         auto* argTuple = std::get_if<TupleType>(&argT->kind);
-        if (argTuple && argTuple->elements.size() == tuple->elements.size())
-            for (size_t i = 0; i < tuple->elements.size(); i++)
-                bindHintVars(tuple->elements[i], argTuple->elements[i], sub,
-                             resolve);
+        if (argTuple && argTuple->elements.size() == tuple->elements.size()) {
+            for (size_t i = 0; i < tuple->elements.size(); i++) {
+                bindHintVars(tuple->elements[i], argTuple->elements[i], sub, resolve);
+            }
+        }
     } else if (auto* named = std::get_if<NamedType>(&sigP->kind)) {
         auto* argNamed = std::get_if<NamedType>(&argT->kind);
         if (argNamed && argNamed->name == named->name &&
-            argNamed->typeArgs.size() == named->typeArgs.size())
-            for (size_t i = 0; i < named->typeArgs.size(); i++)
-                bindHintVars(named->typeArgs[i], argNamed->typeArgs[i], sub,
-                             resolve);
+            argNamed->typeArgs.size() == named->typeArgs.size()) {
+            for (size_t i = 0; i < named->typeArgs.size(); i++) {
+                bindHintVars(named->typeArgs[i], argNamed->typeArgs[i], sub, resolve);
+            }
+        }
     }
 }
 

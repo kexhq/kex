@@ -27,7 +27,9 @@ constexpr std::size_t kMaxCopies = 64;
 auto sizeOf(const Expr& e) -> std::size_t {
     std::size_t n = 1;
     forEachChild(e, [&](const ExprPtr& c) {
-        if (c) n += sizeOf(*c);
+        if (c) {
+            n += sizeOf(*c);
+        }
     });
     return n;
 }
@@ -38,7 +40,9 @@ auto isVarNamed(const ExprPtr& e, const std::string& name) -> bool {
 }
 
 auto patternBinds(const PatternPtr& p, const std::string& name) -> bool {
-    if (!p) return false;
+    if (!p) {
+        return false;
+    }
     std::set<std::string> bound;
     bindPattern(*p, bound);
     return bound.contains(name);
@@ -62,27 +66,46 @@ auto appliesAtArity(std::size_t args, std::size_t blockArity) -> bool {
 // The position `call` passes `param` at, when it passes it exactly once.
 auto passedAt(const Call& call, const std::string& param) -> std::optional<std::size_t> {
     std::optional<std::size_t> at;
-    for (std::size_t k = 0; k < call.args.size(); ++k)
+    for (std::size_t k = 0; k < call.args.size(); ++k) {
         if (isVarNamed(call.args[k], param)) {
-            if (at) return std::nullopt;
+            if (at) {
+                return std::nullopt;
+            }
             at = k;
         }
+    }
     return at;
 }
 
-auto blockParameters(const FunDef& callee, std::size_t index, std::size_t blockArity,
-                     const std::string& home = {}, const Resolve* resolve = nullptr, int depth = 0)
-    -> std::optional<std::vector<std::string>>;
+auto blockParameters(
+    const FunDef& callee,
+    std::size_t index,
+    std::size_t blockArity,
+    const std::string& home = {},
+    const Resolve* resolve = nullptr,
+    int depth = 0) -> std::optional<std::vector<std::string>>;
 
 // Whether `call`, which passes the block `param`, hands it to a function a
 // copy can be made of in turn.
-auto handsOn(const Call& call, const std::string& param, const FunDef& from, std::size_t blockArity,
-             const std::string& home, const Resolve* resolve, int depth) -> bool {
-    if (!resolve || depth >= kMaxHandOn) return false;
+auto handsOn(
+    const Call& call,
+    const std::string& param,
+    const FunDef& from,
+    std::size_t blockArity,
+    const std::string& home,
+    const Resolve* resolve,
+    int depth) -> bool {
+    if (!resolve || depth >= kMaxHandOn) {
+        return false;
+    }
     const auto at = passedAt(call, param);
-    if (!at) return false;
+    if (!at) {
+        return false;
+    }
     const auto* target = (*resolve)(home, call);
-    if (!target || target == &from) return false;
+    if (!target || target == &from) {
+        return false;
+    }
     const auto targetHome = call.module.empty() ? home : call.module;
     return blockParameters(*target, *at, blockArity, targetHome, resolve, depth + 1).has_value();
 }
@@ -96,64 +119,98 @@ struct Uses {
     bool rebound = false;
 };
 
-auto countUses(const Expr& e, const std::string& param, const FunDef& callee, std::size_t index,
-               std::size_t blockArity, const std::string& home, const Resolve* resolve, int depth,
-               Uses& uses) -> void {
-    std::visit([&](const auto& n) {
-        using T = std::decay_t<decltype(n)>;
-        if constexpr (std::is_same_v<T, Var>) {
-            if (n.name == param) ++uses.all;
-        } else if constexpr (std::is_same_v<T, CallIndirect>) {
-            if (isVarNamed(n.callee, param) && appliesAtArity(n.args.size(), blockArity))
-                ++uses.replaceable;
-        } else if constexpr (std::is_same_v<T, Call>) {
-            if (n.module.empty() && n.name == callee.name && n.arity == callee.arity &&
-                index < n.args.size() && isVarNamed(n.args[index], param))
-                ++uses.replaceable;
-            else if (handsOn(n, param, callee, blockArity, home, resolve, depth))
-                ++uses.replaceable;
-        } else if constexpr (std::is_same_v<T, Let>) {
-            uses.rebound = uses.rebound || n.name == param;
-        } else if constexpr (std::is_same_v<T, Lambda> || std::is_same_v<T, LetRec>) {
-            for (const auto& p : n.params) uses.rebound = uses.rebound || p == param;
-        } else if constexpr (std::is_same_v<T, Match> || std::is_same_v<T, TryCatch>) {
-            for (const auto& c : n.clauses)
-                for (const auto& p : c.patterns) uses.rebound = uses.rebound || patternBinds(p, param);
-        } else if constexpr (std::is_same_v<T, Receive>) {
-            uses.rebound = uses.rebound || n.senderVar == param;
-            for (const auto& c : n.clauses) uses.rebound = uses.rebound || patternBinds(c.pattern, param);
-        }
-    }, e.node);
+auto countUses(
+    const Expr& e,
+    const std::string& param,
+    const FunDef& callee,
+    std::size_t index,
+    std::size_t blockArity,
+    const std::string& home,
+    const Resolve* resolve,
+    int depth,
+    Uses& uses) -> void {
+    std::visit(
+        [&](const auto& n) {
+            using T = std::decay_t<decltype(n)>;
+            if constexpr (std::is_same_v<T, Var>) {
+                if (n.name == param) {
+                    ++uses.all;
+                }
+            } else if constexpr (std::is_same_v<T, CallIndirect>) {
+                if (isVarNamed(n.callee, param) && appliesAtArity(n.args.size(), blockArity)) {
+                    ++uses.replaceable;
+                }
+            } else if constexpr (std::is_same_v<T, Call>) {
+                if (n.module.empty() && n.name == callee.name && n.arity == callee.arity &&
+                    index < n.args.size() && isVarNamed(n.args[index], param)) {
+                    ++uses.replaceable;
+                } else if (handsOn(n, param, callee, blockArity, home, resolve, depth)) {
+                    ++uses.replaceable;
+                }
+            } else if constexpr (std::is_same_v<T, Let>) {
+                uses.rebound = uses.rebound || n.name == param;
+            } else if constexpr (std::is_same_v<T, Lambda> || std::is_same_v<T, LetRec>) {
+                for (const auto& p : n.params) {
+                    uses.rebound = uses.rebound || p == param;
+                }
+            } else if constexpr (std::is_same_v<T, Match> || std::is_same_v<T, TryCatch>) {
+                for (const auto& c : n.clauses) {
+                    for (const auto& p : c.patterns) {
+                        uses.rebound = uses.rebound || patternBinds(p, param);
+                    }
+                }
+            } else if constexpr (std::is_same_v<T, Receive>) {
+                uses.rebound = uses.rebound || n.senderVar == param;
+                for (const auto& c : n.clauses) {
+                    uses.rebound = uses.rebound || patternBinds(c.pattern, param);
+                }
+            }
+        },
+        e.node);
     forEachChild(e, [&](const ExprPtr& c) {
-        if (c) countUses(*c, param, callee, index, blockArity, home, resolve, depth, uses);
+        if (c) {
+            countUses(*c, param, callee, index, blockArity, home, resolve, depth, uses);
+        }
     });
 }
 
 // The name each clause of `callee` binds its block parameter `index` to (""
 // for `_`), when every use of it is one a copy replaces; nullopt otherwise.
-auto blockParameters(const FunDef& callee, std::size_t index, std::size_t blockArity,
-                     const std::string& home, const Resolve* resolve, int depth)
-    -> std::optional<std::vector<std::string>> {
+auto blockParameters(
+    const FunDef& callee,
+    std::size_t index,
+    std::size_t blockArity,
+    const std::string& home,
+    const Resolve* resolve,
+    int depth) -> std::optional<std::vector<std::string>> {
     if (!callee.dictionaryTraits.empty() || callee.hasCapabilityContext ||
-        callee.isCollisionDispatcher || callee.isFieldAccessor || callee.clauses.empty())
+        callee.isCollisionDispatcher || callee.isFieldAccessor || callee.clauses.empty()) {
         return std::nullopt;
+    }
     std::vector<std::string> names;
     for (const auto& clause : callee.clauses) {
         if (clause.params.size() != static_cast<std::size_t>(callee.arity) || !clause.body ||
-            !clause.params[index] || sizeOf(*clause.body) > kMaxCalleeSize)
+            !clause.params[index] || sizeOf(*clause.body) > kMaxCalleeSize) {
             return std::nullopt;
+        }
         const auto& p = *clause.params[index];
-        if (p.kind != PatKind::Var && p.kind != PatKind::Wild) return std::nullopt;
+        if (p.kind != PatKind::Var && p.kind != PatKind::Wild) {
+            return std::nullopt;
+        }
         const auto name = p.kind == PatKind::Var ? p.name : std::string{};
         if (!name.empty()) {
             if (clause.guard && *clause.guard) {
                 std::set<std::string> read;
                 collectFree(**clause.guard, {}, read);
-                if (read.contains(name)) return std::nullopt;
+                if (read.contains(name)) {
+                    return std::nullopt;
+                }
             }
             Uses uses;
             countUses(*clause.body, name, callee, index, blockArity, home, resolve, depth, uses);
-            if (uses.rebound || uses.all != uses.replaceable) return std::nullopt;
+            if (uses.rebound || uses.all != uses.replaceable) {
+                return std::nullopt;
+            }
         }
         names.push_back(name);
     }
@@ -164,27 +221,40 @@ auto blockParameters(const FunDef& callee, std::size_t index, std::size_t blockA
 // pattern's name bound to the atom. `List.map` branches on the backend this
 // way, and a copy must see only the branch the BEAM runs.
 auto foldConstantMatches(ExprPtr& e) -> void {
-    if (!e) return;
+    if (!e) {
+        return;
+    }
     forEachChild(*e, [](ExprPtr& c) { foldConstantMatches(c); });
     auto* match = std::get_if<Match>(&e->node);
-    if (!match || match->subjects.size() != 1 || !match->subjects[0]) return;
+    if (!match || match->subjects.size() != 1 || !match->subjects[0]) {
+        return;
+    }
     const auto* subject = std::get_if<Lit>(&match->subjects[0]->node);
-    if (!subject || subject->kind != LitKind::Atom) return;
+    if (!subject || subject->kind != LitKind::Atom) {
+        return;
+    }
     const auto atom = subject->text;
     for (auto& clause : match->clauses) {
-        if (clause.guard && *clause.guard) return;
-        const Pattern* p = clause.patterns.size() == 1 ? clause.patterns[0].get() : nullptr;
-        if (!p) return;
-        bool takes = false;
-        if (p->kind == PatKind::Wild || p->kind == PatKind::Var)
-            takes = true;
-        else if (p->kind == PatKind::Lit && p->litKind == LitKind::Atom)
-            takes = p->litText == atom;
-        else if (p->kind == PatKind::Construct && p->args.empty())
-            takes = p->tag == atom;
-        else
+        if (clause.guard && *clause.guard) {
             return;
-        if (!takes) continue;
+        }
+        const Pattern* p = clause.patterns.size() == 1 ? clause.patterns[0].get() : nullptr;
+        if (!p) {
+            return;
+        }
+        bool takes = false;
+        if (p->kind == PatKind::Wild || p->kind == PatKind::Var) {
+            takes = true;
+        } else if (p->kind == PatKind::Lit && p->litKind == LitKind::Atom) {
+            takes = p->litText == atom;
+        } else if (p->kind == PatKind::Construct && p->args.empty()) {
+            takes = p->tag == atom;
+        } else {
+            return;
+        }
+        if (!takes) {
+            continue;
+        }
         auto body = std::move(clause.body);
         if (p->kind == PatKind::Var) {
             auto let = std::make_unique<Expr>();
@@ -202,20 +272,30 @@ auto callsOnlyItselfAndErlang(const FunDef& fn) -> bool {
     std::function<bool(const Expr&)> pure = [&](const Expr& e) -> bool {
         if (const auto* call = std::get_if<Call>(&e.node)) {
             // A raise ends the loop whatever it says (the no-match message).
-            if (call->module == "erlang" && call->name == "error") return true;
-            const bool itself = call->module.empty() && call->name == fn.name && call->arity == fn.arity;
-            if (!itself && call->module != "erlang") return false;
+            if (call->module == "erlang" && call->name == "error") {
+                return true;
+            }
+            const bool itself =
+                call->module.empty() && call->name == fn.name && call->arity == fn.arity;
+            if (!itself && call->module != "erlang") {
+                return false;
+            }
         }
         return !anyChild(e, [&](const ExprPtr& c) { return !pure(*c); });
     };
-    for (const auto& clause : fn.clauses)
-        if (!clause.body || !pure(*clause.body) || (clause.guard && *clause.guard && !pure(**clause.guard)))
+    for (const auto& clause : fn.clauses) {
+        if (!clause.body || !pure(*clause.body) ||
+            (clause.guard && *clause.guard && !pure(**clause.guard))) {
             return false;
+        }
+    }
     return true;
 }
 
 auto readsVar(const Expr& e, const std::string& name) -> bool {
-    if (const auto* v = std::get_if<Var>(&e.node); v && v->name == name) return true;
+    if (const auto* v = std::get_if<Var>(&e.node); v && v->name == name) {
+        return true;
+    }
     return anyChild(e, [&](const ExprPtr& c) { return readsVar(*c, name); });
 }
 
@@ -223,8 +303,9 @@ auto readsVar(const Expr& e, const std::string& name) -> bool {
 // a copy elsewhere calls them there.
 auto callsOnly(const Expr& e, const std::set<std::pair<std::string, int>>& exported) -> bool {
     if (const auto* call = std::get_if<Call>(&e.node);
-        call && call->module.empty() && !exported.contains({call->name, call->arity}))
+        call && call->module.empty() && !exported.contains({call->name, call->arity})) {
         return false;
+    }
     return !anyChild(e, [&](const ExprPtr& c) { return !callsOnly(*c, exported); });
 }
 
@@ -241,9 +322,15 @@ auto cloneFunction(const FunDef& fn) -> FunDef {
     copy.isFieldAccessor = fn.isFieldAccessor;
     for (const auto& clause : fn.clauses) {
         FunClause out;
-        for (const auto& p : clause.params) out.params.push_back(p ? clonePattern(*p) : nullptr);
-        if (clause.guard && *clause.guard) out.guard = cloneExpr(**clause.guard);
-        if (clause.body) out.body = cloneExpr(*clause.body);
+        for (const auto& p : clause.params) {
+            out.params.push_back(p ? clonePattern(*p) : nullptr);
+        }
+        if (clause.guard && *clause.guard) {
+            out.guard = cloneExpr(**clause.guard);
+        }
+        if (clause.body) {
+            out.body = cloneExpr(*clause.body);
+        }
         out.routes = clause.routes;
         copy.clauses.push_back(std::move(out));
     }
@@ -254,13 +341,19 @@ auto cloneFunction(const FunDef& fn) -> FunDef {
 // it applies, or hands on to a function that does.
 auto takesBlock(const FunDef& fn, const Resolve& resolve) -> bool {
     constexpr std::size_t kMaxBlockArity = 6;
-    for (std::size_t k = 0; k < static_cast<std::size_t>(fn.arity); ++k)
+    for (std::size_t k = 0; k < static_cast<std::size_t>(fn.arity); ++k) {
         for (std::size_t blockArity = 0; blockArity <= kMaxBlockArity; ++blockArity) {
             const auto names = blockParameters(fn, k, blockArity, {}, &resolve);
-            if (!names) continue;
-            for (std::size_t c = 0; c < names->size(); ++c)
-                if (!(*names)[c].empty() && readsVar(*fn.clauses[c].body, (*names)[c])) return true;
+            if (!names) {
+                continue;
+            }
+            for (std::size_t c = 0; c < names->size(); ++c) {
+                if (!(*names)[c].empty() && readsVar(*fn.clauses[c].body, (*names)[c])) {
+                    return true;
+                }
+            }
         }
+    }
     return false;
 }
 
@@ -282,7 +375,9 @@ auto foreignRegistry() -> ForeignRegistry& {
 auto foreignCallee(const std::string& module, const std::string& name, int arity) -> const FunDef* {
     auto& registry = foreignRegistry();
     const std::lock_guard lock(registry.mutex);
-    if (!registry.load) return nullptr;
+    if (!registry.load) {
+        return nullptr;
+    }
     if (!registry.loaded) {
         registry.loaded = true;
         // A runtime without the record (an older build, a broken file) only
@@ -292,8 +387,11 @@ auto foreignCallee(const std::string& module, const std::string& name, int arity
         } catch (const std::exception&) {
             registry.functions.clear();
         }
-        for (const auto& [owner, functions] : registry.functions)
-            for (const auto& fn : functions) registry.index[{owner, fn.name, fn.arity}] = &fn;
+        for (const auto& [owner, functions] : registry.functions) {
+            for (const auto& fn : functions) {
+                registry.index[{owner, fn.name, fn.arity}] = &fn;
+            }
+        }
     }
     const auto found = registry.index.find({module, name, arity});
     return found == registry.index.end() ? nullptr : found->second;
@@ -302,16 +400,27 @@ auto foreignCallee(const std::string& module, const std::string& name, int arity
 // In a copy of `callee` made in another module: every call `callee` makes in
 // its own module goes to `module`, but the recursion that passes the block
 // (`param`, at `index`), which becomes the copy's own.
-auto redirectCalls(Expr& e, const FunDef& callee, std::size_t index, const std::string& param,
-                   const std::string& module) -> void {
+auto redirectCalls(
+    Expr& e,
+    const FunDef& callee,
+    std::size_t index,
+    const std::string& param,
+    const std::string& module) -> void {
     forEachChild(e, [&](ExprPtr& c) {
-        if (c) redirectCalls(*c, callee, index, param, module);
+        if (c) {
+            redirectCalls(*c, callee, index, param, module);
+        }
     });
     auto* call = std::get_if<Call>(&e.node);
-    if (!call || !call->module.empty()) return;
-    const bool recursion = !param.empty() && call->name == callee.name && call->arity == callee.arity &&
-                           index < call->args.size() && isVarNamed(call->args[index], param);
-    if (!recursion) call->module = module;
+    if (!call || !call->module.empty()) {
+        return;
+    }
+    const bool recursion = !param.empty() && call->name == callee.name &&
+                           call->arity == callee.arity && index < call->args.size() &&
+                           isVarNamed(call->args[index], param);
+    if (!recursion) {
+        call->module = module;
+    }
 }
 
 // ---- State threading ------------------------------------------------------
@@ -357,21 +466,33 @@ auto pairWith(ExprPtr value, const std::string& state, const Threading& t) -> Ex
 // `e` answering {Value, State}, from `state`; null where an effect sits
 // somewhere this cannot follow (a nested function, a match subject).
 auto thread(ExprPtr e, const std::string& state, const Threading& t) -> ExprPtr {
-    if (!e) return nullptr;
-    if (!effectful(*e, t)) return pairWith(std::move(e), state, t);
-    if (t.isEffect(*e)) return t.effect(*e, state);
+    if (!e) {
+        return nullptr;
+    }
+    if (!effectful(*e, t)) {
+        return pairWith(std::move(e), state, t);
+    }
+    if (t.isEffect(*e)) {
+        return t.effect(*e, state);
+    }
     if (auto* let = std::get_if<Let>(&e->node)) {
         if (!effectful(*let->value, t)) {
             auto body = thread(std::move(let->body), state, t);
-            if (!body) return nullptr;
+            if (!body) {
+                return nullptr;
+            }
             let->body = std::move(body);
             return e;
         }
         auto value = thread(std::move(let->value), state, t);
-        if (!value) return nullptr;
+        if (!value) {
+            return nullptr;
+        }
         const auto next = t.fresh("St");
         auto body = thread(std::move(let->body), next, t);
-        if (!body) return nullptr;
+        if (!body) {
+            return nullptr;
+        }
         auto pattern = std::make_unique<Pattern>();
         pattern->kind = PatKind::Tuple;
         for (const auto& name : {let->name, next}) {
@@ -391,7 +512,9 @@ auto thread(ExprPtr e, const std::string& state, const Threading& t) -> ExprPtr 
         return out;
     }
     if (auto* seq = std::get_if<Seq>(&e->node)) {
-        if (seq->exprs.empty()) return nullptr;
+        if (seq->exprs.empty()) {
+            return nullptr;
+        }
         auto chain = std::move(seq->exprs.back());
         for (std::size_t i = seq->exprs.size() - 1; i-- > 0;) {
             auto let = std::make_unique<Expr>();
@@ -401,12 +524,19 @@ auto thread(ExprPtr e, const std::string& state, const Threading& t) -> ExprPtr 
         return thread(std::move(chain), state, t);
     }
     if (auto* match = std::get_if<Match>(&e->node)) {
-        for (const auto& s : match->subjects)
-            if (s && effectful(*s, t)) return nullptr;
+        for (const auto& s : match->subjects) {
+            if (s && effectful(*s, t)) {
+                return nullptr;
+            }
+        }
         for (auto& clause : match->clauses) {
-            if (clause.guard && *clause.guard && effectful(**clause.guard, t)) return nullptr;
+            if (clause.guard && *clause.guard && effectful(**clause.guard, t)) {
+                return nullptr;
+            }
             auto body = thread(std::move(clause.body), state, t);
-            if (!body) return nullptr;
+            if (!body) {
+                return nullptr;
+            }
             clause.body = std::move(body);
         }
         return e;
@@ -415,22 +545,30 @@ auto thread(ExprPtr e, const std::string& state, const Threading& t) -> ExprPtr 
 }
 
 auto containsReturn(const Expr& e) -> bool {
-    if (std::holds_alternative<Return>(e.node)) return true;
+    if (std::holds_alternative<Return>(e.node)) {
+        return true;
+    }
     return anyChild(e, [](const ExprPtr& c) { return containsReturn(*c); });
 }
 
 // The one call in `e` that passes `name`, when `name` is read nowhere else.
 auto soleCallPassing(Expr& e, const std::string& name, Call*& found, std::size_t& index, int& reads)
     -> void {
-    if (const auto* v = std::get_if<Var>(&e.node); v && v->name == name) ++reads;
-    if (auto* call = std::get_if<Call>(&e.node))
-        for (std::size_t k = 0; k < call->args.size(); ++k)
+    if (const auto* v = std::get_if<Var>(&e.node); v && v->name == name) {
+        ++reads;
+    }
+    if (auto* call = std::get_if<Call>(&e.node)) {
+        for (std::size_t k = 0; k < call->args.size(); ++k) {
             if (isVarNamed(call->args[k], name)) {
                 found = call;
                 index = k;
             }
+        }
+    }
     forEachChild(e, [&](ExprPtr& c) {
-        if (c) soleCallPassing(*c, name, found, index, reads);
+        if (c) {
+            soleCallPassing(*c, name, found, index, reads);
+        }
     });
 }
 
@@ -443,14 +581,22 @@ public:
             const auto& fn = m_mod.functions[i];
             m_names.insert(fn.name);
             const auto [at, fresh] = m_index.try_emplace({fn.name, fn.arity}, i);
-            if (!fresh) at->second = kAmbiguous;
+            if (!fresh) {
+                at->second = kAmbiguous;
+            }
         }
         // Copies are added after the walk: the walk holds references into the
         // functions it is rewriting.
-        for (auto& fn : m_mod.functions)
-            for (auto& clause : fn.clauses)
-                if (clause.body) findCalls(clause.body, {});
-        for (auto& copy : m_copies) m_mod.functions.push_back(std::move(copy));
+        for (auto& fn : m_mod.functions) {
+            for (auto& clause : fn.clauses) {
+                if (clause.body) {
+                    findCalls(clause.body, {});
+                }
+            }
+        }
+        for (auto& copy : m_copies) {
+            m_mod.functions.push_back(std::move(copy));
+        }
     }
 
 private:
@@ -472,27 +618,38 @@ private:
         return blocks;
     }
     static auto shadowedBy(Blocks blocks, const PatternPtr& pattern) -> Blocks {
-        if (!pattern) return blocks;
+        if (!pattern) {
+            return blocks;
+        }
         std::set<std::string> bound;
         bindPattern(*pattern, bound);
-        for (const auto& name : bound) blocks = shadowed(std::move(blocks), name);
+        for (const auto& name : bound) {
+            blocks = shadowed(std::move(blocks), name);
+        }
         return blocks;
     }
 
     auto findCalls(ExprPtr& e, const Blocks& blocks) -> void {
-        if (!e) return;
+        if (!e) {
+            return;
+        }
         auto clauses = [&](std::vector<MatchClause>& cs) {
             for (auto& c : cs) {
                 auto inner = blocks;
-                for (const auto& p : c.patterns) inner = shadowedBy(std::move(inner), p);
-                if (c.guard) findCalls(*c.guard, inner);
+                for (const auto& p : c.patterns) {
+                    inner = shadowedBy(std::move(inner), p);
+                }
+                if (c.guard) {
+                    findCalls(*c.guard, inner);
+                }
                 findCalls(c.body, inner);
             }
         };
         if (auto* let = std::get_if<Let>(&e->node)) {
             findCalls(let->value, blocks);
             auto inner = shadowed(blocks, let->name);
-            if (const auto* lambda = let->value ? std::get_if<Lambda>(&let->value->node) : nullptr) {
+            if (const auto* lambda =
+                    let->value ? std::get_if<Lambda>(&let->value->node) : nullptr) {
                 Block block{lambda, {}};
                 collectFree(*let->value, {}, block.captured);
                 inner[let->name] = std::move(block);
@@ -501,7 +658,9 @@ private:
             return;
         }
         if (auto* match = std::get_if<Match>(&e->node)) {
-            for (auto& s : match->subjects) findCalls(s, blocks);
+            for (auto& s : match->subjects) {
+                findCalls(s, blocks);
+            }
             clauses(match->clauses);
             return;
         }
@@ -512,13 +671,17 @@ private:
         }
         if (auto* lambda = std::get_if<Lambda>(&e->node)) {
             auto inner = blocks;
-            for (const auto& p : lambda->params) inner = shadowed(std::move(inner), p);
+            for (const auto& p : lambda->params) {
+                inner = shadowed(std::move(inner), p);
+            }
             findCalls(lambda->body, inner);
             return;
         }
         if (auto* rec = std::get_if<LetRec>(&e->node)) {
             auto inner = blocks;
-            for (const auto& p : rec->params) inner = shadowed(std::move(inner), p);
+            for (const auto& p : rec->params) {
+                inner = shadowed(std::move(inner), p);
+            }
             findCalls(rec->funBody, inner);
             findCalls(rec->contBody, blocks);
             return;
@@ -528,41 +691,59 @@ private:
                 auto inner = receive->senderVar ? shadowed(blocks, *receive->senderVar) : blocks;
                 findCalls(c.body, shadowedBy(std::move(inner), c.pattern));
             }
-            if (receive->timeout) findCalls(*receive->timeout, blocks);
-            if (receive->afterBody) findCalls(*receive->afterBody, blocks);
+            if (receive->timeout) {
+                findCalls(*receive->timeout, blocks);
+            }
+            if (receive->afterBody) {
+                findCalls(*receive->afterBody, blocks);
+            }
             return;
         }
         forEachChild(*e, [&](ExprPtr& c) { findCalls(c, blocks); });
         if (auto* call = std::get_if<Call>(&e->node)) {
-            if (isThreadState(*call))
+            if (isThreadState(*call)) {
                 threadCall(e, blocks);
-            else
+            } else {
                 specialize(*call, blocks);
+            }
         }
     }
 
     // Sends `call` to a copy of its callee with the block it passes in place,
     // where it passes one the callee only applies or hands on.
     auto specialize(Call& call, const Blocks& blocks) -> void {
-        const bool passesBlock = std::any_of(call.args.begin(), call.args.end(), [&](const ExprPtr& a) {
-            const auto* v = a ? std::get_if<Var>(&a->node) : nullptr;
-            return v && blocks.contains(v->name);
-        });
-        if (!passesBlock) return;
+        const bool passesBlock =
+            std::any_of(call.args.begin(), call.args.end(), [&](const ExprPtr& a) {
+                const auto* v = a ? std::get_if<Var>(&a->node) : nullptr;
+                return v && blocks.contains(v->name);
+            });
+        if (!passesBlock) {
+            return;
+        }
         const auto* callee = m_resolve("", call);
-        if (!callee) return;
+        if (!callee) {
+            return;
+        }
         for (std::size_t k = 0; k < call.args.size(); ++k) {
             const auto* arg = call.args[k] ? std::get_if<Var>(&call.args[k]->node) : nullptr;
             const auto block = arg ? blocks.find(arg->name) : blocks.end();
-            if (block == blocks.end()) continue;
-            const auto& lambda = *block->second.lambda;
-            if (!lambda.body || returnsEarly(*lambda.body) || sizeOf(*lambda.body) > kMaxBlockSize)
+            if (block == blocks.end()) {
                 continue;
+            }
+            const auto& lambda = *block->second.lambda;
+            if (!lambda.body || returnsEarly(*lambda.body) ||
+                sizeOf(*lambda.body) > kMaxBlockSize) {
+                continue;
+            }
             const auto copy = copyOf(*callee, k, block->second, call.module, false);
-            if (!copy) continue;
+            if (!copy) {
+                continue;
+            }
             const auto& [name, arity] = *copy;
             call.args.erase(call.args.begin() + static_cast<std::ptrdiff_t>(k));
-            for (const auto& captured : block->second.captured) call.args.push_back(var(captured));
+            for (const auto& captured : block->second.captured) {
+                call.args.push_back(var(captured));
+            }
             call.module.clear();
             call.name = name;
             call.arity = arity;
@@ -575,19 +756,35 @@ private:
     // captured variables after its own parameters. `threaded`: the block
     // takes the caller's state last and answers {Value, State}; so does the
     // copy, which takes the state last. Nullopt where no copy can be made.
-    auto copyOf(const FunDef& callee, std::size_t index, const Block& block, const std::string& home,
-                bool threaded) -> std::optional<std::pair<std::string, int>> {
+    auto copyOf(
+        const FunDef& callee,
+        std::size_t index,
+        const Block& block,
+        const std::string& home,
+        bool threaded) -> std::optional<std::pair<std::string, int>> {
         const auto key = std::make_tuple(&callee, index, block.lambda);
-        if (const auto made = m_made.find(key); made != m_made.end()) return made->second;
-        if (m_copies.size() >= kMaxCopies) return std::nullopt;
+        if (const auto made = m_made.find(key); made != m_made.end()) {
+            return made->second;
+        }
+        if (m_copies.size() >= kMaxCopies) {
+            return std::nullopt;
+        }
         const auto& lambda = *block.lambda;
-        if (threaded && lambda.params.empty()) return std::nullopt;
+        if (threaded && lambda.params.empty()) {
+            return std::nullopt;
+        }
         const auto blockArity = lambda.params.size() - (threaded ? 1 : 0);
         const auto names = blockParameters(callee, index, blockArity, home, &m_resolve);
-        if (!names) return std::nullopt;
-        if (threaded)
-            for (const auto& clause : callee.clauses)
-                if (containsReturn(*clause.body)) return std::nullopt;
+        if (!names) {
+            return std::nullopt;
+        }
+        if (threaded) {
+            for (const auto& clause : callee.clauses) {
+                if (containsReturn(*clause.body)) {
+                    return std::nullopt;
+                }
+            }
+        }
         std::string name;
         do {
             name = callee.name + (threaded ? "__state" : "__block") + std::to_string(m_counter++);
@@ -597,7 +794,8 @@ private:
         const auto capturedParam = [ordinal](const std::string& captured) {
             return "_ir_Blk" + std::to_string(ordinal) + "_" + captured;
         };
-        const int arity = callee.arity - 1 + static_cast<int>(block.captured.size()) + (threaded ? 1 : 0);
+        const int arity =
+            callee.arity - 1 + static_cast<int>(block.captured.size()) + (threaded ? 1 : 0);
         // Registered before its body is made: a copy may reach itself
         // through a function it hands the block on to.
         m_made.emplace(key, std::make_pair(name, arity));
@@ -612,8 +810,11 @@ private:
             const auto& clause = callee.clauses[c];
             const auto& param = (*names)[c];
             FunClause out;
-            for (std::size_t i = 0; i < clause.params.size(); ++i)
-                if (i != index) out.params.push_back(clonePattern(*clause.params[i]));
+            for (std::size_t i = 0; i < clause.params.size(); ++i) {
+                if (i != index) {
+                    out.params.push_back(clonePattern(*clause.params[i]));
+                }
+            }
             for (const auto& captured : block.captured) {
                 auto p = std::make_unique<Pattern>();
                 p->kind = PatKind::Var;
@@ -627,13 +828,18 @@ private:
                 p->name = state;
                 out.params.push_back(std::move(p));
             }
-            if (clause.guard && *clause.guard) out.guard = cloneExpr(**clause.guard);
+            if (clause.guard && *clause.guard) {
+                out.guard = cloneExpr(**clause.guard);
+            }
             auto body = cloneExpr(*clause.body);
             if (!home.empty()) {
-                if (out.guard && *out.guard) redirectCalls(**out.guard, callee, index, param, home);
+                if (out.guard && *out.guard) {
+                    redirectCalls(**out.guard, callee, index, param, home);
+                }
                 redirectCalls(*body, callee, index, param, home);
             }
-            const Site site{callee, index, param, home, block, blockArity, name, arity, capturedParam};
+            const Site site{callee,     index, param, home,         block,
+                            blockArity, name,  arity, capturedParam};
             if (threaded) {
                 Threading threading;
                 threading.counter = &m_inlined;
@@ -673,9 +879,13 @@ private:
     // Whether `x` is a use of the block a copy replaces: an application, the
     // recursion passing it, or a call handing it on.
     static auto usesBlock(const Expr& x, const Site& site) -> bool {
-        if (site.param.empty()) return false;
-        if (const auto* apply = std::get_if<CallIndirect>(&x.node))
-            return isVarNamed(apply->callee, site.param) && appliesAtArity(apply->args.size(), site.blockArity);
+        if (site.param.empty()) {
+            return false;
+        }
+        if (const auto* apply = std::get_if<CallIndirect>(&x.node)) {
+            return isVarNamed(apply->callee, site.param) &&
+                   appliesAtArity(apply->args.size(), site.blockArity);
+        }
         const auto* call = std::get_if<Call>(&x.node);
         return call && passedAt(*call, site.param).has_value();
     }
@@ -698,11 +908,14 @@ private:
                 let->node = Let{rename(lambda.params.back()), var(*state), std::move(body)};
                 body = std::move(let);
             }
-            if (site.blockArity == 0) return body;
+            if (site.blockArity == 0) {
+                return body;
+            }
             if (apply->args.size() == site.blockArity) {
                 for (std::size_t i = site.blockArity; i-- > 0;) {
                     auto let = std::make_unique<Expr>();
-                    let->node = Let{rename(lambda.params[i]), std::move(apply->args[i]), std::move(body)};
+                    let->node =
+                        Let{rename(lambda.params[i]), std::move(apply->args[i]), std::move(body)};
                     body = std::move(let);
                 }
                 return body;
@@ -734,18 +947,29 @@ private:
         int arity = site.copyArity;
         if (!recursion) {
             const auto* target = m_resolve(site.home, call);
-            if (!target) return nullptr;
+            if (!target) {
+                return nullptr;
+            }
             const auto targetHome = call.module.empty() ? site.home : call.module;
             const auto copy = copyOf(*target, at, site.block, targetHome, state.has_value());
-            if (!copy) return nullptr;
+            if (!copy) {
+                return nullptr;
+            }
             name = copy->first;
             arity = copy->second;
         }
         Call out{"", name, arity, {}, false};
-        for (std::size_t k = 0; k < call.args.size(); ++k)
-            if (k != at) out.args.push_back(std::move(call.args[k]));
-        for (const auto& captured : site.block.captured) out.args.push_back(var(site.capturedParam(captured)));
-        if (state) out.args.push_back(var(*state));
+        for (std::size_t k = 0; k < call.args.size(); ++k) {
+            if (k != at) {
+                out.args.push_back(std::move(call.args[k]));
+            }
+        }
+        for (const auto& captured : site.block.captured) {
+            out.args.push_back(var(site.capturedParam(captured)));
+        }
+        if (state) {
+            out.args.push_back(var(*state));
+        }
         auto expr = std::make_unique<Expr>();
         expr->node = std::move(out);
         return expr;
@@ -756,12 +980,20 @@ private:
     auto inlineUses(ExprPtr& e, const Site& site) -> bool {
         bool ok = true;
         forEachChild(*e, [&](ExprPtr& c) {
-            if (c && ok) ok = inlineUses(c, site);
+            if (c && ok) {
+                ok = inlineUses(c, site);
+            }
         });
-        if (!ok) return false;
-        if (!usesBlock(*e, site)) return true;
+        if (!ok) {
+            return false;
+        }
+        if (!usesBlock(*e, site)) {
+            return true;
+        }
         auto replaced = replaceUse(*e, site, std::nullopt);
-        if (!replaced) return false;
+        if (!replaced) {
+            return false;
+        }
         e = std::move(replaced);
         return true;
     }
@@ -774,27 +1006,38 @@ private:
         const auto* blockVar = std::get_if<Var>(&call.args[0]->node);
         const auto* initial = std::get_if<Var>(&call.args[1]->node);
         const auto* statementVar = std::get_if<Var>(&call.args[2]->node);
-        if (!blockVar || !initial || !statementVar) return;
+        if (!blockVar || !initial || !statementVar) {
+            return;
+        }
         const auto blockAt = blocks.find(blockVar->name);
         const auto statementAt = blocks.find(statementVar->name);
-        if (blockAt == blocks.end() || statementAt == blocks.end()) return;
+        if (blockAt == blocks.end() || statementAt == blocks.end()) {
+            return;
+        }
         const auto& block = blockAt->second;
         const auto& statement = *statementAt->second.lambda;
         if (block.lambda->params.empty() || !block.lambda->body || statement.params.size() != 1 ||
             !statement.body || returnsEarly(*block.lambda->body) ||
-            sizeOf(*block.lambda->body) > kMaxBlockSize)
+            sizeOf(*block.lambda->body) > kMaxBlockSize) {
             return;
+        }
         const auto& placeholder = statement.params[0];
         auto body = cloneExpr(*statement.body);
         Call* target = nullptr;
         std::size_t index = 0;
         int reads = 0;
         soleCallPassing(*body, placeholder, target, index, reads);
-        if (!target || reads != 1) return;
+        if (!target || reads != 1) {
+            return;
+        }
         const auto* callee = m_resolve("", *target);
-        if (!callee) return;
+        if (!callee) {
+            return;
+        }
         const auto copy = copyOf(*callee, index, block, target->module, true);
-        if (!copy) return;
+        if (!copy) {
+            return;
+        }
         const auto [copyName, copyArity] = *copy;
         Threading threading;
         threading.counter = &m_inlined;
@@ -806,9 +1049,14 @@ private:
         threading.effect = [&, index](Expr& x, const std::string& state) -> ExprPtr {
             auto& c = std::get<Call>(x.node);
             Call out{"", copyName, copyArity, {}, false};
-            for (std::size_t k = 0; k < c.args.size(); ++k)
-                if (k != index) out.args.push_back(std::move(c.args[k]));
-            for (const auto& captured : block.captured) out.args.push_back(var(captured));
+            for (std::size_t k = 0; k < c.args.size(); ++k) {
+                if (k != index) {
+                    out.args.push_back(std::move(c.args[k]));
+                }
+            }
+            for (const auto& captured : block.captured) {
+                out.args.push_back(var(captured));
+            }
             out.args.push_back(var(state));
             auto expr = std::make_unique<Expr>();
             expr->node = std::move(out);
@@ -816,7 +1064,9 @@ private:
         };
         const auto start = threading.fresh("St");
         auto threaded = thread(std::move(body), start, threading);
-        if (!threaded) return;
+        if (!threaded) {
+            return;
+        }
         auto let = std::make_unique<Expr>();
         let->node = Let{start, var(initial->name), std::move(threaded)};
         e = std::move(let);
@@ -825,48 +1075,67 @@ private:
     Module& m_mod;
     std::map<std::pair<std::string, int>, std::size_t> m_index;
     std::set<std::string> m_names;
-    std::map<std::tuple<const FunDef*, std::size_t, const Lambda*>, std::pair<std::string, int>> m_made;
+    std::map<std::tuple<const FunDef*, std::size_t, const Lambda*>, std::pair<std::string, int>>
+        m_made;
     std::vector<FunDef> m_copies;
     int m_counter = 0;
     int m_inlined = 0;
     // A call's callee: another module's through the standard library's
     // record, this one's by name where it is unambiguous.
     Resolve m_resolve = [this](const std::string& home, const Call& call) -> const FunDef* {
-        if (!call.module.empty()) return foreignCallee(call.module, call.name, call.arity);
-        if (!home.empty()) return foreignCallee(home, call.name, call.arity);
+        if (!call.module.empty()) {
+            return foreignCallee(call.module, call.name, call.arity);
+        }
+        if (!home.empty()) {
+            return foreignCallee(home, call.name, call.arity);
+        }
         const auto local = m_index.find({call.name, call.arity});
-        if (local == m_index.end() || local->second == kAmbiguous) return nullptr;
+        if (local == m_index.end() || local->second == kAmbiguous) {
+            return nullptr;
+        }
         return &m_mod.functions[local->second];
     };
 };
 
 } // namespace
 
-auto specializeBlocks(Module& mod) -> void { Specializer(mod).run(); }
+auto specializeBlocks(Module& mod) -> void {
+    Specializer(mod).run();
+}
 
 auto specializableFunctions(const Module& mod) -> std::vector<FunDef> {
     std::set<std::pair<std::string, int>> exported;
     std::map<std::pair<std::string, int>, int> defined;
     for (const auto& fn : mod.functions) {
         ++defined[{fn.name, fn.arity}];
-        if (fn.exported) exported.insert({fn.name, fn.arity});
+        if (fn.exported) {
+            exported.insert({fn.name, fn.arity});
+        }
     }
     // The exported functions as a copy would see them, first: one may hand
     // its block on to another.
     std::vector<FunDef> folded;
     for (const auto& fn : mod.functions) {
-        if (!fn.exported || defined[{fn.name, fn.arity}] != 1) continue;
+        if (!fn.exported || defined[{fn.name, fn.arity}] != 1) {
+            continue;
+        }
         auto copy = cloneFunction(fn);
         for (auto& clause : copy.clauses) {
-            if (clause.guard) foldConstantMatches(*clause.guard);
+            if (clause.guard) {
+                foldConstantMatches(*clause.guard);
+            }
             foldConstantMatches(clause.body);
         }
         folded.push_back(std::move(copy));
     }
     std::map<std::pair<std::string, int>, const FunDef*> byName;
-    for (const auto& fn : folded) byName[{fn.name, fn.arity}] = &fn;
+    for (const auto& fn : folded) {
+        byName[{fn.name, fn.arity}] = &fn;
+    }
     const Resolve resolve = [&](const std::string& home, const Call& call) -> const FunDef* {
-        if (!home.empty() || !call.module.empty()) return nullptr;
+        if (!home.empty() || !call.module.empty()) {
+            return nullptr;
+        }
         const auto found = byName.find({call.name, call.arity});
         return found == byName.end() ? nullptr : found->second;
     };
@@ -877,14 +1146,18 @@ auto specializableFunctions(const Module& mod) -> std::vector<FunDef> {
             continue;
         }
         bool callable = true;
-        for (const auto& clause : copy.clauses)
+        for (const auto& clause : copy.clauses) {
             callable = callable && clause.body && callsOnly(*clause.body, exported) &&
                        (!clause.guard || !*clause.guard || callsOnly(**clause.guard, exported));
+        }
         keep.push_back(callable);
     }
     std::vector<FunDef> out;
-    for (std::size_t i = 0; i < folded.size(); ++i)
-        if (keep[i]) out.push_back(std::move(folded[i]));
+    for (std::size_t i = 0; i < folded.size(); ++i) {
+        if (keep[i]) {
+            out.push_back(std::move(folded[i]));
+        }
+    }
     return out;
 }
 

@@ -31,8 +31,10 @@ public:
 
     // `entryFiles`: the program's own files (Analyzer::setEntryFiles); what
     // any other merged file declares at its top level is that file's own.
-    auto check(const ast::Program& program, std::vector<Diagnostic>& diagnostics,
-               const std::vector<std::string>& entryFiles = {}) -> void;
+    auto check(
+        const ast::Program& program,
+        std::vector<Diagnostic>& diagnostics,
+        const std::vector<std::string>& entryFiles = {}) -> void;
     auto linkModules(std::set<std::string> modules) -> void {
         m_linkedModules = std::move(modules);
     }
@@ -78,7 +80,9 @@ public:
         std::string field;
         TypePtr type;
     };
-    auto recordKeys() const -> const std::vector<RecordKey>& { return m_recordKeys; }
+    auto recordKeys() const -> const std::vector<RecordKey>& {
+        return m_recordKeys;
+    }
     // Each type name written in an annotation, at the name: the type the
     // checker resolved it to (`This` in a `make Box` block is `Box`).
     struct TypeReference {
@@ -89,14 +93,19 @@ public:
         // `Reply<T>` installs a new value of it.
         TypePtr makeType = nullptr;
     };
-    auto typeReferences() const -> const std::vector<TypeReference>& { return m_typeReferences; }
+    auto typeReferences() const -> const std::vector<TypeReference>& {
+        return m_typeReferences;
+    }
     // The alias `name` is, as the check resolved it: by its identity
     // (`Net.HTTP.Handler`), else as written. Null when it is none.
     auto declaredTypeAlias(const std::string& name) const -> TypePtr {
-        if (const auto alias = m_typeAliases.find(name); alias != m_typeAliases.end())
+        if (const auto alias = m_typeAliases.find(name); alias != m_typeAliases.end()) {
             return alias->second;
+        }
         const auto dot = name.rfind('.');
-        if (dot == std::string::npos) return nullptr;
+        if (dot == std::string::npos) {
+            return nullptr;
+        }
         const auto bare = m_typeAliases.find(name.substr(dot + 1));
         return bare == m_typeAliases.end() ? nullptr : bare->second;
     }
@@ -126,7 +135,9 @@ public:
         std::vector<std::string> bound;
         std::size_t context = 0;
     };
-    auto setRecordsNames(bool records) -> void { m_recordsNames = records; }
+    auto setRecordsNames(bool records) -> void {
+        m_recordsNames = records;
+    }
     // Each expression that names something no scope binds (an identifier, a
     // bare call, a constructor, a tag, a capture), with its context.
     auto nameUses() const -> const std::unordered_map<const ast::Expr*, std::size_t>& {
@@ -135,7 +146,9 @@ public:
     auto scopeNames() const -> const std::unordered_map<const ast::Expr*, ScopeNames>& {
         return m_scopeNames;
     }
-    auto scopeContexts() const -> const std::vector<ScopeContext>& { return m_scopeContexts; }
+    auto scopeContexts() const -> const std::vector<ScopeContext>& {
+        return m_scopeContexts;
+    }
     // Where the local each name use (an Identifier) means is bound, and the
     // places locals are bound: what go-to-definition answers a local with.
     auto localDefinitions() const -> const std::unordered_map<const ast::Expr*, SourceLocation>& {
@@ -182,13 +195,13 @@ public:
     // fits it: the known one. Null otherwise. Kept as `[Unknown]`, `if c
     // then [] else xs.map {..}` let every later use of the list through.
     auto moreKnownBranch(const TypePtr& held, const TypePtr& next) const -> TypePtr;
-    auto overloadsTake(const std::vector<const Signature*>& candidates,
-                       std::size_t position) const -> TypePtr;
+    auto overloadsTake(const std::vector<const Signature*>& candidates, std::size_t position) const
+        -> TypePtr;
     // The result of a call none of `candidates` takes whole, when an argument
     // is a union each of whose members one of them takes; none otherwise
     // (kexhq/kex#647).
-    auto unionArgumentCovered(const std::vector<const Signature*>& candidates,
-                              const std::vector<TypePtr>& argTypes) const
+    auto unionArgumentCovered(
+        const std::vector<const Signature*>& candidates, const std::vector<TypePtr>& argTypes) const
         -> std::optional<TypePtr>;
     // The list patterns that take a String apart into its characters
     // (`[c | rest]` against a String): the elements bind Chars, the tail the
@@ -204,28 +217,26 @@ public:
     auto isTrait(const std::string& name) const -> bool {
         return m_traits.get(name) != nullptr;
     }
-    auto traitRequires(const std::string& trait,
-                       const std::string& method) const -> bool {
+    auto traitRequires(const std::string& trait, const std::string& method) const -> bool {
         const auto* definition = m_traits.get(trait);
-        if (!definition) return false;
+        if (!definition) {
+            return false;
+        }
         return std::any_of(
-            definition->requiredMethods.begin(),
-            definition->requiredMethods.end(),
+            definition->requiredMethods.begin(), definition->requiredMethods.end(),
             [&](const auto& required) { return required.name == method; });
     }
     // Does the trait declare this required method `foul`? A trait-typed
     // receiver dispatches dynamically, so such a call has no single resolved
     // target — the trait declaration is the only place its effect is stated.
-    auto traitMethodIsFoul(const std::string& trait,
-                           const std::string& method) const -> bool {
+    auto traitMethodIsFoul(const std::string& trait, const std::string& method) const -> bool {
         const auto* definition = m_traits.get(trait);
-        if (!definition) return false;
+        if (!definition) {
+            return false;
+        }
         return std::any_of(
-            definition->requiredMethods.begin(),
-            definition->requiredMethods.end(),
-            [&](const auto& required) {
-                return required.name == method && required.isFoul;
-            });
+            definition->requiredMethods.begin(), definition->requiredMethods.end(),
+            [&](const auto& required) { return required.name == method && required.isFoul; });
     }
     auto traitNeedsDictionary(const std::string& trait) const -> bool {
         const auto* definition = m_traits.get(trait);
@@ -235,8 +246,7 @@ public:
         -> const std::vector<Signature>*;
     // Canonical source-facing rendering. Internal inference variable IDs are
     // deliberately normalized to A, B, C, ... for diagnostics and tooling.
-    auto displaySignature(const std::string& name,
-                          const Signature& sig) const -> std::string;
+    auto displaySignature(const std::string& name, const Signature& sig) const -> std::string;
     auto resolvedCalls() const
         -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
     // The module of the imported function a call by name runs (`Math` for
@@ -245,17 +255,14 @@ public:
         return m_calledModules;
     }
     auto resolvedTraits() const
-        -> const std::unordered_map<const ast::MakeDef*,
-                                    std::vector<std::string>>& {
+        -> const std::unordered_map<const ast::MakeDef*, std::vector<std::string>>& {
         return m_resolvedTraits;
     }
-    auto selectedCallSignatures() const
-        -> const std::unordered_map<const ast::Expr*, Signature>& {
+    auto selectedCallSignatures() const -> const std::unordered_map<const ast::Expr*, Signature>& {
         return m_selectedCallSignatures;
     }
     // The function each `~name` capture names, as settled: its effect too.
-    auto captureSignatures() const
-        -> const std::unordered_map<const ast::Expr*, Signature>& {
+    auto captureSignatures() const -> const std::unordered_map<const ast::Expr*, Signature>& {
         return m_captureSignatures;
     }
     // The captures passed where a foul function type is expected (#640).
@@ -265,15 +272,16 @@ public:
     // Arguments of a distinct type given for a `Showable` parameter, by call:
     // each one's parameter position and the type, whose own `showValue`
     // shows it (at run time the value is its erased backing value).
-    auto shownThroughDistinct() const -> const ShownThrough& { return m_shownThroughDistinct; }
+    auto shownThroughDistinct() const -> const ShownThrough& {
+        return m_shownThroughDistinct;
+    }
     // What a call-shaped expression turned out to be, when that is neither a
     // call with a selected signature nor an imported method (the two tables
     // above). Every such decision is recorded
     // here, so no later pass has to resolve the call again (src/hir/).
     using CallKind = semantic::CallKind;
     using DecidedCall = semantic::DecidedCall;
-    auto decidedCalls() const
-        -> const std::unordered_map<const ast::Expr*, DecidedCall>& {
+    auto decidedCalls() const -> const std::unordered_map<const ast::Expr*, DecidedCall>& {
         return m_decidedCalls;
     }
     // The parameters written as a bare type name, which take that type as a
@@ -283,13 +291,11 @@ public:
     }
     // The trait each parameter declared as one names, which the parameter
     // takes a dictionary for.
-    auto parameterTraits() const
-        -> const std::unordered_map<const ast::Param*, std::string>& {
+    auto parameterTraits() const -> const std::unordered_map<const ast::Param*, std::string>& {
         return m_parameterTraits;
     }
     // The trait a type spelling written in module `scope` names, or "".
-    auto traitWrittenAs(const std::string& scope, const std::string& written) const
-        -> std::string;
+    auto traitWrittenAs(const std::string& scope, const std::string& written) const -> std::string;
     // An annotation's declared type, for run-time reflection (`Type.fields`):
     // as written, with the program's transparent aliases followed.
     auto declaredTypeOf(const ast::TypeExpr& type) const -> StructuredType;
@@ -303,14 +309,18 @@ public:
     // parameters as slots (-1 for the first); null when there is none.
     auto recordFieldType(const std::string& record, const std::string& field) const -> TypePtr {
         const auto found = m_recordFields.find(record);
-        if (found == m_recordFields.end()) return nullptr;
+        if (found == m_recordFields.end()) {
+            return nullptr;
+        }
         const auto type = found->second.find(field);
         return type == found->second.end() ? nullptr : type->second;
     }
     // The same with the record's parameters by their declared names
     // (`value : V`), as an editor shows it.
-    auto recordFieldType(const std::string& record, const std::string& field,
-                         const std::vector<std::string>& typeParams) const -> TypePtr;
+    auto recordFieldType(
+        const std::string& record,
+        const std::string& field,
+        const std::vector<std::string>& typeParams) const -> TypePtr;
     auto inheritedDefaults() const
         -> const std::unordered_map<const ast::MakeDef*, std::vector<InheritedDefault>>& {
         return m_inheritedDefaults;
@@ -338,12 +348,10 @@ public:
         -> const std::unordered_map<const ast::MakeDef*, std::vector<std::string>>& {
         return m_makeTargetIdentities;
     }
-    auto annotatedRecords() const
-        -> const std::unordered_map<const ast::TypeExpr*, std::string>& {
+    auto annotatedRecords() const -> const std::unordered_map<const ast::TypeExpr*, std::string>& {
         return m_annotatedRecords;
     }
-    auto annotatedTypes() const
-        -> const std::unordered_map<const ast::TypeExpr*, std::string>& {
+    auto annotatedTypes() const -> const std::unordered_map<const ast::TypeExpr*, std::string>& {
         return m_annotatedTypes;
     }
     auto recordPatterns() const
@@ -364,8 +372,7 @@ public:
         -> const std::unordered_map<const ast::MethodCall*, StaticTypeAnswer>& {
         return m_staticTypeOfCalls;
     }
-    auto referencedModules() const
-        -> const std::unordered_set<std::string>& {
+    auto referencedModules() const -> const std::unordered_set<std::string>& {
         return m_referencedModules;
     }
 
@@ -390,8 +397,7 @@ private:
     auto typeDefToType(const ast::TypeDef& def) -> TypePtr;
     auto distinctBacking(const TypePtr& type) const -> TypePtr;
     auto resolveDistinctName(const std::string& name) const -> std::string;
-    auto representationsCompatible(const TypePtr& from,
-                                   const TypePtr& to) -> bool;
+    auto representationsCompatible(const TypePtr& from, const TypePtr& to) -> bool;
     auto checkRecordDef(const ast::RecordDef& def) -> void;
 
     // Standalone type signatures (`fact : Integer -> Integer`) — registered
@@ -415,10 +421,8 @@ private:
     // alias-resolution step, which consults this the same way it does a
     // `using M, as: Alias`.
     auto registerExports(const ast::Program& program) -> void;
-    auto registerExportsInModule(const ast::ModuleDef& mod,
-                                 const std::string& parentPath) -> void;
-    auto registerMakeSignature(const ast::MakeDef& def,
-                               const std::string& modulePath) -> void;
+    auto registerExportsInModule(const ast::ModuleDef& mod, const std::string& parentPath) -> void;
+    auto registerMakeSignature(const ast::MakeDef& def, const std::string& modulePath) -> void;
     auto makeModuleVisible(const std::string& module) const -> bool;
     // The module of an out-of-scope `make` whose method `name` takes these
     // arguments (receiver first), or empty: what a call no visible candidate
@@ -440,29 +444,35 @@ private:
     // it in); "" when the bare name may be used.
     auto moduleOfUnreachableConstructor(const std::string& name) const -> std::string;
     // Refuses `name`, a constructor of `declaring` named bare out of scope.
-    auto reportUnreachableConstructor(const std::string& name, const std::string& declaring,
-                                      const SourceLocation& at) -> void;
+    auto reportUnreachableConstructor(
+        const std::string& name, const std::string& declaring, const SourceLocation& at) -> void;
     // A name nothing in scope declares: the one report of it, for every
     // consumer of the check (`what` is "name", "function", "variable"...).
-    auto reportUndefined(const std::string& what, const std::string& name,
-                         const SourceLocation& at) -> void;
+    auto reportUndefined(const std::string& what, const std::string& name, const SourceLocation& at)
+        -> void;
     // Whether a free function of the program named `name` is in reach here.
     auto bareFunctionReachable(const std::string& name) const -> bool;
     // The result a body with no declared result gets from its failing
     // `.try`s (`T?` or `T or! E`), or `type` itself; `who` names the body in
     // a refusal. A function's (`isFunction`) refuses its `return`s and a mix
     // of the two kinds of `.try`; a block keeps its own type for a mix.
-    auto inferredFailingResult(const std::string& who, const std::vector<ast::ExprPtr>& body,
-                               const std::vector<std::pair<SourceLocation, TypePtr>>& tries,
-                               const TypePtr& type, bool isFunction) -> TypePtr;
+    auto inferredFailingResult(
+        const std::string& who,
+        const std::vector<ast::ExprPtr>& body,
+        const std::vector<std::pair<SourceLocation, TypePtr>>& tries,
+        const TypePtr& type,
+        bool isFunction) -> TypePtr;
     // Each of `tries` refused where `declared` cannot hold its failure.
-    auto refuseUnheldTries(const std::string& who, const TypePtr& declared,
-                           const std::vector<std::pair<SourceLocation, TypePtr>>& tries) -> void;
+    auto refuseUnheldTries(
+        const std::string& who,
+        const TypePtr& declared,
+        const std::vector<std::pair<SourceLocation, TypePtr>>& tries) -> void;
     // A block's result after its `.try`s: inferred as above where it
     // declares none, refused where it declares one that cannot hold them.
-    auto blockFailingResult(const ast::Lambda& block,
-                            const std::vector<std::pair<SourceLocation, TypePtr>>& tries,
-                            const TypePtr& type) -> TypePtr;
+    auto blockFailingResult(
+        const ast::Lambda& block,
+        const std::vector<std::pair<SourceLocation, TypePtr>>& tries,
+        const TypePtr& type) -> TypePtr;
     // Whether a bare `name` no scope binds still names something here: a
     // top-level value, a function in reach, a sibling of the `make` block
     // being checked, or a function a `using` brings in.
@@ -472,17 +482,18 @@ private:
     auto reportPendingUnknownTypes() -> void;
     auto spellingHasSeveralArities(const std::string& name) const -> bool;
     auto variantType(const TypePtr& result, const std::string& name) const -> TypePtr;
-    auto bareMethodCall(const ast::Expr& expr, const ast::FunctionCall& call,
-                        const std::vector<TypePtr>& argTypes) -> TypePtr;
-    auto ownFunctionOnThis(const ast::Expr& expr, const std::string& name,
-                           const std::vector<TypePtr>& argTypes) -> TypePtr;
+    auto bareMethodCall(
+        const ast::Expr& expr, const ast::FunctionCall& call, const std::vector<TypePtr>& argTypes)
+        -> TypePtr;
+    auto ownFunctionOnThis(
+        const ast::Expr& expr, const std::string& name, const std::vector<TypePtr>& argTypes)
+        -> TypePtr;
     auto ownFunctionOfMake(const std::string& name) const -> bool;
     auto withinModule(const std::string& module) const -> bool;
     // Whether a bare call to `name` may reach a free function declared in
     // `module`: from inside it, or — unless it is private there — under a
     // `using` of it whose `only:` / `except:` admit the name.
-    auto freeFunctionVisible(const std::string& module,
-                             const std::string& name) const -> bool;
+    auto freeFunctionVisible(const std::string& module, const std::string& name) const -> bool;
     // The free functions a bare `name` reaches from here (a call's or a
     // capture's); see the definition.
     // What a `~name` capture names (see the definitions).
@@ -491,10 +502,11 @@ private:
     // A `~name` capture in `value` (or a list literal's element) flowing where
     // `expected` is: noted when that is a foul function type (#640).
     auto noteCaptureFlow(const ast::Expr* value, const TypePtr& expected) -> void;
-    auto reachableFreeFunctions(const std::string& name, bool isMethodCall,
-                                std::vector<Signature>& visible,
-                                std::set<std::string>& hidden) const
-        -> const std::vector<Signature>*;
+    auto reachableFreeFunctions(
+        const std::string& name,
+        bool isMethodCall,
+        std::vector<Signature>& visible,
+        std::set<std::string>& hidden) const -> const std::vector<Signature>*;
     // "module\nname" for each free function declared in a `private do`.
     std::unordered_set<std::string> m_privateFreeFunctions;
     auto reportUnknownMethods() -> void;
@@ -505,8 +517,9 @@ private:
     static auto dispatcherTarget(const ImportedFunction& dispatcher) -> ResolvedCallTarget;
     auto importedFunctionChoice(const ast::MethodCall& call, const std::string& name)
         -> std::optional<ResolvedCallTarget>;
-    auto publishQualifiedSignatures(const std::string& name,
-                                    const std::vector<Signature>& signatures) -> void;
+    auto
+    publishQualifiedSignatures(const std::string& name, const std::vector<Signature>& signatures)
+        -> void;
     std::unordered_set<std::string> m_qualifiedPublished;
     // Method calls that resolved to nothing, judged after the whole program is
     // registered (a make block below the call registers its methods later).
@@ -540,22 +553,20 @@ private:
     // Each answers whether it reached a verdict on the match (reported, or
     // proved it whole); what neither decides is the pattern matrix's.
     auto checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLocation loc) -> bool;
-    auto checkUnionCoverage(const ast::MatchExpr& node, const TypePtr& subject,
-                            SourceLocation loc) -> bool;
-    auto checkPatternMatrix(const ast::MatchExpr& node, const TypePtr& subject,
-                            SourceLocation loc) -> void;
+    auto checkUnionCoverage(const ast::MatchExpr& node, const TypePtr& subject, SourceLocation loc)
+        -> bool;
+    auto checkPatternMatrix(const ast::MatchExpr& node, const TypePtr& subject, SourceLocation loc)
+        -> void;
 
     // Defines every variable a pattern introduces (VarPattern, shorthand
     // record fields, nested constructor/list/tuple args) in the current
     // scope as a fresh type var — mirrors how checkFunctionDef already
     // treats untyped params, just recursing into pattern structure.
-    auto bindPatternVars(
-        const ast::Pattern& pat, TypePtr expected = nullptr) -> void;
+    auto bindPatternVars(const ast::Pattern& pat, TypePtr expected = nullptr) -> void;
     // A destructuring `let`/`var` against its value's type: arity first,
     // then an early constructor-mismatch error (so `var` and `let` agree),
     // then the bindings a `match` arm gets from its subject.
-    auto bindDestructuredPattern(
-        const ast::Pattern& pat, const TypePtr& valueType) -> void;
+    auto bindDestructuredPattern(const ast::Pattern& pat, const TypePtr& valueType) -> void;
     auto registerTraits(const ast::Program& program) -> void;
     auto registerCapabilityTraits(const ast::Program& program) -> void;
     // Qualified names of every module declared `capability`. `with` may only
@@ -570,8 +581,9 @@ private:
     auto rejectRedefinedImports(const ast::MakeDef& def) -> void;
     // Whether a clause declared to return a Result ends in its success value,
     // which is then wrapped in `Ok` (recorded as the clause's success wrapper).
-    auto wrapsDeclaredSuccess(const std::vector<ast::ExprPtr>& exprs, const TypePtr& declared,
-                              const TypePtr& body) -> bool;
+    auto wrapsDeclaredSuccess(
+        const std::vector<ast::ExprPtr>& exprs, const TypePtr& declared, const TypePtr& body)
+        -> bool;
     auto checkTraitDef(const ast::TraitDef& def) -> void;
     auto checkTraitImplementation(const ast::MakeDef& def) -> void;
     auto checkMainBlock(const ast::MainBlock& block) -> void;
@@ -581,10 +593,12 @@ private:
     // so repeated occurrences of the same single-letter generic name (e.g.
     // `zip(a : [A], b : [B])`) resolve to the same TypeVar within that
     // clause, not a fresh one per occurrence.
-    auto resolveTypeExpr(const ast::TypeExpr& typeExpr,
-                        std::unordered_map<std::string, TypePtr>& genericVars) -> TypePtr;
-    auto resolveTypeExprNode(const ast::TypeExpr& typeExpr,
-                             std::unordered_map<std::string, TypePtr>& genericVars) -> TypePtr;
+    auto resolveTypeExpr(
+        const ast::TypeExpr& typeExpr, std::unordered_map<std::string, TypePtr>& genericVars)
+        -> TypePtr;
+    auto resolveTypeExprNode(
+        const ast::TypeExpr& typeExpr, std::unordered_map<std::string, TypePtr>& genericVars)
+        -> TypePtr;
     auto normalizeIntersection(TypePtr type) const -> TypePtr;
     // Imported record field types arrive from KexI with alias names left as
     // written (`FS.FilePath`); the local path expands them via m_typeAliases.
@@ -601,8 +615,7 @@ private:
     // Infer a trailing block (Lambda or BlockExpr) with optional hint param
     // types so the call site constrains the lambda's params before the body
     // is checked. Returns a FuncType wrapping inferred param and body types.
-    auto inferBlock(const ast::Expr& blockExpr,
-                    const std::vector<TypePtr>& hintParams) -> TypePtr;
+    auto inferBlock(const ast::Expr& blockExpr, const std::vector<TypePtr>& hintParams) -> TypePtr;
 
     // Look up matching signatures for `name` with `nonBlockArgTypes` as the
     // non-block args, take those that have a FuncType as their last param,
@@ -610,36 +623,34 @@ private:
     // types. Returns the block param types they agree on, or empty if none.
     // `skippedTo` receives the block parameter's name when every candidate
     // reaches it only by skipping defaulted parameters (kexhq/kex#554).
-    auto resolveBlockHints(const std::string& name,
-                           const std::vector<TypePtr>& nonBlockArgTypes,
-                           bool isMethodCall = false,
-                           bool* collection = nullptr,
-                           std::string* skippedTo = nullptr,
-                           std::optional<std::size_t> writtenParams = std::nullopt)
-        -> std::vector<TypePtr>;
+    auto resolveBlockHints(
+        const std::string& name,
+        const std::vector<TypePtr>& nonBlockArgTypes,
+        bool isMethodCall = false,
+        bool* collection = nullptr,
+        std::string* skippedTo = nullptr,
+        std::optional<std::size_t> writtenParams = std::nullopt) -> std::vector<TypePtr>;
     // The parameter types a block passed by label (`named(from: { |t| … })`)
     // should take: those of the labelled parameter's function type.
-    auto namedArgHints(const std::string& name, const std::string& label)
-        -> std::vector<TypePtr>;
+    auto namedArgHints(const std::string& name, const std::string& label) -> std::vector<TypePtr>;
     // Like resolveBlockHints but for an inline lambda at a specific arg index.
     // Returns the FuncType param hints for that position, applying generic substitution
     // from the other (already-known) arg types.
-    auto resolveArgHints(const std::string& name,
-                         const std::vector<TypePtr>& argTypes,
-                         size_t slArgIdx,
-                         bool isMethodCall = false) -> std::vector<TypePtr>;
+    auto resolveArgHints(
+        const std::string& name,
+        const std::vector<TypePtr>& argTypes,
+        size_t slArgIdx,
+        bool isMethodCall = false) -> std::vector<TypePtr>;
     // The hints every candidate signature agrees on, position by position;
     // Unknown where they differ (see its definition).
-    auto agreedHints(const std::vector<std::vector<TypePtr>>& hintSets)
-        -> std::vector<TypePtr>;
+    auto agreedHints(const std::vector<std::vector<TypePtr>>& hintSets) -> std::vector<TypePtr>;
     // A variable, Unknown, or trait-bounded type: one that accepts anything.
     auto isOpenType(const TypePtr& type) -> bool;
 
     // Signatures of `name` visible through the imported package interfaces:
     // receiver functions for bare names, qualified module exports for
     // `Module.name`, and automatic-import module exports otherwise.
-    auto importedCandidateSignatures(const std::string& name) const
-        -> std::vector<Signature>;
+    auto importedCandidateSignatures(const std::string& name) const -> std::vector<Signature>;
     // The same, as the imported functions that carry them; `receiver`, the
     // checked type of the value a dot call or an operator goes through.
     auto importedCandidates(const std::string& name, const TypePtr& receiver = nullptr) const
@@ -653,13 +664,14 @@ private:
     // receiver type (`set.add(x)`), which reaches its own type's functions
     // without a `using`; a bare call (`add(set, x)`) does not. `receiver`,
     // that value's checked type when the call site has it.
-    auto importedFunctionVisible(const ImportedFunction& function,
-                                 bool throughReceiver = true,
-                                 const TypePtr& receiver = nullptr) const -> bool;
+    auto importedFunctionVisible(
+        const ImportedFunction& function,
+        bool throughReceiver = true,
+        const TypePtr& receiver = nullptr) const -> bool;
     // Whether a `using` in scope brings `module`'s `member` in; `bare`, for
     // a call by the bare name, which `using M, as: A` alone does not.
-    auto moduleMemberImported(const std::string& module, const std::string& member,
-                              bool bare = false) const -> bool;
+    auto moduleMemberImported(
+        const std::string& module, const std::string& member, bool bare = false) const -> bool;
 
     // Binary operator type resolution
     // `==` or `!=` between an Optional (or a Result) and a settled plain
@@ -668,8 +680,8 @@ private:
     // Whether `value` is an atom literal that `expected`, a set of atoms
     // (`:ok | :error`), does not admit (kexhq/kex#641).
     auto atomOutsideSet(const ast::Expr& value, const TypePtr& expected) const -> bool;
-    auto inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr& right,
-                       SourceLocation loc) -> TypePtr;
+    auto inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr& right, SourceLocation loc)
+        -> TypePtr;
 
     // Call checking (FunctionCall and MethodCall, the latter desugared to
     // the same path with the receiver prepended as the first argument).
@@ -678,13 +690,16 @@ private:
     // make-block methods, whose implicit `this` receiver isn't a regular
     // param, so the "receiver is argument 0" UFCS desugaring used here
     // would mis-count arity for them (see checkMakeDef).
-    auto checkCall(const std::string& name, const std::vector<TypePtr>& argTypes,
-                   SourceLocation loc, bool isMethodCall = false,
-                   const ast::MethodCall* methodCall = nullptr,
-                   const ast::Expr* callExpr = nullptr,
-                   // A call with neither node (`&.to(Float)`): its arguments,
-                   // receiver slot first when `isMethodCall`.
-                   const std::vector<const ast::Expr*>* argumentExprs = nullptr) -> TypePtr;
+    auto checkCall(
+        const std::string& name,
+        const std::vector<TypePtr>& argTypes,
+        SourceLocation loc,
+        bool isMethodCall = false,
+        const ast::MethodCall* methodCall = nullptr,
+        const ast::Expr* callExpr = nullptr,
+        // A call with neither node (`&.to(Float)`): its arguments,
+        // receiver slot first when `isMethodCall`.
+        const std::vector<const ast::Expr*>* argumentExprs = nullptr) -> TypePtr;
     auto argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool;
     // Whether `value` is a literal written straight into a distinct type it
     // backs: `1` as a `BookId`, `"t1"` as a `TeamId`, `[1, 2]` as `[BookId]`.
@@ -704,8 +719,9 @@ private:
     // (a type may overload one name several times, e.g. Date's `+(Duration)`
     // and `+(Period)`), so checking "any signature already there" would make
     // the first overload block every sibling one from ever registering.
-    auto hasAnnotatedSignatureForReceiver(const std::string& name,
-                                          const TypePtr& receiverType) const -> bool;
+    auto
+    hasAnnotatedSignatureForReceiver(const std::string& name, const TypePtr& receiverType) const
+        -> bool;
     // A receiver type as m_annotatedReceiverKeys files it: `Set<A>` by its
     // head, since each pass spells its variables apart; `[Integer]` whole.
     auto annotatedReceiverKey(const TypePtr& receiverType) const -> std::string;
@@ -713,8 +729,9 @@ private:
     auto namedFunctionSignature(const ast::Expr& expr) -> const Signature*;
     // Why `written.method(...)` names nothing callable, if it does not: an
     // unknown module, or a local module without that member.
-    auto namespaceCallProblem(const std::string& written, const std::string& resolved,
-                              const std::string& method) -> std::optional<std::string>;
+    auto namespaceCallProblem(
+        const std::string& written, const std::string& resolved, const std::string& method)
+        -> std::optional<std::string>;
     // Whether module `path` shares its name with a type (`DateTime`,
     // `Map`): its calls then also reach that type's static functions, which
     // `make` blocks declare, so its own members are not all it answers.
@@ -729,25 +746,25 @@ private:
     auto typeSelectorParameter(const ast::Param& param) -> TypePtr;
     // A `rescue` block's arms, each in its own scope; `onArm` gets the type of
     // every arm that does not leave the enclosing function.
-    auto checkRescue(const ast::RescueBlock& rescue,
-                     const std::function<void(const TypePtr&)>& onArm = {}) -> void;
+    auto checkRescue(
+        const ast::RescueBlock& rescue, const std::function<void(const TypePtr&)>& onArm = {})
+        -> void;
     // The result of `name` on a receiver whose type claims a trait requiring
     // it, recorded as dispatched through that trait; null when none does.
-    auto claimedTraitAnswers(const std::vector<TypePtr>& argTypes,
-                             const std::string& name, const ast::Expr* callExpr)
+    auto claimedTraitAnswers(
+        const std::vector<TypePtr>& argTypes, const std::string& name, const ast::Expr* callExpr)
         -> TypePtr;
     // Reports a call to a trait requirement with a count of values the
     // requirement does not take, receiver included; true when it did.
-    auto missesRequiredArity(const Signature& required, std::size_t given,
-                             const std::string& name, SourceLocation loc) -> bool;
+    auto missesRequiredArity(
+        const Signature& required, std::size_t given, const std::string& name, SourceLocation loc)
+        -> bool;
     // Compile-time intrinsic handlers (intrinsics.hxx; typechecker_intrinsics.cxx).
     friend auto findCompileTimeIntrinsic(std::string_view, std::size_t)
         -> const CompileTimeIntrinsic*;
     auto checkAs(const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
-    auto checkTypeReturnedBy(const ast::Expr& expr, const ast::MethodCall& call)
-        -> TypePtr;
-    auto checkTypeOf(const ast::Expr& expr, const ast::MethodCall& call)
-        -> TypePtr;
+    auto checkTypeReturnedBy(const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
+    auto checkTypeOf(const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
     // Who owns a method call once the overload rules chose its winner — the
     // one place a call's target is decided, so no later pass re-decides it:
     //   ReceiverType — the receiver's own type answers the method itself,
@@ -771,9 +788,8 @@ private:
         // the type's `make` block answers.
         std::string moduleFunction;
         auto decision() const -> DecidedCall {
-            return moduleFunction.empty()
-                ? DecidedCall{CallKind::OwnMethod, type}
-                : DecidedCall{CallKind::ModuleFunction, moduleFunction};
+            return moduleFunction.empty() ? DecidedCall{CallKind::OwnMethod, type}
+                                          : DecidedCall{CallKind::ModuleFunction, moduleFunction};
         }
     };
     struct OwnerDecision {
@@ -782,20 +798,22 @@ private:
         OwnAnswer own;
     };
     // `competing`: another module answers the method at the winner's arity.
-    auto ownerOfCall(const std::vector<TypePtr>& argTypes,
-                     const std::string& method,
-                     const std::string& winnerModule, bool competing)
-        -> OwnerDecision;
-    auto ownTypeAnswers(const std::vector<TypePtr>& argTypes,
-                        const std::string& method) -> std::optional<OwnAnswer>;
-    auto typeHomeModule(const std::string& type) const
-        -> std::optional<std::string>;
+    auto ownerOfCall(
+        const std::vector<TypePtr>& argTypes,
+        const std::string& method,
+        const std::string& winnerModule,
+        bool competing) -> OwnerDecision;
+    auto ownTypeAnswers(const std::vector<TypePtr>& argTypes, const std::string& method)
+        -> std::optional<OwnAnswer>;
+    auto typeHomeModule(const std::string& type) const -> std::optional<std::string>;
     auto ownTypeIdentity(const std::string& name) const -> std::string;
-    auto foldTypeOf(const ast::Expr& expr, const ast::MethodCall& call,
-                    const std::vector<TypePtr>& argTypes) -> void;
+    auto foldTypeOf(
+        const ast::Expr& expr, const ast::MethodCall& call, const std::vector<TypePtr>& argTypes)
+        -> void;
     auto checkProcessSpawn(const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
-    auto foldProcessSpawn(const ast::Expr& expr, const ast::MethodCall& call,
-                          const std::vector<TypePtr>& argTypes) -> void;
+    auto foldProcessSpawn(
+        const ast::Expr& expr, const ast::MethodCall& call, const std::vector<TypePtr>& argTypes)
+        -> void;
     // Backing store for the pointer namedFunctionSignature returns when the
     // match came from imported interfaces.
     std::vector<Signature> m_importedSignatureCache;
@@ -811,13 +829,14 @@ private:
     std::vector<ComputedAlias> m_computedAliases;
     // Declared functions by name, so `type X = Type.returnedBy(f)` can read a
     // return annotation before signature registration has run.
-    std::unordered_multimap<std::string, const ast::FunctionDef*>
-        m_functionDeclarations;
-    auto declaredBindingType(const std::optional<ast::TypeExprPtr>& annotation,
-                             const TypePtr& valueType, SourceLocation loc,
-                             const ast::Expr* value = nullptr) -> TypePtr;
-    auto declaredConstantType(const std::string& name, const TypePtr& valueType,
-                              SourceLocation loc) -> TypePtr;
+    std::unordered_multimap<std::string, const ast::FunctionDef*> m_functionDeclarations;
+    auto declaredBindingType(
+        const std::optional<ast::TypeExprPtr>& annotation,
+        const TypePtr& valueType,
+        SourceLocation loc,
+        const ast::Expr* value = nullptr) -> TypePtr;
+    auto declaredConstantType(const std::string& name, const TypePtr& valueType, SourceLocation loc)
+        -> TypePtr;
     bool m_inSyntheticMain = false;
     // Trait conformance for a value type, lifting a nullary ADT constructor
     // (`Dog`) to the ADT that declares the conformance (`Animal`).
@@ -825,15 +844,18 @@ private:
     // Scope management
     auto pushScope() -> void;
     auto popScope() -> void;
-    auto defineVar(const std::string& name, TypePtr type,
-                   TypeEnv::Binding binding = {}) -> void;
+    auto defineVar(const std::string& name, TypePtr type, TypeEnv::Binding binding = {}) -> void;
     // A binding the program writes (`let`, `var`, a pattern's name): a name
     // the current scope already binds is a redeclaration, reported at
     // `where`; the first binding's kind is kept. `named` is where the name
     // itself is written (`p` in `var p = ...`), which tooling records; it
     // defaults to `where`.
-    auto declareVar(const std::string& name, TypePtr type, bool isVar,
-                    SourceLocation where, SourceLocation named = {}) -> void;
+    auto declareVar(
+        const std::string& name,
+        TypePtr type,
+        bool isVar,
+        SourceLocation where,
+        SourceLocation named = {}) -> void;
     auto lookupVar(const std::string& name) const -> TypePtr;
     // How the nearest binding of `name` was made, or null.
     auto bindingOf(const std::string& name) const -> const TypeEnv::Binding*;
@@ -853,8 +875,7 @@ private:
     // True, and the check is left until the body answers, when `actual` is a
     // make-block method's result its body has not decided yet
     // (m_pendingResults): `main` above the make block cannot know it.
-    auto deferIfPending(const TypePtr& actual, const TypePtr& expected,
-                        SourceLocation loc) -> bool;
+    auto deferIfPending(const TypePtr& actual, const TypePtr& expected, SourceLocation loc) -> bool;
     // A pending result has its answer: bind it, then run every check that
     // was waiting for it (m_pendingChecks).
     auto answerPending(int id, const TypePtr& answer) -> void;
@@ -881,8 +902,9 @@ private:
     // Reports each bare name the newest of `active` (the `using`s in force
     // in module `within`) brings in that an earlier one already did, from
     // another module (resolve_core::mergeImportOrigin).
-    auto reportAmbiguousImports(const std::vector<ImportSelection>& active,
-                                const std::string& within) -> void;
+    auto
+    reportAmbiguousImports(const std::vector<ImportSelection>& active, const std::string& within)
+        -> void;
     // A `using` written in a body: in force for the rest of the scope.
     auto pushImport(ImportSelection selection) -> void;
     // Reports made once per place, however often the place is checked.
@@ -893,8 +915,8 @@ private:
     std::unordered_map<std::string, std::string> m_fileLocalTopLevel;
     // Reports a bare `name` no scope binds that only another file's top level
     // declares; false when it is not one.
-    auto reportOtherFilesTopLevel(const std::string& what, const std::string& name,
-                                  const SourceLocation& at) -> bool;
+    auto reportOtherFilesTopLevel(
+        const std::string& what, const std::string& name, const SourceLocation& at) -> bool;
     // What recordNames keeps (setRecordsNames).
     bool m_recordsNames = false;
     // For tooling (setRecordsNames): where each local a name uses is bound,
@@ -914,21 +936,17 @@ private:
     // with it: whether a method name is in reach depends on the call's own
     // file and block, not on what some other module of the program imports.
     std::vector<std::vector<ImportSelection>> m_unresolvedMethodImports;
-    auto resolveTraitReference(const std::string& written, const std::string& scope,
-                               const std::vector<ImportSelection>* imports,
-                               bool lastResort = true,
-                               std::vector<std::string>* ambiguous = nullptr) const
-        -> std::string;
-    std::unordered_map<const ast::FunctionDef*, std::vector<ImportSelection>>
-        m_functionImports;
-    std::unordered_map<const ast::MakeDef*, std::vector<ImportSelection>>
-        m_makeImports;
-    std::unordered_map<const ast::MainBlock*, std::vector<ImportSelection>>
-        m_mainImports;
-    std::unordered_map<const ast::RecordDef*, std::vector<ImportSelection>>
-        m_recordImports;
-    std::unordered_map<const ast::TypeDef*, std::vector<ImportSelection>>
-        m_typeImports;
+    auto resolveTraitReference(
+        const std::string& written,
+        const std::string& scope,
+        const std::vector<ImportSelection>* imports,
+        bool lastResort = true,
+        std::vector<std::string>* ambiguous = nullptr) const -> std::string;
+    std::unordered_map<const ast::FunctionDef*, std::vector<ImportSelection>> m_functionImports;
+    std::unordered_map<const ast::MakeDef*, std::vector<ImportSelection>> m_makeImports;
+    std::unordered_map<const ast::MainBlock*, std::vector<ImportSelection>> m_mainImports;
+    std::unordered_map<const ast::RecordDef*, std::vector<ImportSelection>> m_recordImports;
+    std::unordered_map<const ast::TypeDef*, std::vector<ImportSelection>> m_typeImports;
     // Every module path any `using` in this program names, wherever it sits.
     // Not what decides whether a method name is in reach: that is the call's
     // own imports (`m_unresolvedMethodImports`), since a union over the whole
@@ -968,8 +986,7 @@ private:
     // lowerer's `inheritedDefaults` consumes these instead of
     // re-resolving from its pre-pass usings (whose import order,
     // aliases, and only/except filtering differ from the checker's).
-    std::unordered_map<const ast::MakeDef*, std::vector<std::string>>
-        m_resolvedTraits;
+    std::unordered_map<const ast::MakeDef*, std::vector<std::string>> m_resolvedTraits;
     // Each default a trait's body defines, by clause: the trait's identity
     // (registerTraits). Its checked signature takes `This`.
     std::unordered_map<const ast::FunctionClause*, std::string> m_traitDefaultClauses;
@@ -1034,15 +1051,15 @@ private:
     // The trait each type spelling names in the module it was written in
     // (writtenKey), as resolveTypeExpr resolved it.
     std::unordered_map<std::string, std::string> m_writtenTraits;
-    static auto writtenKey(const std::string& scope, const std::string& written)
-        -> std::string {
+    static auto writtenKey(const std::string& scope, const std::string& written) -> std::string {
         return scope + "\n" + written;
     }
     // The imported overloads of each binary operator (and of `==` for a
     // `!=`) its scope could see when it was checked: decideOperators runs
     // after the scope (its `using`s) is gone.
-    std::unordered_map<const ast::Expr*,
-                       std::unordered_map<std::string, std::vector<const ImportedFunction*>>>
+    std::unordered_map<
+        const ast::Expr*,
+        std::unordered_map<std::string, std::vector<const ImportedFunction*>>>
         m_operatorImports;
     std::unordered_map<const ast::MethodCall*, StaticTypeAnswer> m_staticTypeOfCalls;
     std::unordered_set<std::string> m_referencedModules;
@@ -1056,8 +1073,7 @@ private:
         // From an imported interface: it is that module's exported function.
         bool imported = false;
     };
-    std::unordered_map<std::string,
-        std::unordered_map<std::string, ModuleConstructor>>
+    std::unordered_map<std::string, std::unordered_map<std::string, ModuleConstructor>>
         m_moduleConstructors;
 
     // typeName -> constructor names; constructorName -> owning typeName.
@@ -1120,8 +1136,7 @@ private:
     // — which let one type's annotation (Char's `string :> String`) block a
     // same-named plain `let` method on an unrelated type (Input's
     // `string(expected: String)`) from ever registering (#251).
-    std::unordered_map<std::string, std::unordered_set<std::string>>
-        m_annotatedReceiverKeys;
+    std::unordered_map<std::string, std::unordered_set<std::string>> m_annotatedReceiverKeys;
     auto checkPatternArity(const ast::Pattern& pattern) -> void;
     // The ADT a scrutinee type belongs to ("Optional", "Result", …), or ""
     // when the type is not a closed ADT (a type variable, Any, a record).
@@ -1140,17 +1155,16 @@ private:
     // The one ADT a shared constructor spelling means from here: declared by
     // an enclosing module, an imported one, or an automatically imported
     // one. Nullptr when none or several are visible.
-    auto scopedConstructorOwner(const std::string& name) const
-        -> const ConstructorOwner*;
+    auto scopedConstructorOwner(const std::string& name) const -> const ConstructorOwner*;
     // `scope`: a module the call names (`Model.RecordDecl(entry)`), looked in
     // first; otherwise the enclosing modules, innermost first.
     // The constructor `name` resolves to there, by the same rules.
     auto constructorInfo(const std::string& name, const std::string& scope = {}) const
         -> const ConstructorResult*;
-    auto constructorResultType(const std::string& name,
-                               const std::vector<TypePtr>& argTypes,
-                               const std::string& scope = {})
-        -> TypePtr;
+    auto constructorResultType(
+        const std::string& name,
+        const std::vector<TypePtr>& argTypes,
+        const std::string& scope = {}) -> TypePtr;
     // Payload `i` of `info` as declared, resolved again in the declaring
     // module now that its records and aliases are known: an ADT is
     // registered before them.
@@ -1159,18 +1173,21 @@ private:
     // (`Broken(5)` for a nullary `Broken`).
     // The first argument of a call to `sig` that disagrees with what earlier
     // arguments bound a shared generic to, and the type it had to be.
-    auto genericConflict(const Signature& sig, const std::vector<TypePtr>& argTypes,
-                         const std::function<TypePtr(std::size_t, const TypePtr&)>& selectedType)
+    auto genericConflict(
+        const Signature& sig,
+        const std::vector<TypePtr>& argTypes,
+        const std::function<TypePtr(std::size_t, const TypePtr&)>& selectedType)
         -> std::optional<std::pair<std::size_t, TypePtr>>;
     // Errors when an integer literal where a Byte goes is out of its range.
     auto checkByteLiterals(const ast::Expr& value, const TypePtr& expected) -> void;
-    auto checkConstructorPayloads(const std::string& name,
-                                  const std::vector<TypePtr>& argTypes,
-                                  SourceLocation loc, const std::string& scope = {}) -> void;
+    auto checkConstructorPayloads(
+        const std::string& name,
+        const std::vector<TypePtr>& argTypes,
+        SourceLocation loc,
+        const std::string& scope = {}) -> void;
     // Errors when a constructor pattern names an arm of a DIFFERENT ADT than
     // the value being matched — `if let Ok(x) = anOptional`.
-    auto checkPatternConstructorOwner(const ast::Pattern& pattern,
-                                      const TypePtr& expected) -> void;
+    auto checkPatternConstructorOwner(const ast::Pattern& pattern, const TypePtr& expected) -> void;
     std::unordered_set<std::string> m_nullaryConstructors;
     // Each ADT's nullary variants, by the ADT's identity: what a variant type
     // (`FileMode.Write`, NamedType::variant) may name.
@@ -1183,8 +1200,7 @@ private:
     // Record field types: typeName -> { fieldName -> TypePtr }.
     // Populated by a pre-pass over all RecordDefs so field access in method
     // chains (`user.name`, `point.x`) returns the declared field type.
-    std::unordered_map<std::string,
-                       std::unordered_map<std::string, TypePtr>> m_recordFields;
+    std::unordered_map<std::string, std::unordered_map<std::string, TypePtr>> m_recordFields;
     // The records the checked program itself declares, as opposed to the
     // imported ones seeded into m_recordFields from interfaces.
     std::unordered_set<std::string> m_programRecords;
@@ -1197,10 +1213,8 @@ private:
     // types, and guessing a record for it misread `info.body`.
     std::unordered_set<int> m_unannotatedParamVars;
     // Fields without a default whose declared type is not Optional.
-    std::unordered_map<std::string, std::unordered_set<std::string>>
-        m_requiredRecordFields;
-    auto registerRecordFields(const ast::Program& program,
-                              bool namesOnly = false) -> void;
+    std::unordered_map<std::string, std::unordered_set<std::string>> m_requiredRecordFields;
+    auto registerRecordFields(const ast::Program& program, bool namesOnly = false) -> void;
     // A dotted type name's nominal identity — the record or ADT it spells,
     // through an alias or a `using`-relative path if need be — or nullopt
     // when it names no declared type.
@@ -1210,24 +1224,20 @@ private:
     // The imported alias `written` names through a `using` or an enclosing
     // module, when exactly one.
     auto aliasReachedAs(const std::string& written) const -> std::optional<TypePtr>;
-    auto qualifiedNominalType(const std::string& qualified) const
-        -> std::optional<std::string>;
+    auto qualifiedNominalType(const std::string& qualified) const -> std::optional<std::string>;
     auto resolveRecordName(const std::string& name) const -> std::string;
     // Whether the built-in `op` cannot apply to `type`: a record or ADT,
     // declared here or imported, a tuple, map or open record, a list for
     // anything but `+`, a distinct type over one of those, or a value typed
     // only by a non-structural trait. Such a type has only the operators
     // declared for it.
-    auto lacksBuiltinOperator(const TypePtr& type, const std::string& op) const
-        -> bool;
+    auto lacksBuiltinOperator(const TypePtr& type, const std::string& op) const -> bool;
     // Whether such a type gets `op` from a trait: one it implements, or the
     // trait it is typed as, requiring or defaulting it.
-    auto traitDeclaresOperator(const TypePtr& type, const std::string& op) const
-        -> bool;
+    auto traitDeclaresOperator(const TypePtr& type, const std::string& op) const -> bool;
     // Whether anything declares `op` for `type`: its own make block, an
     // imported one, or a trait.
-    auto declaresOperatorFor(const TypePtr& type, const std::string& op) const
-        -> bool;
+    auto declaresOperatorFor(const TypePtr& type, const std::string& op) const -> bool;
     // An overload of an operator: its signature, and the imported function
     // that implements it (null for one of this unit's own make blocks).
     struct OperatorOverload {
@@ -1236,9 +1246,10 @@ private:
     };
     // The overloads of `op` the type of a left operand declares itself: a
     // make block for it, local or imported, not a generic one.
-    auto operatorOverloadsFor(const TypePtr& left, const std::string& op,
-                              const std::vector<const ImportedFunction*>& imported)
-        -> std::vector<OperatorOverload>;
+    auto operatorOverloadsFor(
+        const TypePtr& left,
+        const std::string& op,
+        const std::vector<const ImportedFunction*>& imported) -> std::vector<OperatorOverload>;
     // Decides every binary operator of `program` once its operands are typed
     // (m_decidedCalls): the left type's own overload (Operator, naming the
     // implementation and, for an imported one, its backend function), dispatch
@@ -1253,11 +1264,10 @@ private:
     // against the modules `using` brought into scope, when the literal name
     // is not itself a registered module. See the .cxx for the precedence
     // rules (kexhq/kex#229).
-    auto resolveModulePath(const std::string& name,
-                          const std::string& member) const -> std::string;
+    auto resolveModulePath(const std::string& name, const std::string& member) const -> std::string;
     // The same, without the enclosing module's own nested modules.
-    auto resolveImportedModulePath(const std::string& name,
-                                   const std::string& member) const -> std::string;
+    auto resolveImportedModulePath(const std::string& name, const std::string& member) const
+        -> std::string;
 
     // Type alias map — populated before function bodies are checked.
     std::unordered_map<std::string, TypePtr> m_typeAliases;
@@ -1272,8 +1282,7 @@ private:
     // Exact lexical owner -> declared contracts. The unqualified call table
     // remains separate; this map prevents `A.get`'s annotation from being
     // used to validate `B.get` merely because their source names coincide.
-    std::unordered_map<std::string, std::vector<Signature>>
-        m_scopedDeclaredSignatures;
+    std::unordered_map<std::string, std::vector<Signature>> m_scopedDeclaredSignatures;
 
     // Per-clause signatures for top-level/module-level user functions,
     // built as each FunctionDef is checked — so a call to a function
@@ -1306,8 +1315,7 @@ private:
     // Checked interface attached to its exact syntax declaration. Unlike the
     // call-resolution table above, this preserves ownership when separate
     // modules or overload declarations reuse the same unqualified name.
-    std::unordered_map<const ast::FunctionDef*, std::vector<Signature>>
-        m_functionSignatures;
+    std::unordered_map<const ast::FunctionDef*, std::vector<Signature>> m_functionSignatures;
     // Names whose provisional pre-registration has been replaced by the first
     // real checkFunctionDef call. Subsequent calls for the same name append
     // rather than replace, building the overload set incrementally.
@@ -1376,8 +1384,7 @@ private:
     std::unordered_set<int> m_pendingResultVars;
     // Checks a use made of a pending result before the body decided it, run
     // with what it decided.
-    std::unordered_map<int, std::vector<std::function<void(const TypePtr&)>>>
-        m_pendingChecks;
+    std::unordered_map<int, std::vector<std::function<void(const TypePtr&)>>> m_pendingChecks;
 
     // Walk m_subst to find the concrete type behind a TypeVar, following any
     // chain of substitutions. Returns `t` unchanged for non-TypeVar types.

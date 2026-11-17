@@ -13,7 +13,9 @@ using namespace test;
 
 auto readFile(const std::string& path) -> std::string {
     std::ifstream file(path);
-    if (!file.is_open()) return "";
+    if (!file.is_open()) {
+        return "";
+    }
     std::stringstream buf;
     buf << file.rdbuf();
     return buf.str();
@@ -21,7 +23,9 @@ auto readFile(const std::string& path) -> std::string {
 
 auto parseFile(const std::string& path) -> bool {
     auto source = readFile(path);
-    if (source.empty()) return false;
+    if (source.empty()) {
+        return false;
+    }
     try {
         Lexer lexer(source, path);
         auto tokens = lexer.tokenizeAll();
@@ -33,8 +37,7 @@ auto parseFile(const std::string& path) -> bool {
     }
 }
 
-auto runFileWithRoots(const std::string& path,
-                      std::vector<std::string> roots) -> std::string {
+auto runFileWithRoots(const std::string& path, std::vector<std::string> roots) -> std::string {
     auto source = readFile(path);
     Lexer lexer(source, path);
     auto tokens = lexer.tokenizeAll();
@@ -82,10 +85,13 @@ int main() {
         it("maps.kex", []() { assertTrue(parseFile("examples/maps.kex")); });
         it("modules.kex", []() { assertTrue(parseFile("examples/modules.kex")); });
         it("mutating.kex", []() { assertTrue(parseFile("examples/mutating.kex")); });
-        it("pattern_matching.kex", []() { assertTrue(parseFile("examples/pattern_matching.kex")); });
+        it("pattern_matching.kex",
+           []() { assertTrue(parseFile("examples/pattern_matching.kex")); });
         it("real_world.kex", []() { assertTrue(parseFile("examples/real_world.kex")); });
-        it("serving_shared_document.kex", []() { assertTrue(parseFile("examples/serving_shared_document.kex")); });
-        it("serving_rate_limiter.kex", []() { assertTrue(parseFile("examples/serving_rate_limiter.kex")); });
+        it("serving_shared_document.kex",
+           []() { assertTrue(parseFile("examples/serving_shared_document.kex")); });
+        it("serving_rate_limiter.kex",
+           []() { assertTrue(parseFile("examples/serving_rate_limiter.kex")); });
         it("net_values.kex", []() { assertTrue(parseFile("examples/net_values.kex")); });
         // BEAM-only (Net.HTTP.Server/WebSocket are unavailable on the
         // tree-walking interpreter), so parse-checked here rather than run
@@ -101,17 +107,25 @@ int main() {
         it("city_distance.kex", []() { assertTrue(parseFile("examples/city_distance.kex")); });
         it("dimensions.kex", []() { assertTrue(parseFile("examples/dimensions.kex")); });
         it("vectors.kex", []() { assertTrue(parseFile("examples/vectors.kex")); });
-        it("vectors_advanced.kex", []() { assertTrue(parseFile("examples/vectors_advanced.kex")); });
+        it("vectors_advanced.kex",
+           []() { assertTrue(parseFile("examples/vectors_advanced.kex")); });
         it("env.kex", []() { assertTrue(parseFile("examples/env.kex")); });
         it("capabilities.kex", []() { assertTrue(parseFile("examples/capabilities.kex")); });
         it("fizzbuzz.kex", []() { assertTrue(parseFile("examples/fizzbuzz.kex")); });
-        it("cluster/store_node.kex", []() { assertTrue(parseFile("examples/cluster/store_node.kex")); });
-        it("cluster/client_node.kex", []() { assertTrue(parseFile("examples/cluster/client_node.kex")); });
-        it("cluster/lib/store.kex", []() { assertTrue(parseFile("examples/cluster/lib/store.kex")); });
-        it("fizzbuzz_abstraction.kex", []() { assertTrue(parseFile("examples/fizzbuzz_abstraction.kex")); });
-        it("fizzbuzz_functional.kex", []() { assertTrue(parseFile("examples/fizzbuzz_functional.kex")); });
-        it("fizzbuzz_pattern_matching.kex", []() { assertTrue(parseFile("examples/fizzbuzz_pattern_matching.kex")); });
-        it("fizzbuzz_recursive.kex", []() { assertTrue(parseFile("examples/fizzbuzz_recursive.kex")); });
+        it("cluster/store_node.kex",
+           []() { assertTrue(parseFile("examples/cluster/store_node.kex")); });
+        it("cluster/client_node.kex",
+           []() { assertTrue(parseFile("examples/cluster/client_node.kex")); });
+        it("cluster/lib/store.kex",
+           []() { assertTrue(parseFile("examples/cluster/lib/store.kex")); });
+        it("fizzbuzz_abstraction.kex",
+           []() { assertTrue(parseFile("examples/fizzbuzz_abstraction.kex")); });
+        it("fizzbuzz_functional.kex",
+           []() { assertTrue(parseFile("examples/fizzbuzz_functional.kex")); });
+        it("fizzbuzz_pattern_matching.kex",
+           []() { assertTrue(parseFile("examples/fizzbuzz_pattern_matching.kex")); });
+        it("fizzbuzz_recursive.kex",
+           []() { assertTrue(parseFile("examples/fizzbuzz_recursive.kex")); });
         it("fizzbuzz_simple.kex", []() { assertTrue(parseFile("examples/fizzbuzz_simple.kex")); });
         it("hello.kex", []() { assertTrue(parseFile("examples/hello.kex")); });
         it("stdlib_demo.kex", []() { assertTrue(parseFile("examples/stdlib_demo.kex")); });
@@ -123,10 +137,14 @@ int main() {
         // Net/serving/slot, none of which exist — unrelated to the process
         // model (spawn/receive/Task/Supervisor), which both backends do
         // support (see the process examples below).
-        it("aspirational/compiled.kex", []() { assertTrue(parseFile("examples/aspirational/compiled.kex")); });
-        it("aspirational/html_dsl.kex", []() { assertTrue(parseFile("examples/aspirational/html_dsl.kex")); });
-        it("aspirational/compiled_router.kex", []() { assertTrue(parseFile("examples/aspirational/compiled_router.kex")); });
-        it("aspirational/chat_server_genserver.kex", []() { assertTrue(parseFile("examples/aspirational/chat_server_genserver.kex")); });
+        it("aspirational/compiled.kex",
+           []() { assertTrue(parseFile("examples/aspirational/compiled.kex")); });
+        it("aspirational/html_dsl.kex",
+           []() { assertTrue(parseFile("examples/aspirational/html_dsl.kex")); });
+        it("aspirational/compiled_router.kex",
+           []() { assertTrue(parseFile("examples/aspirational/compiled_router.kex")); });
+        it("aspirational/chat_server_genserver.kex",
+           []() { assertTrue(parseFile("examples/aspirational/chat_server_genserver.kex")); });
         // Process examples — parse (and, below, run) on both the
         // tree-walking interpreter and the BEAM backend (`kex --run`).
         it("proc_ping.kex", []() { assertTrue(parseFile("examples/proc_ping.kex")); });
@@ -134,15 +152,11 @@ int main() {
         it("proc_supervisor.kex", []() { assertTrue(parseFile("examples/proc_supervisor.kex")); });
         it("proc_task.kex", []() { assertTrue(parseFile("examples/proc_task.kex")); });
         it("processes.kex", []() { assertTrue(parseFile("examples/processes.kex")); });
-        it("parser_combinators/main.kex", []() {
-            assertTrue(parseFile("examples/parser_combinators/main.kex"));
-        });
-        it("parser_combinators/lib/parsing.kex", []() {
-            assertTrue(parseFile("examples/parser_combinators/lib/parsing.kex"));
-        });
-        it("parsing_stdlib.kex", []() {
-            assertTrue(parseFile("examples/parsing_stdlib.kex"));
-        });
+        it("parser_combinators/main.kex",
+           []() { assertTrue(parseFile("examples/parser_combinators/main.kex")); });
+        it("parser_combinators/lib/parsing.kex",
+           []() { assertTrue(parseFile("examples/parser_combinators/lib/parsing.kex")); });
+        it("parsing_stdlib.kex", []() { assertTrue(parseFile("examples/parsing_stdlib.kex")); });
     });
 
     // Parsing is not enough to catch regressions like a stdlib function
@@ -158,9 +172,12 @@ int main() {
         it("capabilities.kex", []() { assertTrue(runFileOk("examples/capabilities.kex")); });
         it("error_handling.kex", []() { assertTrue(runFileOk("examples/error_handling.kex")); });
         it("fizzbuzz.kex", []() { assertTrue(runFileOk("examples/fizzbuzz.kex")); });
-        it("fizzbuzz_functional.kex", []() { assertTrue(runFileOk("examples/fizzbuzz_functional.kex")); });
-        it("fizzbuzz_pattern_matching.kex", []() { assertTrue(runFileOk("examples/fizzbuzz_pattern_matching.kex")); });
-        it("fizzbuzz_recursive.kex", []() { assertTrue(runFileOk("examples/fizzbuzz_recursive.kex")); });
+        it("fizzbuzz_functional.kex",
+           []() { assertTrue(runFileOk("examples/fizzbuzz_functional.kex")); });
+        it("fizzbuzz_pattern_matching.kex",
+           []() { assertTrue(runFileOk("examples/fizzbuzz_pattern_matching.kex")); });
+        it("fizzbuzz_recursive.kex",
+           []() { assertTrue(runFileOk("examples/fizzbuzz_recursive.kex")); });
         it("fizzbuzz_simple.kex", []() { assertTrue(runFileOk("examples/fizzbuzz_simple.kex")); });
         it("generics.kex", []() { assertTrue(runFileOk("examples/generics.kex")); });
         it("hello.kex", []() { assertTrue(runFileOk("examples/hello.kex")); });
@@ -169,7 +186,8 @@ int main() {
         it("modules.kex", []() { assertTrue(runFileOk("examples/modules.kex")); });
         it("mutating.kex", []() { assertTrue(runFileOk("examples/mutating.kex")); });
         it("net_values.kex", []() { assertTrue(runFileOk("examples/net_values.kex")); });
-        it("pattern_matching.kex", []() { assertTrue(runFileOk("examples/pattern_matching.kex")); });
+        it("pattern_matching.kex",
+           []() { assertTrue(runFileOk("examples/pattern_matching.kex")); });
         it("proc_ping.kex", []() { assertTrue(runFileOk("examples/proc_ping.kex")); });
         it("proc_link.kex", []() { assertTrue(runFileOk("examples/proc_link.kex")); });
         it("proc_supervisor.kex", []() { assertTrue(runFileOk("examples/proc_supervisor.kex")); });
@@ -184,11 +202,11 @@ int main() {
         it("units_data.kex", []() { assertTrue(runFileOk("examples/units_data.kex")); });
         it("units_si.kex", []() { assertTrue(runFileOk("examples/units_si.kex")); });
         it("city_distance.kex", []() { assertTrue(runFileOk("examples/city_distance.kex")); });
-        it("dimensions.kex", []() {
-            assertEqual(runFile("examples/dimensions.kex"), "true\n-1\ntrue\n");
-        });
+        it("dimensions.kex",
+           []() { assertEqual(runFile("examples/dimensions.kex"), "true\n-1\ntrue\n"); });
         it("vectors.kex", []() { assertTrue(runFileOk("examples/vectors.kex")); });
-        it("vectors_advanced.kex", []() { assertTrue(runFileOk("examples/vectors_advanced.kex")); });
+        it("vectors_advanced.kex",
+           []() { assertTrue(runFileOk("examples/vectors_advanced.kex")); });
 
         it("json_parser.kex", []() {
             // Used to fail with "Undefined function: parse" — Float had no
@@ -208,13 +226,21 @@ int main() {
             auto output = runFile("examples/template_stdlib.kex");
             assertTrue(output.find("tags: Tags([changelog, public])") != std::string::npos, output);
             assertTrue(output.find("title: Scalar(Release notes)") != std::string::npos, output);
-            assertTrue(output.find("TemplateParam { name: title, type: String }") != std::string::npos, output);
-            assertTrue(output.find("TemplateParam { name: draft, type: Bool }") != std::string::npos, output);
-            assertTrue(output.find("TemplateParam { name: tags, type: [String] }") != std::string::npos, output);
+            assertTrue(
+                output.find("TemplateParam { name: title, type: String }") != std::string::npos,
+                output);
+            assertTrue(
+                output.find("TemplateParam { name: draft, type: Bool }") != std::string::npos,
+                output);
+            assertTrue(
+                output.find("TemplateParam { name: tags, type: [String] }") != std::string::npos,
+                output);
             assertTrue(output.find("Interpolate(title)") != std::string::npos, output);
             assertTrue(output.find("Control(if draft)") != std::string::npos, output);
-            assertTrue(output.find("Comment(internal note, never rendered)") != std::string::npos, output);
-            assertTrue(output.find("InterpolateRaw(tags.join(\", \"))") != std::string::npos, output);
+            assertTrue(
+                output.find("Comment(internal note, never rendered)") != std::string::npos, output);
+            assertTrue(
+                output.find("InterpolateRaw(tags.join(\", \"))") != std::string::npos, output);
         });
         it("testing.kex", []() {
             // Rewritten to use real, parenthesized describe/it/assert
@@ -262,7 +288,8 @@ int main() {
 
         it("higher-order functions work", []() {
             auto output = runFile("examples/stdlib_demo.kex");
-            assertTrue(output.find("doubled: [20, 6, 14, 2, 18, 8, 12, 4, 16, 10]") != std::string::npos);
+            assertTrue(
+                output.find("doubled: [20, 6, 14, 2, 18, 8, 12, 4, 16, 10]") != std::string::npos);
             assertTrue(output.find("evens: [10, 4, 6, 2, 8]") != std::string::npos);
             assertTrue(output.find("reduce product: 120") != std::string::npos);
         });
@@ -278,7 +305,9 @@ int main() {
         it("recursion works", []() {
             auto output = runFile("examples/stdlib_demo.kex");
             assertTrue(output.find("factorial(10) = 3628800") != std::string::npos);
-            assertTrue(output.find("fibonacci: [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55]") != std::string::npos);
+            assertTrue(
+                output.find("fibonacci: [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55]") !=
+                std::string::npos);
         });
 
         it("records and pattern matching work", []() {
@@ -301,15 +330,17 @@ int main() {
         // library from lib/parsing.kex, resolved the same way the CLI does
         // (a `lib` root beside the entry file).
         auto runMain = []() {
-            return runFileWithRoots("examples/parser_combinators/main.kex",
-                                    {"examples/parser_combinators/lib", "src/stdlib"});
+            return runFileWithRoots(
+                "examples/parser_combinators/main.kex",
+                {"examples/parser_combinators/lib", "src/stdlib"});
         };
         it("parses and evaluates arithmetic expressions", [runMain]() {
             auto output = runMain();
             assertTrue(output.find("42 => 42 = 42") != std::string::npos, output);
             assertTrue(output.find("3 + 5 => (3 + 5) = 8") != std::string::npos, output);
             assertTrue(output.find("1 + 2 * 3 => (1 + (2 * 3)) = 7") != std::string::npos, output);
-            assertTrue(output.find("10 - 7 + 2 => (10 - (7 + 2)) = 1") != std::string::npos, output);
+            assertTrue(
+                output.find("10 - 7 + 2 => (10 - (7 + 2)) = 1") != std::string::npos, output);
         });
     });
 

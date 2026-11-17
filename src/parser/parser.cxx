@@ -14,18 +14,20 @@ namespace kex {
 // Internal exception: thrown by error(), caught at the two recovery
 // boundaries (parseProgram and parseBody). Never escapes the parser.
 struct ParseError : std::exception {
-  SourceLocation location;
-  std::string message;
-  ParseError(SourceLocation loc, std::string msg)
-      : location(std::move(loc)), message(std::move(msg)) {}
-  const char *what() const noexcept override { return message.c_str(); }
+    SourceLocation location;
+    std::string message;
+    ParseError(SourceLocation loc, std::string msg)
+        : location(std::move(loc)), message(std::move(msg)) {}
+    const char* what() const noexcept override {
+        return message.c_str();
+    }
 };
 
 Parser::Parser(std::vector<Token> tokens, std::string_view filename)
     : m_tokens(std::move(tokens)), m_filename(filename) {}
 
-auto Parser::diagnostics() const -> const std::vector<ParseDiagnostic> & {
-  return m_diagnostics;
+auto Parser::diagnostics() const -> const std::vector<ParseDiagnostic>& {
+    return m_diagnostics;
 }
 
 // `.to(...)`'s argument is normally a TYPE (`String`, `[X]`, `Optional<Int>`),
@@ -37,81 +39,93 @@ auto Parser::diagnostics() const -> const std::vector<ParseDiagnostic> & {
 // argument is a value. All-uppercase segments are a qualified type name
 // (`Temperature.Fahrenheit`), which stays on the type path.
 auto Parser::toArgumentIsValue() const -> bool {
-  if (!check(TokenType::UpperIdent))
+    if (!check(TokenType::UpperIdent)) {
+        return false;
+    }
+    int offset = 1;
+    while (peekAt(offset).type == TokenType::Dot) {
+        const auto& segment = peekAt(offset + 1);
+        if (segment.type != TokenType::UpperIdent) {
+            return true;
+        }
+        offset += 2;
+    }
     return false;
-  int offset = 1;
-  while (peekAt(offset).type == TokenType::Dot) {
-    const auto &segment = peekAt(offset + 1);
-    if (segment.type != TokenType::UpperIdent)
-      return true;
-    offset += 2;
-  }
-  return false;
 }
 
 // ===== Token Navigation =====
 
-auto Parser::peek() const -> const Token & { return m_tokens[m_pos]; }
-
-auto Parser::peekNext() const -> const Token & {
-  if (m_pos + 1 >= static_cast<int>(m_tokens.size())) {
-    return m_tokens.back();
-  }
-  return m_tokens[m_pos + 1];
+auto Parser::peek() const -> const Token& {
+    return m_tokens[m_pos];
 }
 
-auto Parser::peekAt(int offset) const -> const Token & {
-  const int index = m_pos + offset;
-  if (index >= static_cast<int>(m_tokens.size()))
-    return m_tokens.back();
-  return m_tokens[index < 0 ? 0 : index];
+auto Parser::peekNext() const -> const Token& {
+    if (m_pos + 1 >= static_cast<int>(m_tokens.size())) {
+        return m_tokens.back();
+    }
+    return m_tokens[m_pos + 1];
 }
 
-auto Parser::advance() -> const Token & {
-  const auto &token = m_tokens[m_pos];
-  if (!atEnd())
-    m_pos++;
-  return token;
+auto Parser::peekAt(int offset) const -> const Token& {
+    const int index = m_pos + offset;
+    if (index >= static_cast<int>(m_tokens.size())) {
+        return m_tokens.back();
+    }
+    return m_tokens[index < 0 ? 0 : index];
 }
 
-auto Parser::atEnd() const -> bool { return peek().type == TokenType::Eof; }
+auto Parser::advance() -> const Token& {
+    const auto& token = m_tokens[m_pos];
+    if (!atEnd()) {
+        m_pos++;
+    }
+    return token;
+}
 
-auto Parser::check(TokenType type) const -> bool { return peek().type == type; }
+auto Parser::atEnd() const -> bool {
+    return peek().type == TokenType::Eof;
+}
+
+auto Parser::check(TokenType type) const -> bool {
+    return peek().type == type;
+}
 
 auto Parser::match(TokenType type) -> bool {
-  if (check(type)) {
-    advance();
-    return true;
-  }
-  return false;
+    if (check(type)) {
+        advance();
+        return true;
+    }
+    return false;
 }
 
-auto Parser::expect(TokenType type, const std::string &message)
-    -> const Token & {
-  if (check(type)) {
-    return advance();
-  }
-  error(message + ", got " + std::string(tokenTypeName(peek().type)) +
+auto Parser::expect(TokenType type, const std::string& message) -> const Token& {
+    if (check(type)) {
+        return advance();
+    }
+    error(
+        message + ", got " + std::string(tokenTypeName(peek().type)) +
         (peek().value.empty() ? "" : " [" + peek().value + "]"));
 }
 
 auto Parser::skipNewlines() -> void {
-  while (check(TokenType::Newline)) {
-    advance();
-  }
+    while (check(TokenType::Newline)) {
+        advance();
+    }
 }
 
 auto Parser::currentLocation() const -> SourceLocation {
-  auto location = peek().location;
-  // Token::startOffset/endOffset predate byte ranges on SourceLocation, and
-  // some tests and embedding callers still construct Token values directly.
-  // Normalize at this single parser boundary instead of scattering fallback
-  // logic through every AST constructor.
-  if (location.startOffset < 0)
-    location.startOffset = peek().startOffset;
-  if (location.endOffset < 0)
-    location.endOffset = peek().endOffset;
-  return location;
+    auto location = peek().location;
+    // Token::startOffset/endOffset predate byte ranges on SourceLocation, and
+    // some tests and embedding callers still construct Token values directly.
+    // Normalize at this single parser boundary instead of scattering fallback
+    // logic through every AST constructor.
+    if (location.startOffset < 0) {
+        location.startOffset = peek().startOffset;
+    }
+    if (location.endOffset < 0) {
+        location.endOffset = peek().endOffset;
+    }
+    return location;
 }
 
 // A single uppercase letter is a type PARAMETER — `T` in
@@ -119,31 +133,32 @@ auto Parser::currentLocation() const -> SourceLocation {
 // `trait T` or `make T` would put a concrete type and a type variable behind
 // the same spelling, and a reader looking at `x: T` could no longer tell which
 // they were being shown.
-auto Parser::rejectSingleLetterTypeName(const std::string &name,
-                                        const char *what) -> void {
-  if (name.size() != 1)
-    return;
-  error(std::string("`") + name +
-        "` is a type parameter, so it cannot name a " + what +
+auto Parser::rejectSingleLetterTypeName(const std::string& name, const char* what) -> void {
+    if (name.size() != 1) {
+        return;
+    }
+    error(
+        std::string("`") + name + "` is a type parameter, so it cannot name a " + what +
         ", give it a longer name");
 }
 
-auto Parser::rejectReservedName(const char *what) -> void {
-  if (!isKeywordToken(peek().type))
-    return;
-  const auto loc = currentLocation();
-  const auto message = "`" + std::string(tokenTypeName(peek().type)) +
-                       "` is a reserved keyword in Kex, so it cannot name a " +
-                       std::string(what) + " — rename it";
-  // The keyword is consumed BEFORE reporting, for the same reason `foul
-  // module` consumes its `foul`: error() throws, and syncToTopLevel resumes on
-  // exactly these tokens, so leaving it in place put the recovery loop back on
-  // the token that just failed. Every reserved-keyword report was then
-  // followed by a second, meaningless one — `let compiled = 1` said what was
-  // wrong and then added "Expected 'do' after 'compiled', got =".
-  advance();
-  m_diagnostics.push_back({loc, message});
-  throw ParseError{loc, message};
+auto Parser::rejectReservedName(const char* what) -> void {
+    if (!isKeywordToken(peek().type)) {
+        return;
+    }
+    const auto loc = currentLocation();
+    const auto message = "`" + std::string(tokenTypeName(peek().type)) +
+                         "` is a reserved keyword in Kex, so it cannot name a " +
+                         std::string(what) + " — rename it";
+    // The keyword is consumed BEFORE reporting, for the same reason `foul
+    // module` consumes its `foul`: error() throws, and syncToTopLevel resumes on
+    // exactly these tokens, so leaving it in place put the recovery loop back on
+    // the token that just failed. Every reserved-keyword report was then
+    // followed by a second, meaningless one — `let compiled = 1` said what was
+    // wrong and then added "Expected 'do' after 'compiled', got =".
+    advance();
+    m_diagnostics.push_back({loc, message});
+    throw ParseError{loc, message};
 }
 
 // `let compiled = 1` / `let compiled(x) = x` — the name is a keyword, so
@@ -154,22 +169,23 @@ auto Parser::rejectReservedName(const char *what) -> void {
 // declaration NAME position — no pattern starts that way — so report it the
 // same way a `make` block's method already does.
 auto Parser::rejectReservedBindingName() -> void {
-  const auto name = peekNext().type;
-  if (!isKeywordToken(name))
-    return;
-  // The keywords Kex deliberately lets a declaration use as its name (see
-  // parseFunctionDef's accepted list). `let match = expr` is a legal binding.
-  if (name == TokenType::Loop || name == TokenType::Match ||
-      name == TokenType::Spawn || name == TokenType::After ||
-      name == TokenType::Next)
-    return;
-  const auto after = static_cast<size_t>(m_pos) + 2 < m_tokens.size()
-                         ? m_tokens[m_pos + 2].type
-                         : TokenType::Eof;
-  if (after != TokenType::Equals && after != TokenType::LParen)
-    return;
-  advance(); // let
-  rejectReservedName("function");
+    const auto name = peekNext().type;
+    if (!isKeywordToken(name)) {
+        return;
+    }
+    // The keywords Kex deliberately lets a declaration use as its name (see
+    // parseFunctionDef's accepted list). `let match = expr` is a legal binding.
+    if (name == TokenType::Loop || name == TokenType::Match || name == TokenType::Spawn ||
+        name == TokenType::After || name == TokenType::Next) {
+        return;
+    }
+    const auto after = static_cast<size_t>(m_pos) + 2 < m_tokens.size() ? m_tokens[m_pos + 2].type
+                                                                        : TokenType::Eof;
+    if (after != TokenType::Equals && after != TokenType::LParen) {
+        return;
+    }
+    advance(); // let
+    rejectReservedName("function");
 }
 
 // At `if` right after `return`: is this the if EXPRESSION (a returned value)
@@ -177,1000 +193,1013 @@ auto Parser::rejectReservedBindingName() -> void {
 // is followed by `then`, or by a line indented deeper than `return` that is not
 // itself closing a branch. Scans tokens only; consumes nothing.
 auto Parser::isReturnIfExpressionAhead(int returnColumn) const -> bool {
-  int offset = 1; // past `if`
-  int depth = 0;
-  for (;; ++offset) {
-    const auto &token = peekAt(offset);
-    if (token.type == TokenType::Eof)
-      return false;
-    if (token.type == TokenType::LParen || token.type == TokenType::LBracket ||
-        token.type == TokenType::LBrace)
-      ++depth;
-    else if (token.type == TokenType::RParen ||
-             token.type == TokenType::RBracket ||
-             token.type == TokenType::RBrace)
-      --depth;
-    else if (depth <= 0 && token.type == TokenType::Then)
-      return true;
-    else if (depth <= 0 && token.type == TokenType::Newline)
-      break;
-  }
-  while (peekAt(offset).type == TokenType::Newline)
-    ++offset;
-  const auto &next = peekAt(offset);
-  if (next.type == TokenType::End || next.type == TokenType::Else ||
-      next.type == TokenType::Elif || next.type == TokenType::Eof)
-    return false;
-  return next.location.column > returnColumn;
+    int offset = 1; // past `if`
+    int depth = 0;
+    for (;; ++offset) {
+        const auto& token = peekAt(offset);
+        if (token.type == TokenType::Eof) {
+            return false;
+        }
+        if (token.type == TokenType::LParen || token.type == TokenType::LBracket ||
+            token.type == TokenType::LBrace) {
+            ++depth;
+        } else if (
+            token.type == TokenType::RParen || token.type == TokenType::RBracket ||
+            token.type == TokenType::RBrace) {
+            --depth;
+        } else if (depth <= 0 && token.type == TokenType::Then) {
+            return true;
+        } else if (depth <= 0 && token.type == TokenType::Newline) {
+            break;
+        }
+    }
+    while (peekAt(offset).type == TokenType::Newline) {
+        ++offset;
+    }
+    const auto& next = peekAt(offset);
+    if (next.type == TokenType::End || next.type == TokenType::Else ||
+        next.type == TokenType::Elif || next.type == TokenType::Eof) {
+        return false;
+    }
+    return next.location.column > returnColumn;
 }
 
 // `kex::ast::FunctionDef` -> `FunctionDef`: the unqualified C++ type name is
 // the syntax kind, so a new node type needs no table entry to show up in the
 // syntax tree (kexhq/kex#136).
-auto Parser::syntaxKindName(const std::type_info &type) -> std::string {
-  int status = 0;
-  std::unique_ptr<char, void (*)(void *)> demangled(
-      abi::__cxa_demangle(type.name(), nullptr, nullptr, &status), std::free);
-  std::string name = status == 0 && demangled ? demangled.get() : type.name();
-  if (const auto colon = name.rfind("::"); colon != std::string::npos)
-    name = name.substr(colon + 2);
-  return name;
+auto Parser::syntaxKindName(const std::type_info& type) -> std::string {
+    int status = 0;
+    std::unique_ptr<char, void (*)(void*)> demangled(
+        abi::__cxa_demangle(type.name(), nullptr, nullptr, &status), std::free);
+    std::string name = status == 0 && demangled ? demangled.get() : type.name();
+    if (const auto colon = name.rfind("::"); colon != std::string::npos) {
+        name = name.substr(colon + 2);
+    }
+    return name;
 }
 
-auto Parser::error(const std::string &message) -> void {
-  auto loc = currentLocation();
-  std::string msg = message;
-  if (peek().type == TokenType::Error && !peek().value.empty()) {
-    msg = peek().value;
-  }
-  m_diagnostics.push_back({loc, msg});
-  throw ParseError{loc, msg};
+auto Parser::error(const std::string& message) -> void {
+    auto loc = currentLocation();
+    std::string msg = message;
+    if (peek().type == TokenType::Error && !peek().value.empty()) {
+        msg = peek().value;
+    }
+    m_diagnostics.push_back({loc, msg});
+    throw ParseError{loc, msg};
 }
 
 auto Parser::syncToTopLevel() -> void {
-  while (!atEnd()) {
-    switch (peek().type) {
-    case TokenType::Let:
-    case TokenType::Foul:
-    case TokenType::Module:
-    case TokenType::Capability:
-    case TokenType::Type:
-    case TokenType::Record:
-    case TokenType::Trait:
-    case TokenType::Make:
-    case TokenType::Serving:
-    case TokenType::Main:
-    case TokenType::Compiled:
-    case TokenType::Using:
-    case TokenType::HashLBracket:
-      return;
-    default:
-      advance();
+    while (!atEnd()) {
+        switch (peek().type) {
+            case TokenType::Let:
+            case TokenType::Foul:
+            case TokenType::Module:
+            case TokenType::Capability:
+            case TokenType::Type:
+            case TokenType::Record:
+            case TokenType::Trait:
+            case TokenType::Make:
+            case TokenType::Serving:
+            case TokenType::Main:
+            case TokenType::Compiled:
+            case TokenType::Using:
+            case TokenType::HashLBracket: return;
+            default: advance();
+        }
     }
-  }
 }
 
 auto Parser::syncToStatement() -> void {
-  while (!atEnd() && !check(TokenType::End) && !check(TokenType::Newline) &&
-         !check(TokenType::Eof)) {
-    advance();
-  }
+    while (!atEnd() && !check(TokenType::End) && !check(TokenType::Newline) &&
+           !check(TokenType::Eof)) {
+        advance();
+    }
 }
 
 // ===== Program =====
 
 auto Parser::parseProgram() -> ast::Program {
-  ast::Program program;
-  skipNewlines();
-
-  while (!atEnd()) {
-    try {
-      if ((check(TokenType::Module) || check(TokenType::Capability) ||
-           (check(TokenType::Foul) && peekNext().type == TokenType::Module)) &&
-          program.items.empty()) {
-        program.items.push_back(parseModuleDef(true));
-      } else {
-        program.items.push_back(parseTopLevelItem());
-      }
-      for (auto &deferred : m_deferredTopLevelItems)
-        program.items.push_back(std::move(deferred));
-      m_deferredTopLevelItems.clear();
-    } catch (const ParseError &) {
-      // Diagnostic already recorded in m_diagnostics; skip to the next
-      // safe top-level keyword and continue parsing.
-      syncToTopLevel();
-    }
+    ast::Program program;
     skipNewlines();
-  }
 
-  // A standalone `f : A -> B` line is the other way to give a free
-  // function its parameter types; point the parameters at it so overload
-  // dispatch sees them (docs/issue-free-function-overloads.md).
-  attachSignatureParamTypes(program.items);
-  // After the signature lines are attached: each one types the declaration
-  // that follows it, so the declarations must still stand apart then.
-  ast::groupFunctionClauses(program);
-  return program;
+    while (!atEnd()) {
+        try {
+            if ((check(TokenType::Module) || check(TokenType::Capability) ||
+                 (check(TokenType::Foul) && peekNext().type == TokenType::Module)) &&
+                program.items.empty()) {
+                program.items.push_back(parseModuleDef(true));
+            } else {
+                program.items.push_back(parseTopLevelItem());
+            }
+            for (auto& deferred : m_deferredTopLevelItems) {
+                program.items.push_back(std::move(deferred));
+            }
+            m_deferredTopLevelItems.clear();
+        } catch (const ParseError&) {
+            // Diagnostic already recorded in m_diagnostics; skip to the next
+            // safe top-level keyword and continue parsing.
+            syncToTopLevel();
+        }
+        skipNewlines();
+    }
+
+    // A standalone `f : A -> B` line is the other way to give a free
+    // function its parameter types; point the parameters at it so overload
+    // dispatch sees them (docs/issue-free-function-overloads.md).
+    attachSignatureParamTypes(program.items);
+    // After the signature lines are attached: each one types the declaration
+    // that follows it, so the declarations must still stand apart then.
+    ast::groupFunctionClauses(program);
+    return program;
 }
 
 auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
-  if (check(TokenType::Module) || check(TokenType::Capability) ||
-      (check(TokenType::Foul) && peekNext().type == TokenType::Module)) {
-    return parseModuleDef();
-  }
-  if (check(TokenType::Type) ||
-      (check(TokenType::LowerIdent) && peek().value == "distinct" &&
-       peekNext().type == TokenType::Type))
-    return parseTypeDef();
-  if (check(TokenType::Record))
-    return parseRecordDef();
-  if (check(TokenType::Trait))
-    return parseTraitDef();
-  if (check(TokenType::Make))
-    return parseMakeDef();
-  if (check(TokenType::Serving))
-    return parseServingDef();
-  if (check(TokenType::Compiled))
-    return parseCompiledBlock();
-  if (check(TokenType::Using))
-    return parseUsingBlock();
-  if (check(TokenType::Main))
-    return parseMainBlock();
-  if (check(TokenType::HashLBracket))
-    return parsePragma();
-
-  if (check(TokenType::Foul)) {
-    return parseFunctionDef(true);
-  }
-  if (check(TokenType::Let)) {
-    if (isLetFunctionDefAhead()) {
-      return parseFunctionDef();
+    if (check(TokenType::Module) || check(TokenType::Capability) ||
+        (check(TokenType::Foul) && peekNext().type == TokenType::Module)) {
+        return parseModuleDef();
     }
-    rejectReservedBindingName();
-    // Plain value binding or destructuring (let { ... } = ..., let x = expr,
-    // etc.)
-    auto mainBlock = std::make_unique<ast::MainBlock>();
-    mainBlock->location = currentLocation();
-    mainBlock->synthetic = true;
-    mainBlock->body.push_back(parseExpr());
-    return complete(std::move(mainBlock));
-  }
+    if (check(TokenType::Type) || (check(TokenType::LowerIdent) && peek().value == "distinct" &&
+                                   peekNext().type == TokenType::Type)) {
+        return parseTypeDef();
+    }
+    if (check(TokenType::Record)) {
+        return parseRecordDef();
+    }
+    if (check(TokenType::Trait)) {
+        return parseTraitDef();
+    }
+    if (check(TokenType::Make)) {
+        return parseMakeDef();
+    }
+    if (check(TokenType::Serving)) {
+        return parseServingDef();
+    }
+    if (check(TokenType::Compiled)) {
+        return parseCompiledBlock();
+    }
+    if (check(TokenType::Using)) {
+        return parseUsingBlock();
+    }
+    if (check(TokenType::Main)) {
+        return parseMainBlock();
+    }
+    if (check(TokenType::HashLBracket)) {
+        return parsePragma();
+    }
 
-  // Top-level type annotation: `name : Type` — must be checked before
-  // the generic expression fallback below, since a bare LowerIdent is
-  // also a valid expression start (e.g. a bare function call). A
-  // LowerIdent immediately followed by `:` is unambiguous: no expression
-  // construct starts that way.
-  //
-  // `:>` (implicit-This signature) is deliberately NOT accepted here —
-  // it only makes sense inside `make T do ... end`, where T is known to
-  // be the implicit first param's type. At top level there's no such T.
-  if ((check(TokenType::LowerIdent) || check(TokenType::After)) &&
-      peekNext().type == TokenType::Colon) {
-    return parseTypeAnnotation();
-  }
-  if (check(TokenType::LowerIdent) &&
-      peekNext().type == TokenType::TypeAnnotation) {
-    error("':>' (implicit-This signature) is only valid inside 'make T do ... "
-          "end' — "
-          "use ':' at top level instead");
-  }
+    if (check(TokenType::Foul)) {
+        return parseFunctionDef(true);
+    }
+    if (check(TokenType::Let)) {
+        if (isLetFunctionDefAhead()) {
+            return parseFunctionDef();
+        }
+        rejectReservedBindingName();
+        // Plain value binding or destructuring (let { ... } = ..., let x = expr,
+        // etc.)
+        auto mainBlock = std::make_unique<ast::MainBlock>();
+        mainBlock->location = currentLocation();
+        mainBlock->synthetic = true;
+        mainBlock->body.push_back(parseExpr());
+        return complete(std::move(mainBlock));
+    }
 
-  // Top-level expression (e.g. describe blocks in tests, bare function calls)
-  if (isAtExprStart()) {
-    auto mainBlock = std::make_unique<ast::MainBlock>();
-    mainBlock->location = currentLocation();
-    mainBlock->body.push_back(parseExpr());
-    return complete(std::move(mainBlock));
-  }
+    // Top-level type annotation: `name : Type` — must be checked before
+    // the generic expression fallback below, since a bare LowerIdent is
+    // also a valid expression start (e.g. a bare function call). A
+    // LowerIdent immediately followed by `:` is unambiguous: no expression
+    // construct starts that way.
+    //
+    // `:>` (implicit-This signature) is deliberately NOT accepted here —
+    // it only makes sense inside `make T do ... end`, where T is known to
+    // be the implicit first param's type. At top level there's no such T.
+    if ((check(TokenType::LowerIdent) || check(TokenType::After)) &&
+        peekNext().type == TokenType::Colon) {
+        return parseTypeAnnotation();
+    }
+    if (check(TokenType::LowerIdent) && peekNext().type == TokenType::TypeAnnotation) {
+        error(
+            "':>' (implicit-This signature) is only valid inside 'make T do ... "
+            "end' — "
+            "use ':' at top level instead");
+    }
 
-  error("Unexpected token at top level: " +
-        std::string(tokenTypeName(peek().type)));
+    // Top-level expression (e.g. describe blocks in tests, bare function calls)
+    if (isAtExprStart()) {
+        auto mainBlock = std::make_unique<ast::MainBlock>();
+        mainBlock->location = currentLocation();
+        mainBlock->body.push_back(parseExpr());
+        return complete(std::move(mainBlock));
+    }
+
+    error("Unexpected token at top level: " + std::string(tokenTypeName(peek().type)));
 }
 
 // ===== Module =====
 
-auto Parser::parseModuleDef(bool allowStandalone,
-                            const std::string &parentModule)
+auto Parser::parseModuleDef(bool allowStandalone, const std::string& parentModule)
     -> std::unique_ptr<ast::ModuleDef> {
-  auto mod = std::make_unique<ast::ModuleDef>();
-  mod->location = currentLocation();
+    auto mod = std::make_unique<ast::ModuleDef>();
+    mod->location = currentLocation();
 
-  // `foul module` used to make every member foul, so a `let` inside one was
-  // silently a foul function — an effect declared arbitrarily far from the
-  // definition it applied to. Effects are per-function now (kexhq/kex#130).
-  if (check(TokenType::Foul) && peekNext().type == TokenType::Module) {
-    // `foul` is consumed BEFORE reporting: error() throws, and syncToTopLevel
-    // treats `foul` as a resume point, so leaving it in place would put the
-    // recovery loop straight back on this token and spin forever.
-    advance();
-    error("'foul module' is no longer supported — mark each effectful "
-          "function 'foul' at its own definition instead");
-  }
+    // `foul module` used to make every member foul, so a `let` inside one was
+    // silently a foul function — an effect declared arbitrarily far from the
+    // definition it applied to. Effects are per-function now (kexhq/kex#130).
+    if (check(TokenType::Foul) && peekNext().type == TokenType::Module) {
+        // `foul` is consumed BEFORE reporting: error() throws, and syncToTopLevel
+        // treats `foul` as a resume point, so leaving it in place would put the
+        // recovery loop straight back on this token and spin forever.
+        advance();
+        error(
+            "'foul module' is no longer supported — mark each effectful "
+            "function 'foul' at its own definition instead");
+    }
 
-  // `capability Name do ... end` is a module that may be substituted; it
-  // parses identically so every later phase sees the ModuleDef it already
-  // understands (kexhq/kex#143).
-  if (check(TokenType::Capability)) {
-    advance();
-    mod->isCapability = true;
-  } else {
-    expect(TokenType::Module, "Expected 'module'");
-  }
-  auto moduleName = parseTypeName();
-  mod->name += moduleName.dotted();
-  if (!parentModule.empty() && mod->name.find('.') == std::string::npos)
-    mod->name = parentModule + "." + mod->name;
-  // A file-level `module Name` without `do` is desugared into the same
-  // ModuleDef used for `module Name do ... end`; it simply runs to EOF.
-  // Keeping one AST form means all later phases remain unaware of the
-  // source-level shorthand.
-  const bool standalone = !match(TokenType::Do);
-  if (standalone && !allowStandalone)
-    error("standalone 'module' must be the first statement in a file");
-  skipNewlines();
-
-  while (!atEnd() && (standalone || !check(TokenType::End))) {
-    if (check(TokenType::Module) || check(TokenType::Capability) ||
-        (check(TokenType::Foul) && peekNext().type == TokenType::Module)) {
-      mod->body.push_back(parseModuleDef(false, mod->name));
-    } else if (check(TokenType::Type) ||
-               (check(TokenType::LowerIdent) && peek().value == "distinct" &&
-                peekNext().type == TokenType::Type)) {
-      mod->body.push_back(parseTypeDef());
-    } else if (check(TokenType::Record)) {
-      mod->body.push_back(parseRecordDef());
-    } else if (check(TokenType::Trait)) {
-      mod->body.push_back(parseTraitDef());
-    } else if (check(TokenType::Make)) {
-      mod->body.push_back(parseMakeDef());
-    } else if (check(TokenType::Serving)) {
-      mod->body.push_back(parseServingDef());
-    } else if (check(TokenType::Compiled)) {
-      mod->body.push_back(parseCompiledBlock());
-    } else if (check(TokenType::Using)) {
-      mod->body.push_back(parseUsingBlock());
-    } else if (check(TokenType::Export)) {
-      mod->body.push_back(parseExportDecl());
-    } else if (check(TokenType::Public) || check(TokenType::Private)) {
-      mod->body.push_back(parseVisibilityBlock());
-    } else if (check(TokenType::Main)) {
-      if (!standalone)
-        error("'main' blocks are not allowed inside block modules");
-      m_deferredTopLevelItems.push_back(parseMainBlock());
-    } else if (check(TokenType::Foul)) {
-      mod->body.push_back(parseFunctionDef(true));
-    } else if (check(TokenType::Let)) {
-      mod->body.push_back(parseFunctionDef());
-    } else if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
-               check(TokenType::Spawn) || check(TokenType::After)) {
-      mod->body.push_back(parseTypeAnnotation());
+    // `capability Name do ... end` is a module that may be substituted; it
+    // parses identically so every later phase sees the ModuleDef it already
+    // understands (kexhq/kex#143).
+    if (check(TokenType::Capability)) {
+        advance();
+        mod->isCapability = true;
     } else {
-      error("Unexpected token in module body: " +
-            std::string(tokenTypeName(peek().type)));
+        expect(TokenType::Module, "Expected 'module'");
+    }
+    auto moduleName = parseTypeName();
+    mod->name += moduleName.dotted();
+    if (!parentModule.empty() && mod->name.find('.') == std::string::npos) {
+        mod->name = parentModule + "." + mod->name;
+    }
+    // A file-level `module Name` without `do` is desugared into the same
+    // ModuleDef used for `module Name do ... end`; it simply runs to EOF.
+    // Keeping one AST form means all later phases remain unaware of the
+    // source-level shorthand.
+    const bool standalone = !match(TokenType::Do);
+    if (standalone && !allowStandalone) {
+        error("standalone 'module' must be the first statement in a file");
     }
     skipNewlines();
-  }
 
-  if (!standalone) {
-    expect(TokenType::End, "Expected 'end' to close module");
-  }
-  return complete(std::move(mod));
+    while (!atEnd() && (standalone || !check(TokenType::End))) {
+        if (check(TokenType::Module) || check(TokenType::Capability) ||
+            (check(TokenType::Foul) && peekNext().type == TokenType::Module)) {
+            mod->body.push_back(parseModuleDef(false, mod->name));
+        } else if (
+            check(TokenType::Type) || (check(TokenType::LowerIdent) && peek().value == "distinct" &&
+                                       peekNext().type == TokenType::Type)) {
+            mod->body.push_back(parseTypeDef());
+        } else if (check(TokenType::Record)) {
+            mod->body.push_back(parseRecordDef());
+        } else if (check(TokenType::Trait)) {
+            mod->body.push_back(parseTraitDef());
+        } else if (check(TokenType::Make)) {
+            mod->body.push_back(parseMakeDef());
+        } else if (check(TokenType::Serving)) {
+            mod->body.push_back(parseServingDef());
+        } else if (check(TokenType::Compiled)) {
+            mod->body.push_back(parseCompiledBlock());
+        } else if (check(TokenType::Using)) {
+            mod->body.push_back(parseUsingBlock());
+        } else if (check(TokenType::Export)) {
+            mod->body.push_back(parseExportDecl());
+        } else if (check(TokenType::Public) || check(TokenType::Private)) {
+            mod->body.push_back(parseVisibilityBlock());
+        } else if (check(TokenType::Main)) {
+            if (!standalone) {
+                error("'main' blocks are not allowed inside block modules");
+            }
+            m_deferredTopLevelItems.push_back(parseMainBlock());
+        } else if (check(TokenType::Foul)) {
+            mod->body.push_back(parseFunctionDef(true));
+        } else if (check(TokenType::Let)) {
+            mod->body.push_back(parseFunctionDef());
+        } else if (
+            check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
+            check(TokenType::Spawn) || check(TokenType::After)) {
+            mod->body.push_back(parseTypeAnnotation());
+        } else {
+            error("Unexpected token in module body: " + std::string(tokenTypeName(peek().type)));
+        }
+        skipNewlines();
+    }
+
+    if (!standalone) {
+        expect(TokenType::End, "Expected 'end' to close module");
+    }
+    return complete(std::move(mod));
 }
 
 // ===== Type Def =====
 
 auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
-  auto def = std::make_unique<ast::TypeDef>();
-  def->location = currentLocation();
-  if (check(TokenType::LowerIdent) && peek().value == "distinct") {
-    advance();
-    def->isDistinct = true;
-  }
-  expect(TokenType::Type, "Expected 'type'");
-
-  def->name = expect(TokenType::UpperIdent, "Expected type name").value;
-  rejectSingleLetterTypeName(def->name, "type");
-
-  // Type params: <A, B> — only if followed by single-letter uppercase params
-  // and > Inheritance: < Parent1, Parent2 — followed by multi-letter names
-  if (check(TokenType::LessThan)) {
-    // Look ahead: if the next token after < is a single-letter UpperIdent
-    // and eventually we find >, it's type params. Otherwise it's inheritance.
-    auto savedPos = m_pos;
-    advance(); // consume <
-
-    bool isTypeParams = false;
-    if (check(TokenType::UpperIdent) && peek().value.size() == 1) {
-      // Likely type params
-      isTypeParams = true;
+    auto def = std::make_unique<ast::TypeDef>();
+    def->location = currentLocation();
+    if (check(TokenType::LowerIdent) && peek().value == "distinct") {
+        advance();
+        def->isDistinct = true;
     }
+    expect(TokenType::Type, "Expected 'type'");
 
-    m_pos = savedPos; // restore
+    def->name = expect(TokenType::UpperIdent, "Expected type name").value;
+    rejectSingleLetterTypeName(def->name, "type");
 
-    if (isTypeParams) {
-      advance(); // <
-      do {
-        def->typeParams.push_back(
-            expect(TokenType::UpperIdent, "Expected type parameter").value);
-      } while (match(TokenType::Comma));
-      expect(TokenType::GreaterThan, "Expected '>' after type parameters");
+    // Type params: <A, B> — only if followed by single-letter uppercase params
+    // and > Inheritance: < Parent1, Parent2 — followed by multi-letter names
+    if (check(TokenType::LessThan)) {
+        // Look ahead: if the next token after < is a single-letter UpperIdent
+        // and eventually we find >, it's type params. Otherwise it's inheritance.
+        auto savedPos = m_pos;
+        advance(); // consume <
 
-      // Could still have inheritance after type params
-      if (match(TokenType::LessThan)) {
-        do {
-          def->parents.push_back(parseTypeName());
-        } while (match(TokenType::Comma));
-      }
-    } else {
-      // Inheritance
-      advance(); // <
-      do {
-        def->parents.push_back(parseTypeName());
-      } while (match(TokenType::Comma));
-    }
-  }
+        bool isTypeParams = false;
+        if (check(TokenType::UpperIdent) && peek().value.size() == 1) {
+            // Likely type params
+            isTypeParams = true;
+        }
 
-  skipNewlines();
+        m_pos = savedPos; // restore
 
-  // Sum type: = Variant1(A) | Variant2 | Variant3(B, C)
-  if (match(TokenType::Equals)) {
-    def->variants = std::vector<ast::TypeExprPtr>{};
-    auto parseVariant = [this]() -> ast::TypeExprPtr {
-      auto variant = std::make_unique<ast::TypeExpr>();
-      variant->location = currentLocation();
+        if (isTypeParams) {
+            advance(); // <
+            do {
+                def->typeParams.push_back(
+                    expect(TokenType::UpperIdent, "Expected type parameter").value);
+            } while (match(TokenType::Comma));
+            expect(TokenType::GreaterThan, "Expected '>' after type parameters");
 
-      // `type Row = Type.returnedBy(parseRow)` — a computed alias, not a
-      // constructor list. It looks like an UpperIdent to the branch
-      // below, so it is recognised first.
-      if (check(TokenType::UpperIdent) && peek().value == "Type" &&
-          peekNext().type == TokenType::Dot &&
-          peekAt(2).type == TokenType::LowerIdent)
-        return parseTypePrimary();
-
-      if (check(TokenType::UpperIdent) || check(TokenType::None)) {
-        auto name = check(TokenType::None)
-                        ? (advance(), ast::TypeName{{"None"}})
-                        : parseTypeName();
-        // Constructor with args: Variant(Type1, Type2)
-        if (match(TokenType::LParen)) {
-          std::vector<ast::TypeExprPtr> args;
-          if (!check(TokenType::RParen)) {
-            args.push_back(parseTypeExpr());
-            while (match(TokenType::Comma)) {
-              args.push_back(parseTypeExpr());
+            // Could still have inheritance after type params
+            if (match(TokenType::LessThan)) {
+                do {
+                    def->parents.push_back(parseTypeName());
+                } while (match(TokenType::Comma));
             }
-          }
-          expect(TokenType::RParen, "Expected ')' after variant args");
-          variant->kind =
-              ast::GenericType{std::move(name), std::move(args), false};
-        } else if (match(TokenType::LessThan)) {
-          std::vector<ast::TypeExprPtr> args;
-          args.push_back(parseTypeExpr());
-          while (match(TokenType::Comma)) {
-            args.push_back(parseTypeExpr());
-          }
-          expect(TokenType::GreaterThan, "Expected '>'");
-          variant->kind = ast::GenericType{std::move(name), std::move(args)};
         } else {
-          variant->kind = std::move(name);
+            // Inheritance
+            advance(); // <
+            do {
+                def->parents.push_back(parseTypeName());
+            } while (match(TokenType::Comma));
         }
+    }
 
-        // Optional suffix: Name?
-        if (match(TokenType::Question)) {
-          auto startOffset = variant->location.startOffset;
-          auto opt = std::make_unique<ast::TypeExpr>();
-          opt->location = currentLocation();
-          opt->location.startOffset = startOffset;
-          opt->kind = ast::OptionalType{std::move(variant)};
-          variant = std::move(opt);
-        }
-
-        // Check for function type: Name -> Type (type alias)
-        if (check(TokenType::Arrow)) {
-          advance(); // ->
-          auto right = parseTypeFunction();
-          auto startOffset = variant->location.startOffset;
-          auto funcType = std::make_unique<ast::TypeExpr>();
-          funcType->location = currentLocation();
-          funcType->location.startOffset = startOffset;
-          funcType->kind =
-              ast::FunctionType{std::move(variant), std::move(right)};
-          return complete(std::move(funcType));
-        }
-      } else if (check(TokenType::Atom)) {
-        variant->kind = ast::AtomType{advance().value};
-      } else if (check(TokenType::LParen)) {
-        // Tuple type or grouped: (A, B) or (A -> B)
-        variant = parseTypePrimary();
-        if (check(TokenType::Arrow)) {
-          advance();
-          auto right = parseTypeFunction();
-          auto startOffset = variant->location.startOffset;
-          auto funcType = std::make_unique<ast::TypeExpr>();
-          funcType->location = currentLocation();
-          funcType->location.startOffset = startOffset;
-          funcType->kind =
-              ast::FunctionType{std::move(variant), std::move(right)};
-          return complete(std::move(funcType));
-        }
-      } else {
-        variant = parseTypeExpr();
-      }
-
-      // Capitalized alias targets take the constructor-aware path above so
-      // `type Result = Ok(A) | Error(E)` keeps its ADT reading. Continue an
-      // `&` tail here, though: `type NamedActive = Named & { active: Bool }`
-      // is one intersection alias, not a constructor followed by an
-      // expression-level receiver shorthand.
-      while (match(TokenType::Amp)) {
-        auto startOffset = variant->location.startOffset;
-        auto intersection = std::make_unique<ast::TypeExpr>();
-        intersection->location = currentLocation();
-        intersection->location.startOffset = startOffset;
-        auto right = parseTypeOr();
-        intersection->kind =
-            ast::IntersectionType{std::move(variant), std::move(right)};
-        variant = std::move(intersection);
-      }
-      return complete(std::move(variant));
-    };
-
-    // An optional leading `|` marks the list as variants even when only
-    // one follows — the one thing that distinguishes
-    // `type E = | DivideByZero` (ADT) from `type FilePath = String`
-    // (transparent alias).
     skipNewlines();
-    if (match(TokenType::Pipe)) {
-      def->leadingPipe = true;
-      skipNewlines();
+
+    // Sum type: = Variant1(A) | Variant2 | Variant3(B, C)
+    if (match(TokenType::Equals)) {
+        def->variants = std::vector<ast::TypeExprPtr>{};
+        auto parseVariant = [this]() -> ast::TypeExprPtr {
+            auto variant = std::make_unique<ast::TypeExpr>();
+            variant->location = currentLocation();
+
+            // `type Row = Type.returnedBy(parseRow)` — a computed alias, not a
+            // constructor list. It looks like an UpperIdent to the branch
+            // below, so it is recognised first.
+            if (check(TokenType::UpperIdent) && peek().value == "Type" &&
+                peekNext().type == TokenType::Dot && peekAt(2).type == TokenType::LowerIdent) {
+                return parseTypePrimary();
+            }
+
+            if (check(TokenType::UpperIdent) || check(TokenType::None)) {
+                auto name =
+                    check(TokenType::None) ? (advance(), ast::TypeName{{"None"}}) : parseTypeName();
+                // Constructor with args: Variant(Type1, Type2)
+                if (match(TokenType::LParen)) {
+                    std::vector<ast::TypeExprPtr> args;
+                    if (!check(TokenType::RParen)) {
+                        args.push_back(parseTypeExpr());
+                        while (match(TokenType::Comma)) {
+                            args.push_back(parseTypeExpr());
+                        }
+                    }
+                    expect(TokenType::RParen, "Expected ')' after variant args");
+                    variant->kind = ast::GenericType{std::move(name), std::move(args), false};
+                } else if (match(TokenType::LessThan)) {
+                    std::vector<ast::TypeExprPtr> args;
+                    args.push_back(parseTypeExpr());
+                    while (match(TokenType::Comma)) {
+                        args.push_back(parseTypeExpr());
+                    }
+                    expect(TokenType::GreaterThan, "Expected '>'");
+                    variant->kind = ast::GenericType{std::move(name), std::move(args)};
+                } else {
+                    variant->kind = std::move(name);
+                }
+
+                // Optional suffix: Name?
+                if (match(TokenType::Question)) {
+                    auto startOffset = variant->location.startOffset;
+                    auto opt = std::make_unique<ast::TypeExpr>();
+                    opt->location = currentLocation();
+                    opt->location.startOffset = startOffset;
+                    opt->kind = ast::OptionalType{std::move(variant)};
+                    variant = std::move(opt);
+                }
+
+                // Check for function type: Name -> Type (type alias)
+                if (check(TokenType::Arrow)) {
+                    advance(); // ->
+                    auto right = parseTypeFunction();
+                    auto startOffset = variant->location.startOffset;
+                    auto funcType = std::make_unique<ast::TypeExpr>();
+                    funcType->location = currentLocation();
+                    funcType->location.startOffset = startOffset;
+                    funcType->kind = ast::FunctionType{std::move(variant), std::move(right)};
+                    return complete(std::move(funcType));
+                }
+            } else if (check(TokenType::Atom)) {
+                variant->kind = ast::AtomType{advance().value};
+            } else if (check(TokenType::LParen)) {
+                // Tuple type or grouped: (A, B) or (A -> B)
+                variant = parseTypePrimary();
+                if (check(TokenType::Arrow)) {
+                    advance();
+                    auto right = parseTypeFunction();
+                    auto startOffset = variant->location.startOffset;
+                    auto funcType = std::make_unique<ast::TypeExpr>();
+                    funcType->location = currentLocation();
+                    funcType->location.startOffset = startOffset;
+                    funcType->kind = ast::FunctionType{std::move(variant), std::move(right)};
+                    return complete(std::move(funcType));
+                }
+            } else {
+                variant = parseTypeExpr();
+            }
+
+            // Capitalized alias targets take the constructor-aware path above so
+            // `type Result = Ok(A) | Error(E)` keeps its ADT reading. Continue an
+            // `&` tail here, though: `type NamedActive = Named & { active: Bool }`
+            // is one intersection alias, not a constructor followed by an
+            // expression-level receiver shorthand.
+            while (match(TokenType::Amp)) {
+                auto startOffset = variant->location.startOffset;
+                auto intersection = std::make_unique<ast::TypeExpr>();
+                intersection->location = currentLocation();
+                intersection->location.startOffset = startOffset;
+                auto right = parseTypeOr();
+                intersection->kind = ast::IntersectionType{std::move(variant), std::move(right)};
+                variant = std::move(intersection);
+            }
+            return complete(std::move(variant));
+        };
+
+        // An optional leading `|` marks the list as variants even when only
+        // one follows — the one thing that distinguishes
+        // `type E = | DivideByZero` (ADT) from `type FilePath = String`
+        // (transparent alias).
+        skipNewlines();
+        if (match(TokenType::Pipe)) {
+            def->leadingPipe = true;
+            skipNewlines();
+        }
+
+        // Parse using variant parser that handles constructors with args
+        // First variant, then check for | (with newline support)
+        def->variants->push_back(parseVariant());
+        skipNewlines();
+        while (match(TokenType::Pipe)) {
+            skipNewlines();
+            def->variants->push_back(parseVariant());
+            skipNewlines();
+        }
+
+        // If only one variant and it's a function/complex type, it's a type alias
+        // Reparse as full type expr if no pipes were found
+        if (def->variants->size() == 1) {
+            // Check if next meaningful token after the type is -> (function type)
+            // Already handled since parseVariant falls through to parseTypeExpr for
+            // non-constructors
+        }
+    }
+    // Abstract type with required functions
+    else if (match(TokenType::Do)) {
+        skipNewlines();
+        def->abstractFunctions = std::vector<ast::AbstractFunction>{};
+        while (!check(TokenType::End) && !atEnd()) {
+            ast::AbstractFunction func;
+            func.name = expect(TokenType::LowerIdent, "Expected function name").value;
+            if (match(TokenType::TypeAnnotation)) {
+                func.implicitThis = true;
+            } else {
+                expect(TokenType::Colon, "Expected ':' or ':>' after function name");
+                func.implicitThis = false;
+            }
+            func.type = parseTypeExpr();
+            def->abstractFunctions->push_back(std::move(func));
+            skipNewlines();
+        }
+        expect(TokenType::End, "Expected 'end' to close type");
     }
 
-    // Parse using variant parser that handles constructors with args
-    // First variant, then check for | (with newline support)
-    def->variants->push_back(parseVariant());
-    skipNewlines();
-    while (match(TokenType::Pipe)) {
-      skipNewlines();
-      def->variants->push_back(parseVariant());
-      skipNewlines();
+    if (def->isDistinct && (!def->variants || def->variants->size() != 1 || def->leadingPipe)) {
+        error("A distinct type needs exactly one backing type after '='");
     }
 
-    // If only one variant and it's a function/complex type, it's a type alias
-    // Reparse as full type expr if no pipes were found
-    if (def->variants->size() == 1) {
-      // Check if next meaningful token after the type is -> (function type)
-      // Already handled since parseVariant falls through to parseTypeExpr for
-      // non-constructors
-    }
-  }
-  // Abstract type with required functions
-  else if (match(TokenType::Do)) {
-    skipNewlines();
-    def->abstractFunctions = std::vector<ast::AbstractFunction>{};
-    while (!check(TokenType::End) && !atEnd()) {
-      ast::AbstractFunction func;
-      func.name = expect(TokenType::LowerIdent, "Expected function name").value;
-      if (match(TokenType::TypeAnnotation)) {
-        func.implicitThis = true;
-      } else {
-        expect(TokenType::Colon, "Expected ':' or ':>' after function name");
-        func.implicitThis = false;
-      }
-      func.type = parseTypeExpr();
-      def->abstractFunctions->push_back(std::move(func));
-      skipNewlines();
-    }
-    expect(TokenType::End, "Expected 'end' to close type");
-  }
-
-  if (def->isDistinct &&
-      (!def->variants || def->variants->size() != 1 || def->leadingPipe))
-    error("A distinct type needs exactly one backing type after '='");
-
-  return complete(std::move(def));
+    return complete(std::move(def));
 }
 
 // ===== Record =====
 
 auto Parser::parseRecordDef() -> std::unique_ptr<ast::RecordDef> {
-  auto def = std::make_unique<ast::RecordDef>();
-  def->location = currentLocation();
-  expect(TokenType::Record, "Expected 'record'");
+    auto def = std::make_unique<ast::RecordDef>();
+    def->location = currentLocation();
+    expect(TokenType::Record, "Expected 'record'");
 
-  def->name = expect(TokenType::UpperIdent, "Expected record name").value;
-  rejectSingleLetterTypeName(def->name, "record");
+    def->name = expect(TokenType::UpperIdent, "Expected record name").value;
+    rejectSingleLetterTypeName(def->name, "record");
 
-  parseRecordBody(*def);
-  return complete(std::move(def));
+    parseRecordBody(*def);
+    return complete(std::move(def));
 }
 
 // The type parameters and `do ... end` half of a record, shared with
 // `record %name` generation, whose name is not known until expansion.
-auto Parser::parseRecordBody(ast::RecordDef &into) -> void {
-  auto *def = &into;
-  if (match(TokenType::LessThan)) {
-    do {
-      def->typeParams.push_back(
-          expect(TokenType::UpperIdent, "Expected type parameter").value);
-    } while (match(TokenType::Comma));
-    expect(TokenType::GreaterThan, "Expected '>' after type parameters");
-  }
-
-  expect(TokenType::Do, "Expected 'do' after record name");
-  skipNewlines();
-
-  while (!atEnd()) {
-    // End of record — 'end' not followed by ':' means it's the closing keyword
-    if (check(TokenType::End) && peekNext().type != TokenType::Colon)
-      break;
-
-    ast::RecordField field;
-    // Field names can be keywords (e.g. 'end', 'type')
-    if (check(TokenType::LowerIdent) || check(TokenType::End) ||
-        check(TokenType::Type) || check(TokenType::Match) ||
-        check(TokenType::Loop) || check(TokenType::Timeout) ||
-        check(TokenType::After) || check(TokenType::Next)) {
-      field.name = advance().value;
-    } else {
-      error("Expected field name");
+auto Parser::parseRecordBody(ast::RecordDef& into) -> void {
+    auto* def = &into;
+    if (match(TokenType::LessThan)) {
+        do {
+            def->typeParams.push_back(
+                expect(TokenType::UpperIdent, "Expected type parameter").value);
+        } while (match(TokenType::Comma));
+        expect(TokenType::GreaterThan, "Expected '>' after type parameters");
     }
-    expect(TokenType::Colon, "Expected ':' after field name");
-    field.type = parseTypeExpr();
-    if (match(TokenType::Equals)) {
-      field.defaultValue = parseExpr();
-    }
-    def->fields.push_back(std::move(field));
+
+    expect(TokenType::Do, "Expected 'do' after record name");
     skipNewlines();
-  }
 
-  expect(TokenType::End, "Expected 'end' to close record");
+    while (!atEnd()) {
+        // End of record — 'end' not followed by ':' means it's the closing keyword
+        if (check(TokenType::End) && peekNext().type != TokenType::Colon) {
+            break;
+        }
+
+        ast::RecordField field;
+        // Field names can be keywords (e.g. 'end', 'type')
+        if (check(TokenType::LowerIdent) || check(TokenType::End) || check(TokenType::Type) ||
+            check(TokenType::Match) || check(TokenType::Loop) || check(TokenType::Timeout) ||
+            check(TokenType::After) || check(TokenType::Next)) {
+            field.name = advance().value;
+        } else {
+            error("Expected field name");
+        }
+        expect(TokenType::Colon, "Expected ':' after field name");
+        field.type = parseTypeExpr();
+        if (match(TokenType::Equals)) {
+            field.defaultValue = parseExpr();
+        }
+        def->fields.push_back(std::move(field));
+        skipNewlines();
+    }
+
+    expect(TokenType::End, "Expected 'end' to close record");
 }
 
 // ===== Make =====
 
 auto Parser::parseTraitDef() -> std::unique_ptr<ast::TraitDef> {
-  auto def = std::make_unique<ast::TraitDef>();
-  def->location = currentLocation();
-  expect(TokenType::Trait, "Expected 'trait'");
-  {
-    auto tok = expect(TokenType::UpperIdent, "Expected trait name");
-    rejectSingleLetterTypeName(tok.value, "trait");
-    def->name = tok.value;
-  }
-  // Optional type params: `trait Functor<F> do ...`
-  if (match(TokenType::LessThan)) {
-    while (!check(TokenType::GreaterThan) && !atEnd()) {
-      def->typeParams.push_back(
-          expect(TokenType::UpperIdent, "Expected type param").value);
-      if (!check(TokenType::GreaterThan))
-        expect(TokenType::Comma, "Expected ','");
+    auto def = std::make_unique<ast::TraitDef>();
+    def->location = currentLocation();
+    expect(TokenType::Trait, "Expected 'trait'");
+    {
+        auto tok = expect(TokenType::UpperIdent, "Expected trait name");
+        rejectSingleLetterTypeName(tok.value, "trait");
+        def->name = tok.value;
     }
-    expect(TokenType::GreaterThan, "Expected '>'");
-  }
-  expect(TokenType::Do, "Expected 'do' after trait name");
-  skipNewlines();
-
-  while (!check(TokenType::End) && !atEnd()) {
-    if (check(TokenType::Foul) && peekNext().type == TokenType::LowerIdent) {
-      // Peek ahead: `foul name :` → foul required method sig
-      //             `foul name(` or `foul name do` → foul default impl
-      size_t saved = m_pos;
-      advance(); // consume foul
-      bool isAnnotation = peekNext().type == TokenType::Colon ||
-                          peekNext().type == TokenType::TypeAnnotation;
-      m_pos = saved;
-      if (isAnnotation) {
-        advance(); // consume foul
-        auto ann = parseTypeAnnotation();
-        ann->isFoul = true;
-        def->body.push_back(std::move(ann));
-      } else {
-        def->body.push_back(parseFunctionDef(true));
-      }
-    } else if (check(TokenType::Let)) {
-      def->body.push_back(parseFunctionDef(false));
-    } else if (check(TokenType::LowerIdent) ||
-               isOverloadableOperator(peek().type)) {
-      // Required method signature: `methodName : type`, or an operator's,
-      // `+ :> This -> This`, as a make block declares one.
-      def->body.push_back(parseTypeAnnotation());
-    } else {
-      error("Unexpected token in trait body");
+    // Optional type params: `trait Functor<F> do ...`
+    if (match(TokenType::LessThan)) {
+        while (!check(TokenType::GreaterThan) && !atEnd()) {
+            def->typeParams.push_back(expect(TokenType::UpperIdent, "Expected type param").value);
+            if (!check(TokenType::GreaterThan)) {
+                expect(TokenType::Comma, "Expected ','");
+            }
+        }
+        expect(TokenType::GreaterThan, "Expected '>'");
     }
+    expect(TokenType::Do, "Expected 'do' after trait name");
     skipNewlines();
-  }
 
-  expect(TokenType::End, "Expected 'end' to close trait");
-  return complete(std::move(def));
+    while (!check(TokenType::End) && !atEnd()) {
+        if (check(TokenType::Foul) && peekNext().type == TokenType::LowerIdent) {
+            // Peek ahead: `foul name :` → foul required method sig
+            //             `foul name(` or `foul name do` → foul default impl
+            size_t saved = m_pos;
+            advance(); // consume foul
+            bool isAnnotation =
+                peekNext().type == TokenType::Colon || peekNext().type == TokenType::TypeAnnotation;
+            m_pos = saved;
+            if (isAnnotation) {
+                advance(); // consume foul
+                auto ann = parseTypeAnnotation();
+                ann->isFoul = true;
+                def->body.push_back(std::move(ann));
+            } else {
+                def->body.push_back(parseFunctionDef(true));
+            }
+        } else if (check(TokenType::Let)) {
+            def->body.push_back(parseFunctionDef(false));
+        } else if (check(TokenType::LowerIdent) || isOverloadableOperator(peek().type)) {
+            // Required method signature: `methodName : type`, or an operator's,
+            // `+ :> This -> This`, as a make block declares one.
+            def->body.push_back(parseTypeAnnotation());
+        } else {
+            error("Unexpected token in trait body");
+        }
+        skipNewlines();
+    }
+
+    expect(TokenType::End, "Expected 'end' to close trait");
+    return complete(std::move(def));
 }
 
 auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
-  auto def = std::make_unique<ast::MakeDef>();
-  def->location = currentLocation();
-  expect(TokenType::Make, "Expected 'make'");
+    auto def = std::make_unique<ast::MakeDef>();
+    def->location = currentLocation();
+    expect(TokenType::Make, "Expected 'make'");
 
-  if (match(TokenType::Final)) {
-    expect(TokenType::Colon, "Expected ':' after 'final'");
-    def->isFinal = true;
-  }
+    if (match(TokenType::Final)) {
+        expect(TokenType::Colon, "Expected ':' after 'final'");
+        def->isFinal = true;
+    }
 
-  def->target = parseTypeExpr();
-  // `make T do ... end` attaches methods to a type parameter, which names no
-  // type at all. Caught here rather than left to the checker, where it
-  // surfaces as methods that silently belong to nothing.
-  if (def->target)
-    if (auto *named = std::get_if<ast::TypeName>(&def->target->kind);
-        named && named->parts.size() == 1)
-      rejectSingleLetterTypeName(named->parts[0], "make target");
-  parseMakeImplements(*def);
-  parseMakeBody(*def);
-  return complete(std::move(def));
+    def->target = parseTypeExpr();
+    // `make T do ... end` attaches methods to a type parameter, which names no
+    // type at all. Caught here rather than left to the checker, where it
+    // surfaces as methods that silently belong to nothing.
+    if (def->target) {
+        if (auto* named = std::get_if<ast::TypeName>(&def->target->kind);
+            named && named->parts.size() == 1) {
+            rejectSingleLetterTypeName(named->parts[0], "make target");
+        }
+    }
+    parseMakeImplements(*def);
+    parseMakeBody(*def);
+    return complete(std::move(def));
 }
 
 auto Parser::parseServingDef() -> std::unique_ptr<ast::MakeDef> {
-  auto def = std::make_unique<ast::MakeDef>();
-  def->location = currentLocation();
-  def->isServing = true;
-  expect(TokenType::Serving, "Expected 'serving'");
-  def->target = parseTypeExpr();
-  if (def->target)
-    if (auto *named = std::get_if<ast::TypeName>(&def->target->kind);
-        named && named->parts.size() == 1)
-      rejectSingleLetterTypeName(named->parts[0], "serving target");
-  parseMakeBody(*def);
-  return complete(std::move(def));
+    auto def = std::make_unique<ast::MakeDef>();
+    def->location = currentLocation();
+    def->isServing = true;
+    expect(TokenType::Serving, "Expected 'serving'");
+    def->target = parseTypeExpr();
+    if (def->target) {
+        if (auto* named = std::get_if<ast::TypeName>(&def->target->kind);
+            named && named->parts.size() == 1) {
+            rejectSingleLetterTypeName(named->parts[0], "serving target");
+        }
+    }
+    parseMakeBody(*def);
+    return complete(std::move(def));
 }
 
 // `, implement: Trait1, Trait2` — optional, and shared with `make %name`
 // generation, which has no target type to parse before it.
-auto Parser::parseMakeImplements(ast::MakeDef &into) -> void {
-  auto *def = &into;
-  // Optional `, implement: Trait1, Trait2` clause
-  // Syntax: `make Something, implement: Showable, Comparable do`
-  if (check(TokenType::Comma) && peekNext().type == TokenType::LowerIdent) {
-    auto savedPos = m_pos;
-    advance(); // ","
-    if (check(TokenType::LowerIdent) && peek().value == "implement" &&
-        peekNext().type == TokenType::Colon) {
-      advance(); // "implement"
-      advance(); // ":"
-      // A trait or capability declared inside a module is named by its
-      // qualified path (`FS.File`), which is how a nested ModuleDef is
-      // registered — so `implement:` has to consume one (kexhq/kex#179).
-      auto implementName = [&]() -> std::string {
-        auto tok = expect(TokenType::UpperIdent, "Expected trait name");
-        std::string name = tok.value;
-        def->implementLocations.push_back(tok.location);
-        while (check(TokenType::Dot) &&
-               peekNext().type == TokenType::UpperIdent) {
-          advance(); // "."
-          const auto& segment = expect(TokenType::UpperIdent,
-                                       "Expected trait name after '.'");
-          name += "." + segment.value;
-          def->implementLocations.back() = segment.location;
-        }
-        // The reserved-letter rule is about a bare name; a qualified path
-        // whose last segment is one letter is not a type parameter.
-        if (name.size() == 1)
-          error("Trait name '" + name +
-                "' is a single uppercase letter — those are reserved for type "
-                "parameters");
-        return name;
-      };
-      def->implements.push_back(implementName());
-      while (check(TokenType::Comma) &&
-             peekNext().type == TokenType::UpperIdent) {
+auto Parser::parseMakeImplements(ast::MakeDef& into) -> void {
+    auto* def = &into;
+    // Optional `, implement: Trait1, Trait2` clause
+    // Syntax: `make Something, implement: Showable, Comparable do`
+    if (check(TokenType::Comma) && peekNext().type == TokenType::LowerIdent) {
+        auto savedPos = m_pos;
         advance(); // ","
-        def->implements.push_back(implementName());
-      }
-    } else {
-      m_pos = savedPos; // not an implement clause, backtrack
+        if (check(TokenType::LowerIdent) && peek().value == "implement" &&
+            peekNext().type == TokenType::Colon) {
+            advance(); // "implement"
+            advance(); // ":"
+            // A trait or capability declared inside a module is named by its
+            // qualified path (`FS.File`), which is how a nested ModuleDef is
+            // registered — so `implement:` has to consume one (kexhq/kex#179).
+            auto implementName = [&]() -> std::string {
+                auto tok = expect(TokenType::UpperIdent, "Expected trait name");
+                std::string name = tok.value;
+                def->implementLocations.push_back(tok.location);
+                while (check(TokenType::Dot) && peekNext().type == TokenType::UpperIdent) {
+                    advance(); // "."
+                    const auto& segment =
+                        expect(TokenType::UpperIdent, "Expected trait name after '.'");
+                    name += "." + segment.value;
+                    def->implementLocations.back() = segment.location;
+                }
+                // The reserved-letter rule is about a bare name; a qualified path
+                // whose last segment is one letter is not a type parameter.
+                if (name.size() == 1) {
+                    error(
+                        "Trait name '" + name +
+                        "' is a single uppercase letter — those are reserved for type "
+                        "parameters");
+                }
+                return name;
+            };
+            def->implements.push_back(implementName());
+            while (check(TokenType::Comma) && peekNext().type == TokenType::UpperIdent) {
+                advance(); // ","
+                def->implements.push_back(implementName());
+            }
+        } else {
+            m_pos = savedPos; // not an implement clause, backtrack
+        }
     }
-  }
 }
 
 // The `do ... end` half of a `make`, shared with `make %name` generation.
-auto Parser::parseMakeBody(ast::MakeDef &into, bool allowDrivers) -> void {
-  auto *def = &into;
-  expect(TokenType::Do, def->isServing
-      ? "Expected 'do' after serving target"
-      : "Expected 'do' after make target");
-  skipNewlines();
-
-  while (!check(TokenType::End) && !atEnd()) {
-    try {
-      if (check(TokenType::Public) || check(TokenType::Private)) {
-        def->body.push_back(parseVisibilityBlock());
-      } else if (check(TokenType::Foul)) {
-        m_makeMemberName = true;
-        def->body.push_back(parseFunctionDef(true));
-      } else if (def->isServing && check(TokenType::Slot)) {
-        m_makeMemberName = true;
-        def->body.push_back(parseFunctionDef());
-      } else if (check(TokenType::Let)) {
-        m_makeMemberName = true;
-        def->body.push_back(parseFunctionDef());
-      } else if ((check(TokenType::LowerIdent) &&
-                  !(allowDrivers && isMakeDriverAhead())) ||
-                 (isKeywordToken(peek().type) &&
-                  (peekNext().type == TokenType::Colon ||
-                   peekNext().type == TokenType::TypeAnnotation))) {
-        def->body.push_back(parseTypeAnnotation());
-      } else if (isOverloadableOperator(peek().type) &&
-                 (peekNext().type == TokenType::Colon ||
-                  peekNext().type == TokenType::TypeAnnotation)) {
-        // `+ :> Set<A> -> Set<A>` — an operator overload's contract, written
-        // the same way an ordinary method's is. The `:`/`:>` lookahead keeps
-        // this from swallowing a driver body's own use of a leading operator.
-        def->body.push_back(parseTypeAnnotation());
-      } else if (allowDrivers) {
-        // A driver loop inside a GENERATED make:
-        // `OPS.each do |op| let %op(...) ... end end`. Ordinary `make`
-        // bodies never reach here, so a stray expression in one still
-        // reports "Unexpected token in make body" as before.
-        def->body.push_back(parseExpr());
-      } else {
-        rejectReservedName("method");
-        error("Unexpected token in make body: " +
-              std::string(tokenTypeName(peek().type)));
-      }
-    } catch (const ParseError &) {
-      // Diagnostic already recorded. Recover inside the make body: unwinding
-      // to the top level makes every remaining method read as a stray token,
-      // so one bad declaration reported a screenful of unrelated errors.
-      const int before = m_pos;
-      syncToStatement();
-      if (m_pos == before && !check(TokenType::End) && !atEnd()) advance();
-    }
+auto Parser::parseMakeBody(ast::MakeDef& into, bool allowDrivers) -> void {
+    auto* def = &into;
+    expect(
+        TokenType::Do,
+        def->isServing ? "Expected 'do' after serving target" : "Expected 'do' after make target");
     skipNewlines();
-  }
 
-  expect(TokenType::End, def->isServing
-      ? "Expected 'end' to close serving"
-      : "Expected 'end' to close make");
+    while (!check(TokenType::End) && !atEnd()) {
+        try {
+            if (check(TokenType::Public) || check(TokenType::Private)) {
+                def->body.push_back(parseVisibilityBlock());
+            } else if (check(TokenType::Foul)) {
+                m_makeMemberName = true;
+                def->body.push_back(parseFunctionDef(true));
+            } else if (def->isServing && check(TokenType::Slot)) {
+                m_makeMemberName = true;
+                def->body.push_back(parseFunctionDef());
+            } else if (check(TokenType::Let)) {
+                m_makeMemberName = true;
+                def->body.push_back(parseFunctionDef());
+            } else if (
+                (check(TokenType::LowerIdent) && !(allowDrivers && isMakeDriverAhead())) ||
+                (isKeywordToken(peek().type) && (peekNext().type == TokenType::Colon ||
+                                                 peekNext().type == TokenType::TypeAnnotation))) {
+                def->body.push_back(parseTypeAnnotation());
+            } else if (
+                isOverloadableOperator(peek().type) &&
+                (peekNext().type == TokenType::Colon ||
+                 peekNext().type == TokenType::TypeAnnotation)) {
+                // `+ :> Set<A> -> Set<A>` — an operator overload's contract, written
+                // the same way an ordinary method's is. The `:`/`:>` lookahead keeps
+                // this from swallowing a driver body's own use of a leading operator.
+                def->body.push_back(parseTypeAnnotation());
+            } else if (allowDrivers) {
+                // A driver loop inside a GENERATED make:
+                // `OPS.each do |op| let %op(...) ... end end`. Ordinary `make`
+                // bodies never reach here, so a stray expression in one still
+                // reports "Unexpected token in make body" as before.
+                def->body.push_back(parseExpr());
+            } else {
+                rejectReservedName("method");
+                error("Unexpected token in make body: " + std::string(tokenTypeName(peek().type)));
+            }
+        } catch (const ParseError&) {
+            // Diagnostic already recorded. Recover inside the make body: unwinding
+            // to the top level makes every remaining method read as a stray token,
+            // so one bad declaration reported a screenful of unrelated errors.
+            const int before = m_pos;
+            syncToStatement();
+            if (m_pos == before && !check(TokenType::End) && !atEnd()) {
+                advance();
+            }
+        }
+        skipNewlines();
+    }
+
+    expect(
+        TokenType::End,
+        def->isServing ? "Expected 'end' to close serving" : "Expected 'end' to close make");
 }
 
 // ===== Functions =====
 
-auto Parser::parseFunctionDef(bool isFoul)
-    -> std::unique_ptr<ast::FunctionDef> {
-  auto def = std::make_unique<ast::FunctionDef>();
-  def->location = currentLocation();
-  def->isFoul = isFoul;
-  // Only this definition's own name: a local function in its body is not a
-  // make member.
-  const bool makeMember = m_makeMemberName;
-  m_makeMemberName = false;
+auto Parser::parseFunctionDef(bool isFoul) -> std::unique_ptr<ast::FunctionDef> {
+    auto def = std::make_unique<ast::FunctionDef>();
+    def->location = currentLocation();
+    def->isFoul = isFoul;
+    // Only this definition's own name: a local function in its body is not a
+    // make member.
+    const bool makeMember = m_makeMemberName;
+    m_makeMemberName = false;
 
-  if (isFoul) {
-    expect(TokenType::Foul, "Expected 'foul'");
-    if (match(TokenType::Slot)) def->isSlot = true;
-  } else if (match(TokenType::Slot)) {
-    def->isSlot = true;
-  } else
-    expect(TokenType::Let, "Expected 'let'");
+    if (isFoul) {
+        expect(TokenType::Foul, "Expected 'foul'");
+        if (match(TokenType::Slot)) {
+            def->isSlot = true;
+        }
+    } else if (match(TokenType::Slot)) {
+        def->isSlot = true;
+    } else {
+        expect(TokenType::Let, "Expected 'let'");
+    }
 
-  // `let %{expr}(...)` — the name is whatever `expr` evaluates to at compile
-  // time. Checked before the operator branch below, which would otherwise
-  // take the `%` as a modulo-overload name and then choke on the `{`.
-  if (check(TokenType::Percent) && peekNext().type == TokenType::LBrace) {
-    advance(); // %
-    advance(); // {
-    def->computedName = parseExpr();
-    expect(TokenType::RBrace, "Expected '}' to close %{...} name");
-    def->name = "%";
-  }
-  // Function name can be a lower ident, upper ident (static constructors),
-  // keyword-as-name, splice ident, or operator
-  else if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
-           check(TokenType::Loop) || check(TokenType::Match) ||
-           check(TokenType::Spawn) || check(TokenType::SpliceIdent) ||
-           check(TokenType::After) || check(TokenType::Next) ||
-           (makeMember && isKeywordToken(peek().type))) {
-    // A splice keeps its `%` so callers can tell `let %name(...)` (the name
-    // is computed at compile time) from an ordinary `let name(...)`. The
-    // lexer strips the sigil, so it is restored here.
-    const bool spliced = check(TokenType::SpliceIdent);
-    def->nameLocation = peek().location;
-    def->name = (spliced ? "%" : "") + advance().value;
-  } else if (check(TokenType::Plus) || check(TokenType::Minus) ||
-             check(TokenType::Star) || check(TokenType::Slash) ||
-             check(TokenType::Percent) || check(TokenType::Caret) ||
-             check(TokenType::EqEq) || check(TokenType::NotEq) ||
-             check(TokenType::LessThan) || check(TokenType::GreaterThan) ||
-             check(TokenType::LessEq) || check(TokenType::GreaterEq) ||
-             check(TokenType::AmpAmp) || check(TokenType::PipePipe)) {
-    def->nameLocation = peek().location;
-    def->name = std::string(tokenTypeName(advance().type));
-  } else {
-    rejectReservedName("function");
-    error("Expected function name");
-  }
+    // `let %{expr}(...)` — the name is whatever `expr` evaluates to at compile
+    // time. Checked before the operator branch below, which would otherwise
+    // take the `%` as a modulo-overload name and then choke on the `{`.
+    if (check(TokenType::Percent) && peekNext().type == TokenType::LBrace) {
+        advance(); // %
+        advance(); // {
+        def->computedName = parseExpr();
+        expect(TokenType::RBrace, "Expected '}' to close %{...} name");
+        def->name = "%";
+    }
+    // Function name can be a lower ident, upper ident (static constructors),
+    // keyword-as-name, splice ident, or operator
+    else if (
+        check(TokenType::LowerIdent) || check(TokenType::UpperIdent) || check(TokenType::Loop) ||
+        check(TokenType::Match) || check(TokenType::Spawn) || check(TokenType::SpliceIdent) ||
+        check(TokenType::After) || check(TokenType::Next) ||
+        (makeMember && isKeywordToken(peek().type))) {
+        // A splice keeps its `%` so callers can tell `let %name(...)` (the name
+        // is computed at compile time) from an ordinary `let name(...)`. The
+        // lexer strips the sigil, so it is restored here.
+        const bool spliced = check(TokenType::SpliceIdent);
+        def->nameLocation = peek().location;
+        def->name = (spliced ? "%" : "") + advance().value;
+    } else if (
+        check(TokenType::Plus) || check(TokenType::Minus) || check(TokenType::Star) ||
+        check(TokenType::Slash) || check(TokenType::Percent) || check(TokenType::Caret) ||
+        check(TokenType::EqEq) || check(TokenType::NotEq) || check(TokenType::LessThan) ||
+        check(TokenType::GreaterThan) || check(TokenType::LessEq) || check(TokenType::GreaterEq) ||
+        check(TokenType::AmpAmp) || check(TokenType::PipePipe)) {
+        def->nameLocation = peek().location;
+        def->name = std::string(tokenTypeName(advance().type));
+    } else {
+        rejectReservedName("function");
+        error("Expected function name");
+    }
 
-  if (match(TokenType::Question)) {
-    def->isPredicate = true;
-  }
+    if (match(TokenType::Question)) {
+        def->isPredicate = true;
+    }
 
-  // Check if function name ends with ?
-  if (!def->isPredicate && !def->name.empty() && def->name.back() == '?') {
-    def->isPredicate = true;
-  }
+    // Check if function name ends with ?
+    if (!def->isPredicate && !def->name.empty() && def->name.back() == '?') {
+        def->isPredicate = true;
+    }
 
-  auto clause = parseFunctionClause();
-  clause.location = def->location;
-  def->clauses.push_back(std::move(clause));
-  return complete(std::move(def));
+    auto clause = parseFunctionClause();
+    clause.location = def->location;
+    def->clauses.push_back(std::move(clause));
+    return complete(std::move(def));
 }
 
 auto Parser::parseFunctionClause() -> ast::FunctionClause {
-  ast::FunctionClause clause;
+    ast::FunctionClause clause;
 
-  // Parameters
-  bool hasParamList = false;
-  if (match(TokenType::LParen)) {
-    hasParamList = true;
-    if (!check(TokenType::RParen)) {
-      clause.params = parseParams();
+    // Parameters
+    bool hasParamList = false;
+    if (match(TokenType::LParen)) {
+        hasParamList = true;
+        if (!check(TokenType::RParen)) {
+            clause.params = parseParams();
+        }
+        expect(TokenType::RParen, "Expected ')' after parameters");
     }
-    expect(TokenType::RParen, "Expected ')' after parameters");
-  }
-  clause.hasParamList = hasParamList;
+    clause.hasParamList = hasParamList;
 
-  // The return type may open on the line AFTER the parameters, the same way
-  // an `=` body may:
-  //
-  //     let chooseTag(name: String, git: String, selector: String)
-  //       -> Result<String, String> do
-  //
-  // Only `->` may follow a signature across a newline, so looking past them
-  // cannot swallow anything else; if the next real token is something else
-  // the cursor goes back.
-  if (check(TokenType::Newline)) {
-    const auto savedPos = m_pos;
-    skipNewlines();
-    if (!check(TokenType::Arrow))
-      m_pos = savedPos;
-  }
-
-  // Return type annotation: -> Type
-  if (match(TokenType::Arrow)) {
-    clause.returnAnnotation = parseTypeExpr();
-  }
-  // A parameterless binding may annotate with `:` instead, which is how the
-  // docs spell it — `foul lines : Feed<String> = …`. `let` reaches the same
-  // form through parseLetExpr; without this, `foul` had no way to write it.
-  // Only when no parameter list was given, so function signatures keep
-  // requiring `->`.
-  else if (!hasParamList && check(TokenType::Colon)) {
-    advance();
-    clause.returnAnnotation = parseTypeExpr();
-  }
-
-  // An `=` body may open on the line AFTER the signature:
-  //
-  //     let add(a, b)
-  //       = a + b
-  //
-  // Nothing else may follow a signature across a newline, so looking past
-  // the newlines for an `=` cannot swallow the start of an unrelated
-  // statement — if the next real token is anything else, the cursor goes
-  // back and the usual `do ... end` / annotation-only handling applies.
-  if (check(TokenType::Newline)) {
-    const auto savedPos = m_pos;
-    skipNewlines();
-    if (!check(TokenType::Equals))
-      m_pos = savedPos;
-  }
-
-  // = expr (single expression body)
-  if (match(TokenType::Equals)) {
-    clause.body.push_back(parseExpr());
-  }
-  // do...end block body
-  else if (match(TokenType::Do)) {
-    skipNewlines();
-    while (!check(TokenType::End) && !check(TokenType::Rescue) && !atEnd()) {
-      clause.body.push_back(parseExpr());
-      skipNewlines();
+    // The return type may open on the line AFTER the parameters, the same way
+    // an `=` body may:
+    //
+    //     let chooseTag(name: String, git: String, selector: String)
+    //       -> Result<String, String> do
+    //
+    // Only `->` may follow a signature across a newline, so looking past them
+    // cannot swallow anything else; if the next real token is something else
+    // the cursor goes back.
+    if (check(TokenType::Newline)) {
+        const auto savedPos = m_pos;
+        skipNewlines();
+        if (!check(TokenType::Arrow)) {
+            m_pos = savedPos;
+        }
     }
 
-    if (match(TokenType::Rescue)) {
-      skipNewlines();
-      clause.rescue = parseRescueBlock();
-      skipNewlines();
+    // Return type annotation: -> Type
+    if (match(TokenType::Arrow)) {
+        clause.returnAnnotation = parseTypeExpr();
+    }
+    // A parameterless binding may annotate with `:` instead, which is how the
+    // docs spell it — `foul lines : Feed<String> = …`. `let` reaches the same
+    // form through parseLetExpr; without this, `foul` had no way to write it.
+    // Only when no parameter list was given, so function signatures keep
+    // requiring `->`.
+    else if (!hasParamList && check(TokenType::Colon)) {
+        advance();
+        clause.returnAnnotation = parseTypeExpr();
     }
 
-    expect(TokenType::End, "Expected 'end' to close function");
-  }
+    // An `=` body may open on the line AFTER the signature:
+    //
+    //     let add(a, b)
+    //       = a + b
+    //
+    // Nothing else may follow a signature across a newline, so looking past
+    // the newlines for an `=` cannot swallow the start of an unrelated
+    // statement — if the next real token is anything else, the cursor goes
+    // back and the usual `do ... end` / annotation-only handling applies.
+    if (check(TokenType::Newline)) {
+        const auto savedPos = m_pos;
+        skipNewlines();
+        if (!check(TokenType::Equals)) {
+            m_pos = savedPos;
+        }
+    }
 
-  return clause;
+    // = expr (single expression body)
+    if (match(TokenType::Equals)) {
+        clause.body.push_back(parseExpr());
+    }
+    // do...end block body
+    else if (match(TokenType::Do)) {
+        skipNewlines();
+        while (!check(TokenType::End) && !check(TokenType::Rescue) && !atEnd()) {
+            clause.body.push_back(parseExpr());
+            skipNewlines();
+        }
+
+        if (match(TokenType::Rescue)) {
+            skipNewlines();
+            clause.rescue = parseRescueBlock();
+            skipNewlines();
+        }
+
+        expect(TokenType::End, "Expected 'end' to close function");
+    }
+
+    return clause;
 }
 
 auto Parser::parseParams() -> std::vector<ast::Param> {
-  std::vector<ast::Param> params;
-  params.push_back(parseParam());
-  while (match(TokenType::Comma)) {
+    std::vector<ast::Param> params;
     params.push_back(parseParam());
-  }
-  return params;
+    while (match(TokenType::Comma)) {
+        params.push_back(parseParam());
+    }
+    return params;
 }
 
 auto Parser::parseParam() -> ast::Param {
-  ast::Param param;
+    ast::Param param;
 
-  // Try pattern first for complex matches. `(` is a TUPLE pattern —
-  // `|(k, v)|`, `let f((a, b))` — the same spelling `match` and `let` use,
-  // so a tuple destructures the same way in every position that binds names.
-  if (check(TokenType::At) || check(TokenType::LBrace) ||
-      check(TokenType::LBracket) || check(TokenType::LParen)) {
-    param.pattern = parsePattern();
-    return param;
-  }
-
-  // Literal pattern (including negative numeric literals, e.g. -10)
-  if (check(TokenType::Integer) || check(TokenType::Float) ||
-      check(TokenType::String) || check(TokenType::RawString) ||
-      check(TokenType::Char) || check(TokenType::True) ||
-      check(TokenType::False) || check(TokenType::None) ||
-      check(TokenType::Atom) ||
-      (check(TokenType::Minus) && (peekNext().type == TokenType::Integer ||
-                                   peekNext().type == TokenType::Float))) {
-    param.pattern = parsePattern();
-    return param;
-  }
-
-  // Underscore — might be typed: _: Type
-  if (check(TokenType::Underscore)) {
-    if (peekNext().type == TokenType::Colon) {
-      advance(); // _
-      advance(); // :
-      param.name = "_";
-      param.type = parseTypeExpr();
-      if (match(TokenType::Equals)) {
-        param.defaultValue = parseExpr();
-      }
-      return param;
-    }
-    param.pattern = parsePattern();
-    return param;
-  }
-
-  // Constructor pattern
-  if (check(TokenType::UpperIdent)) {
-    param.pattern = parsePattern();
-    return param;
-  }
-
-  // name.._ / name..name — range pattern with a var-bound start
-  if (check(TokenType::LowerIdent) && peekNext().type == TokenType::DotDot) {
-    param.pattern = parsePattern();
-    return param;
-  }
-
-  // name: Type = default  or  name = default  or  just name. A call can pass
-  // `type:` as a named argument (`option("name", type: String)`), so a
-  // typed parameter may be named `type` too, or nothing could receive it.
-  if (check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
-      check(TokenType::After) ||
-      (check(TokenType::Type) && peekNext().type == TokenType::Colon)) {
-    auto &nameToken = advance();
-    param.name = nameToken.value;
-    param.location = nameToken.location;
-
-    if (match(TokenType::Colon)) {
-      param.type = parseTypeExpr();
-      if (match(TokenType::Equals)) {
-        param.defaultValue = parseExpr();
-      }
-    } else if (match(TokenType::Equals)) {
-      param.defaultValue = parseExpr();
+    // Try pattern first for complex matches. `(` is a TUPLE pattern —
+    // `|(k, v)|`, `let f((a, b))` — the same spelling `match` and `let` use,
+    // so a tuple destructures the same way in every position that binds names.
+    if (check(TokenType::At) || check(TokenType::LBrace) || check(TokenType::LBracket) ||
+        check(TokenType::LParen)) {
+        param.pattern = parsePattern();
+        return param;
     }
 
-    return param;
-  }
+    // Literal pattern (including negative numeric literals, e.g. -10)
+    if (check(TokenType::Integer) || check(TokenType::Float) || check(TokenType::String) ||
+        check(TokenType::RawString) || check(TokenType::Char) || check(TokenType::True) ||
+        check(TokenType::False) || check(TokenType::None) || check(TokenType::Atom) ||
+        (check(TokenType::Minus) &&
+         (peekNext().type == TokenType::Integer || peekNext().type == TokenType::Float))) {
+        param.pattern = parsePattern();
+        return param;
+    }
 
-  error("Expected parameter");
+    // Underscore — might be typed: _: Type
+    if (check(TokenType::Underscore)) {
+        if (peekNext().type == TokenType::Colon) {
+            advance(); // _
+            advance(); // :
+            param.name = "_";
+            param.type = parseTypeExpr();
+            if (match(TokenType::Equals)) {
+                param.defaultValue = parseExpr();
+            }
+            return param;
+        }
+        param.pattern = parsePattern();
+        return param;
+    }
+
+    // Constructor pattern
+    if (check(TokenType::UpperIdent)) {
+        param.pattern = parsePattern();
+        return param;
+    }
+
+    // name.._ / name..name — range pattern with a var-bound start
+    if (check(TokenType::LowerIdent) && peekNext().type == TokenType::DotDot) {
+        param.pattern = parsePattern();
+        return param;
+    }
+
+    // name: Type = default  or  name = default  or  just name. A call can pass
+    // `type:` as a named argument (`option("name", type: String)`), so a
+    // typed parameter may be named `type` too, or nothing could receive it.
+    if (check(TokenType::LowerIdent) || check(TokenType::Timeout) || check(TokenType::After) ||
+        (check(TokenType::Type) && peekNext().type == TokenType::Colon)) {
+        auto& nameToken = advance();
+        param.name = nameToken.value;
+        param.location = nameToken.location;
+
+        if (match(TokenType::Colon)) {
+            param.type = parseTypeExpr();
+            if (match(TokenType::Equals)) {
+                param.defaultValue = parseExpr();
+            }
+        } else if (match(TokenType::Equals)) {
+            param.defaultValue = parseExpr();
+        }
+
+        return param;
+    }
+
+    error("Expected parameter");
 }
 
 // The operator set `let`/`foul` function definitions accept as a name
@@ -1178,60 +1207,59 @@ auto Parser::parseParam() -> ast::Param {
 // can be declared the same way an ordinary method's is (grammar.ebnf's
 // `binary_op TYPE_ANNOTATION type_expr` / `binary_op COLON type_expr`).
 auto Parser::isOverloadableOperator(TokenType type) -> bool {
-  switch (type) {
-    case TokenType::AmpAmp:
-    case TokenType::PipePipe:
-    case TokenType::Plus:
-    case TokenType::Minus:
-    case TokenType::Star:
-    case TokenType::Slash:
-    case TokenType::Percent:
-    case TokenType::Caret:
-    case TokenType::EqEq:
-    case TokenType::NotEq:
-    case TokenType::LessThan:
-    case TokenType::GreaterThan:
-    case TokenType::LessEq:
-    case TokenType::GreaterEq:
-      return true;
-    default:
-      return false;
-  }
+    switch (type) {
+        case TokenType::AmpAmp:
+        case TokenType::PipePipe:
+        case TokenType::Plus:
+        case TokenType::Minus:
+        case TokenType::Star:
+        case TokenType::Slash:
+        case TokenType::Percent:
+        case TokenType::Caret:
+        case TokenType::EqEq:
+        case TokenType::NotEq:
+        case TokenType::LessThan:
+        case TokenType::GreaterThan:
+        case TokenType::LessEq:
+        case TokenType::GreaterEq: return true;
+        default: return false;
+    }
 }
 
 auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
-  auto ann = std::make_unique<ast::TypeAnnotation>();
-  ann->location = currentLocation();
-  if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
-      check(TokenType::After) || check(TokenType::Spawn) ||
-      check(TokenType::Next) ||
-      isKeywordToken(peek().type))
-    ann->name = advance().value;
-  else if (isOverloadableOperator(peek().type))
-    ann->name = std::string(tokenTypeName(advance().type));
-  else
-    error("Expected name");
+    auto ann = std::make_unique<ast::TypeAnnotation>();
+    ann->location = currentLocation();
+    if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) || check(TokenType::After) ||
+        check(TokenType::Spawn) || check(TokenType::Next) || isKeywordToken(peek().type)) {
+        ann->name = advance().value;
+    } else if (isOverloadableOperator(peek().type)) {
+        ann->name = std::string(tokenTypeName(advance().type));
+    } else {
+        error("Expected name");
+    }
 
-  if (match(TokenType::SlotAnnotation)) {
-    ann->implicitThis = true;
-    ann->implicitFrom = true;
-  } else if (match(TokenType::TypeAnnotation)) {
-    ann->implicitThis = true;
-  } else {
-    expect(TokenType::Colon, "Expected ':' or ':>'");
-    ann->implicitThis = false;
-  }
+    if (match(TokenType::SlotAnnotation)) {
+        ann->implicitThis = true;
+        ann->implicitFrom = true;
+    } else if (match(TokenType::TypeAnnotation)) {
+        ann->implicitThis = true;
+    } else {
+        expect(TokenType::Colon, "Expected ':' or ':>'");
+        ann->implicitThis = false;
+    }
 
-  const bool savedInSignature = m_inTypeSignature;
-  m_inTypeSignature = true;
-  ann->type = parseTypeExpr();
-  m_inTypeSignature = savedInSignature;
-  return complete(std::move(ann));
+    const bool savedInSignature = m_inTypeSignature;
+    m_inTypeSignature = true;
+    ann->type = parseTypeExpr();
+    m_inTypeSignature = savedInSignature;
+    return complete(std::move(ann));
 }
 
 // ===== Type Expressions =====
 
-auto Parser::parseTypeExpr() -> ast::TypeExprPtr { return parseTypeUnion(); }
+auto Parser::parseTypeExpr() -> ast::TypeExprPtr {
+    return parseTypeUnion();
+}
 
 // `T or! E`  →  Result<T, E>   (Ok/Error constructors)
 // `T or L`   →  Either<T, L>   (Right/Left constructors)
@@ -1240,887 +1268,889 @@ auto Parser::parseTypeExpr() -> ast::TypeExprPtr { return parseTypeUnion(); }
 // (`A -> Result<B, E>`) rather than wrapping the whole function type — which is
 // what the same signature means when written as `let f(a: A) -> B or! E`.
 auto Parser::parseTypeOr() -> ast::TypeExprPtr {
-  auto left = parseTypePostfix();
+    auto left = parseTypePostfix();
 
-  // `or` is context-sensitive: only a keyword in type position (stays as
-  // LowerIdent in expression position so `.or(...)` and `let or = ...` work).
-  if (check(TokenType::LowerIdent) && peek().value == "or") {
-    advance();
-    bool isResult = match(TokenType::Bang); // consume `!` if present
-    auto right = parseTypePostfix();
+    // `or` is context-sensitive: only a keyword in type position (stays as
+    // LowerIdent in expression position so `.or(...)` and `let or = ...` work).
+    if (check(TokenType::LowerIdent) && peek().value == "or") {
+        advance();
+        bool isResult = match(TokenType::Bang); // consume `!` if present
+        auto right = parseTypePostfix();
 
-    auto result = std::make_unique<ast::TypeExpr>();
-    result->location = left->location;
+        auto result = std::make_unique<ast::TypeExpr>();
+        result->location = left->location;
 
-    std::vector<ast::TypeExprPtr> args;
-    args.push_back(std::move(left));
-    args.push_back(std::move(right));
-    ast::TypeName typeName;
-    typeName.parts = {isResult ? "Result" : "Either"};
-    result->kind = ast::GenericType{std::move(typeName), std::move(args)};
-    return complete(std::move(result));
-  }
+        std::vector<ast::TypeExprPtr> args;
+        args.push_back(std::move(left));
+        args.push_back(std::move(right));
+        ast::TypeName typeName;
+        typeName.parts = {isResult ? "Result" : "Either"};
+        result->kind = ast::GenericType{std::move(typeName), std::move(args)};
+        return complete(std::move(result));
+    }
 
-  return complete(std::move(left));
+    return complete(std::move(left));
 }
 
 auto Parser::parseTypeUnion() -> ast::TypeExprPtr {
-  auto left = parseTypeFunction();
+    auto left = parseTypeFunction();
 
-  while (match(TokenType::Pipe)) {
-    auto startOffset = left->location.startOffset;
-    auto unionType = std::make_unique<ast::TypeExpr>();
-    unionType->location = currentLocation();
-    unionType->location.startOffset = startOffset;
-    auto right = parseTypeFunction();
-    unionType->kind = ast::UnionType{std::move(left), std::move(right)};
-    left = std::move(unionType);
-  }
+    while (match(TokenType::Pipe)) {
+        auto startOffset = left->location.startOffset;
+        auto unionType = std::make_unique<ast::TypeExpr>();
+        unionType->location = currentLocation();
+        unionType->location.startOffset = startOffset;
+        auto right = parseTypeFunction();
+        unionType->kind = ast::UnionType{std::move(left), std::move(right)};
+        left = std::move(unionType);
+    }
 
-  return complete(std::move(left));
+    return complete(std::move(left));
 }
 
 auto Parser::parseTypeFunction() -> ast::TypeExprPtr {
-  auto left = parseTypeIntersection();
+    auto left = parseTypeIntersection();
 
-  // A signature may continue with `->` leading the next line
-  // (kexhq/kex#497). Only in a `name : T` signature, where nothing else can
-  // begin a line with `->`; elsewhere the cursor goes back.
-  if (m_inTypeSignature && check(TokenType::Newline)) {
-    const auto savedPos = m_pos;
-    skipNewlines();
-    if (!check(TokenType::Arrow))
-      m_pos = savedPos;
-  }
+    // A signature may continue with `->` leading the next line
+    // (kexhq/kex#497). Only in a `name : T` signature, where nothing else can
+    // begin a line with `->`; elsewhere the cursor goes back.
+    if (m_inTypeSignature && check(TokenType::Newline)) {
+        const auto savedPos = m_pos;
+        skipNewlines();
+        if (!check(TokenType::Arrow)) {
+            m_pos = savedPos;
+        }
+    }
 
-  if (match(TokenType::Arrow)) {
-    auto startOffset = left->location.startOffset;
-    auto funcType = std::make_unique<ast::TypeExpr>();
-    funcType->location = currentLocation();
-    funcType->location.startOffset = startOffset;
-    // Nothing but a type can follow `->`, so a line break after it never
-    // ends the signature: `summed : Integer ->` + `Integer -> Integer`.
-    skipNewlines();
-    auto right = parseTypeFunction(); // right-associative
-    funcType->kind = ast::FunctionType{std::move(left), std::move(right)};
-    return complete(std::move(funcType));
-  }
+    if (match(TokenType::Arrow)) {
+        auto startOffset = left->location.startOffset;
+        auto funcType = std::make_unique<ast::TypeExpr>();
+        funcType->location = currentLocation();
+        funcType->location.startOffset = startOffset;
+        // Nothing but a type can follow `->`, so a line break after it never
+        // ends the signature: `summed : Integer ->` + `Integer -> Integer`.
+        skipNewlines();
+        auto right = parseTypeFunction(); // right-associative
+        funcType->kind = ast::FunctionType{std::move(left), std::move(right)};
+        return complete(std::move(funcType));
+    }
 
-  return complete(std::move(left));
+    return complete(std::move(left));
 }
 
 auto Parser::parseTypeIntersection() -> ast::TypeExprPtr {
-  auto left = parseTypeOr();
+    auto left = parseTypeOr();
 
-  while (match(TokenType::Amp)) {
-    auto startOffset = left->location.startOffset;
-    auto intersection = std::make_unique<ast::TypeExpr>();
-    intersection->location = currentLocation();
-    intersection->location.startOffset = startOffset;
-    auto right = parseTypeOr();
-    intersection->kind =
-        ast::IntersectionType{std::move(left), std::move(right)};
-    left = std::move(intersection);
-  }
+    while (match(TokenType::Amp)) {
+        auto startOffset = left->location.startOffset;
+        auto intersection = std::make_unique<ast::TypeExpr>();
+        intersection->location = currentLocation();
+        intersection->location.startOffset = startOffset;
+        auto right = parseTypeOr();
+        intersection->kind = ast::IntersectionType{std::move(left), std::move(right)};
+        left = std::move(intersection);
+    }
 
-  return complete(std::move(left));
+    return complete(std::move(left));
 }
 
 auto Parser::parseTypePostfix() -> ast::TypeExprPtr {
-  auto type = parseTypePrimary();
+    auto type = parseTypePrimary();
 
-  if (match(TokenType::Question)) {
-    auto startOffset = type->location.startOffset;
-    auto opt = std::make_unique<ast::TypeExpr>();
-    opt->location = currentLocation();
-    opt->location.startOffset = startOffset;
-    opt->kind = ast::OptionalType{std::move(type)};
-    return complete(std::move(opt));
-  }
+    if (match(TokenType::Question)) {
+        auto startOffset = type->location.startOffset;
+        auto opt = std::make_unique<ast::TypeExpr>();
+        opt->location = currentLocation();
+        opt->location.startOffset = startOffset;
+        opt->kind = ast::OptionalType{std::move(type)};
+        return complete(std::move(opt));
+    }
 
-  return complete(std::move(type));
+    return complete(std::move(type));
 }
 
 auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
-  auto type = std::make_unique<ast::TypeExpr>();
-  type->location = currentLocation();
+    auto type = std::make_unique<ast::TypeExpr>();
+    type->location = currentLocation();
 
-  // List type: [A]
-  if (match(TokenType::LBracket)) {
-    auto elem = parseTypeExpr();
-    expect(TokenType::RBracket, "Expected ']' in list type");
-    type->kind = ast::ListType{std::move(elem)};
-    return complete(std::move(type));
-  }
-
-  // Open record type: { name: String, age: Integer }. A lowercase field name
-  // disambiguates it from the existing map type { K: V }, whose key begins a
-  // type expression and therefore cannot start lowercase.
-  if (match(TokenType::LBrace)) {
-    if (check(TokenType::LowerIdent)) {
-      std::vector<std::pair<std::string, ast::TypeExprPtr>> fields;
-      do {
-        auto name =
-            expect(TokenType::LowerIdent, "Expected field name in record type")
-                .value;
-        if (std::any_of(fields.begin(), fields.end(), [&](const auto& field) {
-              return field.first == name;
-            }))
-          error("Duplicate field `" + name + "` in record type");
-        expect(TokenType::Colon, "Expected ':' after record type field");
-        fields.emplace_back(std::move(name), parseTypeExpr());
-      } while (match(TokenType::Comma));
-      expect(TokenType::RBrace, "Expected '}' in record type");
-      type->kind = ast::RecordType{std::move(fields)};
-      return complete(std::move(type));
+    // List type: [A]
+    if (match(TokenType::LBracket)) {
+        auto elem = parseTypeExpr();
+        expect(TokenType::RBracket, "Expected ']' in list type");
+        type->kind = ast::ListType{std::move(elem)};
+        return complete(std::move(type));
     }
 
-    // Map type: { K: V }
-    auto key = parseTypeExpr();
-    expect(TokenType::Colon, "Expected ':' in map type");
-    auto val = parseTypeExpr();
-    expect(TokenType::RBrace, "Expected '}' in map type");
-    type->kind = ast::MapType{std::move(key), std::move(val)};
-    return complete(std::move(type));
-  }
+    // Open record type: { name: String, age: Integer }. A lowercase field name
+    // disambiguates it from the existing map type { K: V }, whose key begins a
+    // type expression and therefore cannot start lowercase.
+    if (match(TokenType::LBrace)) {
+        if (check(TokenType::LowerIdent)) {
+            std::vector<std::pair<std::string, ast::TypeExprPtr>> fields;
+            do {
+                auto name =
+                    expect(TokenType::LowerIdent, "Expected field name in record type").value;
+                if (std::any_of(fields.begin(), fields.end(), [&](const auto& field) {
+                        return field.first == name;
+                    })) {
+                    error("Duplicate field `" + name + "` in record type");
+                }
+                expect(TokenType::Colon, "Expected ':' after record type field");
+                fields.emplace_back(std::move(name), parseTypeExpr());
+            } while (match(TokenType::Comma));
+            expect(TokenType::RBrace, "Expected '}' in record type");
+            type->kind = ast::RecordType{std::move(fields)};
+            return complete(std::move(type));
+        }
 
-  // Tuple type: (A, B, C) or unit type ()
-  if (match(TokenType::LParen)) {
-    if (match(TokenType::RParen)) {
-      // Void type ()
-      type->kind = ast::TupleType{{}};
-      return complete(std::move(type));
+        // Map type: { K: V }
+        auto key = parseTypeExpr();
+        expect(TokenType::Colon, "Expected ':' in map type");
+        auto val = parseTypeExpr();
+        expect(TokenType::RBrace, "Expected '}' in map type");
+        type->kind = ast::MapType{std::move(key), std::move(val)};
+        return complete(std::move(type));
     }
-    std::vector<ast::TypeExprPtr> elements;
-    elements.push_back(parseTypeExpr());
-    while (match(TokenType::Comma)) {
-      elements.push_back(parseTypeExpr());
+
+    // Tuple type: (A, B, C) or unit type ()
+    if (match(TokenType::LParen)) {
+        if (match(TokenType::RParen)) {
+            // Void type ()
+            type->kind = ast::TupleType{{}};
+            return complete(std::move(type));
+        }
+        std::vector<ast::TypeExprPtr> elements;
+        elements.push_back(parseTypeExpr());
+        while (match(TokenType::Comma)) {
+            elements.push_back(parseTypeExpr());
+        }
+        expect(TokenType::RParen, "Expected ')' in tuple type");
+        if (elements.size() == 1) {
+            auto grouped = std::move(elements[0]);
+            grouped->location.startOffset = type->location.startOffset;
+            grouped->parenthesized = true; // just grouping, but note it was there
+            return complete(std::move(grouped));
+        }
+        type->kind = ast::TupleType{std::move(elements)};
+        return complete(std::move(type));
     }
-    expect(TokenType::RParen, "Expected ')' in tuple type");
-    if (elements.size() == 1) {
-      auto grouped = std::move(elements[0]);
-      grouped->location.startOffset = type->location.startOffset;
-      grouped->parenthesized = true; // just grouping, but note it was there
-      return complete(std::move(grouped));
+
+    // Block type
+    if (check(TokenType::UpperIdent) && peek().value == "Block") {
+        advance();
+        expect(TokenType::LessThan, "Expected '<' after Block");
+        // `Block<R>` takes nothing; `Block<A, B, R>` is handed an `A` and a `B`.
+        // The result is always written last.
+        std::vector<ast::TypeExprPtr> arguments;
+        arguments.push_back(parseTypeExpr());
+        while (match(TokenType::Comma)) {
+            arguments.push_back(parseTypeExpr());
+        }
+        expect(TokenType::GreaterThan, "Expected '>' to close Block type");
+        auto inner = std::move(arguments.back());
+        arguments.pop_back();
+        type->kind = ast::BlockType{std::move(inner), std::move(arguments)};
+        return complete(std::move(type));
     }
-    type->kind = ast::TupleType{std::move(elements)};
-    return complete(std::move(type));
-  }
 
-  // Block type
-  if (check(TokenType::UpperIdent) && peek().value == "Block") {
-    advance();
-    expect(TokenType::LessThan, "Expected '<' after Block");
-    // `Block<R>` takes nothing; `Block<A, B, R>` is handed an `A` and a `B`.
-    // The result is always written last.
-    std::vector<ast::TypeExprPtr> arguments;
-    arguments.push_back(parseTypeExpr());
-    while (match(TokenType::Comma))
-      arguments.push_back(parseTypeExpr());
-    expect(TokenType::GreaterThan, "Expected '>' to close Block type");
-    auto inner = std::move(arguments.back());
-    arguments.pop_back();
-    type->kind = ast::BlockType{std::move(inner), std::move(arguments)};
-    return complete(std::move(type));
-  }
-
-  // Atom type
-  if (check(TokenType::Atom)) {
-    type->kind = ast::AtomType{advance().value};
-    return complete(std::move(type));
-  }
-
-  // Type parameters are uppercase, like every other type name. A lowercase
-  // letter here is what someone arriving from a language that spells them
-  // lowercase will reach for, so it is worth its own message: falling
-  // through to "Expected type expression" points at an ordinary-looking
-  // name and says nothing about what to write instead.
-  if (check(TokenType::LowerIdent) && peek().value.size() == 1) {
-    const auto name = peek().value;
-    std::string upper = name;
-    upper[0] =
-        static_cast<char>(std::toupper(static_cast<unsigned char>(upper[0])));
-    error("type parameters are uppercase: write `" + upper + "` rather than `" +
-          name + "`");
-  }
-
-  // A compiler-computed type: `Type.returnedBy(f)` / `Type.of(expr)`.
-  // Written where a type goes, so it parses here rather than as a value.
-  if (check(TokenType::UpperIdent) && peek().value == "Type" &&
-      peekNext().type == TokenType::Dot &&
-      peekAt(2).type == TokenType::LowerIdent &&
-      (peekAt(2).value == "of" || peekAt(2).value == "returnedBy")) {
-    advance(); // Type
-    advance(); // .
-    auto query = advance().value;
-    expect(TokenType::LParen, "Expected '(' after Type." + query);
-    auto argument = parseExpr();
-    expect(TokenType::RParen, "Expected ')' after Type." + query + " argument");
-    type->kind = ast::TypeQuery{std::move(query), std::move(argument)};
-    return complete(std::move(type));
-  }
-
-  // Named type (possibly with generics)
-  if (check(TokenType::UpperIdent)) {
-    auto name = parseTypeName();
-
-    if (match(TokenType::LessThan)) {
-      std::vector<ast::TypeExprPtr> args;
-      args.push_back(parseTypeExpr());
-      while (match(TokenType::Comma)) {
-        args.push_back(parseTypeExpr());
-      }
-      expect(TokenType::GreaterThan, "Expected '>' after type arguments");
-      type->kind = ast::GenericType{std::move(name), std::move(args)};
-    } else {
-      type->kind = std::move(name);
+    // Atom type
+    if (check(TokenType::Atom)) {
+        type->kind = ast::AtomType{advance().value};
+        return complete(std::move(type));
     }
-    return complete(std::move(type));
-  }
 
-  error("Expected type expression");
+    // Type parameters are uppercase, like every other type name. A lowercase
+    // letter here is what someone arriving from a language that spells them
+    // lowercase will reach for, so it is worth its own message: falling
+    // through to "Expected type expression" points at an ordinary-looking
+    // name and says nothing about what to write instead.
+    if (check(TokenType::LowerIdent) && peek().value.size() == 1) {
+        const auto name = peek().value;
+        std::string upper = name;
+        upper[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(upper[0])));
+        error("type parameters are uppercase: write `" + upper + "` rather than `" + name + "`");
+    }
+
+    // A compiler-computed type: `Type.returnedBy(f)` / `Type.of(expr)`.
+    // Written where a type goes, so it parses here rather than as a value.
+    if (check(TokenType::UpperIdent) && peek().value == "Type" &&
+        peekNext().type == TokenType::Dot && peekAt(2).type == TokenType::LowerIdent &&
+        (peekAt(2).value == "of" || peekAt(2).value == "returnedBy")) {
+        advance(); // Type
+        advance(); // .
+        auto query = advance().value;
+        expect(TokenType::LParen, "Expected '(' after Type." + query);
+        auto argument = parseExpr();
+        expect(TokenType::RParen, "Expected ')' after Type." + query + " argument");
+        type->kind = ast::TypeQuery{std::move(query), std::move(argument)};
+        return complete(std::move(type));
+    }
+
+    // Named type (possibly with generics)
+    if (check(TokenType::UpperIdent)) {
+        auto name = parseTypeName();
+
+        if (match(TokenType::LessThan)) {
+            std::vector<ast::TypeExprPtr> args;
+            args.push_back(parseTypeExpr());
+            while (match(TokenType::Comma)) {
+                args.push_back(parseTypeExpr());
+            }
+            expect(TokenType::GreaterThan, "Expected '>' after type arguments");
+            type->kind = ast::GenericType{std::move(name), std::move(args)};
+        } else {
+            type->kind = std::move(name);
+        }
+        return complete(std::move(type));
+    }
+
+    error("Expected type expression");
 }
 
 auto Parser::parseTypeName() -> ast::TypeName {
-  ast::TypeName name;
-  name.parts.push_back(
-      expect(TokenType::UpperIdent, "Expected type name").value);
-  while (check(TokenType::Dot) && peekNext().type == TokenType::UpperIdent) {
-    advance(); // consume .
-    name.parts.push_back(advance().value);
-  }
-  return name;
+    ast::TypeName name;
+    name.parts.push_back(expect(TokenType::UpperIdent, "Expected type name").value);
+    while (check(TokenType::Dot) && peekNext().type == TokenType::UpperIdent) {
+        advance(); // consume .
+        name.parts.push_back(advance().value);
+    }
+    return name;
 }
 
 // ===== Expressions =====
 
 auto Parser::parseExpr() -> ast::ExprPtr {
-  auto expr = parseExprWithoutGuard();
+    auto expr = parseExprWithoutGuard();
 
-  if (match(TokenType::If)) {
-    auto condition = parseExpr();
-    // A guarded ASSIGNMENT is a statement, not a value: `total = total + 1
-    // if ready?` means "assign when ready", so it desugars to a one-armed
-    // `if`. As a TrailingIf it would be an expression whose value is None
-    // when the condition fails — and every backend would then have to
-    // decide separately what assigning None means.
-    if (std::holds_alternative<ast::AssignExpr>(expr->kind)) {
-      auto guarded = std::make_unique<ast::Expr>();
-      guarded->location = expr->location;
-      std::vector<ast::ExprPtr> body;
-      body.push_back(std::move(expr));
-      guarded->kind = ast::IfExpr{
-          std::move(condition), std::move(body), {}, std::nullopt, nullptr};
-      return complete(std::move(guarded));
+    if (match(TokenType::If)) {
+        auto condition = parseExpr();
+        // A guarded ASSIGNMENT is a statement, not a value: `total = total + 1
+        // if ready?` means "assign when ready", so it desugars to a one-armed
+        // `if`. As a TrailingIf it would be an expression whose value is None
+        // when the condition fails — and every backend would then have to
+        // decide separately what assigning None means.
+        if (std::holds_alternative<ast::AssignExpr>(expr->kind)) {
+            auto guarded = std::make_unique<ast::Expr>();
+            guarded->location = expr->location;
+            std::vector<ast::ExprPtr> body;
+            body.push_back(std::move(expr));
+            guarded->kind =
+                ast::IfExpr{std::move(condition), std::move(body), {}, std::nullopt, nullptr};
+            return complete(std::move(guarded));
+        }
+        auto trailing = std::make_unique<ast::Expr>();
+        trailing->location = expr->location;
+        trailing->kind = ast::TrailingIf{std::move(expr), std::move(condition)};
+        return complete(std::move(trailing));
     }
-    auto trailing = std::make_unique<ast::Expr>();
-    trailing->location = expr->location;
-    trailing->kind = ast::TrailingIf{std::move(expr), std::move(condition)};
-    return complete(std::move(trailing));
-  }
 
-  return complete(std::move(expr));
+    return complete(std::move(expr));
 }
 
 auto Parser::parseExprWithoutGuard() -> ast::ExprPtr {
-  auto expr = parseAssignment();
+    auto expr = parseAssignment();
 
-  // `cond then a else b` — ternary replacement, lowest precedence. Both
-  // branches parse at the assignment level (not parseExpr), so nesting
-  // another then/else requires parens — exactly the rule we want.
-  // `then` may also lead the line after the condition (kexhq/kex#497):
-  // nothing else can begin a line with `then`, so looking past the line
-  // break cannot take anything else, and the cursor goes back otherwise.
-  if (!m_noThenExpr && check(TokenType::Newline)) {
-    const auto conditionEnd = m_pos;
-    skipNewlines();
-    if (!check(TokenType::Then)) m_pos = conditionEnd;
-  }
-  if (!m_noThenExpr && match(TokenType::Then)) {
-    auto thenElse = std::make_unique<ast::Expr>();
-    thenElse->location = expr->location;
-    // The indentation of the line holding `then`: the first token on it.
-    auto lineStart = m_pos - 1;
-    while (lineStart > 0 && m_tokens[lineStart - 1].location.line ==
-                                m_tokens[m_pos - 1].location.line)
-      --lineStart;
-    const auto thenIndent = m_tokens[lineStart].location.column;
-    // A branch may start on the next line: nothing else can follow `then`
-    // or `else`, so the line break cannot end the expression there
-    // (`ready then x else` + a long branch below, kexhq/kex#462).
-    skipNewlines();
-    auto thenExpr = parseAssignment();
-    // `else` may open the next line too, since a `then` branch must be
-    // followed by one. Only then are the newlines skipped; otherwise the
-    // missing `else` is reported where the branch ended. An `else` indented
-    // less than the `then` line belongs to an enclosing `if`, and taking it
-    // would give a ternary with no `else` of its own that branch instead.
-    if (check(TokenType::Newline)) {
-      const auto branchEnd = m_pos;
-      skipNewlines();
-      if (!check(TokenType::Else) || peek().location.column < thenIndent)
-        m_pos = branchEnd;
+    // `cond then a else b` — ternary replacement, lowest precedence. Both
+    // branches parse at the assignment level (not parseExpr), so nesting
+    // another then/else requires parens — exactly the rule we want.
+    // `then` may also lead the line after the condition (kexhq/kex#497):
+    // nothing else can begin a line with `then`, so looking past the line
+    // break cannot take anything else, and the cursor goes back otherwise.
+    if (!m_noThenExpr && check(TokenType::Newline)) {
+        const auto conditionEnd = m_pos;
+        skipNewlines();
+        if (!check(TokenType::Then)) {
+            m_pos = conditionEnd;
+        }
     }
-    expect(TokenType::Else, "Expected 'else' after 'then'");
-    skipNewlines();
-    auto elseExpr = parseAssignment();
-    thenElse->kind = ast::ThenElseExpr{std::move(expr), std::move(thenExpr),
-                                       std::move(elseExpr)};
-    expr = std::move(thenElse);
-  }
+    if (!m_noThenExpr && match(TokenType::Then)) {
+        auto thenElse = std::make_unique<ast::Expr>();
+        thenElse->location = expr->location;
+        // The indentation of the line holding `then`: the first token on it.
+        auto lineStart = m_pos - 1;
+        while (lineStart > 0 &&
+               m_tokens[lineStart - 1].location.line == m_tokens[m_pos - 1].location.line) {
+            --lineStart;
+        }
+        const auto thenIndent = m_tokens[lineStart].location.column;
+        // A branch may start on the next line: nothing else can follow `then`
+        // or `else`, so the line break cannot end the expression there
+        // (`ready then x else` + a long branch below, kexhq/kex#462).
+        skipNewlines();
+        auto thenExpr = parseAssignment();
+        // `else` may open the next line too, since a `then` branch must be
+        // followed by one. Only then are the newlines skipped; otherwise the
+        // missing `else` is reported where the branch ended. An `else` indented
+        // less than the `then` line belongs to an enclosing `if`, and taking it
+        // would give a ternary with no `else` of its own that branch instead.
+        if (check(TokenType::Newline)) {
+            const auto branchEnd = m_pos;
+            skipNewlines();
+            if (!check(TokenType::Else) || peek().location.column < thenIndent) {
+                m_pos = branchEnd;
+            }
+        }
+        expect(TokenType::Else, "Expected 'else' after 'then'");
+        skipNewlines();
+        auto elseExpr = parseAssignment();
+        thenElse->kind =
+            ast::ThenElseExpr{std::move(expr), std::move(thenExpr), std::move(elseExpr)};
+        expr = std::move(thenElse);
+    }
 
-  return complete(std::move(expr));
+    return complete(std::move(expr));
 }
 
 // `<op>=` (`+=`, `-=`, `*=`, `/=`, `%=`, `&&=`, `||=`) desugars to
 // `name = name <op> value` (or `name.path = name.path <op> value`), reusing
 // the plain BinaryOp so every later pass only ever sees ordinary assignment.
 static auto compoundAssignBinaryOp(TokenType type) -> std::optional<TokenType> {
-  switch (type) {
-    case TokenType::PlusEq: return TokenType::Plus;
-    case TokenType::MinusEq: return TokenType::Minus;
-    case TokenType::StarEq: return TokenType::Star;
-    case TokenType::SlashEq: return TokenType::Slash;
-    case TokenType::PercentEq: return TokenType::Percent;
-    case TokenType::AmpAmpEq: return TokenType::AmpAmp;
-    case TokenType::PipePipeEq: return TokenType::PipePipe;
-    default: return std::nullopt;
-  }
+    switch (type) {
+        case TokenType::PlusEq: return TokenType::Plus;
+        case TokenType::MinusEq: return TokenType::Minus;
+        case TokenType::StarEq: return TokenType::Star;
+        case TokenType::SlashEq: return TokenType::Slash;
+        case TokenType::PercentEq: return TokenType::Percent;
+        case TokenType::AmpAmpEq: return TokenType::AmpAmp;
+        case TokenType::PipePipeEq: return TokenType::PipePipe;
+        default: return std::nullopt;
+    }
 }
 
 auto Parser::parseAssignment() -> ast::ExprPtr {
-  // Assignment targets are deliberately narrower than postfix expressions:
-  // a mutable local, optionally followed by record fields. Calls and computed
-  // receivers are never lvalues.
-  bool assignmentAhead = false;
-  int assignmentOffset = 0;
-  auto isFieldName = [](TokenType type) {
-    return type == TokenType::LowerIdent || type == TokenType::End ||
-           type == TokenType::Type || type == TokenType::Match ||
-           type == TokenType::Loop || type == TokenType::Timeout;
-  };
-  auto isAssignOp = [](TokenType type) {
-    return type == TokenType::Equals || compoundAssignBinaryOp(type);
-  };
-  if (check(TokenType::LowerIdent)) {
-    assignmentOffset = 1;
-    while (peekAt(assignmentOffset).type == TokenType::Dot &&
-           isFieldName(peekAt(assignmentOffset + 1).type))
-      assignmentOffset += 2;
-    assignmentAhead = isAssignOp(peekAt(assignmentOffset).type);
-  }
-  if (assignmentAhead) {
-    auto loc = currentLocation();
-    auto name = advance().value;
-    std::vector<std::string> path;
-    while (match(TokenType::Dot)) {
-      if (!isFieldName(peek().type)) error("Expected field name");
-      path.push_back(advance().value);
+    // Assignment targets are deliberately narrower than postfix expressions:
+    // a mutable local, optionally followed by record fields. Calls and computed
+    // receivers are never lvalues.
+    bool assignmentAhead = false;
+    int assignmentOffset = 0;
+    auto isFieldName = [](TokenType type) {
+        return type == TokenType::LowerIdent || type == TokenType::End || type == TokenType::Type ||
+               type == TokenType::Match || type == TokenType::Loop || type == TokenType::Timeout;
+    };
+    auto isAssignOp = [](TokenType type) {
+        return type == TokenType::Equals || compoundAssignBinaryOp(type);
+    };
+    if (check(TokenType::LowerIdent)) {
+        assignmentOffset = 1;
+        while (peekAt(assignmentOffset).type == TokenType::Dot &&
+               isFieldName(peekAt(assignmentOffset + 1).type)) {
+            assignmentOffset += 2;
+        }
+        assignmentAhead = isAssignOp(peekAt(assignmentOffset).type);
     }
-    auto opType = advance().type; // = or <op>=
-    // The value stops short of a trailing `if`: in
-    // `status = code if failed?` the condition decides whether the
-    // ASSIGNMENT happens. Read as part of the value it would instead
-    // store None whenever the condition was false — silently replacing
-    // the variable's contents with nothing, which is never the intent.
-    auto value = parseExprWithoutGuard();
+    if (assignmentAhead) {
+        auto loc = currentLocation();
+        auto name = advance().value;
+        std::vector<std::string> path;
+        while (match(TokenType::Dot)) {
+            if (!isFieldName(peek().type)) {
+                error("Expected field name");
+            }
+            path.push_back(advance().value);
+        }
+        auto opType = advance().type; // = or <op>=
+        // The value stops short of a trailing `if`: in
+        // `status = code if failed?` the condition decides whether the
+        // ASSIGNMENT happens. Read as part of the value it would instead
+        // store None whenever the condition was false — silently replacing
+        // the variable's contents with nothing, which is never the intent.
+        auto value = parseExprWithoutGuard();
 
-    if (auto binaryOp = compoundAssignBinaryOp(opType)) {
-      ast::ExprPtr target = std::make_unique<ast::Expr>();
-      target->location = loc;
-      target->kind = ast::Identifier{name};
-      for (const auto &field : path) {
-        auto access = std::make_unique<ast::Expr>();
-        access->location = loc;
-        access->kind =
-            ast::MethodCall{std::move(target), field, {}, {}, std::nullopt, false};
-        target = std::move(access);
-      }
-      auto combined = std::make_unique<ast::Expr>();
-      combined->location = loc;
-      combined->kind =
-          ast::BinaryOp{std::move(target), *binaryOp, std::move(value)};
-      value = complete(std::move(combined));
+        if (auto binaryOp = compoundAssignBinaryOp(opType)) {
+            ast::ExprPtr target = std::make_unique<ast::Expr>();
+            target->location = loc;
+            target->kind = ast::Identifier{name};
+            for (const auto& field : path) {
+                auto access = std::make_unique<ast::Expr>();
+                access->location = loc;
+                access->kind =
+                    ast::MethodCall{std::move(target), field, {}, {}, std::nullopt, false};
+                target = std::move(access);
+            }
+            auto combined = std::make_unique<ast::Expr>();
+            combined->location = loc;
+            combined->kind = ast::BinaryOp{std::move(target), *binaryOp, std::move(value)};
+            value = complete(std::move(combined));
+        }
+
+        auto expr = std::make_unique<ast::Expr>();
+        expr->location = loc;
+        expr->kind = ast::AssignExpr{std::move(name), std::move(path), std::move(value)};
+        return complete(std::move(expr));
     }
-
-    auto expr = std::make_unique<ast::Expr>();
-    expr->location = loc;
-    expr->kind =
-        ast::AssignExpr{std::move(name), std::move(path), std::move(value)};
-    return complete(std::move(expr));
-  }
-  return parseOr();
+    return parseOr();
 }
 
 auto Parser::parseOr() -> ast::ExprPtr {
-  auto left = parseAnd();
+    auto left = parseAnd();
 
-  while (check(TokenType::PipePipe)) {
-    auto startOffset = left->location.startOffset;
-    auto opType = peek().type;
-    advance();
-    auto op = std::make_unique<ast::Expr>();
-    op->location = currentLocation();
-    op->location.startOffset = startOffset;
-    auto right = parseAnd();
-    op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
-    left = std::move(op);
-  }
+    while (check(TokenType::PipePipe)) {
+        auto startOffset = left->location.startOffset;
+        auto opType = peek().type;
+        advance();
+        auto op = std::make_unique<ast::Expr>();
+        op->location = currentLocation();
+        op->location.startOffset = startOffset;
+        auto right = parseAnd();
+        op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
+        left = std::move(op);
+    }
 
-  return complete(std::move(left));
+    return complete(std::move(left));
 }
 
 auto Parser::parseAnd() -> ast::ExprPtr {
-  auto left = parseEquality();
+    auto left = parseEquality();
 
-  while (check(TokenType::AmpAmp)) {
-    auto startOffset = left->location.startOffset;
-    advance();
-    auto op = std::make_unique<ast::Expr>();
-    op->location = currentLocation();
-    op->location.startOffset = startOffset;
-    auto right = parseEquality();
-    op->kind =
-        ast::BinaryOp{std::move(left), TokenType::AmpAmp, std::move(right)};
-    left = std::move(op);
-  }
+    while (check(TokenType::AmpAmp)) {
+        auto startOffset = left->location.startOffset;
+        advance();
+        auto op = std::make_unique<ast::Expr>();
+        op->location = currentLocation();
+        op->location.startOffset = startOffset;
+        auto right = parseEquality();
+        op->kind = ast::BinaryOp{std::move(left), TokenType::AmpAmp, std::move(right)};
+        left = std::move(op);
+    }
 
-  return complete(std::move(left));
+    return complete(std::move(left));
 }
 
 auto Parser::parseEquality() -> ast::ExprPtr {
-  auto left = parseComparison();
+    auto left = parseComparison();
 
-  while (check(TokenType::EqEq) || check(TokenType::NotEq)) {
-    auto startOffset = left->location.startOffset;
-    auto opType = advance().type;
-    auto op = std::make_unique<ast::Expr>();
-    op->location = currentLocation();
-    op->location.startOffset = startOffset;
-    auto right = parseComparison();
-    op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
-    left = std::move(op);
-  }
+    while (check(TokenType::EqEq) || check(TokenType::NotEq)) {
+        auto startOffset = left->location.startOffset;
+        auto opType = advance().type;
+        auto op = std::make_unique<ast::Expr>();
+        op->location = currentLocation();
+        op->location.startOffset = startOffset;
+        auto right = parseComparison();
+        op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
+        left = std::move(op);
+    }
 
-  return complete(std::move(left));
+    return complete(std::move(left));
 }
 
 auto Parser::parseComparison() -> ast::ExprPtr {
-  auto left = parseRange();
+    auto left = parseRange();
 
-  while (check(TokenType::LessThan) || check(TokenType::GreaterThan) ||
-         check(TokenType::LessEq) || check(TokenType::GreaterEq)) {
-    auto startOffset = left->location.startOffset;
-    auto opType = advance().type;
-    auto op = std::make_unique<ast::Expr>();
-    op->location = currentLocation();
-    op->location.startOffset = startOffset;
-    auto right = parseRange();
-    op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
-    left = std::move(op);
-  }
+    while (check(TokenType::LessThan) || check(TokenType::GreaterThan) ||
+           check(TokenType::LessEq) || check(TokenType::GreaterEq)) {
+        auto startOffset = left->location.startOffset;
+        auto opType = advance().type;
+        auto op = std::make_unique<ast::Expr>();
+        op->location = currentLocation();
+        op->location.startOffset = startOffset;
+        auto right = parseRange();
+        op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
+        left = std::move(op);
+    }
 
-  return complete(std::move(left));
+    return complete(std::move(left));
 }
 
 auto Parser::parseRange() -> ast::ExprPtr {
-  auto start = parseAddition();
-  if (!match(TokenType::DotDot)) return start;
-  auto range = std::make_unique<ast::Expr>();
-  range->location = start->location;
-  auto end = parseAddition();
-  range->kind = ast::RangeExpr{std::move(start), std::move(end)};
-  return complete(std::move(range));
+    auto start = parseAddition();
+    if (!match(TokenType::DotDot)) {
+        return start;
+    }
+    auto range = std::make_unique<ast::Expr>();
+    range->location = start->location;
+    auto end = parseAddition();
+    range->kind = ast::RangeExpr{std::move(start), std::move(end)};
+    return complete(std::move(range));
 }
 
 auto Parser::parseAddition() -> ast::ExprPtr {
-  auto left = parseMultiplication();
+    auto left = parseMultiplication();
 
-  while (check(TokenType::Plus) || check(TokenType::Minus)) {
-    auto startOffset = left->location.startOffset;
-    auto opType = advance().type;
-    auto op = std::make_unique<ast::Expr>();
-    op->location = currentLocation();
-    op->location.startOffset = startOffset;
-    auto right = parseMultiplication();
-    op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
-    left = std::move(op);
-  }
+    while (check(TokenType::Plus) || check(TokenType::Minus)) {
+        auto startOffset = left->location.startOffset;
+        auto opType = advance().type;
+        auto op = std::make_unique<ast::Expr>();
+        op->location = currentLocation();
+        op->location.startOffset = startOffset;
+        auto right = parseMultiplication();
+        op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
+        left = std::move(op);
+    }
 
-  return complete(std::move(left));
+    return complete(std::move(left));
 }
 
 auto Parser::parseMultiplication() -> ast::ExprPtr {
-  auto left = parseUnary();
+    auto left = parseUnary();
 
-  while (check(TokenType::Star) || check(TokenType::Slash) ||
-         check(TokenType::Percent)) {
-    auto startOffset = left->location.startOffset;
-    auto opType = advance().type;
-    auto op = std::make_unique<ast::Expr>();
-    op->location = currentLocation();
-    op->location.startOffset = startOffset;
-    auto right = parseUnary();
-    op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
-    left = std::move(op);
-  }
+    while (check(TokenType::Star) || check(TokenType::Slash) || check(TokenType::Percent)) {
+        auto startOffset = left->location.startOffset;
+        auto opType = advance().type;
+        auto op = std::make_unique<ast::Expr>();
+        op->location = currentLocation();
+        op->location.startOffset = startOffset;
+        auto right = parseUnary();
+        op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
+        left = std::move(op);
+    }
 
-  return complete(std::move(left));
+    return complete(std::move(left));
 }
 
 auto Parser::parseUnary() -> ast::ExprPtr {
-  // Note: `not` is handled at parseNot() (lower precedence, Python-style)
-  // rather than here — see parseNot() for why.
-  if (check(TokenType::Minus) || check(TokenType::Bang)) {
-    auto loc = currentLocation();
-    auto opType = advance().type;
-    auto operand = parseUnary();
+    // Note: `not` is handled at parseNot() (lower precedence, Python-style)
+    // rather than here — see parseNot() for why.
+    if (check(TokenType::Minus) || check(TokenType::Bang)) {
+        auto loc = currentLocation();
+        auto opType = advance().type;
+        auto operand = parseUnary();
 
-    auto expr = std::make_unique<ast::Expr>();
-    expr->location = loc;
-    expr->kind = ast::UnaryOp{opType, std::move(operand)};
-    return complete(std::move(expr));
-  }
+        auto expr = std::make_unique<ast::Expr>();
+        expr->location = loc;
+        expr->kind = ast::UnaryOp{opType, std::move(operand)};
+        return complete(std::move(expr));
+    }
 
-  // `...` is a spread, not an operator: it only means anything where a
-  // collection is being built. Parsing it as a general unary expression made
-  // `let y = ...xs` legal, and it quietly evaluated to None.
-  if (check(TokenType::DotDotDot)) {
-    error("`...` only spreads into a list, a map, or a `do` block body");
-  }
+    // `...` is a spread, not an operator: it only means anything where a
+    // collection is being built. Parsing it as a general unary expression made
+    // `let y = ...xs` legal, and it quietly evaluated to None.
+    if (check(TokenType::DotDotDot)) {
+        error("`...` only spreads into a list, a map, or a `do` block body");
+    }
 
-  return parsePower();
+    return parsePower();
 }
 
 auto Parser::parsePower() -> ast::ExprPtr {
-  auto left = parsePostfix();
+    auto left = parsePostfix();
 
-  // Exponentiation is right-associative and binds more tightly than unary
-  // negation: `2 ^ 3 ^ 2` is `2 ^ (3 ^ 2)`, while `-2 ^ 2` is `-(2 ^ 2)`.
-  if (check(TokenType::Caret)) {
-    auto startOffset = left->location.startOffset;
-    auto opType = advance().type;
-    auto op = std::make_unique<ast::Expr>();
-    op->location = currentLocation();
-    op->location.startOffset = startOffset;
-    auto right = parseUnary();
-    op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
-    return complete(std::move(op));
-  }
+    // Exponentiation is right-associative and binds more tightly than unary
+    // negation: `2 ^ 3 ^ 2` is `2 ^ (3 ^ 2)`, while `-2 ^ 2` is `-(2 ^ 2)`.
+    if (check(TokenType::Caret)) {
+        auto startOffset = left->location.startOffset;
+        auto opType = advance().type;
+        auto op = std::make_unique<ast::Expr>();
+        op->location = currentLocation();
+        op->location.startOffset = startOffset;
+        auto right = parseUnary();
+        op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
+        return complete(std::move(op));
+    }
 
-  return complete(std::move(left));
+    return complete(std::move(left));
 }
 
 auto Parser::parsePostfix() -> ast::ExprPtr {
-  return parsePostfixTail(parsePrimary());
+    return parsePostfixTail(parsePrimary());
 }
 
 // A module path is a bare `Module` or a dotted chain of capitalised segments
 // (`A.B.C`), which the postfix parser represents as nested `MethodCall`s with
 // upper-case method names, no arguments, and no block. Used to decide whether
 // `X.tag`body`` is a module-qualified tagged literal rather than member access.
-static auto isModulePathExpr(const ast::Expr *e) -> bool {
-  if (!e)
+static auto isModulePathExpr(const ast::Expr* e) -> bool {
+    if (!e) {
+        return false;
+    }
+    if (std::holds_alternative<ast::UpperIdentifier>(e->kind)) {
+        return true;
+    }
+    if (auto* mc = std::get_if<ast::MethodCall>(&e->kind)) {
+        if (!mc->args.empty() || !mc->namedArgs.empty() || mc->block || mc->mutating ||
+            mc->method.empty() || !(mc->method[0] >= 'A' && mc->method[0] <= 'Z')) {
+            return false;
+        }
+        return isModulePathExpr(mc->receiver.get());
+    }
     return false;
-  if (std::holds_alternative<ast::UpperIdentifier>(e->kind))
-    return true;
-  if (auto *mc = std::get_if<ast::MethodCall>(&e->kind)) {
-    if (!mc->args.empty() || !mc->namedArgs.empty() || mc->block ||
-        mc->mutating || mc->method.empty() ||
-        !(mc->method[0] >= 'A' && mc->method[0] <= 'Z'))
-      return false;
-    return isModulePathExpr(mc->receiver.get());
-  }
-  return false;
 }
 
 auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
-  while (true) {
-    // Skip newlines if followed by . (method chaining across lines)
-    if (check(TokenType::Newline)) {
-      auto savedPos = m_pos;
-      skipNewlines();
-      if (!check(TokenType::Dot)) {
-        m_pos = savedPos;
-      }
-    }
-
-    // Method call: expr.method or expr.method(args) or expr.method!
-    // Also handles module access: Mod.Sub.func
-    if (match(TokenType::Dot)) {
-      // .try — postfix unwrap
-      if (check(TokenType::Try)) {
-        auto startOffset = expr->location.startOffset;
-        advance();
-        auto tryExpr = std::make_unique<ast::Expr>();
-        tryExpr->location = currentLocation();
-        tryExpr->location.startOffset = startOffset;
-        tryExpr->kind = ast::TryExpr{std::move(expr)};
-        expr = complete(std::move(tryExpr));
-        continue;
-      }
-
-      // Any keyword names a method here: nothing else can follow `.`, so
-      // `insert.record(row)` is unambiguous (kexhq/kex#508).
-      if (!check(TokenType::LowerIdent) && !check(TokenType::UpperIdent) &&
-          !isKeywordToken(peek().type)) {
-        error("Expected method or module name after '.'");
-      }
-      auto methodTok = advance();
-      auto method = methodTok.value;
-
-      // Module-qualified tagged literal: `Number.format`#.00`` is the call
-      // `Number.format(parts, values)`, so the tag resolves in that module
-      // like any other `Number.x`, and its validator is
-      // `Number.validateFormat`. Requires adjacency (no space before the
-      // backtick) and a module-path receiver, so ordinary `mod.method`
-      // access is untouched.
-      if (methodTok.type == TokenType::LowerIdent &&
-          (check(TokenType::RawString) ||
-           check(TokenType::InterpolatedRawString)) &&
-          methodTok.endOffset == peek().startOffset &&
-          isModulePathExpr(expr.get())) {
-        auto body = advance();
-        auto literal = std::make_shared<ast::TaggedLiteral>();
-        literal->tag = method;
-        literal->interpolating = body.type == TokenType::InterpolatedRawString;
-        literal->bodyStartOffset = body.startOffset;
-        literal->bodyEndOffset = body.endOffset;
-        std::vector<ast::ExprPtr> values;
-        if (literal->interpolating)
-          parseInterpolatedBody(body, literal->parts, values, true);
-        else
-          literal->parts.push_back(body.value);
-
-        const auto location = expr->location;
-        auto listOf = [&](std::vector<ast::ExprPtr> elements, bool anyElements) {
-          auto list = std::make_unique<ast::Expr>();
-          list->location = location;
-          list->kind = ast::ListExpr{std::move(elements), std::nullopt, anyElements};
-          return list;
-        };
-        std::vector<ast::ExprPtr> parts;
-        for (const auto &part : literal->parts) {
-          auto text = std::make_unique<ast::Expr>();
-          text->location = location;
-          text->kind = ast::StringLiteral{part, false, {}, {}};
-          parts.push_back(std::move(text));
-        }
-        ast::MethodCall call;
-        call.receiver = std::move(expr);
-        call.method = method;
-        call.args.push_back(listOf(std::move(parts), false));
-        call.args.push_back(listOf(std::move(values), true));
-        call.parenthesized = true;
-        call.tagged = std::move(literal);
-        auto callExpr = std::make_unique<ast::Expr>();
-        callExpr->location = location;
-        callExpr->kind = std::move(call);
-        expr = complete(std::move(callExpr));
-        continue;
-      }
-
-      bool mutating = match(TokenType::Bang);
-
-      auto call = std::make_unique<ast::Expr>();
-      call->location = currentLocation();
-      call->location.startOffset = expr->location.startOffset;
-
-      std::vector<ast::ExprPtr> args;
-      std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
-      std::optional<ast::ExprPtr> block;
-      ast::TypeExprPtr targetType;
-
-      bool hasParens = false;
-      if (match(TokenType::LParen)) {
-        hasParens = true;
-        if (!check(TokenType::RParen)) {
-          // Parse arguments
-          do {
-            if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
-                 check(TokenType::Type) || check(TokenType::Match) ||
-                 check(TokenType::Loop) || check(TokenType::After)) &&
-                peekNext().type == TokenType::Colon) {
-              auto name = advance().value;
-              advance(); // :
-              namedArgs.push_back({name, parseExpr()});
-            } else if ((method == "to" || method == "as") &&
-                       !toArgumentIsValue() &&
-                       (check(TokenType::UpperIdent) ||
-                        (check(TokenType::LBracket) &&
-                         peekNext().type == TokenType::UpperIdent))) {
-              // `.to(...)` receives a Type — any type spelling:
-              // List, [X], Optional<Int>, a typedef… — so its
-              // argument parses as a type expression, not a value
-              // expression. At runtime a Type is (for now) its
-              // outer constructor's module value, so the parsed
-              // type desugars to that UpperIdentifier: to(List),
-              // to(List<X>) and to([X]) are the same call. When
-              // Type becomes a first-class runtime value (users
-              // pattern-matching the type to define their own
-              // conversions), carry the full TypeExpr through
-              // instead of collapsing to the head here.
-              auto ty = parseTypeExpr();
-              std::string head;
-              if (auto *tn = std::get_if<ast::TypeName>(&ty->kind)) {
-                if (!tn->parts.empty())
-                  head = tn->parts.back();
-              } else if (auto *g = std::get_if<ast::GenericType>(&ty->kind)) {
-                if (!g->name.parts.empty())
-                  head = g->name.parts.back();
-              } else if (std::holds_alternative<ast::ListType>(ty->kind)) {
-                head = "List";
-              } else if (std::holds_alternative<ast::MapType>(ty->kind)) {
-                head = "Map";
-              }
-              auto mod = std::make_unique<ast::Expr>();
-              mod->location = currentLocation();
-              mod->location.startOffset = ty->location.startOffset;
-              mod->kind = ast::UpperIdentifier{std::move(head)};
-              args.push_back(std::move(mod));
-              targetType = std::move(ty);
-            } else {
-              args.push_back(parseExpr());
+    while (true) {
+        // Skip newlines if followed by . (method chaining across lines)
+        if (check(TokenType::Newline)) {
+            auto savedPos = m_pos;
+            skipNewlines();
+            if (!check(TokenType::Dot)) {
+                m_pos = savedPos;
             }
-          } while (match(TokenType::Comma));
         }
-        expect(TokenType::RParen, "Expected ')' after arguments");
-      } else if (methodTok.type == TokenType::LowerIdent && !m_noDoBlocks &&
-                 isAtExprStart() && !check(TokenType::Do) &&
-                 !check(TokenType::LBrace) && hasDoBeforeNewline()) {
-        // Qualified call with bare arguments (no parens): `Mod.name a, k: v
-        // do...end`. Same rule as the unqualified form in parsePrimary — only
-        // taken when a `do` follows at bracket depth 0 on this line.
-        m_noDoBlocks = true;
-        do {
-          if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
-               check(TokenType::Type) || check(TokenType::Match) ||
-               check(TokenType::Loop) || check(TokenType::After)) &&
-              peekNext().type == TokenType::Colon) {
-            auto name = advance().value;
-            advance(); // :
-            namedArgs.push_back({name, parseExpr()});
-          } else {
-            args.push_back(parseExpr());
-          }
-        } while (match(TokenType::Comma));
-        m_noDoBlocks = false;
-      }
 
-      // Block argument
-      if (check(TokenType::LBrace)) {
-        block = parsePrimary();
-      } else if (check(TokenType::Do) && !m_noDoBlocks) {
-        block = parsePrimary();
-      }
+        // Method call: expr.method or expr.method(args) or expr.method!
+        // Also handles module access: Mod.Sub.func
+        if (match(TokenType::Dot)) {
+            // .try — postfix unwrap
+            if (check(TokenType::Try)) {
+                auto startOffset = expr->location.startOffset;
+                advance();
+                auto tryExpr = std::make_unique<ast::Expr>();
+                tryExpr->location = currentLocation();
+                tryExpr->location.startOffset = startOffset;
+                tryExpr->kind = ast::TryExpr{std::move(expr)};
+                expr = complete(std::move(tryExpr));
+                continue;
+            }
 
-      call->kind = ast::MethodCall{
-          std::move(expr),  method,   std::move(args), std::move(namedArgs),
-          std::move(block), mutating, hasParens};
-      std::get<ast::MethodCall>(call->kind).targetType =
-          std::move(targetType);
-      std::get<ast::MethodCall>(call->kind).methodLocation = methodTok.location;
-      expr = complete(std::move(call));
-      continue;
+            // Any keyword names a method here: nothing else can follow `.`, so
+            // `insert.record(row)` is unambiguous (kexhq/kex#508).
+            if (!check(TokenType::LowerIdent) && !check(TokenType::UpperIdent) &&
+                !isKeywordToken(peek().type)) {
+                error("Expected method or module name after '.'");
+            }
+            auto methodTok = advance();
+            auto method = methodTok.value;
+
+            // Module-qualified tagged literal: `Number.format`#.00`` is the call
+            // `Number.format(parts, values)`, so the tag resolves in that module
+            // like any other `Number.x`, and its validator is
+            // `Number.validateFormat`. Requires adjacency (no space before the
+            // backtick) and a module-path receiver, so ordinary `mod.method`
+            // access is untouched.
+            if (methodTok.type == TokenType::LowerIdent &&
+                (check(TokenType::RawString) || check(TokenType::InterpolatedRawString)) &&
+                methodTok.endOffset == peek().startOffset && isModulePathExpr(expr.get())) {
+                auto body = advance();
+                auto literal = std::make_shared<ast::TaggedLiteral>();
+                literal->tag = method;
+                literal->interpolating = body.type == TokenType::InterpolatedRawString;
+                literal->bodyStartOffset = body.startOffset;
+                literal->bodyEndOffset = body.endOffset;
+                std::vector<ast::ExprPtr> values;
+                if (literal->interpolating) {
+                    parseInterpolatedBody(body, literal->parts, values, true);
+                } else {
+                    literal->parts.push_back(body.value);
+                }
+
+                const auto location = expr->location;
+                auto listOf = [&](std::vector<ast::ExprPtr> elements, bool anyElements) {
+                    auto list = std::make_unique<ast::Expr>();
+                    list->location = location;
+                    list->kind = ast::ListExpr{std::move(elements), std::nullopt, anyElements};
+                    return list;
+                };
+                std::vector<ast::ExprPtr> parts;
+                for (const auto& part : literal->parts) {
+                    auto text = std::make_unique<ast::Expr>();
+                    text->location = location;
+                    text->kind = ast::StringLiteral{part, false, {}, {}};
+                    parts.push_back(std::move(text));
+                }
+                ast::MethodCall call;
+                call.receiver = std::move(expr);
+                call.method = method;
+                call.args.push_back(listOf(std::move(parts), false));
+                call.args.push_back(listOf(std::move(values), true));
+                call.parenthesized = true;
+                call.tagged = std::move(literal);
+                auto callExpr = std::make_unique<ast::Expr>();
+                callExpr->location = location;
+                callExpr->kind = std::move(call);
+                expr = complete(std::move(callExpr));
+                continue;
+            }
+
+            bool mutating = match(TokenType::Bang);
+
+            auto call = std::make_unique<ast::Expr>();
+            call->location = currentLocation();
+            call->location.startOffset = expr->location.startOffset;
+
+            std::vector<ast::ExprPtr> args;
+            std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
+            std::optional<ast::ExprPtr> block;
+            ast::TypeExprPtr targetType;
+
+            bool hasParens = false;
+            if (match(TokenType::LParen)) {
+                hasParens = true;
+                if (!check(TokenType::RParen)) {
+                    // Parse arguments
+                    do {
+                        if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
+                             check(TokenType::Type) || check(TokenType::Match) ||
+                             check(TokenType::Loop) || check(TokenType::After)) &&
+                            peekNext().type == TokenType::Colon) {
+                            auto name = advance().value;
+                            advance(); // :
+                            namedArgs.push_back({name, parseExpr()});
+                        } else if (
+                            (method == "to" || method == "as") && !toArgumentIsValue() &&
+                            (check(TokenType::UpperIdent) ||
+                             (check(TokenType::LBracket) &&
+                              peekNext().type == TokenType::UpperIdent))) {
+                            // `.to(...)` receives a Type — any type spelling:
+                            // List, [X], Optional<Int>, a typedef… — so its
+                            // argument parses as a type expression, not a value
+                            // expression. At runtime a Type is (for now) its
+                            // outer constructor's module value, so the parsed
+                            // type desugars to that UpperIdentifier: to(List),
+                            // to(List<X>) and to([X]) are the same call. When
+                            // Type becomes a first-class runtime value (users
+                            // pattern-matching the type to define their own
+                            // conversions), carry the full TypeExpr through
+                            // instead of collapsing to the head here.
+                            auto ty = parseTypeExpr();
+                            std::string head;
+                            if (auto* tn = std::get_if<ast::TypeName>(&ty->kind)) {
+                                if (!tn->parts.empty()) {
+                                    head = tn->parts.back();
+                                }
+                            } else if (auto* g = std::get_if<ast::GenericType>(&ty->kind)) {
+                                if (!g->name.parts.empty()) {
+                                    head = g->name.parts.back();
+                                }
+                            } else if (std::holds_alternative<ast::ListType>(ty->kind)) {
+                                head = "List";
+                            } else if (std::holds_alternative<ast::MapType>(ty->kind)) {
+                                head = "Map";
+                            }
+                            auto mod = std::make_unique<ast::Expr>();
+                            mod->location = currentLocation();
+                            mod->location.startOffset = ty->location.startOffset;
+                            mod->kind = ast::UpperIdentifier{std::move(head)};
+                            args.push_back(std::move(mod));
+                            targetType = std::move(ty);
+                        } else {
+                            args.push_back(parseExpr());
+                        }
+                    } while (match(TokenType::Comma));
+                }
+                expect(TokenType::RParen, "Expected ')' after arguments");
+            } else if (
+                methodTok.type == TokenType::LowerIdent && !m_noDoBlocks && isAtExprStart() &&
+                !check(TokenType::Do) && !check(TokenType::LBrace) && hasDoBeforeNewline()) {
+                // Qualified call with bare arguments (no parens): `Mod.name a, k: v
+                // do...end`. Same rule as the unqualified form in parsePrimary — only
+                // taken when a `do` follows at bracket depth 0 on this line.
+                m_noDoBlocks = true;
+                do {
+                    if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
+                         check(TokenType::Type) || check(TokenType::Match) ||
+                         check(TokenType::Loop) || check(TokenType::After)) &&
+                        peekNext().type == TokenType::Colon) {
+                        auto name = advance().value;
+                        advance(); // :
+                        namedArgs.push_back({name, parseExpr()});
+                    } else {
+                        args.push_back(parseExpr());
+                    }
+                } while (match(TokenType::Comma));
+                m_noDoBlocks = false;
+            }
+
+            // Block argument
+            if (check(TokenType::LBrace)) {
+                block = parsePrimary();
+            } else if (check(TokenType::Do) && !m_noDoBlocks) {
+                block = parsePrimary();
+            }
+
+            call->kind =
+                ast::MethodCall{std::move(expr),  method,   std::move(args), std::move(namedArgs),
+                                std::move(block), mutating, hasParens};
+            std::get<ast::MethodCall>(call->kind).targetType = std::move(targetType);
+            std::get<ast::MethodCall>(call->kind).methodLocation = methodTok.location;
+            expr = complete(std::move(call));
+            continue;
+        }
+
+        // Bracket access: expr[key]
+        if (match(TokenType::LBracket)) {
+            auto key = parseExpr();
+            expect(TokenType::RBracket, "Expected ']' after index");
+
+            auto call = std::make_unique<ast::Expr>();
+            call->location = currentLocation();
+            call->location.startOffset = expr->location.startOffset;
+            // Desugar to method call: expr.get(key)
+            std::vector<ast::ExprPtr> args;
+            args.push_back(std::move(key));
+            call->kind =
+                ast::MethodCall{std::move(expr), "get", std::move(args), {}, std::nullopt, false};
+            expr = complete(std::move(call));
+            continue;
+        }
+
+        // Direct call on an arbitrary expression's result: expr(args). Only a
+        // NAME can head a FunctionCall (`f(x)`) or a receiver.method a MethodCall
+        // — neither has a slot for "the callee is this whole expression" — so
+        // `g(~id)(10)` desugars to a hidden local bound to the callee, called by
+        // that name, reusing the call-a-local-function-value path that already
+        // works: `do let _chainN = expr; _chainN(args) end`. Checked by BYTE
+        // ADJACENCY (the `(` starts exactly where the previously consumed token
+        // ends, no space/comment/newline of any width between them), not by
+        // source line: a same-line check is not narrow enough, since Kex has no
+        // statement separator at all inside a `do...end` body — `do
+        // failures.push!(error) () end` (real code, tey/src/tey/manifest.kex) is
+        // two statements on one line, a mutating call followed by an unrelated
+        // bare `()`, and a same-line check wrongly chained the second onto the
+        // first's result ("'_chainN' is not callable"). Only truly adjacent
+        // tokens are unambiguous: `f(1)(2)(3)` (a real chain) is always written
+        // with no space, while two independent statements always have at least
+        // one separating character (space or newline) between them in practice.
+        if (check(TokenType::LParen) && m_pos > 0 &&
+            m_tokens[m_pos - 1].endOffset == peek().startOffset) {
+            // This `(`'s own offset, not the wrapped expr's: `f(1)(2)(3)` chains
+            // three times over the SAME base expr's (relocated, post-interpolation)
+            // start position, which a per-Parser counter can't tell apart either —
+            // string interpolation holes are each their own fresh Parser (see
+            // parseInterpolatedBody), so two SEPARATE `${f(a)(b)}` interpolations
+            // would otherwise both mint `_chain0` and collide on a real, distinct
+            // name. The paren position is unique per call site either way.
+            const auto callParenOffset = peek().startOffset;
+            advance();
+            std::vector<ast::ExprPtr> args;
+            std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
+            if (!check(TokenType::RParen)) {
+                do {
+                    if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
+                         check(TokenType::Type) || check(TokenType::Match) ||
+                         check(TokenType::Loop) || check(TokenType::After)) &&
+                        peekNext().type == TokenType::Colon) {
+                        auto argName = advance().value;
+                        advance(); // :
+                        namedArgs.push_back({argName, parseExpr()});
+                    } else {
+                        args.push_back(parseExpr());
+                    }
+                } while (match(TokenType::Comma));
+            }
+            expect(TokenType::RParen, "Expected ')'");
+
+            auto startOffset = expr->location.startOffset;
+            auto calleeName = "_chain" + std::to_string(callParenOffset);
+
+            auto pattern = std::make_unique<ast::Pattern>();
+            pattern->location = expr->location;
+            pattern->kind = ast::VarPattern{calleeName};
+
+            auto binding = std::make_unique<ast::Expr>();
+            binding->location = expr->location;
+            binding->kind = ast::LetExpr{std::move(pattern), std::move(expr), std::nullopt};
+
+            auto call = std::make_unique<ast::Expr>();
+            call->location = currentLocation();
+            call->location.startOffset = startOffset;
+            call->kind =
+                ast::FunctionCall{calleeName, std::move(args), std::move(namedArgs), std::nullopt};
+
+            std::vector<ast::ExprPtr> body;
+            body.push_back(std::move(binding));
+            body.push_back(std::move(call));
+
+            auto block = std::make_unique<ast::Expr>();
+            block->location = currentLocation();
+            block->location.startOffset = startOffset;
+            block->kind = ast::BlockExpr{std::move(body)};
+            expr = complete(std::move(block));
+            continue;
+        }
+
+        break;
     }
 
-    // Bracket access: expr[key]
-    if (match(TokenType::LBracket)) {
-      auto key = parseExpr();
-      expect(TokenType::RBracket, "Expected ']' after index");
-
-      auto call = std::make_unique<ast::Expr>();
-      call->location = currentLocation();
-      call->location.startOffset = expr->location.startOffset;
-      // Desugar to method call: expr.get(key)
-      std::vector<ast::ExprPtr> args;
-      args.push_back(std::move(key));
-      call->kind = ast::MethodCall{std::move(expr), "get", std::move(args), {},
-                                   std::nullopt,    false};
-      expr = complete(std::move(call));
-      continue;
-    }
-
-    // Direct call on an arbitrary expression's result: expr(args). Only a
-    // NAME can head a FunctionCall (`f(x)`) or a receiver.method a MethodCall
-    // — neither has a slot for "the callee is this whole expression" — so
-    // `g(~id)(10)` desugars to a hidden local bound to the callee, called by
-    // that name, reusing the call-a-local-function-value path that already
-    // works: `do let _chainN = expr; _chainN(args) end`. Checked by BYTE
-    // ADJACENCY (the `(` starts exactly where the previously consumed token
-    // ends, no space/comment/newline of any width between them), not by
-    // source line: a same-line check is not narrow enough, since Kex has no
-    // statement separator at all inside a `do...end` body — `do
-    // failures.push!(error) () end` (real code, tey/src/tey/manifest.kex) is
-    // two statements on one line, a mutating call followed by an unrelated
-    // bare `()`, and a same-line check wrongly chained the second onto the
-    // first's result ("'_chainN' is not callable"). Only truly adjacent
-    // tokens are unambiguous: `f(1)(2)(3)` (a real chain) is always written
-    // with no space, while two independent statements always have at least
-    // one separating character (space or newline) between them in practice.
-    if (check(TokenType::LParen) && m_pos > 0
-        && m_tokens[m_pos - 1].endOffset == peek().startOffset) {
-      // This `(`'s own offset, not the wrapped expr's: `f(1)(2)(3)` chains
-      // three times over the SAME base expr's (relocated, post-interpolation)
-      // start position, which a per-Parser counter can't tell apart either —
-      // string interpolation holes are each their own fresh Parser (see
-      // parseInterpolatedBody), so two SEPARATE `${f(a)(b)}` interpolations
-      // would otherwise both mint `_chain0` and collide on a real, distinct
-      // name. The paren position is unique per call site either way.
-      const auto callParenOffset = peek().startOffset;
-      advance();
-      std::vector<ast::ExprPtr> args;
-      std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
-      if (!check(TokenType::RParen)) {
-        do {
-          if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
-               check(TokenType::Type) || check(TokenType::Match) ||
-               check(TokenType::Loop) || check(TokenType::After)) &&
-              peekNext().type == TokenType::Colon) {
-            auto argName = advance().value;
-            advance(); // :
-            namedArgs.push_back({argName, parseExpr()});
-          } else {
-            args.push_back(parseExpr());
-          }
-        } while (match(TokenType::Comma));
-      }
-      expect(TokenType::RParen, "Expected ')'");
-
-      auto startOffset = expr->location.startOffset;
-      auto calleeName = "_chain" + std::to_string(callParenOffset);
-
-      auto pattern = std::make_unique<ast::Pattern>();
-      pattern->location = expr->location;
-      pattern->kind = ast::VarPattern{calleeName};
-
-      auto binding = std::make_unique<ast::Expr>();
-      binding->location = expr->location;
-      binding->kind =
-          ast::LetExpr{std::move(pattern), std::move(expr), std::nullopt};
-
-      auto call = std::make_unique<ast::Expr>();
-      call->location = currentLocation();
-      call->location.startOffset = startOffset;
-      call->kind = ast::FunctionCall{calleeName, std::move(args),
-                                     std::move(namedArgs), std::nullopt};
-
-      std::vector<ast::ExprPtr> body;
-      body.push_back(std::move(binding));
-      body.push_back(std::move(call));
-
-      auto block = std::make_unique<ast::Expr>();
-      block->location = currentLocation();
-      block->location.startOffset = startOffset;
-      block->kind = ast::BlockExpr{std::move(body)};
-      expr = complete(std::move(block));
-      continue;
-    }
-
-    break;
-  }
-
-  return complete(std::move(expr));
+    return complete(std::move(expr));
 }
 
 // In a STRING literal, `${expr}` is sugar for a call to the show protocol, so
@@ -2134,1257 +2164,1281 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
 // (`regex$` escapes per character, a `sql$` tag would bind parameters), so
 // rendering them to text here would destroy what the tag ABI exists for.
 namespace {
-constexpr const char *kShowMethod = "showValue";
+constexpr const char* kShowMethod = "showValue";
 
 // A hole that is the only thing on its line stands for a block, not for a
 // word: whatever it holds should land at the hole's own column. Only line
 // one gets that for free — the literal's own text put it there — so lines
 // two onward are indented to match, and one trailing newline is swallowed
 // so the value does not push a blank line into the slot.
-auto alignBlockHoles(const std::vector<std::string> &parts,
-                     std::vector<ast::ExprPtr> &values,
-                     const SourceLocation &at) -> void {
-  for (size_t index = 0; index < values.size(); ++index) {
-    if (!values[index] || index >= parts.size())
-      continue;
+auto alignBlockHoles(
+    const std::vector<std::string>& parts,
+    std::vector<ast::ExprPtr>& values,
+    const SourceLocation& at) -> void {
+    for (size_t index = 0; index < values.size(); ++index) {
+        if (!values[index] || index >= parts.size()) {
+            continue;
+        }
 
-    const auto &before = parts[index];
-    auto lineStart = before.rfind('\n');
-    // The text before the hole is its line's indentation, either from the
-    // literal's start or from the last newline.
-    if (lineStart == std::string::npos) {
-      if (index != 0)
-        continue;
-      lineStart = 0;
-    } else {
-      lineStart += 1;
+        const auto& before = parts[index];
+        auto lineStart = before.rfind('\n');
+        // The text before the hole is its line's indentation, either from the
+        // literal's start or from the last newline.
+        if (lineStart == std::string::npos) {
+            if (index != 0) {
+                continue;
+            }
+            lineStart = 0;
+        } else {
+            lineStart += 1;
+        }
+        auto indent = before.substr(lineStart);
+        if (!std::all_of(
+                indent.begin(), indent.end(), [](char c) { return c == ' ' || c == '\t'; })) {
+            continue;
+        }
+
+        // Nothing may follow on the line either, or the hole is inline text.
+        const bool endsLine = index + 1 >= parts.size() || parts[index + 1].empty() ||
+                              parts[index + 1].starts_with("\n") ||
+                              parts[index + 1].starts_with("\r\n");
+        if (!endsLine) {
+            continue;
+        }
+
+        auto prefix = std::make_unique<ast::Expr>();
+        prefix->location = at;
+        prefix->kind = ast::StringLiteral{indent, false};
+
+        auto call = std::make_unique<ast::Expr>();
+        call->location = at;
+        ast::MethodCall method;
+        method.receiver = std::move(values[index]);
+        method.method = "indentRest";
+        method.args.push_back(std::move(prefix));
+        call->kind = std::move(method);
+        values[index] = std::move(call);
     }
-    auto indent = before.substr(lineStart);
-    if (!std::all_of(indent.begin(), indent.end(),
-                     [](char c) { return c == ' ' || c == '\t'; }))
-      continue;
-
-    // Nothing may follow on the line either, or the hole is inline text.
-    const bool endsLine = index + 1 >= parts.size() ||
-                          parts[index + 1].empty() ||
-                          parts[index + 1].starts_with("\n") ||
-                          parts[index + 1].starts_with("\r\n");
-    if (!endsLine)
-      continue;
-
-    auto prefix = std::make_unique<ast::Expr>();
-    prefix->location = at;
-    prefix->kind = ast::StringLiteral{indent, false};
-
-    auto call = std::make_unique<ast::Expr>();
-    call->location = at;
-    ast::MethodCall method;
-    method.receiver = std::move(values[index]);
-    method.method = "indentRest";
-    method.args.push_back(std::move(prefix));
-    call->kind = std::move(method);
-    values[index] = std::move(call);
-  }
 }
 
-auto wrapInShowCalls(std::vector<ast::ExprPtr> &values,
-                     const SourceLocation &at) -> void {
-  for (auto &value : values) {
-    if (!value)
-      continue;
-    auto call = std::make_unique<ast::Expr>();
-    call->location = at;
-    ast::MethodCall method;
-    method.receiver = std::move(value);
-    method.method = kShowMethod;
-    call->kind = std::move(method);
-    value = std::move(call);
-  }
+auto wrapInShowCalls(std::vector<ast::ExprPtr>& values, const SourceLocation& at) -> void {
+    for (auto& value : values) {
+        if (!value) {
+            continue;
+        }
+        auto call = std::make_unique<ast::Expr>();
+        call->location = at;
+        ast::MethodCall method;
+        method.receiver = std::move(value);
+        method.method = kShowMethod;
+        call->kind = std::move(method);
+        value = std::move(call);
+    }
 }
 } // namespace
 
-auto Parser::parseInterpolatedBody(const Token &token,
-                                   std::vector<std::string> &parts,
-                                   std::vector<ast::ExprPtr> &values,
-                                   bool dollarBraceEscape) -> void {
-  const auto &body = token.value;
-  std::string part;
-  size_t i = 0;
+auto Parser::parseInterpolatedBody(
+    const Token& token,
+    std::vector<std::string>& parts,
+    std::vector<ast::ExprPtr>& values,
+    bool dollarBraceEscape) -> void {
+    const auto& body = token.value;
+    std::string part;
+    size_t i = 0;
 
-  auto interpolationError = [&](const std::string &message) -> void {
-    m_diagnostics.push_back({token.location, message});
-    throw ParseError{token.location, message};
-  };
+    auto interpolationError = [&](const std::string& message) -> void {
+        m_diagnostics.push_back({token.location, message});
+        throw ParseError{token.location, message};
+    };
 
-  while (i < body.size()) {
-    // `$${` is the one escape in an interpolating backtick body, where
-    // backslash has no special role. A double-quoted string escapes with
-    // `\$` instead, so there `$${x}` is a literal `$` followed by an
-    // interpolation — SQL placeholders (`$${idx}` → `$1`) depend on it.
-    if (dollarBraceEscape && i + 2 < body.size() && body[i] == '$' &&
-        body[i + 1] == '$' && body[i + 2] == '{') {
-      part += "${";
-      i += 3;
-      continue;
-    }
-    // A `$` written `\$` is literal even before a `{` (docs/strings.md);
-    // the lexer has already unescaped it, so it says which ones they were.
-    const bool escapedDollar =
-        std::find(token.escapedDollars.begin(), token.escapedDollars.end(),
-                  i) != token.escapedDollars.end();
-    if (escapedDollar || i + 1 >= body.size() || body[i] != '$' ||
-        body[i + 1] != '{') {
-      part += body[i++];
-      continue;
-    }
-
-    parts.push_back(std::move(part));
-    part.clear();
-
-    enum class Mode { Normal, DoubleString, Char, RawString, Comment };
-    Mode mode = Mode::Normal;
-    int depth = 1;
-    size_t cursor = i + 2;
-    size_t close = std::string::npos;
-    while (cursor < body.size()) {
-      char c = body[cursor];
-      if (mode == Mode::DoubleString) {
-        if (c == '\\' && cursor + 1 < body.size())
-          cursor += 2;
-        else {
-          if (c == '"')
-            mode = Mode::Normal;
-          cursor++;
+    while (i < body.size()) {
+        // `$${` is the one escape in an interpolating backtick body, where
+        // backslash has no special role. A double-quoted string escapes with
+        // `\$` instead, so there `$${x}` is a literal `$` followed by an
+        // interpolation — SQL placeholders (`$${idx}` → `$1`) depend on it.
+        if (dollarBraceEscape && i + 2 < body.size() && body[i] == '$' && body[i + 1] == '$' &&
+            body[i + 2] == '{') {
+            part += "${";
+            i += 3;
+            continue;
         }
-        continue;
-      }
-      if (mode == Mode::Char) {
-        if (c == '\\' && cursor + 1 < body.size())
-          cursor += 2;
-        else {
-          if (c == '\'')
-            mode = Mode::Normal;
-          cursor++;
+        // A `$` written `\$` is literal even before a `{` (docs/strings.md);
+        // the lexer has already unescaped it, so it says which ones they were.
+        const bool escapedDollar =
+            std::find(token.escapedDollars.begin(), token.escapedDollars.end(), i) !=
+            token.escapedDollars.end();
+        if (escapedDollar || i + 1 >= body.size() || body[i] != '$' || body[i + 1] != '{') {
+            part += body[i++];
+            continue;
         }
-        continue;
-      }
-      if (mode == Mode::RawString) {
-        if (c == '`') {
-          if (cursor + 1 < body.size() && body[cursor + 1] == '`')
-            cursor += 2;
-          else {
-            mode = Mode::Normal;
+
+        parts.push_back(std::move(part));
+        part.clear();
+
+        enum class Mode { Normal, DoubleString, Char, RawString, Comment };
+        Mode mode = Mode::Normal;
+        int depth = 1;
+        size_t cursor = i + 2;
+        size_t close = std::string::npos;
+        while (cursor < body.size()) {
+            char c = body[cursor];
+            if (mode == Mode::DoubleString) {
+                if (c == '\\' && cursor + 1 < body.size()) {
+                    cursor += 2;
+                } else {
+                    if (c == '"') {
+                        mode = Mode::Normal;
+                    }
+                    cursor++;
+                }
+                continue;
+            }
+            if (mode == Mode::Char) {
+                if (c == '\\' && cursor + 1 < body.size()) {
+                    cursor += 2;
+                } else {
+                    if (c == '\'') {
+                        mode = Mode::Normal;
+                    }
+                    cursor++;
+                }
+                continue;
+            }
+            if (mode == Mode::RawString) {
+                if (c == '`') {
+                    if (cursor + 1 < body.size() && body[cursor + 1] == '`') {
+                        cursor += 2;
+                    } else {
+                        mode = Mode::Normal;
+                        cursor++;
+                    }
+                } else {
+                    cursor++;
+                }
+                continue;
+            }
+            if (mode == Mode::Comment) {
+                if (c == '\n') {
+                    mode = Mode::Normal;
+                }
+                cursor++;
+                continue;
+            }
+
+            if (c == '"') {
+                mode = Mode::DoubleString;
+            } else if (c == '\'') {
+                mode = Mode::Char;
+            } else if (c == '`') {
+                mode = Mode::RawString;
+            } else if (c == '#') {
+                mode = Mode::Comment;
+            } else if (c == '{') {
+                depth++;
+            } else if (c == '}' && --depth == 0) {
+                close = cursor;
+                break;
+            }
             cursor++;
-          }
-        } else {
-          cursor++;
         }
-        continue;
-      }
-      if (mode == Mode::Comment) {
-        if (c == '\n')
-          mode = Mode::Normal;
-        cursor++;
-        continue;
-      }
 
-      if (c == '"')
-        mode = Mode::DoubleString;
-      else if (c == '\'')
-        mode = Mode::Char;
-      else if (c == '`')
-        mode = Mode::RawString;
-      else if (c == '#')
-        mode = Mode::Comment;
-      else if (c == '{')
-        depth++;
-      else if (c == '}' && --depth == 0) {
-        close = cursor;
-        break;
-      }
-      cursor++;
+        if (close == std::string::npos) {
+            interpolationError("Unterminated interpolation in string literal");
+        }
+
+        auto inner = body.substr(i + 2, close - i - 2);
+        Lexer lexer(inner, m_filename);
+        auto tokens = lexer.tokenizeAll();
+        // The interpolation is lexed as a small standalone source, but its
+        // AST participates in diagnostics and editor features for the outer
+        // file. Relocate every inner token back to its real source position
+        // before parsing so nested calls retain usable hover/reference spans.
+        const auto innerOffsetInBody = i + 2;
+        const auto prefix = std::string_view(body).substr(0, innerOffsetInBody);
+        const auto newlineCount = static_cast<int>(std::count(prefix.begin(), prefix.end(), '\n'));
+        const auto lastNewline = prefix.rfind('\n');
+        const int delimiterWidth = token.type == TokenType::InterpolatedRawString ? 2 : 1;
+        const int innerLine = token.location.line + newlineCount;
+        const int innerColumn = newlineCount == 0 ? token.location.column + delimiterWidth +
+                                                        static_cast<int>(innerOffsetInBody)
+                                                  : static_cast<int>(prefix.size() - lastNewline);
+        const int absoluteInnerOffset =
+            token.startOffset < 0
+                ? -1
+                : token.startOffset + delimiterWidth + static_cast<int>(innerOffsetInBody);
+        for (auto& innerToken : tokens) {
+            const auto relativeLine = innerToken.location.line;
+            innerToken.location.line = innerLine + relativeLine - 1;
+            if (relativeLine == 1) {
+                innerToken.location.column = innerColumn + innerToken.location.column - 1;
+            }
+            if (absoluteInnerOffset >= 0) {
+                if (innerToken.startOffset >= 0) {
+                    innerToken.startOffset += absoluteInnerOffset;
+                }
+                if (innerToken.endOffset >= 0) {
+                    innerToken.endOffset += absoluteInnerOffset;
+                }
+                innerToken.location.startOffset = innerToken.startOffset;
+                innerToken.location.endOffset = innerToken.endOffset;
+            }
+        }
+        if (!tokens.empty() && tokens.front().type == TokenType::Error) {
+            interpolationError("Invalid interpolation: " + tokens.front().value);
+        }
+
+        Parser parser(std::move(tokens), m_filename);
+        ast::ExprPtr value;
+        try {
+            parser.skipNewlines();
+            value = parser.parseExpr();
+            parser.skipNewlines();
+        } catch (const ParseError& e) {
+            interpolationError("Invalid interpolation: " + e.message);
+        }
+        if (!value || !parser.atEnd()) {
+            interpolationError("Interpolation must contain exactly one expression");
+        }
+        values.push_back(std::move(value));
+        i = close + 1;
     }
-
-    if (close == std::string::npos)
-      interpolationError("Unterminated interpolation in string literal");
-
-    auto inner = body.substr(i + 2, close - i - 2);
-    Lexer lexer(inner, m_filename);
-    auto tokens = lexer.tokenizeAll();
-    // The interpolation is lexed as a small standalone source, but its
-    // AST participates in diagnostics and editor features for the outer
-    // file. Relocate every inner token back to its real source position
-    // before parsing so nested calls retain usable hover/reference spans.
-    const auto innerOffsetInBody = i + 2;
-    const auto prefix = std::string_view(body).substr(0, innerOffsetInBody);
-    const auto newlineCount =
-        static_cast<int>(std::count(prefix.begin(), prefix.end(), '\n'));
-    const auto lastNewline = prefix.rfind('\n');
-    const int delimiterWidth =
-        token.type == TokenType::InterpolatedRawString ? 2 : 1;
-    const int innerLine = token.location.line + newlineCount;
-    const int innerColumn = newlineCount == 0
-                                ? token.location.column + delimiterWidth +
-                                      static_cast<int>(innerOffsetInBody)
-                                : static_cast<int>(prefix.size() - lastNewline);
-    const int absoluteInnerOffset =
-        token.startOffset < 0 ? -1
-                              : token.startOffset + delimiterWidth +
-                                    static_cast<int>(innerOffsetInBody);
-    for (auto &innerToken : tokens) {
-      const auto relativeLine = innerToken.location.line;
-      innerToken.location.line = innerLine + relativeLine - 1;
-      if (relativeLine == 1)
-        innerToken.location.column =
-            innerColumn + innerToken.location.column - 1;
-      if (absoluteInnerOffset >= 0) {
-        if (innerToken.startOffset >= 0)
-          innerToken.startOffset += absoluteInnerOffset;
-        if (innerToken.endOffset >= 0)
-          innerToken.endOffset += absoluteInnerOffset;
-        innerToken.location.startOffset = innerToken.startOffset;
-        innerToken.location.endOffset = innerToken.endOffset;
-      }
-    }
-    if (!tokens.empty() && tokens.front().type == TokenType::Error)
-      interpolationError("Invalid interpolation: " + tokens.front().value);
-
-    Parser parser(std::move(tokens), m_filename);
-    ast::ExprPtr value;
-    try {
-      parser.skipNewlines();
-      value = parser.parseExpr();
-      parser.skipNewlines();
-    } catch (const ParseError &e) {
-      interpolationError("Invalid interpolation: " + e.message);
-    }
-    if (!value || !parser.atEnd())
-      interpolationError("Interpolation must contain exactly one expression");
-    values.push_back(std::move(value));
-    i = close + 1;
-  }
-  parts.push_back(std::move(part));
+    parts.push_back(std::move(part));
 }
 
 auto Parser::parsePrimary() -> ast::ExprPtr {
-  auto loc = currentLocation();
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = loc;
+    auto loc = currentLocation();
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = loc;
 
-  // Literals
-  if (check(TokenType::Integer)) {
-    expr->kind = ast::IntLiteral{advance().value};
-    return expr;
-  }
-  if (check(TokenType::Float)) {
-    expr->kind = ast::FloatLiteral{advance().value};
-    return expr;
-  }
-  if (check(TokenType::String)) {
-    // Split here rather than leaving `${...}` as raw text for someone
-    // downstream to re-lex: the interpolated expressions become ordinary
-    // AST nodes, so every later pass sees them.
-    auto body = advance();
-    ast::StringLiteral literal;
-    literal.interpolating = true;
-    parseInterpolatedBody(body, literal.parts, literal.values, false);
-    wrapInShowCalls(literal.values, body.location);
-    expr->kind = std::move(literal);
-    return expr;
-  }
-  if (check(TokenType::RawString)) {
-    expr->kind = ast::StringLiteral{advance().value, false};
-    return expr;
-  }
-  if (check(TokenType::InterpolatedRawString)) {
-    auto body = advance();
-    ast::StringLiteral literal;
-    literal.interpolating = true;
-    parseInterpolatedBody(body, literal.parts, literal.values, true);
-    wrapInShowCalls(literal.values, body.location);
-    alignBlockHoles(literal.parts, literal.values, body.location);
-    expr->kind = std::move(literal);
-    return expr;
-  }
-  if (check(TokenType::Char)) {
-    auto val = advance().value;
-    auto codepoints = utf8::decode(val);
-    expr->kind =
-        ast::CharLiteral{codepoints.empty() ? U'\0' : codepoints.front()};
-    return expr;
-  }
-  if (match(TokenType::True)) {
-    expr->kind = ast::BoolLiteral{true};
-    return expr;
-  }
-  if (match(TokenType::False)) {
-    expr->kind = ast::BoolLiteral{false};
-    return expr;
-  }
-  if (match(TokenType::None)) {
-    expr->kind = ast::NoneLiteral{};
-    return expr;
-  }
-  if (check(TokenType::Atom)) {
-    expr->kind = ast::AtomLiteral{advance().value};
-    return expr;
-  }
-  // Uppercase atoms (`:Math`) are lexed as ':' + UpperIdent so a map
-  // separator immediately followed by an uppercase value remains
-  // unambiguous to the lexer. In expression position the pair is an atom.
-  if (check(TokenType::Colon) && peekNext().type == TokenType::UpperIdent) {
-    advance();
-    expr->kind = ast::AtomLiteral{advance().value};
-    return expr;
-  }
-
-  // this
-  if (match(TokenType::This)) {
-    expr->kind = ast::ThisExpr{};
-    return expr;
-  }
-
-  // @field / @method(args) — shorthand for this.field / this.method(args),
-  // for use inside make/record functions.
-  if (check(TokenType::At) &&
-      (peekNext().type == TokenType::LowerIdent ||
-       peekNext().type == TokenType::Timeout ||
-       peekNext().type == TokenType::Type ||
-       peekNext().type == TokenType::Match ||
-       peekNext().type == TokenType::Loop ||
-       peekNext().type == TokenType::End)) {
-    advance(); // @
-    auto name = advance().value;
-
-    auto thisExpr = std::make_unique<ast::Expr>();
-    thisExpr->location = loc;
-    thisExpr->kind = ast::ThisExpr{};
-
-    std::vector<ast::ExprPtr> args;
-    std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
-    if (match(TokenType::LParen)) {
-      if (!check(TokenType::RParen)) {
-        do {
-          if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
-               check(TokenType::Type) || check(TokenType::Match) ||
-               check(TokenType::Loop) || check(TokenType::After)) &&
-              peekNext().type == TokenType::Colon) {
-            auto argName = advance().value;
-            advance(); // :
-            namedArgs.push_back({argName, parseExpr()});
-          } else {
-            args.push_back(parseExpr());
-          }
-        } while (match(TokenType::Comma));
-      }
-      expect(TokenType::RParen, "Expected ')' after arguments");
+    // Literals
+    if (check(TokenType::Integer)) {
+        expr->kind = ast::IntLiteral{advance().value};
+        return expr;
+    }
+    if (check(TokenType::Float)) {
+        expr->kind = ast::FloatLiteral{advance().value};
+        return expr;
+    }
+    if (check(TokenType::String)) {
+        // Split here rather than leaving `${...}` as raw text for someone
+        // downstream to re-lex: the interpolated expressions become ordinary
+        // AST nodes, so every later pass sees them.
+        auto body = advance();
+        ast::StringLiteral literal;
+        literal.interpolating = true;
+        parseInterpolatedBody(body, literal.parts, literal.values, false);
+        wrapInShowCalls(literal.values, body.location);
+        expr->kind = std::move(literal);
+        return expr;
+    }
+    if (check(TokenType::RawString)) {
+        expr->kind = ast::StringLiteral{advance().value, false};
+        return expr;
+    }
+    if (check(TokenType::InterpolatedRawString)) {
+        auto body = advance();
+        ast::StringLiteral literal;
+        literal.interpolating = true;
+        parseInterpolatedBody(body, literal.parts, literal.values, true);
+        wrapInShowCalls(literal.values, body.location);
+        alignBlockHoles(literal.parts, literal.values, body.location);
+        expr->kind = std::move(literal);
+        return expr;
+    }
+    if (check(TokenType::Char)) {
+        auto val = advance().value;
+        auto codepoints = utf8::decode(val);
+        expr->kind = ast::CharLiteral{codepoints.empty() ? U'\0' : codepoints.front()};
+        return expr;
+    }
+    if (match(TokenType::True)) {
+        expr->kind = ast::BoolLiteral{true};
+        return expr;
+    }
+    if (match(TokenType::False)) {
+        expr->kind = ast::BoolLiteral{false};
+        return expr;
+    }
+    if (match(TokenType::None)) {
+        expr->kind = ast::NoneLiteral{};
+        return expr;
+    }
+    if (check(TokenType::Atom)) {
+        expr->kind = ast::AtomLiteral{advance().value};
+        return expr;
+    }
+    // Uppercase atoms (`:Math`) are lexed as ':' + UpperIdent so a map
+    // separator immediately followed by an uppercase value remains
+    // unambiguous to the lexer. In expression position the pair is an atom.
+    if (check(TokenType::Colon) && peekNext().type == TokenType::UpperIdent) {
+        advance();
+        expr->kind = ast::AtomLiteral{advance().value};
+        return expr;
     }
 
-    expr->kind =
-        ast::MethodCall{std::move(thisExpr),  name,         std::move(args),
-                        std::move(namedArgs), std::nullopt, false};
-    return expr;
-  }
-
-  // Receiver shorthand: &.method
-  if (check(TokenType::Amp)) {
-    return parseShorthandLambda();
-  }
-
-  // Curry / partial application: ~func(args) or ~(op)(args)
-  if (check(TokenType::Tilde)) {
-    return parseCurryExpr();
-  }
-
-  // List
-  if (check(TokenType::LBracket)) {
-    return parseListExpr();
-  }
-
-  // Map or brace lambda
-  if (check(TokenType::LBrace)) {
-    return parseMapOrBlock();
-  }
-
-  // Tuple or grouped expression
-  if (check(TokenType::LParen)) {
-    return parseTupleOrGrouped();
-  }
-
-  // Control flow
-  if (check(TokenType::If))
-    return parseIfExpr();
-  if (check(TokenType::Match))
-    return parseMatchExpr();
-  if (check(TokenType::Receive))
-    return parseReceiveExpr();
-  if (check(TokenType::Loop) && peekNext().type != TokenType::LParen)
-    return parseLoopExpr();
-  if (check(TokenType::While))
-    return parseWhileExpr();
-  if (check(TokenType::Let))
-    return parseLetExpr();
-  if (check(TokenType::Var))
-    return parseVarExpr();
-  if (check(TokenType::Return))
-    return parseReturnExpr();
-  if (check(TokenType::Spawn))
-    return parseSpawnExpr();
-  if (check(TokenType::With))
-    return parseWithExpr();
-  if (check(TokenType::Trying))
-    return parseTryingExpr();
-  if (check(TokenType::Break)) {
-    advance();
-    expr->kind = ast::BreakExpr{};
-    return expr;
-  }
-  if (check(TokenType::Next)) {
-    advance();
-    expr->kind = ast::NextExpr{};
-    return expr;
-  }
-
-  // Do block (standalone lambda)
-  if (check(TokenType::Do)) {
-    return parseLambda();
-  }
-
-  // Splice ident in expression context (compiled blocks): %name :> type or
-  // %name(...)
-  if (check(TokenType::SpliceIdent)) {
-    auto name = "%" + advance().value;
-    // Type annotation: %name :> Type or %name : Type
-    if (match(TokenType::TypeAnnotation) || match(TokenType::Colon)) {
-      parseTypeExpr(); // consume and discard
-      expr->kind = ast::Identifier{name};
-      return expr;
-    }
-    expr->kind = ast::Identifier{name};
-    return expr;
-  }
-
-  // Upper ident (type constructor or record creation)
-  if (check(TokenType::UpperIdent)) {
-    auto name = advance().value;
-
-    // A record's canonical source identity may include its owning module:
-    // `Tey.Manifest.Dependency { ... }`. Consume the dotted uppercase
-    // path only when it terminates in `{`; ordinary namespace calls keep
-    // flowing through parsePostfixTail unchanged.
-    int pathOffset = 0;
-    while (peekAt(pathOffset).type == TokenType::Dot &&
-           peekAt(pathOffset + 1).type == TokenType::UpperIdent)
-      pathOffset += 2;
-    if (pathOffset > 0 && peekAt(pathOffset).type == TokenType::LBrace) {
-      while (match(TokenType::Dot)) {
-        name += ".";
-        name +=
-            expect(TokenType::UpperIdent, "Expected record type name").value;
-      }
+    // this
+    if (match(TokenType::This)) {
+        expr->kind = ast::ThisExpr{};
+        return expr;
     }
 
-    // Record construction: Type { field: value } / Type { ...base, field: v }
-    if (check(TokenType::LBrace)) {
-      advance(); // {
-      std::vector<ast::RecordEntry> fields;
+    // @field / @method(args) — shorthand for this.field / this.method(args),
+    // for use inside make/record functions.
+    if (check(TokenType::At) &&
+        (peekNext().type == TokenType::LowerIdent || peekNext().type == TokenType::Timeout ||
+         peekNext().type == TokenType::Type || peekNext().type == TokenType::Match ||
+         peekNext().type == TokenType::Loop || peekNext().type == TokenType::End)) {
+        advance(); // @
+        auto name = advance().value;
 
-      if (!check(TokenType::RBrace)) {
-        do {
-          skipNewlines();
-          if (match(TokenType::DotDotDot)) {
-            fields.push_back(ast::RecordEntry{"", parseExpr(), true});
-            skipNewlines();
-            continue;
-          }
-          std::string fieldName;
-          const auto keyLocation = peek().location;
-          if (check(TokenType::LowerIdent) || check(TokenType::End) ||
-              check(TokenType::Type) || check(TokenType::Match) ||
-              check(TokenType::Loop) || check(TokenType::Timeout) ||
-              check(TokenType::After)) {
-            fieldName = advance().value;
-          } else {
-            error("Expected field name");
-          }
-          ast::ExprPtr value;
-          if (match(TokenType::Colon)) {
-            value = parseExpr();
-          } else {
-            // Field shorthand: `Person { name }` is
-            // `Person { name: name }`, matching how record
-            // patterns already destructure with `{ name, age }`.
-            value = std::make_unique<ast::Expr>();
-            value->location = currentLocation();
-            value->kind = ast::Identifier{fieldName};
-          }
-          fields.push_back(
-              ast::RecordEntry{fieldName, std::move(value), false, keyLocation});
-          skipNewlines();
-        } while (match(TokenType::Comma));
-      }
-      skipNewlines();
-      expect(TokenType::RBrace, "Expected '}' to close record");
+        auto thisExpr = std::make_unique<ast::Expr>();
+        thisExpr->location = loc;
+        thisExpr->kind = ast::ThisExpr{};
 
-      expr->kind = ast::RecordConstruction{name, std::move(fields)};
-      return expr;
-    }
-
-    // Constructor/function with args: Just(x) or Vector2D.Polar(angle: 1.0)
-    if (match(TokenType::LParen)) {
-      std::vector<ast::ExprPtr> args;
-      std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
-      if (!check(TokenType::RParen)) {
-        do {
-          if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
-               check(TokenType::Type) || check(TokenType::Match) ||
-               check(TokenType::Loop) || check(TokenType::After)) &&
-              peekNext().type == TokenType::Colon) {
-            auto argName = advance().value;
-            advance(); // :
-            namedArgs.push_back({argName, parseExpr()});
-          } else {
-            args.push_back(parseExpr());
-          }
-        } while (match(TokenType::Comma));
-      }
-      expect(TokenType::RParen, "Expected ')'");
-
-      // Trailing block as last arg
-      std::optional<ast::ExprPtr> block;
-      if (check(TokenType::LBrace) || (check(TokenType::Do) && !m_noDoBlocks)) {
-        block = parsePrimary();
-      }
-
-      auto call = std::make_unique<ast::Expr>();
-      call->location = loc;
-      call->kind = ast::FunctionCall{name, std::move(args),
-                                     std::move(namedArgs), std::move(block)};
-      return call;
-    }
-
-    expr->kind = ast::UpperIdentifier{name};
-    return expr;
-  }
-
-  // `after` is a receive-clause keyword there, but a normal testing DSL
-  // function everywhere else (`after do ... end`).
-  if (check(TokenType::After)) {
-    auto name = advance().value;
-    std::vector<ast::ExprPtr> args;
-    if (match(TokenType::LParen)) {
-      if (!check(TokenType::RParen)) {
-        do {
-          args.push_back(parseExpr());
-        } while (match(TokenType::Comma));
-      }
-      expect(TokenType::RParen, "Expected ')' after after arguments");
-    }
-    if (check(TokenType::LBrace) || (check(TokenType::Do) && !m_noDoBlocks)) {
-      auto block = parsePrimary();
-      expr->kind =
-          ast::FunctionCall{name, std::move(args), {}, std::move(block)};
-      return expr;
-    }
-    if (!args.empty()) {
-      expr->kind = ast::FunctionCall{name, std::move(args), {}, std::nullopt};
-      return expr;
-    }
-    expr->kind = ast::Identifier{name};
-    return expr;
-  }
-
-  // Keywords that can be used as identifiers in expression context
-  if ((check(TokenType::Loop) && peekNext().type == TokenType::LParen) ||
-      (check(TokenType::Match) && peekNext().type != TokenType::Do)) {
-    auto name = advance().value;
-    if (match(TokenType::LParen)) {
-      std::vector<ast::ExprPtr> args;
-      std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
-      if (!check(TokenType::RParen)) {
-        do {
-          if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
-               check(TokenType::Type) || check(TokenType::Match) ||
-               check(TokenType::Loop) || check(TokenType::After)) &&
-              peekNext().type == TokenType::Colon) {
-            auto argName = advance().value;
-            advance();
-            namedArgs.push_back({argName, parseExpr()});
-          } else {
-            args.push_back(parseExpr());
-          }
-        } while (match(TokenType::Comma));
-      }
-      expect(TokenType::RParen, "Expected ')'");
-      expr->kind = ast::FunctionCall{name, std::move(args),
-                                     std::move(namedArgs), std::nullopt};
-      return expr;
-    }
-    expr->kind = ast::Identifier{name};
-    return expr;
-  }
-
-  // Lower ident (variable or function call). `timeout` is a keyword only in
-  // the receive-clause position; elsewhere it remains a valid source name.
-  if (check(TokenType::LowerIdent) || check(TokenType::Timeout)) {
-    auto tagToken = advance();
-    auto name = tagToken.value;
-
-    // A raw tag is adjacency-sensitive: whitespace between the identifier
-    // and opening backtick makes these two ordinary expressions instead.
-    if ((check(TokenType::RawString) ||
-         check(TokenType::InterpolatedRawString)) &&
-        tagToken.endOffset == peek().startOffset) {
-      auto body = advance();
-      ast::TaggedLiteral tagged;
-      tagged.tag = name;
-      tagged.interpolating = body.type == TokenType::InterpolatedRawString;
-      tagged.bodyStartOffset = body.startOffset;
-      tagged.bodyEndOffset = body.endOffset;
-      if (tagged.interpolating)
-        parseInterpolatedBody(body, tagged.parts, tagged.values, true);
-      else
-        tagged.parts.push_back(body.value);
-      expr->kind = std::move(tagged);
-      return expr;
-    }
-
-    // Function call with parens
-    if (match(TokenType::LParen)) {
-      std::vector<ast::ExprPtr> args;
-      std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
-
-      if (!check(TokenType::RParen)) {
-        do {
-          if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
-               check(TokenType::Type) || check(TokenType::Match) ||
-               check(TokenType::Loop) || check(TokenType::After)) &&
-              peekNext().type == TokenType::Colon) {
-            auto argName = advance().value;
-            advance(); // :
-            namedArgs.push_back({argName, parseExpr()});
-          } else {
-            args.push_back(parseExpr());
-          }
-        } while (match(TokenType::Comma));
-      }
-      expect(TokenType::RParen, "Expected ')'");
-
-      std::optional<ast::ExprPtr> block;
-      if (check(TokenType::LBrace) || (check(TokenType::Do) && !m_noDoBlocks)) {
-        block = parsePrimary();
-      }
-
-      expr->kind = ast::FunctionCall{name, std::move(args),
-                                     std::move(namedArgs), std::move(block)};
-      return expr;
-    }
-
-    // Function call with named args (no parens): name key: val, ... do...end
-    if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
-         check(TokenType::Type) || check(TokenType::Match)) &&
-        peekNext().type == TokenType::Colon) {
-      std::vector<ast::ExprPtr> args;
-      std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
-      do {
-        auto argName = advance().value;
-        advance(); // :
-        namedArgs.push_back({argName, parseExpr()});
-      } while (match(TokenType::Comma) &&
-               (check(TokenType::LowerIdent) || check(TokenType::Timeout)) &&
-               peekNext().type == TokenType::Colon);
-
-      std::optional<ast::ExprPtr> block;
-      if (check(TokenType::LBrace) || (check(TokenType::Do) && !m_noDoBlocks)) {
-        block = parsePrimary();
-      }
-
-      expr->kind = ast::FunctionCall{name, std::move(args),
-                                     std::move(namedArgs), std::move(block)};
-      return expr;
-    }
-
-    // Function call with bare positional args (no parens): name a, b
-    // do...end. Only taken when a `do` actually follows at bracket
-    // depth 0 on this line — otherwise plain calls still require
-    // parens, so this can't swallow unrelated adjacent statements.
-    if (!m_noDoBlocks && isAtExprStart() && !check(TokenType::Do) &&
-        !check(TokenType::LBrace) && hasDoBeforeNewline()) {
-      std::vector<ast::ExprPtr> args;
-      std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
-      m_noDoBlocks = true;
-      do {
-        if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
-             check(TokenType::Type) || check(TokenType::Match) ||
-             check(TokenType::Loop) || check(TokenType::After)) &&
-            peekNext().type == TokenType::Colon) {
-          auto argName = advance().value;
-          advance(); // :
-          namedArgs.push_back({argName, parseExpr()});
-        } else {
-          args.push_back(parseExpr());
+        std::vector<ast::ExprPtr> args;
+        std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
+        if (match(TokenType::LParen)) {
+            if (!check(TokenType::RParen)) {
+                do {
+                    if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
+                         check(TokenType::Type) || check(TokenType::Match) ||
+                         check(TokenType::Loop) || check(TokenType::After)) &&
+                        peekNext().type == TokenType::Colon) {
+                        auto argName = advance().value;
+                        advance(); // :
+                        namedArgs.push_back({argName, parseExpr()});
+                    } else {
+                        args.push_back(parseExpr());
+                    }
+                } while (match(TokenType::Comma));
+            }
+            expect(TokenType::RParen, "Expected ')' after arguments");
         }
-      } while (match(TokenType::Comma));
-      m_noDoBlocks = false;
 
-      std::optional<ast::ExprPtr> block =
-          parsePrimary(); // positioned at `do`, confirmed by hasDoBeforeNewline
-      expr->kind = ast::FunctionCall{name, std::move(args),
-                                     std::move(namedArgs), std::move(block)};
-      return expr;
+        expr->kind = ast::MethodCall{std::move(thisExpr),  name,         std::move(args),
+                                     std::move(namedArgs), std::nullopt, false};
+        return expr;
     }
 
-    // Function call with block (no parens): name do...end or name { }
-    if (check(TokenType::LBrace) || (check(TokenType::Do) && !m_noDoBlocks)) {
-      auto block = parsePrimary();
-      expr->kind = ast::FunctionCall{name, {}, {}, std::move(block)};
-      return expr;
+    // Receiver shorthand: &.method
+    if (check(TokenType::Amp)) {
+        return parseShorthandLambda();
     }
 
-    expr->kind = ast::Identifier{name};
-    return expr;
-  }
-
-  // `type` / `record` / `make` in EXPRESSION context, which in practice means
-  // inside a `compiled do` driver — a declaration generated by ordinary
-  // compile-time code.
-  //
-  // This used to skip the construct entirely and yield a placeholder
-  // identifier, so the declaration was silently discarded at parse time and
-  // the program later died with `Undefined variable: __compiled_type__`.
-  // The placeholder could never resolve, so nothing could depend on it —
-  // reporting it here loses no working behaviour and gains a diagnostic that
-  // names the actual limitation.
-  // `type %name = ...` in EXPRESSION context — i.e. inside a `compiled do`
-  // driver loop, generating a type alias or sum type.
-  if (check(TokenType::Type) && (peekNext().type == TokenType::SpliceIdent ||
-                                 peekNext().type == TokenType::Percent)) {
-    auto loc = currentLocation();
-    advance(); // type
-    auto nameExpr = parseSpliceName();
-    auto def = std::make_unique<ast::TypeDef>();
-    def->location = loc;
-    expect(TokenType::Equals, "Expected '=' in generated type");
-    std::vector<ast::TypeExprPtr> variants;
-    variants.push_back(parseTypeExpr());
-    while (match(TokenType::Pipe))
-      variants.push_back(parseTypeExpr());
-    def->variants = std::move(variants);
-    expr->kind = ast::GeneratedDecl{
-        std::move(nameExpr), std::shared_ptr<ast::TypeDef>(std::move(def))};
-    return expr;
-  }
-
-  // `record %name do ... end` in expression context. The fields and optional
-  // type parameters use exactly the ordinary record grammar; expansion fills
-  // in only the name.
-  if (check(TokenType::Record) &&
-      (peekNext().type == TokenType::SpliceIdent ||
-       peekNext().type == TokenType::Percent)) {
-    auto loc = currentLocation();
-    advance(); // record
-    auto nameExpr = parseSpliceName();
-    auto def = std::make_unique<ast::RecordDef>();
-    def->location = loc;
-    parseRecordBody(*def);
-    expr->kind = ast::GeneratedDecl{
-        std::move(nameExpr), std::shared_ptr<ast::RecordDef>(std::move(def))};
-    return expr;
-  }
-
-  // `make %name do ... end` in EXPRESSION context — generating a make block
-  // whose target type is computed at compile time. Everything after the name
-  // is an ordinary make, so it goes through the same two helpers
-  // parseMakeDef uses; only the target differs, and it is not known yet.
-  if (check(TokenType::Make) && (peekNext().type == TokenType::SpliceIdent ||
-                                 peekNext().type == TokenType::Percent)) {
-    auto loc = currentLocation();
-    advance(); // make
-    auto nameExpr = parseSpliceName();
-    auto def = std::make_unique<ast::MakeDef>();
-    def->location = loc;
-    // `target` stays null: expansion fills it in with the resolved name.
-    parseMakeImplements(*def);
-    parseMakeBody(*def, /*allowDrivers=*/true);
-    expr->kind = ast::GeneratedDecl{
-        std::move(nameExpr), std::shared_ptr<ast::MakeDef>(std::move(def))};
-    return expr;
-  }
-
-  // A `type`/`make` in expression position that is NOT a splice. There is no
-  // such construct — a plain `make Foo do ... end` is a declaration, parsed
-  // elsewhere — so reaching here means a generation form that is not
-  // supported.
-  //
-  // Recorded rather than thrown: error() throws, and the parser's recovery
-  // then resumes INSIDE the construct and reports a second, confusing error
-  // ("Expected type expression"). Reporting at the keyword and skipping the
-  // construct gives exactly one diagnostic, in the right place. The program
-  // still aborts, because a recorded diagnostic is enough.
-  if (check(TokenType::Type) || check(TokenType::Record) ||
-      check(TokenType::Make)) {
-    m_diagnostics.push_back(
-        {currentLocation(),
-         "generating a `" + std::string(tokenTypeName(peek().type)) +
-             "` inside `compiled do` needs a spliced name — "
-             "`let %name(...)`, `type %name = ...`, "
-             "`record %name do ... end` and `make %name do ... end` are the "
-             "generation forms"});
-    advance(); // the keyword
-    int depth = 0;
-    while (!atEnd()) {
-      if (check(TokenType::Do))
-        depth++;
-      if (check(TokenType::End)) {
-        if (depth == 0)
-          break;
-        depth--;
-      }
-      if (depth == 0 && check(TokenType::Newline))
-        break;
-      advance();
+    // Curry / partial application: ~func(args) or ~(op)(args)
+    if (check(TokenType::Tilde)) {
+        return parseCurryExpr();
     }
-    if (check(TokenType::End))
-      advance();
-    expr->kind = ast::NoneLiteral{};
-    return expr;
-  }
 
-  // `using Module` or `using Module do...end` inside a body
-  if (check(TokenType::Using)) {
-    advance(); // consume 'using'
-    ast::UsingExpr usingExpr;
-    usingExpr.module = parseTypeName();
-    if (match(TokenType::Comma)) {
-      parseUsingOptions(usingExpr.alias, usingExpr.onlyNames,
-                        usingExpr.exceptNames);
+    // List
+    if (check(TokenType::LBracket)) {
+        return parseListExpr();
     }
-    if (match(TokenType::Do)) {
-      skipNewlines();
-      while (!check(TokenType::End) && !atEnd()) {
-        usingExpr.body.push_back(parseExpr());
-        skipNewlines();
-      }
-      expect(TokenType::End, "Expected 'end' to close using block");
-    }
-    expr->kind = std::move(usingExpr);
-    return expr;
-  }
 
-  error("Unexpected token: " + std::string(tokenTypeName(peek().type)));
+    // Map or brace lambda
+    if (check(TokenType::LBrace)) {
+        return parseMapOrBlock();
+    }
+
+    // Tuple or grouped expression
+    if (check(TokenType::LParen)) {
+        return parseTupleOrGrouped();
+    }
+
+    // Control flow
+    if (check(TokenType::If)) {
+        return parseIfExpr();
+    }
+    if (check(TokenType::Match)) {
+        return parseMatchExpr();
+    }
+    if (check(TokenType::Receive)) {
+        return parseReceiveExpr();
+    }
+    if (check(TokenType::Loop) && peekNext().type != TokenType::LParen) {
+        return parseLoopExpr();
+    }
+    if (check(TokenType::While)) {
+        return parseWhileExpr();
+    }
+    if (check(TokenType::Let)) {
+        return parseLetExpr();
+    }
+    if (check(TokenType::Var)) {
+        return parseVarExpr();
+    }
+    if (check(TokenType::Return)) {
+        return parseReturnExpr();
+    }
+    if (check(TokenType::Spawn)) {
+        return parseSpawnExpr();
+    }
+    if (check(TokenType::With)) {
+        return parseWithExpr();
+    }
+    if (check(TokenType::Trying)) {
+        return parseTryingExpr();
+    }
+    if (check(TokenType::Break)) {
+        advance();
+        expr->kind = ast::BreakExpr{};
+        return expr;
+    }
+    if (check(TokenType::Next)) {
+        advance();
+        expr->kind = ast::NextExpr{};
+        return expr;
+    }
+
+    // Do block (standalone lambda)
+    if (check(TokenType::Do)) {
+        return parseLambda();
+    }
+
+    // Splice ident in expression context (compiled blocks): %name :> type or
+    // %name(...)
+    if (check(TokenType::SpliceIdent)) {
+        auto name = "%" + advance().value;
+        // Type annotation: %name :> Type or %name : Type
+        if (match(TokenType::TypeAnnotation) || match(TokenType::Colon)) {
+            parseTypeExpr(); // consume and discard
+            expr->kind = ast::Identifier{name};
+            return expr;
+        }
+        expr->kind = ast::Identifier{name};
+        return expr;
+    }
+
+    // Upper ident (type constructor or record creation)
+    if (check(TokenType::UpperIdent)) {
+        auto name = advance().value;
+
+        // A record's canonical source identity may include its owning module:
+        // `Tey.Manifest.Dependency { ... }`. Consume the dotted uppercase
+        // path only when it terminates in `{`; ordinary namespace calls keep
+        // flowing through parsePostfixTail unchanged.
+        int pathOffset = 0;
+        while (peekAt(pathOffset).type == TokenType::Dot &&
+               peekAt(pathOffset + 1).type == TokenType::UpperIdent) {
+            pathOffset += 2;
+        }
+        if (pathOffset > 0 && peekAt(pathOffset).type == TokenType::LBrace) {
+            while (match(TokenType::Dot)) {
+                name += ".";
+                name += expect(TokenType::UpperIdent, "Expected record type name").value;
+            }
+        }
+
+        // Record construction: Type { field: value } / Type { ...base, field: v }
+        if (check(TokenType::LBrace)) {
+            advance(); // {
+            std::vector<ast::RecordEntry> fields;
+
+            if (!check(TokenType::RBrace)) {
+                do {
+                    skipNewlines();
+                    if (match(TokenType::DotDotDot)) {
+                        fields.push_back(ast::RecordEntry{"", parseExpr(), true});
+                        skipNewlines();
+                        continue;
+                    }
+                    std::string fieldName;
+                    const auto keyLocation = peek().location;
+                    if (check(TokenType::LowerIdent) || check(TokenType::End) ||
+                        check(TokenType::Type) || check(TokenType::Match) ||
+                        check(TokenType::Loop) || check(TokenType::Timeout) ||
+                        check(TokenType::After)) {
+                        fieldName = advance().value;
+                    } else {
+                        error("Expected field name");
+                    }
+                    ast::ExprPtr value;
+                    if (match(TokenType::Colon)) {
+                        value = parseExpr();
+                    } else {
+                        // Field shorthand: `Person { name }` is
+                        // `Person { name: name }`, matching how record
+                        // patterns already destructure with `{ name, age }`.
+                        value = std::make_unique<ast::Expr>();
+                        value->location = currentLocation();
+                        value->kind = ast::Identifier{fieldName};
+                    }
+                    fields.push_back(
+                        ast::RecordEntry{fieldName, std::move(value), false, keyLocation});
+                    skipNewlines();
+                } while (match(TokenType::Comma));
+            }
+            skipNewlines();
+            expect(TokenType::RBrace, "Expected '}' to close record");
+
+            expr->kind = ast::RecordConstruction{name, std::move(fields)};
+            return expr;
+        }
+
+        // Constructor/function with args: Just(x) or Vector2D.Polar(angle: 1.0)
+        if (match(TokenType::LParen)) {
+            std::vector<ast::ExprPtr> args;
+            std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
+            if (!check(TokenType::RParen)) {
+                do {
+                    if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
+                         check(TokenType::Type) || check(TokenType::Match) ||
+                         check(TokenType::Loop) || check(TokenType::After)) &&
+                        peekNext().type == TokenType::Colon) {
+                        auto argName = advance().value;
+                        advance(); // :
+                        namedArgs.push_back({argName, parseExpr()});
+                    } else {
+                        args.push_back(parseExpr());
+                    }
+                } while (match(TokenType::Comma));
+            }
+            expect(TokenType::RParen, "Expected ')'");
+
+            // Trailing block as last arg
+            std::optional<ast::ExprPtr> block;
+            if (check(TokenType::LBrace) || (check(TokenType::Do) && !m_noDoBlocks)) {
+                block = parsePrimary();
+            }
+
+            auto call = std::make_unique<ast::Expr>();
+            call->location = loc;
+            call->kind =
+                ast::FunctionCall{name, std::move(args), std::move(namedArgs), std::move(block)};
+            return call;
+        }
+
+        expr->kind = ast::UpperIdentifier{name};
+        return expr;
+    }
+
+    // `after` is a receive-clause keyword there, but a normal testing DSL
+    // function everywhere else (`after do ... end`).
+    if (check(TokenType::After)) {
+        auto name = advance().value;
+        std::vector<ast::ExprPtr> args;
+        if (match(TokenType::LParen)) {
+            if (!check(TokenType::RParen)) {
+                do {
+                    args.push_back(parseExpr());
+                } while (match(TokenType::Comma));
+            }
+            expect(TokenType::RParen, "Expected ')' after after arguments");
+        }
+        if (check(TokenType::LBrace) || (check(TokenType::Do) && !m_noDoBlocks)) {
+            auto block = parsePrimary();
+            expr->kind = ast::FunctionCall{name, std::move(args), {}, std::move(block)};
+            return expr;
+        }
+        if (!args.empty()) {
+            expr->kind = ast::FunctionCall{name, std::move(args), {}, std::nullopt};
+            return expr;
+        }
+        expr->kind = ast::Identifier{name};
+        return expr;
+    }
+
+    // Keywords that can be used as identifiers in expression context
+    if ((check(TokenType::Loop) && peekNext().type == TokenType::LParen) ||
+        (check(TokenType::Match) && peekNext().type != TokenType::Do)) {
+        auto name = advance().value;
+        if (match(TokenType::LParen)) {
+            std::vector<ast::ExprPtr> args;
+            std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
+            if (!check(TokenType::RParen)) {
+                do {
+                    if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
+                         check(TokenType::Type) || check(TokenType::Match) ||
+                         check(TokenType::Loop) || check(TokenType::After)) &&
+                        peekNext().type == TokenType::Colon) {
+                        auto argName = advance().value;
+                        advance();
+                        namedArgs.push_back({argName, parseExpr()});
+                    } else {
+                        args.push_back(parseExpr());
+                    }
+                } while (match(TokenType::Comma));
+            }
+            expect(TokenType::RParen, "Expected ')'");
+            expr->kind =
+                ast::FunctionCall{name, std::move(args), std::move(namedArgs), std::nullopt};
+            return expr;
+        }
+        expr->kind = ast::Identifier{name};
+        return expr;
+    }
+
+    // Lower ident (variable or function call). `timeout` is a keyword only in
+    // the receive-clause position; elsewhere it remains a valid source name.
+    if (check(TokenType::LowerIdent) || check(TokenType::Timeout)) {
+        auto tagToken = advance();
+        auto name = tagToken.value;
+
+        // A raw tag is adjacency-sensitive: whitespace between the identifier
+        // and opening backtick makes these two ordinary expressions instead.
+        if ((check(TokenType::RawString) || check(TokenType::InterpolatedRawString)) &&
+            tagToken.endOffset == peek().startOffset) {
+            auto body = advance();
+            ast::TaggedLiteral tagged;
+            tagged.tag = name;
+            tagged.interpolating = body.type == TokenType::InterpolatedRawString;
+            tagged.bodyStartOffset = body.startOffset;
+            tagged.bodyEndOffset = body.endOffset;
+            if (tagged.interpolating) {
+                parseInterpolatedBody(body, tagged.parts, tagged.values, true);
+            } else {
+                tagged.parts.push_back(body.value);
+            }
+            expr->kind = std::move(tagged);
+            return expr;
+        }
+
+        // Function call with parens
+        if (match(TokenType::LParen)) {
+            std::vector<ast::ExprPtr> args;
+            std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
+
+            if (!check(TokenType::RParen)) {
+                do {
+                    if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
+                         check(TokenType::Type) || check(TokenType::Match) ||
+                         check(TokenType::Loop) || check(TokenType::After)) &&
+                        peekNext().type == TokenType::Colon) {
+                        auto argName = advance().value;
+                        advance(); // :
+                        namedArgs.push_back({argName, parseExpr()});
+                    } else {
+                        args.push_back(parseExpr());
+                    }
+                } while (match(TokenType::Comma));
+            }
+            expect(TokenType::RParen, "Expected ')'");
+
+            std::optional<ast::ExprPtr> block;
+            if (check(TokenType::LBrace) || (check(TokenType::Do) && !m_noDoBlocks)) {
+                block = parsePrimary();
+            }
+
+            expr->kind =
+                ast::FunctionCall{name, std::move(args), std::move(namedArgs), std::move(block)};
+            return expr;
+        }
+
+        // Function call with named args (no parens): name key: val, ... do...end
+        if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) || check(TokenType::Type) ||
+             check(TokenType::Match)) &&
+            peekNext().type == TokenType::Colon) {
+            std::vector<ast::ExprPtr> args;
+            std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
+            do {
+                auto argName = advance().value;
+                advance(); // :
+                namedArgs.push_back({argName, parseExpr()});
+            } while (match(TokenType::Comma) &&
+                     (check(TokenType::LowerIdent) || check(TokenType::Timeout)) &&
+                     peekNext().type == TokenType::Colon);
+
+            std::optional<ast::ExprPtr> block;
+            if (check(TokenType::LBrace) || (check(TokenType::Do) && !m_noDoBlocks)) {
+                block = parsePrimary();
+            }
+
+            expr->kind =
+                ast::FunctionCall{name, std::move(args), std::move(namedArgs), std::move(block)};
+            return expr;
+        }
+
+        // Function call with bare positional args (no parens): name a, b
+        // do...end. Only taken when a `do` actually follows at bracket
+        // depth 0 on this line — otherwise plain calls still require
+        // parens, so this can't swallow unrelated adjacent statements.
+        if (!m_noDoBlocks && isAtExprStart() && !check(TokenType::Do) &&
+            !check(TokenType::LBrace) && hasDoBeforeNewline()) {
+            std::vector<ast::ExprPtr> args;
+            std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
+            m_noDoBlocks = true;
+            do {
+                if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
+                     check(TokenType::Type) || check(TokenType::Match) || check(TokenType::Loop) ||
+                     check(TokenType::After)) &&
+                    peekNext().type == TokenType::Colon) {
+                    auto argName = advance().value;
+                    advance(); // :
+                    namedArgs.push_back({argName, parseExpr()});
+                } else {
+                    args.push_back(parseExpr());
+                }
+            } while (match(TokenType::Comma));
+            m_noDoBlocks = false;
+
+            std::optional<ast::ExprPtr> block =
+                parsePrimary(); // positioned at `do`, confirmed by hasDoBeforeNewline
+            expr->kind =
+                ast::FunctionCall{name, std::move(args), std::move(namedArgs), std::move(block)};
+            return expr;
+        }
+
+        // Function call with block (no parens): name do...end or name { }
+        if (check(TokenType::LBrace) || (check(TokenType::Do) && !m_noDoBlocks)) {
+            auto block = parsePrimary();
+            expr->kind = ast::FunctionCall{name, {}, {}, std::move(block)};
+            return expr;
+        }
+
+        expr->kind = ast::Identifier{name};
+        return expr;
+    }
+
+    // `type` / `record` / `make` in EXPRESSION context, which in practice means
+    // inside a `compiled do` driver — a declaration generated by ordinary
+    // compile-time code.
+    //
+    // This used to skip the construct entirely and yield a placeholder
+    // identifier, so the declaration was silently discarded at parse time and
+    // the program later died with `Undefined variable: __compiled_type__`.
+    // The placeholder could never resolve, so nothing could depend on it —
+    // reporting it here loses no working behaviour and gains a diagnostic that
+    // names the actual limitation.
+    // `type %name = ...` in EXPRESSION context — i.e. inside a `compiled do`
+    // driver loop, generating a type alias or sum type.
+    if (check(TokenType::Type) &&
+        (peekNext().type == TokenType::SpliceIdent || peekNext().type == TokenType::Percent)) {
+        auto loc = currentLocation();
+        advance(); // type
+        auto nameExpr = parseSpliceName();
+        auto def = std::make_unique<ast::TypeDef>();
+        def->location = loc;
+        expect(TokenType::Equals, "Expected '=' in generated type");
+        std::vector<ast::TypeExprPtr> variants;
+        variants.push_back(parseTypeExpr());
+        while (match(TokenType::Pipe)) {
+            variants.push_back(parseTypeExpr());
+        }
+        def->variants = std::move(variants);
+        expr->kind =
+            ast::GeneratedDecl{std::move(nameExpr), std::shared_ptr<ast::TypeDef>(std::move(def))};
+        return expr;
+    }
+
+    // `record %name do ... end` in expression context. The fields and optional
+    // type parameters use exactly the ordinary record grammar; expansion fills
+    // in only the name.
+    if (check(TokenType::Record) &&
+        (peekNext().type == TokenType::SpliceIdent || peekNext().type == TokenType::Percent)) {
+        auto loc = currentLocation();
+        advance(); // record
+        auto nameExpr = parseSpliceName();
+        auto def = std::make_unique<ast::RecordDef>();
+        def->location = loc;
+        parseRecordBody(*def);
+        expr->kind = ast::GeneratedDecl{
+            std::move(nameExpr), std::shared_ptr<ast::RecordDef>(std::move(def))};
+        return expr;
+    }
+
+    // `make %name do ... end` in EXPRESSION context — generating a make block
+    // whose target type is computed at compile time. Everything after the name
+    // is an ordinary make, so it goes through the same two helpers
+    // parseMakeDef uses; only the target differs, and it is not known yet.
+    if (check(TokenType::Make) &&
+        (peekNext().type == TokenType::SpliceIdent || peekNext().type == TokenType::Percent)) {
+        auto loc = currentLocation();
+        advance(); // make
+        auto nameExpr = parseSpliceName();
+        auto def = std::make_unique<ast::MakeDef>();
+        def->location = loc;
+        // `target` stays null: expansion fills it in with the resolved name.
+        parseMakeImplements(*def);
+        parseMakeBody(*def, /*allowDrivers=*/true);
+        expr->kind =
+            ast::GeneratedDecl{std::move(nameExpr), std::shared_ptr<ast::MakeDef>(std::move(def))};
+        return expr;
+    }
+
+    // A `type`/`make` in expression position that is NOT a splice. There is no
+    // such construct — a plain `make Foo do ... end` is a declaration, parsed
+    // elsewhere — so reaching here means a generation form that is not
+    // supported.
+    //
+    // Recorded rather than thrown: error() throws, and the parser's recovery
+    // then resumes INSIDE the construct and reports a second, confusing error
+    // ("Expected type expression"). Reporting at the keyword and skipping the
+    // construct gives exactly one diagnostic, in the right place. The program
+    // still aborts, because a recorded diagnostic is enough.
+    if (check(TokenType::Type) || check(TokenType::Record) || check(TokenType::Make)) {
+        m_diagnostics.push_back(
+            {currentLocation(), "generating a `" + std::string(tokenTypeName(peek().type)) +
+                                    "` inside `compiled do` needs a spliced name — "
+                                    "`let %name(...)`, `type %name = ...`, "
+                                    "`record %name do ... end` and `make %name do ... end` are the "
+                                    "generation forms"});
+        advance(); // the keyword
+        int depth = 0;
+        while (!atEnd()) {
+            if (check(TokenType::Do)) {
+                depth++;
+            }
+            if (check(TokenType::End)) {
+                if (depth == 0) {
+                    break;
+                }
+                depth--;
+            }
+            if (depth == 0 && check(TokenType::Newline)) {
+                break;
+            }
+            advance();
+        }
+        if (check(TokenType::End)) {
+            advance();
+        }
+        expr->kind = ast::NoneLiteral{};
+        return expr;
+    }
+
+    // `using Module` or `using Module do...end` inside a body
+    if (check(TokenType::Using)) {
+        advance(); // consume 'using'
+        ast::UsingExpr usingExpr;
+        usingExpr.module = parseTypeName();
+        if (match(TokenType::Comma)) {
+            parseUsingOptions(usingExpr.alias, usingExpr.onlyNames, usingExpr.exceptNames);
+        }
+        if (match(TokenType::Do)) {
+            skipNewlines();
+            while (!check(TokenType::End) && !atEnd()) {
+                usingExpr.body.push_back(parseExpr());
+                skipNewlines();
+            }
+            expect(TokenType::End, "Expected 'end' to close using block");
+        }
+        expr->kind = std::move(usingExpr);
+        return expr;
+    }
+
+    error("Unexpected token: " + std::string(tokenTypeName(peek().type)));
 }
 
 // ===== Specific Expression Parsers =====
 
 auto Parser::parseIfExpr() -> ast::ExprPtr {
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = currentLocation();
-  expect(TokenType::If, "Expected 'if'");
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = currentLocation();
+    expect(TokenType::If, "Expected 'if'");
 
-  // `if let Pattern = expr` — pattern-binding conditional
-  ast::PatternPtr letPattern;
-  if (match(TokenType::Let)) {
-    letPattern = parsePattern();
-    expect(TokenType::Equals, "Expected '=' after pattern in 'if let'");
-  }
-
-  m_noDoBlocks = true;
-  m_noThenExpr = true;
-  auto condition = parseExpr();
-  m_noDoBlocks = false;
-  m_noThenExpr = false;
-
-  // Accept `if cond then body end` (single-line) OR `if cond\n body\n end`
-  // (multiline). The `then` keyword acts as an inline body separator so
-  // that `if n == 0 then true else false end` parses correctly without
-  // consuming `then` as a ternary operator inside the condition.
-  // `if val do |binding| ... end` — option-unwrapping guard.
-  // Desugars to: match val do Just(binding) -> body; _ -> () end
-  if (check(TokenType::Do) && !letPattern) {
-    // Peek past 'do' to see if this is 'do |name|'
-    auto saved = m_pos;
-    advance(); // consume 'do'
-    skipNewlines();
-    if (check(TokenType::Pipe)) {
-      advance(); // consume '|'
-      if (check(TokenType::LowerIdent)) {
-        const auto& bindToken = advance();
-        auto bindName = bindToken.value;
-        const auto bindLocation = bindToken.location;
-        if (match(TokenType::Pipe)) {
-          skipNewlines();
-          // Collect body
-          std::vector<ast::ExprPtr> body;
-          while (!check(TokenType::End) && !atEnd()) {
-            body.push_back(parseExpr());
-            skipNewlines();
-          }
-          expect(TokenType::End, "Expected 'end' to close if block");
-
-          // Desugars to: match condition do None -> (); binding -> body end
-          // This handles both explicit Optional (None / Just(x)) and
-          // truthy-optional fields (None / bare-value) uniformly.
-          auto matchExpr = std::make_unique<ast::Expr>();
-          matchExpr->location = expr->location;
-
-          // None literal pattern
-          auto nonePat = std::make_unique<ast::Pattern>();
-          nonePat->location = expr->location;
-          nonePat->kind =
-              ast::LiteralPattern{Token{TokenType::None, "None", {}}};
-
-          // Variable binding pattern
-          auto varPat = std::make_unique<ast::Pattern>();
-          // At the name, where tooling finds the binding: `lim` in
-          // `if @limit do |lim|` led definition to the `if`.
-          varPat->location = bindLocation;
-          varPat->kind = ast::VarPattern{bindName};
-
-          // Build () unit for None clause
-          auto unitExpr = std::make_unique<ast::Expr>();
-          unitExpr->location = expr->location;
-          unitExpr->kind = ast::TupleExpr{{}};
-
-          // Build body expr for binding clause
-          auto bodyExpr = std::make_unique<ast::Expr>();
-          bodyExpr->location = expr->location;
-          bodyExpr->kind = ast::BlockExpr{std::move(body)};
-
-          ast::MatchClause noneClause;
-          noneClause.patterns.push_back(std::move(nonePat));
-          noneClause.body = std::move(unitExpr);
-
-          ast::MatchClause bindClause;
-          bindClause.patterns.push_back(std::move(varPat));
-          bindClause.body = std::move(bodyExpr);
-
-          ast::MatchExpr matchNode;
-          matchNode.subject = std::move(condition);
-          matchNode.clauses.push_back(std::move(noneClause));
-          matchNode.clauses.push_back(std::move(bindClause));
-
-          matchExpr->kind = std::move(matchNode);
-          return matchExpr;
-        }
-      }
+    // `if let Pattern = expr` — pattern-binding conditional
+    ast::PatternPtr letPattern;
+    if (match(TokenType::Let)) {
+        letPattern = parsePattern();
+        expect(TokenType::Equals, "Expected '=' after pattern in 'if let'");
     }
-    // Not an option guard — restore position and fall through to error
-    m_pos = saved;
-  }
 
-  // `do` after an if condition is a syntax error — use `then`. Reported
-  // without throwing, then parsed AS `then`: the recovery a throw starts used
-  // to consume the `if`'s own `end` as the enclosing block's, cutting a
-  // surrounding `make` block short and burying this one mistake under
-  // unrelated errors further down (kexhq/kex#165).
-  bool inlineThen;
-  if (check(TokenType::Do)) {
-    m_diagnostics.push_back(
-        {currentLocation(),
-         "use 'then' instead of 'do' in if expression: `if cond then body end`"});
-    advance();
-    inlineThen = !check(TokenType::Newline);
-  } else {
-    inlineThen = match(TokenType::Then);
-  }
-  if (!inlineThen)
-    skipNewlines();
-
-  std::vector<ast::ExprPtr> thenBody;
-  while (!check(TokenType::End) && !check(TokenType::Else) &&
-         !check(TokenType::Elif) && !atEnd()) {
-    thenBody.push_back(parseExpr());
-    if (!inlineThen)
-      skipNewlines();
-    else
-      break; // inline: only one expression in then-branch
-  }
-  if (inlineThen)
-    skipNewlines(); // allow elif/else on next line after inline body
-
-  std::vector<std::pair<ast::ExprPtr, std::vector<ast::ExprPtr>>> elifs;
-  while (match(TokenType::Elif)) {
     m_noDoBlocks = true;
     m_noThenExpr = true;
-    auto elifCond = parseExpr();
+    auto condition = parseExpr();
     m_noDoBlocks = false;
     m_noThenExpr = false;
-    bool elifInline = inlineThen && match(TokenType::Then);
-    if (!elifInline)
-      skipNewlines();
-    std::vector<ast::ExprPtr> elifBody;
-    while (!check(TokenType::End) && !check(TokenType::Else) &&
-           !check(TokenType::Elif) && !atEnd()) {
-      elifBody.push_back(parseExpr());
-      if (!elifInline)
-        skipNewlines();
-      else
-        break;
-    }
-    if (elifInline)
-      skipNewlines(); // allow elif/else/end on next line
-    elifs.push_back({std::move(elifCond), std::move(elifBody)});
-  }
 
-  std::optional<std::vector<ast::ExprPtr>> elseBody;
-  if (match(TokenType::Else)) {
-    skipNewlines(); // always skip: inline-else can have its expr on the next
-                    // line
-    elseBody = std::vector<ast::ExprPtr>{};
-    if (inlineThen) {
-      elseBody->push_back(parseExpr()); // single expression before `end`
+    // Accept `if cond then body end` (single-line) OR `if cond\n body\n end`
+    // (multiline). The `then` keyword acts as an inline body separator so
+    // that `if n == 0 then true else false end` parses correctly without
+    // consuming `then` as a ternary operator inside the condition.
+    // `if val do |binding| ... end` — option-unwrapping guard.
+    // Desugars to: match val do Just(binding) -> body; _ -> () end
+    if (check(TokenType::Do) && !letPattern) {
+        // Peek past 'do' to see if this is 'do |name|'
+        auto saved = m_pos;
+        advance(); // consume 'do'
+        skipNewlines();
+        if (check(TokenType::Pipe)) {
+            advance(); // consume '|'
+            if (check(TokenType::LowerIdent)) {
+                const auto& bindToken = advance();
+                auto bindName = bindToken.value;
+                const auto bindLocation = bindToken.location;
+                if (match(TokenType::Pipe)) {
+                    skipNewlines();
+                    // Collect body
+                    std::vector<ast::ExprPtr> body;
+                    while (!check(TokenType::End) && !atEnd()) {
+                        body.push_back(parseExpr());
+                        skipNewlines();
+                    }
+                    expect(TokenType::End, "Expected 'end' to close if block");
+
+                    // Desugars to: match condition do None -> (); binding -> body end
+                    // This handles both explicit Optional (None / Just(x)) and
+                    // truthy-optional fields (None / bare-value) uniformly.
+                    auto matchExpr = std::make_unique<ast::Expr>();
+                    matchExpr->location = expr->location;
+
+                    // None literal pattern
+                    auto nonePat = std::make_unique<ast::Pattern>();
+                    nonePat->location = expr->location;
+                    nonePat->kind = ast::LiteralPattern{Token{TokenType::None, "None", {}}};
+
+                    // Variable binding pattern
+                    auto varPat = std::make_unique<ast::Pattern>();
+                    // At the name, where tooling finds the binding: `lim` in
+                    // `if @limit do |lim|` led definition to the `if`.
+                    varPat->location = bindLocation;
+                    varPat->kind = ast::VarPattern{bindName};
+
+                    // Build () unit for None clause
+                    auto unitExpr = std::make_unique<ast::Expr>();
+                    unitExpr->location = expr->location;
+                    unitExpr->kind = ast::TupleExpr{{}};
+
+                    // Build body expr for binding clause
+                    auto bodyExpr = std::make_unique<ast::Expr>();
+                    bodyExpr->location = expr->location;
+                    bodyExpr->kind = ast::BlockExpr{std::move(body)};
+
+                    ast::MatchClause noneClause;
+                    noneClause.patterns.push_back(std::move(nonePat));
+                    noneClause.body = std::move(unitExpr);
+
+                    ast::MatchClause bindClause;
+                    bindClause.patterns.push_back(std::move(varPat));
+                    bindClause.body = std::move(bodyExpr);
+
+                    ast::MatchExpr matchNode;
+                    matchNode.subject = std::move(condition);
+                    matchNode.clauses.push_back(std::move(noneClause));
+                    matchNode.clauses.push_back(std::move(bindClause));
+
+                    matchExpr->kind = std::move(matchNode);
+                    return matchExpr;
+                }
+            }
+        }
+        // Not an option guard — restore position and fall through to error
+        m_pos = saved;
+    }
+
+    // `do` after an if condition is a syntax error — use `then`. Reported
+    // without throwing, then parsed AS `then`: the recovery a throw starts used
+    // to consume the `if`'s own `end` as the enclosing block's, cutting a
+    // surrounding `make` block short and burying this one mistake under
+    // unrelated errors further down (kexhq/kex#165).
+    bool inlineThen;
+    if (check(TokenType::Do)) {
+        m_diagnostics.push_back(
+            {currentLocation(),
+             "use 'then' instead of 'do' in if expression: `if cond then body end`"});
+        advance();
+        inlineThen = !check(TokenType::Newline);
     } else {
-      while (!check(TokenType::End) && !atEnd()) {
-        elseBody->push_back(parseExpr());
-        skipNewlines();
-      }
+        inlineThen = match(TokenType::Then);
     }
-  }
+    if (!inlineThen) {
+        skipNewlines();
+    }
 
-  skipNewlines();
-  expect(TokenType::End, "Expected 'end' to close if");
+    std::vector<ast::ExprPtr> thenBody;
+    while (!check(TokenType::End) && !check(TokenType::Else) && !check(TokenType::Elif) &&
+           !atEnd()) {
+        thenBody.push_back(parseExpr());
+        if (!inlineThen) {
+            skipNewlines();
+        } else {
+            break; // inline: only one expression in then-branch
+        }
+    }
+    if (inlineThen) {
+        skipNewlines(); // allow elif/else on next line after inline body
+    }
 
-  ast::IfExpr ifNode{std::move(condition), std::move(thenBody),
-                     std::move(elifs), std::move(elseBody)};
-  ifNode.letPattern = std::move(letPattern);
-  expr->kind = std::move(ifNode);
-  return expr;
+    std::vector<std::pair<ast::ExprPtr, std::vector<ast::ExprPtr>>> elifs;
+    while (match(TokenType::Elif)) {
+        m_noDoBlocks = true;
+        m_noThenExpr = true;
+        auto elifCond = parseExpr();
+        m_noDoBlocks = false;
+        m_noThenExpr = false;
+        bool elifInline = inlineThen && match(TokenType::Then);
+        if (!elifInline) {
+            skipNewlines();
+        }
+        std::vector<ast::ExprPtr> elifBody;
+        while (!check(TokenType::End) && !check(TokenType::Else) && !check(TokenType::Elif) &&
+               !atEnd()) {
+            elifBody.push_back(parseExpr());
+            if (!elifInline) {
+                skipNewlines();
+            } else {
+                break;
+            }
+        }
+        if (elifInline) {
+            skipNewlines(); // allow elif/else/end on next line
+        }
+        elifs.push_back({std::move(elifCond), std::move(elifBody)});
+    }
+
+    std::optional<std::vector<ast::ExprPtr>> elseBody;
+    if (match(TokenType::Else)) {
+        skipNewlines(); // always skip: inline-else can have its expr on the next
+                        // line
+        elseBody = std::vector<ast::ExprPtr>{};
+        if (inlineThen) {
+            elseBody->push_back(parseExpr()); // single expression before `end`
+        } else {
+            while (!check(TokenType::End) && !atEnd()) {
+                elseBody->push_back(parseExpr());
+                skipNewlines();
+            }
+        }
+    }
+
+    skipNewlines();
+    expect(TokenType::End, "Expected 'end' to close if");
+
+    ast::IfExpr ifNode{
+        std::move(condition), std::move(thenBody), std::move(elifs), std::move(elseBody)};
+    ifNode.letPattern = std::move(letPattern);
+    expr->kind = std::move(ifNode);
+    return expr;
 }
 
 auto Parser::parseMatchExpr() -> ast::ExprPtr {
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = currentLocation();
-  expect(TokenType::Match, "Expected 'match'");
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = currentLocation();
+    expect(TokenType::Match, "Expected 'match'");
 
-  m_noDoBlocks = true;
-  auto subject = parseExpr();
-  m_noDoBlocks = false;
-  expect(TokenType::Do, "Expected 'do' after match subject");
+    m_noDoBlocks = true;
+    auto subject = parseExpr();
+    m_noDoBlocks = false;
+    expect(TokenType::Do, "Expected 'do' after match subject");
 
-  std::optional<std::string> subjectBinding;
-  if (match(TokenType::Pipe)) {
-    subjectBinding =
-        expect(TokenType::LowerIdent, "Expected name in match subject binding")
-            .value;
-    expect(TokenType::Pipe, "Expected '|' after match subject binding");
-  }
+    std::optional<std::string> subjectBinding;
+    if (match(TokenType::Pipe)) {
+        subjectBinding =
+            expect(TokenType::LowerIdent, "Expected name in match subject binding").value;
+        expect(TokenType::Pipe, "Expected '|' after match subject binding");
+    }
 
-  skipNewlines();
-
-  std::vector<ast::MatchClause> clauses;
-  while (!check(TokenType::End) && !atEnd()) {
-    clauses.push_back(parseMatchClause());
     skipNewlines();
-  }
 
-  expect(TokenType::End, "Expected 'end' to close match");
+    std::vector<ast::MatchClause> clauses;
+    while (!check(TokenType::End) && !atEnd()) {
+        clauses.push_back(parseMatchClause());
+        skipNewlines();
+    }
 
-  expr->kind = ast::MatchExpr{std::move(subject), std::move(subjectBinding),
-                              std::move(clauses)};
-  return expr;
+    expect(TokenType::End, "Expected 'end' to close match");
+
+    expr->kind = ast::MatchExpr{std::move(subject), std::move(subjectBinding), std::move(clauses)};
+    return expr;
 }
 
 auto Parser::parseMatchClause() -> ast::MatchClause {
-  ast::MatchClause clause;
+    ast::MatchClause clause;
 
-  // Bare `when cond -> ...` = sugar for `_ when cond -> ...`
-  if (check(TokenType::When)) {
-    auto wildcard = std::make_unique<ast::Pattern>();
-    wildcard->location = currentLocation();
-    wildcard->kind = ast::WildcardPattern{};
-    clause.patterns.push_back(std::move(wildcard));
-    advance(); // when
-    clause.guard = parseExpr();
+    // Bare `when cond -> ...` = sugar for `_ when cond -> ...`
+    if (check(TokenType::When)) {
+        auto wildcard = std::make_unique<ast::Pattern>();
+        wildcard->location = currentLocation();
+        wildcard->kind = ast::WildcardPattern{};
+        clause.patterns.push_back(std::move(wildcard));
+        advance(); // when
+        clause.guard = parseExpr();
+
+        expect(TokenType::FatArrow, "Expected '=>' in match clause");
+        clause.body = parseMatchClauseBody();
+        return clause;
+    }
+
+    // `name : Type` / `_ : Type` — a TYPE alternative. Only a match clause
+    // accepts one: everywhere else `pattern : Type` is an annotation on a
+    // binding, not a test.
+    auto matchPattern = [this]() -> ast::PatternPtr {
+        auto pattern = parsePattern();
+        if (!check(TokenType::Colon)) {
+            return pattern;
+        }
+        std::string bound;
+        if (const auto* variable = std::get_if<ast::VarPattern>(&pattern->kind)) {
+            bound = variable->name;
+        } else if (!std::holds_alternative<ast::WildcardPattern>(pattern->kind)) {
+            error("a type alternative binds a name or `_`, as in `s : String =>`");
+        }
+        advance(); // ":"
+        auto typed = std::make_unique<ast::Pattern>();
+        typed->location = pattern->location;
+        typed->kind = ast::TypePattern{std::move(bound), parseTypeExpr()};
+        return complete(std::move(typed));
+    };
+    clause.patterns.push_back(matchPattern());
+    while (match(TokenType::Comma)) {
+        clause.patterns.push_back(matchPattern());
+    }
+
+    // Guard
+    if (match(TokenType::When)) {
+        clause.guard = parseExpr();
+    }
 
     expect(TokenType::FatArrow, "Expected '=>' in match clause");
     clause.body = parseMatchClauseBody();
+
     return clause;
-  }
-
-  // `name : Type` / `_ : Type` — a TYPE alternative. Only a match clause
-  // accepts one: everywhere else `pattern : Type` is an annotation on a
-  // binding, not a test.
-  auto matchPattern = [this]() -> ast::PatternPtr {
-    auto pattern = parsePattern();
-    if (!check(TokenType::Colon)) return pattern;
-    std::string bound;
-    if (const auto* variable = std::get_if<ast::VarPattern>(&pattern->kind))
-      bound = variable->name;
-    else if (!std::holds_alternative<ast::WildcardPattern>(pattern->kind))
-      error("a type alternative binds a name or `_`, as in `s : String =>`");
-    advance(); // ":"
-    auto typed = std::make_unique<ast::Pattern>();
-    typed->location = pattern->location;
-    typed->kind = ast::TypePattern{std::move(bound), parseTypeExpr()};
-    return complete(std::move(typed));
-  };
-  clause.patterns.push_back(matchPattern());
-  while (match(TokenType::Comma)) {
-    clause.patterns.push_back(matchPattern());
-  }
-
-  // Guard
-  if (match(TokenType::When)) {
-    clause.guard = parseExpr();
-  }
-
-  expect(TokenType::FatArrow, "Expected '=>' in match clause");
-  clause.body = parseMatchClauseBody();
-
-  return clause;
 }
 
 auto Parser::parseMatchClauseBody() -> ast::ExprPtr {
-  // do...end block: required for multi-statement arm bodies.
-  if (check(TokenType::Do)) {
-    auto startOffset = currentLocation().startOffset;
-    advance();
-    skipNewlines();
-    std::vector<ast::ExprPtr> body;
-    while (!check(TokenType::End) && !atEnd()) {
-      body.push_back(parseExpr());
-      skipNewlines();
+    // do...end block: required for multi-statement arm bodies.
+    if (check(TokenType::Do)) {
+        auto startOffset = currentLocation().startOffset;
+        advance();
+        skipNewlines();
+        std::vector<ast::ExprPtr> body;
+        while (!check(TokenType::End) && !atEnd()) {
+            body.push_back(parseExpr());
+            skipNewlines();
+        }
+        expect(TokenType::End, "Expected 'end' to close match clause body");
+        auto blockExpr = std::make_unique<ast::Expr>();
+        blockExpr->location = currentLocation();
+        blockExpr->location.startOffset = startOffset;
+        blockExpr->kind = ast::BlockExpr{std::move(body)};
+        return complete(std::move(blockExpr));
     }
-    expect(TokenType::End, "Expected 'end' to close match clause body");
-    auto blockExpr = std::make_unique<ast::Expr>();
-    blockExpr->location = currentLocation();
-    blockExpr->location.startOffset = startOffset;
-    blockExpr->kind = ast::BlockExpr{std::move(body)};
-    return complete(std::move(blockExpr));
-  }
-  // Single expression — inline or on the next line.
-  // Multi-statement arms require do...end to avoid ambiguity.
-  if (check(TokenType::Newline))
-    skipNewlines();
-  return parseExpr();
+    // Single expression — inline or on the next line.
+    // Multi-statement arms require do...end to avoid ambiguity.
+    if (check(TokenType::Newline)) {
+        skipNewlines();
+    }
+    return parseExpr();
 }
 
 auto Parser::parseReceiveExpr() -> ast::ExprPtr {
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = currentLocation();
-  expect(TokenType::Receive, "Expected 'receive'");
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = currentLocation();
+    expect(TokenType::Receive, "Expected 'receive'");
 
-  if (check(TokenType::Timeout)) {
-    error("the timeout belongs to the `after` clause: "
-          "`receive do ... after timeout: 1000 ... end`");
-    advance();
-    if (match(TokenType::Colon)) parseExpr();
-  }
-
-  expect(TokenType::Do, "Expected 'do' after receive");
-
-  std::optional<std::string> senderBinding;
-  if (match(TokenType::Pipe)) {
-    senderBinding =
-        expect(TokenType::LowerIdent, "Expected name in receive sender binding")
-            .value;
-    expect(TokenType::Pipe, "Expected '|' after receive sender binding");
-  }
-
-  skipNewlines();
-
-  std::vector<ast::MatchClause> clauses;
-  while (!check(TokenType::End) && !check(TokenType::After) && !atEnd()) {
-    auto clause = parseMatchClause();
-    if (clause.guard) {
-      error("'when' guards are not supported on receive clauses; "
-            "check the condition inside the clause body instead");
+    if (check(TokenType::Timeout)) {
+        error(
+            "the timeout belongs to the `after` clause: "
+            "`receive do ... after timeout: 1000 ... end`");
+        advance();
+        if (match(TokenType::Colon)) {
+            parseExpr();
+        }
     }
-    clause.guard.reset();
-    clauses.push_back(std::move(clause));
-    skipNewlines();
-  }
 
-  // `after timeout: <ms>` — the duration sits with the branch it governs, and
-  // its body runs to the receive's own `end` rather than opening a block of
-  // its own. An empty body is a plain wait. A timeout without an `after` is
-  // unrepresentable by construction, which is what keeps a timeout from being
-  // silently dropped.
-  std::optional<ast::ExprPtr> timeout;
-  std::optional<ast::ExprPtr> afterBody;
-  if (match(TokenType::After)) {
-    auto afterLocation = currentLocation();
-    expect(TokenType::Timeout, "Expected 'timeout:' after 'after'");
-    expect(TokenType::Colon, "Expected ':' after 'timeout'");
-    // The body starts on the next line, so the timeout expression must not
-    // swallow a trailing `do` block — the same guard `while` puts around its
-    // condition.
-    m_noDoBlocks = true;
-    timeout = parseExpr();
-    m_noDoBlocks = false;
-    skipNewlines();
-    std::vector<ast::ExprPtr> body;
-    while (!check(TokenType::End) && !atEnd()) {
-      body.push_back(parseExpr());
-      skipNewlines();
+    expect(TokenType::Do, "Expected 'do' after receive");
+
+    std::optional<std::string> senderBinding;
+    if (match(TokenType::Pipe)) {
+        senderBinding =
+            expect(TokenType::LowerIdent, "Expected name in receive sender binding").value;
+        expect(TokenType::Pipe, "Expected '|' after receive sender binding");
     }
-    auto block = std::make_unique<ast::Expr>();
-    block->location = afterLocation;
-    block->kind = ast::BlockExpr{std::move(body)};
-    afterBody = std::move(block);
-  }
 
-  expect(TokenType::End, "Expected 'end' to close receive");
+    skipNewlines();
 
-  expr->kind = ast::ReceiveExpr{std::move(clauses), std::move(timeout),
-                                std::move(afterBody), std::move(senderBinding)};
-  return expr;
+    std::vector<ast::MatchClause> clauses;
+    while (!check(TokenType::End) && !check(TokenType::After) && !atEnd()) {
+        auto clause = parseMatchClause();
+        if (clause.guard) {
+            error(
+                "'when' guards are not supported on receive clauses; "
+                "check the condition inside the clause body instead");
+        }
+        clause.guard.reset();
+        clauses.push_back(std::move(clause));
+        skipNewlines();
+    }
+
+    // `after timeout: <ms>` — the duration sits with the branch it governs, and
+    // its body runs to the receive's own `end` rather than opening a block of
+    // its own. An empty body is a plain wait. A timeout without an `after` is
+    // unrepresentable by construction, which is what keeps a timeout from being
+    // silently dropped.
+    std::optional<ast::ExprPtr> timeout;
+    std::optional<ast::ExprPtr> afterBody;
+    if (match(TokenType::After)) {
+        auto afterLocation = currentLocation();
+        expect(TokenType::Timeout, "Expected 'timeout:' after 'after'");
+        expect(TokenType::Colon, "Expected ':' after 'timeout'");
+        // The body starts on the next line, so the timeout expression must not
+        // swallow a trailing `do` block — the same guard `while` puts around its
+        // condition.
+        m_noDoBlocks = true;
+        timeout = parseExpr();
+        m_noDoBlocks = false;
+        skipNewlines();
+        std::vector<ast::ExprPtr> body;
+        while (!check(TokenType::End) && !atEnd()) {
+            body.push_back(parseExpr());
+            skipNewlines();
+        }
+        auto block = std::make_unique<ast::Expr>();
+        block->location = afterLocation;
+        block->kind = ast::BlockExpr{std::move(body)};
+        afterBody = std::move(block);
+    }
+
+    expect(TokenType::End, "Expected 'end' to close receive");
+
+    expr->kind = ast::ReceiveExpr{
+        std::move(clauses), std::move(timeout), std::move(afterBody), std::move(senderBinding)};
+    return expr;
 }
 
 auto Parser::parseLoopExpr() -> ast::ExprPtr {
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = currentLocation();
-  expect(TokenType::Loop, "Expected 'loop'");
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = currentLocation();
+    expect(TokenType::Loop, "Expected 'loop'");
 
-  // `loop do ... end`, optionally binding a 0-based iteration counter:
-  // `loop do |i| ... end`.
-  expect(TokenType::Do, "Expected 'do' after 'loop'");
-  std::optional<std::string> counter;
-  if (match(TokenType::Pipe)) {
-    if (check(TokenType::Underscore)) {
-      advance();
-      counter = "_";
-    } else {
-      counter =
-          expect(TokenType::LowerIdent, "Expected loop counter name").value;
+    // `loop do ... end`, optionally binding a 0-based iteration counter:
+    // `loop do |i| ... end`.
+    expect(TokenType::Do, "Expected 'do' after 'loop'");
+    std::optional<std::string> counter;
+    if (match(TokenType::Pipe)) {
+        if (check(TokenType::Underscore)) {
+            advance();
+            counter = "_";
+        } else {
+            counter = expect(TokenType::LowerIdent, "Expected loop counter name").value;
+        }
+        expect(TokenType::Pipe, "Expected '|' to close loop counter");
     }
-    expect(TokenType::Pipe, "Expected '|' to close loop counter");
-  }
-  skipNewlines();
-
-  std::vector<ast::ExprPtr> body;
-  while (!check(TokenType::End) && !atEnd()) {
-    body.push_back(parseExpr());
     skipNewlines();
-  }
 
-  expect(TokenType::End, "Expected 'end' to close loop");
+    std::vector<ast::ExprPtr> body;
+    while (!check(TokenType::End) && !atEnd()) {
+        body.push_back(parseExpr());
+        skipNewlines();
+    }
 
-  expr->kind = ast::LoopExpr{std::move(body), std::move(counter)};
-  return expr;
+    expect(TokenType::End, "Expected 'end' to close loop");
+
+    expr->kind = ast::LoopExpr{std::move(body), std::move(counter)};
+    return expr;
 }
 
 auto Parser::parseWhileExpr() -> ast::ExprPtr {
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = currentLocation();
-  expect(TokenType::While, "Expected 'while'");
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = currentLocation();
+    expect(TokenType::While, "Expected 'while'");
 
-  m_noDoBlocks = true;
-  auto condition = parseExpr();
-  m_noDoBlocks = false;
-  expect(TokenType::Do, "Expected 'do' after 'while' condition");
-  skipNewlines();
-
-  std::vector<ast::ExprPtr> body;
-  while (!check(TokenType::End) && !atEnd()) {
-    body.push_back(parseExpr());
+    m_noDoBlocks = true;
+    auto condition = parseExpr();
+    m_noDoBlocks = false;
+    expect(TokenType::Do, "Expected 'do' after 'while' condition");
     skipNewlines();
-  }
 
-  expect(TokenType::End, "Expected 'end' to close while");
+    std::vector<ast::ExprPtr> body;
+    while (!check(TokenType::End) && !atEnd()) {
+        body.push_back(parseExpr());
+        skipNewlines();
+    }
 
-  expr->kind = ast::WhileExpr{std::move(condition), std::move(body)};
-  return expr;
+    expect(TokenType::End, "Expected 'end' to close while");
+
+    expr->kind = ast::WhileExpr{std::move(condition), std::move(body)};
+    return expr;
 }
 
 // The name of a generated declaration: `%name` splices a variable, `%{expr}`
@@ -3395,1199 +3449,1194 @@ auto Parser::parseWhileExpr() -> ast::ExprPtr {
 // annotation form always has a `:` or `:>` right after the name, and nothing
 // else does — so one token of lookahead separates them.
 auto Parser::isMakeDriverAhead() -> bool {
-  return peekNext().type != TokenType::Colon;
+    return peekNext().type != TokenType::Colon;
 }
 
 auto Parser::parseSpliceName() -> ast::ExprPtr {
-  auto loc = currentLocation();
-  if (check(TokenType::SpliceIdent)) {
-    auto name = std::make_unique<ast::Expr>();
-    name->location = loc;
-    name->kind = ast::Identifier{advance().value};
-    return name;
-  }
-  expect(TokenType::Percent, "Expected a spliced name");
-  expect(TokenType::LBrace, "Expected '{' after '%'");
-  auto computed = parseExpr();
-  expect(TokenType::RBrace, "Expected '}' to close %{...} name");
-  return computed;
+    auto loc = currentLocation();
+    if (check(TokenType::SpliceIdent)) {
+        auto name = std::make_unique<ast::Expr>();
+        name->location = loc;
+        name->kind = ast::Identifier{advance().value};
+        return name;
+    }
+    expect(TokenType::Percent, "Expected a spliced name");
+    expect(TokenType::LBrace, "Expected '{' after '%'");
+    auto computed = parseExpr();
+    expect(TokenType::RBrace, "Expected '}' to close %{...} name");
+    return computed;
 }
 
 auto Parser::isLetFunctionDefAhead() -> bool {
-  // Note: some keywords can be used as function names (e.g. 'loop', 'where')
-  auto nextType = peekNext().type;
-  // `let %{expr}(...)` — a computed declaration name. Decided here rather
-  // than by the lookahead below, which advances past the name expecting an
-  // identifier and would land inside the `{...}`.
-  //
-  // Only the `%{` form. A bare `%` after `let` is the modulo OPERATOR being
-  // defined (`let %(other) = ...`, see spec/prelude/operator_overloading),
-  // which is a declaration inside a `make` block — parseMakeDef calls
-  // parseFunctionDef directly and never consults this predicate, so `%`
-  // does not belong in the name list below.
-  if (nextType == TokenType::Percent) {
-    auto saved = m_pos;
-    advance(); // let
-    advance(); // %
-    bool computed = check(TokenType::LBrace);
-    m_pos = saved;
-    if (computed)
-      return true;
-  }
-  bool isLowerName =
-      nextType == TokenType::LowerIdent || nextType == TokenType::Loop ||
-      nextType == TokenType::Match || nextType == TokenType::SpliceIdent ||
-      nextType == TokenType::Plus || nextType == TokenType::Minus ||
-      nextType == TokenType::Star || nextType == TokenType::EqEq ||
-      nextType == TokenType::After;
-  bool isUpperName = nextType == TokenType::UpperIdent;
-  if (!isLowerName && !isUpperName)
-    return false; // `let { ... }`, `let ( ... )`, `let [ ... ]`
+    // Note: some keywords can be used as function names (e.g. 'loop', 'where')
+    auto nextType = peekNext().type;
+    // `let %{expr}(...)` — a computed declaration name. Decided here rather
+    // than by the lookahead below, which advances past the name expecting an
+    // identifier and would land inside the `{...}`.
+    //
+    // Only the `%{` form. A bare `%` after `let` is the modulo OPERATOR being
+    // defined (`let %(other) = ...`, see spec/prelude/operator_overloading),
+    // which is a declaration inside a `make` block — parseMakeDef calls
+    // parseFunctionDef directly and never consults this predicate, so `%`
+    // does not belong in the name list below.
+    if (nextType == TokenType::Percent) {
+        auto saved = m_pos;
+        advance(); // let
+        advance(); // %
+        bool computed = check(TokenType::LBrace);
+        m_pos = saved;
+        if (computed) {
+            return true;
+        }
+    }
+    bool isLowerName = nextType == TokenType::LowerIdent || nextType == TokenType::Loop ||
+                       nextType == TokenType::Match || nextType == TokenType::SpliceIdent ||
+                       nextType == TokenType::Plus || nextType == TokenType::Minus ||
+                       nextType == TokenType::Star || nextType == TokenType::EqEq ||
+                       nextType == TokenType::After;
+    bool isUpperName = nextType == TokenType::UpperIdent;
+    if (!isLowerName && !isUpperName) {
+        return false; // `let { ... }`, `let ( ... )`, `let [ ... ]`
+    }
 
-  // UpperIdent after `let` is a zero-arg constant definition
-  // (`let MAX_RETRIES = 3`, `let DEFAULT_LEVEL = "info"`), UNLESS it's
-  // followed by `(` (constructor pattern: `let Ok((v, r)) = parse(s)`) or
-  // `{` (named record pattern: `let Pt { x, y } = point`).
-  if (isUpperName) {
-    auto savedPos2 = m_pos;
-    advance(); // let
-    advance(); // UpperIdent name
-    bool isPattern = check(TokenType::LParen) || check(TokenType::LBrace);
-    m_pos = savedPos2;
-    return !isPattern;
-  }
+    // UpperIdent after `let` is a zero-arg constant definition
+    // (`let MAX_RETRIES = 3`, `let DEFAULT_LEVEL = "info"`), UNLESS it's
+    // followed by `(` (constructor pattern: `let Ok((v, r)) = parse(s)`) or
+    // `{` (named record pattern: `let Pt { x, y } = point`).
+    if (isUpperName) {
+        auto savedPos2 = m_pos;
+        advance(); // let
+        advance(); // UpperIdent name
+        bool isPattern = check(TokenType::LParen) || check(TokenType::LBrace);
+        m_pos = savedPos2;
+        return !isPattern;
+    }
 
-  // Look further: is there a ( after the name? Or is it let name = expr (simple
-  // binding)?
-  auto savedPos = m_pos;
-  advance(); // let
-  advance(); // name
-  // It's a function def if followed by ( or -> (return type) or do or ?
-  // (predicate) It's a simple let binding if followed by = directly
-  bool isFuncDef = check(TokenType::LParen) || check(TokenType::Do) ||
-                   check(TokenType::Arrow) || check(TokenType::Question);
-  m_pos = savedPos;
-  return isFuncDef;
+    // Look further: is there a ( after the name? Or is it let name = expr (simple
+    // binding)?
+    auto savedPos = m_pos;
+    advance(); // let
+    advance(); // name
+    // It's a function def if followed by ( or -> (return type) or do or ?
+    // (predicate) It's a simple let binding if followed by = directly
+    bool isFuncDef = check(TokenType::LParen) || check(TokenType::Do) || check(TokenType::Arrow) ||
+                     check(TokenType::Question);
+    m_pos = savedPos;
+    return isFuncDef;
 }
 
 auto Parser::parseLetExpr() -> ast::ExprPtr {
-  auto loc = currentLocation();
+    auto loc = currentLocation();
 
-  if (isLetFunctionDefAhead()) {
-    // Parse as inline function def, wrap in a dummy expr
-    // Single-letter uppercase names are type parameters, so a local
-    // `let N = ...` binds a name no reference can ever read — bare `N`
-    // means the type, not the value (kexhq/kex#603). Reject it here at the
-    // `let` rather than letting it decay into an atom downstream. Only the
-    // constant shape is rejected (`let Ok(v) = ...` stays a pattern), and
-    // only in expression position: top-level and module constants go
-    // through parseFunctionDef directly and keep working.
-    if (peekNext().type == TokenType::UpperIdent &&
-        peekNext().value.size() == 1 &&
-        peekAt(2).type != TokenType::LParen &&
-        peekAt(2).type != TokenType::LBrace) {
-      // Consumed BEFORE reporting, like `foul` above: error() throws, and
-      // leaving `let` in place would put recovery straight back on it.
-      // The report then points at the offending name itself.
-      auto name = peekNext().value;
-      advance(); // let
-      error("Cannot bind '" + name +
-            "': single-letter uppercase names are reserved for type "
-            "parameters");
+    if (isLetFunctionDefAhead()) {
+        // Parse as inline function def, wrap in a dummy expr
+        // Single-letter uppercase names are type parameters, so a local
+        // `let N = ...` binds a name no reference can ever read — bare `N`
+        // means the type, not the value (kexhq/kex#603). Reject it here at the
+        // `let` rather than letting it decay into an atom downstream. Only the
+        // constant shape is rejected (`let Ok(v) = ...` stays a pattern), and
+        // only in expression position: top-level and module constants go
+        // through parseFunctionDef directly and keep working.
+        if (peekNext().type == TokenType::UpperIdent && peekNext().value.size() == 1 &&
+            peekAt(2).type != TokenType::LParen && peekAt(2).type != TokenType::LBrace) {
+            // Consumed BEFORE reporting, like `foul` above: error() throws, and
+            // leaving `let` in place would put recovery straight back on it.
+            // The report then points at the offending name itself.
+            auto name = peekNext().value;
+            advance(); // let
+            error(
+                "Cannot bind '" + name +
+                "': single-letter uppercase names are reserved for type "
+                "parameters");
+        }
+        auto funcDef = parseFunctionDef();
+        auto expr = std::make_unique<ast::Expr>();
+        expr->location = loc;
+        // `let %name(...)` declares a function whose NAME is computed at
+        // compile time, so it cannot become a local binding — the name is
+        // not known yet. Emit a GeneratedDecl for the expansion pass; the
+        // `%` prefix was put there by parseFunctionDef.
+        if (!funcDef->name.empty() && funcDef->name.front() == '%') {
+            ast::ExprPtr nameExpr;
+            if (funcDef->computedName) {
+                nameExpr = std::move(funcDef->computedName); // %{expr}
+            } else {
+                nameExpr = std::make_unique<ast::Expr>(); // %name
+                nameExpr->location = loc;
+                nameExpr->kind = ast::Identifier{funcDef->name.substr(1)};
+            }
+            funcDef->name.clear();
+            expr->kind = ast::GeneratedDecl{
+                std::move(nameExpr), std::shared_ptr<ast::FunctionDef>(std::move(funcDef))};
+            return expr;
+        }
+        // Represent as a let binding of a lambda with the function name
+        ast::PatternPtr pat = std::make_unique<ast::Pattern>();
+        pat->location = loc;
+        pat->kind = ast::VarPattern{funcDef->name};
+
+        auto lambda = std::make_unique<ast::Expr>();
+        lambda->location = loc;
+        if (!funcDef->clauses.empty()) {
+            // Preserve the clause's params — they were previously
+            // silently dropped (`{}`), so a local function defined this
+            // way (`let loop(state: Int) do ... end`) compiled to a
+            // zero-param Lambda whose body still referenced `state`,
+            // which was never bound to anything.
+            std::vector<ast::LambdaParam> params;
+            for (auto& param : funcDef->clauses[0].params) {
+                ast::LambdaParam lp;
+                lp.name = param.name.value_or("_");
+                lp.type = std::move(param.type);
+                params.push_back(std::move(lp));
+            }
+            ast::Lambda function{
+                std::move(params), std::move(funcDef->clauses[0].body),
+                std::move(funcDef->clauses[0].returnAnnotation),
+                std::move(funcDef->clauses[0].rescue)};
+            function.namedFunction = true;
+            lambda->kind = std::move(function);
+        } else {
+            ast::Lambda function{{}, {}, std::nullopt, std::nullopt};
+            function.namedFunction = true;
+            lambda->kind = std::move(function);
+        }
+
+        expr->kind = ast::LetExpr{std::move(pat), std::move(lambda)};
+        return expr;
     }
-    auto funcDef = parseFunctionDef();
+
+    rejectReservedBindingName();
     auto expr = std::make_unique<ast::Expr>();
     expr->location = loc;
-    // `let %name(...)` declares a function whose NAME is computed at
-    // compile time, so it cannot become a local binding — the name is
-    // not known yet. Emit a GeneratedDecl for the expansion pass; the
-    // `%` prefix was put there by parseFunctionDef.
-    if (!funcDef->name.empty() && funcDef->name.front() == '%') {
-      ast::ExprPtr nameExpr;
-      if (funcDef->computedName) {
-        nameExpr = std::move(funcDef->computedName); // %{expr}
-      } else {
-        nameExpr = std::make_unique<ast::Expr>(); // %name
-        nameExpr->location = loc;
-        nameExpr->kind = ast::Identifier{funcDef->name.substr(1)};
-      }
-      funcDef->name.clear();
-      expr->kind = ast::GeneratedDecl{
-          std::move(nameExpr),
-          std::shared_ptr<ast::FunctionDef>(std::move(funcDef))};
-      return expr;
-    }
-    // Represent as a let binding of a lambda with the function name
-    ast::PatternPtr pat = std::make_unique<ast::Pattern>();
-    pat->location = loc;
-    pat->kind = ast::VarPattern{funcDef->name};
+    expect(TokenType::Let, "Expected 'let'");
 
-    auto lambda = std::make_unique<ast::Expr>();
-    lambda->location = loc;
-    if (!funcDef->clauses.empty()) {
-      // Preserve the clause's params — they were previously
-      // silently dropped (`{}`), so a local function defined this
-      // way (`let loop(state: Int) do ... end`) compiled to a
-      // zero-param Lambda whose body still referenced `state`,
-      // which was never bound to anything.
-      std::vector<ast::LambdaParam> params;
-      for (auto &param : funcDef->clauses[0].params) {
-        ast::LambdaParam lp;
-        lp.name = param.name.value_or("_");
-        lp.type = std::move(param.type);
-        params.push_back(std::move(lp));
-      }
-      ast::Lambda function{std::move(params),
-                           std::move(funcDef->clauses[0].body),
-                           std::move(funcDef->clauses[0].returnAnnotation),
-                           std::move(funcDef->clauses[0].rescue)};
-      function.namedFunction = true;
-      lambda->kind = std::move(function);
-    } else {
-      ast::Lambda function{{}, {}, std::nullopt, std::nullopt};
-      function.namedFunction = true;
-      lambda->kind = std::move(function);
+    auto pattern = parsePattern();
+    // `let x: Type = value` — documented in docs/types.md and parsed here;
+    // a destructuring pattern takes its types from what it matches, so the
+    // annotation is only meaningful on a plain name.
+    std::optional<ast::TypeExprPtr> declaredType;
+    if (match(TokenType::Colon)) {
+        declaredType = parseTypeExpr();
     }
+    expect(TokenType::Equals, "Expected '=' in let binding");
+    auto value = parseExpr();
 
-    expr->kind = ast::LetExpr{std::move(pat), std::move(lambda)};
+    expr->kind = ast::LetExpr{std::move(pattern), std::move(value), std::move(declaredType)};
     return expr;
-  }
-
-  rejectReservedBindingName();
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = loc;
-  expect(TokenType::Let, "Expected 'let'");
-
-  auto pattern = parsePattern();
-  // `let x: Type = value` — documented in docs/types.md and parsed here;
-  // a destructuring pattern takes its types from what it matches, so the
-  // annotation is only meaningful on a plain name.
-  std::optional<ast::TypeExprPtr> declaredType;
-  if (match(TokenType::Colon))
-    declaredType = parseTypeExpr();
-  expect(TokenType::Equals, "Expected '=' in let binding");
-  auto value = parseExpr();
-
-  expr->kind = ast::LetExpr{std::move(pattern), std::move(value),
-                            std::move(declaredType)};
-  return expr;
 }
 
 auto Parser::parseVarExpr() -> ast::ExprPtr {
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = currentLocation();
-  expect(TokenType::Var, "Expected 'var'");
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = currentLocation();
+    expect(TokenType::Var, "Expected 'var'");
 
-  // A bare `var Name = ...` binds nothing: an uppercase name in pattern
-  // position is a constructor match, not a binding — `var Just(x) = ...`
-  // stays a pattern (PR #607 review). Reject it here rather than failing
-  // later with a resolve error or a runtime mismatch. Already positioned
-  // at the name, so the report points at it with nothing to consume.
-  if (peek().type == TokenType::UpperIdent &&
-      (peekNext().type == TokenType::Equals ||
-       peekNext().type == TokenType::Colon)) {
-    error("Cannot bind '" + peek().value +
-          "' with 'var': patterns only bind lowercase names");
-  }
+    // A bare `var Name = ...` binds nothing: an uppercase name in pattern
+    // position is a constructor match, not a binding — `var Just(x) = ...`
+    // stays a pattern (PR #607 review). Reject it here rather than failing
+    // later with a resolve error or a runtime mismatch. Already positioned
+    // at the name, so the report points at it with nothing to consume.
+    if (peek().type == TokenType::UpperIdent &&
+        (peekNext().type == TokenType::Equals || peekNext().type == TokenType::Colon)) {
+        error("Cannot bind '" + peek().value + "' with 'var': patterns only bind lowercase names");
+    }
 
-  // Same patterns `let` accepts (`var (i, j) = pair`, `var { x } = rec`):
-  // each bound name is mutable (kexhq/kex#602).
-  auto pattern = parsePattern();
+    // Same patterns `let` accepts (`var (i, j) = pair`, `var { x } = rec`):
+    // each bound name is mutable (kexhq/kex#602).
+    auto pattern = parsePattern();
 
-  // Optional type annotation: var x: Type = value
-  std::optional<ast::TypeExprPtr> declaredType;
-  if (match(TokenType::Colon))
-    declaredType = parseTypeExpr();
+    // Optional type annotation: var x: Type = value
+    std::optional<ast::TypeExprPtr> declaredType;
+    if (match(TokenType::Colon)) {
+        declaredType = parseTypeExpr();
+    }
 
-  expect(TokenType::Equals, "Expected '=' in var binding");
-  auto value = parseExpr();
+    expect(TokenType::Equals, "Expected '=' in var binding");
+    auto value = parseExpr();
 
-  expr->kind = ast::VarExpr{std::move(pattern), std::move(value),
-                            std::move(declaredType)};
-  return expr;
+    expr->kind = ast::VarExpr{std::move(pattern), std::move(value), std::move(declaredType)};
+    return expr;
 }
 
 auto Parser::parseReturnExpr() -> ast::ExprPtr {
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = currentLocation();
-  expect(TokenType::Return, "Expected 'return'");
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = currentLocation();
+    expect(TokenType::Return, "Expected 'return'");
 
-  // `return if COND` — value-less guard-clause early return (returns
-  // None when COND is true, does nothing when false). Must be handled
-  // here, before falling into parseExpr(): `if` is itself a primary
-  // expression (`if COND do ... end`), so without this check the `if`
-  // immediately after `return` would be parsed as that instead, and
-  // fail since there's no `do` block to go with it.
-  //
-  // `return EXPR if COND` (a value, then a trailing guard) doesn't need
-  // special handling here — parseExpr() already produces
-  // TrailingIf{EXPR, COND} for that on its own.
-  //
-  // `return if COND then a else b end` and a multi-line `return if COND` whose
-  // next line is indented deeper than `return` are the if EXPRESSION, the same
-  // one `let x = if … elif … end` accepts (#332). A guard's next line sits at
-  // `return`'s own column (or shallower, closing the block), so indentation
-  // tells the two apart without changing what any existing guard means.
-  if (check(TokenType::If) && isReturnIfExpressionAhead(expr->location.column)) {
-    auto value = parseIfExpr();
+    // `return if COND` — value-less guard-clause early return (returns
+    // None when COND is true, does nothing when false). Must be handled
+    // here, before falling into parseExpr(): `if` is itself a primary
+    // expression (`if COND do ... end`), so without this check the `if`
+    // immediately after `return` would be parsed as that instead, and
+    // fail since there's no `do` block to go with it.
+    //
+    // `return EXPR if COND` (a value, then a trailing guard) doesn't need
+    // special handling here — parseExpr() already produces
+    // TrailingIf{EXPR, COND} for that on its own.
+    //
+    // `return if COND then a else b end` and a multi-line `return if COND` whose
+    // next line is indented deeper than `return` are the if EXPRESSION, the same
+    // one `let x = if … elif … end` accepts (#332). A guard's next line sits at
+    // `return`'s own column (or shallower, closing the block), so indentation
+    // tells the two apart without changing what any existing guard means.
+    if (check(TokenType::If) && isReturnIfExpressionAhead(expr->location.column)) {
+        auto value = parseIfExpr();
+        expr->kind = ast::ReturnExpr{std::move(value)};
+        return expr;
+    }
+    if (check(TokenType::If)) {
+        auto startOffset = currentLocation().startOffset;
+        advance(); // if
+        auto trailing = std::make_unique<ast::Expr>();
+        trailing->location = currentLocation();
+        trailing->location.startOffset = startOffset;
+        auto condition = parseExpr();
+        trailing->kind = ast::TrailingIf{nullptr, std::move(condition)};
+        expr->kind = ast::ReturnExpr{std::move(trailing)};
+        return expr;
+    }
+
+    auto value = parseExpr();
     expr->kind = ast::ReturnExpr{std::move(value)};
     return expr;
-  }
-  if (check(TokenType::If)) {
-    auto startOffset = currentLocation().startOffset;
-    advance(); // if
-    auto trailing = std::make_unique<ast::Expr>();
-    trailing->location = currentLocation();
-    trailing->location.startOffset = startOffset;
-    auto condition = parseExpr();
-    trailing->kind = ast::TrailingIf{nullptr, std::move(condition)};
-    expr->kind = ast::ReturnExpr{std::move(trailing)};
-    return expr;
-  }
-
-  auto value = parseExpr();
-  expr->kind = ast::ReturnExpr{std::move(value)};
-  return expr;
 }
 
 auto Parser::parseSpawnExpr() -> ast::ExprPtr {
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = currentLocation();
-  expect(TokenType::Spawn, "Expected 'spawn'");
-  expect(TokenType::Do, "Expected 'do' after 'spawn'");
-  skipNewlines();
-
-  std::vector<ast::ExprPtr> body;
-  while (!check(TokenType::End) && !atEnd()) {
-    body.push_back(parseExpr());
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = currentLocation();
+    expect(TokenType::Spawn, "Expected 'spawn'");
+    expect(TokenType::Do, "Expected 'do' after 'spawn'");
     skipNewlines();
-  }
 
-  expect(TokenType::End, "Expected 'end' to close spawn");
+    std::vector<ast::ExprPtr> body;
+    while (!check(TokenType::End) && !atEnd()) {
+        body.push_back(parseExpr());
+        skipNewlines();
+    }
 
-  expr->kind = ast::SpawnExpr{std::move(body)};
-  return expr;
+    expect(TokenType::End, "Expected 'end' to close spawn");
+
+    expr->kind = ast::SpawnExpr{std::move(body)};
+    return expr;
 }
 
 // `with FS.File = FakeFiles { ... } do ... end` — substitute a capability's
 // implementation for the body's lexical region (kexhq/kex#143).
 auto Parser::parseWithExpr() -> ast::ExprPtr {
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = currentLocation();
-  expect(TokenType::With, "Expected 'with'");
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = currentLocation();
+    expect(TokenType::With, "Expected 'with'");
 
-  ast::WithExpr node;
-  node.capability = parseTypeName();
-  expect(TokenType::Equals, "Expected '=' after the capability name in 'with'");
-  // The replacement is followed by `do`, which a trailing-block expression
-  // would otherwise swallow: `with FS.File = fake do` parsed `do ... end` as a
-  // block argument to `fake` and then complained about the `end`. Same
-  // treatment an `if` condition gets, for the same reason.
-  const bool savedNoDoBlocks = m_noDoBlocks;
-  m_noDoBlocks = true;
-  node.value = parseExpr();
-  m_noDoBlocks = savedNoDoBlocks;
-  expect(TokenType::Do, "Expected 'do' after the 'with' replacement");
-  skipNewlines();
-
-  while (!check(TokenType::End) && !atEnd()) {
-    node.body.push_back(parseExpr());
+    ast::WithExpr node;
+    node.capability = parseTypeName();
+    expect(TokenType::Equals, "Expected '=' after the capability name in 'with'");
+    // The replacement is followed by `do`, which a trailing-block expression
+    // would otherwise swallow: `with FS.File = fake do` parsed `do ... end` as a
+    // block argument to `fake` and then complained about the `end`. Same
+    // treatment an `if` condition gets, for the same reason.
+    const bool savedNoDoBlocks = m_noDoBlocks;
+    m_noDoBlocks = true;
+    node.value = parseExpr();
+    m_noDoBlocks = savedNoDoBlocks;
+    expect(TokenType::Do, "Expected 'do' after the 'with' replacement");
     skipNewlines();
-  }
-  expect(TokenType::End, "Expected 'end' to close with");
 
-  expr->kind = std::move(node);
-  return expr;
+    while (!check(TokenType::End) && !atEnd()) {
+        node.body.push_back(parseExpr());
+        skipNewlines();
+    }
+    expect(TokenType::End, "Expected 'end' to close with");
+
+    expr->kind = std::move(node);
+    return expr;
 }
 
 auto Parser::parseLambda() -> ast::ExprPtr {
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = currentLocation();
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = currentLocation();
 
-  // { |params| body } or { expr }
-  if (match(TokenType::LBrace)) {
-    std::vector<ast::LambdaParam> params;
+    // { |params| body } or { expr }
+    if (match(TokenType::LBrace)) {
+        std::vector<ast::LambdaParam> params;
 
-    if (match(TokenType::Pipe)) {
-      while (!check(TokenType::Pipe) && !atEnd()) {
-        ast::LambdaParam param;
-        param.location = peek().location;
-        if (check(TokenType::Underscore)) {
-          param.name = "_";
-          advance();
-        } else if (check(TokenType::LParen)) {
-          // Destructured tuple param: |(a, b)|
-          advance(); // (
-          std::string combined;
-          while (!check(TokenType::RParen) && !atEnd()) {
-            if (!combined.empty() && check(TokenType::Comma)) {
-              combined += ",";
-              advance();
-            } else {
-              combined += advance().value;
+        if (match(TokenType::Pipe)) {
+            while (!check(TokenType::Pipe) && !atEnd()) {
+                ast::LambdaParam param;
+                param.location = peek().location;
+                if (check(TokenType::Underscore)) {
+                    param.name = "_";
+                    advance();
+                } else if (check(TokenType::LParen)) {
+                    // Destructured tuple param: |(a, b)|
+                    advance(); // (
+                    std::string combined;
+                    while (!check(TokenType::RParen) && !atEnd()) {
+                        if (!combined.empty() && check(TokenType::Comma)) {
+                            combined += ",";
+                            advance();
+                        } else {
+                            combined += advance().value;
+                        }
+                    }
+                    expect(TokenType::RParen, "Expected ')' in tuple param");
+                    param.name = "(" + combined + ")";
+                } else {
+                    param.name = expect(TokenType::LowerIdent, "Expected param name").value;
+                }
+                params.push_back(std::move(param));
+                match(TokenType::Comma);
             }
-          }
-          expect(TokenType::RParen, "Expected ')' in tuple param");
-          param.name = "(" + combined + ")";
-        } else {
-          param.name =
-              expect(TokenType::LowerIdent, "Expected param name").value;
+            expect(TokenType::Pipe, "Expected '|' to close params");
         }
-        params.push_back(std::move(param));
-        match(TokenType::Comma);
-      }
-      expect(TokenType::Pipe, "Expected '|' to close params");
-    }
 
-    std::vector<ast::ExprPtr> body;
-    skipNewlines();
-    while (!check(TokenType::RBrace) && !atEnd()) {
-      body.push_back(parseExpr());
-      skipNewlines();
-    }
-    expect(TokenType::RBrace, "Expected '}' to close lambda");
-
-    expr->kind = ast::Lambda{std::move(params), std::move(body), std::nullopt,
-                             std::nullopt};
-    return expr;
-  }
-
-  // do |params| body end
-  if (match(TokenType::Do)) {
-    std::vector<ast::LambdaParam> params;
-    skipNewlines();
-
-    if (match(TokenType::Pipe)) {
-      while (!check(TokenType::Pipe) && !atEnd()) {
-        ast::LambdaParam param;
-        param.location = peek().location;
-        if (check(TokenType::Underscore)) {
-          param.name = "_";
-          advance();
-        } else {
-          param.name =
-              expect(TokenType::LowerIdent, "Expected param name").value;
+        std::vector<ast::ExprPtr> body;
+        skipNewlines();
+        while (!check(TokenType::RBrace) && !atEnd()) {
+            body.push_back(parseExpr());
+            skipNewlines();
         }
-        params.push_back(std::move(param));
-        match(TokenType::Comma);
-      }
-      expect(TokenType::Pipe, "Expected '|' to close params");
+        expect(TokenType::RBrace, "Expected '}' to close lambda");
+
+        expr->kind = ast::Lambda{std::move(params), std::move(body), std::nullopt, std::nullopt};
+        return expr;
     }
 
-    skipNewlines();
-    std::vector<ast::ExprPtr> body;
-    while (!check(TokenType::End) && !check(TokenType::Rescue) && !atEnd()) {
-      // A `Block<[A]>` parameter collects these, and `...expr` splices a
-      // list into what it collects (see docs/dsl.md).
-      body.push_back(parseSpreadableExpr());
-      skipNewlines();
+    // do |params| body end
+    if (match(TokenType::Do)) {
+        std::vector<ast::LambdaParam> params;
+        skipNewlines();
+
+        if (match(TokenType::Pipe)) {
+            while (!check(TokenType::Pipe) && !atEnd()) {
+                ast::LambdaParam param;
+                param.location = peek().location;
+                if (check(TokenType::Underscore)) {
+                    param.name = "_";
+                    advance();
+                } else {
+                    param.name = expect(TokenType::LowerIdent, "Expected param name").value;
+                }
+                params.push_back(std::move(param));
+                match(TokenType::Comma);
+            }
+            expect(TokenType::Pipe, "Expected '|' to close params");
+        }
+
+        skipNewlines();
+        std::vector<ast::ExprPtr> body;
+        while (!check(TokenType::End) && !check(TokenType::Rescue) && !atEnd()) {
+            // A `Block<[A]>` parameter collects these, and `...expr` splices a
+            // list into what it collects (see docs/dsl.md).
+            body.push_back(parseSpreadableExpr());
+            skipNewlines();
+        }
+
+        // A block rescues exactly the way a function body does. Without this a
+        // route handler — the archetypal block — had to nest a whole `trying`
+        // inside itself to answer a failure.
+        std::optional<ast::RescueBlock> rescue;
+        if (match(TokenType::Rescue)) {
+            skipNewlines();
+            rescue = parseRescueBlock();
+            skipNewlines();
+        }
+        expect(TokenType::End, "Expected 'end' to close do block");
+
+        expr->kind =
+            ast::Lambda{std::move(params), std::move(body), std::nullopt, std::move(rescue)};
+        return expr;
     }
 
-    // A block rescues exactly the way a function body does. Without this a
-    // route handler — the archetypal block — had to nest a whole `trying`
-    // inside itself to answer a failure.
-    std::optional<ast::RescueBlock> rescue;
-    if (match(TokenType::Rescue)) {
-      skipNewlines();
-      rescue = parseRescueBlock();
-      skipNewlines();
-    }
-    expect(TokenType::End, "Expected 'end' to close do block");
-
-    expr->kind = ast::Lambda{std::move(params), std::move(body), std::nullopt,
-                             std::move(rescue)};
-    return expr;
-  }
-
-  error("Expected lambda");
+    error("Expected lambda");
 }
 
 // Every binary operator that can be named as a value — `~(op)` curries any of
 // these, and `&.op` takes one as a method name.
 static auto isOperatorToken(TokenType t) -> bool {
-  switch (t) {
-  case TokenType::Plus:
-  case TokenType::Minus:
-  case TokenType::Star:
-  case TokenType::Slash:
-  case TokenType::Percent:
-  case TokenType::Caret:
-  case TokenType::EqEq:
-  case TokenType::NotEq:
-  case TokenType::LessThan:
-  case TokenType::LessEq:
-  case TokenType::GreaterThan:
-  case TokenType::GreaterEq:
-  case TokenType::AmpAmp:
-  case TokenType::PipePipe:
-    return true;
-  default:
-    return false;
-  }
+    switch (t) {
+        case TokenType::Plus:
+        case TokenType::Minus:
+        case TokenType::Star:
+        case TokenType::Slash:
+        case TokenType::Percent:
+        case TokenType::Caret:
+        case TokenType::EqEq:
+        case TokenType::NotEq:
+        case TokenType::LessThan:
+        case TokenType::LessEq:
+        case TokenType::GreaterThan:
+        case TokenType::GreaterEq:
+        case TokenType::AmpAmp:
+        case TokenType::PipePipe: return true;
+        default: return false;
+    }
 }
 
 auto Parser::parseShorthandLambda() -> ast::ExprPtr {
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = currentLocation();
-  expect(TokenType::Amp, "Expected '&'");
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = currentLocation();
+    expect(TokenType::Amp, "Expected '&'");
 
-  if (match(TokenType::Dot)) {
-    std::string name;
+    if (match(TokenType::Dot)) {
+        std::string name;
+        if (check(TokenType::LowerIdent)) {
+            name = advance().value;
+        } else if (isOperatorToken(peek().type)) {
+            // `&.` names a method; operators are captured with `~(op)`, which
+            // covers both spellings: `&.+ 1` → `~(+)(1)`, `&.+` → `~(+)`.
+            auto opName = std::string(tokenTypeName(peek().type));
+            error(
+                "`&." + opName + "` is not valid — write `~(" + opName +
+                ")` to capture an operator");
+        } else {
+            error("Expected method name after '&.'");
+        }
+        std::vector<ast::ExprPtr> args;
+
+        auto kind = ast::ShorthandLambda::Kind::Method;
+        if (match(TokenType::LParen)) {
+            if (!check(TokenType::RParen)) {
+                do {
+                    args.push_back(parseExpr());
+                } while (match(TokenType::Comma));
+            }
+            expect(TokenType::RParen, "Expected ')'");
+            kind = ast::ShorthandLambda::Kind::MethodWithArgs;
+        } else if (isAtExprStart()) {
+            // Operator with inline arg: &.+ 1 or &.+ "hello"
+            args.push_back(parsePrimary());
+            kind = ast::ShorthandLambda::Kind::MethodWithArgs;
+        }
+        // What it means: `{ |__shorthand| __shorthand.method(args) }`, and a
+        // continuation belongs inside it: `&.to(String).or("")` is
+        // `{ |__shorthand| __shorthand.to(String).or("") }`.
+        constexpr const char* paramName = "__shorthand";
+        auto receiver = std::make_unique<ast::Expr>();
+        receiver->location = expr->location;
+        receiver->kind = ast::Identifier{paramName};
+        auto firstCall = std::make_unique<ast::Expr>();
+        firstCall->location = expr->location;
+        ast::MethodCall call;
+        call.receiver = std::move(receiver);
+        call.method = name;
+        call.args = std::move(args);
+        firstCall->kind = std::move(call);
+        const bool chained = check(TokenType::Dot);
+        std::vector<ast::ExprPtr> body;
+        body.push_back(chained ? parsePostfixTail(std::move(firstCall)) : std::move(firstCall));
+        ast::LambdaParam param;
+        param.name = paramName;
+        std::vector<ast::LambdaParam> params;
+        params.push_back(std::move(param));
+        auto lambda = std::make_unique<ast::Expr>();
+        lambda->location = body.front()->location;
+        lambda->kind = ast::Lambda{std::move(params), std::move(body), std::nullopt, std::nullopt};
+        // A chain is no shorthand any more, only the lambda.
+        if (chained) {
+            return lambda;
+        }
+        expr->kind = ast::ShorthandLambda{kind, name, std::move(lambda)};
+        return expr;
+    }
+
+    // `&` is receiver shorthand only — `&.method`. Capturing a named function
+    // or an operator is spelled with `~`, which also curries.
     if (check(TokenType::LowerIdent)) {
-      name = advance().value;
-    } else if (isOperatorToken(peek().type)) {
-      // `&.` names a method; operators are captured with `~(op)`, which
-      // covers both spellings: `&.+ 1` → `~(+)(1)`, `&.+` → `~(+)`.
-      auto opName = std::string(tokenTypeName(peek().type));
-      error("`&." + opName + "` is not valid — write `~(" + opName +
-            ")` to capture an operator");
-    } else {
-      error("Expected method name after '&.'");
+        error(
+            "`&" + std::string(peek().value) + "` is no longer valid — write `~" +
+            std::string(peek().value) +
+            "` to capture a named function ('&' is "
+            "receiver shorthand only, as in `&.method`)");
     }
-    std::vector<ast::ExprPtr> args;
-
-    auto kind = ast::ShorthandLambda::Kind::Method;
-    if (match(TokenType::LParen)) {
-      if (!check(TokenType::RParen)) {
-        do {
-          args.push_back(parseExpr());
-        } while (match(TokenType::Comma));
-      }
-      expect(TokenType::RParen, "Expected ')'");
-      kind = ast::ShorthandLambda::Kind::MethodWithArgs;
-    } else if (isAtExprStart()) {
-      // Operator with inline arg: &.+ 1 or &.+ "hello"
-      args.push_back(parsePrimary());
-      kind = ast::ShorthandLambda::Kind::MethodWithArgs;
+    if (isOperatorToken(peek().type)) {
+        auto opName = std::string(tokenTypeName(peek().type));
+        error(
+            "`&" + opName + "` is no longer valid — write `~(" + opName +
+            ")` to capture an operator ('&' is receiver shorthand only, as "
+            "in `&.method`)");
     }
-    // What it means: `{ |__shorthand| __shorthand.method(args) }`, and a
-    // continuation belongs inside it: `&.to(String).or("")` is
-    // `{ |__shorthand| __shorthand.to(String).or("") }`.
-    constexpr const char *paramName = "__shorthand";
-    auto receiver = std::make_unique<ast::Expr>();
-    receiver->location = expr->location;
-    receiver->kind = ast::Identifier{paramName};
-    auto firstCall = std::make_unique<ast::Expr>();
-    firstCall->location = expr->location;
-    ast::MethodCall call;
-    call.receiver = std::move(receiver);
-    call.method = name;
-    call.args = std::move(args);
-    firstCall->kind = std::move(call);
-    const bool chained = check(TokenType::Dot);
-    std::vector<ast::ExprPtr> body;
-    body.push_back(chained ? parsePostfixTail(std::move(firstCall)) : std::move(firstCall));
-    ast::LambdaParam param;
-    param.name = paramName;
-    std::vector<ast::LambdaParam> params;
-    params.push_back(std::move(param));
-    auto lambda = std::make_unique<ast::Expr>();
-    lambda->location = body.front()->location;
-    lambda->kind = ast::Lambda{std::move(params), std::move(body), std::nullopt, std::nullopt};
-    // A chain is no shorthand any more, only the lambda.
-    if (chained) return lambda;
-    expr->kind = ast::ShorthandLambda{kind, name, std::move(lambda)};
+    error("Expected '.' after '&' — '&' is receiver shorthand, as in `&.method`");
     return expr;
-  }
-
-  // `&` is receiver shorthand only — `&.method`. Capturing a named function
-  // or an operator is spelled with `~`, which also curries.
-  if (check(TokenType::LowerIdent)) {
-    error("`&" + std::string(peek().value) + "` is no longer valid — write `~" +
-          std::string(peek().value) +
-          "` to capture a named function ('&' is "
-          "receiver shorthand only, as in `&.method`)");
-  }
-  if (isOperatorToken(peek().type)) {
-    auto opName = std::string(tokenTypeName(peek().type));
-    error("`&" + opName + "` is no longer valid — write `~(" + opName +
-          ")` to capture an operator ('&' is receiver shorthand only, as "
-          "in `&.method`)");
-  }
-  error("Expected '.' after '&' — '&' is receiver shorthand, as in `&.method`");
-  return expr;
 }
 
 // An expression in a position that also accepts `...expr` — a list element or
 // a statement in a block body that a `Block<[A]>` parameter collects.
 auto Parser::parseSpreadableExpr() -> ast::ExprPtr {
-  if (!check(TokenType::DotDotDot))
-    return parseExpr();
-  auto loc = currentLocation();
-  advance();
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = loc;
-  expr->kind = ast::SpreadExpr{parseExpr()};
-  return complete(std::move(expr));
-}
-
-auto Parser::parseListExpr() -> ast::ExprPtr {
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = currentLocation();
-  expect(TokenType::LBracket, "Expected '['");
-
-  std::vector<ast::ExprPtr> elements;
-  std::optional<ast::ExprPtr> rest;
-
-  skipNewlines();
-  if (!check(TokenType::RBracket)) {
-    elements.push_back(parseSpreadableExpr());
-    skipNewlines();
-    while (match(TokenType::Comma)) {
-      skipNewlines();
-      if (check(TokenType::RBracket))
-        break; // trailing comma
-      elements.push_back(parseSpreadableExpr());
-      skipNewlines();
+    if (!check(TokenType::DotDotDot)) {
+        return parseExpr();
     }
-    if (match(TokenType::Pipe)) {
-      rest = parseExpr();
-    }
-  }
-  skipNewlines();
-  expect(TokenType::RBracket, "Expected ']'");
-
-  expr->kind = ast::ListExpr{std::move(elements), std::move(rest)};
-  return expr;
-}
-
-auto Parser::parseMapOrBlock() -> ast::ExprPtr {
-  auto loc = currentLocation();
-  advance(); // consume {
-  skipNewlines();
-
-  // Empty map: {}
-  if (check(TokenType::RBrace)) {
+    auto loc = currentLocation();
     advance();
     auto expr = std::make_unique<ast::Expr>();
     expr->location = loc;
-    expr->kind = ast::MapExpr{{}};
-    return expr;
-  }
+    expr->kind = ast::SpreadExpr{parseExpr()};
+    return complete(std::move(expr));
+}
 
-  // Lambda: { |params| body }
-  if (check(TokenType::Pipe)) {
+auto Parser::parseListExpr() -> ast::ExprPtr {
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = currentLocation();
+    expect(TokenType::LBracket, "Expected '['");
+
+    std::vector<ast::ExprPtr> elements;
+    std::optional<ast::ExprPtr> rest;
+
+    skipNewlines();
+    if (!check(TokenType::RBracket)) {
+        elements.push_back(parseSpreadableExpr());
+        skipNewlines();
+        while (match(TokenType::Comma)) {
+            skipNewlines();
+            if (check(TokenType::RBracket)) {
+                break; // trailing comma
+            }
+            elements.push_back(parseSpreadableExpr());
+            skipNewlines();
+        }
+        if (match(TokenType::Pipe)) {
+            rest = parseExpr();
+        }
+    }
+    skipNewlines();
+    expect(TokenType::RBracket, "Expected ']'");
+
+    expr->kind = ast::ListExpr{std::move(elements), std::move(rest)};
+    return expr;
+}
+
+auto Parser::parseMapOrBlock() -> ast::ExprPtr {
+    auto loc = currentLocation();
+    advance(); // consume {
+    skipNewlines();
+
+    // Empty map: {}
+    if (check(TokenType::RBrace)) {
+        advance();
+        auto expr = std::make_unique<ast::Expr>();
+        expr->location = loc;
+        expr->kind = ast::MapExpr{{}};
+        return expr;
+    }
+
+    // Lambda: { |params| body }
+    if (check(TokenType::Pipe)) {
+        auto expr = std::make_unique<ast::Expr>();
+        expr->location = loc;
+
+        std::vector<ast::LambdaParam> params;
+        advance(); // |
+        while (!check(TokenType::Pipe) && !atEnd()) {
+            ast::LambdaParam param;
+            param.location = peek().location;
+            if (check(TokenType::Underscore)) {
+                param.name = "_";
+                advance();
+            } else if (check(TokenType::LParen)) {
+                advance(); // (
+                std::string combined;
+                while (!check(TokenType::RParen) && !atEnd()) {
+                    if (!combined.empty() && check(TokenType::Comma)) {
+                        combined += ",";
+                        advance();
+                    } else {
+                        combined += advance().value;
+                    }
+                }
+                expect(TokenType::RParen, "Expected ')' in tuple param");
+                param.name = "(" + combined + ")";
+            } else {
+                param.name = expect(TokenType::LowerIdent, "Expected param name").value;
+            }
+            params.push_back(std::move(param));
+            match(TokenType::Comma);
+        }
+        expect(TokenType::Pipe, "Expected '|'");
+
+        std::vector<ast::ExprPtr> body;
+        skipNewlines();
+        while (!check(TokenType::RBrace) && !atEnd()) {
+            body.push_back(parseExpr());
+            skipNewlines();
+        }
+        expect(TokenType::RBrace, "Expected '}'");
+
+        expr->kind = ast::Lambda{std::move(params), std::move(body), std::nullopt, std::nullopt};
+        return expr;
+    }
+
+    // Try to detect map vs single-expression lambda
+    // Map: { key: value, ... }
+    // Lambda: { expr }
+    // Heuristic: if first token is string/ident followed by colon, it's a map.
+    // A leading `...` also means a map — `{ ...other, "k": 1 }` splices one in,
+    // and a lambda body has no use for a bare spread.
+    if (check(TokenType::DotDotDot) ||
+        (check(TokenType::LowerIdent) && peek().value == "new" &&
+         (peekNext().type == TokenType::Comma || peekNext().type == TokenType::RBrace)) ||
+        ((check(TokenType::String) || check(TokenType::RawString) ||
+          check(TokenType::InterpolatedRawString) || check(TokenType::LowerIdent)) &&
+         peekNext().type == TokenType::Colon)) {
+        auto expr = std::make_unique<ast::Expr>();
+        expr->location = loc;
+
+        std::vector<ast::MapEntry> entries;
+        do {
+            skipNewlines();
+            // Serving transition shorthand: `{ new, reply: value }` means the
+            // same map as `{ new: new, reply: value }`.
+            if (check(TokenType::LowerIdent) && peek().value == "new" &&
+                (peekNext().type == TokenType::Comma || peekNext().type == TokenType::RBrace)) {
+                auto keyLoc = currentLocation();
+                advance();
+                auto key = std::make_unique<ast::Expr>();
+                key->location = keyLoc;
+                key->kind = ast::AtomLiteral{"new"};
+                auto value = std::make_unique<ast::Expr>();
+                value->location = keyLoc;
+                value->kind = ast::Identifier{"new"};
+                entries.push_back(ast::MapEntry{std::move(key), std::move(value)});
+                skipNewlines();
+                continue;
+            }
+            // `{ ...other, "k": 1 }` — splice another map in. No `key: value`
+            // follows, so this entry is complete once the source is parsed.
+            if (check(TokenType::DotDotDot)) {
+                advance();
+                auto source = parseExpr();
+                entries.push_back(ast::MapEntry{nullptr, std::move(source), true});
+                skipNewlines();
+                continue;
+            }
+            ast::ExprPtr key;
+            // `ident:` sugar — bare lowercase identifier used as an atom key,
+            // same as Elixir's `%{host: "localhost"}` meaning `%{:host => ...}`.
+            // parseExpr() would treat it as a variable lookup instead.
+            if (check(TokenType::LowerIdent) && peekNext().type == TokenType::Colon) {
+                auto keyLoc = currentLocation();
+                auto atomName = advance().value; // consume ident
+                key = std::make_unique<ast::Expr>();
+                key->location = keyLoc;
+                key->kind = ast::AtomLiteral{atomName};
+            } else {
+                key = parseExpr();
+            }
+            expect(TokenType::Colon, "Expected ':' in map entry");
+            auto value = parseExpr();
+            entries.push_back(ast::MapEntry{std::move(key), std::move(value)});
+            skipNewlines();
+        } while (match(TokenType::Comma) && !check(TokenType::RBrace));
+
+        skipNewlines();
+        expect(TokenType::RBrace, "Expected '}' to close map");
+
+        expr->kind = ast::MapExpr{std::move(entries)};
+        return expr;
+    }
+
+    // Single-expression lambda: { expr }
     auto expr = std::make_unique<ast::Expr>();
     expr->location = loc;
-
-    std::vector<ast::LambdaParam> params;
-    advance(); // |
-    while (!check(TokenType::Pipe) && !atEnd()) {
-      ast::LambdaParam param;
-      param.location = peek().location;
-      if (check(TokenType::Underscore)) {
-        param.name = "_";
-        advance();
-      } else if (check(TokenType::LParen)) {
-        advance(); // (
-        std::string combined;
-        while (!check(TokenType::RParen) && !atEnd()) {
-          if (!combined.empty() && check(TokenType::Comma)) {
-            combined += ",";
-            advance();
-          } else {
-            combined += advance().value;
-          }
-        }
-        expect(TokenType::RParen, "Expected ')' in tuple param");
-        param.name = "(" + combined + ")";
-      } else {
-        param.name = expect(TokenType::LowerIdent, "Expected param name").value;
-      }
-      params.push_back(std::move(param));
-      match(TokenType::Comma);
-    }
-    expect(TokenType::Pipe, "Expected '|'");
 
     std::vector<ast::ExprPtr> body;
     skipNewlines();
     while (!check(TokenType::RBrace) && !atEnd()) {
-      body.push_back(parseExpr());
-      skipNewlines();
+        body.push_back(parseExpr());
+        skipNewlines();
     }
     expect(TokenType::RBrace, "Expected '}'");
 
-    expr->kind = ast::Lambda{std::move(params), std::move(body), std::nullopt,
-                             std::nullopt};
+    expr->kind = ast::Lambda{{}, std::move(body), std::nullopt, std::nullopt};
     return expr;
-  }
-
-  // Try to detect map vs single-expression lambda
-  // Map: { key: value, ... }
-  // Lambda: { expr }
-  // Heuristic: if first token is string/ident followed by colon, it's a map.
-  // A leading `...` also means a map — `{ ...other, "k": 1 }` splices one in,
-  // and a lambda body has no use for a bare spread.
-  if (check(TokenType::DotDotDot) ||
-      (check(TokenType::LowerIdent) && peek().value == "new" &&
-       (peekNext().type == TokenType::Comma ||
-        peekNext().type == TokenType::RBrace)) ||
-      ((check(TokenType::String) || check(TokenType::RawString) ||
-        check(TokenType::InterpolatedRawString) ||
-        check(TokenType::LowerIdent)) &&
-       peekNext().type == TokenType::Colon)) {
-    auto expr = std::make_unique<ast::Expr>();
-    expr->location = loc;
-
-    std::vector<ast::MapEntry> entries;
-    do {
-      skipNewlines();
-      // Serving transition shorthand: `{ new, reply: value }` means the
-      // same map as `{ new: new, reply: value }`.
-      if (check(TokenType::LowerIdent) && peek().value == "new" &&
-          (peekNext().type == TokenType::Comma ||
-           peekNext().type == TokenType::RBrace)) {
-        auto keyLoc = currentLocation();
-        advance();
-        auto key = std::make_unique<ast::Expr>();
-        key->location = keyLoc;
-        key->kind = ast::AtomLiteral{"new"};
-        auto value = std::make_unique<ast::Expr>();
-        value->location = keyLoc;
-        value->kind = ast::Identifier{"new"};
-        entries.push_back(ast::MapEntry{std::move(key), std::move(value)});
-        skipNewlines();
-        continue;
-      }
-      // `{ ...other, "k": 1 }` — splice another map in. No `key: value`
-      // follows, so this entry is complete once the source is parsed.
-      if (check(TokenType::DotDotDot)) {
-        advance();
-        auto source = parseExpr();
-        entries.push_back(ast::MapEntry{nullptr, std::move(source), true});
-        skipNewlines();
-        continue;
-      }
-      ast::ExprPtr key;
-      // `ident:` sugar — bare lowercase identifier used as an atom key,
-      // same as Elixir's `%{host: "localhost"}` meaning `%{:host => ...}`.
-      // parseExpr() would treat it as a variable lookup instead.
-      if (check(TokenType::LowerIdent) && peekNext().type == TokenType::Colon) {
-        auto keyLoc = currentLocation();
-        auto atomName = advance().value; // consume ident
-        key = std::make_unique<ast::Expr>();
-        key->location = keyLoc;
-        key->kind = ast::AtomLiteral{atomName};
-      } else {
-        key = parseExpr();
-      }
-      expect(TokenType::Colon, "Expected ':' in map entry");
-      auto value = parseExpr();
-      entries.push_back(ast::MapEntry{std::move(key), std::move(value)});
-      skipNewlines();
-    } while (match(TokenType::Comma) && !check(TokenType::RBrace));
-
-    skipNewlines();
-    expect(TokenType::RBrace, "Expected '}' to close map");
-
-    expr->kind = ast::MapExpr{std::move(entries)};
-    return expr;
-  }
-
-  // Single-expression lambda: { expr }
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = loc;
-
-  std::vector<ast::ExprPtr> body;
-  skipNewlines();
-  while (!check(TokenType::RBrace) && !atEnd()) {
-    body.push_back(parseExpr());
-    skipNewlines();
-  }
-  expect(TokenType::RBrace, "Expected '}'");
-
-  expr->kind = ast::Lambda{{}, std::move(body), std::nullopt, std::nullopt};
-  return expr;
 }
 
 auto Parser::parseTupleOrGrouped() -> ast::ExprPtr {
-  auto loc = currentLocation();
-  expect(TokenType::LParen, "Expected '('");
+    auto loc = currentLocation();
+    expect(TokenType::LParen, "Expected '('");
 
-  // Void value: ()
-  if (match(TokenType::RParen)) {
-    auto expr = std::make_unique<ast::Expr>();
-    expr->location = loc;
-    expr->kind = ast::TupleExpr{{}};
-    return complete(std::move(expr));
-  }
-
-  auto first = parseExpr();
-
-  // Tuple: (a, b, ...)
-  if (match(TokenType::Comma)) {
-    std::vector<ast::ExprPtr> elements;
-    elements.push_back(std::move(first));
-    elements.push_back(parseExpr());
-    while (match(TokenType::Comma)) {
-      elements.push_back(parseExpr());
+    // Void value: ()
+    if (match(TokenType::RParen)) {
+        auto expr = std::make_unique<ast::Expr>();
+        expr->location = loc;
+        expr->kind = ast::TupleExpr{{}};
+        return complete(std::move(expr));
     }
+
+    auto first = parseExpr();
+
+    // Tuple: (a, b, ...)
+    if (match(TokenType::Comma)) {
+        std::vector<ast::ExprPtr> elements;
+        elements.push_back(std::move(first));
+        elements.push_back(parseExpr());
+        while (match(TokenType::Comma)) {
+            elements.push_back(parseExpr());
+        }
+        expect(TokenType::RParen, "Expected ')'");
+
+        auto expr = std::make_unique<ast::Expr>();
+        expr->location = loc;
+        expr->kind = ast::TupleExpr{std::move(elements)};
+        return complete(std::move(expr));
+    }
+
+    // Grouped expression: (expr)
     expect(TokenType::RParen, "Expected ')'");
-
-    auto expr = std::make_unique<ast::Expr>();
-    expr->location = loc;
-    expr->kind = ast::TupleExpr{std::move(elements)};
-    return complete(std::move(expr));
-  }
-
-  // Grouped expression: (expr)
-  expect(TokenType::RParen, "Expected ')'");
-  first->location.startOffset = loc.startOffset;
-  return complete(std::move(first));
+    first->location.startOffset = loc.startOffset;
+    return complete(std::move(first));
 }
 
 // ===== Patterns =====
 
 auto Parser::parsePattern() -> ast::PatternPtr {
-  auto loc = currentLocation();
-  auto pattern = std::make_unique<ast::Pattern>();
-  pattern->location = loc;
+    auto loc = currentLocation();
+    auto pattern = std::make_unique<ast::Pattern>();
+    pattern->location = loc;
 
-  // @ pattern (match on this)
-  if (match(TokenType::At)) {
-    auto inner = parsePatternPrimary();
-    pattern->kind = ast::ThisPattern{std::move(inner)};
-    return complete(std::move(pattern));
-  }
+    // @ pattern (match on this)
+    if (match(TokenType::At)) {
+        auto inner = parsePatternPrimary();
+        pattern->kind = ast::ThisPattern{std::move(inner)};
+        return complete(std::move(pattern));
+    }
 
-  auto first = parsePatternPrimary();
-  if (match(TokenType::DotDot)) {
-    auto end = parsePatternPrimary();
-    auto rangePattern = std::make_unique<ast::Pattern>();
-    rangePattern->location = first->location;
-    rangePattern->kind = ast::RangePattern{std::move(first), std::move(end)};
-    return complete(std::move(rangePattern));
-  }
-  return complete(std::move(first));
+    auto first = parsePatternPrimary();
+    if (match(TokenType::DotDot)) {
+        auto end = parsePatternPrimary();
+        auto rangePattern = std::make_unique<ast::Pattern>();
+        rangePattern->location = first->location;
+        rangePattern->kind = ast::RangePattern{std::move(first), std::move(end)};
+        return complete(std::move(rangePattern));
+    }
+    return complete(std::move(first));
 }
 
 // Shared by the anonymous `{ ... }` and named `Foo { ... }` record/map
 // patterns: the `{` has already been consumed; this consumes through `}`.
 auto Parser::parseRecordPatternFields() -> std::vector<ast::FieldPattern> {
-  std::vector<ast::FieldPattern> fields;
-  if (!check(TokenType::RBrace)) {
-    do {
-      skipNewlines();
-      ast::FieldPattern field;
+    std::vector<ast::FieldPattern> fields;
+    if (!check(TokenType::RBrace)) {
+        do {
+            skipNewlines();
+            ast::FieldPattern field;
 
-      if (check(TokenType::String) || check(TokenType::RawString)) {
-        field.isStringKey = true;
-        field.name = advance().value;
-      } else if (check(TokenType::LowerIdent) || check(TokenType::End) ||
-                 check(TokenType::Type) || check(TokenType::Loop) ||
-                 check(TokenType::Match) || check(TokenType::Timeout) ||
-                 check(TokenType::After)) {
-        field.name = advance().value;
-      } else {
-        error("Expected field name");
-      }
+            if (check(TokenType::String) || check(TokenType::RawString)) {
+                field.isStringKey = true;
+                field.name = advance().value;
+            } else if (
+                check(TokenType::LowerIdent) || check(TokenType::End) || check(TokenType::Type) ||
+                check(TokenType::Loop) || check(TokenType::Match) || check(TokenType::Timeout) ||
+                check(TokenType::After)) {
+                field.name = advance().value;
+            } else {
+                error("Expected field name");
+            }
 
-      if (match(TokenType::Colon)) {
-        field.pattern = parsePattern();
-      }
+            if (match(TokenType::Colon)) {
+                field.pattern = parsePattern();
+            }
 
-      fields.push_back(std::move(field));
-      skipNewlines();
-    } while (match(TokenType::Comma));
-  }
+            fields.push_back(std::move(field));
+            skipNewlines();
+        } while (match(TokenType::Comma));
+    }
 
-  expect(TokenType::RBrace, "Expected '}'");
-  return fields;
+    expect(TokenType::RBrace, "Expected '}'");
+    return fields;
 }
 
 auto Parser::parsePatternPrimary() -> ast::PatternPtr {
-  auto loc = currentLocation();
-  auto pattern = std::make_unique<ast::Pattern>();
-  pattern->location = loc;
+    auto loc = currentLocation();
+    auto pattern = std::make_unique<ast::Pattern>();
+    pattern->location = loc;
 
-  // Wildcard
-  if (match(TokenType::Underscore)) {
-    pattern->kind = ast::WildcardPattern{};
-    return complete(std::move(pattern));
-  }
+    // Wildcard
+    if (match(TokenType::Underscore)) {
+        pattern->kind = ast::WildcardPattern{};
+        return complete(std::move(pattern));
+    }
 
-  // Negative numeric literal: -10, -3.5
-  if (check(TokenType::Minus) && (peekNext().type == TokenType::Integer ||
-                                  peekNext().type == TokenType::Float)) {
-    advance(); // consume '-'
-    Token lit = advance();
-    lit.value = "-" + lit.value;
-    pattern->kind = ast::LiteralPattern{std::move(lit)};
-    return complete(std::move(pattern));
-  }
+    // Negative numeric literal: -10, -3.5
+    if (check(TokenType::Minus) &&
+        (peekNext().type == TokenType::Integer || peekNext().type == TokenType::Float)) {
+        advance(); // consume '-'
+        Token lit = advance();
+        lit.value = "-" + lit.value;
+        pattern->kind = ast::LiteralPattern{std::move(lit)};
+        return complete(std::move(pattern));
+    }
 
-  // Literals
-  if (check(TokenType::Integer) || check(TokenType::Float) ||
-      check(TokenType::String) || check(TokenType::RawString) ||
-      check(TokenType::Char) || check(TokenType::True) ||
-      check(TokenType::False) || check(TokenType::None) ||
-      check(TokenType::Atom)) {
-    pattern->kind = ast::LiteralPattern{advance()};
-    return complete(std::move(pattern));
-  }
+    // Literals
+    if (check(TokenType::Integer) || check(TokenType::Float) || check(TokenType::String) ||
+        check(TokenType::RawString) || check(TokenType::Char) || check(TokenType::True) ||
+        check(TokenType::False) || check(TokenType::None) || check(TokenType::Atom)) {
+        pattern->kind = ast::LiteralPattern{advance()};
+        return complete(std::move(pattern));
+    }
 
-  // Record/map destructuring: { ... }
-  if (match(TokenType::LBrace)) {
-    auto fields = parseRecordPatternFields();
-    pattern->kind = ast::RecordPattern{.fields = std::move(fields)};
-    return complete(std::move(pattern));
-  }
+    // Record/map destructuring: { ... }
+    if (match(TokenType::LBrace)) {
+        auto fields = parseRecordPatternFields();
+        pattern->kind = ast::RecordPattern{.fields = std::move(fields)};
+        return complete(std::move(pattern));
+    }
 
-  // List pattern: [...]
-  if (match(TokenType::LBracket)) {
-    std::vector<ast::PatternPtr> elements;
-    std::optional<ast::PatternPtr> rest;
+    // List pattern: [...]
+    if (match(TokenType::LBracket)) {
+        std::vector<ast::PatternPtr> elements;
+        std::optional<ast::PatternPtr> rest;
 
-    if (!check(TokenType::RBracket)) {
-      elements.push_back(parsePattern());
-      while (match(TokenType::Comma)) {
-        elements.push_back(parsePattern());
-      }
-      // `[a | b | rest]` chains like cons: each extra `|` peels one
-      // more head element off, and only the last segment ends up as
-      // the actual rest pattern.
-      if (match(TokenType::Pipe)) {
-        rest = parsePattern();
-        while (match(TokenType::Pipe)) {
-          elements.push_back(std::move(*rest));
-          rest = parsePattern();
+        if (!check(TokenType::RBracket)) {
+            elements.push_back(parsePattern());
+            while (match(TokenType::Comma)) {
+                elements.push_back(parsePattern());
+            }
+            // `[a | b | rest]` chains like cons: each extra `|` peels one
+            // more head element off, and only the last segment ends up as
+            // the actual rest pattern.
+            if (match(TokenType::Pipe)) {
+                rest = parsePattern();
+                while (match(TokenType::Pipe)) {
+                    elements.push_back(std::move(*rest));
+                    rest = parsePattern();
+                }
+            }
         }
-      }
+
+        expect(TokenType::RBracket, "Expected ']'");
+        pattern->kind = ast::ListPattern{std::move(elements), std::move(rest)};
+        return complete(std::move(pattern));
     }
 
-    expect(TokenType::RBracket, "Expected ']'");
-    pattern->kind = ast::ListPattern{std::move(elements), std::move(rest)};
-    return complete(std::move(pattern));
-  }
-
-  // Tuple pattern: (a, b) — or just a grouped pattern (a) / (a..b) if there's
-  // no comma, matching how grouped expressions vs. tuples are parsed.
-  if (match(TokenType::LParen)) {
-    std::vector<ast::PatternPtr> elements;
-    if (!check(TokenType::RParen)) {
-      elements.push_back(parsePattern());
-      while (match(TokenType::Comma)) {
-        elements.push_back(parsePattern());
-      }
-    }
-    expect(TokenType::RParen, "Expected ')'");
-    if (elements.size() == 1) {
-      auto grouped = std::move(elements[0]);
-      grouped->location.startOffset = loc.startOffset;
-      return complete(std::move(grouped));
-    }
-    pattern->kind = ast::TuplePattern{std::move(elements)};
-    return complete(std::move(pattern));
-  }
-
-  // Constructor pattern: Name(args) or just Name
-  if (check(TokenType::UpperIdent)) {
-    auto name = advance().value;
-    int pathOffset = 0;
-    while (peekAt(pathOffset).type == TokenType::Dot &&
-           peekAt(pathOffset + 1).type == TokenType::UpperIdent)
-      pathOffset += 2;
-    // `Geo.Point { x }` names a record by its path; `Shades.Light` and
-    // `Shades.Tint(n)` a module's constructor.
-    std::string module;
-    if (pathOffset > 0) {
-      while (match(TokenType::Dot)) {
-        module += (module.empty() ? "" : ".") + name;
-        name = expect(TokenType::UpperIdent, "Expected a name").value;
-      }
-      if (check(TokenType::LBrace)) {
-        name = module + "." + name;
-        module.clear();
-      }
-    }
-    // Named record pattern: `Foo { x, y }` — same field-list grammar as
-    // the anonymous `{ ... }` form, but the leading type name makes the
-    // match also assert the record's type (see ast::RecordPattern).
-    if (check(TokenType::LBrace)) {
-      advance(); // consume '{'
-      auto fields = parseRecordPatternFields();
-      pattern->kind =
-          ast::RecordPattern{.typeName = name, .fields = std::move(fields)};
-      return complete(std::move(pattern));
-    }
+    // Tuple pattern: (a, b) — or just a grouped pattern (a) / (a..b) if there's
+    // no comma, matching how grouped expressions vs. tuples are parsed.
     if (match(TokenType::LParen)) {
-      std::vector<ast::PatternPtr> args;
-      if (!check(TokenType::RParen)) {
-        args.push_back(parsePattern());
-        while (match(TokenType::Comma)) {
-          args.push_back(parsePattern());
+        std::vector<ast::PatternPtr> elements;
+        if (!check(TokenType::RParen)) {
+            elements.push_back(parsePattern());
+            while (match(TokenType::Comma)) {
+                elements.push_back(parsePattern());
+            }
         }
-      }
-      expect(TokenType::RParen, "Expected ')'");
-      pattern->kind = ast::ConstructorPattern{name, std::move(args), module};
-    } else {
-      pattern->kind = ast::ConstructorPattern{name, {}, module};
+        expect(TokenType::RParen, "Expected ')'");
+        if (elements.size() == 1) {
+            auto grouped = std::move(elements[0]);
+            grouped->location.startOffset = loc.startOffset;
+            return complete(std::move(grouped));
+        }
+        pattern->kind = ast::TuplePattern{std::move(elements)};
+        return complete(std::move(pattern));
     }
-    return complete(std::move(pattern));
-  }
 
-  // Variable binding
-  if (check(TokenType::LowerIdent) || check(TokenType::After)) {
-    pattern->kind = ast::VarPattern{advance().value};
-    return complete(std::move(pattern));
-  }
+    // Constructor pattern: Name(args) or just Name
+    if (check(TokenType::UpperIdent)) {
+        auto name = advance().value;
+        int pathOffset = 0;
+        while (peekAt(pathOffset).type == TokenType::Dot &&
+               peekAt(pathOffset + 1).type == TokenType::UpperIdent) {
+            pathOffset += 2;
+        }
+        // `Geo.Point { x }` names a record by its path; `Shades.Light` and
+        // `Shades.Tint(n)` a module's constructor.
+        std::string module;
+        if (pathOffset > 0) {
+            while (match(TokenType::Dot)) {
+                module += (module.empty() ? "" : ".") + name;
+                name = expect(TokenType::UpperIdent, "Expected a name").value;
+            }
+            if (check(TokenType::LBrace)) {
+                name = module + "." + name;
+                module.clear();
+            }
+        }
+        // Named record pattern: `Foo { x, y }` — same field-list grammar as
+        // the anonymous `{ ... }` form, but the leading type name makes the
+        // match also assert the record's type (see ast::RecordPattern).
+        if (check(TokenType::LBrace)) {
+            advance(); // consume '{'
+            auto fields = parseRecordPatternFields();
+            pattern->kind = ast::RecordPattern{.typeName = name, .fields = std::move(fields)};
+            return complete(std::move(pattern));
+        }
+        if (match(TokenType::LParen)) {
+            std::vector<ast::PatternPtr> args;
+            if (!check(TokenType::RParen)) {
+                args.push_back(parsePattern());
+                while (match(TokenType::Comma)) {
+                    args.push_back(parsePattern());
+                }
+            }
+            expect(TokenType::RParen, "Expected ')'");
+            pattern->kind = ast::ConstructorPattern{name, std::move(args), module};
+        } else {
+            pattern->kind = ast::ConstructorPattern{name, {}, module};
+        }
+        return complete(std::move(pattern));
+    }
 
-  // `let next = 1`, `let (previous, next) = pair` — a keyword where a binding
-  // name belongs. Name the keyword instead of the bare "Expected pattern".
-  if (isKeywordToken(peek().type))
-    rejectReservedName("variable");
+    // Variable binding
+    if (check(TokenType::LowerIdent) || check(TokenType::After)) {
+        pattern->kind = ast::VarPattern{advance().value};
+        return complete(std::move(pattern));
+    }
 
-  error("Expected pattern");
+    // `let next = 1`, `let (previous, next) = pair` — a keyword where a binding
+    // name belongs. Name the keyword instead of the bare "Expected pattern".
+    if (isKeywordToken(peek().type)) {
+        rejectReservedName("variable");
+    }
+
+    error("Expected pattern");
 }
 
 // ===== Remaining Top-Level =====
 
 auto Parser::parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock> {
-  auto block = std::make_unique<ast::CompiledBlock>();
-  block->location = currentLocation();
-  expect(TokenType::Compiled, "Expected 'compiled'");
-  expect(TokenType::Do, "Expected 'do' after 'compiled'");
-  skipNewlines();
-
-  while (!check(TokenType::End) && !atEnd()) {
-    // Compile-time constants are written `let NAME = expr`, like every
-    // other binding in the language — the bare `NAME = expr` form that
-    // used to be accepted here was the only place in Kex where a
-    // declaration had no keyword. It is a binding, not a function; it just
-    // shares the AST encoding of a top-level `let NAME = expr`.
-    if (check(TokenType::UpperIdent) && peekNext().type == TokenType::Equals) {
-      error("Compile-time constants need `let`: write `let " + peek().value +
-            " = ...`");
-    }
-    // Function definition (possibly splice: let %name(...) = ...)
-    if (check(TokenType::Let) || check(TokenType::Foul)) {
-      // parseFunctionDef reads the `foul` itself: taking it here first left
-      // it expecting a second one, so no `foul` in a `compiled do` parsed.
-      block->items.push_back(parseFunctionDef(check(TokenType::Foul)));
-    }
-    // make Block inside compiled
-    else if (check(TokenType::Make)) {
-      block->items.push_back(parseMakeDef());
-    }
-    // record definition inside compiled
-    else if (check(TokenType::Record)) {
-      block->items.push_back(parseRecordDef());
-    }
-    // type definition inside compiled
-    else if (check(TokenType::Type) ||
-             (check(TokenType::LowerIdent) && peek().value == "distinct" &&
-              peekNext().type == TokenType::Type)) {
-      block->items.push_back(parseTypeDef());
-    }
-    // %name :> TypeAnnotation or %name : TypeAnnotation (type annotation for
-    // splice)
-    else if (check(TokenType::SpliceIdent) &&
-             (peekNext().type == TokenType::TypeAnnotation ||
-              peekNext().type == TokenType::Colon)) {
-      advance();       // %name
-      advance();       // :> or :
-      parseTypeExpr(); // consume type — annotation only, no item emitted
-    } else {
-      // Fallback: general expression (e.g. .each { |tag| let %tag = ... }
-      // loops)
-      auto expr = parseExpr();
-      block->items.push_back(std::move(expr));
-    }
+    auto block = std::make_unique<ast::CompiledBlock>();
+    block->location = currentLocation();
+    expect(TokenType::Compiled, "Expected 'compiled'");
+    expect(TokenType::Do, "Expected 'do' after 'compiled'");
     skipNewlines();
-  }
 
-  expect(TokenType::End, "Expected 'end' to close compiled block");
-  return complete(std::move(block));
+    while (!check(TokenType::End) && !atEnd()) {
+        // Compile-time constants are written `let NAME = expr`, like every
+        // other binding in the language — the bare `NAME = expr` form that
+        // used to be accepted here was the only place in Kex where a
+        // declaration had no keyword. It is a binding, not a function; it just
+        // shares the AST encoding of a top-level `let NAME = expr`.
+        if (check(TokenType::UpperIdent) && peekNext().type == TokenType::Equals) {
+            error("Compile-time constants need `let`: write `let " + peek().value + " = ...`");
+        }
+        // Function definition (possibly splice: let %name(...) = ...)
+        if (check(TokenType::Let) || check(TokenType::Foul)) {
+            // parseFunctionDef reads the `foul` itself: taking it here first left
+            // it expecting a second one, so no `foul` in a `compiled do` parsed.
+            block->items.push_back(parseFunctionDef(check(TokenType::Foul)));
+        }
+        // make Block inside compiled
+        else if (check(TokenType::Make)) {
+            block->items.push_back(parseMakeDef());
+        }
+        // record definition inside compiled
+        else if (check(TokenType::Record)) {
+            block->items.push_back(parseRecordDef());
+        }
+        // type definition inside compiled
+        else if (
+            check(TokenType::Type) || (check(TokenType::LowerIdent) && peek().value == "distinct" &&
+                                       peekNext().type == TokenType::Type)) {
+            block->items.push_back(parseTypeDef());
+        }
+        // %name :> TypeAnnotation or %name : TypeAnnotation (type annotation for
+        // splice)
+        else if (
+            check(TokenType::SpliceIdent) &&
+            (peekNext().type == TokenType::TypeAnnotation || peekNext().type == TokenType::Colon)) {
+            advance();       // %name
+            advance();       // :> or :
+            parseTypeExpr(); // consume type — annotation only, no item emitted
+        } else {
+            // Fallback: general expression (e.g. .each { |tag| let %tag = ... }
+            // loops)
+            auto expr = parseExpr();
+            block->items.push_back(std::move(expr));
+        }
+        skipNewlines();
+    }
+
+    expect(TokenType::End, "Expected 'end' to close compiled block");
+    return complete(std::move(block));
 }
 
 auto Parser::parseUsingBlock() -> std::unique_ptr<ast::UsingBlock> {
-  auto block = std::make_unique<ast::UsingBlock>();
-  block->location = currentLocation();
-  expect(TokenType::Using, "Expected 'using'");
+    auto block = std::make_unique<ast::UsingBlock>();
+    block->location = currentLocation();
+    expect(TokenType::Using, "Expected 'using'");
 
-  block->module = parseTypeName();
-  if (match(TokenType::Comma)) {
-    parseUsingOptions(block->alias, block->onlyNames, block->exceptNames);
-  }
-  skipNewlines();
-
-  // using Module do...end (scoped) or using Module (bare import, rest of scope)
-  if (match(TokenType::Do)) {
-    skipNewlines();
-    while (!check(TokenType::End) && !atEnd()) {
-      block->body.push_back(parseExpr());
-      skipNewlines();
+    block->module = parseTypeName();
+    if (match(TokenType::Comma)) {
+        parseUsingOptions(block->alias, block->onlyNames, block->exceptNames);
     }
-    expect(TokenType::End, "Expected 'end' to close using block");
-  }
-  // Bare using — no body (applies to enclosing scope)
+    skipNewlines();
 
-  return complete(std::move(block));
+    // using Module do...end (scoped) or using Module (bare import, rest of scope)
+    if (match(TokenType::Do)) {
+        skipNewlines();
+        while (!check(TokenType::End) && !atEnd()) {
+            block->body.push_back(parseExpr());
+            skipNewlines();
+        }
+        expect(TokenType::End, "Expected 'end' to close using block");
+    }
+    // Bare using — no body (applies to enclosing scope)
+
+    return complete(std::move(block));
 }
 
 auto Parser::parseExportDecl() -> std::unique_ptr<ast::ExportDecl> {
-  auto decl = std::make_unique<ast::ExportDecl>();
-  decl->location = currentLocation();
-  expect(TokenType::Export, "Expected 'export'");
-  decl->module = parseTypeName();
-  if (match(TokenType::Comma)) {
-    parseUsingOptions(decl->alias, decl->onlyNames, decl->exceptNames);
-  }
-  return complete(std::move(decl));
+    auto decl = std::make_unique<ast::ExportDecl>();
+    decl->location = currentLocation();
+    expect(TokenType::Export, "Expected 'export'");
+    decl->module = parseTypeName();
+    if (match(TokenType::Comma)) {
+        parseUsingOptions(decl->alias, decl->onlyNames, decl->exceptNames);
+    }
+    return complete(std::move(decl));
 }
 
-auto Parser::parseUsingOptions(std::optional<std::string> &alias,
-                               std::vector<std::string> &onlyNames,
-                               std::vector<std::string> &exceptNames) -> void {
-  auto atOperator = [&]() {
-    return check(TokenType::Plus) || check(TokenType::Minus) ||
-           check(TokenType::Star) || check(TokenType::Slash) ||
-           check(TokenType::Percent) || check(TokenType::Caret) ||
-           check(TokenType::EqEq) || check(TokenType::NotEq) ||
-           check(TokenType::LessThan) || check(TokenType::LessEq) ||
-           check(TokenType::GreaterThan) || check(TokenType::GreaterEq) ||
-           check(TokenType::AmpAmp) || check(TokenType::PipePipe);
-  };
-  auto parseName = [&]() -> std::string {
-    if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent))
-      return advance().value;
-    if (match(TokenType::LParen)) {
-      if (atOperator()) {
-        auto name = std::string(tokenTypeName(advance().type));
-        expect(TokenType::RParen, "Expected ')' after operator");
-        return name;
-      }
-      error("Expected name or operator in using option list");
-    }
-    // `only: [||]` — the operator is named in parentheses, as it is
-    // everywhere else it is referred to (kexhq/kex#532).
-    if (atOperator()) {
-      const auto op = std::string(tokenTypeName(peek().type));
-      error("An operator in a using option list is written in parentheses: `(" +
-            op + ")`");
-    }
-    error("Expected name in using option list");
-  };
+auto Parser::parseUsingOptions(
+    std::optional<std::string>& alias,
+    std::vector<std::string>& onlyNames,
+    std::vector<std::string>& exceptNames) -> void {
+    auto atOperator = [&]() {
+        return check(TokenType::Plus) || check(TokenType::Minus) || check(TokenType::Star) ||
+               check(TokenType::Slash) || check(TokenType::Percent) || check(TokenType::Caret) ||
+               check(TokenType::EqEq) || check(TokenType::NotEq) || check(TokenType::LessThan) ||
+               check(TokenType::LessEq) || check(TokenType::GreaterThan) ||
+               check(TokenType::GreaterEq) || check(TokenType::AmpAmp) ||
+               check(TokenType::PipePipe);
+    };
+    auto parseName = [&]() -> std::string {
+        if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent)) {
+            return advance().value;
+        }
+        if (match(TokenType::LParen)) {
+            if (atOperator()) {
+                auto name = std::string(tokenTypeName(advance().type));
+                expect(TokenType::RParen, "Expected ')' after operator");
+                return name;
+            }
+            error("Expected name or operator in using option list");
+        }
+        // `only: [||]` — the operator is named in parentheses, as it is
+        // everywhere else it is referred to (kexhq/kex#532).
+        if (atOperator()) {
+            const auto op = std::string(tokenTypeName(peek().type));
+            error("An operator in a using option list is written in parentheses: `(" + op + ")`");
+        }
+        error("Expected name in using option list");
+    };
 
-  do {
-    const auto key =
-        expect(TokenType::LowerIdent, "Expected using option").value;
-    expect(TokenType::Colon, "Expected ':' after using option");
-    if (key == "as") {
-      if (alias)
-        error("Duplicate 'as' using option");
-      alias = expect(TokenType::UpperIdent, "Expected alias name after 'as:'")
-                  .value;
-      rejectSingleLetterTypeName(*alias, "module");
-    } else if (key == "only" || key == "except") {
-      auto &names = key == "only" ? onlyNames : exceptNames;
-      if (!names.empty())
-        error("Duplicate '" + key + "' using option");
-      expect(TokenType::LBracket, "Expected '[' after using option");
-      // The list may span lines inside its brackets, one name per line,
-      // with a trailing comma before `]` (kexhq/kex#497).
-      skipNewlines();
-      while (!check(TokenType::RBracket)) {
-        names.push_back(parseName());
-        skipNewlines();
-        if (!match(TokenType::Comma)) break;
-        skipNewlines();
-      }
-      expect(TokenType::RBracket, "Expected ']' after using option list");
-    } else {
-      error("Unknown using option '" + key + "'");
-    }
-  } while (match(TokenType::Comma));
+    do {
+        const auto key = expect(TokenType::LowerIdent, "Expected using option").value;
+        expect(TokenType::Colon, "Expected ':' after using option");
+        if (key == "as") {
+            if (alias) {
+                error("Duplicate 'as' using option");
+            }
+            alias = expect(TokenType::UpperIdent, "Expected alias name after 'as:'").value;
+            rejectSingleLetterTypeName(*alias, "module");
+        } else if (key == "only" || key == "except") {
+            auto& names = key == "only" ? onlyNames : exceptNames;
+            if (!names.empty()) {
+                error("Duplicate '" + key + "' using option");
+            }
+            expect(TokenType::LBracket, "Expected '[' after using option");
+            // The list may span lines inside its brackets, one name per line,
+            // with a trailing comma before `]` (kexhq/kex#497).
+            skipNewlines();
+            while (!check(TokenType::RBracket)) {
+                names.push_back(parseName());
+                skipNewlines();
+                if (!match(TokenType::Comma)) {
+                    break;
+                }
+                skipNewlines();
+            }
+            expect(TokenType::RBracket, "Expected ']' after using option list");
+        } else {
+            error("Unknown using option '" + key + "'");
+        }
+    } while (match(TokenType::Comma));
 
-  if (!onlyNames.empty() && !exceptNames.empty()) {
-    error("'only' and 'except' using options are mutually exclusive");
-  }
+    if (!onlyNames.empty() && !exceptNames.empty()) {
+        error("'only' and 'except' using options are mutually exclusive");
+    }
 }
 
 auto Parser::parseMainBlock() -> std::unique_ptr<ast::MainBlock> {
-  auto block = std::make_unique<ast::MainBlock>();
-  block->location = currentLocation();
-  block->isExplicitMain = true;
-  expect(TokenType::Main, "Expected 'main'");
+    auto block = std::make_unique<ast::MainBlock>();
+    block->location = currentLocation();
+    block->isExplicitMain = true;
+    expect(TokenType::Main, "Expected 'main'");
 
-  // Optional params: main(args) do ... end — bound to the script's
-  // command-line arguments ([String]) when the body runs.
-  if (match(TokenType::LParen)) {
-    if (!check(TokenType::RParen)) {
-      block->params = parseParams();
+    // Optional params: main(args) do ... end — bound to the script's
+    // command-line arguments ([String]) when the body runs.
+    if (match(TokenType::LParen)) {
+        if (!check(TokenType::RParen)) {
+            block->params = parseParams();
+        }
+        expect(TokenType::RParen, "Expected ')' after main parameters");
     }
-    expect(TokenType::RParen, "Expected ')' after main parameters");
-  }
 
-  expect(TokenType::Do, "Expected 'do' after 'main'");
-  skipNewlines();
-
-  while (!check(TokenType::End) && !check(TokenType::Rescue) && !atEnd()) {
-    block->body.push_back(parseExpr());
+    expect(TokenType::Do, "Expected 'do' after 'main'");
     skipNewlines();
-  }
 
-  if (match(TokenType::Rescue)) {
-    skipNewlines();
-    block->rescue = parseRescueBlock();
-    skipNewlines();
-  }
+    while (!check(TokenType::End) && !check(TokenType::Rescue) && !atEnd()) {
+        block->body.push_back(parseExpr());
+        skipNewlines();
+    }
 
-  expect(TokenType::End, "Expected 'end' to close main block");
-  return complete(std::move(block));
+    if (match(TokenType::Rescue)) {
+        skipNewlines();
+        block->rescue = parseRescueBlock();
+        skipNewlines();
+    }
+
+    expect(TokenType::End, "Expected 'end' to close main block");
+    return complete(std::move(block));
 }
 
 auto Parser::parsePragma() -> std::unique_ptr<ast::Pragma> {
-  auto pragma = std::make_unique<ast::Pragma>();
-  pragma->location = currentLocation();
-  expect(TokenType::HashLBracket, "Expected '#['");
+    auto pragma = std::make_unique<ast::Pragma>();
+    pragma->location = currentLocation();
+    expect(TokenType::HashLBracket, "Expected '#['");
 
-  while (check(TokenType::UpperIdent)) {
-    pragma->requirements.push_back(advance().value);
-    match(TokenType::Comma); // optional comma
-  }
+    while (check(TokenType::UpperIdent)) {
+        pragma->requirements.push_back(advance().value);
+        match(TokenType::Comma); // optional comma
+    }
 
-  expect(TokenType::RBracket, "Expected ']' to close pragma");
-  return complete(std::move(pragma));
+    expect(TokenType::RBracket, "Expected ']' to close pragma");
+    return complete(std::move(pragma));
 }
 
 auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
-  auto block = std::make_unique<ast::VisibilityBlock>();
-  block->location = currentLocation();
-  block->isPublic = check(TokenType::Public);
-  advance(); // consume public/private
+    auto block = std::make_unique<ast::VisibilityBlock>();
+    block->location = currentLocation();
+    block->isPublic = check(TokenType::Public);
+    advance(); // consume public/private
 
-  expect(TokenType::Do, "Expected 'do' after visibility keyword");
-  skipNewlines();
-
-  while (!check(TokenType::End) && !atEnd()) {
-    if (check(TokenType::Foul)) {
-      block->items.push_back(parseFunctionDef(true));
-    } else if (check(TokenType::Let)) {
-      block->items.push_back(parseFunctionDef());
-    } else if (check(TokenType::LowerIdent) &&
-               !(peek().value == "distinct" &&
-                 peekNext().type == TokenType::Type)) {
-      block->items.push_back(parseTypeAnnotation());
-    } else if (check(TokenType::Make)) {
-      block->items.push_back(parseMakeDef());
-    } else if (check(TokenType::Type) ||
-               (check(TokenType::LowerIdent) && peek().value == "distinct" &&
-                peekNext().type == TokenType::Type)) {
-      block->items.push_back(parseTypeDef());
-    } else if (check(TokenType::Record)) {
-      block->items.push_back(parseRecordDef());
-    } else if (check(TokenType::Using)) {
-      block->items.push_back(parseUsingBlock());
-    } else {
-      error("Unexpected token in visibility block: " +
-            std::string(tokenTypeName(peek().type)));
-    }
+    expect(TokenType::Do, "Expected 'do' after visibility keyword");
     skipNewlines();
-  }
 
-  expect(TokenType::End, "Expected 'end' to close visibility block");
-  return complete(std::move(block));
+    while (!check(TokenType::End) && !atEnd()) {
+        if (check(TokenType::Foul)) {
+            block->items.push_back(parseFunctionDef(true));
+        } else if (check(TokenType::Let)) {
+            block->items.push_back(parseFunctionDef());
+        } else if (
+            check(TokenType::LowerIdent) &&
+            !(peek().value == "distinct" && peekNext().type == TokenType::Type)) {
+            block->items.push_back(parseTypeAnnotation());
+        } else if (check(TokenType::Make)) {
+            block->items.push_back(parseMakeDef());
+        } else if (
+            check(TokenType::Type) || (check(TokenType::LowerIdent) && peek().value == "distinct" &&
+                                       peekNext().type == TokenType::Type)) {
+            block->items.push_back(parseTypeDef());
+        } else if (check(TokenType::Record)) {
+            block->items.push_back(parseRecordDef());
+        } else if (check(TokenType::Using)) {
+            block->items.push_back(parseUsingBlock());
+        } else {
+            error(
+                "Unexpected token in visibility block: " + std::string(tokenTypeName(peek().type)));
+        }
+        skipNewlines();
+    }
+
+    expect(TokenType::End, "Expected 'end' to close visibility block");
+    return complete(std::move(block));
 }
 
 // Looks ahead (without consuming) for a `do` token on the current logical
@@ -4596,230 +4645,227 @@ auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
 // call arguments (only valid when a do-block actually follows) versus left
 // alone as separate statements/expressions.
 auto Parser::hasDoBeforeNewline() const -> bool {
-  int depth = 0;
-  for (int i = m_pos; i < static_cast<int>(m_tokens.size()); i++) {
-    const auto &t = m_tokens[i];
-    switch (t.type) {
-    case TokenType::LParen:
-    case TokenType::LBracket:
-    case TokenType::LBrace:
-      depth++;
-      break;
-    case TokenType::RParen:
-    case TokenType::RBracket:
-    case TokenType::RBrace:
-      // Closing a bracket opened before this point ends the expression the
-      // call would be in: a `do` past it is some outer call's. In `[("C", k
-      // - 1)].each do`, the `do` is `each`'s, and `k - 1` is no call `k(-1)`
-      // taking it (kexhq/kex#613).
-      if (depth == 0)
-        return false;
-      depth--;
-      break;
-    case TokenType::Do:
-      if (depth == 0)
-        return true;
-      break;
-    case TokenType::Newline:
-    case TokenType::End:
-    case TokenType::Eof:
-      if (depth == 0)
-        return false;
-      break;
-    default:
-      break;
+    int depth = 0;
+    for (int i = m_pos; i < static_cast<int>(m_tokens.size()); i++) {
+        const auto& t = m_tokens[i];
+        switch (t.type) {
+            case TokenType::LParen:
+            case TokenType::LBracket:
+            case TokenType::LBrace: depth++; break;
+            case TokenType::RParen:
+            case TokenType::RBracket:
+            case TokenType::RBrace:
+                // Closing a bracket opened before this point ends the expression the
+                // call would be in: a `do` past it is some outer call's. In `[("C", k
+                // - 1)].each do`, the `do` is `each`'s, and `k - 1` is no call `k(-1)`
+                // taking it (kexhq/kex#613).
+                if (depth == 0) {
+                    return false;
+                }
+                depth--;
+                break;
+            case TokenType::Do:
+                if (depth == 0) {
+                    return true;
+                }
+                break;
+            case TokenType::Newline:
+            case TokenType::End:
+            case TokenType::Eof:
+                if (depth == 0) {
+                    return false;
+                }
+                break;
+            default: break;
+        }
     }
-  }
-  return false;
+    return false;
 }
 
 auto Parser::isAtExprStart() const -> bool {
-  switch (peek().type) {
-  case TokenType::Integer:
-  case TokenType::Float:
-  case TokenType::String:
-  case TokenType::RawString:
-  case TokenType::InterpolatedRawString:
-  case TokenType::Char:
-  case TokenType::True:
-  case TokenType::False:
-  case TokenType::None:
-  case TokenType::Atom:
-  case TokenType::LowerIdent:
-  case TokenType::Timeout:
-  case TokenType::UpperIdent:
-  case TokenType::This:
-  case TokenType::LParen:
-  case TokenType::LBracket:
-  case TokenType::LBrace:
-  case TokenType::If:
-  case TokenType::Match:
-  case TokenType::Receive:
-  case TokenType::After:
-  case TokenType::Loop:
-  case TokenType::Let:
-  case TokenType::Var:
-  case TokenType::Return:
-  case TokenType::Spawn:
-  case TokenType::With:
-  case TokenType::Do:
-  case TokenType::Amp:
-  case TokenType::Minus:
-  case TokenType::Bang:
-  case TokenType::DotDotDot:
-    return true;
-  default:
-    return false;
-  }
+    switch (peek().type) {
+        case TokenType::Integer:
+        case TokenType::Float:
+        case TokenType::String:
+        case TokenType::RawString:
+        case TokenType::InterpolatedRawString:
+        case TokenType::Char:
+        case TokenType::True:
+        case TokenType::False:
+        case TokenType::None:
+        case TokenType::Atom:
+        case TokenType::LowerIdent:
+        case TokenType::Timeout:
+        case TokenType::UpperIdent:
+        case TokenType::This:
+        case TokenType::LParen:
+        case TokenType::LBracket:
+        case TokenType::LBrace:
+        case TokenType::If:
+        case TokenType::Match:
+        case TokenType::Receive:
+        case TokenType::After:
+        case TokenType::Loop:
+        case TokenType::Let:
+        case TokenType::Var:
+        case TokenType::Return:
+        case TokenType::Spawn:
+        case TokenType::With:
+        case TokenType::Do:
+        case TokenType::Amp:
+        case TokenType::Minus:
+        case TokenType::Bang:
+        case TokenType::DotDotDot: return true;
+        default: return false;
+    }
 }
 
 auto Parser::parseCurryExpr() -> ast::ExprPtr {
-  auto loc = currentLocation();
-  expect(TokenType::Tilde, "Expected '~'");
+    auto loc = currentLocation();
+    expect(TokenType::Tilde, "Expected '~'");
 
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = loc;
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = loc;
 
-  std::string name;
-  std::string module;
-  bool isOperator = false;
+    std::string name;
+    std::string module;
+    bool isOperator = false;
 
-  if (check(TokenType::UpperIdent) && peekNext().type == TokenType::Dot) {
-    // ~Mod.fn — a module-qualified capture. Nested namespaces (~A.B.fn)
-    // join with '.', matching how MethodCall receivers are named.
-    module = advance().value;
-    while (match(TokenType::Dot)) {
-      if (check(TokenType::UpperIdent)) {
-        module += "." + advance().value;
-        continue;
-      }
-      name = expect(TokenType::LowerIdent,
-                    "Expected function name after '~" + module + ".'")
-                 .value;
-      break;
-    }
-    if (name.empty())
-      error("Expected function name after '~" + module + ".'");
-  } else if (check(TokenType::LParen)) {
-    // ~(op) form
-    advance(); // consume '('
-    // `~(!)` is the only unary capture: `-` in this position stays binary
-    // subtraction, since `~(-)(_, 5)` is how you fix its right operand.
-    if (check(TokenType::Bang)) {
-      advance();
-      name = "!";
-      isOperator = true;
-    } else if (isOperatorToken(peek().type)) {
-      name = std::string(tokenTypeName(advance().type));
-      isOperator = true;
-    } else {
-      error("Expected operator inside '~(...)'");
-    }
-    expect(TokenType::RParen, "Expected ')' after operator");
-  } else if (check(TokenType::LowerIdent)) {
-    name = advance().value;
-    isOperator = false;
-  } else {
-    error("Expected function name or operator after '~'");
-  }
-
-  // Parse all trailing (args) groups greedily
-  auto parseCurryArgGroup = [&]() -> std::vector<ast::ExprPtr> {
-    std::vector<ast::ExprPtr> args;
-    expect(TokenType::LParen, "Expected '('");
-    if (!check(TokenType::RParen)) {
-      do {
-        auto argExpr = std::make_unique<ast::Expr>();
-        argExpr->location = currentLocation();
-        if (check(TokenType::Underscore)) {
-          advance();
-          argExpr->kind = ast::CurryPlaceholder{};
-        } else {
-          argExpr = parseExpr();
+    if (check(TokenType::UpperIdent) && peekNext().type == TokenType::Dot) {
+        // ~Mod.fn — a module-qualified capture. Nested namespaces (~A.B.fn)
+        // join with '.', matching how MethodCall receivers are named.
+        module = advance().value;
+        while (match(TokenType::Dot)) {
+            if (check(TokenType::UpperIdent)) {
+                module += "." + advance().value;
+                continue;
+            }
+            name = expect(TokenType::LowerIdent, "Expected function name after '~" + module + ".'")
+                       .value;
+            break;
         }
-        args.push_back(std::move(argExpr));
-      } while (match(TokenType::Comma));
+        if (name.empty()) {
+            error("Expected function name after '~" + module + ".'");
+        }
+    } else if (check(TokenType::LParen)) {
+        // ~(op) form
+        advance(); // consume '('
+        // `~(!)` is the only unary capture: `-` in this position stays binary
+        // subtraction, since `~(-)(_, 5)` is how you fix its right operand.
+        if (check(TokenType::Bang)) {
+            advance();
+            name = "!";
+            isOperator = true;
+        } else if (isOperatorToken(peek().type)) {
+            name = std::string(tokenTypeName(advance().type));
+            isOperator = true;
+        } else {
+            error("Expected operator inside '~(...)'");
+        }
+        expect(TokenType::RParen, "Expected ')' after operator");
+    } else if (check(TokenType::LowerIdent)) {
+        name = advance().value;
+        isOperator = false;
+    } else {
+        error("Expected function name or operator after '~'");
     }
-    expect(TokenType::RParen, "Expected ')'");
-    return args;
-  };
 
-  std::vector<std::vector<ast::ExprPtr>> argGroups;
-  while (check(TokenType::LParen)) {
-    argGroups.push_back(parseCurryArgGroup());
-  }
+    // Parse all trailing (args) groups greedily
+    auto parseCurryArgGroup = [&]() -> std::vector<ast::ExprPtr> {
+        std::vector<ast::ExprPtr> args;
+        expect(TokenType::LParen, "Expected '('");
+        if (!check(TokenType::RParen)) {
+            do {
+                auto argExpr = std::make_unique<ast::Expr>();
+                argExpr->location = currentLocation();
+                if (check(TokenType::Underscore)) {
+                    advance();
+                    argExpr->kind = ast::CurryPlaceholder{};
+                } else {
+                    argExpr = parseExpr();
+                }
+                args.push_back(std::move(argExpr));
+            } while (match(TokenType::Comma));
+        }
+        expect(TokenType::RParen, "Expected ')'");
+        return args;
+    };
 
-  expr->kind =
-      ast::CurryExpr{name, isOperator, std::move(argGroups), std::move(module)};
-  return expr;
+    std::vector<std::vector<ast::ExprPtr>> argGroups;
+    while (check(TokenType::LParen)) {
+        argGroups.push_back(parseCurryArgGroup());
+    }
+
+    expr->kind = ast::CurryExpr{name, isOperator, std::move(argGroups), std::move(module)};
+    return expr;
 }
 
 auto Parser::parseRescueBlock() -> ast::RescueBlock {
-  ast::RescueBlock rescue;
+    ast::RescueBlock rescue;
 
-  // `rescue return expr` — inline return shorthand
-  if (check(TokenType::Return)) {
-    advance();
-    rescue.isInlineReturn = true;
-    rescue.inlineReturnExpr = parseExpr();
-    return rescue;
-  }
-
-  // `rescue |param| ... end` — concise catch-all. The enclosing function,
-  // main, or trying block owns the `end`; unlike the explicit `do` form this
-  // rescue does not open and close a nested block of its own.
-  if (match(TokenType::Pipe)) {
-    rescue.isCatchAll = true;
-    if (check(TokenType::LowerIdent)) {
-      rescue.catchAllParam = advance().value;
-    } else {
-      error("Expected parameter name after '|' in rescue");
+    // `rescue return expr` — inline return shorthand
+    if (check(TokenType::Return)) {
+        advance();
+        rescue.isInlineReturn = true;
+        rescue.inlineReturnExpr = parseExpr();
+        return rescue;
     }
-    expect(TokenType::Pipe, "Expected '|' after rescue parameter");
+
+    // `rescue |param| ... end` — concise catch-all. The enclosing function,
+    // main, or trying block owns the `end`; unlike the explicit `do` form this
+    // rescue does not open and close a nested block of its own.
+    if (match(TokenType::Pipe)) {
+        rescue.isCatchAll = true;
+        if (check(TokenType::LowerIdent)) {
+            rescue.catchAllParam = advance().value;
+        } else {
+            error("Expected parameter name after '|' in rescue");
+        }
+        expect(TokenType::Pipe, "Expected '|' after rescue parameter");
+        skipNewlines();
+        while (!check(TokenType::End) && !atEnd()) {
+            rescue.catchAllBody.push_back(parseExpr());
+            skipNewlines();
+        }
+        return rescue;
+    }
+
+    // Pattern matching clauses (same as match clauses)
     skipNewlines();
     while (!check(TokenType::End) && !atEnd()) {
-      rescue.catchAllBody.push_back(parseExpr());
-      skipNewlines();
+        rescue.clauses.push_back(parseMatchClause());
+        skipNewlines();
     }
+
     return rescue;
-  }
-
-  // Pattern matching clauses (same as match clauses)
-  skipNewlines();
-  while (!check(TokenType::End) && !atEnd()) {
-    rescue.clauses.push_back(parseMatchClause());
-    skipNewlines();
-  }
-
-  return rescue;
 }
 
 auto Parser::parseTryingExpr() -> ast::ExprPtr {
-  auto expr = std::make_unique<ast::Expr>();
-  expr->location = currentLocation();
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = currentLocation();
 
-  expect(TokenType::Trying, "Expected 'trying'");
-  expect(TokenType::Do, "Expected 'do' after 'trying'");
-  skipNewlines();
-
-  std::vector<ast::ExprPtr> body;
-  while (!check(TokenType::Rescue) && !check(TokenType::End) && !atEnd()) {
-    body.push_back(parseExpr());
+    expect(TokenType::Trying, "Expected 'trying'");
+    expect(TokenType::Do, "Expected 'do' after 'trying'");
     skipNewlines();
-  }
 
-  if (!match(TokenType::Rescue)) {
-    error("'trying' block requires 'rescue'");
-  }
-  skipNewlines();
+    std::vector<ast::ExprPtr> body;
+    while (!check(TokenType::Rescue) && !check(TokenType::End) && !atEnd()) {
+        body.push_back(parseExpr());
+        skipNewlines();
+    }
 
-  auto rescue = parseRescueBlock();
-  skipNewlines();
+    if (!match(TokenType::Rescue)) {
+        error("'trying' block requires 'rescue'");
+    }
+    skipNewlines();
 
-  expect(TokenType::End, "Expected 'end' to close trying block");
+    auto rescue = parseRescueBlock();
+    skipNewlines();
 
-  expr->kind = ast::TryingExpr{std::move(body), std::move(rescue)};
-  return expr;
+    expect(TokenType::End, "Expected 'end' to close trying block");
+
+    expr->kind = ast::TryingExpr{std::move(body), std::move(rescue)};
+    return expr;
 }
 
 } // namespace kex

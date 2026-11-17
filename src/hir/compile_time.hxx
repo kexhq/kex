@@ -39,7 +39,9 @@ auto checkSilently(const ast::Program& program, const semantic::ImportedInterfac
 // this toolchain checked the same program before: `key` names everything the
 // program was made from (its source, the files its expansion read). A module
 // the walker loads is checked once, not by every build that loads it.
-auto cachedCheck(const ast::Program& program, const semantic::ImportedInterfaces* interfaces,
-                 const std::string& key) -> std::unique_ptr<CheckedProgram>;
+auto cachedCheck(
+    const ast::Program& program,
+    const semantic::ImportedInterfaces* interfaces,
+    const std::string& key) -> std::unique_ptr<CheckedProgram>;
 
 } // namespace kex::hir

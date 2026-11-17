@@ -322,9 +322,9 @@ end
     auto check() -> std::string {
         const auto output = root / "output";
         std::filesystem::create_directories(root / "checked");
-        const auto command = "KEX_CACHE=" + (root / "cache").string() +
-            " " + std::string(KEX_BINARY_PATH) + " --no-colors -c -o " +
-            (root / "checked").string() + " --source-root " +
+        const auto command =
+            "KEX_CACHE=" + (root / "cache").string() + " " + std::string(KEX_BINARY_PATH) +
+            " --no-colors -c -o " + (root / "checked").string() + " --source-root " +
             (root / "app").string() + " --source-root " + (root / "lib").string() + " " +
             (root / "app" / "main.kex").string() + " > " + output.string() + " 2>&1";
         (void)std::system(command.c_str());
@@ -335,8 +335,8 @@ end
     // KEX_SEPARATE_CORE, each compiled and run: what the build ran, then what
     // the kept Core runs.
     auto run() -> std::pair<std::string, std::string> {
-        const auto roots = " --source-root " + (root / "app").string() +
-            " --source-root " + (root / "lib").string() + " ";
+        const auto roots = " --source-root " + (root / "app").string() + " --source-root " +
+                           (root / "lib").string() + " ";
         const auto runAs = [&](const std::string& kind) {
             const auto cores = root / kind;
             const auto beams = root / (kind + "-beam");
@@ -345,31 +345,34 @@ end
             // erlc's warnings are no output of the program; its errors are
             // read back when nothing ran.
             const auto compiled = root / (kind + "-erlc.out");
-            const auto command = "erlc -o " + beams.string() + " " + cores.string() +
-                "/*.core > " + compiled.string() + " 2>&1 && " + std::string(KEX_BINARY_PATH) +
-                " --no-colors --run " + (beams / "kex_main.beam").string() + " > " +
-                output.string() + " 2>&1 || cat " + compiled.string() + " >> " +
-                output.string();
+            const auto command = "erlc -o " + beams.string() + " " + cores.string() + "/*.core > " +
+                                 compiled.string() + " 2>&1 && " + std::string(KEX_BINARY_PATH) +
+                                 " --no-colors --run " + (beams / "kex_main.beam").string() +
+                                 " > " + output.string() + " 2>&1 || cat " + compiled.string() +
+                                 " >> " + output.string();
             (void)std::system(command.c_str());
             return read(output);
         };
         std::filesystem::create_directories(root / "actual");
         std::filesystem::create_directories(root / "separate");
         const auto actualBuild = "KEX_SEPARATE_CORE=" + (root / "separate").string() +
-            " KEX_CACHE=" + (root / "cache").string() + " " + std::string(KEX_BINARY_PATH) +
-            " --no-colors -E -o " + (root / "actual").string() + roots +
-            (root / "app" / "main.kex").string() + " > " +
-            (root / "actual-build.out").string() + " 2>&1";
+                                 " KEX_CACHE=" + (root / "cache").string() + " " +
+                                 std::string(KEX_BINARY_PATH) + " --no-colors -E -o " +
+                                 (root / "actual").string() + roots +
+                                 (root / "app" / "main.kex").string() + " > " +
+                                 (root / "actual-build.out").string() + " 2>&1";
         (void)std::system(actualBuild.c_str());
         auto separate = runAs("separate");
         auto actual = runAs("actual");
         // What went wrong is in the build's own output when it emitted nothing.
-        if (actual.find("open error") != std::string::npos)
+        if (actual.find("open error") != std::string::npos) {
             actual += read(root / "actual-build.out");
+        }
         (void)std::system(("KEX_TIMINGS=1 " + actualBuild).c_str());
         const auto warmBuild = read(root / "actual-build.out");
-        assertTrue(warmBuild.find("unit cache hit:") != std::string::npos,
-                   "the warm separate build did not reuse a unit: " + warmBuild);
+        assertTrue(
+            warmBuild.find("unit cache hit:") != std::string::npos,
+            "the warm separate build did not reuse a unit: " + warmBuild);
         assertEqual(runAs("actual"), actual);
         write("lib/paths.kex", R"KEX(module Paths
 
@@ -378,16 +381,19 @@ let join(first, second) = "${first}:${second}"
 )KEX");
         (void)std::system(("KEX_TIMINGS=1 " + actualBuild).c_str());
         const auto changedBuild = read(root / "actual-build.out");
-        assertTrue(changedBuild.find("unit cache hit: " +
-                    std::filesystem::weakly_canonical(
-                        root / "lib" / "path_user.kex").string()) != std::string::npos,
-                   "a dependent unit with unchanged interfaces was rebuilt: " + changedBuild);
+        assertTrue(
+            changedBuild.find(
+                "unit cache hit: " +
+                std::filesystem::weakly_canonical(root / "lib" / "path_user.kex").string()) !=
+                std::string::npos,
+            "a dependent unit with unchanged interfaces was rebuilt: " + changedBuild);
         const auto changedRun = runAs("actual");
-        assertTrue(changedRun.find("\na:b\n") != std::string::npos,
-                   "the changed unit's body was not rebuilt: " + changedRun + "\n---\n" +
-                       changedBuild);
-        assertTrue(runAs("actual").find("\nx:y\n") != std::string::npos,
-                   "a cached dependent called the old implementation: " + changedBuild);
+        assertTrue(
+            changedRun.find("\na:b\n") != std::string::npos,
+            "the changed unit's body was not rebuilt: " + changedRun + "\n---\n" + changedBuild);
+        assertTrue(
+            runAs("actual").find("\nx:y\n") != std::string::npos,
+            "a cached dependent called the old implementation: " + changedBuild);
         return {std::move(actual), std::move(separate)};
     }
 
@@ -497,7 +503,6 @@ main do
 end
 )KEX";
 
-
 } // namespace
 
 int main() {
@@ -506,10 +511,9 @@ int main() {
             Package package;
             package.write("app/main.kex", program);
             const auto text = package.check();
-            assertTrue(text.find("Aborted") == std::string::npos,
-                       "the build was aborted: " + text);
-            assertTrue(text.find(": error: ") == std::string::npos,
-                       "a check reported an error: " + text);
+            assertTrue(text.find("Aborted") == std::string::npos, "the build was aborted: " + text);
+            assertTrue(
+                text.find(": error: ") == std::string::npos, "a check reported an error: " + text);
         });
         it("finds each error a unit has", []() {
             Package package;
@@ -521,11 +525,13 @@ let skipped() -> String = define do |t| t.text(:id, doc: 1) end
 foul timed(server: Server<Counter>) = server.reset(within: 10)
 )KEX");
             const auto text = package.check();
-            for (const std::string expected : {"`wrong` declared to return String but body returns Shapes.Shape.Dot",
-                                               "`text` expects argument 5 to be String, but got Integer",
-                                               "`within:` is not valid on an asynchronous cast slot"}) {
-                assertTrue(text.find(expected) != std::string::npos,
-                           "the check missed \"" + expected + "\": " + text);
+            for (const std::string expected :
+                 {"`wrong` declared to return String but body returns Shapes.Shape.Dot",
+                  "`text` expects argument 5 to be String, but got Integer",
+                  "`within:` is not valid on an asynchronous cast slot"}) {
+                assertTrue(
+                    text.find(expected) != std::string::npos,
+                    "the check missed \"" + expected + "\": " + text);
             }
         });
     });
@@ -534,18 +540,22 @@ foul timed(server: Server<Counter>) = server.reset(within: 10)
             Package package;
             package.write("app/main.kex", program);
             const auto [ran, separate] = package.run();
-            assertTrue(ran.find("error") == std::string::npos && !ran.empty(),
-                       "the build did not run: " + ran);
+            assertTrue(
+                ran.find("error") == std::string::npos && !ran.empty(),
+                "the build did not run: " + ran);
             assertEqual(separate, ran);
-            assertTrue(ran.find("\nbag true\n") != std::string::npos,
-                       "a trait default another unit's type inherits did not run: " + ran);
-            assertTrue(ran.find("\n?\n?\n") != std::string::npos,
-                       "list.join called a path join: " + ran);
-            assertTrue(ran.find("\npage x\ntrue\n") != std::string::npos,
-                       "cross-unit callable or distinct method did not run: " + ran);
-            assertTrue(ran.find("Any([One(1), One(2)])") != std::string::npos &&
-                       ran.find("All([One(1), One(2)])") != std::string::npos,
-                       "external union boolean operators did not run: " + ran);
+            assertTrue(
+                ran.find("\nbag true\n") != std::string::npos,
+                "a trait default another unit's type inherits did not run: " + ran);
+            assertTrue(
+                ran.find("\n?\n?\n") != std::string::npos, "list.join called a path join: " + ran);
+            assertTrue(
+                ran.find("\npage x\ntrue\n") != std::string::npos,
+                "cross-unit callable or distinct method did not run: " + ran);
+            assertTrue(
+                ran.find("Any([One(1), One(2)])") != std::string::npos &&
+                    ran.find("All([One(1), One(2)])") != std::string::npos,
+                "external union boolean operators did not run: " + ran);
         });
     });
     return runAll();

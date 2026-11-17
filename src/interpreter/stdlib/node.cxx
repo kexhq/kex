@@ -11,34 +11,25 @@ auto Evaluator::registerNodeBuiltins() -> void {
     defineIntrinsic("Node.self", [](std::vector<ValuePtr>) -> ValuePtr {
         return Value::atom("nonode@nohost");
     });
-    defineIntrinsic("Node.alive?", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::boolean(false);
-    });
-    defineIntrinsic("Node.list", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::list({});
-    });
+    defineIntrinsic(
+        "Node.alive?", [](std::vector<ValuePtr>) -> ValuePtr { return Value::boolean(false); });
+    defineIntrinsic("Node.list", [](std::vector<ValuePtr>) -> ValuePtr { return Value::list({}); });
     defineIntrinsic("Node.start", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::error(Value::string(
-            "the tree-walk interpreter cannot be a distributed node; run on the BEAM"));
+        return Value::error(
+            Value::string(
+                "the tree-walk interpreter cannot be a distributed node; run on the BEAM"));
     });
-    defineIntrinsic("Node.stop", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::boolean(false);
-    });
-    defineIntrinsic("Node.connect", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::boolean(false);
-    });
-    defineIntrinsic("Node.disconnect", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::boolean(false);
-    });
-    defineIntrinsic("Node.setCookie", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::unit();
-    });
-    defineIntrinsic("Node.send", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::unit();
-    });
-    defineIntrinsic("Node.whereIs", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::none();
-    });
+    defineIntrinsic(
+        "Node.stop", [](std::vector<ValuePtr>) -> ValuePtr { return Value::boolean(false); });
+    defineIntrinsic(
+        "Node.connect", [](std::vector<ValuePtr>) -> ValuePtr { return Value::boolean(false); });
+    defineIntrinsic(
+        "Node.disconnect", [](std::vector<ValuePtr>) -> ValuePtr { return Value::boolean(false); });
+    defineIntrinsic(
+        "Node.setCookie", [](std::vector<ValuePtr>) -> ValuePtr { return Value::unit(); });
+    defineIntrinsic("Node.send", [](std::vector<ValuePtr>) -> ValuePtr { return Value::unit(); });
+    defineIntrinsic(
+        "Node.whereIs", [](std::vector<ValuePtr>) -> ValuePtr { return Value::none(); });
 }
 
 } // namespace kex::interpreter

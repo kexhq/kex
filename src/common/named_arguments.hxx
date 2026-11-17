@@ -9,33 +9,45 @@ namespace kex {
 
 // Labels reserve their declared slots; positional arguments fill the rest.
 // An Optional parameter is still required unless it has a default value.
-inline auto namedArgumentsFit(const std::vector<std::string>& names,
-                              const std::vector<bool>& defaulted,
-                              const std::vector<std::string>& labels,
-                              std::size_t positionalCount) -> bool {
+inline auto namedArgumentsFit(
+    const std::vector<std::string>& names,
+    const std::vector<bool>& defaulted,
+    const std::vector<std::string>& labels,
+    std::size_t positionalCount) -> bool {
     std::vector<bool> supplied(names.size(), false);
     for (const auto& label : labels) {
         const auto found = std::find(names.begin(), names.end(), label);
-        if (found == names.end()) return false;
+        if (found == names.end()) {
+            return false;
+        }
         const auto slot = static_cast<std::size_t>(found - names.begin());
-        if (supplied[slot]) return false;
+        if (supplied[slot]) {
+            return false;
+        }
         supplied[slot] = true;
     }
     for (std::size_t slot = 0; positionalCount && slot < supplied.size(); ++slot) {
-        if (supplied[slot]) continue;
+        if (supplied[slot]) {
+            continue;
+        }
         supplied[slot] = true;
         --positionalCount;
     }
-    if (positionalCount) return false;
-    for (std::size_t slot = 0; slot < supplied.size(); ++slot)
-        if (!supplied[slot] && (slot >= defaulted.size() || !defaulted[slot]))
+    if (positionalCount) {
+        return false;
+    }
+    for (std::size_t slot = 0; slot < supplied.size(); ++slot) {
+        if (!supplied[slot] && (slot >= defaulted.size() || !defaulted[slot])) {
             return false;
+        }
+    }
     return true;
 }
 
-inline auto namedArgumentsFit(const ast::FunctionClause& clause,
-                              const std::vector<std::string>& labels,
-                              std::size_t positionalCount) -> bool {
+inline auto namedArgumentsFit(
+    const ast::FunctionClause& clause,
+    const std::vector<std::string>& labels,
+    std::size_t positionalCount) -> bool {
     std::vector<std::string> names;
     std::vector<bool> defaulted;
     for (const auto& param : clause.params) {
@@ -61,27 +73,34 @@ struct PlacedArguments {
 // left. `firstSlot` reserves the front slots, which stay `npos`-free for
 // the caller to fill (a pre-placed receiver). Pure index mapping —
 // lowering, miss policy, and default-filling stay per call site.
-inline auto placeArguments(const std::vector<std::string>& paramNames,
-                           const std::vector<std::string>& labels,
-                           std::size_t positionalCount,
-                           std::size_t firstSlot = 0) -> PlacedArguments {
+inline auto placeArguments(
+    const std::vector<std::string>& paramNames,
+    const std::vector<std::string>& labels,
+    std::size_t positionalCount,
+    std::size_t firstSlot = 0) -> PlacedArguments {
     PlacedArguments placed;
     std::vector<bool> taken(paramNames.size(), false);
-    for (std::size_t slot = 0; slot < firstSlot && slot < taken.size(); ++slot)
+    for (std::size_t slot = 0; slot < firstSlot && slot < taken.size(); ++slot) {
         taken[slot] = true;
+    }
     for (const auto& label : labels) {
         std::size_t slot = PlacedArguments::npos;
-        for (std::size_t i = firstSlot; i < paramNames.size(); ++i)
+        for (std::size_t i = firstSlot; i < paramNames.size(); ++i) {
             if (paramNames[i] == label) {
                 slot = i;
                 break;
             }
+        }
         placed.labelSlots.push_back(slot);
-        if (slot != PlacedArguments::npos) taken[slot] = true;
+        if (slot != PlacedArguments::npos) {
+            taken[slot] = true;
+        }
     }
     std::size_t next = firstSlot;
     for (std::size_t k = 0; k < positionalCount; ++k) {
-        while (next < taken.size() && taken[next]) ++next;
+        while (next < taken.size() && taken[next]) {
+            ++next;
+        }
         if (next >= taken.size()) {
             placed.positionalSlots.push_back(PlacedArguments::npos);
             continue;

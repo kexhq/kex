@@ -10,10 +10,11 @@
 
 namespace kex::interpreter {
 
-auto cachedCodepoints(const StringValue &s) -> const std::vector<char32_t> & {
-  if (!s.codepointCache)
-    s.codepointCache = std::make_shared<std::vector<char32_t>>(utf8::decode(s.value));
-  return *s.codepointCache;
+auto cachedCodepoints(const StringValue& s) -> const std::vector<char32_t>& {
+    if (!s.codepointCache) {
+        s.codepointCache = std::make_shared<std::vector<char32_t>>(utf8::decode(s.value));
+    }
+    return *s.codepointCache;
 }
 
 namespace {
@@ -33,17 +34,24 @@ auto formatFloat(double v) -> std::string {
     // Unreachable from Kex code — nonFiniteFloatError makes producing either
     // value an error. Kept so a NaN arriving from a future intrinsic that
     // forgets the check prints as itself instead of as garbage digits.
-    if (std::isnan(v)) return "NaN";
-    if (std::isinf(v)) return v < 0 ? "-Infinity" : "Infinity";
-    if (v == 0.0) return std::signbit(v) ? "-0.0" : "0.0";
+    if (std::isnan(v)) {
+        return "NaN";
+    }
+    if (std::isinf(v)) {
+        return v < 0 ? "-Infinity" : "Infinity";
+    }
+    if (v == 0.0) {
+        return std::signbit(v) ? "-0.0" : "0.0";
+    }
 
     char buf[64];
-    auto [end, ec] = std::to_chars(buf, buf + sizeof(buf), v,
-                                   std::chars_format::scientific);
+    auto [end, ec] = std::to_chars(buf, buf + sizeof(buf), v, std::chars_format::scientific);
     std::string s(buf, end);
 
     bool neg = s[0] == '-';
-    if (neg) s.erase(0, 1);
+    if (neg) {
+        s.erase(0, 1);
+    }
 
     // Reduce to `digits * 10^power`, the one shape both backends agree on
     // regardless of how their shortest-round-trip primitive spelled it.
@@ -99,12 +107,14 @@ StreamCell::~StreamCell() {
 }
 
 auto forceStream(const StreamCellPtr& cell) -> StreamCell* {
-    if (!cell) return nullptr;   // a null cell is the end of the stream
+    if (!cell) {
+        return nullptr; // a null cell is the end of the stream
+    }
     if (!cell->forced) {
-        cell->forced = true;     // set first: a thunk that re-enters its own
-                                 // cell sees the end rather than looping
+        cell->forced = true; // set first: a thunk that re-enters its own
+                             // cell sees the end rather than looping
         auto thunk = std::move(cell->thunk);
-        cell->thunk = nullptr;   // release what it captured
+        cell->thunk = nullptr; // release what it captured
         if (thunk) {
             auto [head, tail] = thunk();
             cell->head = std::move(head);
@@ -115,7 +125,9 @@ auto forceStream(const StreamCellPtr& cell) -> StreamCell* {
 }
 
 auto pullFeed(const std::shared_ptr<FeedState>& state) -> ValuePtr {
-    if (!state || state->spent) return nullptr;
+    if (!state || state->spent) {
+        return nullptr;
+    }
     auto value = state->pull ? state->pull() : nullptr;
     if (!value) {
         // Latch at the end and drop the source, so a spent feed holds no file
@@ -158,8 +170,12 @@ auto asInteger(const ValuePtr& v) -> std::optional<mpz_class> {
     // regardless of the platform's `long` width, and Integer arithmetic
     // isn't a hot path here (the wasm build's GMP is already the slower
     // portable-C fallback, not hand-tuned assembly, for the same reason).
-    if (auto* i = std::get_if<IntValue>(&v->data)) return mpz_class(std::to_string(i->value));
-    if (auto* b = std::get_if<BigIntValue>(&v->data)) return b->value;
+    if (auto* i = std::get_if<IntValue>(&v->data)) {
+        return mpz_class(std::to_string(i->value));
+    }
+    if (auto* b = std::get_if<BigIntValue>(&v->data)) {
+        return b->value;
+    }
     return std::nullopt;
 }
 
@@ -176,33 +192,49 @@ auto integerResult(mpz_class v) -> ValuePtr {
     return Value::bigInteger(std::move(v));
 }
 
-auto nonFiniteFloatError(double v, const std::string& what)
-    -> std::optional<std::string> {
-    if (std::isnan(v)) return what + ": undefined result (NaN)";
-    if (std::isinf(v))
-        return what + ": result overflowed (" +
-               (v < 0 ? "-Infinity" : "Infinity") + ")";
+auto nonFiniteFloatError(double v, const std::string& what) -> std::optional<std::string> {
+    if (std::isnan(v)) {
+        return what + ": undefined result (NaN)";
+    }
+    if (std::isinf(v)) {
+        return what + ": result overflowed (" + (v < 0 ? "-Infinity" : "Infinity") + ")";
+    }
     return std::nullopt;
 }
 
 auto parseIntegerInBase(const std::string& text, int base) -> std::optional<mpz_class> {
-    if (base < 2 || base > 36) return std::nullopt;
-    if (text.empty()) return std::nullopt;
+    if (base < 2 || base > 36) {
+        return std::nullopt;
+    }
+    if (text.empty()) {
+        return std::nullopt;
+    }
     // mpz_set_str is lenient about embedded whitespace and would accept
     // " 1 2 " as 12; the digit check keeps it to exactly what Kex accepts.
     size_t i = (text[0] == '+' || text[0] == '-') ? 1 : 0;
-    if (i == text.size()) return std::nullopt;
+    if (i == text.size()) {
+        return std::nullopt;
+    }
     for (size_t d = i; d < text.size(); d++) {
         int value;
         char c = text[d];
-        if (c >= '0' && c <= '9') value = c - '0';
-        else if (c >= 'a' && c <= 'z') value = c - 'a' + 10;
-        else if (c >= 'A' && c <= 'Z') value = c - 'A' + 10;
-        else return std::nullopt;
-        if (value >= base) return std::nullopt;
+        if (c >= '0' && c <= '9') {
+            value = c - '0';
+        } else if (c >= 'a' && c <= 'z') {
+            value = c - 'a' + 10;
+        } else if (c >= 'A' && c <= 'Z') {
+            value = c - 'A' + 10;
+        } else {
+            return std::nullopt;
+        }
+        if (value >= base) {
+            return std::nullopt;
+        }
     }
     mpz_class out;
-    if (mpz_set_str(out.get_mpz_t(), text.c_str(), base) != 0) return std::nullopt;
+    if (mpz_set_str(out.get_mpz_t(), text.c_str(), base) != 0) {
+        return std::nullopt;
+    }
     return out;
 }
 
@@ -230,10 +262,15 @@ auto Value::atom(std::string name) -> ValuePtr {
     return std::make_shared<Value>(Value{AtomValue{std::move(name)}});
 }
 
-auto Value::variant(std::string tag, std::string parentType, std::vector<ValuePtr> args,
-                     std::vector<std::string> typeParams, std::vector<int> argParamIndex) -> ValuePtr {
-    return std::make_shared<Value>(Value{VariantValue{std::move(tag), std::move(parentType), std::move(args),
-                                                        std::move(typeParams), std::move(argParamIndex)}});
+auto Value::variant(
+    std::string tag,
+    std::string parentType,
+    std::vector<ValuePtr> args,
+    std::vector<std::string> typeParams,
+    std::vector<int> argParamIndex) -> ValuePtr {
+    return std::make_shared<Value>(Value{VariantValue{
+        std::move(tag), std::move(parentType), std::move(args), std::move(typeParams),
+        std::move(argParamIndex)}});
 }
 
 auto Value::just(ValuePtr inner) -> ValuePtr {
@@ -260,8 +297,7 @@ auto Value::task(uint64_t pid, class Scheduler* scheduler) -> ValuePtr {
     return std::make_shared<Value>(Value{TaskValue{pid, scheduler}});
 }
 
-auto Value::server(uint64_t pid, class Scheduler* scheduler, int64_t timeoutMs)
-    -> ValuePtr {
+auto Value::server(uint64_t pid, class Scheduler* scheduler, int64_t timeoutMs) -> ValuePtr {
     return std::make_shared<Value>(Value{ServerValue{pid, scheduler, timeoutMs}});
 }
 
@@ -278,18 +314,27 @@ auto Value::record(std::string type, std::unordered_map<std::string, ValuePtr> f
 }
 
 auto Value::isTrue() const -> bool {
-    if (isNone()) return false;
-    return std::visit([](const auto& v) -> bool {
-        using T = std::decay_t<decltype(v)>;
-        if constexpr (std::is_same_v<T, BoolValue>) return v.value;
-        if constexpr (std::is_same_v<T, UnitValue>) return false;
-        // A placeholder has no truth value: answering `true` here would send
-        // compile-time evaluation down a branch the running program might not
-        // take.
-        if constexpr (std::is_same_v<T, PlaceholderValue>)
-            throw PlaceholderMisuse(v.name, "a condition");
-        return true;
-    }, data);
+    if (isNone()) {
+        return false;
+    }
+    return std::visit(
+        [](const auto& v) -> bool {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, BoolValue>) {
+                return v.value;
+            }
+            if constexpr (std::is_same_v<T, UnitValue>) {
+                return false;
+            }
+            // A placeholder has no truth value: answering `true` here would send
+            // compile-time evaluation down a branch the running program might not
+            // take.
+            if constexpr (std::is_same_v<T, PlaceholderValue>) {
+                throw PlaceholderMisuse(v.name, "a condition");
+            }
+            return true;
+        },
+        data);
 }
 
 // A map literal writes an atom key bare — `{ a: 1 }` — so the key's own colon
@@ -298,285 +343,364 @@ auto Value::isTrue() const -> bool {
 // ("the type as it is written in source"). Returns the bare name for an atom
 // key and nullptr for anything else, which renders as itself.
 static auto atomKeyName(const ValuePtr& key) -> const std::string* {
-    if (const auto* atom = std::get_if<AtomValue>(&key->data)) return &atom->name;
+    if (const auto* atom = std::get_if<AtomValue>(&key->data)) {
+        return &atom->name;
+    }
     return nullptr;
 }
 
 auto Value::toString() const -> std::string {
-    return std::visit([](const auto& v) -> std::string {
-        using T = std::decay_t<decltype(v)>;
-        // Before anything else: text is the one thing a placeholder must never
-        // produce, since the result would be baked into the emitted program.
-        if constexpr (std::is_same_v<T, PlaceholderValue>)
-            throw PlaceholderMisuse(v.name, "converting it to text");
-        else if constexpr (std::is_same_v<T, UnitValue>) return "()";
-        else if constexpr (std::is_same_v<T, IntValue>) return std::to_string(v.value);
-        else if constexpr (std::is_same_v<T, BigIntValue>) return v.value.get_str();
-        else if constexpr (std::is_same_v<T, FloatValue>) return formatFloat(v.value);
-        else if constexpr (std::is_same_v<T, StringValue>) return v.value;
-        else if constexpr (std::is_same_v<T, BinaryValue>)
-            return "#Binary<" + std::to_string(v.bytes.size()) + " bytes>";
-        else if constexpr (std::is_same_v<T, CharValue>) return utf8::encode(v.value);
-        else if constexpr (std::is_same_v<T, BoolValue>) return v.value ? "true" : "false";
-        else if constexpr (std::is_same_v<T, AtomValue>) {
-            // Printed as written: bare when `:name` can spell it, else quoted.
-            // A lowercase letter outside ASCII spells one too (`:árvíz`), as
-            // the lexer reads it.
-            const auto codepoints = utf8::decode(v.name);
-            const bool bare = kex::startsLowercase(v.name) && v.name[0] != '_' &&
-                v.name.back() != '@' && v.name.find("@@") == std::string::npos &&
-                std::all_of(codepoints.begin(), codepoints.end(), [](char32_t c) {
-                    if (c >= 0x80)
-                        return utf8::categories::inRanges(utf8::categories::letterRanges, c);
-                    return std::isalnum(static_cast<int>(c)) || c == '_' || c == '@';
-                });
-            if (bare) return ":" + v.name;
-            std::string quoted = ":\"";
-            for (char c : v.name) {
-                if (c == '"' || c == '\\') quoted += '\\';
-                quoted += c;
-            }
-            return quoted + "\"";
-        }
-        else if constexpr (std::is_same_v<T, VariantValue>) {
-            if (v.args.empty()) return v.tag;
-            std::string result = v.tag + "(";
-            for (size_t i = 0; i < v.args.size(); i++) {
-                if (i > 0) result += ", ";
-                result += v.args[i]->toString();
-            }
-            return result + ")";
-        }
-        else if constexpr (std::is_same_v<T, ModuleValue>) return v.name;
-        else if constexpr (std::is_same_v<T, ProcessValue>) return "#Process<" + std::to_string(v.pid) + ">";
-        else if constexpr (std::is_same_v<T, TaskValue>) return "#Task<" + std::to_string(v.pid) + ">";
-        else if constexpr (std::is_same_v<T, ServerValue>) return "#Server<" + std::to_string(v.pid) + ">";
-        else if constexpr (std::is_same_v<T, ListValue>) {
-            // A [Char] prints as the list it is, so `"hi".chars` is visibly
-            // a conversion rather than looking like a no-op.
-            std::string result = "[";
-            for (size_t i = 0; i < v.elements.size(); i++) {
-                if (i > 0) result += ", ";
-                result += v.elements[i]->toString();
-            }
-            return result + "]";
-        }
-        else if constexpr (std::is_same_v<T, TupleValue>) {
-            std::string result = "(";
-            for (size_t i = 0; i < v.elements.size(); i++) {
-                if (i > 0) result += ", ";
-                result += v.elements[i]->toString();
-            }
-            return result + ")";
-        }
-        else if constexpr (std::is_same_v<T, MapValue>) {
-            auto entries = v.entries;
-            std::stable_sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
-                return a.first->toString() < b.first->toString();
-            });
-            std::string result = "{ ";
-            for (size_t i = 0; i < entries.size(); i++) {
-                if (i > 0) result += ", ";
-                const auto* atomKey = atomKeyName(entries[i].first);
-                result += (atomKey ? *atomKey : entries[i].first->toString()) +
-                          ": " + entries[i].second->toString();
-            }
-            return result + " }";
-        }
-        else if constexpr (std::is_same_v<T, RangeValue>) {
-            if (v.lower) return v.lower->toString() + ".." + v.upper->toString();
-            if (v.isChar) {
-                return std::string("'") + static_cast<char>(v.start) + "'.." +
-                       "'" + static_cast<char>(v.end) + "'";
-            }
-            return std::to_string(v.start) + ".." + std::to_string(v.end);
-        }
-        else if constexpr (std::is_same_v<T, StreamValue>) {
-            return "<Stream>";
-        }
-        else if constexpr (std::is_same_v<T, FeedValue>) {
-            return v.state && v.state->spent ? "<Feed: spent>" : "<Feed>";
-        }
-        else if constexpr (std::is_same_v<T, FileHandleValue>) {
-            return "<FileHandle: \"" + v.path + "\">";
-        }
-        else if constexpr (std::is_same_v<T, RecordValue>) {
-            // Positional constructor (Just(x), Ok(x), Number(n), ...): fields
-            // keyed "0", "1", ... — print as Name(v0, v1, ...) in index order
-            // rather than the unordered_map's unspecified iteration order.
-            bool positional = !v.fields.empty();
-            for (size_t i = 0; positional && i < v.fields.size(); i++) {
-                if (v.fields.find(std::to_string(i)) == v.fields.end()) positional = false;
-            }
-            if (positional) {
-                std::string result = v.typeName + "(";
-                for (size_t i = 0; i < v.fields.size(); i++) {
-                    if (i > 0) result += ", ";
-                    result += v.fields.at(std::to_string(i))->toString();
+    return std::visit(
+        [](const auto& v) -> std::string {
+            using T = std::decay_t<decltype(v)>;
+            // Before anything else: text is the one thing a placeholder must never
+            // produce, since the result would be baked into the emitted program.
+            if constexpr (std::is_same_v<T, PlaceholderValue>) {
+                throw PlaceholderMisuse(v.name, "converting it to text");
+            } else if constexpr (std::is_same_v<T, UnitValue>) {
+                return "()";
+            } else if constexpr (std::is_same_v<T, IntValue>) {
+                return std::to_string(v.value);
+            } else if constexpr (std::is_same_v<T, BigIntValue>) {
+                return v.value.get_str();
+            } else if constexpr (std::is_same_v<T, FloatValue>) {
+                return formatFloat(v.value);
+            } else if constexpr (std::is_same_v<T, StringValue>) {
+                return v.value;
+            } else if constexpr (std::is_same_v<T, BinaryValue>) {
+                return "#Binary<" + std::to_string(v.bytes.size()) + " bytes>";
+            } else if constexpr (std::is_same_v<T, CharValue>) {
+                return utf8::encode(v.value);
+            } else if constexpr (std::is_same_v<T, BoolValue>) {
+                return v.value ? "true" : "false";
+            } else if constexpr (std::is_same_v<T, AtomValue>) {
+                // Printed as written: bare when `:name` can spell it, else quoted.
+                // A lowercase letter outside ASCII spells one too (`:árvíz`), as
+                // the lexer reads it.
+                const auto codepoints = utf8::decode(v.name);
+                const bool bare =
+                    kex::startsLowercase(v.name) && v.name[0] != '_' && v.name.back() != '@' &&
+                    v.name.find("@@") == std::string::npos &&
+                    std::all_of(codepoints.begin(), codepoints.end(), [](char32_t c) {
+                        if (c >= 0x80) {
+                            return utf8::categories::inRanges(utf8::categories::letterRanges, c);
+                        }
+                        return std::isalnum(static_cast<int>(c)) || c == '_' || c == '@';
+                    });
+                if (bare) {
+                    return ":" + v.name;
+                }
+                std::string quoted = ":\"";
+                for (char c : v.name) {
+                    if (c == '"' || c == '\\') {
+                        quoted += '\\';
+                    }
+                    quoted += c;
+                }
+                return quoted + "\"";
+            } else if constexpr (std::is_same_v<T, VariantValue>) {
+                if (v.args.empty()) {
+                    return v.tag;
+                }
+                std::string result = v.tag + "(";
+                for (size_t i = 0; i < v.args.size(); i++) {
+                    if (i > 0) {
+                        result += ", ";
+                    }
+                    result += v.args[i]->toString();
                 }
                 return result + ")";
+            } else if constexpr (std::is_same_v<T, ModuleValue>) {
+                return v.name;
+            } else if constexpr (std::is_same_v<T, ProcessValue>) {
+                return "#Process<" + std::to_string(v.pid) + ">";
+            } else if constexpr (std::is_same_v<T, TaskValue>) {
+                return "#Task<" + std::to_string(v.pid) + ">";
+            } else if constexpr (std::is_same_v<T, ServerValue>) {
+                return "#Server<" + std::to_string(v.pid) + ">";
+            } else if constexpr (std::is_same_v<T, ListValue>) {
+                // A [Char] prints as the list it is, so `"hi".chars` is visibly
+                // a conversion rather than looking like a no-op.
+                std::string result = "[";
+                for (size_t i = 0; i < v.elements.size(); i++) {
+                    if (i > 0) {
+                        result += ", ";
+                    }
+                    result += v.elements[i]->toString();
+                }
+                return result + "]";
+            } else if constexpr (std::is_same_v<T, TupleValue>) {
+                std::string result = "(";
+                for (size_t i = 0; i < v.elements.size(); i++) {
+                    if (i > 0) {
+                        result += ", ";
+                    }
+                    result += v.elements[i]->toString();
+                }
+                return result + ")";
+            } else if constexpr (std::is_same_v<T, MapValue>) {
+                auto entries = v.entries;
+                std::stable_sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+                    return a.first->toString() < b.first->toString();
+                });
+                std::string result = "{ ";
+                for (size_t i = 0; i < entries.size(); i++) {
+                    if (i > 0) {
+                        result += ", ";
+                    }
+                    const auto* atomKey = atomKeyName(entries[i].first);
+                    result += (atomKey ? *atomKey : entries[i].first->toString()) + ": " +
+                              entries[i].second->toString();
+                }
+                return result + " }";
+            } else if constexpr (std::is_same_v<T, RangeValue>) {
+                if (v.lower) {
+                    return v.lower->toString() + ".." + v.upper->toString();
+                }
+                if (v.isChar) {
+                    return std::string("'") + static_cast<char>(v.start) + "'.." + "'" +
+                           static_cast<char>(v.end) + "'";
+                }
+                return std::to_string(v.start) + ".." + std::to_string(v.end);
+            } else if constexpr (std::is_same_v<T, StreamValue>) {
+                return "<Stream>";
+            } else if constexpr (std::is_same_v<T, FeedValue>) {
+                return v.state && v.state->spent ? "<Feed: spent>" : "<Feed>";
+            } else if constexpr (std::is_same_v<T, FileHandleValue>) {
+                return "<FileHandle: \"" + v.path + "\">";
+            } else if constexpr (std::is_same_v<T, RecordValue>) {
+                // Positional constructor (Just(x), Ok(x), Number(n), ...): fields
+                // keyed "0", "1", ... — print as Name(v0, v1, ...) in index order
+                // rather than the unordered_map's unspecified iteration order.
+                bool positional = !v.fields.empty();
+                for (size_t i = 0; positional && i < v.fields.size(); i++) {
+                    if (v.fields.find(std::to_string(i)) == v.fields.end()) {
+                        positional = false;
+                    }
+                }
+                if (positional) {
+                    std::string result = v.typeName + "(";
+                    for (size_t i = 0; i < v.fields.size(); i++) {
+                        if (i > 0) {
+                            result += ", ";
+                        }
+                        result += v.fields.at(std::to_string(i))->toString();
+                    }
+                    return result + ")";
+                }
+                // Sorted field order: deterministic, and reproducible by the
+                // BEAM backend (the unordered_map's hash order isn't).
+                std::vector<std::string> keys;
+                keys.reserve(v.fields.size());
+                for (const auto& [key, _] : v.fields) {
+                    keys.push_back(key);
+                }
+                std::sort(keys.begin(), keys.end());
+                std::string result = v.typeName + " { ";
+                bool first = true;
+                for (const auto& key : keys) {
+                    if (!first) {
+                        result += ", ";
+                    }
+                    result += key + ": " + v.fields.at(key)->toString();
+                    first = false;
+                }
+                return result + " }";
+            } else if constexpr (std::is_same_v<T, FunctionValue>) {
+                return "<function:" + v.name + ">";
+            } else if constexpr (std::is_same_v<T, LambdaValue>) {
+                return "<lambda>";
+            } else {
+                return "?";
             }
-            // Sorted field order: deterministic, and reproducible by the
-            // BEAM backend (the unordered_map's hash order isn't).
-            std::vector<std::string> keys;
-            keys.reserve(v.fields.size());
-            for (const auto& [key, _] : v.fields) keys.push_back(key);
-            std::sort(keys.begin(), keys.end());
-            std::string result = v.typeName + " { ";
-            bool first = true;
-            for (const auto& key : keys) {
-                if (!first) result += ", ";
-                result += key + ": " + v.fields.at(key)->toString();
-                first = false;
-            }
-            return result + " }";
-        }
-        else if constexpr (std::is_same_v<T, FunctionValue>) return "<function:" + v.name + ">";
-        else if constexpr (std::is_same_v<T, LambdaValue>) return "<lambda>";
-        else return "?";
-    }, data);
+        },
+        data);
 }
 
 auto Value::toRepr() const -> std::string {
-    return std::visit([](const auto& v) -> std::string {
-        using T = std::decay_t<decltype(v)>;
-        if constexpr (std::is_same_v<T, PlaceholderValue>)
-            throw PlaceholderMisuse(v.name, "converting it to text");
-        else if constexpr (std::is_same_v<T, StringValue>) {
-            return "\"" + v.value + "\"";
-        }
-        else if constexpr (std::is_same_v<T, CharValue>) {
-            return "'" + utf8::encode(v.value) + "'";
-        }
-        else if constexpr (std::is_same_v<T, ListValue>) {
-            std::string result = "[";
-            for (size_t i = 0; i < v.elements.size(); i++) {
-                if (i > 0) result += ", ";
-                result += v.elements[i]->toRepr();
-            }
-            return result + "]";
-        }
-        else if constexpr (std::is_same_v<T, TupleValue>) {
-            std::string result = "(";
-            for (size_t i = 0; i < v.elements.size(); i++) {
-                if (i > 0) result += ", ";
-                result += v.elements[i]->toRepr();
-            }
-            return result + ")";
-        }
-        else if constexpr (std::is_same_v<T, MapValue>) {
-            std::string result = "{ ";
-            for (size_t i = 0; i < v.entries.size(); i++) {
-                if (i > 0) result += ", ";
-                const auto* atomKey = atomKeyName(v.entries[i].first);
-                result += (atomKey ? *atomKey : v.entries[i].first->toRepr()) +
-                          ": " + v.entries[i].second->toRepr();
-            }
-            return result + " }";
-        }
-        else if constexpr (std::is_same_v<T, RangeValue>) {
-            if (v.lower) return v.lower->toString() + ".." + v.upper->toString();
-            if (v.isChar) {
-                return std::string("'") + static_cast<char>(v.start) + "'.." +
-                       "'" + static_cast<char>(v.end) + "'";
-            }
-            return std::to_string(v.start) + ".." + std::to_string(v.end);
-        }
-        else if constexpr (std::is_same_v<T, VariantValue>) {
-            if (v.args.empty()) return v.tag;
-            std::string result = v.tag + "(";
-            for (size_t i = 0; i < v.args.size(); i++) {
-                if (i > 0) result += ", ";
-                result += v.args[i]->toRepr();
-            }
-            return result + ")";
-        }
-        else if constexpr (std::is_same_v<T, RecordValue>) {
-            bool positional = !v.fields.empty();
-            for (size_t i = 0; positional && i < v.fields.size(); i++) {
-                if (v.fields.find(std::to_string(i)) == v.fields.end()) positional = false;
-            }
-            if (positional) {
-                std::string result = v.typeName + "(";
-                for (size_t i = 0; i < v.fields.size(); i++) {
-                    if (i > 0) result += ", ";
-                    result += v.fields.at(std::to_string(i))->toRepr();
+    return std::visit(
+        [](const auto& v) -> std::string {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, PlaceholderValue>) {
+                throw PlaceholderMisuse(v.name, "converting it to text");
+            } else if constexpr (std::is_same_v<T, StringValue>) {
+                return "\"" + v.value + "\"";
+            } else if constexpr (std::is_same_v<T, CharValue>) {
+                return "'" + utf8::encode(v.value) + "'";
+            } else if constexpr (std::is_same_v<T, ListValue>) {
+                std::string result = "[";
+                for (size_t i = 0; i < v.elements.size(); i++) {
+                    if (i > 0) {
+                        result += ", ";
+                    }
+                    result += v.elements[i]->toRepr();
+                }
+                return result + "]";
+            } else if constexpr (std::is_same_v<T, TupleValue>) {
+                std::string result = "(";
+                for (size_t i = 0; i < v.elements.size(); i++) {
+                    if (i > 0) {
+                        result += ", ";
+                    }
+                    result += v.elements[i]->toRepr();
                 }
                 return result + ")";
+            } else if constexpr (std::is_same_v<T, MapValue>) {
+                std::string result = "{ ";
+                for (size_t i = 0; i < v.entries.size(); i++) {
+                    if (i > 0) {
+                        result += ", ";
+                    }
+                    const auto* atomKey = atomKeyName(v.entries[i].first);
+                    result += (atomKey ? *atomKey : v.entries[i].first->toRepr()) + ": " +
+                              v.entries[i].second->toRepr();
+                }
+                return result + " }";
+            } else if constexpr (std::is_same_v<T, RangeValue>) {
+                if (v.lower) {
+                    return v.lower->toString() + ".." + v.upper->toString();
+                }
+                if (v.isChar) {
+                    return std::string("'") + static_cast<char>(v.start) + "'.." + "'" +
+                           static_cast<char>(v.end) + "'";
+                }
+                return std::to_string(v.start) + ".." + std::to_string(v.end);
+            } else if constexpr (std::is_same_v<T, VariantValue>) {
+                if (v.args.empty()) {
+                    return v.tag;
+                }
+                std::string result = v.tag + "(";
+                for (size_t i = 0; i < v.args.size(); i++) {
+                    if (i > 0) {
+                        result += ", ";
+                    }
+                    result += v.args[i]->toRepr();
+                }
+                return result + ")";
+            } else if constexpr (std::is_same_v<T, RecordValue>) {
+                bool positional = !v.fields.empty();
+                for (size_t i = 0; positional && i < v.fields.size(); i++) {
+                    if (v.fields.find(std::to_string(i)) == v.fields.end()) {
+                        positional = false;
+                    }
+                }
+                if (positional) {
+                    std::string result = v.typeName + "(";
+                    for (size_t i = 0; i < v.fields.size(); i++) {
+                        if (i > 0) {
+                            result += ", ";
+                        }
+                        result += v.fields.at(std::to_string(i))->toRepr();
+                    }
+                    return result + ")";
+                }
+                std::string result = v.typeName + " { ";
+                bool first = true;
+                for (const auto& [key, val] : v.fields) {
+                    if (!first) {
+                        result += ", ";
+                    }
+                    result += key + ": " + val->toRepr();
+                    first = false;
+                }
+                return result + " }";
+            } else {
+                // For non-string types, toRepr == toString
+                Value tmp;
+                tmp.data = v;
+                return tmp.toString();
             }
-            std::string result = v.typeName + " { ";
-            bool first = true;
-            for (const auto& [key, val] : v.fields) {
-                if (!first) result += ", ";
-                result += key + ": " + val->toRepr();
-                first = false;
-            }
-            return result + " }";
-        }
-        else {
-            // For non-string types, toRepr == toString
-            Value tmp;
-            tmp.data = v;
-            return tmp.toString();
-        }
-    }, data);
+        },
+        data);
 }
 
 auto Value::typeName() const -> std::string {
-    return std::visit([](const auto& v) -> std::string {
-        using T = std::decay_t<decltype(v)>;
-        if constexpr (std::is_same_v<T, PlaceholderValue>)
-            throw PlaceholderMisuse(v.name, "asking for its type");
-        else if constexpr (std::is_same_v<T, UnitValue>) return "Void";
-        else if constexpr (std::is_same_v<T, IntValue>) return "Integer";
-        else if constexpr (std::is_same_v<T, BigIntValue>) return "Integer";
-        else if constexpr (std::is_same_v<T, FloatValue>) return "Float";
-        else if constexpr (std::is_same_v<T, StringValue>) return "String";
-        else if constexpr (std::is_same_v<T, BinaryValue>) return "Binary";
-        else if constexpr (std::is_same_v<T, CharValue>) return "Char";
-        else if constexpr (std::is_same_v<T, BoolValue>) return "Bool";
-        else if constexpr (std::is_same_v<T, AtomValue>) return "Atom";
-        else if constexpr (std::is_same_v<T, VariantValue>) {
-            std::string base = v.parentType.empty() ? v.tag : v.parentType;
-            if (v.typeParams.empty()) return base;
-            std::vector<std::string> resolved(v.typeParams.size(), "?");
-            bool anyResolved = false;
-            for (size_t i = 0; i < v.args.size() && i < v.argParamIndex.size(); i++) {
-                int pi = v.argParamIndex[i];
-                if (pi >= 0 && static_cast<size_t>(pi) < resolved.size()) {
-                    resolved[static_cast<size_t>(pi)] = v.args[i]->typeName();
-                    anyResolved = true;
+    return std::visit(
+        [](const auto& v) -> std::string {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, PlaceholderValue>) {
+                throw PlaceholderMisuse(v.name, "asking for its type");
+            } else if constexpr (std::is_same_v<T, UnitValue>) {
+                return "Void";
+            } else if constexpr (std::is_same_v<T, IntValue>) {
+                return "Integer";
+            } else if constexpr (std::is_same_v<T, BigIntValue>) {
+                return "Integer";
+            } else if constexpr (std::is_same_v<T, FloatValue>) {
+                return "Float";
+            } else if constexpr (std::is_same_v<T, StringValue>) {
+                return "String";
+            } else if constexpr (std::is_same_v<T, BinaryValue>) {
+                return "Binary";
+            } else if constexpr (std::is_same_v<T, CharValue>) {
+                return "Char";
+            } else if constexpr (std::is_same_v<T, BoolValue>) {
+                return "Bool";
+            } else if constexpr (std::is_same_v<T, AtomValue>) {
+                return "Atom";
+            } else if constexpr (std::is_same_v<T, VariantValue>) {
+                std::string base = v.parentType.empty() ? v.tag : v.parentType;
+                if (v.typeParams.empty()) {
+                    return base;
                 }
+                std::vector<std::string> resolved(v.typeParams.size(), "?");
+                bool anyResolved = false;
+                for (size_t i = 0; i < v.args.size() && i < v.argParamIndex.size(); i++) {
+                    int pi = v.argParamIndex[i];
+                    if (pi >= 0 && static_cast<size_t>(pi) < resolved.size()) {
+                        resolved[static_cast<size_t>(pi)] = v.args[i]->typeName();
+                        anyResolved = true;
+                    }
+                }
+                // Zero-arg variant of a generic type (e.g. None) carries no
+                // payload to infer params from — show the bare type name.
+                if (!anyResolved) {
+                    return base;
+                }
+                std::string result = base + "<";
+                for (size_t i = 0; i < resolved.size(); i++) {
+                    if (i) {
+                        result += ", ";
+                    }
+                    result += resolved[i];
+                }
+                return result + ">";
+            } else if constexpr (std::is_same_v<T, ModuleValue>) {
+                return "Module";
+            } else if constexpr (std::is_same_v<T, ProcessValue>) {
+                return "Process";
+            } else if constexpr (std::is_same_v<T, TaskValue>) {
+                return "Task";
+            } else if constexpr (std::is_same_v<T, ServerValue>) {
+                return "Server";
+            } else if constexpr (std::is_same_v<T, ListValue>) {
+                if (v.elements.empty()) {
+                    return "List";
+                }
+                return "[" + v.elements.front()->typeName() + "]";
+            } else if constexpr (std::is_same_v<T, TupleValue>) {
+                return "Tuple";
+            } else if constexpr (std::is_same_v<T, MapValue>) {
+                return "Map";
+            } else if constexpr (std::is_same_v<T, RangeValue>) {
+                return "Range";
+            } else if constexpr (std::is_same_v<T, StreamValue>) {
+                return "Stream";
+            } else if constexpr (std::is_same_v<T, FeedValue>) {
+                return "Feed";
+            } else if constexpr (std::is_same_v<T, FileHandleValue>) {
+                return "FileHandle";
+            } else if constexpr (std::is_same_v<T, RecordValue>) {
+                return v.typeName;
+            } else if constexpr (std::is_same_v<T, FunctionValue>) {
+                return "Function";
+            } else if constexpr (std::is_same_v<T, LambdaValue>) {
+                return "Lambda";
+            } else {
+                return "Unknown";
             }
-            // Zero-arg variant of a generic type (e.g. None) carries no
-            // payload to infer params from — show the bare type name.
-            if (!anyResolved) return base;
-            std::string result = base + "<";
-            for (size_t i = 0; i < resolved.size(); i++) {
-                if (i) result += ", ";
-                result += resolved[i];
-            }
-            return result + ">";
-        }
-        else if constexpr (std::is_same_v<T, ModuleValue>) return "Module";
-        else if constexpr (std::is_same_v<T, ProcessValue>) return "Process";
-        else if constexpr (std::is_same_v<T, TaskValue>) return "Task";
-        else if constexpr (std::is_same_v<T, ServerValue>) return "Server";
-        else if constexpr (std::is_same_v<T, ListValue>) {
-            if (v.elements.empty()) return "List";
-            return "[" + v.elements.front()->typeName() + "]";
-        }
-        else if constexpr (std::is_same_v<T, TupleValue>) return "Tuple";
-        else if constexpr (std::is_same_v<T, MapValue>) return "Map";
-        else if constexpr (std::is_same_v<T, RangeValue>) return "Range";
-        else if constexpr (std::is_same_v<T, StreamValue>) return "Stream";
-        else if constexpr (std::is_same_v<T, FeedValue>) return "Feed";
-        else if constexpr (std::is_same_v<T, FileHandleValue>) return "FileHandle";
-        else if constexpr (std::is_same_v<T, RecordValue>) return v.typeName;
-        else if constexpr (std::is_same_v<T, FunctionValue>) return "Function";
-        else if constexpr (std::is_same_v<T, LambdaValue>) return "Lambda";
-        else return "Unknown";
-    }, data);
+        },
+        data);
 }
 
 // A String is its OWN type, NOT a [Char] — `chars` converts one to the other
@@ -589,7 +713,9 @@ auto Value::typeName() const -> std::string {
 // a String and membership on a [Char], and there is no single right answer
 // while they share a type.
 auto stringText(const ValuePtr& v) -> std::optional<std::string> {
-    if (auto* s = std::get_if<StringValue>(&v->data)) return s->value;
+    if (auto* s = std::get_if<StringValue>(&v->data)) {
+        return s->value;
+    }
     return std::nullopt;
 }
 
@@ -597,25 +723,36 @@ auto stringText(const ValuePtr& v) -> std::optional<std::string> {
 // would concatenating this produce" (`'a' + 'b'` is "ab"), not "is this the
 // same type as String" (valuesEqual, pattern matching).
 auto textContent(const ValuePtr& v) -> std::optional<std::string> {
-    if (auto* c = std::get_if<CharValue>(&v->data)) return utf8::encode(c->value);
+    if (auto* c = std::get_if<CharValue>(&v->data)) {
+        return utf8::encode(c->value);
+    }
     return stringText(v);
 }
 
 auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
-    if (!a && !b) return true;
-    if (!a || !b) return false;
+    if (!a && !b) {
+        return true;
+    }
+    if (!a || !b) {
+        return false;
+    }
 
-    if (std::holds_alternative<StringValue>(a->data) || std::holds_alternative<StringValue>(b->data)) {
+    if (std::holds_alternative<StringValue>(a->data) ||
+        std::holds_alternative<StringValue>(b->data)) {
         auto at = stringText(a);
         auto bt = stringText(b);
-        if (at && bt) return *at == *bt;
+        if (at && bt) {
+            return *at == *bt;
+        }
     }
 
     // IntValue and BigIntValue are both just `Integer` — compare across
     // representations rather than requiring an exact variant match (the
     // generic std::visit below only compares same-variant).
     if (auto av = asInteger(a)) {
-        if (auto bv = asInteger(b)) return *av == *bv;
+        if (auto bv = asInteger(b)) {
+            return *av == *bv;
+        }
     }
 
     // Mixed Integer/Float compares numerically, matching the promotion the
@@ -625,9 +762,13 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
         const auto* af = std::get_if<FloatValue>(&a->data);
         const auto* bf = std::get_if<FloatValue>(&b->data);
         if (af && !bf) {
-            if (auto bi = asInteger(b)) return af->value == bi->get_d();
+            if (auto bi = asInteger(b)) {
+                return af->value == bi->get_d();
+            }
         } else if (bf && !af) {
-            if (auto ai = asInteger(a)) return ai->get_d() == bf->value;
+            if (auto ai = asInteger(a)) {
+                return ai->get_d() == bf->value;
+            }
         }
     }
 
@@ -636,261 +777,351 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
     // (a list of durations, a record holding one), as numbers compare across
     // the numeric tower.
     {
-        const auto quantity = [](const ValuePtr& value)
-            -> std::optional<std::pair<ValuePtr, ValuePtr>> {
+        const auto quantity =
+            [](const ValuePtr& value) -> std::optional<std::pair<ValuePtr, ValuePtr>> {
             const auto* record = std::get_if<RecordValue>(&value->data);
-            if (!record || record->typeName != names::kMeasureRecord) return std::nullopt;
+            if (!record || record->typeName != names::kMeasureRecord) {
+                return std::nullopt;
+            }
             const auto canonical = record->fields.find(names::kMeasureCanonical);
             const auto unit = record->fields.find(names::kMeasureUnit);
-            if (canonical == record->fields.end() || unit == record->fields.end())
+            if (canonical == record->fields.end() || unit == record->fields.end()) {
                 return std::nullopt;
+            }
             const auto* definition = std::get_if<RecordValue>(&unit->second->data);
-            if (!definition) return std::nullopt;
+            if (!definition) {
+                return std::nullopt;
+            }
             const auto dimension = definition->fields.find(names::kUnitDimension);
-            if (dimension == definition->fields.end()) return std::nullopt;
+            if (dimension == definition->fields.end()) {
+                return std::nullopt;
+            }
             return std::pair{canonical->second, dimension->second};
         };
-        if (const auto left = quantity(a))
-            if (const auto right = quantity(b))
+        if (const auto left = quantity(a)) {
+            if (const auto right = quantity(b)) {
                 return valuesEqual(left->second, right->second) &&
                        valuesEqual(left->first, right->first);
+            }
+        }
     }
 
     // Comparing a placeholder cannot yield `false` — the running program's
     // value might well be equal — so it must not answer at all.
-    for (const auto* side : {&a, &b})
-        if (const auto* ph = std::get_if<PlaceholderValue>(&(*side)->data))
+    for (const auto* side : {&a, &b}) {
+        if (const auto* ph = std::get_if<PlaceholderValue>(&(*side)->data)) {
             throw PlaceholderMisuse(ph->name, "comparing it");
+        }
+    }
 
-    return std::visit([&b](const auto& av) -> bool {
-        using AT = std::decay_t<decltype(av)>;
-        auto* bv = std::get_if<AT>(&b->data);
-        if (!bv) return false;
+    return std::visit(
+        [&b](const auto& av) -> bool {
+            using AT = std::decay_t<decltype(av)>;
+            auto* bv = std::get_if<AT>(&b->data);
+            if (!bv) {
+                return false;
+            }
 
-        if constexpr (std::is_same_v<AT, IntValue>) return av.value == bv->value;
-        else if constexpr (std::is_same_v<AT, FloatValue>) return av.value == bv->value;
-        else if constexpr (std::is_same_v<AT, StringValue>) return av.value == bv->value;
-        else if constexpr (std::is_same_v<AT, CharValue>) return av.value == bv->value;
-        else if constexpr (std::is_same_v<AT, BoolValue>) return av.value == bv->value;
-        else if constexpr (std::is_same_v<AT, AtomValue>) return av.name == bv->name;
-        else if constexpr (std::is_same_v<AT, ProcessValue>) return av.pid == bv->pid;
-        else if constexpr (std::is_same_v<AT, TaskValue>) return av.pid == bv->pid;
-        else if constexpr (std::is_same_v<AT, ServerValue>) return av.pid == bv->pid;
-        else if constexpr (std::is_same_v<AT, ListValue>) {
-            if (av.elements.size() != bv->elements.size()) return false;
-            for (size_t i = 0; i < av.elements.size(); i++) {
-                if (!valuesEqual(av.elements[i], bv->elements[i])) return false;
-            }
-            return true;
-        }
-        else if constexpr (std::is_same_v<AT, TupleValue>) {
-            if (av.elements.size() != bv->elements.size()) return false;
-            for (size_t i = 0; i < av.elements.size(); i++) {
-                if (!valuesEqual(av.elements[i], bv->elements[i])) return false;
-            }
-            return true;
-        }
-        else if constexpr (std::is_same_v<AT, BinaryValue>) {
-            return av.bytes == bv->bytes;
-        }
-        else if constexpr (std::is_same_v<AT, RangeValue>) {
-            if (av.lower || bv->lower)
-                return av.lower && bv->lower && valuesEqual(av.lower, bv->lower) &&
-                       valuesEqual(av.upper, bv->upper);
-            return av.isChar == bv->isChar && av.start == bv->start && av.end == bv->end;
-        }
-        else if constexpr (std::is_same_v<AT, MapValue>) {
-            if (av.entries.size() != bv->entries.size()) return false;
-            for (const auto& [key, val] : av.entries) {
-                bool found = false;
-                for (const auto& [bkey, bval] : bv->entries) {
-                    if (valuesEqual(key, bkey)) {
-                        if (!valuesEqual(val, bval)) return false;
-                        found = true;
-                        break;
+            if constexpr (std::is_same_v<AT, IntValue>) {
+                return av.value == bv->value;
+            } else if constexpr (std::is_same_v<AT, FloatValue>) {
+                return av.value == bv->value;
+            } else if constexpr (std::is_same_v<AT, StringValue>) {
+                return av.value == bv->value;
+            } else if constexpr (std::is_same_v<AT, CharValue>) {
+                return av.value == bv->value;
+            } else if constexpr (std::is_same_v<AT, BoolValue>) {
+                return av.value == bv->value;
+            } else if constexpr (std::is_same_v<AT, AtomValue>) {
+                return av.name == bv->name;
+            } else if constexpr (std::is_same_v<AT, ProcessValue>) {
+                return av.pid == bv->pid;
+            } else if constexpr (std::is_same_v<AT, TaskValue>) {
+                return av.pid == bv->pid;
+            } else if constexpr (std::is_same_v<AT, ServerValue>) {
+                return av.pid == bv->pid;
+            } else if constexpr (std::is_same_v<AT, ListValue>) {
+                if (av.elements.size() != bv->elements.size()) {
+                    return false;
+                }
+                for (size_t i = 0; i < av.elements.size(); i++) {
+                    if (!valuesEqual(av.elements[i], bv->elements[i])) {
+                        return false;
                     }
                 }
-                if (!found) return false;
+                return true;
+            } else if constexpr (std::is_same_v<AT, TupleValue>) {
+                if (av.elements.size() != bv->elements.size()) {
+                    return false;
+                }
+                for (size_t i = 0; i < av.elements.size(); i++) {
+                    if (!valuesEqual(av.elements[i], bv->elements[i])) {
+                        return false;
+                    }
+                }
+                return true;
+            } else if constexpr (std::is_same_v<AT, BinaryValue>) {
+                return av.bytes == bv->bytes;
+            } else if constexpr (std::is_same_v<AT, RangeValue>) {
+                if (av.lower || bv->lower) {
+                    return av.lower && bv->lower && valuesEqual(av.lower, bv->lower) &&
+                           valuesEqual(av.upper, bv->upper);
+                }
+                return av.isChar == bv->isChar && av.start == bv->start && av.end == bv->end;
+            } else if constexpr (std::is_same_v<AT, MapValue>) {
+                if (av.entries.size() != bv->entries.size()) {
+                    return false;
+                }
+                for (const auto& [key, val] : av.entries) {
+                    bool found = false;
+                    for (const auto& [bkey, bval] : bv->entries) {
+                        if (valuesEqual(key, bkey)) {
+                            if (!valuesEqual(val, bval)) {
+                                return false;
+                            }
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        return false;
+                    }
+                }
+                return true;
+            } else if constexpr (std::is_same_v<AT, VariantValue>) {
+                if (av.tag != bv->tag) {
+                    return false;
+                }
+                if (av.args.size() != bv->args.size()) {
+                    return false;
+                }
+                for (size_t i = 0; i < av.args.size(); i++) {
+                    if (!valuesEqual(av.args[i], bv->args[i])) {
+                        return false;
+                    }
+                }
+                return true;
+            } else if constexpr (std::is_same_v<AT, RecordValue>) {
+                // Structural equality — same type, same fields. Without this,
+                // `==` on any record/ADT value (Just(x) == Just(y), Ok(x) ==
+                // Ok(y), two instances of a user record, ...) always falls
+                // through to `false` here, silently breaking every comparison
+                // that isn't covered by an explicit operator overload.
+                if (av.typeName != bv->typeName) {
+                    return false;
+                }
+                if (av.fields.size() != bv->fields.size()) {
+                    return false;
+                }
+                for (const auto& [key, val] : av.fields) {
+                    auto it = bv->fields.find(key);
+                    if (it == bv->fields.end()) {
+                        return false;
+                    }
+                    if (!valuesEqual(val, it->second)) {
+                        return false;
+                    }
+                }
+                return true;
+            } else {
+                return false;
             }
-            return true;
-        }
-        else if constexpr (std::is_same_v<AT, VariantValue>) {
-            if (av.tag != bv->tag) return false;
-            if (av.args.size() != bv->args.size()) return false;
-            for (size_t i = 0; i < av.args.size(); i++) {
-                if (!valuesEqual(av.args[i], bv->args[i])) return false;
-            }
-            return true;
-        }
-        else if constexpr (std::is_same_v<AT, RecordValue>) {
-            // Structural equality — same type, same fields. Without this,
-            // `==` on any record/ADT value (Just(x) == Just(y), Ok(x) ==
-            // Ok(y), two instances of a user record, ...) always falls
-            // through to `false` here, silently breaking every comparison
-            // that isn't covered by an explicit operator overload.
-            if (av.typeName != bv->typeName) return false;
-            if (av.fields.size() != bv->fields.size()) return false;
-            for (const auto& [key, val] : av.fields) {
-                auto it = bv->fields.find(key);
-                if (it == bv->fields.end()) return false;
-                if (!valuesEqual(val, it->second)) return false;
-            }
-            return true;
-        }
-        else return false;
-    }, a->data);
+        },
+        a->data);
 }
 
 auto Value::inspect() const -> std::string {
     using namespace kex::color;
-    auto c = [](const char* code) -> const char* {
-        return apply(code);
-    };
+    auto c = [](const char* code) -> const char* { return apply(code); };
 
     std::function<std::string(const Value&)> rec = [&](const Value& v) -> std::string {
-        return std::visit([&](const auto& node) -> std::string {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, PlaceholderValue>)
-                throw PlaceholderMisuse(node.name, "converting it to text");
-            else if constexpr (std::is_same_v<T, UnitValue>)
-                return std::string(c(gray)) + "()" + c(reset);
-            else if constexpr (std::is_same_v<T, IntValue>)
-                return std::string(c(yellow)) + std::to_string(node.value) + c(reset);
-            else if constexpr (std::is_same_v<T, BigIntValue>)
-                return std::string(c(yellow)) + node.value.get_str() + c(reset);
-            else if constexpr (std::is_same_v<T, FloatValue>)
-                return std::string(c(yellow)) + formatFloat(node.value) + c(reset);
-            else if constexpr (std::is_same_v<T, StringValue>)
-                return std::string(c(green)) + "\"" + node.value + "\"" + c(reset);
-            else if constexpr (std::is_same_v<T, BinaryValue>)
-                return std::string(c(gray)) + "#Binary<" +
-                       std::to_string(node.bytes.size()) + " bytes>" + c(reset);
-            else if constexpr (std::is_same_v<T, CharValue>)
-                return std::string(c(green)) + "'" + utf8::encode(node.value) + "'" + c(reset);
-            else if constexpr (std::is_same_v<T, BoolValue>)
-                return std::string(c(magenta)) + (node.value ? "true" : "false") + c(reset);
-            else if constexpr (std::is_same_v<T, AtomValue>)
-                return std::string(c(purple)) + ":" + node.name + c(reset);
-            else if constexpr (std::is_same_v<T, VariantValue>) {
-                if (node.args.empty())
-                    return std::string(c(cyan)) + node.tag + c(reset);
-                std::string result = std::string(c(cyan)) + node.tag + c(reset) + "(";
-                for (size_t i = 0; i < node.args.size(); i++) {
-                    if (i > 0) result += ", ";
-                    result += rec(*node.args[i]);
-                }
-                return result + ")";
-            }
-            else if constexpr (std::is_same_v<T, ModuleValue>)
-                return std::string(c(cyan)) + node.name + c(reset);
-            else if constexpr (std::is_same_v<T, ProcessValue>)
-                return std::string(c(gray)) + "#Process<" + std::to_string(node.pid) + ">" + c(reset);
-            else if constexpr (std::is_same_v<T, TaskValue>)
-                return std::string(c(gray)) + "#Task<" + std::to_string(node.pid) + ">" + c(reset);
-            else if constexpr (std::is_same_v<T, ServerValue>)
-                return std::string(c(gray)) + "#Server<" + std::to_string(node.pid) + ">" + c(reset);
-            else if constexpr (std::is_same_v<T, ListValue>) {
-                std::string result = "[";
-                for (size_t i = 0; i < node.elements.size(); i++) {
-                    if (i > 0) result += ", ";
-                    result += rec(*node.elements[i]);
-                }
-                return result + "]";
-            }
-            else if constexpr (std::is_same_v<T, TupleValue>) {
-                std::string result = "(";
-                for (size_t i = 0; i < node.elements.size(); i++) {
-                    if (i > 0) result += ", ";
-                    result += rec(*node.elements[i]);
-                }
-                return result + ")";
-            }
-            else if constexpr (std::is_same_v<T, MapValue>) {
-                std::string result = "{ ";
-                for (size_t i = 0; i < node.entries.size(); i++) {
-                    if (i > 0) result += ", ";
-                    const auto* atomKey = atomKeyName(node.entries[i].first);
-                    result += (atomKey ? std::string(c(purple)) + *atomKey + c(reset)
-                                       : rec(*node.entries[i].first)) +
-                              ": " + rec(*node.entries[i].second);
-                }
-                return result + " }";
-            }
-            else if constexpr (std::is_same_v<T, RangeValue>) {
-                if (node.lower) return rec(*node.lower) + ".." + rec(*node.upper);
-                if (node.isChar) {
-                    return std::string(c(green)) + "'" + static_cast<char>(node.start) + "'" + c(reset)
-                           + ".." + std::string(c(green)) + "'" + static_cast<char>(node.end) + "'" + c(reset);
-                }
-                return std::string(c(yellow)) + std::to_string(node.start) + c(reset)
-                       + ".." + std::string(c(yellow)) + std::to_string(node.end) + c(reset);
-            }
-            else if constexpr (std::is_same_v<T, StreamValue>)
-                return std::string(c(gray)) + "<Stream>" + c(reset);
-            else if constexpr (std::is_same_v<T, FeedValue>)
-                return std::string(c(gray))
-                       + (node.state && node.state->spent ? "<Feed: spent>" : "<Feed>")
-                       + c(reset);
-            else if constexpr (std::is_same_v<T, FileHandleValue>)
-                return std::string(c(gray)) + "<FileHandle: \"" + node.path + "\">" + c(reset);
-            else if constexpr (std::is_same_v<T, RecordValue>) {
-                bool positional = !node.fields.empty();
-                for (size_t i = 0; positional && i < node.fields.size(); i++)
-                    if (node.fields.find(std::to_string(i)) == node.fields.end()) positional = false;
-                if (positional) {
-                    std::string result = std::string(c(cyan)) + node.typeName + c(reset) + "(";
-                    for (size_t i = 0; i < node.fields.size(); i++) {
-                        if (i > 0) result += ", ";
-                        result += rec(*node.fields.at(std::to_string(i)));
+        return std::visit(
+            [&](const auto& node) -> std::string {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, PlaceholderValue>) {
+                    throw PlaceholderMisuse(node.name, "converting it to text");
+                } else if constexpr (std::is_same_v<T, UnitValue>) {
+                    return std::string(c(gray)) + "()" + c(reset);
+                } else if constexpr (std::is_same_v<T, IntValue>) {
+                    return std::string(c(yellow)) + std::to_string(node.value) + c(reset);
+                } else if constexpr (std::is_same_v<T, BigIntValue>) {
+                    return std::string(c(yellow)) + node.value.get_str() + c(reset);
+                } else if constexpr (std::is_same_v<T, FloatValue>) {
+                    return std::string(c(yellow)) + formatFloat(node.value) + c(reset);
+                } else if constexpr (std::is_same_v<T, StringValue>) {
+                    return std::string(c(green)) + "\"" + node.value + "\"" + c(reset);
+                } else if constexpr (std::is_same_v<T, BinaryValue>) {
+                    return std::string(c(gray)) + "#Binary<" + std::to_string(node.bytes.size()) +
+                           " bytes>" + c(reset);
+                } else if constexpr (std::is_same_v<T, CharValue>) {
+                    return std::string(c(green)) + "'" + utf8::encode(node.value) + "'" + c(reset);
+                } else if constexpr (std::is_same_v<T, BoolValue>) {
+                    return std::string(c(magenta)) + (node.value ? "true" : "false") + c(reset);
+                } else if constexpr (std::is_same_v<T, AtomValue>) {
+                    return std::string(c(purple)) + ":" + node.name + c(reset);
+                } else if constexpr (std::is_same_v<T, VariantValue>) {
+                    if (node.args.empty()) {
+                        return std::string(c(cyan)) + node.tag + c(reset);
+                    }
+                    std::string result = std::string(c(cyan)) + node.tag + c(reset) + "(";
+                    for (size_t i = 0; i < node.args.size(); i++) {
+                        if (i > 0) {
+                            result += ", ";
+                        }
+                        result += rec(*node.args[i]);
                     }
                     return result + ")";
+                } else if constexpr (std::is_same_v<T, ModuleValue>) {
+                    return std::string(c(cyan)) + node.name + c(reset);
+                } else if constexpr (std::is_same_v<T, ProcessValue>) {
+                    return std::string(c(gray)) + "#Process<" + std::to_string(node.pid) + ">" +
+                           c(reset);
+                } else if constexpr (std::is_same_v<T, TaskValue>) {
+                    return std::string(c(gray)) + "#Task<" + std::to_string(node.pid) + ">" +
+                           c(reset);
+                } else if constexpr (std::is_same_v<T, ServerValue>) {
+                    return std::string(c(gray)) + "#Server<" + std::to_string(node.pid) + ">" +
+                           c(reset);
+                } else if constexpr (std::is_same_v<T, ListValue>) {
+                    std::string result = "[";
+                    for (size_t i = 0; i < node.elements.size(); i++) {
+                        if (i > 0) {
+                            result += ", ";
+                        }
+                        result += rec(*node.elements[i]);
+                    }
+                    return result + "]";
+                } else if constexpr (std::is_same_v<T, TupleValue>) {
+                    std::string result = "(";
+                    for (size_t i = 0; i < node.elements.size(); i++) {
+                        if (i > 0) {
+                            result += ", ";
+                        }
+                        result += rec(*node.elements[i]);
+                    }
+                    return result + ")";
+                } else if constexpr (std::is_same_v<T, MapValue>) {
+                    std::string result = "{ ";
+                    for (size_t i = 0; i < node.entries.size(); i++) {
+                        if (i > 0) {
+                            result += ", ";
+                        }
+                        const auto* atomKey = atomKeyName(node.entries[i].first);
+                        result += (atomKey ? std::string(c(purple)) + *atomKey + c(reset)
+                                           : rec(*node.entries[i].first)) +
+                                  ": " + rec(*node.entries[i].second);
+                    }
+                    return result + " }";
+                } else if constexpr (std::is_same_v<T, RangeValue>) {
+                    if (node.lower) {
+                        return rec(*node.lower) + ".." + rec(*node.upper);
+                    }
+                    if (node.isChar) {
+                        return std::string(c(green)) + "'" + static_cast<char>(node.start) + "'" +
+                               c(reset) + ".." + std::string(c(green)) + "'" +
+                               static_cast<char>(node.end) + "'" + c(reset);
+                    }
+                    return std::string(c(yellow)) + std::to_string(node.start) + c(reset) + ".." +
+                           std::string(c(yellow)) + std::to_string(node.end) + c(reset);
+                } else if constexpr (std::is_same_v<T, StreamValue>) {
+                    return std::string(c(gray)) + "<Stream>" + c(reset);
+                } else if constexpr (std::is_same_v<T, FeedValue>) {
+                    return std::string(c(gray)) +
+                           (node.state && node.state->spent ? "<Feed: spent>" : "<Feed>") +
+                           c(reset);
+                } else if constexpr (std::is_same_v<T, FileHandleValue>) {
+                    return std::string(c(gray)) + "<FileHandle: \"" + node.path + "\">" + c(reset);
+                } else if constexpr (std::is_same_v<T, RecordValue>) {
+                    bool positional = !node.fields.empty();
+                    for (size_t i = 0; positional && i < node.fields.size(); i++) {
+                        if (node.fields.find(std::to_string(i)) == node.fields.end()) {
+                            positional = false;
+                        }
+                    }
+                    if (positional) {
+                        std::string result = std::string(c(cyan)) + node.typeName + c(reset) + "(";
+                        for (size_t i = 0; i < node.fields.size(); i++) {
+                            if (i > 0) {
+                                result += ", ";
+                            }
+                            result += rec(*node.fields.at(std::to_string(i)));
+                        }
+                        return result + ")";
+                    }
+                    std::string result = std::string(c(cyan)) + node.typeName + c(reset) + " { ";
+                    bool first = true;
+                    for (const auto& [key, val] : node.fields) {
+                        if (!first) {
+                            result += ", ";
+                        }
+                        result += key + ": " + rec(*val);
+                        first = false;
+                    }
+                    return result + " }";
+                } else if constexpr (std::is_same_v<T, FunctionValue>) {
+                    return std::string(c(gray)) + "<function:" + node.name + ">" + c(reset);
+                } else if constexpr (std::is_same_v<T, LambdaValue>) {
+                    return std::string(c(gray)) + "<lambda>" + c(reset);
+                } else {
+                    return "?";
                 }
-                std::string result = std::string(c(cyan)) + node.typeName + c(reset) + " { ";
-                bool first = true;
-                for (const auto& [key, val] : node.fields) {
-                    if (!first) result += ", ";
-                    result += key + ": " + rec(*val);
-                    first = false;
-                }
-                return result + " }";
-            }
-            else if constexpr (std::is_same_v<T, FunctionValue>)
-                return std::string(c(gray)) + "<function:" + node.name + ">" + c(reset);
-            else if constexpr (std::is_same_v<T, LambdaValue>)
-                return std::string(c(gray)) + "<lambda>" + c(reset);
-            else return "?";
-        }, v.data);
+            },
+            v.data);
     };
     return rec(*this);
 }
 
 auto dispatchTypeName(const ValuePtr& v) -> std::string {
-    return std::visit([](const auto& d) -> std::string {
-        using T = std::decay_t<decltype(d)>;
-        if constexpr (std::is_same_v<T, PlaceholderValue>)
-            throw PlaceholderMisuse(d.name, "dispatching a method on it");
-        else if constexpr (std::is_same_v<T, RecordValue>) return d.typeName;
-        else if constexpr (std::is_same_v<T, VariantValue>) return d.tag;
-        else if constexpr (std::is_same_v<T, AtomValue>) return "Atom";
-        else if constexpr (std::is_same_v<T, TupleValue>) return "Tuple";
-        else if constexpr (std::is_same_v<T, UnitValue>) return "Void";
-        else if constexpr (std::is_same_v<T, ListValue>) return "List";
-        else if constexpr (std::is_same_v<T, MapValue>) return "Map";
-        else if constexpr (std::is_same_v<T, FileHandleValue>) return "FileHandle";
-        else if constexpr (std::is_same_v<T, ProcessValue>) return "Process";
-        else if constexpr (std::is_same_v<T, TaskValue>) return "Task";
-        else if constexpr (std::is_same_v<T, ServerValue>) return "Server";
-        else if constexpr (std::is_same_v<T, IntValue> || std::is_same_v<T, BigIntValue>) return "Integer";
-        else if constexpr (std::is_same_v<T, FloatValue>) return "Float";
-        else if constexpr (std::is_same_v<T, BoolValue>) return "Bool";
-        else if constexpr (std::is_same_v<T, CharValue>) return "Char";
-        else if constexpr (std::is_same_v<T, StringValue>) return "String";
-        else if constexpr (std::is_same_v<T, BinaryValue>) return "Binary";
-        else if constexpr (std::is_same_v<T, RangeValue>) return "Range";
-        else if constexpr (std::is_same_v<T, StreamValue>) return "Stream";
-        else if constexpr (std::is_same_v<T, FeedValue>) return "Feed";
-        else return "";
-    }, v->data);
+    return std::visit(
+        [](const auto& d) -> std::string {
+            using T = std::decay_t<decltype(d)>;
+            if constexpr (std::is_same_v<T, PlaceholderValue>) {
+                throw PlaceholderMisuse(d.name, "dispatching a method on it");
+            } else if constexpr (std::is_same_v<T, RecordValue>) {
+                return d.typeName;
+            } else if constexpr (std::is_same_v<T, VariantValue>) {
+                return d.tag;
+            } else if constexpr (std::is_same_v<T, AtomValue>) {
+                return "Atom";
+            } else if constexpr (std::is_same_v<T, TupleValue>) {
+                return "Tuple";
+            } else if constexpr (std::is_same_v<T, UnitValue>) {
+                return "Void";
+            } else if constexpr (std::is_same_v<T, ListValue>) {
+                return "List";
+            } else if constexpr (std::is_same_v<T, MapValue>) {
+                return "Map";
+            } else if constexpr (std::is_same_v<T, FileHandleValue>) {
+                return "FileHandle";
+            } else if constexpr (std::is_same_v<T, ProcessValue>) {
+                return "Process";
+            } else if constexpr (std::is_same_v<T, TaskValue>) {
+                return "Task";
+            } else if constexpr (std::is_same_v<T, ServerValue>) {
+                return "Server";
+            } else if constexpr (std::is_same_v<T, IntValue> || std::is_same_v<T, BigIntValue>) {
+                return "Integer";
+            } else if constexpr (std::is_same_v<T, FloatValue>) {
+                return "Float";
+            } else if constexpr (std::is_same_v<T, BoolValue>) {
+                return "Bool";
+            } else if constexpr (std::is_same_v<T, CharValue>) {
+                return "Char";
+            } else if constexpr (std::is_same_v<T, StringValue>) {
+                return "String";
+            } else if constexpr (std::is_same_v<T, BinaryValue>) {
+                return "Binary";
+            } else if constexpr (std::is_same_v<T, RangeValue>) {
+                return "Range";
+            } else if constexpr (std::is_same_v<T, StreamValue>) {
+                return "Stream";
+            } else if constexpr (std::is_same_v<T, FeedValue>) {
+                return "Feed";
+            } else {
+                return "";
+            }
+        },
+        v->data);
 }
 
 auto dispatchSupertypes(const std::string& typeName) -> std::vector<std::string> {
@@ -898,35 +1129,52 @@ auto dispatchSupertypes(const std::string& typeName) -> std::vector<std::string>
     // `make Number do ... end` block applies to both. Listed most- to
     // least-specific; the concrete type is tried before any of these, so a
     // type that defines the method itself still wins.
-    if (typeName == "Integer" || typeName == "Int" || typeName == "Float")
+    if (typeName == "Integer" || typeName == "Int" || typeName == "Float") {
         return {"Number"};
+    }
     return {};
 }
 
 auto matchesTypeName(const std::string& name, const ValuePtr& v) -> bool {
-    return std::visit([&name](const auto& d) -> bool {
-        using T = std::decay_t<decltype(d)>;
-        if constexpr (std::is_same_v<T, StringValue>) return name == "String";
-        else if constexpr (std::is_same_v<T, BinaryValue>) return name == "Binary";
-        else if constexpr (std::is_same_v<T, IntValue> || std::is_same_v<T, BigIntValue>)
-            return name == "Int" || name == "Integer";
-        else if constexpr (std::is_same_v<T, FloatValue>) return name == "Float";
-        else if constexpr (std::is_same_v<T, BoolValue>) return name == "Bool";
-        else if constexpr (std::is_same_v<T, AtomValue>) return name == "Atom";
-        else if constexpr (std::is_same_v<T, CharValue>) return name == "Char";
-        else if constexpr (std::is_same_v<T, ListValue>) return name == kex::names::kListType;
-        else if constexpr (std::is_same_v<T, TupleValue>) return name == "Tuple";
-        else if constexpr (std::is_same_v<T, MapValue>) return name == kex::names::kMapType;
-        else if constexpr (std::is_same_v<T, RangeValue>) return name == "Range";
-        else if constexpr (std::is_same_v<T, StreamValue>) return name == "Stream";
-        else if constexpr (std::is_same_v<T, FeedValue>) return name == "Feed";
-        else return false;
-    }, v->data);
+    return std::visit(
+        [&name](const auto& d) -> bool {
+            using T = std::decay_t<decltype(d)>;
+            if constexpr (std::is_same_v<T, StringValue>) {
+                return name == "String";
+            } else if constexpr (std::is_same_v<T, BinaryValue>) {
+                return name == "Binary";
+            } else if constexpr (std::is_same_v<T, IntValue> || std::is_same_v<T, BigIntValue>) {
+                return name == "Int" || name == "Integer";
+            } else if constexpr (std::is_same_v<T, FloatValue>) {
+                return name == "Float";
+            } else if constexpr (std::is_same_v<T, BoolValue>) {
+                return name == "Bool";
+            } else if constexpr (std::is_same_v<T, AtomValue>) {
+                return name == "Atom";
+            } else if constexpr (std::is_same_v<T, CharValue>) {
+                return name == "Char";
+            } else if constexpr (std::is_same_v<T, ListValue>) {
+                return name == kex::names::kListType;
+            } else if constexpr (std::is_same_v<T, TupleValue>) {
+                return name == "Tuple";
+            } else if constexpr (std::is_same_v<T, MapValue>) {
+                return name == kex::names::kMapType;
+            } else if constexpr (std::is_same_v<T, RangeValue>) {
+                return name == "Range";
+            } else if constexpr (std::is_same_v<T, StreamValue>) {
+                return name == "Stream";
+            } else if constexpr (std::is_same_v<T, FeedValue>) {
+                return name == "Feed";
+            } else {
+                return false;
+            }
+        },
+        v->data);
 }
 
 auto defaultEvalAllowList() -> const std::vector<std::string>& {
-    static const std::vector<std::string> allow = {
-        "Math", "List", "String", "Integer", "Map", "Stream"};
+    static const std::vector<std::string> allow = {"Math",    "List", "String",
+                                                   "Integer", "Map",  "Stream"};
     return allow;
 }
 
@@ -935,10 +1183,12 @@ auto defaultEvalAllowList() -> const std::vector<std::string>& {
 namespace kex::interpreter {
 
 auto clampedCount(const ValuePtr& count, size_t size) -> size_t {
-    if (auto* n = std::get_if<IntValue>(&count->data))
+    if (auto* n = std::get_if<IntValue>(&count->data)) {
         return n->value <= 0 ? 0 : std::min(static_cast<size_t>(n->value), size);
-    if (auto* big = std::get_if<BigIntValue>(&count->data))
+    }
+    if (auto* big = std::get_if<BigIntValue>(&count->data)) {
         return sgn(big->value) <= 0 ? 0 : size;
+    }
     return 0;
 }
 

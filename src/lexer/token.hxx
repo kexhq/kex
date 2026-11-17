@@ -54,63 +54,63 @@ enum class TokenType {
     While,
 
     // Symbols
-    Arrow,        // ->
-    FatArrow,     // => (match, when and receive arms)
-    Amp,          // &
-    At,           // @
-    Bang,         // !
-    Colon,        // :
-    Caret,        // ^
+    Arrow,          // ->
+    FatArrow,       // => (match, when and receive arms)
+    Amp,            // &
+    At,             // @
+    Bang,           // !
+    Colon,          // :
+    Caret,          // ^
     TypeAnnotation, // :>
     SlotAnnotation, // ::>
-    Comma,        // ,
-    Dot,          // .
-    DotDot,       // ..
-    DotDotDot,    // ...
-    Equals,       // =
-    EqEq,         // ==
-    GreaterThan,  // >
-    GreaterEq,    // >=
-    LBrace,       // {
-    RBrace,       // }
-    LBracket,     // [
-    RBracket,     // ]
-    LessThan,     // <
-    LessEq,       // <=
-    LParen,       // (
-    RParen,       // )
-    Minus,        // -
-    NotEq,        // !=
-    Percent,      // %
-    Pipe,         // |
-    PipePipe,     // ||
-    AmpAmp,       // &&
-    Plus,         // +
-    Question,     // ?
-    Slash,        // /
-    Star,         // *
-    Tilde,        // ~
-    Underscore,   // _
-    HashLBracket, // #[
-    PlusEq,       // +=
-    MinusEq,      // -=
-    StarEq,       // *=
-    SlashEq,      // /=
-    PercentEq,    // %=
-    AmpAmpEq,     // &&=
-    PipePipeEq,   // ||=
+    Comma,          // ,
+    Dot,            // .
+    DotDot,         // ..
+    DotDotDot,      // ...
+    Equals,         // =
+    EqEq,           // ==
+    GreaterThan,    // >
+    GreaterEq,      // >=
+    LBrace,         // {
+    RBrace,         // }
+    LBracket,       // [
+    RBracket,       // ]
+    LessThan,       // <
+    LessEq,         // <=
+    LParen,         // (
+    RParen,         // )
+    Minus,          // -
+    NotEq,          // !=
+    Percent,        // %
+    Pipe,           // |
+    PipePipe,       // ||
+    AmpAmp,         // &&
+    Plus,           // +
+    Question,       // ?
+    Slash,          // /
+    Star,           // *
+    Tilde,          // ~
+    Underscore,     // _
+    HashLBracket,   // #[
+    PlusEq,         // +=
+    MinusEq,        // -=
+    StarEq,         // *=
+    SlashEq,        // /=
+    PercentEq,      // %=
+    AmpAmpEq,       // &&=
+    PipePipeEq,     // ||=
 
     // Identifiers and literals
-    LowerIdent,   // lowercase identifier (may end with ?)
-    UpperIdent,   // uppercase identifier
-    SpliceIdent,  // %identifier
+    LowerIdent,  // lowercase identifier (may end with ?)
+    UpperIdent,  // uppercase identifier
+    SpliceIdent, // %identifier
     Integer,
     Float,
     String,
-    RawString,      // `raw text`, multiline and non-interpolating
+    RawString,             // `raw text`, multiline and non-interpolating
     InterpolatedRawString, // $`text ${expr}`, multiline and interpolating
-    Char,         // 'c'
-    Atom,         // :identifier
+    Char,                  // 'c'
+    Atom,                  // :identifier
 
     // Special
     Newline,

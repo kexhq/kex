@@ -24,24 +24,27 @@ static auto makeLocation(SourceLocation loc, const std::string& filename) -> Val
     return converter.location(loc, filename);
 }
 
-static auto convertProgram(const ast::Program& program,
-                            const std::vector<Token>& tokens,
-                            const std::string& source,
-                            const std::string& filename) -> ValuePtr {
+static auto convertProgram(
+    const ast::Program& program,
+    const std::vector<Token>& tokens,
+    const std::string& source,
+    const std::string& filename) -> ValuePtr {
     auto docs = ast::extractDocComments(tokens, source);
     ValueBuilder builder;
     ast::Converter converter(builder);
     return converter.program(program, filename, docs);
 }
 
-static auto makeParseError(const std::string& message, std::optional<SourceLocation> loc,
-                            const std::string& filename) -> ValuePtr {
+static auto makeParseError(
+    const std::string& message, std::optional<SourceLocation> loc, const std::string& filename)
+    -> ValuePtr {
     ValueBuilder builder;
-    return builder.record("ParseError", {
-        {"message", Value::string(message)},
-        {"location", loc ? builder.just(makeLocation(*loc, filename))
-                         : builder.none()},
-    });
+    return builder.record(
+        "ParseError",
+        {
+            {"message", Value::string(message)},
+            {"location", loc ? builder.just(makeLocation(*loc, filename)) : builder.none()},
+        });
 }
 
 // --- Registration ---
@@ -52,34 +55,38 @@ auto Evaluator::registerParserBuiltins() -> void {
     defineModule("Kex.Intrinsic.AST");
 
     // Register TypeRef/PatternRef/Expression variant->parent mappings so UFCS dispatch works
-    for (const auto& tag : {"NamedType", "FunctionType", "TupleType", "ListType",
-                            "MapType", "UnionType", "NullableType", "TypeVar",
-                            "AnyType", "NoneType", "ParameterBlockType"}) {
+    for (const auto& tag :
+         {"NamedType", "FunctionType", "TupleType", "ListType", "MapType", "UnionType",
+          "NullableType", "TypeVar", "AnyType", "NoneType", "ParameterBlockType"}) {
         m_variantParent[tag] = "Kex.AST.TypeRef";
     }
     for (const auto& tag : {"TokenElement", "NodeElement"}) {
         m_variantParent[tag] = "Kex.AST.SyntaxElement";
     }
-    for (const auto& tag : {"BindPattern", "LiteralPattern", "ConstructorPattern",
-                            "TuplePattern", "ListPattern", "WildcardPattern",
-                            "GuardedPattern"}) {
+    for (const auto& tag :
+         {"BindPattern", "LiteralPattern", "ConstructorPattern", "TuplePattern", "ListPattern",
+          "WildcardPattern", "GuardedPattern"}) {
         m_variantParent[tag] = "Kex.AST.PatternRef";
     }
-    for (const auto& tag : {"LitInt", "LitFloat", "LitString", "InterpolatedString",
-                            "LitBool", "LitAtom",
-                            "LitNone", "Identifier", "BinaryOp", "UnaryOp", "Call",
-                            "TaggedLiteral",
-                            "MethodCall", "If", "Match", "ListLit", "TupleLit", "Block",
-                            "Lambda", "Let", "Var", "Assign", "Return", "Spread",
-                            "TrailingIf", "While", "Loop", "RangeLit"}) {
+    for (const auto& tag : {"LitInt",     "LitFloat", "LitString", "InterpolatedString",
+                            "LitBool",    "LitAtom",  "LitNone",   "Identifier",
+                            "BinaryOp",   "UnaryOp",  "Call",      "TaggedLiteral",
+                            "MethodCall", "If",       "Match",     "ListLit",
+                            "TupleLit",   "Block",    "Lambda",    "Let",
+                            "Var",        "Assign",   "Return",    "Spread",
+                            "TrailingIf", "While",    "Loop",      "RangeLit"}) {
         m_variantParent[tag] = "Kex.AST.Expression";
     }
 
     // Kex.AST.parse(source) or Kex.AST.parse(source, filename)
     defineIntrinsic("AST.parse", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::error(makeParseError("parse requires a source string", std::nullopt, ""));
+        if (args.empty()) {
+            return Value::error(makeParseError("parse requires a source string", std::nullopt, ""));
+        }
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
-        if (!srcVal) return Value::error(makeParseError("parse requires a source string", std::nullopt, ""));
+        if (!srcVal) {
+            return Value::error(makeParseError("parse requires a source string", std::nullopt, ""));
+        }
 
         std::string source = srcVal->value;
         std::string filename = "<string>";
@@ -97,8 +104,8 @@ auto Evaluator::registerParserBuiltins() -> void {
             auto program = parser.parseProgram();
             if (!parser.diagnostics().empty()) {
                 const auto& diagnostic = parser.diagnostics().front();
-                return Value::error(makeParseError(
-                    diagnostic.message, diagnostic.location, filename));
+                return Value::error(
+                    makeParseError(diagnostic.message, diagnostic.location, filename));
             }
             return Value::ok(convertProgram(program, tokens, source, filename));
         } catch (const std::exception& e) {
@@ -108,9 +115,13 @@ auto Evaluator::registerParserBuiltins() -> void {
 
     // Kex.AST.parseFile(path)
     defineIntrinsic("AST.parseFile", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::error(makeParseError("parseFile requires a file path", std::nullopt, ""));
+        if (args.empty()) {
+            return Value::error(makeParseError("parseFile requires a file path", std::nullopt, ""));
+        }
         auto* pathVal = std::get_if<StringValue>(&args[0]->data);
-        if (!pathVal) return Value::error(makeParseError("parseFile requires a file path", std::nullopt, ""));
+        if (!pathVal) {
+            return Value::error(makeParseError("parseFile requires a file path", std::nullopt, ""));
+        }
 
         std::string path = pathVal->value;
         std::ifstream file(path);
@@ -129,8 +140,7 @@ auto Evaluator::registerParserBuiltins() -> void {
             auto program = parser.parseProgram();
             if (!parser.diagnostics().empty()) {
                 const auto& diagnostic = parser.diagnostics().front();
-                return Value::error(makeParseError(
-                    diagnostic.message, diagnostic.location, path));
+                return Value::error(makeParseError(diagnostic.message, diagnostic.location, path));
             }
             return Value::ok(convertProgram(program, tokens, source, path));
         } catch (const std::exception& e) {
@@ -142,9 +152,15 @@ auto Evaluator::registerParserBuiltins() -> void {
     // written, with the trivia in front of it, nested under the nodes the
     // parser completed (kexhq/kex#136).
     defineIntrinsic("AST.parseSyntax", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::error(makeParseError("parseSyntax requires a source string", std::nullopt, ""));
+        if (args.empty()) {
+            return Value::error(
+                makeParseError("parseSyntax requires a source string", std::nullopt, ""));
+        }
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
-        if (!srcVal) return Value::error(makeParseError("parseSyntax requires a source string", std::nullopt, ""));
+        if (!srcVal) {
+            return Value::error(
+                makeParseError("parseSyntax requires a source string", std::nullopt, ""));
+        }
 
         const std::string source = srcVal->value;
         const std::string filename = "<string>";
@@ -156,16 +172,15 @@ auto Evaluator::registerParserBuiltins() -> void {
             parser.parseProgram();
             if (!parser.diagnostics().empty()) {
                 const auto& diagnostic = parser.diagnostics().front();
-                return Value::error(makeParseError(
-                    diagnostic.message, diagnostic.location, filename));
+                return Value::error(
+                    makeParseError(diagnostic.message, diagnostic.location, filename));
             }
             ValueBuilder builder;
-            auto tree = ast::buildSyntaxTree(builder, tokens, source,
-                                             parser.syntaxSpans());
-            if (!tree)
+            auto tree = ast::buildSyntaxTree(builder, tokens, source, parser.syntaxSpans());
+            if (!tree) {
                 return Value::error(makeParseError(
-                    "the source could not be divided among its tokens",
-                    std::nullopt, filename));
+                    "the source could not be divided among its tokens", std::nullopt, filename));
+            }
             return Value::ok(*tree);
         } catch (const std::exception& e) {
             return Value::error(makeParseError(e.what(), std::nullopt, filename));
@@ -174,9 +189,15 @@ auto Evaluator::registerParserBuiltins() -> void {
 
     // Kex.AST.parseType(typeStr)
     defineIntrinsic("AST.parseType", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::error(makeParseError("parseType requires a type string", std::nullopt, ""));
+        if (args.empty()) {
+            return Value::error(
+                makeParseError("parseType requires a type string", std::nullopt, ""));
+        }
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
-        if (!srcVal) return Value::error(makeParseError("parseType requires a type string", std::nullopt, ""));
+        if (!srcVal) {
+            return Value::error(
+                makeParseError("parseType requires a type string", std::nullopt, ""));
+        }
 
         // Wrap in a module with a type annotation to get unambiguous parsing
         std::string source = "module T do\n  x : " + srcVal->value + "\nend";
@@ -190,8 +211,8 @@ auto Evaluator::registerParserBuiltins() -> void {
             auto program = parser.parseProgram();
             if (!parser.diagnostics().empty()) {
                 const auto& diagnostic = parser.diagnostics().front();
-                return Value::error(makeParseError(
-                    diagnostic.message, diagnostic.location, filename));
+                return Value::error(
+                    makeParseError(diagnostic.message, diagnostic.location, filename));
             }
             // Find the type annotation inside the module wrapper
             for (const auto& item : program.items) {
@@ -203,7 +224,8 @@ auto Evaluator::registerParserBuiltins() -> void {
                     }
                 }
             }
-            return Value::error(makeParseError("Failed to parse type expression", std::nullopt, filename));
+            return Value::error(
+                makeParseError("Failed to parse type expression", std::nullopt, filename));
         } catch (const std::exception& e) {
             return Value::error(makeParseError(e.what(), std::nullopt, filename));
         }
@@ -211,9 +233,15 @@ auto Evaluator::registerParserBuiltins() -> void {
 
     // Kex.AST.parseExpression(source)
     defineIntrinsic("AST.parseExpression", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::error(makeParseError("parseExpression requires a source string", std::nullopt, ""));
+        if (args.empty()) {
+            return Value::error(
+                makeParseError("parseExpression requires a source string", std::nullopt, ""));
+        }
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
-        if (!srcVal) return Value::error(makeParseError("parseExpression requires a source string", std::nullopt, ""));
+        if (!srcVal) {
+            return Value::error(
+                makeParseError("parseExpression requires a source string", std::nullopt, ""));
+        }
 
         std::string source = srcVal->value;
         std::string filename = "<expression>";
@@ -226,8 +254,8 @@ auto Evaluator::registerParserBuiltins() -> void {
             auto expr = parser.parseExpr();
             if (!parser.diagnostics().empty()) {
                 const auto& diagnostic = parser.diagnostics().front();
-                return Value::error(makeParseError(
-                    diagnostic.message, diagnostic.location, filename));
+                return Value::error(
+                    makeParseError(diagnostic.message, diagnostic.location, filename));
             }
             ValueBuilder builder;
             ast::Converter converter(builder);
@@ -236,7 +264,6 @@ auto Evaluator::registerParserBuiltins() -> void {
             return Value::error(makeParseError(e.what(), std::nullopt, filename));
         }
     });
-
 }
 
 } // namespace kex::interpreter

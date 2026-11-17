@@ -36,16 +36,14 @@ struct Package {
     }
 };
 
-auto writeFile(const std::filesystem::path& path, const std::string& contents)
-    -> void {
+auto writeFile(const std::filesystem::path& path, const std::string& contents) -> void {
     std::ofstream file(path);
     file << contents;
 }
 
 // A package with its library module in `lib/` and its entry file beside it,
 // so only `--source-root` can connect the two.
-auto makePackage(const std::string& library, const std::string& entry)
-    -> std::shared_ptr<Package> {
+auto makePackage(const std::string& library, const std::string& entry) -> std::shared_ptr<Package> {
     auto package = std::make_shared<Package>();
     char tmp[] = "/tmp/kex_multi_module_XXXXXX";
     package->root = mkdtemp(tmp);
@@ -64,9 +62,9 @@ struct Result {
 
 auto runCheck(const Package& package) -> Result {
     const auto outPath = package.root / "check.out";
-    std::string command = std::string(KEX_BINARY_PATH) +
-        " -C --no-colors --source-root " + package.lib.string() + " " +
-        package.main.string() + " > " + outPath.string() + " 2>&1";
+    std::string command = std::string(KEX_BINARY_PATH) + " -C --no-colors --source-root " +
+                          package.lib.string() + " " + package.main.string() + " > " +
+                          outPath.string() + " 2>&1";
     const int status = std::system(command.c_str());
     std::ifstream file(outPath);
     std::stringstream buffer;
@@ -132,9 +130,9 @@ main do
 end
 )KEX");
             auto result = runCheck(*package);
-            assertTrue(result.output.find("No errors found") !=
-                           std::string::npos,
-                       "expected a clean check, got: " + result.output);
+            assertTrue(
+                result.output.find("No errors found") != std::string::npos,
+                "expected a clean check, got: " + result.output);
             assertEqual(result.exitCode, 0);
         });
 
@@ -150,9 +148,9 @@ main do
 end
 )KEX");
             auto result = runCheck(*package);
-            assertTrue(result.output.find("No errors found") !=
-                           std::string::npos,
-                       "expected a clean check, got: " + result.output);
+            assertTrue(
+                result.output.find("No errors found") != std::string::npos,
+                "expected a clean check, got: " + result.output);
             assertEqual(result.exitCode, 0);
         });
 
@@ -168,9 +166,9 @@ main do
 end
 )KEX");
             auto result = runCheck(*package);
-            assertTrue(result.output.find("but body returns String") !=
-                           std::string::npos,
-                       "expected a member mismatch, got: " + result.output);
+            assertTrue(
+                result.output.find("but body returns String") != std::string::npos,
+                "expected a member mismatch, got: " + result.output);
             assertEqual(result.exitCode, 1);
         });
 
@@ -188,10 +186,9 @@ main do
 end
 )KEX");
             auto result = runCheck(*package);
-            assertTrue(result.output.find("No errors found") !=
-                           std::string::npos,
-                       "a builtin in the union broke its record members: " +
-                           result.output);
+            assertTrue(
+                result.output.find("No errors found") != std::string::npos,
+                "a builtin in the union broke its record members: " + result.output);
             assertEqual(result.exitCode, 0);
         });
 
@@ -205,9 +202,9 @@ main do
 end
 )KEX");
             auto result = runCheck(*package);
-            assertTrue(result.output.find("No errors found") !=
-                           std::string::npos,
-                       "the union refused its own String: " + result.output);
+            assertTrue(
+                result.output.find("No errors found") != std::string::npos,
+                "the union refused its own String: " + result.output);
             assertEqual(result.exitCode, 0);
         });
 
@@ -221,27 +218,28 @@ main do
 end
 )KEX");
             auto result = runCheck(*package);
-            assertTrue(result.output.find("but body returns Integer") !=
-                           std::string::npos,
-                       "expected an Integer to be rejected, got: " +
-                           result.output);
+            assertTrue(
+                result.output.find("but body returns Integer") != std::string::npos,
+                "expected an Integer to be rejected, got: " + result.output);
             assertEqual(result.exitCode, 1);
         });
 
         it("verifies a call into the sibling module's function", []() {
-            auto package = makePackage(R"KEX(module Web
+            auto package = makePackage(
+                R"KEX(module Web
 
 let render(markup: String) -> String = markup
-)KEX", R"KEX(using Web
+)KEX",
+                R"KEX(using Web
 
 main do
   IO.printLine(Web.render(42))
 end
 )KEX");
             auto result = runCheck(*package);
-            assertTrue(result.output.find("render") != std::string::npos,
-                       "expected the sibling's signature to be checked, got: " +
-                           result.output);
+            assertTrue(
+                result.output.find("render") != std::string::npos,
+                "expected the sibling's signature to be checked, got: " + result.output);
             assertEqual(result.exitCode, 1);
         });
 
@@ -267,11 +265,12 @@ end
             std::stringstream buffer;
             buffer << file.rdbuf();
             const auto output = buffer.str();
-            assertTrue(output.find("Expected method or module name after '.'") !=
-                           std::string::npos,
-                       "the syntax error was not reported: " + output);
-            assertTrue(output.find("name it `module Tool`") == std::string::npos,
-                       "told to rename `module Tool` to itself: " + output);
+            assertTrue(
+                output.find("Expected method or module name after '.'") != std::string::npos,
+                "the syntax error was not reported: " + output);
+            assertTrue(
+                output.find("name it `module Tool`") == std::string::npos,
+                "told to rename `module Tool` to itself: " + output);
             assertEqual(WIFEXITED(status) ? WEXITSTATUS(status) : -1, 1);
         });
 
@@ -318,7 +317,8 @@ end
         });
 
         it("discovers a module named only by a parameter's type", [&]() {
-            auto package = shopPackage(R"KEX(let total(order: Shop.Rules.Order) -> Integer = order.total
+            auto package =
+                shopPackage(R"KEX(let total(order: Shop.Rules.Order) -> Integer = order.total
 
 main do
   IO.printLine("none")

@@ -12,7 +12,9 @@
 
 namespace kex::ir {
 
-auto unitName(const Module& module) -> std::string { return module.name; }
+auto unitName(const Module& module) -> std::string {
+    return module.name;
+}
 
 auto printUnit(std::ostream& out, const Module& module) -> void {
     out << emitCore(module).source;
@@ -42,7 +44,9 @@ auto VerifierPass::run(Module& module, ModuleAnalysisManager&) -> pass::Preserve
     const auto problems = verifyModule(module);
     if (!problems.empty()) {
         std::string message = "IR verification failed:";
-        for (const auto& problem : problems) message += "\n  " + problem;
+        for (const auto& problem : problems) {
+            message += "\n  " + problem;
+        }
         throw std::runtime_error(message);
     }
     return pass::PreservedAnalyses::all();
@@ -64,8 +68,9 @@ auto modulePassRegistry() -> const pass::PassRegistry<Module>& {
 auto buildModulePipeline() -> ModulePassManager {
     ModulePassManager pipeline;
     const auto text = pass::pipelineText(pass::IRUnitLevel<Module>::kName, kDefaultModulePipeline);
-    if (auto problem = modulePassRegistry().build(pipeline, text))
+    if (auto problem = modulePassRegistry().build(pipeline, text)) {
         throw std::invalid_argument(*problem);
+    }
     return pipeline;
 }
 

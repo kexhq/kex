@@ -85,8 +85,7 @@ struct ExternalModules {
     // populated only from package-declared provider modules.
     std::unordered_map<std::string, std::vector<ReceiverFunction>> receiverFunctions;
     // External serving type -> module that owns its slots, and their names.
-    std::unordered_map<std::string, std::pair<std::string, std::vector<std::string>>>
-        servingSlots;
+    std::unordered_map<std::string, std::pair<std::string, std::vector<std::string>>> servingSlots;
     // Trait name -> required method names in declaration order. Dictionaries
     // use this stable order for their hidden function slots.
     std::unordered_map<std::string, std::vector<TraitMethod>> traitMethods;
@@ -141,14 +140,16 @@ struct LowerContext {
 auto mergeExternalModules(const ExternalModules& base, const ExternalModules& overrides)
     -> ExternalModules;
 
-auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
-                  const LowerContext& context = {}) -> Module;
+auto lowerProgram(
+    const ast::Program& prog, const std::string& fileStem, const LowerContext& context = {})
+    -> Module;
 
 // Lower a compilation unit using the module-system BEAM mapping. The first
 // result is the file-local Kex.Global module; every explicit Kex module is a
 // separate `Kex.<Name>` module.
-auto lowerModules(const ast::Program& prog, const std::string& fileStem,
-                  const LowerContext& context = {}) -> std::vector<Module>;
+auto lowerModules(
+    const ast::Program& prog, const std::string& fileStem, const LowerContext& context = {})
+    -> std::vector<Module>;
 
 // Lower the prelude with per-tier awareness. The full AST is used for the
 // pre-pass (records, types, method owners); items are logically partitioned
@@ -156,9 +157,10 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
 // versions will produce separate modules per tier.
 // The prelude's tiers: lowered as one module, with all of `context`,
 // the checked program (`hir`) included.
-auto lowerProgramTiered(const ast::Program& prog,
-                        const std::array<size_t, 5>& tierBounds,
-                        const std::string& fileStem,
-                        const LowerContext& context = {}) -> Module;
+auto lowerProgramTiered(
+    const ast::Program& prog,
+    const std::array<size_t, 5>& tierBounds,
+    const std::string& fileStem,
+    const LowerContext& context = {}) -> Module;
 
 } // namespace kex::ir

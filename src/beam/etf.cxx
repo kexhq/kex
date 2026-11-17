@@ -97,10 +97,17 @@ auto Term::asList() const -> const std::vector<TermPtr>& {
 }
 
 auto Term::mapGet(const std::string& key) const -> TermPtr {
-    if (std::holds_alternative<Nil>(value)) return nullptr;
-    if (!std::holds_alternative<Map>(value)) return nullptr;
-    for (auto& [k, v] : std::get<Map>(value).pairs)
-        if (k->isAtom(key)) return v;
+    if (std::holds_alternative<Nil>(value)) {
+        return nullptr;
+    }
+    if (!std::holds_alternative<Map>(value)) {
+        return nullptr;
+    }
+    for (auto& [k, v] : std::get<Map>(value).pairs) {
+        if (k->isAtom(key)) {
+            return v;
+        }
+    }
     return nullptr;
 }
 
@@ -111,23 +118,25 @@ namespace {
 constexpr uint8_t ETF_VERSION = 131;
 
 // Tag bytes
-constexpr uint8_t SMALL_INTEGER_EXT  = 97;
-constexpr uint8_t INTEGER_EXT        = 98;
-constexpr uint8_t ATOM_EXT           = 100;
-constexpr uint8_t SMALL_TUPLE_EXT    = 104;
-constexpr uint8_t LARGE_TUPLE_EXT    = 105;
-constexpr uint8_t NIL_EXT            = 106;
-constexpr uint8_t LIST_EXT           = 108;
-constexpr uint8_t BINARY_EXT         = 109;
-constexpr uint8_t SMALL_ATOM_EXT     = 115;
-constexpr uint8_t MAP_EXT            = 116;
-constexpr uint8_t NEW_FLOAT_EXT      = 70;
-constexpr uint8_t ATOM_UTF8_EXT      = 118;
+constexpr uint8_t SMALL_INTEGER_EXT = 97;
+constexpr uint8_t INTEGER_EXT = 98;
+constexpr uint8_t ATOM_EXT = 100;
+constexpr uint8_t SMALL_TUPLE_EXT = 104;
+constexpr uint8_t LARGE_TUPLE_EXT = 105;
+constexpr uint8_t NIL_EXT = 106;
+constexpr uint8_t LIST_EXT = 108;
+constexpr uint8_t BINARY_EXT = 109;
+constexpr uint8_t SMALL_ATOM_EXT = 115;
+constexpr uint8_t MAP_EXT = 116;
+constexpr uint8_t NEW_FLOAT_EXT = 70;
+constexpr uint8_t ATOM_UTF8_EXT = 118;
 constexpr uint8_t SMALL_ATOM_UTF8_EXT = 119;
-constexpr uint8_t SMALL_BIG_EXT      = 110;
-constexpr uint8_t LARGE_BIG_EXT      = 111;
+constexpr uint8_t SMALL_BIG_EXT = 110;
+constexpr uint8_t LARGE_BIG_EXT = 111;
 
-void put8(std::vector<uint8_t>& out, uint8_t v) { out.push_back(v); }
+void put8(std::vector<uint8_t>& out, uint8_t v) {
+    out.push_back(v);
+}
 void put16(std::vector<uint8_t>& out, uint16_t v) {
     out.push_back(uint8_t(v >> 8));
     out.push_back(uint8_t(v));
@@ -145,9 +154,7 @@ void put64(std::vector<uint8_t>& out, uint64_t v) {
 
 void encodeBigInt(std::vector<uint8_t>& out, const mpz_class& value) {
     mpz_class magnitude = value < 0 ? -value : value;
-    const size_t count = magnitude == 0
-                             ? 1
-                             : (mpz_sizeinbase(magnitude.get_mpz_t(), 2) + 7) / 8;
+    const size_t count = magnitude == 0 ? 1 : (mpz_sizeinbase(magnitude.get_mpz_t(), 2) + 7) / 8;
     if (count <= 255) {
         put8(out, SMALL_BIG_EXT);
         put8(out, static_cast<uint8_t>(count));
@@ -165,70 +172,74 @@ void encodeBigInt(std::vector<uint8_t>& out, const mpz_class& value) {
 void encodeTerm(std::vector<uint8_t>& out, const TermPtr& term);
 
 void encodeTerm(std::vector<uint8_t>& out, const TermPtr& term) {
-    std::visit([&](const auto& node) {
-        using T = std::decay_t<decltype(node)>;
-        if constexpr (std::is_same_v<T, Term::Atom>) {
-            if (node.name.size() <= 255) {
-                put8(out, SMALL_ATOM_UTF8_EXT);
-                put8(out, static_cast<uint8_t>(node.name.size()));
-            } else {
-                put8(out, ATOM_UTF8_EXT);
-                put16(out, static_cast<uint16_t>(node.name.size()));
-            }
-            out.insert(out.end(), node.name.begin(), node.name.end());
-        } else if constexpr (std::is_same_v<T, Term::Int>) {
-            if (node.value >= 0 && node.value <= 255) {
-                put8(out, SMALL_INTEGER_EXT);
-                put8(out, static_cast<uint8_t>(node.value));
-            } else if (node.value >= INT32_MIN && node.value <= INT32_MAX) {
-                put8(out, INTEGER_EXT);
-                put32(out, static_cast<uint32_t>(static_cast<int32_t>(node.value)));
-            } else {
-                encodeBigInt(out, mpz_class(std::to_string(node.value)));
-            }
-        } else if constexpr (std::is_same_v<T, Term::BigInt>) {
-            encodeBigInt(out, node.value);
-        } else if constexpr (std::is_same_v<T, Term::Float>) {
-            put8(out, NEW_FLOAT_EXT);
-            uint64_t bits;
-            static_assert(sizeof(bits) == sizeof(node.value));
-            std::memcpy(&bits, &node.value, sizeof(bits));
-            put64(out, bits);
-        } else if constexpr (std::is_same_v<T, Term::Bin>) {
-            put8(out, BINARY_EXT);
-            put32(out, static_cast<uint32_t>(node.data.size()));
-            out.insert(out.end(), node.data.begin(), node.data.end());
-        } else if constexpr (std::is_same_v<T, Term::Tuple>) {
-            if (node.elements.size() <= 255) {
-                put8(out, SMALL_TUPLE_EXT);
-                put8(out, static_cast<uint8_t>(node.elements.size()));
-            } else {
-                put8(out, LARGE_TUPLE_EXT);
-                put32(out, static_cast<uint32_t>(node.elements.size()));
-            }
-            for (const auto& e : node.elements)
-                encodeTerm(out, e);
-        } else if constexpr (std::is_same_v<T, Term::List>) {
-            if (node.elements.empty()) {
-                put8(out, NIL_EXT);
-            } else {
-                put8(out, LIST_EXT);
-                put32(out, static_cast<uint32_t>(node.elements.size()));
-                for (const auto& e : node.elements)
+    std::visit(
+        [&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, Term::Atom>) {
+                if (node.name.size() <= 255) {
+                    put8(out, SMALL_ATOM_UTF8_EXT);
+                    put8(out, static_cast<uint8_t>(node.name.size()));
+                } else {
+                    put8(out, ATOM_UTF8_EXT);
+                    put16(out, static_cast<uint16_t>(node.name.size()));
+                }
+                out.insert(out.end(), node.name.begin(), node.name.end());
+            } else if constexpr (std::is_same_v<T, Term::Int>) {
+                if (node.value >= 0 && node.value <= 255) {
+                    put8(out, SMALL_INTEGER_EXT);
+                    put8(out, static_cast<uint8_t>(node.value));
+                } else if (node.value >= INT32_MIN && node.value <= INT32_MAX) {
+                    put8(out, INTEGER_EXT);
+                    put32(out, static_cast<uint32_t>(static_cast<int32_t>(node.value)));
+                } else {
+                    encodeBigInt(out, mpz_class(std::to_string(node.value)));
+                }
+            } else if constexpr (std::is_same_v<T, Term::BigInt>) {
+                encodeBigInt(out, node.value);
+            } else if constexpr (std::is_same_v<T, Term::Float>) {
+                put8(out, NEW_FLOAT_EXT);
+                uint64_t bits;
+                static_assert(sizeof(bits) == sizeof(node.value));
+                std::memcpy(&bits, &node.value, sizeof(bits));
+                put64(out, bits);
+            } else if constexpr (std::is_same_v<T, Term::Bin>) {
+                put8(out, BINARY_EXT);
+                put32(out, static_cast<uint32_t>(node.data.size()));
+                out.insert(out.end(), node.data.begin(), node.data.end());
+            } else if constexpr (std::is_same_v<T, Term::Tuple>) {
+                if (node.elements.size() <= 255) {
+                    put8(out, SMALL_TUPLE_EXT);
+                    put8(out, static_cast<uint8_t>(node.elements.size()));
+                } else {
+                    put8(out, LARGE_TUPLE_EXT);
+                    put32(out, static_cast<uint32_t>(node.elements.size()));
+                }
+                for (const auto& e : node.elements) {
                     encodeTerm(out, e);
-                put8(out, NIL_EXT); // proper list tail
+                }
+            } else if constexpr (std::is_same_v<T, Term::List>) {
+                if (node.elements.empty()) {
+                    put8(out, NIL_EXT);
+                } else {
+                    put8(out, LIST_EXT);
+                    put32(out, static_cast<uint32_t>(node.elements.size()));
+                    for (const auto& e : node.elements) {
+                        encodeTerm(out, e);
+                    }
+                    put8(out, NIL_EXT); // proper list tail
+                }
+            } else if constexpr (std::is_same_v<T, Term::Map>) {
+                put8(out, MAP_EXT);
+                put32(out, static_cast<uint32_t>(node.pairs.size()));
+                for (const auto& [k, v] : node.pairs) {
+                    encodeTerm(out, k);
+                    encodeTerm(out, v);
+                }
+            } else if constexpr (std::is_same_v<T, Term::Nil>) {
+                put8(out, NIL_EXT);
             }
-        } else if constexpr (std::is_same_v<T, Term::Map>) {
-            put8(out, MAP_EXT);
-            put32(out, static_cast<uint32_t>(node.pairs.size()));
-            for (const auto& [k, v] : node.pairs) {
-                encodeTerm(out, k);
-                encodeTerm(out, v);
-            }
-        } else if constexpr (std::is_same_v<T, Term::Nil>) {
-            put8(out, NIL_EXT);
-        }
-    }, term->value);
+        },
+        term->value);
 }
 
 struct Decoder {
@@ -236,22 +247,30 @@ struct Decoder {
     size_t len;
     size_t pos = 0;
 
-    auto remaining() const -> size_t { return len - pos; }
+    auto remaining() const -> size_t {
+        return len - pos;
+    }
 
     auto read8() -> uint8_t {
-        if (pos >= len) throw EtfError("unexpected end of ETF data");
+        if (pos >= len) {
+            throw EtfError("unexpected end of ETF data");
+        }
         return data[pos++];
     }
     auto read16() -> uint16_t {
-        if (remaining() < 2) throw EtfError("unexpected end of ETF data");
+        if (remaining() < 2) {
+            throw EtfError("unexpected end of ETF data");
+        }
         uint16_t v = (uint16_t(data[pos]) << 8) | data[pos + 1];
         pos += 2;
         return v;
     }
     auto read32() -> uint32_t {
-        if (remaining() < 4) throw EtfError("unexpected end of ETF data");
-        uint32_t v = (uint32_t(data[pos]) << 24) | (uint32_t(data[pos+1]) << 16) |
-                     (uint32_t(data[pos+2]) << 8) | data[pos+3];
+        if (remaining() < 4) {
+            throw EtfError("unexpected end of ETF data");
+        }
+        uint32_t v = (uint32_t(data[pos]) << 24) | (uint32_t(data[pos + 1]) << 16) |
+                     (uint32_t(data[pos + 2]) << 8) | data[pos + 3];
         pos += 4;
         return v;
     }
@@ -262,24 +281,31 @@ struct Decoder {
     auto readBig(size_t count) -> TermPtr {
         const auto sign = read8();
         mpz_class value = 0;
-        for (size_t i = 0; i < count; ++i)
+        for (size_t i = 0; i < count; ++i) {
             value += mpz_class(read8()) << (8 * i);
-        if (sign)
+        }
+        if (sign) {
             value = -value;
+        }
         const mpz_class min("-9223372036854775808");
         const mpz_class max("9223372036854775807");
-        if (value >= min && value <= max)
+        if (value >= min && value <= max) {
             return Term::integer(static_cast<int64_t>(std::stoll(value.get_str())));
+        }
         return Term::integer(std::move(value));
     }
     auto readBytes(size_t n) -> std::vector<uint8_t> {
-        if (remaining() < n) throw EtfError("unexpected end of ETF data");
+        if (remaining() < n) {
+            throw EtfError("unexpected end of ETF data");
+        }
         std::vector<uint8_t> v(data + pos, data + pos + n);
         pos += n;
         return v;
     }
     auto readString(size_t n) -> std::string {
-        if (remaining() < n) throw EtfError("unexpected end of ETF data");
+        if (remaining() < n) {
+            throw EtfError("unexpected end of ETF data");
+        }
         std::string s(reinterpret_cast<const char*>(data + pos), n);
         pos += n;
         return s;
@@ -288,83 +314,82 @@ struct Decoder {
     auto decodeTerm() -> TermPtr {
         uint8_t tag = read8();
         switch (tag) {
-        case SMALL_INTEGER_EXT:
-            return Term::integer(read8());
-        case INTEGER_EXT: {
-            auto raw = read32();
-            return Term::integer(static_cast<int32_t>(raw));
-        }
-        case NEW_FLOAT_EXT: {
-            const auto bits = read64();
-            double value;
-            std::memcpy(&value, &bits, sizeof(value));
-            return Term::floating(value);
-        }
-        case SMALL_BIG_EXT: {
-            return readBig(read8());
-        }
-        case LARGE_BIG_EXT:
-            return readBig(read32());
-        case ATOM_EXT: {
-            auto len = read16();
-            return Term::atom(readString(len));
-        }
-        case SMALL_ATOM_EXT: {
-            auto len = read8();
-            return Term::atom(readString(len));
-        }
-        case ATOM_UTF8_EXT: {
-            auto len = read16();
-            return Term::atom(readString(len));
-        }
-        case SMALL_ATOM_UTF8_EXT: {
-            auto len = read8();
-            return Term::atom(readString(len));
-        }
-        case SMALL_TUPLE_EXT: {
-            uint8_t arity = read8();
-            std::vector<TermPtr> elems;
-            elems.reserve(arity);
-            for (int i = 0; i < arity; i++)
-                elems.push_back(decodeTerm());
-            return Term::tuple(std::move(elems));
-        }
-        case LARGE_TUPLE_EXT: {
-            uint32_t arity = read32();
-            std::vector<TermPtr> elems;
-            elems.reserve(arity);
-            for (uint32_t i = 0; i < arity; i++)
-                elems.push_back(decodeTerm());
-            return Term::tuple(std::move(elems));
-        }
-        case NIL_EXT:
-            return Term::nil();
-        case LIST_EXT: {
-            uint32_t count = read32();
-            std::vector<TermPtr> elems;
-            elems.reserve(count);
-            for (uint32_t i = 0; i < count; i++)
-                elems.push_back(decodeTerm());
-            decodeTerm(); // tail (should be NIL for proper lists)
-            return Term::list(std::move(elems));
-        }
-        case BINARY_EXT: {
-            uint32_t len = read32();
-            return Term::binary(readBytes(len));
-        }
-        case MAP_EXT: {
-            uint32_t count = read32();
-            std::vector<std::pair<TermPtr, TermPtr>> pairs;
-            pairs.reserve(count);
-            for (uint32_t i = 0; i < count; i++) {
-                auto k = decodeTerm();
-                auto v = decodeTerm();
-                pairs.emplace_back(std::move(k), std::move(v));
+            case SMALL_INTEGER_EXT: return Term::integer(read8());
+            case INTEGER_EXT: {
+                auto raw = read32();
+                return Term::integer(static_cast<int32_t>(raw));
             }
-            return Term::map(std::move(pairs));
-        }
-        default:
-            throw EtfError("unsupported ETF tag: " + std::to_string(tag));
+            case NEW_FLOAT_EXT: {
+                const auto bits = read64();
+                double value;
+                std::memcpy(&value, &bits, sizeof(value));
+                return Term::floating(value);
+            }
+            case SMALL_BIG_EXT: {
+                return readBig(read8());
+            }
+            case LARGE_BIG_EXT: return readBig(read32());
+            case ATOM_EXT: {
+                auto len = read16();
+                return Term::atom(readString(len));
+            }
+            case SMALL_ATOM_EXT: {
+                auto len = read8();
+                return Term::atom(readString(len));
+            }
+            case ATOM_UTF8_EXT: {
+                auto len = read16();
+                return Term::atom(readString(len));
+            }
+            case SMALL_ATOM_UTF8_EXT: {
+                auto len = read8();
+                return Term::atom(readString(len));
+            }
+            case SMALL_TUPLE_EXT: {
+                uint8_t arity = read8();
+                std::vector<TermPtr> elems;
+                elems.reserve(arity);
+                for (int i = 0; i < arity; i++) {
+                    elems.push_back(decodeTerm());
+                }
+                return Term::tuple(std::move(elems));
+            }
+            case LARGE_TUPLE_EXT: {
+                uint32_t arity = read32();
+                std::vector<TermPtr> elems;
+                elems.reserve(arity);
+                for (uint32_t i = 0; i < arity; i++) {
+                    elems.push_back(decodeTerm());
+                }
+                return Term::tuple(std::move(elems));
+            }
+            case NIL_EXT: return Term::nil();
+            case LIST_EXT: {
+                uint32_t count = read32();
+                std::vector<TermPtr> elems;
+                elems.reserve(count);
+                for (uint32_t i = 0; i < count; i++) {
+                    elems.push_back(decodeTerm());
+                }
+                decodeTerm(); // tail (should be NIL for proper lists)
+                return Term::list(std::move(elems));
+            }
+            case BINARY_EXT: {
+                uint32_t len = read32();
+                return Term::binary(readBytes(len));
+            }
+            case MAP_EXT: {
+                uint32_t count = read32();
+                std::vector<std::pair<TermPtr, TermPtr>> pairs;
+                pairs.reserve(count);
+                for (uint32_t i = 0; i < count; i++) {
+                    auto k = decodeTerm();
+                    auto v = decodeTerm();
+                    pairs.emplace_back(std::move(k), std::move(v));
+                }
+                return Term::map(std::move(pairs));
+            }
+            default: throw EtfError("unsupported ETF tag: " + std::to_string(tag));
         }
     }
 };
@@ -379,9 +404,12 @@ auto encodeEtf(const TermPtr& term) -> std::vector<uint8_t> {
 }
 
 auto decodeEtf(const uint8_t* data, size_t len) -> TermPtr {
-    if (len < 2) throw EtfError("ETF data too short");
-    if (data[0] != ETF_VERSION)
+    if (len < 2) {
+        throw EtfError("ETF data too short");
+    }
+    if (data[0] != ETF_VERSION) {
         throw EtfError("unsupported ETF version: " + std::to_string(data[0]));
+    }
     Decoder dec{data, len, 1};
     return dec.decodeTerm();
 }
@@ -399,11 +427,13 @@ struct SaxReader::Cursor {
     std::vector<bool> listTails;
 };
 
-SaxReader::SaxReader(const uint8_t* data, size_t len)
-    : m_cursor(new Cursor{{data, len, 1}, {}}) {
-    if (len < 2) throw EtfError("ETF data too short");
-    if (data[0] != ETF_VERSION)
+SaxReader::SaxReader(const uint8_t* data, size_t len) : m_cursor(new Cursor{{data, len, 1}, {}}) {
+    if (len < 2) {
+        throw EtfError("ETF data too short");
+    }
+    if (data[0] != ETF_VERSION) {
         throw EtfError("unsupported ETF version: " + std::to_string(data[0]));
+    }
 }
 
 SaxReader::~SaxReader() = default;
@@ -411,39 +441,49 @@ SaxReader::~SaxReader() = default;
 auto SaxReader::beginTuple() -> size_t {
     auto& dec = m_cursor->dec;
     const uint8_t tag = dec.read8();
-    if (tag == SMALL_TUPLE_EXT) return dec.read8();
-    if (tag == LARGE_TUPLE_EXT) return dec.read32();
-    throw EtfError("ETF SAX: expected tuple, got tag " +
-                   std::to_string(tag));
+    if (tag == SMALL_TUPLE_EXT) {
+        return dec.read8();
+    }
+    if (tag == LARGE_TUPLE_EXT) {
+        return dec.read32();
+    }
+    throw EtfError("ETF SAX: expected tuple, got tag " + std::to_string(tag));
 }
 
 auto SaxReader::beginList() -> size_t {
     auto& dec = m_cursor->dec;
-    if (dec.pos >= dec.len) throw EtfError("unexpected end of ETF data");
+    if (dec.pos >= dec.len) {
+        throw EtfError("unexpected end of ETF data");
+    }
     if (dec.data[dec.pos] == NIL_EXT) {
         dec.pos += 1;
         m_cursor->listTails.push_back(false);
         return 0;
     }
     const uint8_t tag = dec.read8();
-    if (tag != LIST_EXT)
-        throw EtfError("ETF SAX: expected list, got tag " +
-                       std::to_string(tag));
+    if (tag != LIST_EXT) {
+        throw EtfError("ETF SAX: expected list, got tag " + std::to_string(tag));
+    }
     m_cursor->listTails.push_back(true);
     return dec.read32();
 }
 
 auto SaxReader::endList() -> void {
     auto& tails = m_cursor->listTails;
-    if (tails.empty()) throw EtfError("ETF SAX: endList without beginList");
+    if (tails.empty()) {
+        throw EtfError("ETF SAX: endList without beginList");
+    }
     const bool tail = tails.back();
     tails.pop_back();
-    if (!tail) return;
+    if (!tail) {
+        return;
+    }
     // Strict where the tree decoder is lenient (it builds and drops the
     // tail): our writers only emit proper lists, so anything else is
     // corruption either way.
-    if (m_cursor->dec.read8() != NIL_EXT)
+    if (m_cursor->dec.read8() != NIL_EXT) {
         throw EtfError("ETF SAX: improper list tail");
+    }
 }
 
 auto SaxReader::readBool() -> bool {
@@ -453,69 +493,83 @@ auto SaxReader::readBool() -> bool {
 auto SaxReader::readAtom() -> std::string {
     auto& dec = m_cursor->dec;
     const uint8_t tag = dec.read8();
-    if (tag == ATOM_EXT || tag == ATOM_UTF8_EXT)
+    if (tag == ATOM_EXT || tag == ATOM_UTF8_EXT) {
         return dec.readString(dec.read16());
-    if (tag == SMALL_ATOM_EXT || tag == SMALL_ATOM_UTF8_EXT)
+    }
+    if (tag == SMALL_ATOM_EXT || tag == SMALL_ATOM_UTF8_EXT) {
         return dec.readString(dec.read8());
-    throw EtfError("ETF SAX: expected atom, got tag " +
-                   std::to_string(tag));
+    }
+    throw EtfError("ETF SAX: expected atom, got tag " + std::to_string(tag));
 }
 
 auto SaxReader::readInt() -> int64_t {
     auto& dec = m_cursor->dec;
     const uint8_t tag = dec.read8();
-    if (tag == SMALL_INTEGER_EXT) return dec.read8();
-    if (tag == INTEGER_EXT) return static_cast<int32_t>(dec.read32());
+    if (tag == SMALL_INTEGER_EXT) {
+        return dec.read8();
+    }
+    if (tag == INTEGER_EXT) {
+        return static_cast<int32_t>(dec.read32());
+    }
     if (tag == SMALL_BIG_EXT || tag == LARGE_BIG_EXT) {
         // Mirror readBig's fit rule (a fitting big reads as an integer;
         // the tree walk fails the same input when asInt meets BigInt).
-        const size_t count =
-            (tag == SMALL_BIG_EXT) ? dec.read8() : dec.read32();
+        const size_t count = (tag == SMALL_BIG_EXT) ? dec.read8() : dec.read32();
         const auto sign = dec.read8();
         uint64_t magnitude = 0;
         for (size_t i = 0; i < count; ++i) {
-            if (dec.pos >= dec.len)
+            if (dec.pos >= dec.len) {
                 throw EtfError("unexpected end of ETF data");
+            }
             const uint64_t byte = dec.data[dec.pos++];
-            if (i < 8)
+            if (i < 8) {
                 magnitude |= byte << (8 * i);
-            else if (byte != 0)
+            } else if (byte != 0) {
                 throw EtfError("ETF SAX: integer out of range");
+            }
         }
         if (sign) {
-            if (magnitude > (uint64_t(1) << 63))
+            if (magnitude > (uint64_t(1) << 63)) {
                 throw EtfError("ETF SAX: integer out of range");
-            if (magnitude == (uint64_t(1) << 63)) return INT64_MIN;
+            }
+            if (magnitude == (uint64_t(1) << 63)) {
+                return INT64_MIN;
+            }
             return -static_cast<int64_t>(magnitude);
         }
-        if (magnitude > uint64_t(INT64_MAX))
+        if (magnitude > uint64_t(INT64_MAX)) {
             throw EtfError("ETF SAX: integer out of range");
+        }
         return static_cast<int64_t>(magnitude);
     }
-    throw EtfError("ETF SAX: expected integer, got tag " +
-                   std::to_string(tag));
+    throw EtfError("ETF SAX: expected integer, got tag " + std::to_string(tag));
 }
 
 auto SaxReader::readBinary() -> std::string {
     auto& dec = m_cursor->dec;
-    if (dec.read8() != BINARY_EXT)
+    if (dec.read8() != BINARY_EXT) {
         throw EtfError("ETF SAX: expected binary");
+    }
     return dec.readString(dec.read32());
 }
 
 auto SaxReader::nextIsTuple() const -> bool {
     const auto& dec = m_cursor->dec;
-    if (dec.pos >= dec.len) return false;
+    if (dec.pos >= dec.len) {
+        return false;
+    }
     const uint8_t tag = dec.data[dec.pos];
     return tag == SMALL_TUPLE_EXT || tag == LARGE_TUPLE_EXT;
 }
 
 auto SaxReader::nextIsAtom() const -> bool {
     const auto& dec = m_cursor->dec;
-    if (dec.pos >= dec.len) return false;
+    if (dec.pos >= dec.len) {
+        return false;
+    }
     const uint8_t tag = dec.data[dec.pos];
-    return tag == ATOM_EXT || tag == SMALL_ATOM_EXT ||
-           tag == ATOM_UTF8_EXT || tag == SMALL_ATOM_UTF8_EXT;
+    return tag == ATOM_EXT || tag == SMALL_ATOM_EXT || tag == ATOM_UTF8_EXT ||
+           tag == SMALL_ATOM_UTF8_EXT;
 }
 
 } // namespace kex::beam

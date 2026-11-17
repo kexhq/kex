@@ -24,24 +24,33 @@ using ValuePtr = std::shared_ptr<Value>;
 class PlaceholderMisuse : public std::runtime_error {
 public:
     explicit PlaceholderMisuse(const std::string& name, const std::string& what)
-        : std::runtime_error("the value of `" + name + "` is not known at " +
-                             "compile time, and " + what + " needs it"),
+        : std::runtime_error(
+              "the value of `" + name + "` is not known at " + "compile time, and " + what +
+              " needs it"),
           m_name(name) {}
-    auto name() const -> const std::string& { return m_name; }
+    auto name() const -> const std::string& {
+        return m_name;
+    }
 
 private:
     std::string m_name;
 };
 
-struct UnitValue {};  // Kex `()` — void return from IO/effectful operations
-struct IntValue { int64_t value; };
+struct UnitValue {}; // Kex `()` — void return from IO/effectful operations
+struct IntValue {
+    int64_t value;
+};
 // The arbitrary-precision case of `Integer` — only ever constructed once a
 // value no longer fits in IntValue's int64_t (see integerResult/asInteger
 // in value.cxx and the overflow-checked arithmetic in evaluator.cxx).
 // IntValue stays the fast path for every value that fits; this is the
 // fallback, not a parallel "the" representation of Integer.
-struct BigIntValue { mpz_class value; };
-struct FloatValue { double value; };
+struct BigIntValue {
+    mpz_class value;
+};
+struct FloatValue {
+    double value;
+};
 // `codepointCache` is populated lazily by `cachedCodepoints` (value.cxx) the
 // first time anything indexes or counts this string by codepoint, and reused
 // by every later call on the SAME StringValue — sharing it, not the bytes.
@@ -54,24 +63,32 @@ struct FloatValue { double value; };
 // ever-shrinking-but-still-huge strings (kexhq/kex#379). Caching the decode
 // once on the shared StringValue turns that back into one decode total.
 struct StringValue {
-  std::string value;
-  mutable std::shared_ptr<std::vector<char32_t>> codepointCache;
+    std::string value;
+    mutable std::shared_ptr<std::vector<char32_t>> codepointCache;
 };
 
 // This string's codepoints, decoded once and cached on `s` for every later
 // caller — see `StringValue::codepointCache`'s own comment.
-auto cachedCodepoints(const StringValue &s) -> const std::vector<char32_t> &;
+auto cachedCodepoints(const StringValue& s) -> const std::vector<char32_t>&;
 
-struct BinaryValue { std::vector<uint8_t> bytes; };
+struct BinaryValue {
+    std::vector<uint8_t> bytes;
+};
 // A Unicode codepoint, not a byte: `"école".chars` yields five of these.
-struct CharValue { char32_t value; };
-struct BoolValue { bool value; };
-struct AtomValue { std::string name; };
+struct CharValue {
+    char32_t value;
+};
+struct BoolValue {
+    bool value;
+};
+struct AtomValue {
+    std::string name;
+};
 
 struct VariantValue {
-    std::string tag;         // "Ok", "Less", "None"
-    std::string parentType;  // "Result", "Ordering", "Optional", "" if unknown
-    std::vector<ValuePtr> args;  // payload — empty for zero-arg
+    std::string tag;            // "Ok", "Less", "None"
+    std::string parentType;     // "Result", "Ordering", "Optional", "" if unknown
+    std::vector<ValuePtr> args; // payload — empty for zero-arg
 
     // Declared type params of parentType, e.g. ["X"] for Optional<X> or
     // ["T", "E"] for Result<T, E> — empty if parentType is non-generic or
@@ -85,7 +102,9 @@ struct VariantValue {
     std::vector<int> argParamIndex;
 };
 
-struct ModuleValue { std::string name; };  // "Math", "IO", "File"
+struct ModuleValue {
+    std::string name;
+}; // "Math", "IO", "File"
 
 // A process handle — the runtime value of `spawn do ... end` and
 // `Process.self`. Deliberately thin: the real Fiber, mailbox, and links
@@ -94,13 +113,19 @@ struct ModuleValue { std::string name; };  // "Math", "IO", "File"
 // issues. `scheduler` is a non-owning back-pointer — it outlives every
 // ProcessValue it produces, since it's owned by the Evaluator for the
 // program's whole run.
-struct ProcessValue { uint64_t pid; class Scheduler* scheduler; };
+struct ProcessValue {
+    uint64_t pid;
+    class Scheduler* scheduler;
+};
 
 // `Task.start { block }`'s handle — a Task *is* spawn+monitor underneath
 // (same as runtime/src/kex_task.erl on the BEAM backend), but kept as its
 // own variant rather than reusing ProcessValue so typeName() says "Task"
 // and `.await` dispatches unambiguously without a tag check.
-struct TaskValue { uint64_t pid; class Scheduler* scheduler; };
+struct TaskValue {
+    uint64_t pid;
+    class Scheduler* scheduler;
+};
 
 // Typed handle for a process-backed serving state machine.  The state itself
 // lives in the server fiber; copying/configuring a handle never copies it.
@@ -110,9 +135,15 @@ struct ServerValue {
     int64_t timeoutMs = 5000;
 };
 
-struct ListValue { std::vector<ValuePtr> elements; };
-struct TupleValue { std::vector<ValuePtr> elements; };
-struct MapValue { std::vector<std::pair<ValuePtr, ValuePtr>> entries; };
+struct ListValue {
+    std::vector<ValuePtr> elements;
+};
+struct TupleValue {
+    std::vector<ValuePtr> elements;
+};
+struct MapValue {
+    std::vector<std::pair<ValuePtr, ValuePtr>> entries;
+};
 struct RangeValue {
     int64_t start;
     int64_t end;
@@ -147,7 +178,7 @@ struct StreamCell {
     // forced, releasing whatever it captured.
     std::function<std::pair<std::shared_ptr<struct Value>, StreamCellPtr>()> thunk;
     bool forced = false;
-    std::shared_ptr<struct Value> head;   // null once forced marks the end
+    std::shared_ptr<struct Value> head; // null once forced marks the end
     StreamCellPtr tail;
 
     // A forced chain is a linked list, so the default destructor would
@@ -159,7 +190,9 @@ struct StreamCell {
 
 // A null cell IS the empty stream, which is why `Stream.empty` needs no
 // special case anywhere downstream.
-struct StreamValue { StreamCellPtr cell; };
+struct StreamValue {
+    StreamCellPtr cell;
+};
 
 // Forces `cell` to its memoised element, answering it. Answers null at the
 // end of the stream — for an already-ended cell, and for a null cell, which
@@ -173,10 +206,12 @@ auto forceStream(const StreamCellPtr& cell) -> StreamCell*;
 // its head. The state is shared, so every reference to a feed advances one
 // cursor and a feed cannot be replayed.
 struct FeedState {
-    std::function<std::shared_ptr<struct Value>()> pull;  // null == spent
+    std::function<std::shared_ptr<struct Value>()> pull; // null == spent
     bool spent = false;
 };
-struct FeedValue { std::shared_ptr<FeedState> state; };
+struct FeedValue {
+    std::shared_ptr<FeedState> state;
+};
 
 // Pulls the next element, or null once the source is spent. Latches: a source
 // that has ended once is never asked again.
@@ -234,8 +269,8 @@ struct FunctionValue {
 // which is far worse than not collapsing: `"${userId}"` must never become the
 // text "Placeholder".
 struct PlaceholderValue {
-    std::size_t index;   // into the collapse site's captured expressions
-    std::string name;    // as written, for diagnostics
+    std::size_t index; // into the collapse site's captured expressions
+    std::string name;  // as written, for diagnostics
     // `.as(T)` applied to it, innermost first: still unknown, and put back
     // around the expression when it is reified (`rootId.as(String)`).
     std::vector<std::string> retags = {};
@@ -274,8 +309,8 @@ struct Value {
         RecordValue,
         FunctionValue,
         LambdaValue,
-        PlaceholderValue
-    > data;
+        PlaceholderValue>
+        data;
 
     static auto none() -> ValuePtr;
     static auto unit() -> ValuePtr;
@@ -287,8 +322,12 @@ struct Value {
     static auto character(char32_t v) -> ValuePtr;
     static auto boolean(bool v) -> ValuePtr;
     static auto atom(std::string name) -> ValuePtr;
-    static auto variant(std::string tag, std::string parentType = "", std::vector<ValuePtr> args = {},
-                         std::vector<std::string> typeParams = {}, std::vector<int> argParamIndex = {}) -> ValuePtr;
+    static auto variant(
+        std::string tag,
+        std::string parentType = "",
+        std::vector<ValuePtr> args = {},
+        std::vector<std::string> typeParams = {},
+        std::vector<int> argParamIndex = {}) -> ValuePtr;
     // Convenience wrappers over variant() for the prelude's builtin generic
     // ADTs (Optional<T> = Just(T) | None, Result<T, E> = Ok(T) | Error(E)) —
     // every stdlib call site that constructs one of these should go through
@@ -302,11 +341,12 @@ struct Value {
     static auto module(std::string name) -> ValuePtr;
     static auto process(uint64_t pid, class Scheduler* scheduler) -> ValuePtr;
     static auto task(uint64_t pid, class Scheduler* scheduler) -> ValuePtr;
-    static auto server(uint64_t pid, class Scheduler* scheduler,
-                       int64_t timeoutMs = 5000) -> ValuePtr;
+    static auto server(uint64_t pid, class Scheduler* scheduler, int64_t timeoutMs = 5000)
+        -> ValuePtr;
     static auto list(std::vector<ValuePtr> elems) -> ValuePtr;
     static auto tuple(std::vector<ValuePtr> elems) -> ValuePtr;
-    static auto record(std::string type, std::unordered_map<std::string, ValuePtr> fields) -> ValuePtr;
+    static auto record(std::string type, std::unordered_map<std::string, ValuePtr> fields)
+        -> ValuePtr;
 
     auto isNone() const -> bool;
     auto isTrue() const -> bool;
@@ -333,7 +373,6 @@ auto dispatchSupertypes(const std::string& typeName) -> std::vector<std::string>
 // runtime type (e.g. both "Int" and "Integer" match IntValue/BigIntValue).
 auto matchesTypeName(const std::string& name, const ValuePtr& v) -> bool;
 
-
 // Default module allowlist for sandboxed Evaluator.run / .runExpression.
 auto defaultEvalAllowList() -> const std::vector<std::string>&;
 
@@ -358,8 +397,7 @@ auto integerResult(mpz_class v) -> ValuePtr;
 // `what`, or nullopt when `v` is finite and the caller should proceed. The
 // caller raises in whichever style its layer uses (RuntimeError with a source
 // location in the evaluator, std::runtime_error in the stdlib intrinsics).
-auto nonFiniteFloatError(double v, const std::string& what)
-    -> std::optional<std::string>;
+auto nonFiniteFloatError(double v, const std::string& what) -> std::optional<std::string>;
 
 // Parses a whole string as an integer in `base` (2-36), with an optional
 // leading sign — nullopt if any character is not a digit of that base, or if

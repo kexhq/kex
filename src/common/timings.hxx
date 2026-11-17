@@ -30,19 +30,21 @@ inline auto milliseconds(Clock::duration duration) -> double {
 // timings are enabled.
 class PhaseTimer {
 public:
-    explicit PhaseTimer(int indent = 2, bool total = true)
-        : m_indent(indent), m_total(total) {}
+    explicit PhaseTimer(int indent = 2, bool total = true) : m_indent(indent), m_total(total) {}
 
     auto mark(const char* phase) -> void {
-        if (!enabled()) return;
+        if (!enabled()) {
+            return;
+        }
         const auto now = Clock::now();
-        if (m_total)
-            std::fprintf(stderr, "%*s%-26s %8.1f ms  (%8.1f ms total)\n",
-                         m_indent, "", phase, milliseconds(now - m_last),
-                         milliseconds(now - m_start));
-        else
-            std::fprintf(stderr, "%*s%-26s %8.1f ms\n", m_indent, "", phase,
-                         milliseconds(now - m_last));
+        if (m_total) {
+            std::fprintf(
+                stderr, "%*s%-26s %8.1f ms  (%8.1f ms total)\n", m_indent, "", phase,
+                milliseconds(now - m_last), milliseconds(now - m_start));
+        } else {
+            std::fprintf(
+                stderr, "%*s%-26s %8.1f ms\n", m_indent, "", phase, milliseconds(now - m_last));
+        }
         m_last = now;
     }
 

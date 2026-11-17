@@ -10,10 +10,12 @@ auto findTopic(std::string_view name) -> const Topic* {
         return std::tolower(static_cast<unsigned char>(a)) ==
                std::tolower(static_cast<unsigned char>(b));
     };
-    for (const auto& topic : topics())
-        if (std::equal(topic.name.begin(), topic.name.end(), name.begin(),
-                       name.end(), sameLetter))
+    for (const auto& topic : topics()) {
+        if (std::equal(
+                topic.name.begin(), topic.name.end(), name.begin(), name.end(), sameLetter)) {
             return &topic;
+        }
+    }
     return nullptr;
 }
 

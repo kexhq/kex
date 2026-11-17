@@ -22,10 +22,15 @@ namespace {
 // `@` cannot appear in a Kex identifier, so the encoding cannot collide with
 // an ordinary name.
 auto erlVar(const std::string& s) -> std::string {
-    if (s.empty()) return "_V";
+    if (s.empty()) {
+        return "_V";
+    }
     static const char* kHex = "0123456789ABCDEF";
     auto append = [&](std::string& out, unsigned char c) {
-        if (std::isalnum(c) || c == '_' || c == '@') { out += static_cast<char>(c); return; }
+        if (std::isalnum(c) || c == '_' || c == '@') {
+            out += static_cast<char>(c);
+            return;
+        }
         out += '@';
         out += kHex[c >> 4];
         out += kHex[c & 0x0F];
@@ -51,7 +56,9 @@ auto erlVar(const std::string& s) -> std::string {
         out += "V@@";
         from = 0;
     }
-    for (size_t i = from; i < s.size(); i++) append(out, static_cast<unsigned char>(s[i]));
+    for (size_t i = from; i < s.size(); i++) {
+        append(out, static_cast<unsigned char>(s[i]));
+    }
     return out;
 }
 
@@ -63,10 +70,11 @@ auto erlBinary(const std::string& s) -> std::string {
     std::string out = "#{";
     bool first = true;
     for (unsigned char c : s) {
-        if (!first) out += ",";
+        if (!first) {
+            out += ",";
+        }
         first = false;
-        out += "#<" + std::to_string(static_cast<int>(c))
-             + ">(8,1,'integer',['unsigned'|['big']])";
+        out += "#<" + std::to_string(static_cast<int>(c)) + ">(8,1,'integer',['unsigned'|['big']])";
     }
     return out + "}#";
 }
@@ -91,45 +99,62 @@ struct Emitter {
     // (see the Lambda case in emit), while the function it sits in only needs
     // to know that one exists — see hasBlockReturn.
     static auto hasReturn(const ExprPtr& e, bool throughLambdas = false) -> bool {
-        if (!e) return false;
-        if (std::holds_alternative<Return>(e->node)) return true;
+        if (!e) {
+            return false;
+        }
+        if (std::holds_alternative<Return>(e->node)) {
+            return true;
+        }
         // A named local function's returns are its own.
-        if (const auto* lambda = std::get_if<Lambda>(&e->node))
+        if (const auto* lambda = std::get_if<Lambda>(&e->node)) {
             return throughLambdas && !lambda->ownReturnScope &&
                    hasReturn(lambda->body, throughLambdas);
+        }
         // Everything else — loops and guard continuations included: they
         // lower to a LetRec but stay in the SAME return scope, so a `return`
         // inside a loop escapes the enclosing function.
-        return anyChild(*e, [&](const ExprPtr& child) {
-            return hasReturn(child, throughLambdas);
-        });
+        return anyChild(*e, [&](const ExprPtr& child) { return hasReturn(child, throughLambdas); });
     }
 
     // Does a block (Lambda) somewhere under this body contain a `return`? Such
     // a return leaves the function the block was WRITTEN in, Ruby-style, so
     // that function needs a return tag the block can name (kexhq/kex#408).
     static auto hasBlockReturn(const ExprPtr& e) -> bool {
-        if (!e) return false;
-        if (const auto* lambda = std::get_if<Lambda>(&e->node))
-            return !lambda->ownReturnScope &&
-                   hasReturn(lambda->body, /*throughLambdas=*/true);
+        if (!e) {
+            return false;
+        }
+        if (const auto* lambda = std::get_if<Lambda>(&e->node)) {
+            return !lambda->ownReturnScope && hasReturn(lambda->body, /*throughLambdas=*/true);
+        }
         return anyChild(*e, [](const ExprPtr& child) { return hasBlockReturn(child); });
     }
 
     // Wrap a body so a thrown {'kex_return', V} becomes the value; anything
     // else is re-raised. Structure mirrors what erlc emits for try/catch.
-    auto uniq(const char* p) -> std::string { return std::string(p) + std::to_string(wildCounter++); }
+    auto uniq(const char* p) -> std::string {
+        return std::string(p) + std::to_string(wildCounter++);
+    }
     auto wrapReturnCatch(const std::string& body) -> std::string {
         std::string rv = uniq("_Ret"), rvv = uniq("_RV");
         std::string cls = uniq("_Cls"), rsn = uniq("_Rsn"), trc = uniq("_Trc");
         std::string t = uniq("_T"), c = uniq("_C"), r = uniq("_R"), tr = uniq("_Tr");
-        return "try\n    " + body + "\n"
-               "of <" + rv + "> -> " + rv + "\n"
-               "catch <" + cls + ", " + rsn + ", " + trc + "> ->\n"
-               "  case <" + cls + ", " + rsn + ", " + trc + "> of\n"
-               "    <'throw', {'kex_return', " + rvv + "}, " + t + "> when 'true' -> " + rvv + "\n"
-               "    <" + c + ", " + r + ", " + tr + "> when 'true' -> primop 'raise'(" +
-                    trc + ", " + rsn + ")\n"
+        return "try\n    " + body +
+               "\n"
+               "of <" +
+               rv + "> -> " + rv +
+               "\n"
+               "catch <" +
+               cls + ", " + rsn + ", " + trc +
+               "> ->\n"
+               "  case <" +
+               cls + ", " + rsn + ", " + trc +
+               "> of\n"
+               "    <'throw', {'kex_return', " +
+               rvv + "}, " + t + "> when 'true' -> " + rvv +
+               "\n"
+               "    <" +
+               c + ", " + r + ", " + tr + "> when 'true' -> primop 'raise'(" + trc + ", " + rsn +
+               ")\n"
                "  end";
     }
     // Emit a clause body, wrapping it in the return try/catch iff it contains
@@ -148,7 +173,9 @@ struct Emitter {
         const auto savedTag = m_returnTag;
         m_returnThrows = true;
         m_inBlock = false;
-        if (blockReturn) m_returnTag = uniq("_RetTag");
+        if (blockReturn) {
+            m_returnTag = uniq("_RetTag");
+        }
         std::string b = blockReturn ? wrapTaggedReturnCatch(emit(body), m_returnTag)
                                     : wrapReturnCatch(emit(body));
         m_returnThrows = saved;
@@ -171,18 +198,36 @@ struct Emitter {
         std::string c = uniq("_C"), r = uniq("_R"), tr = uniq("_Tr");
         const std::string key = "{'kex_frame', " + tag + "}";
         const std::string erase = "call 'erlang':'erase'(" + key + ")";
-        return "let <" + tag + "> = call 'erlang':'make_ref'()\n"
-               "in do call 'erlang':'put'(" + key + ", 'true')\n"
-               "try\n    " + body + "\n"
-               "of <" + rv + "> -> do " + erase + " " + rv + "\n"
-               "catch <" + cls + ", " + rsn + ", " + trc + "> ->\n"
-               "  do " + erase + "\n"
-               "  case <" + cls + ", " + rsn + ", " + trc + "> of\n"
-               "    <'throw', {'kex_return', " + rvv + "}, " + t + "> when 'true' -> " + rvv + "\n"
-               "    <'throw', {'kex_return', " + got + ", " + rvt + "}, " + t2 + "> when call 'erlang':'=:='(" +
-                    got + ", " + tag + ") -> " + rvt + "\n"
-               "    <" + c + ", " + r + ", " + tr + "> when 'true' -> primop 'raise'(" +
-                    trc + ", " + rsn + ")\n"
+        return "let <" + tag +
+               "> = call 'erlang':'make_ref'()\n"
+               "in do call 'erlang':'put'(" +
+               key +
+               ", 'true')\n"
+               "try\n    " +
+               body +
+               "\n"
+               "of <" +
+               rv + "> -> do " + erase + " " + rv +
+               "\n"
+               "catch <" +
+               cls + ", " + rsn + ", " + trc +
+               "> ->\n"
+               "  do " +
+               erase +
+               "\n"
+               "  case <" +
+               cls + ", " + rsn + ", " + trc +
+               "> of\n"
+               "    <'throw', {'kex_return', " +
+               rvv + "}, " + t + "> when 'true' -> " + rvv +
+               "\n"
+               "    <'throw', {'kex_return', " +
+               got + ", " + rvt + "}, " + t2 + "> when call 'erlang':'=:='(" + got + ", " + tag +
+               ") -> " + rvt +
+               "\n"
+               "    <" +
+               c + ", " + r + ", " + tr + "> when 'true' -> primop 'raise'(" + trc + ", " + rsn +
+               ")\n"
                "  end";
     }
 
@@ -193,42 +238,60 @@ struct Emitter {
         std::string cls = uniq("_Cls"), rsn = uniq("_Rsn"), trc = uniq("_Trc");
         std::string t = uniq("_T"), got = uniq("_Tg");
         std::string c = uniq("_C"), r = uniq("_R"), tr = uniq("_Tr");
-        return "try\n    " + body + "\n"
-               "of <" + rv + "> -> " + rv + "\n"
-               "catch <" + cls + ", " + rsn + ", " + trc + "> ->\n"
-               "  case <" + cls + ", " + rsn + ", " + trc + "> of\n"
-               "    <'throw', {'kex_return', " + got + ", " + rvt + "}, " + t + "> when call 'erlang':'=:='(" +
-                    got + ", " + tag + ") ->\n"
-               "      case call 'erlang':'get'({'kex_frame', " + tag + "}) of\n"
-               "        <'true'> when 'true' -> primop 'raise'(" + trc + ", " + rsn + ")\n"
-               "        <" + uniq("_Gone") + "> when 'true' -> " + rvt + "\n"
+        return "try\n    " + body +
+               "\n"
+               "of <" +
+               rv + "> -> " + rv +
+               "\n"
+               "catch <" +
+               cls + ", " + rsn + ", " + trc +
+               "> ->\n"
+               "  case <" +
+               cls + ", " + rsn + ", " + trc +
+               "> of\n"
+               "    <'throw', {'kex_return', " +
+               got + ", " + rvt + "}, " + t + "> when call 'erlang':'=:='(" + got + ", " + tag +
+               ") ->\n"
+               "      case call 'erlang':'get'({'kex_frame', " +
+               tag +
+               "}) of\n"
+               "        <'true'> when 'true' -> primop 'raise'(" +
+               trc + ", " + rsn +
+               ")\n"
+               "        <" +
+               uniq("_Gone") + "> when 'true' -> " + rvt +
+               "\n"
                "      end\n"
-               "    <" + c + ", " + r + ", " + tr + "> when 'true' -> primop 'raise'(" +
-                    trc + ", " + rsn + ")\n"
+               "    <" +
+               c + ", " + r + ", " + tr + "> when 'true' -> primop 'raise'(" + trc + ", " + rsn +
+               ")\n"
                "  end";
     }
 
     // Core Erlang treats `_` as a real variable, so repeating it within one
     // pattern is a duplicate-variable error — each wildcard needs a distinct
     // fresh name.
-    auto freshWild() -> std::string { return "_Wc" + std::to_string(wildCounter++); }
+    auto freshWild() -> std::string {
+        return "_Wc" + std::to_string(wildCounter++);
+    }
     auto emitLit(const Lit& l) -> std::string {
         switch (l.kind) {
-            case LitKind::Int:    return l.text;
-            case LitKind::Float:  return l.text;
+            case LitKind::Int: return l.text;
+            case LitKind::Float: return l.text;
             // A Char is a tagged tuple {'Char', Codepoint} — a bare integer
             // is indistinguishable from Int (display, dispatch, [Char] vs
             // [Int]). Works in both expression and pattern position.
-            case LitKind::Char:
-                return "{'Char'," + std::to_string(charCodepoint(l.text)) + "}";
+            case LitKind::Char: return "{'Char'," + std::to_string(charCodepoint(l.text)) + "}";
             case LitKind::String: return erlBinary(l.text);
-            case LitKind::Bool:   return l.boolValue ? "'true'" : "'false'";
-            case LitKind::None:   return "'None'";
+            case LitKind::Bool: return l.boolValue ? "'true'" : "'false'";
+            case LitKind::None: return "'None'";
             case LitKind::Atom: {
                 // A quoted Kex atom (`:"it's"`) can hold quote and backslash.
                 std::string quoted = "'";
                 for (char c : l.text) {
-                    if (c == '\'' || c == '\\') quoted += '\\';
+                    if (c == '\'' || c == '\\') {
+                        quoted += '\\';
+                    }
                     quoted += c;
                 }
                 return quoted + "'";
@@ -244,25 +307,27 @@ struct Emitter {
             // lowerer routes everything except provably-integer addition
             // through kex_intrinsic_number:add, so reaching here means both
             // operands are integers and the raw BIF is exact.
-            case Op::Add:    return "call 'erlang':'+'(" + a(0) + ", " + a(1) + ")";
-            case Op::Sub:    return "call 'erlang':'-'(" + a(0) + ", " + a(1) + ")";
-            case Op::Mul:    return "call 'erlang':'*'(" + a(0) + ", " + a(1) + ")";
-            case Op::Div:    return "call 'kex_intrinsic_number':'divide'(" + a(0) + ", " + a(1) + ")";
-            case Op::Mod:    return "call 'erlang':'rem'(" + a(0) + ", " + a(1) + ")";
-            case Op::Pow:    return "call 'kex_intrinsic_number':'pow'(" + a(0) + ", " + a(1) + ")";
-            case Op::Neg:    return "call 'erlang':'-'(" + a(0) + ")";
-            case Op::Eq:     return "call 'erlang':'=:='(" + a(0) + ", " + a(1) + ")";
-            case Op::Neq:    return "call 'erlang':'=/='(" + a(0) + ", " + a(1) + ")";
-            case Op::Lt:     return "call 'erlang':'<'(" + a(0) + ", " + a(1) + ")";
-            case Op::Gt:     return "call 'erlang':'>'(" + a(0) + ", " + a(1) + ")";
-            case Op::Lte:    return "call 'erlang':'=<'(" + a(0) + ", " + a(1) + ")";
-            case Op::Gte:    return "call 'erlang':'>='(" + a(0) + ", " + a(1) + ")";
-            case Op::Not:    return "call 'erlang':'not'(" + a(0) + ")";
+            case Op::Add: return "call 'erlang':'+'(" + a(0) + ", " + a(1) + ")";
+            case Op::Sub: return "call 'erlang':'-'(" + a(0) + ", " + a(1) + ")";
+            case Op::Mul: return "call 'erlang':'*'(" + a(0) + ", " + a(1) + ")";
+            case Op::Div: return "call 'kex_intrinsic_number':'divide'(" + a(0) + ", " + a(1) + ")";
+            case Op::Mod: return "call 'erlang':'rem'(" + a(0) + ", " + a(1) + ")";
+            case Op::Pow: return "call 'kex_intrinsic_number':'pow'(" + a(0) + ", " + a(1) + ")";
+            case Op::Neg: return "call 'erlang':'-'(" + a(0) + ")";
+            case Op::Eq: return "call 'erlang':'=:='(" + a(0) + ", " + a(1) + ")";
+            case Op::Neq: return "call 'erlang':'=/='(" + a(0) + ", " + a(1) + ")";
+            case Op::Lt: return "call 'erlang':'<'(" + a(0) + ", " + a(1) + ")";
+            case Op::Gt: return "call 'erlang':'>'(" + a(0) + ", " + a(1) + ")";
+            case Op::Lte: return "call 'erlang':'=<'(" + a(0) + ", " + a(1) + ")";
+            case Op::Gte: return "call 'erlang':'>='(" + a(0) + ", " + a(1) + ")";
+            case Op::Not: return "call 'erlang':'not'(" + a(0) + ")";
             case Op::Concat: return "call 'erlang':'++'(" + a(0) + ", " + a(1) + ")";
-            case Op::And:    return "case " + a(0) + " of 'true' when 'true' -> " + a(1) +
-                                    " 'false' when 'true' -> 'false' end";
-            case Op::Or:     return "case " + a(0) + " of 'true' when 'true' -> 'true'" +
-                                    " 'false' when 'true' -> " + a(1) + " end";
+            case Op::And:
+                return "case " + a(0) + " of 'true' when 'true' -> " + a(1) +
+                       " 'false' when 'true' -> 'false' end";
+            case Op::Or:
+                return "case " + a(0) + " of 'true' when 'true' -> 'true'" +
+                       " 'false' when 'true' -> " + a(1) + " end";
         }
         return "'undefined'";
     }
@@ -270,11 +335,14 @@ struct Emitter {
     auto emitCall(const Call& c) -> std::string {
         std::string args;
         for (size_t i = 0; i < c.args.size(); i++) {
-            if (i) args += ", ";
+            if (i) {
+                args += ", ";
+            }
             args += emit(c.args[i]);
         }
-        if (c.module.empty())
+        if (c.module.empty()) {
             return "apply '" + c.name + "'/" + std::to_string(c.arity) + "(" + args + ")";
+        }
         return "call '" + c.module + "':'" + c.name + "'(" + args + ")";
     }
 
@@ -286,7 +354,10 @@ struct Emitter {
     // every path funnels through emitPattern.
     std::vector<std::string> patGuards;
 
-    auto beginPatGuards() -> void { patGuards.clear(); charLets.clear(); }
+    auto beginPatGuards() -> void {
+        patGuards.clear();
+        charLets.clear();
+    }
 
     // Combines the collected conjuncts with a clause's own guard, nesting
     // `erlang:and`. Eager evaluation is safe HERE for one narrow reason: every
@@ -305,8 +376,12 @@ struct Emitter {
             acc = acc.empty() ? g : "call 'erlang':'and'(" + acc + ", " + g + ")";
         }
         patGuards.clear();
-        if (acc.empty()) return own.empty() ? "'true'" : own;
-        if (own.empty()) return acc;
+        if (acc.empty()) {
+            return own.empty() ? "'true'" : own;
+        }
+        if (own.empty()) {
+            return acc;
+        }
         return "call 'erlang':'and'(" + acc + ", " + own + ")";
     }
 
@@ -321,10 +396,12 @@ struct Emitter {
         return std::exchange(charLets, {});
     }
 
-    static auto withCharLets(const std::vector<std::pair<std::string, std::string>>& lets,
-                             std::string expr) -> std::string {
-        for (auto let = lets.rbegin(); let != lets.rend(); ++let)
+    static auto
+    withCharLets(const std::vector<std::pair<std::string, std::string>>& lets, std::string expr)
+        -> std::string {
+        for (auto let = lets.rbegin(); let != lets.rend(); ++let) {
             expr = "let <" + let->first + "> = {'Char', " + let->second + "} in " + expr;
+        }
         return expr;
     }
 
@@ -338,7 +415,9 @@ struct Emitter {
                 value = std::to_string(charCodepoint(element->litText));
             } else {
                 value = uniq("_Cp");
-                if (element->kind == PatKind::Var) charLets.push_back({erlVar(element->name), value});
+                if (element->kind == PatKind::Var) {
+                    charLets.push_back({erlVar(element->name), value});
+                }
             }
             segments.push_back("#<" + value + ">" + utf8);
         }
@@ -346,54 +425,74 @@ struct Emitter {
             if (p.rest->kind == PatKind::Lit) {
                 const auto bytes = erlBinary(p.rest->litText);
                 // The literal's own byte segments, without its #{ }#.
-                if (bytes.size() > 4) segments.push_back(bytes.substr(2, bytes.size() - 4));
+                if (bytes.size() > 4) {
+                    segments.push_back(bytes.substr(2, bytes.size() - 4));
+                }
             } else {
                 const auto tail = p.rest->kind == PatKind::Var ? erlVar(p.rest->name) : freshWild();
                 segments.push_back("#<" + tail + ">('all',8,'binary',['unsigned'|['big']])");
             }
         }
         std::string out = "#{";
-        for (std::size_t i = 0; i < segments.size(); ++i) out += (i ? "," : "") + segments[i];
+        for (std::size_t i = 0; i < segments.size(); ++i) {
+            out += (i ? "," : "") + segments[i];
+        }
         return out + "}#";
     }
 
     auto emitPattern(const Pattern& p) -> std::string {
         switch (p.kind) {
             case PatKind::Wild: return freshWild();
-            case PatKind::Var:  return erlVar(p.name);
+            case PatKind::Var: return erlVar(p.name);
             case PatKind::Lit: {
-                Lit l; l.kind = p.litKind; l.text = p.litText; l.boolValue = p.litBool;
+                Lit l;
+                l.kind = p.litKind;
+                l.text = p.litText;
+                l.boolValue = p.litBool;
                 if (p.litKind == LitKind::Int || p.litKind == LitKind::Float) {
                     std::string v = "_Nc" + std::to_string(wildCounter++);
-                    patGuards.push_back("call 'erlang':'=='(" + v + ", " +
-                                        emitLit(l) + ")");
+                    patGuards.push_back("call 'erlang':'=='(" + v + ", " + emitLit(l) + ")");
                     return v;
                 }
                 return emitLit(l);
             }
             case PatKind::Construct: {
-                if (p.args.empty()) return "'" + p.tag + "'";
+                if (p.args.empty()) {
+                    return "'" + p.tag + "'";
+                }
                 std::string s = "{'" + p.tag + "'";
-                for (const auto& a : p.args) s += ", " + emitPattern(*a);
+                for (const auto& a : p.args) {
+                    s += ", " + emitPattern(*a);
+                }
                 return s + "}";
             }
             case PatKind::Tuple: {
                 std::string s = "{";
                 for (size_t i = 0; i < p.args.size(); i++) {
-                    if (i) s += ", ";
+                    if (i) {
+                        s += ", ";
+                    }
                     s += emitPattern(*p.args[i]);
                 }
                 return s + "}";
             }
             case PatKind::List: {
-                if (p.ofString) return emitStringPattern(p);
-                if (p.args.empty() && !p.rest) return "[]";
+                if (p.ofString) {
+                    return emitStringPattern(p);
+                }
+                if (p.args.empty() && !p.rest) {
+                    return "[]";
+                }
                 std::string s = "[";
                 for (size_t i = 0; i < p.args.size(); i++) {
-                    if (i) s += ", ";
+                    if (i) {
+                        s += ", ";
+                    }
                     s += emitPattern(*p.args[i]);
                 }
-                if (p.rest) s += "|" + emitPattern(*p.rest);
+                if (p.rest) {
+                    s += "|" + emitPattern(*p.rest);
+                }
                 return s + "]";
             }
         }
@@ -407,20 +506,30 @@ struct Emitter {
         bool multi = m.subjects.size() > 1;
         auto seq = [&](auto&& emitOne, size_t n, auto&& get) {
             std::string s;
-            for (size_t i = 0; i < n; i++) { if (i) s += ", "; s += emitOne(get(i)); }
+            for (size_t i = 0; i < n; i++) {
+                if (i) {
+                    s += ", ";
+                }
+                s += emitOne(get(i));
+            }
             return s;
         };
-        std::string subj = multi
-            ? "<" + seq([&](const ExprPtr& e){ return emit(e); }, m.subjects.size(),
-                        [&](size_t i)->const ExprPtr&{ return m.subjects[i]; }) + ">"
-            : emit(m.subjects[0]);
+        std::string subj =
+            multi ? "<" +
+                        seq([&](const ExprPtr& e) { return emit(e); }, m.subjects.size(),
+                            [&](size_t i) -> const ExprPtr& { return m.subjects[i]; }) +
+                        ">"
+                  : emit(m.subjects[0]);
         std::string out = "case " + subj + " of\n";
         for (const auto& cl : m.clauses) {
             beginPatGuards();
-            std::string pat = multi
-                ? "<" + seq([&](const PatternPtr& p){ return emitPattern(*p); }, cl.patterns.size(),
-                            [&](size_t i)->const PatternPtr&{ return cl.patterns[i]; }) + ">"
-                : emitPattern(*cl.patterns[0]);
+            std::string pat =
+                multi ? "<" +
+                            seq([&](const PatternPtr& p) { return emitPattern(*p); },
+                                cl.patterns.size(),
+                                [&](size_t i) -> const PatternPtr& { return cl.patterns[i]; }) +
+                            ">"
+                      : emitPattern(*cl.patterns[0]);
             out += "  " + pat;
             const auto lets = takeCharLets();
             out += " when " + withCharLets(lets, takePatGuards(cl.guard ? emit(*cl.guard) : ""));
@@ -438,215 +547,290 @@ struct Emitter {
             beginPatGuards();
             std::string pat = emitPattern(*cl.pattern);
             const auto lets = takeCharLets();
-            if (r.senderVar)
+            if (r.senderVar) {
                 out += "  {" + erlVar(*r.senderVar) + ", " + pat + "}";
-            else
+            } else {
                 out += "  " + pat;
-            const auto senderGuard = r.senderVar
-                ? "call 'erlang':'is_pid'(" + erlVar(*r.senderVar) + ")"
-                : "";
+            }
+            const auto senderGuard =
+                r.senderVar ? "call 'erlang':'is_pid'(" + erlVar(*r.senderVar) + ")" : "";
             out += " when " + takePatGuards(senderGuard) + " ->\n    " +
                    withCharLets(lets, emit(cl.body)) + "\n";
         }
-        if (r.timeout && r.afterBody)
+        if (r.timeout && r.afterBody) {
             out += "after " + emit(*r.timeout) + " ->\n    " + emit(*r.afterBody);
-        else
+        } else {
             out += "after 'infinity' ->\n    'true'";
+        }
         return out;
     }
 
     auto emit(const ExprPtr& e) -> std::string {
-        return std::visit([&](const auto& n) -> std::string {
-            using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, Lit>) {
-                return emitLit(n);
-            } else if constexpr (std::is_same_v<T, Var>) {
-                return erlVar(n.name);
-            } else if constexpr (std::is_same_v<T, Intrinsic>) {
-                return emitIntrinsic(n);
-            } else if constexpr (std::is_same_v<T, Call>) {
-                return emitCall(n);
-            } else if constexpr (std::is_same_v<T, Let>) {
-                return "let <" + erlVar(n.name) + "> =\n    " + emit(n.value) +
-                       "\nin\n" + emit(n.body);
-            } else if constexpr (std::is_same_v<T, Match>) {
-                return emitMatch(n);
-            } else if constexpr (std::is_same_v<T, Receive>) {
-                return emitReceive(n);
-            } else if constexpr (std::is_same_v<T, MakeTuple>) {
-                std::string s = "{";
-                for (size_t i = 0; i < n.elements.size(); i++) {
-                    if (i) s += ", ";
-                    s += emit(n.elements[i]);
-                }
-                return s + "}";
-            } else if constexpr (std::is_same_v<T, MakeList>) {
-                if (n.elements.empty() && !n.rest) return "[]";
-                std::string s = "[";
-                for (size_t i = 0; i < n.elements.size(); i++) {
-                    if (i) s += ", ";
-                    s += emit(n.elements[i]);
-                }
-                if (n.rest) s += "|" + emit(*n.rest);
-                return s + "]";
-            } else if constexpr (std::is_same_v<T, Construct>) {
-                if (n.args.empty()) return "'" + n.tag + "'";
-                std::string s = "{'" + n.tag + "'";
-                for (const auto& a : n.args) s += ", " + emit(a);
-                return s + "}";
-            } else if constexpr (std::is_same_v<T, Lambda>) {
-                std::string head = "(";
-                for (size_t i = 0; i < n.params.size(); i++) {
-                    if (i) head += ", ";
-                    head += erlVar(n.params[i]);
-                }
-                head += ")";
-                // A `return` in a block leaves the function the block was
-                // written in, Ruby-style (kexhq/kex#408). It used to follow
-                // the enclosing function's mode by accident: a throw past the
-                // fun when that function had an early return of its own, and
-                // a plain block value when it had none.
-                //
-                // With no enclosing function to name (a block at a module's
-                // top level), the block is its own return scope.
-                if (m_returnTag.empty() || n.ownReturnScope) {
+        return std::visit(
+            [&](const auto& n) -> std::string {
+                using T = std::decay_t<decltype(n)>;
+                if constexpr (std::is_same_v<T, Lit>) {
+                    return emitLit(n);
+                } else if constexpr (std::is_same_v<T, Var>) {
+                    return erlVar(n.name);
+                } else if constexpr (std::is_same_v<T, Intrinsic>) {
+                    return emitIntrinsic(n);
+                } else if constexpr (std::is_same_v<T, Call>) {
+                    return emitCall(n);
+                } else if constexpr (std::is_same_v<T, Let>) {
+                    return "let <" + erlVar(n.name) + "> =\n    " + emit(n.value) + "\nin\n" +
+                           emit(n.body);
+                } else if constexpr (std::is_same_v<T, Match>) {
+                    return emitMatch(n);
+                } else if constexpr (std::is_same_v<T, Receive>) {
+                    return emitReceive(n);
+                } else if constexpr (std::is_same_v<T, MakeTuple>) {
+                    std::string s = "{";
+                    for (size_t i = 0; i < n.elements.size(); i++) {
+                        if (i) {
+                            s += ", ";
+                        }
+                        s += emit(n.elements[i]);
+                    }
+                    return s + "}";
+                } else if constexpr (std::is_same_v<T, MakeList>) {
+                    if (n.elements.empty() && !n.rest) {
+                        return "[]";
+                    }
+                    std::string s = "[";
+                    for (size_t i = 0; i < n.elements.size(); i++) {
+                        if (i) {
+                            s += ", ";
+                        }
+                        s += emit(n.elements[i]);
+                    }
+                    if (n.rest) {
+                        s += "|" + emit(*n.rest);
+                    }
+                    return s + "]";
+                } else if constexpr (std::is_same_v<T, Construct>) {
+                    if (n.args.empty()) {
+                        return "'" + n.tag + "'";
+                    }
+                    std::string s = "{'" + n.tag + "'";
+                    for (const auto& a : n.args) {
+                        s += ", " + emit(a);
+                    }
+                    return s + "}";
+                } else if constexpr (std::is_same_v<T, Lambda>) {
+                    std::string head = "(";
+                    for (size_t i = 0; i < n.params.size(); i++) {
+                        if (i) {
+                            head += ", ";
+                        }
+                        head += erlVar(n.params[i]);
+                    }
+                    head += ")";
+                    // A `return` in a block leaves the function the block was
+                    // written in, Ruby-style (kexhq/kex#408). It used to follow
+                    // the enclosing function's mode by accident: a throw past the
+                    // fun when that function had an early return of its own, and
+                    // a plain block value when it had none.
+                    //
+                    // With no enclosing function to name (a block at a module's
+                    // top level), the block is its own return scope.
+                    if (m_returnTag.empty() || n.ownReturnScope) {
+                        const bool saved = m_returnThrows;
+                        m_returnThrows = false;
+                        auto own = emitClauseBody(n.body);
+                        m_returnThrows = saved;
+                        return "fun " + head + " ->\n    " + own;
+                    }
                     const bool saved = m_returnThrows;
-                    m_returnThrows = false;
-                    auto own = emitClauseBody(n.body);
+                    const bool savedBlock = m_inBlock;
+                    m_returnThrows = true;
+                    m_inBlock = true;
+                    auto body = emit(n.body);
                     m_returnThrows = saved;
-                    return "fun " + head + " ->\n    " + own;
-                }
-                const bool saved = m_returnThrows;
-                const bool savedBlock = m_inBlock;
-                m_returnThrows = true;
-                m_inBlock = true;
-                auto body = emit(n.body);
-                m_returnThrows = saved;
-                m_inBlock = savedBlock;
-                if (hasReturn(n.body)) body = wrapBlockReturnCatch(body, m_returnTag);
-                return "fun " + head + " ->\n    " + body;
-            } else if constexpr (std::is_same_v<T, CallIndirect>) {
-                std::string args;
-                for (size_t i = 0; i < n.args.size(); i++) {
-                    if (i) args += ", ";
-                    args += emit(n.args[i]);
-                }
-                // A function value is called with the arity it has when that
-                // matches (the fast path, a plain apply); otherwise through
-                // applyFlexible, which fills a partial application in over
-                // several calls or feeds a returned function the rest. A
-                // curried capture used to be nested one-argument funs, so the
-                // runtime calling a `~handler(x)` route with (request,
-                // context) got `badarity` (kexhq/kex#408).
-                const auto callee = uniq("_Callee");
-                const auto count = std::to_string(n.args.size());
-                return "let <" + callee + "> = " + emit(n.callee) + "\n"
-                       "in case call 'erlang':'is_function'(" + callee + ", " + count + ") of\n"
-                       "  <'true'> when 'true' -> apply " + callee + "(" + args + ")\n"
-                       "  <" + uniq("_NotArity") + "> when 'true' -> call 'kex_intrinsic_fun':'applyFlexible'(" +
-                       callee + ", [" + args + "])\n"
-                       "end";
-            } else if constexpr (std::is_same_v<T, LetRec>) {
-                std::string head = "(";
-                for (size_t i = 0; i < n.params.size(); i++) {
-                    if (i) head += ", ";
-                    head += erlVar(n.params[i]);
-                }
-                head += ")";
-                return "letrec '" + n.name + "'/" + std::to_string(n.params.size()) + " =\n"
-                       "  fun " + head + " ->\n    " + emit(n.funBody) + "\n"
-                       "in\n" + emit(n.contBody);
-            } else if constexpr (std::is_same_v<T, Return>) {
-                // In a function that has any early return, a Return throws so
-                // it escapes nested contexts (a match arm whose value is
-                // consumed by an enclosing `let`); the function-body try/catch
-                // turns it back into the result. In a return-free tail spot
-                // it's just the value.
-                if (m_inBlock && !m_returnTag.empty())
-                    return "call 'erlang':'throw'({'kex_return', " + m_returnTag + ", " +
-                           emit(n.value) + "})";
-                if (m_returnThrows)
-                    return "call 'erlang':'throw'({'kex_return', " + emit(n.value) + "})";
-                return emit(n.value);
-            } else if constexpr (std::is_same_v<T, TryThrow>) {
-                return "call 'erlang':'throw'({'kex_try_error', " + emit(n.error) + "})";
-            } else if constexpr (std::is_same_v<T, TryCatch>) {
-                std::string errVar = uniq("_TryErr");
-                std::string cls = uniq("_Cls"), rsn = uniq("_Rsn"), trc = uniq("_Trc");
-                std::string rv = uniq("_TryRV");
-                std::string trcAlias = uniq("_TrcA");
-                std::string c2 = uniq("_C"), r2 = uniq("_R"), tr2 = uniq("_Tr");
+                    m_inBlock = savedBlock;
+                    if (hasReturn(n.body)) {
+                        body = wrapBlockReturnCatch(body, m_returnTag);
+                    }
+                    return "fun " + head + " ->\n    " + body;
+                } else if constexpr (std::is_same_v<T, CallIndirect>) {
+                    std::string args;
+                    for (size_t i = 0; i < n.args.size(); i++) {
+                        if (i) {
+                            args += ", ";
+                        }
+                        args += emit(n.args[i]);
+                    }
+                    // A function value is called with the arity it has when that
+                    // matches (the fast path, a plain apply); otherwise through
+                    // applyFlexible, which fills a partial application in over
+                    // several calls or feeds a returned function the rest. A
+                    // curried capture used to be nested one-argument funs, so the
+                    // runtime calling a `~handler(x)` route with (request,
+                    // context) got `badarity` (kexhq/kex#408).
+                    const auto callee = uniq("_Callee");
+                    const auto count = std::to_string(n.args.size());
+                    return "let <" + callee + "> = " + emit(n.callee) +
+                           "\n"
+                           "in case call 'erlang':'is_function'(" +
+                           callee + ", " + count +
+                           ") of\n"
+                           "  <'true'> when 'true' -> apply " +
+                           callee + "(" + args +
+                           ")\n"
+                           "  <" +
+                           uniq("_NotArity") +
+                           "> when 'true' -> call 'kex_intrinsic_fun':'applyFlexible'(" + callee +
+                           ", [" + args +
+                           "])\n"
+                           "end";
+                } else if constexpr (std::is_same_v<T, LetRec>) {
+                    std::string head = "(";
+                    for (size_t i = 0; i < n.params.size(); i++) {
+                        if (i) {
+                            head += ", ";
+                        }
+                        head += erlVar(n.params[i]);
+                    }
+                    head += ")";
+                    return "letrec '" + n.name + "'/" + std::to_string(n.params.size()) +
+                           " =\n"
+                           "  fun " +
+                           head + " ->\n    " + emit(n.funBody) +
+                           "\n"
+                           "in\n" +
+                           emit(n.contBody);
+                } else if constexpr (std::is_same_v<T, Return>) {
+                    // In a function that has any early return, a Return throws so
+                    // it escapes nested contexts (a match arm whose value is
+                    // consumed by an enclosing `let`); the function-body try/catch
+                    // turns it back into the result. In a return-free tail spot
+                    // it's just the value.
+                    if (m_inBlock && !m_returnTag.empty()) {
+                        return "call 'erlang':'throw'({'kex_return', " + m_returnTag + ", " +
+                               emit(n.value) + "})";
+                    }
+                    if (m_returnThrows) {
+                        return "call 'erlang':'throw'({'kex_return', " + emit(n.value) + "})";
+                    }
+                    return emit(n.value);
+                } else if constexpr (std::is_same_v<T, TryThrow>) {
+                    return "call 'erlang':'throw'({'kex_try_error', " + emit(n.error) + "})";
+                } else if constexpr (std::is_same_v<T, TryCatch>) {
+                    std::string errVar = uniq("_TryErr");
+                    std::string cls = uniq("_Cls"), rsn = uniq("_Rsn"), trc = uniq("_Trc");
+                    std::string rv = uniq("_TryRV");
+                    std::string trcAlias = uniq("_TrcA");
+                    std::string c2 = uniq("_C"), r2 = uniq("_R"), tr2 = uniq("_Tr");
 
-                std::string body = emit(n.body);
+                    std::string body = emit(n.body);
 
-                std::string catchBody = "case " + errVar + " of\n";
-                for (size_t i = 0; i < n.clauses.size(); i++) {
-                    beginPatGuards();
-                    std::string cpat = emitPattern(*n.clauses[i].patterns[0]);
-                    const auto lets = takeCharLets();
-                    catchBody += "      " + cpat;
-                    catchBody += " when " + takePatGuards("") + " -> " +
-                                 withCharLets(lets, emit(n.clauses[i].body));
-                    if (i + 1 < n.clauses.size()) catchBody += "\n";
-                }
-                // The rescue patterns may not be exhaustive. A non-exhaustive
-                // `case` in a catch handler both mismatches the interpreter
-                // (which re-throws an unmatched error, evaluator.cxx evalRescue)
-                // and trips erlc's try-state checker (ambiguous_catch_try_state).
-                // Append an explicit catch-all that re-throws, unless a clause
-                // already catches everything.
-                bool exhaustive = false;
-                for (const auto& cl : n.clauses) {
-                    auto k = cl.patterns[0]->kind;
-                    if (k == PatKind::Var || k == PatKind::Wild) { exhaustive = true; break; }
-                }
-                if (!exhaustive) {
-                    std::string other = freshWild();
-                    catchBody += "\n      " + other + " when 'true' -> call 'erlang':'throw'({'kex_try_error', " + other + "})";
-                }
-                catchBody += "\n    end";
+                    std::string catchBody = "case " + errVar + " of\n";
+                    for (size_t i = 0; i < n.clauses.size(); i++) {
+                        beginPatGuards();
+                        std::string cpat = emitPattern(*n.clauses[i].patterns[0]);
+                        const auto lets = takeCharLets();
+                        catchBody += "      " + cpat;
+                        catchBody += " when " + takePatGuards("") + " -> " +
+                                     withCharLets(lets, emit(n.clauses[i].body));
+                        if (i + 1 < n.clauses.size()) {
+                            catchBody += "\n";
+                        }
+                    }
+                    // The rescue patterns may not be exhaustive. A non-exhaustive
+                    // `case` in a catch handler both mismatches the interpreter
+                    // (which re-throws an unmatched error, evaluator.cxx evalRescue)
+                    // and trips erlc's try-state checker (ambiguous_catch_try_state).
+                    // Append an explicit catch-all that re-throws, unless a clause
+                    // already catches everything.
+                    bool exhaustive = false;
+                    for (const auto& cl : n.clauses) {
+                        auto k = cl.patterns[0]->kind;
+                        if (k == PatKind::Var || k == PatKind::Wild) {
+                            exhaustive = true;
+                            break;
+                        }
+                    }
+                    if (!exhaustive) {
+                        std::string other = freshWild();
+                        catchBody += "\n      " + other +
+                                     " when 'true' -> call 'erlang':'throw'({'kex_try_error', " +
+                                     other + "})";
+                    }
+                    catchBody += "\n    end";
 
-                // Rescuable: a Kex failure (`throw {kex_try_error, E}`), an
-                // Erlang `error` — the reason a raising Erlang call (`json:decode`)
-                // or a runtime fault (`badarith`) carries (#326) — and any other
-                // Erlang `throw`, rescued as the thrown value (#400). Kex's own
-                // `kex_return` throws — the function-local `{kex_return, V}`
-                // and a block's `{kex_return, Tag, V}` (kexhq/kex#408) — and
-                // exits re-raise untouched. Rescuing the tagged form turned a
-                // block's `return` into `Error({kex_return, ...})`.
-                std::string tryErr = uniq("_E"), erlErr = uniq("_E"), erlTrc = uniq("_TrcE");
-                std::string returned = uniq("_Ret"), retTrc = uniq("_TrcR");
-                std::string tag = uniq("_Tag"), tagged = uniq("_Ret"), taggedTrc = uniq("_TrcR");
-                std::string thrown = uniq("_E"), thrTrc = uniq("_TrcT");
-                std::string unrescuable = freshWild();
-                return "try\n    " + body + "\n"
-                       "of <" + rv + "> -> " + rv + "\n"
-                       "catch <" + cls + ", " + rsn + ", " + trc + "> ->\n"
-                       "  case case <" + cls + ", " + rsn + ", " + trc + "> of\n"
-                       "      <'throw', {'kex_try_error', " + tryErr + "}, " + trcAlias + "> when 'true' ->\n"
-                       "        {'kex_rescuable', " + tryErr + "}\n"
-                       "      <'throw', {'kex_return', " + returned + "}, " + retTrc + "> when 'true' ->\n"
-                       "        'kex_unrescuable'\n"
-                       "      <'throw', {'kex_return', " + tag + ", " + tagged + "}, " + taggedTrc + "> when 'true' ->\n"
-                       "        'kex_unrescuable'\n"
-                       "      <'throw', " + thrown + ", " + thrTrc + "> when 'true' ->\n"
-                       "        {'kex_rescuable', " + thrown + "}\n"
-                       "      <'error', " + erlErr + ", " + erlTrc + "> when 'true' ->\n"
-                       "        {'kex_rescuable', " + erlErr + "}\n"
-                       "      <" + c2 + ", " + r2 + ", " + tr2 + "> when 'true' -> 'kex_unrescuable'\n"
-                       "    end of\n"
-                       "    {'kex_rescuable', " + errVar + "} when 'true' ->\n"
-                       "    " + catchBody + "\n"
-                       "    " + unrescuable + " when 'true' -> primop 'raise'(" +
-                            trc + ", " + rsn + ")\n"
-                       "  end";
-            } else {
-                return "call 'erlang':'error'('ir_unimplemented')";
-            }
-        }, e->node);
+                    // Rescuable: a Kex failure (`throw {kex_try_error, E}`), an
+                    // Erlang `error` — the reason a raising Erlang call (`json:decode`)
+                    // or a runtime fault (`badarith`) carries (#326) — and any other
+                    // Erlang `throw`, rescued as the thrown value (#400). Kex's own
+                    // `kex_return` throws — the function-local `{kex_return, V}`
+                    // and a block's `{kex_return, Tag, V}` (kexhq/kex#408) — and
+                    // exits re-raise untouched. Rescuing the tagged form turned a
+                    // block's `return` into `Error({kex_return, ...})`.
+                    std::string tryErr = uniq("_E"), erlErr = uniq("_E"), erlTrc = uniq("_TrcE");
+                    std::string returned = uniq("_Ret"), retTrc = uniq("_TrcR");
+                    std::string tag = uniq("_Tag"), tagged = uniq("_Ret"),
+                                taggedTrc = uniq("_TrcR");
+                    std::string thrown = uniq("_E"), thrTrc = uniq("_TrcT");
+                    std::string unrescuable = freshWild();
+                    return "try\n    " + body +
+                           "\n"
+                           "of <" +
+                           rv + "> -> " + rv +
+                           "\n"
+                           "catch <" +
+                           cls + ", " + rsn + ", " + trc +
+                           "> ->\n"
+                           "  case case <" +
+                           cls + ", " + rsn + ", " + trc +
+                           "> of\n"
+                           "      <'throw', {'kex_try_error', " +
+                           tryErr + "}, " + trcAlias +
+                           "> when 'true' ->\n"
+                           "        {'kex_rescuable', " +
+                           tryErr +
+                           "}\n"
+                           "      <'throw', {'kex_return', " +
+                           returned + "}, " + retTrc +
+                           "> when 'true' ->\n"
+                           "        'kex_unrescuable'\n"
+                           "      <'throw', {'kex_return', " +
+                           tag + ", " + tagged + "}, " + taggedTrc +
+                           "> when 'true' ->\n"
+                           "        'kex_unrescuable'\n"
+                           "      <'throw', " +
+                           thrown + ", " + thrTrc +
+                           "> when 'true' ->\n"
+                           "        {'kex_rescuable', " +
+                           thrown +
+                           "}\n"
+                           "      <'error', " +
+                           erlErr + ", " + erlTrc +
+                           "> when 'true' ->\n"
+                           "        {'kex_rescuable', " +
+                           erlErr +
+                           "}\n"
+                           "      <" +
+                           c2 + ", " + r2 + ", " + tr2 +
+                           "> when 'true' -> 'kex_unrescuable'\n"
+                           "    end of\n"
+                           "    {'kex_rescuable', " +
+                           errVar +
+                           "} when 'true' ->\n"
+                           "    " +
+                           catchBody +
+                           "\n"
+                           "    " +
+                           unrescuable + " when 'true' -> primop 'raise'(" + trc + ", " + rsn +
+                           ")\n"
+                           "  end";
+                } else {
+                    return "call 'erlang':'error'('ir_unimplemented')";
+                }
+            },
+            e->node);
     }
 
-    auto emitFunction(const FunDef& fn, std::vector<std::pair<std::string,int>>& exports)
+    auto emitFunction(const FunDef& fn, std::vector<std::pair<std::string, int>>& exports)
         -> std::string {
         exports.push_back({fn.name, fn.arity});
         std::ostringstream out;
@@ -655,13 +839,17 @@ struct Emitter {
         // Fast path: exactly one clause with only var/wildcard params → a bare
         // fun, no case dispatch.
         const auto& cl0 = fn.clauses[0];
-        bool singleSimple = fn.clauses.size() == 1 && !cl0.guard &&
-            std::all_of(cl0.params.begin(), cl0.params.end(),
-                [](const PatternPtr& p){ return p->kind == PatKind::Var || p->kind == PatKind::Wild; });
+        bool singleSimple =
+            fn.clauses.size() == 1 && !cl0.guard &&
+            std::all_of(cl0.params.begin(), cl0.params.end(), [](const PatternPtr& p) {
+                return p->kind == PatKind::Var || p->kind == PatKind::Wild;
+            });
         if (singleSimple) {
             std::string head = "(";
             for (size_t i = 0; i < cl0.params.size(); i++) {
-                if (i) head += ", ";
+                if (i) {
+                    head += ", ";
+                }
                 head += cl0.params[i]->kind == PatKind::Wild ? "_W" + std::to_string(i)
                                                              : erlVar(cl0.params[i]->name);
             }
@@ -673,18 +861,24 @@ struct Emitter {
         // General: dispatch clauses on the argument value-list.
         std::string head = "(", subj = "<";
         for (int i = 0; i < fn.arity; i++) {
-            if (i) { head += ", "; subj += ", "; }
+            if (i) {
+                head += ", ";
+                subj += ", ";
+            }
             head += "_Arg" + std::to_string(i);
             subj += "_Arg" + std::to_string(i);
         }
-        head += ")"; subj += ">";
+        head += ")";
+        subj += ">";
         out << "  fun " << head << " ->\n";
         out << "    case " << subj << " of\n";
         for (const auto& cl : fn.clauses) {
             beginPatGuards();
             std::string pats = "<";
             for (size_t i = 0; i < cl.params.size(); i++) {
-                if (i) pats += ", ";
+                if (i) {
+                    pats += ", ";
+                }
                 pats += emitPattern(*cl.params[i]);
             }
             pats += ">";
@@ -698,12 +892,19 @@ struct Emitter {
         // when the last clause is already an unguarded catch-all — the
         // fallback would be a dead clause there.
         const auto& last = fn.clauses.back();
-        bool lastIsCatchAll = !last.guard &&
-            std::all_of(last.params.begin(), last.params.end(),
-                [](const PatternPtr& p){ return p->kind == PatKind::Var || p->kind == PatKind::Wild; });
+        bool lastIsCatchAll =
+            !last.guard &&
+            std::all_of(last.params.begin(), last.params.end(), [](const PatternPtr& p) {
+                return p->kind == PatKind::Var || p->kind == PatKind::Wild;
+            });
         if (!lastIsCatchAll) {
             out << "      <";
-            for (int i = 0; i < fn.arity; i++) { if (i) out << ", "; out << "_Wf" << i; }
+            for (int i = 0; i < fn.arity; i++) {
+                if (i) {
+                    out << ", ";
+                }
+                out << "_Wf" << i;
+            }
             out << "> when 'true' -> call 'erlang':'error'('function_clause')\n";
         }
         out << "    end\n";
@@ -715,10 +916,11 @@ struct Emitter {
 
 auto emitCore(const Module& mod) -> EmitResult {
     Emitter em;
-    std::vector<std::pair<std::string,int>> exports;
+    std::vector<std::pair<std::string, int>> exports;
     std::vector<std::string> fns;
-    for (const auto& fn : mod.functions)
+    for (const auto& fn : mod.functions) {
         fns.push_back(em.emitFunction(fn, exports));
+    }
 
     exports.push_back({"module_info", 0});
     exports.push_back({"module_info", 1});
@@ -726,7 +928,9 @@ auto emitCore(const Module& mod) -> EmitResult {
     std::ostringstream out;
     out << "module '" << mod.name << "' [";
     for (size_t i = 0; i < exports.size(); i++) {
-        if (i) out << ", ";
+        if (i) {
+            out << ", ";
+        }
         out << "'" << exports[i].first << "'/" << exports[i].second;
     }
     out << "]\n  attributes [";
@@ -735,32 +939,37 @@ auto emitCore(const Module& mod) -> EmitResult {
         out << (firstAttribute ? "" : ", ") << "'" << name << "' = " << value;
         firstAttribute = false;
     };
-    if (!mod.onLoad.empty()) attribute("on_load", "[{'" + mod.onLoad + "', 0}]");
+    if (!mod.onLoad.empty()) {
+        attribute("on_load", "[{'" + mod.onLoad + "', 0}]");
+    }
     if (auto slots = mod.servingSlots.find(mod.name); slots != mod.servingSlots.end()) {
         std::string value = "[";
         bool firstType = true;
         for (const auto& [type, names] : slots->second) {
             value += (firstType ? "{'" : ", {'") + type + "', [";
             firstType = false;
-            for (size_t i = 0; i < names.size(); i++)
+            for (size_t i = 0; i < names.size(); i++) {
                 value += (i ? ", '" : "'") + names[i] + "'";
+            }
             value += "]}";
         }
         attribute("kex_serving_slots", value + "]");
     }
-    if (auto upgrades = mod.servingUpgrades.find(mod.name);
-        upgrades != mod.servingUpgrades.end()) {
+    if (auto upgrades = mod.servingUpgrades.find(mod.name); upgrades != mod.servingUpgrades.end()) {
         std::string value = "[";
-        for (const auto& type : upgrades->second)
+        for (const auto& type : upgrades->second) {
             value += (value.size() > 1 ? ", '" : "'") + type + "'";
+        }
         attribute("kex_serving_upgrade", value + "]");
     }
     out << "]\n\n";
-    for (const auto& f : fns) out << f << "\n";
-    out << "'module_info'/0 =\n  fun () ->\n    call 'erlang':'get_module_info'('"
-        << mod.name << "')\n";
-    out << "'module_info'/1 =\n  fun (_Key) ->\n    call 'erlang':'get_module_info'('"
-        << mod.name << "', _Key)\n";
+    for (const auto& f : fns) {
+        out << f << "\n";
+    }
+    out << "'module_info'/0 =\n  fun () ->\n    call 'erlang':'get_module_info'('" << mod.name
+        << "')\n";
+    out << "'module_info'/1 =\n  fun (_Key) ->\n    call 'erlang':'get_module_info'('" << mod.name
+        << "', _Key)\n";
     out << "end\n";
 
     EmitResult r;
@@ -769,10 +978,13 @@ auto emitCore(const Module& mod) -> EmitResult {
     r.mainArity = mod.mainArity;
     // A dispatcher's routes hold only as its function's first clause: one
     // merged in ahead (a bare definition of the same name) answers first.
-    for (const auto& fn : mod.functions)
-        if (!fn.clauses.empty())
-            for (const auto& route : fn.clauses.front().routes)
+    for (const auto& fn : mod.functions) {
+        if (!fn.clauses.empty()) {
+            for (const auto& route : fn.clauses.front().routes) {
                 r.routedImplementations.insert({route, fn.arity});
+            }
+        }
+    }
     return r;
 }
 

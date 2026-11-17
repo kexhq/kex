@@ -19,8 +19,8 @@ struct Resolution {
 class Resolver {
 public:
     explicit Resolver(std::vector<std::string> roots = {"lib", "src"});
-    auto resolve(const std::string& moduleName,
-                 const std::string& currentModule = "") const -> std::optional<Resolution>;
+    auto resolve(const std::string& moduleName, const std::string& currentModule = "") const
+        -> std::optional<Resolution>;
     static auto isForeignNamespace(const std::string& moduleName) -> bool;
     // The program's entry file, which no `using` may resolve to: its own
     // directory is a source root, so a script named after the module it
@@ -34,8 +34,7 @@ public:
     static auto setCaching(bool on) -> void;
 
 private:
-    auto resolveUncached(const std::string& moduleName,
-                         const std::string& currentModule) const
+    auto resolveUncached(const std::string& moduleName, const std::string& currentModule) const
         -> std::optional<Resolution>;
     std::vector<std::string> m_roots;
 };

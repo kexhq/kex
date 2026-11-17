@@ -35,15 +35,15 @@
 
 namespace kex::compiled {
 
-auto effectiveModuleRoots(const std::vector<std::string>& roots)
-    -> std::vector<std::string> {
+auto effectiveModuleRoots(const std::vector<std::string>& roots) -> std::vector<std::string> {
     auto effective = roots;
-    for (auto& root : kex::standardLibraryModuleRoots())
-        if (std::find(effective.begin(), effective.end(), root) == effective.end())
+    for (auto& root : kex::standardLibraryModuleRoots()) {
+        if (std::find(effective.begin(), effective.end(), root) == effective.end()) {
             effective.push_back(std::move(root));
+        }
+    }
     return effective;
 }
-
 
 namespace {
 // The template-scan cache settings of an expansion that has none of its own.
@@ -63,14 +63,20 @@ auto setDefaultScanCache(std::filesystem::path root, std::string toolchainKey) -
     defaultScanCache().toolchainKey = std::move(toolchainKey);
 }
 
-auto setReuseCollapses(bool reuse) -> void { reuseCollapses() = reuse; }
+auto setReuseCollapses(bool reuse) -> void {
+    reuseCollapses() = reuse;
+}
 
 namespace {
 bool anyReachedOutside = false;
 } // namespace
 
-auto noteReachedOutside() -> void { anyReachedOutside = true; }
-auto reachedOutside() -> bool { return anyReachedOutside; }
+auto noteReachedOutside() -> void {
+    anyReachedOutside = true;
+}
+auto reachedOutside() -> bool {
+    return anyReachedOutside;
+}
 
 namespace {
 thread_local DependencyRecorder* innermostRecorder = nullptr;
@@ -80,28 +86,47 @@ DependencyRecorder::DependencyRecorder() : m_outer(innermostRecorder) {
     innermostRecorder = this;
 }
 
-DependencyRecorder::~DependencyRecorder() { innermostRecorder = m_outer; }
+DependencyRecorder::~DependencyRecorder() {
+    innermostRecorder = m_outer;
+}
 
-auto DependencyRecorder::current() -> DependencyRecorder* { return innermostRecorder; }
+auto DependencyRecorder::current() -> DependencyRecorder* {
+    return innermostRecorder;
+}
 
-auto recordingDependencies() -> bool { return innermostRecorder != nullptr; }
+auto recordingDependencies() -> bool {
+    return innermostRecorder != nullptr;
+}
 
 // Every live recorder gets it, innermost first. One that already has it got
 // it together with all of those outside it, so the walk stops there.
 auto noteDependency(const std::string& path) -> void {
-    if (!innermostRecorder || path.empty()) return;
+    if (!innermostRecorder || path.empty()) {
+        return;
+    }
     std::error_code ec;
     auto canonical = std::filesystem::weakly_canonical(path, ec).string();
-    if (ec) canonical = path;
-    for (auto* recorder = innermostRecorder; recorder; recorder = recorder->m_outer)
-        if (!recorder->m_files.insert(canonical).second) break;
+    if (ec) {
+        canonical = path;
+    }
+    for (auto* recorder = innermostRecorder; recorder; recorder = recorder->m_outer) {
+        if (!recorder->m_files.insert(canonical).second) {
+            break;
+        }
+    }
 }
 
 auto noteDependencies(const std::set<std::string>& paths) -> void {
-    if (!innermostRecorder) return;
-    for (const auto& path : paths)
-        for (auto* recorder = innermostRecorder; recorder; recorder = recorder->m_outer)
-            if (!recorder->m_files.insert(path).second) break;
+    if (!innermostRecorder) {
+        return;
+    }
+    for (const auto& path : paths) {
+        for (auto* recorder = innermostRecorder; recorder; recorder = recorder->m_outer) {
+            if (!recorder->m_files.insert(path).second) {
+                break;
+            }
+        }
+    }
 }
 
 auto sandboxTimings() -> SandboxTimings& {
@@ -123,7 +148,9 @@ struct SandboxClock {
         timings.startup += now - began;
         began = now;
     }
-    ~SandboxClock() { sandboxTimings().evaluation += Clock::now() - began; }
+    ~SandboxClock() {
+        sandboxTimings().evaluation += Clock::now() - began;
+    }
 };
 
 // Is this `let` a VALUE BINDING rather than a function definition?
@@ -146,30 +173,28 @@ struct SandboxClock {
 // time, failed to substitute its (method-call) uses, and then pruned the
 // definition. That is what `Undefined function: Css.stylesheet` was.
 auto isValueBinding(const ast::FunctionDef& fn) -> bool {
-    return fn.clauses.size() == 1 && !fn.clauses[0].hasParamList &&
-           fn.clauses[0].params.empty() && fn.clauses[0].body.size() == 1 &&
-           fn.clauses[0].body[0] != nullptr;
+    return fn.clauses.size() == 1 && !fn.clauses[0].hasParamList && fn.clauses[0].params.empty() &&
+           fn.clauses[0].body.size() == 1 && fn.clauses[0].body[0] != nullptr;
 }
 
-auto addError(std::vector<semantic::Diagnostic>& diagnostics,
-              const SourceLocation& location, std::string message) -> void {
-    diagnostics.push_back({semantic::Diagnostic::Level::Error, location,
-                           std::move(message)});
+auto addError(
+    std::vector<semantic::Diagnostic>& diagnostics,
+    const SourceLocation& location,
+    std::string message) -> void {
+    diagnostics.push_back({semantic::Diagnostic::Level::Error, location, std::move(message)});
 }
 
 using Constants = std::unordered_map<std::string, interpreter::ValuePtr>;
 using ScopedConstants = std::unordered_map<std::string, Constants>;
 
-auto qualifiedName(const std::string& scope, const std::string& name)
-    -> std::string {
+auto qualifiedName(const std::string& scope, const std::string& name) -> std::string {
     return kex::mangle::qualify(scope, name);
 }
 
 // Stable identity for a generation template, whichever declaration shape it
 // holds. Used to map a template back to the scope that declared it.
 auto templateId(const ast::GeneratedTemplate& tmpl) -> const void* {
-    return std::visit([](const auto& held) -> const void* { return held.get(); },
-                      tmpl);
+    return std::visit([](const auto& held) -> const void* { return held.get(); }, tmpl);
 }
 
 // ---------------------------------------------------------------------------
@@ -220,35 +245,43 @@ struct Substituter {
     std::function<bool(const std::string&)> alsoSplit;
 
     auto nameOf(const ast::Expr& expr) -> const std::string* {
-        if (const auto* upper = std::get_if<ast::UpperIdentifier>(&expr.kind))
+        if (const auto* upper = std::get_if<ast::UpperIdentifier>(&expr.kind)) {
             return &upper->name;
-        if (const auto* lower = std::get_if<ast::Identifier>(&expr.kind))
+        }
+        if (const auto* lower = std::get_if<ast::Identifier>(&expr.kind)) {
             return &lower->name;
+        }
         return nullptr;
     }
 
     auto qualifierPath(const ast::Expr& expr, std::string& out) const -> bool {
-        if (const auto* upper =
-                std::get_if<ast::UpperIdentifier>(&expr.kind)) {
+        if (const auto* upper = std::get_if<ast::UpperIdentifier>(&expr.kind)) {
             out = upper->name;
             return true;
         }
         const auto* call = std::get_if<ast::MethodCall>(&expr.kind);
-        if (!call || !call->receiver || !call->args.empty() ||
-            !call->namedArgs.empty() || call->block || call->parenthesized)
+        if (!call || !call->receiver || !call->args.empty() || !call->namedArgs.empty() ||
+            call->block || call->parenthesized) {
             return false;
-        if (!qualifierPath(*call->receiver, out)) return false;
+        }
+        if (!qualifierPath(*call->receiver, out)) {
+            return false;
+        }
         out += "." + call->method;
         return true;
     }
 
     auto substitute(ast::ExprPtr& slot) -> void {
-        if (!slot) return;
-        if (onSlot && onSlot(slot)) return;
+        if (!slot) {
+            return;
+        }
+        if (onSlot && onSlot(slot)) {
+            return;
+        }
         if (scoped) {
             if (const auto* call = std::get_if<ast::MethodCall>(&slot->kind);
-                call && call->receiver && call->args.empty() &&
-                call->namedArgs.empty() && !call->block) {
+                call && call->receiver && call->args.empty() && call->namedArgs.empty() &&
+                !call->block) {
                 std::string owner;
                 if (qualifierPath(*call->receiver, owner)) {
                     auto scope = scoped->find(owner);
@@ -256,14 +289,13 @@ struct Substituter {
                         auto found = scope->second.find(call->method);
                         if (found != scope->second.end()) {
                             std::string why;
-                            auto literal = valueToLiteral(
-                                found->second, slot->location, why, reify);
+                            auto literal =
+                                valueToLiteral(found->second, slot->location, why, reify);
                             if (literal) {
                                 slot = std::move(literal);
                                 return;
                             }
-                            remaining.push_back(
-                                qualifiedName(owner, call->method));
+                            remaining.push_back(qualifiedName(owner, call->method));
                             return;
                         }
                     }
@@ -274,8 +306,7 @@ struct Substituter {
             auto found = constants.find(*name);
             if (found != constants.end() && !shadowed.count(*name)) {
                 std::string why;
-                auto literal =
-                    valueToLiteral(found->second, slot->location, why, reify);
+                auto literal = valueToLiteral(found->second, slot->location, why, reify);
                 if (literal) {
                     slot = std::move(literal);
                     return;
@@ -288,46 +319,76 @@ struct Substituter {
     }
 
     auto each(std::vector<ast::ExprPtr>& list) -> void {
-        for (auto& item : list) substitute(item);
+        for (auto& item : list) {
+            substitute(item);
+        }
     }
 
-    auto patternNames(const ast::Pattern& pattern,
-                      std::vector<std::string>& names) -> void {
-        std::visit([&](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, ast::VarPattern>) {
-                if (node.name != "_") names.push_back(node.name);
-            } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
-                if (node.inner) patternNames(*node.inner, names);
-            } else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
-                for (const auto& arg : node.args)
-                    if (arg) patternNames(*arg, names);
-            } else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
-                for (const auto& field : node.fields) {
-                    if (field.pattern) patternNames(**field.pattern, names);
-                    else names.push_back(field.name);
+    auto patternNames(const ast::Pattern& pattern, std::vector<std::string>& names) -> void {
+        std::visit(
+            [&](const auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, ast::VarPattern>) {
+                    if (node.name != "_") {
+                        names.push_back(node.name);
+                    }
+                } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
+                    if (node.inner) {
+                        patternNames(*node.inner, names);
+                    }
+                } else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
+                    for (const auto& arg : node.args) {
+                        if (arg) {
+                            patternNames(*arg, names);
+                        }
+                    }
+                } else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
+                    for (const auto& field : node.fields) {
+                        if (field.pattern) {
+                            patternNames(**field.pattern, names);
+                        } else {
+                            names.push_back(field.name);
+                        }
+                    }
+                } else if constexpr (std::is_same_v<T, ast::ListPattern>) {
+                    for (const auto& element : node.elements) {
+                        if (element) {
+                            patternNames(*element, names);
+                        }
+                    }
+                    if (node.rest) {
+                        patternNames(**node.rest, names);
+                    }
+                } else if constexpr (std::is_same_v<T, ast::TuplePattern>) {
+                    for (const auto& element : node.elements) {
+                        if (element) {
+                            patternNames(*element, names);
+                        }
+                    }
+                } else if constexpr (std::is_same_v<T, ast::RangePattern>) {
+                    if (node.start) {
+                        patternNames(*node.start, names);
+                    }
+                    if (node.end) {
+                        patternNames(*node.end, names);
+                    }
                 }
-            } else if constexpr (std::is_same_v<T, ast::ListPattern>) {
-                for (const auto& element : node.elements)
-                    if (element) patternNames(*element, names);
-                if (node.rest) patternNames(**node.rest, names);
-            } else if constexpr (std::is_same_v<T, ast::TuplePattern>) {
-                for (const auto& element : node.elements)
-                    if (element) patternNames(*element, names);
-            } else if constexpr (std::is_same_v<T, ast::RangePattern>) {
-                if (node.start) patternNames(*node.start, names);
-                if (node.end) patternNames(*node.end, names);
-            }
-        }, pattern.kind);
+            },
+            pattern.kind);
     }
 
     template <typename F>
     auto inScope(const std::vector<std::string>& names, F&& fn) -> void {
         std::vector<std::string> added;
-        for (const auto& name : names)
-            if (shadowed.insert(name).second) added.push_back(name);
+        for (const auto& name : names) {
+            if (shadowed.insert(name).second) {
+                added.push_back(name);
+            }
+        }
         fn();
-        for (const auto& name : added) shadowed.erase(name);
+        for (const auto& name : added) {
+            shadowed.erase(name);
+        }
     }
 
     auto body(std::vector<ast::ExprPtr>& expressions) -> void {
@@ -335,36 +396,56 @@ struct Substituter {
         inScope(locals, [&] {
             for (auto& expression : expressions) {
                 substitute(expression);
-                if (!expression) continue;
+                if (!expression) {
+                    continue;
+                }
                 if (auto* let = std::get_if<ast::LetExpr>(&expression->kind)) {
                     std::vector<std::string> names;
-                    if (let->pattern) patternNames(*let->pattern, names);
+                    if (let->pattern) {
+                        patternNames(*let->pattern, names);
+                    }
                     for (const auto& name : names) {
-                        if (shadowed.insert(name).second) locals.push_back(name);
+                        if (shadowed.insert(name).second) {
+                            locals.push_back(name);
+                        }
                     }
                 } else if (auto* var = std::get_if<ast::VarExpr>(&expression->kind)) {
                     std::vector<std::string> names;
-                    if (var->pattern) patternNames(*var->pattern, names);
+                    if (var->pattern) {
+                        patternNames(*var->pattern, names);
+                    }
                     for (const auto& name : names) {
-                        if (shadowed.insert(name).second) locals.push_back(name);
+                        if (shadowed.insert(name).second) {
+                            locals.push_back(name);
+                        }
                     }
                 }
             }
         });
-        for (const auto& name : locals) shadowed.erase(name);
+        for (const auto& name : locals) {
+            shadowed.erase(name);
+        }
     }
     auto each(std::optional<ast::ExprPtr>& slot) -> void {
-        if (slot) substitute(*slot);
+        if (slot) {
+            substitute(*slot);
+        }
     }
     auto each(std::vector<std::pair<std::string, ast::ExprPtr>>& list) -> void {
-        for (auto& [_, item] : list) substitute(item);
+        for (auto& [_, item] : list) {
+            substitute(item);
+        }
     }
     auto each(std::vector<ast::RecordEntry>& list) -> void {
-        for (auto& entry : list) substitute(entry.value);
+        for (auto& entry : list) {
+            substitute(entry.value);
+        }
     }
     auto each(std::vector<ast::MatchClause>& clauses) -> void {
         for (auto& clause : clauses) {
-            if (clause.guard) substitute(*clause.guard);
+            if (clause.guard) {
+                substitute(*clause.guard);
+            }
             substitute(clause.body);
         }
     }
@@ -386,7 +467,9 @@ struct Substituter {
         std::vector<semantic::Diagnostic> sink;
         Substituter stamp{none, sink, {}, {}, {}};
         stamp.onSlot = [&at](ast::ExprPtr& slot) {
-            if (slot) slot->location = at;
+            if (slot) {
+                slot->location = at;
+            }
             return false;
         };
         stamp.substitute(root);
@@ -401,14 +484,21 @@ struct Substituter {
     //
     // Only done for strings that actually mention a constant, so programs
     // without compiled constants keep the existing lazy path untouched.
-    auto splitInterpolation(ast::StringLiteral& literal,
-                            const SourceLocation& at) -> void {
-        if (!literal.interpolating || !literal.parts.empty()) return;
+    auto splitInterpolation(ast::StringLiteral& literal, const SourceLocation& at) -> void {
+        if (!literal.interpolating || !literal.parts.empty()) {
+            return;
+        }
         const std::string& text = literal.value;
         bool mentions = false;
-        for (const auto& [name, _] : constants)
-            if (text.find(name) != std::string::npos) { mentions = true; break; }
-        if (!mentions && !(alsoSplit && alsoSplit(text))) return;
+        for (const auto& [name, _] : constants) {
+            if (text.find(name) != std::string::npos) {
+                mentions = true;
+                break;
+            }
+        }
+        if (!mentions && !(alsoSplit && alsoSplit(text))) {
+            return;
+        }
 
         std::vector<std::string> parts;
         std::vector<ast::ExprPtr> values;
@@ -419,11 +509,19 @@ struct Substituter {
                 std::string inner;
                 int depth = 1;
                 while (i < text.size() && depth > 0) {
-                    if (text[i] == '{') depth++;
-                    else if (text[i] == '}') { depth--; if (!depth) break; }
+                    if (text[i] == '{') {
+                        depth++;
+                    } else if (text[i] == '}') {
+                        depth--;
+                        if (!depth) {
+                            break;
+                        }
+                    }
                     inner += text[i++];
                 }
-                if (i < text.size()) i++; // closing brace
+                if (i < text.size()) {
+                    i++; // closing brace
+                }
                 Lexer lexer(inner);
                 Parser parser(lexer.tokenizeAll());
                 auto parsed = parser.parseExpr();
@@ -460,7 +558,9 @@ struct Substituter {
                 } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
                     each(node.values);
                 } else if constexpr (std::is_same_v<T, ast::GeneratedDecl>) {
-                    if (onGenerated) onGenerated(node);
+                    if (onGenerated) {
+                        onGenerated(node);
+                    }
                     substitute(node.name);
                 } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
                     substitute(node.receiver);
@@ -478,14 +578,14 @@ struct Substituter {
                     substitute(node.right);
                 } else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
                     substitute(node.operand);
-                } else if constexpr (std::is_same_v<T, ast::TupleExpr> ||
-                                     std::is_same_v<T, ast::BlockExpr> ||
-                                     std::is_same_v<T, ast::LoopExpr> ||
-                                     std::is_same_v<T, ast::SpawnExpr>) {
-                    if constexpr (std::is_same_v<T, ast::TupleExpr>)
+                } else if constexpr (
+                    std::is_same_v<T, ast::TupleExpr> || std::is_same_v<T, ast::BlockExpr> ||
+                    std::is_same_v<T, ast::LoopExpr> || std::is_same_v<T, ast::SpawnExpr>) {
+                    if constexpr (std::is_same_v<T, ast::TupleExpr>) {
                         each(node.elements);
-                    else
+                    } else {
                         body(node.body);
+                    }
                 } else if constexpr (std::is_same_v<T, ast::ListExpr>) {
                     each(node.elements);
                     each(node.rest);
@@ -504,7 +604,9 @@ struct Substituter {
                         substitute(condition);
                         each(body);
                     }
-                    if (node.elseBody) each(*node.elseBody);
+                    if (node.elseBody) {
+                        each(*node.elseBody);
+                    }
                 } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
                     substitute(node.subject);
                     each(node.clauses);
@@ -515,18 +617,22 @@ struct Substituter {
                 } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
                     substitute(node.condition);
                     each(node.body);
-                } else if constexpr (std::is_same_v<T, ast::LetExpr> ||
-                                     std::is_same_v<T, ast::VarExpr> ||
-                                     std::is_same_v<T, ast::AssignExpr> ||
-                                     std::is_same_v<T, ast::ReturnExpr>) {
+                } else if constexpr (
+                    std::is_same_v<T, ast::LetExpr> || std::is_same_v<T, ast::VarExpr> ||
+                    std::is_same_v<T, ast::AssignExpr> || std::is_same_v<T, ast::ReturnExpr>) {
                     substitute(node.value);
                 } else if constexpr (std::is_same_v<T, ast::Lambda>) {
                     std::vector<std::string> names;
-                    for (const auto& param : node.params)
-                        if (param.name != "_") names.push_back(param.name);
+                    for (const auto& param : node.params) {
+                        if (param.name != "_") {
+                            names.push_back(param.name);
+                        }
+                    }
                     inScope(names, [&] {
                         body(node.body);
-                        if (node.rescue) each(*node.rescue);
+                        if (node.rescue) {
+                            each(*node.rescue);
+                        }
                     });
                 } else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
                     substitute(node.lambda);
@@ -540,7 +646,9 @@ struct Substituter {
                     substitute(node.thenExpr);
                     substitute(node.elseExpr);
                 } else if constexpr (std::is_same_v<T, ast::CurryExpr>) {
-                    for (auto& group : node.argGroups) each(group);
+                    for (auto& group : node.argGroups) {
+                        each(group);
+                    }
                 } else if constexpr (std::is_same_v<T, ast::TryExpr>) {
                     substitute(node.operand);
                 } else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
@@ -556,16 +664,25 @@ struct Substituter {
 
     auto functionBody(ast::FunctionDef& fn) -> void {
         for (auto& clause : fn.clauses) {
-            for (auto& param : clause.params)
-                if (param.defaultValue) substitute(*param.defaultValue);
+            for (auto& param : clause.params) {
+                if (param.defaultValue) {
+                    substitute(*param.defaultValue);
+                }
+            }
             std::vector<std::string> names;
             for (const auto& param : clause.params) {
-                if (param.name && *param.name != "_") names.push_back(*param.name);
-                if (param.pattern) patternNames(**param.pattern, names);
+                if (param.name && *param.name != "_") {
+                    names.push_back(*param.name);
+                }
+                if (param.pattern) {
+                    patternNames(**param.pattern, names);
+                }
             }
             inScope(names, [&] {
                 body(clause.body);
-                if (clause.rescue) each(*clause.rescue);
+                if (clause.rescue) {
+                    each(*clause.rescue);
+                }
             });
         }
     }
@@ -580,34 +697,36 @@ struct Substituter {
 // Each nested declaration carries its OWN captured bindings — the inner loop's
 // variable — which the outer make's bindings do not include, so the
 // substitution has to happen here rather than being left to the caller's pass.
-auto spliceNestedMethods(ast::MakeDef& make,
-                         const interpreter::Evaluator::GeneratedDeclaration& decl,
-                         std::vector<semantic::Diagnostic>& diagnostics,
-                         bool& ok) -> void {
+auto spliceNestedMethods(
+    ast::MakeDef& make,
+    const interpreter::Evaluator::GeneratedDeclaration& decl,
+    std::vector<semantic::Diagnostic>& diagnostics,
+    bool& ok) -> void {
     decltype(make.body) kept;
-    for (auto& item : make.body)
-        if (!std::holds_alternative<ast::ExprPtr>(item))
+    for (auto& item : make.body) {
+        if (!std::holds_alternative<ast::ExprPtr>(item)) {
             kept.push_back(std::move(item));
+        }
+    }
     make.body = std::move(kept);
 
     for (const auto& nested : decl.nested) {
-        const auto* fnTemplate =
-            std::get_if<std::shared_ptr<ast::FunctionDef>>(&nested.function);
+        const auto* fnTemplate = std::get_if<std::shared_ptr<ast::FunctionDef>>(&nested.function);
         if (!fnTemplate || !*fnTemplate) {
             // Not a missing feature: a `make` body holds methods, and
             // `make Foo do type Q = Int end` is "Unexpected token in make
             // body" in ordinary source too. Generation is held to the same
             // grammar as what you could write by hand.
-            addError(diagnostics, nested.location,
-                     "a `make` body holds methods, so only `let %name(...)` "
-                     "can be generated inside one — the same rule an ordinary "
-                     "`make` follows");
+            addError(
+                diagnostics, nested.location,
+                "a `make` body holds methods, so only `let %name(...)` "
+                "can be generated inside one — the same rule an ordinary "
+                "`make` follows");
             ok = false;
             continue;
         }
         if (nested.name.empty()) {
-            addError(diagnostics, nested.location,
-                     "generated method has an empty name");
+            addError(diagnostics, nested.location, "generated method has an empty name");
             ok = false;
             continue;
         }
@@ -615,11 +734,16 @@ auto spliceNestedMethods(ast::MakeDef& make,
         method->name = nested.name;
         method->location = nested.location;
         Constants captured;
-        for (const auto& [bound, value] : nested.bindings)
+        for (const auto& [bound, value] : nested.bindings) {
             captured.emplace(bound, value);
-        for (const auto& clause : method->clauses)
-            for (const auto& param : clause.params)
-                if (param.name) captured.erase(*param.name);
+        }
+        for (const auto& clause : method->clauses) {
+            for (const auto& param : clause.params) {
+                if (param.name) {
+                    captured.erase(*param.name);
+                }
+            }
+        }
         Substituter inner{captured, diagnostics, {}, {}, {}, {}, {}};
         inner.functionBody(*method);
         make.body.push_back(std::move(method));
@@ -631,29 +755,37 @@ auto spliceNestedMethods(ast::MakeDef& make,
 // Each method's own parameters must WIN over a captured loop variable of the
 // same name, and the map is shared across methods, so the erasures have to be
 // undone between them — hence the per-method copy rather than one mutated map.
-auto substituteMakeBodies(ast::MakeDef& make, Substituter& base,
-                          const Constants& captured) -> void {
+auto substituteMakeBodies(ast::MakeDef& make, Substituter& base, const Constants& captured)
+    -> void {
     auto forFunction = [&](ast::FunctionDef& fn) {
         Constants shadowed = captured;
-        for (const auto& clause : fn.clauses)
-            for (const auto& param : clause.params)
-                if (param.name) shadowed.erase(*param.name);
-        Substituter inner{
-            shadowed, base.diagnostics, {}, {}, {}, {}, {}, base.reify};
+        for (const auto& clause : fn.clauses) {
+            for (const auto& param : clause.params) {
+                if (param.name) {
+                    shadowed.erase(*param.name);
+                }
+            }
+        }
+        Substituter inner{shadowed, base.diagnostics, {}, {}, {}, {}, {}, base.reify};
         inner.functionBody(fn);
     };
     for (auto& item : make.body) {
         std::visit(
             [&](auto& node) {
                 using Ptr = std::decay_t<decltype(*node)>;
-                if (!node) return;
+                if (!node) {
+                    return;
+                }
                 if constexpr (std::is_same_v<Ptr, ast::FunctionDef>) {
                     forFunction(*node);
                 } else if constexpr (std::is_same_v<Ptr, ast::VisibilityBlock>) {
-                    for (auto& inner : node->items)
-                        if (auto* fn = std::get_if<
-                                std::unique_ptr<ast::FunctionDef>>(&inner))
-                            if (*fn) forFunction(**fn);
+                    for (auto& inner : node->items) {
+                        if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&inner)) {
+                            if (*fn) {
+                                forFunction(**fn);
+                            }
+                        }
+                    }
                 }
                 // TypeAnnotation holds types, not expressions — nothing to do.
             },
@@ -672,17 +804,23 @@ auto walkBodies(Items& items, Visit&& visit, bool intoCompiled = true) -> void {
         std::visit(
             [&](auto& node) {
                 using Ptr = std::decay_t<decltype(*node)>;
-                if (!node) return;
+                if (!node) {
+                    return;
+                }
                 if constexpr (std::is_same_v<Ptr, ast::FunctionDef>) {
                     visit(*node);
                 } else if constexpr (std::is_same_v<Ptr, ast::MainBlock>) {
-                    for (auto& expr : node->body) visit(expr);
+                    for (auto& expr : node->body) {
+                        visit(expr);
+                    }
                 } else if constexpr (std::is_same_v<Ptr, ast::MakeDef>) {
                     walkBodies(node->body, visit, intoCompiled);
                 } else if constexpr (std::is_same_v<Ptr, ast::ModuleDef>) {
                     walkBodies(node->body, visit, intoCompiled);
                 } else if constexpr (std::is_same_v<Ptr, ast::CompiledBlock>) {
-                    if (intoCompiled) walkBodies(node->items, visit, intoCompiled);
+                    if (intoCompiled) {
+                        walkBodies(node->items, visit, intoCompiled);
+                    }
                 } else if constexpr (std::is_same_v<Ptr, ast::VisibilityBlock>) {
                     walkBodies(node->items, visit, intoCompiled);
                 }
@@ -700,11 +838,15 @@ auto walkScopeBodies(Items& items, Visit&& visit) -> void {
         std::visit(
             [&](auto& node) {
                 using Ptr = std::decay_t<decltype(*node)>;
-                if (!node) return;
+                if (!node) {
+                    return;
+                }
                 if constexpr (std::is_same_v<Ptr, ast::FunctionDef>) {
                     visit(*node);
                 } else if constexpr (std::is_same_v<Ptr, ast::MainBlock>) {
-                    for (auto& expr : node->body) visit(expr);
+                    for (auto& expr : node->body) {
+                        visit(expr);
+                    }
                 } else if constexpr (std::is_same_v<Ptr, ast::MakeDef>) {
                     walkScopeBodies(node->body, visit);
                 } else if constexpr (std::is_same_v<Ptr, ast::VisibilityBlock>) {
@@ -764,11 +906,12 @@ auto collectMakeMethods(const ast::MakeDef& make, CompiledNames& into) -> void {
             std::visit(
                 [&](const auto& node) {
                     using Ptr = std::decay_t<decltype(*node)>;
-                    if (!node) return;
+                    if (!node) {
+                        return;
+                    }
                     if constexpr (std::is_same_v<Ptr, ast::FunctionDef>) {
                         into.methods.insert(node->name);
-                    } else if constexpr (
-                        std::is_same_v<Ptr, ast::VisibilityBlock>) {
+                    } else if constexpr (std::is_same_v<Ptr, ast::VisibilityBlock>) {
                         self(self, node->items);
                     }
                 },
@@ -778,18 +921,23 @@ auto collectMakeMethods(const ast::MakeDef& make, CompiledNames& into) -> void {
     collect(collect, make.body);
 }
 
-auto collectDeclaredNames(const std::vector<ast::CompiledItem>& items,
-                          const std::string& scope,
-                          CompiledNames& into) -> void {
+auto collectDeclaredNames(
+    const std::vector<ast::CompiledItem>& items, const std::string& scope, CompiledNames& into)
+    -> void {
     for (const auto& entry : items) {
-        if (const auto* fn =
-                std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry)) {
-            if (!*fn || isValueBinding(**fn)) continue;
-            if (scope.empty()) into.functions.insert((*fn)->name);
-            else into.qualified.insert(qualifiedName(scope, (*fn)->name));
-        } else if (const auto* make =
-                       std::get_if<std::unique_ptr<ast::MakeDef>>(&entry)) {
-            if (*make) collectMakeMethods(**make, into);
+        if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry)) {
+            if (!*fn || isValueBinding(**fn)) {
+                continue;
+            }
+            if (scope.empty()) {
+                into.functions.insert((*fn)->name);
+            } else {
+                into.qualified.insert(qualifiedName(scope, (*fn)->name));
+            }
+        } else if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&entry)) {
+            if (*make) {
+                collectMakeMethods(**make, into);
+            }
         }
     }
 }
@@ -797,15 +945,16 @@ auto collectDeclaredNames(const std::vector<ast::CompiledItem>& items,
 // Every `compiled do` block in the program, at top level or inside a module.
 auto compiledNames(const ast::Program& program) -> CompiledNames {
     CompiledNames names;
-    auto scan = [&](auto&& self, const auto& items,
-                    const std::string& scope) -> void {
+    auto scan = [&](auto&& self, const auto& items, const std::string& scope) -> void {
         for (const auto& item : items) {
-            if (const auto* block =
-                    std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item)) {
-                if (*block) collectDeclaredNames((*block)->items, scope, names);
-            } else if (const auto* mod =
-                           std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
-                if (*mod) self(self, (*mod)->body, (*mod)->name);
+            if (const auto* block = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item)) {
+                if (*block) {
+                    collectDeclaredNames((*block)->items, scope, names);
+                }
+            } else if (const auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*mod) {
+                    self(self, (*mod)->body, (*mod)->name);
+                }
             }
         }
     };
@@ -828,25 +977,37 @@ auto compiledNames(const ast::Program& program) -> CompiledNames {
 // through.
 auto holeValue(const ast::Expr& hole) -> const ast::Expr* {
     const auto* call = std::get_if<ast::MethodCall>(&hole.kind);
-    if (call && call->method == "showValue" && call->receiver &&
-        call->args.empty() && call->namedArgs.empty() && !call->block)
+    if (call && call->method == "showValue" && call->receiver && call->args.empty() &&
+        call->namedArgs.empty() && !call->block) {
         return call->receiver.get();
+    }
     return &hole;
 }
 
 auto knownText(const ast::Expr& expr) -> std::optional<std::string> {
     const auto* literal = std::get_if<ast::StringLiteral>(&expr.kind);
-    if (!literal) return std::nullopt;
-    if (!literal->interpolating) return literal->value;
-    if (literal->values.empty())
+    if (!literal) {
+        return std::nullopt;
+    }
+    if (!literal->interpolating) {
+        return literal->value;
+    }
+    if (literal->values.empty()) {
         return literal->parts.empty() ? std::string{} : literal->parts.front();
+    }
     std::string text;
     for (std::size_t i = 0; i < literal->parts.size(); i++) {
         text += literal->parts[i];
-        if (i >= literal->values.size()) continue;
-        if (!literal->values[i]) return std::nullopt;
+        if (i >= literal->values.size()) {
+            continue;
+        }
+        if (!literal->values[i]) {
+            return std::nullopt;
+        }
         auto hole = knownText(*holeValue(*literal->values[i]));
-        if (!hole) return std::nullopt;
+        if (!hole) {
+            return std::nullopt;
+        }
         text += *hole;
     }
     return text;
@@ -883,37 +1044,43 @@ struct EmbedFolder {
     }
 
     auto claim(ast::ExprPtr& slot) -> bool {
-        if (!slot) return false;
+        if (!slot) {
+            return false;
+        }
         const auto* call = std::get_if<ast::MethodCall>(&slot->kind);
         if (!call || call->method != names::kEmbedFunction || !call->receiver ||
-            !isKexReceiver(*call->receiver))
+            !isKexReceiver(*call->receiver)) {
             return false;
-        if (call->args.size() != 1 || !call->namedArgs.empty() || call->block)
-            return fail(slot->location,
-                        "Kex.embed takes exactly one argument: the path of "
-                        "the file to embed");
-        if (!std::holds_alternative<ast::StringLiteral>(call->args[0]->kind))
-            return fail(slot->location,
-                        "Kex.embed's argument must be a plain string "
-                        "literal naming the file to embed — the path has to "
-                        "be knowable to the compiler, not just to the "
-                        "running program");
+        }
+        if (call->args.size() != 1 || !call->namedArgs.empty() || call->block) {
+            return fail(
+                slot->location, "Kex.embed takes exactly one argument: the path of "
+                                "the file to embed");
+        }
+        if (!std::holds_alternative<ast::StringLiteral>(call->args[0]->kind)) {
+            return fail(
+                slot->location, "Kex.embed's argument must be a plain string "
+                                "literal naming the file to embed — the path has to "
+                                "be knowable to the compiler, not just to the "
+                                "running program");
+        }
         auto path = knownText(*call->args[0]);
-        if (!path)
-            return fail(slot->location,
-                        "Kex.embed's argument must be a plain string "
-                        "literal naming the file to embed, not an "
-                        "interpolated one — the path has to be knowable to "
-                        "the compiler, not just to the running program. A "
-                        "hole may name a `compiled do` loop variable, or a "
-                        "String parameter of the enclosing function, which "
-                        "then gets one clause per matching file");
+        if (!path) {
+            return fail(
+                slot->location, "Kex.embed's argument must be a plain string "
+                                "literal naming the file to embed, not an "
+                                "interpolated one — the path has to be knowable to "
+                                "the compiler, not just to the running program. A "
+                                "hole may name a `compiled do` loop variable, or a "
+                                "String parameter of the enclosing function, which "
+                                "then gets one clause per matching file");
+        }
         std::filesystem::path target = sourceDir / *path;
         noteDependency(target.string());
         std::ifstream file(target, std::ios::binary);
-        if (!file)
-            return fail(slot->location, "Kex.embed: cannot read '" +
-                                             target.string() + "'");
+        if (!file) {
+            return fail(slot->location, "Kex.embed: cannot read '" + target.string() + "'");
+        }
         std::ostringstream contents;
         contents << file.rdbuf();
         slot->kind = ast::StringLiteral{contents.str(), false};
@@ -925,19 +1092,21 @@ struct EmbedFolder {
 // and `main` body, inside a `compiled do` block or not. Deliberately NOT
 // gated behind whether the program has any `compiled` block at all: embed
 // folding is unconditional, unlike everything below it in this file.
-auto foldEmbeds(ast::Program& program, const std::string& sourcePath,
-                 std::vector<semantic::Diagnostic>& diagnostics) -> bool {
-    EmbedFolder folder{
-        std::filesystem::path(sourcePath).parent_path(), diagnostics};
+auto foldEmbeds(
+    ast::Program& program,
+    const std::string& sourcePath,
+    std::vector<semantic::Diagnostic>& diagnostics) -> bool {
+    EmbedFolder folder{std::filesystem::path(sourcePath).parent_path(), diagnostics};
     Constants none;
     Substituter walk{none, diagnostics, {}, {}, {}};
     walk.onSlot = [&](ast::ExprPtr& slot) { return folder.claim(slot); };
     walkBodies(program.items, [&](auto& target) {
         using T = std::decay_t<decltype(target)>;
-        if constexpr (std::is_same_v<T, ast::FunctionDef>)
+        if constexpr (std::is_same_v<T, ast::FunctionDef>) {
             walk.functionBody(target);
-        else
+        } else {
             walk.substitute(target);
+        }
     });
     return folder.ok;
 }
@@ -974,55 +1143,72 @@ struct EmbedPattern {
 };
 
 // The first `Kex.embed` in `clause` whose holes all name one of `params`.
-auto findDispatchEmbed(ast::FunctionClause& clause,
-                       const std::unordered_set<std::string>& params,
-                       std::vector<semantic::Diagnostic>& diagnostics)
-    -> std::optional<EmbedPattern> {
+auto findDispatchEmbed(
+    ast::FunctionClause& clause,
+    const std::unordered_set<std::string>& params,
+    std::vector<semantic::Diagnostic>& diagnostics) -> std::optional<EmbedPattern> {
     std::optional<EmbedPattern> found;
     Constants none;
     Substituter walk{none, diagnostics, {}, {}, {}};
     bool splitting = false;
     walk.alsoSplit = [&](const std::string&) { return splitting; };
     walk.onSlot = [&](ast::ExprPtr& slot) {
-        if (found || !slot) return found.has_value();
+        if (found || !slot) {
+            return found.has_value();
+        }
         auto* call = std::get_if<ast::MethodCall>(&slot->kind);
         if (!call || call->method != names::kEmbedFunction || !call->receiver ||
-            !EmbedFolder::isKexReceiver(*call->receiver) ||
-            call->args.size() != 1 || !call->args[0])
+            !EmbedFolder::isKexReceiver(*call->receiver) || call->args.size() != 1 ||
+            !call->args[0]) {
             return false;
+        }
         auto* literal = std::get_if<ast::StringLiteral>(&call->args[0]->kind);
-        if (!literal) return true;
+        if (!literal) {
+            return true;
+        }
         splitting = true;
         walk.walkChildren(*call->args[0]);
         splitting = false;
-        if (literal->values.empty()) return true;
+        if (literal->values.empty()) {
+            return true;
+        }
         EmbedPattern pattern{slot->location, literal->parts, {}};
         for (const auto& value : literal->values) {
             const auto* name =
                 value ? std::get_if<ast::Identifier>(&holeValue(*value)->kind) : nullptr;
-            if (!name || !params.count(name->name)) return true;
+            if (!name || !params.count(name->name)) {
+                return true;
+            }
             pattern.holes.push_back(name->name);
         }
-        if (pattern.parts.size() != pattern.holes.size() + 1) return true;
+        if (pattern.parts.size() != pattern.holes.size() + 1) {
+            return true;
+        }
         found = std::move(pattern);
         return true;
     };
-    for (auto& param : clause.params)
-        if (param.defaultValue) walk.substitute(*param.defaultValue);
+    for (auto& param : clause.params) {
+        if (param.defaultValue) {
+            walk.substitute(*param.defaultValue);
+        }
+    }
     walk.body(clause.body);
-    if (clause.rescue) walk.each(*clause.rescue);
+    if (clause.rescue) {
+        walk.each(*clause.rescue);
+    }
     return found;
 }
 
 // Every file under `sourceDir` that fits `pattern`, sorted, as the text each
 // hole matched.
-auto matchEmbedPattern(const EmbedPattern& pattern,
-                       const std::filesystem::path& sourceDir)
+auto matchEmbedPattern(const EmbedPattern& pattern, const std::filesystem::path& sourceDir)
     -> std::vector<std::vector<std::string>> {
     auto escape = [](const std::string& text) {
         std::string out;
         for (char c : text) {
-            if (std::strchr("\\^$.|?*+()[]{}", c)) out += '\\';
+            if (std::strchr("\\^$.|?*+()[]{}", c)) {
+                out += '\\';
+            }
             out += c;
         }
         return out;
@@ -1045,56 +1231,68 @@ auto matchEmbedPattern(const EmbedPattern& pattern,
     const auto& lead = pattern.parts[0];
     const auto slash = lead.rfind('/');
     const bool absolute = !lead.empty() && lead.front() == '/';
-    const auto root = slash == std::string::npos
-        ? sourceDir : sourceDir / lead.substr(0, slash + 1);
+    const auto root =
+        slash == std::string::npos ? sourceDir : sourceDir / lead.substr(0, slash + 1);
     std::vector<std::vector<std::string>> matches;
     std::error_code error;
     // The directories, not only the files that matched: one more file
     // there is one more clause, and adding it changes its directory.
     noteDependency(root.string());
-    if (!std::filesystem::is_directory(root, error)) return matches;
+    if (!std::filesystem::is_directory(root, error)) {
+        return matches;
+    }
     std::filesystem::recursive_directory_iterator walk(root, error), end;
     for (; !error && walk != end; walk.increment(error)) {
-        if (walk->is_directory(error)) noteDependency(walk->path().string());
-        if (!walk->is_regular_file(error)) continue;
+        if (walk->is_directory(error)) {
+            noteDependency(walk->path().string());
+        }
+        if (!walk->is_regular_file(error)) {
+            continue;
+        }
         const auto candidate = absolute
-            ? walk->path().generic_string()
-            : walk->path().lexically_relative(sourceDir).generic_string();
+                                   ? walk->path().generic_string()
+                                   : walk->path().lexically_relative(sourceDir).generic_string();
         std::smatch match;
-        if (!std::regex_match(candidate, match, matcher)) continue;
+        if (!std::regex_match(candidate, match, matcher)) {
+            continue;
+        }
         std::vector<std::string> captured;
-        for (const auto& hole : pattern.holes)
+        for (const auto& hole : pattern.holes) {
             captured.push_back(match[group.at(hole)].str());
+        }
         matches.push_back(std::move(captured));
     }
     std::sort(matches.begin(), matches.end());
     return matches;
 }
 
-auto expandEmbedDispatch(ast::Program& program, const std::string& sourcePath,
-                         std::vector<semantic::Diagnostic>& diagnostics)
-    -> bool {
+auto expandEmbedDispatch(
+    ast::Program& program,
+    const std::string& sourcePath,
+    std::vector<semantic::Diagnostic>& diagnostics) -> bool {
     const auto sourceDir = std::filesystem::path(sourcePath).parent_path();
     bool ok = true;
     auto dispatch = [&](ast::FunctionDef& fn) {
         // Most functions embed nothing; leave their clauses where they are.
-        if (!std::any_of(fn.clauses.begin(), fn.clauses.end(),
-                         [&](ast::FunctionClause& clause) {
-                             std::unordered_set<std::string> params;
-                             for (const auto& param : clause.params)
-                                 if (param.name && !param.pattern &&
-                                     !param.defaultValue)
-                                     params.insert(*param.name);
-                             return findDispatchEmbed(clause, params, diagnostics)
-                                 .has_value();
-                         }))
+        if (!std::any_of(fn.clauses.begin(), fn.clauses.end(), [&](ast::FunctionClause& clause) {
+                std::unordered_set<std::string> params;
+                for (const auto& param : clause.params) {
+                    if (param.name && !param.pattern && !param.defaultValue) {
+                        params.insert(*param.name);
+                    }
+                }
+                return findDispatchEmbed(clause, params, diagnostics).has_value();
+            })) {
             return;
+        }
         std::vector<ast::FunctionClause> clauses;
         for (auto& clause : fn.clauses) {
             std::unordered_set<std::string> params;
-            for (const auto& param : clause.params)
-                if (param.name && !param.pattern && !param.defaultValue)
+            for (const auto& param : clause.params) {
+                if (param.name && !param.pattern && !param.defaultValue) {
                     params.insert(*param.name);
+                }
+            }
             auto pattern = findDispatchEmbed(clause, params, diagnostics);
             if (!pattern) {
                 clauses.push_back(std::move(clause));
@@ -1103,11 +1301,13 @@ auto expandEmbedDispatch(ast::Program& program, const std::string& sourcePath,
             auto matches = matchEmbedPattern(*pattern, sourceDir);
             if (matches.empty()) {
                 std::string shown = pattern->parts[0];
-                for (std::size_t i = 0; i < pattern->holes.size(); i++)
+                for (std::size_t i = 0; i < pattern->holes.size(); i++) {
                     shown += "${" + pattern->holes[i] + "}" + pattern->parts[i + 1];
-                addError(diagnostics, pattern->location,
-                         "Kex.embed(\"" + shown + "\") matches no file, so `" +
-                             fn.name + "` would have no clause for it");
+                }
+                addError(
+                    diagnostics, pattern->location,
+                    "Kex.embed(\"" + shown + "\") matches no file, so `" + fn.name +
+                        "` would have no clause for it");
                 ok = false;
                 clauses.push_back(std::move(clause));
                 continue;
@@ -1115,43 +1315,55 @@ auto expandEmbedDispatch(ast::Program& program, const std::string& sourcePath,
             for (const auto& captured : matches) {
                 auto copy = ast::clone(clause);
                 Constants fixed;
-                for (std::size_t i = 0; i < pattern->holes.size(); i++)
-                    fixed.emplace(pattern->holes[i],
-                                  interpreter::Value::string(captured[i]));
+                for (std::size_t i = 0; i < pattern->holes.size(); i++) {
+                    fixed.emplace(pattern->holes[i], interpreter::Value::string(captured[i]));
+                }
                 std::vector<std::string> others;
                 for (auto& param : copy.params) {
                     if (!param.name || !fixed.count(*param.name)) {
-                        if (param.name) others.push_back(*param.name);
+                        if (param.name) {
+                            others.push_back(*param.name);
+                        }
                         continue;
                     }
                     auto literal = std::make_unique<ast::Pattern>();
                     literal->location = pattern->location;
                     literal->kind = ast::LiteralPattern{Token{
                         TokenType::RawString,
-                        captured[std::find(pattern->holes.begin(),
-                                           pattern->holes.end(), *param.name) -
-                                 pattern->holes.begin()],
+                        captured
+                            [std::find(pattern->holes.begin(), pattern->holes.end(), *param.name) -
+                             pattern->holes.begin()],
                         pattern->location}};
                     param.pattern = std::move(literal);
                     param.name.reset();
                     param.type.reset();
                 }
                 Substituter fill{fixed, diagnostics, {}, {}, {}};
-                for (auto& param : copy.params)
-                    if (param.defaultValue) fill.substitute(*param.defaultValue);
+                for (auto& param : copy.params) {
+                    if (param.defaultValue) {
+                        fill.substitute(*param.defaultValue);
+                    }
+                }
                 fill.inScope(others, [&] {
                     fill.body(copy.body);
-                    if (copy.rescue) fill.each(*copy.rescue);
+                    if (copy.rescue) {
+                        fill.each(*copy.rescue);
+                    }
                 });
                 clauses.push_back(std::move(copy));
             }
         }
         fn.clauses = std::move(clauses);
     };
-    walkBodies(program.items, [&](auto& target) {
-        using T = std::decay_t<decltype(target)>;
-        if constexpr (std::is_same_v<T, ast::FunctionDef>) dispatch(target);
-    }, /*intoCompiled=*/false);
+    walkBodies(
+        program.items,
+        [&](auto& target) {
+            using T = std::decay_t<decltype(target)>;
+            if constexpr (std::is_same_v<T, ast::FunctionDef>) {
+                dispatch(target);
+            }
+        },
+        /*intoCompiled=*/false);
     return ok;
 }
 
@@ -1232,11 +1444,21 @@ struct ExplicitParam {
 };
 
 auto templateNodeKind(const std::string& tag) -> std::optional<TemplateNode::Kind> {
-    if (tag == "Text") return TemplateNode::Kind::Text;
-    if (tag == "Interpolate") return TemplateNode::Kind::Interpolate;
-    if (tag == "InterpolateRaw") return TemplateNode::Kind::InterpolateRaw;
-    if (tag == "Control") return TemplateNode::Kind::Control;
-    if (tag == "Comment") return TemplateNode::Kind::Comment;
+    if (tag == "Text") {
+        return TemplateNode::Kind::Text;
+    }
+    if (tag == "Interpolate") {
+        return TemplateNode::Kind::Interpolate;
+    }
+    if (tag == "InterpolateRaw") {
+        return TemplateNode::Kind::InterpolateRaw;
+    }
+    if (tag == "Control") {
+        return TemplateNode::Kind::Control;
+    }
+    if (tag == "Comment") {
+        return TemplateNode::Kind::Comment;
+    }
     return std::nullopt;
 }
 
@@ -1278,7 +1500,8 @@ auto scanCacheKey(const std::string& source, const std::string& toolchainKey) ->
     return sha256Hex(material);
 }
 
-auto scanCachePath(const std::filesystem::path& root, const std::string& key) -> std::filesystem::path {
+auto scanCachePath(const std::filesystem::path& root, const std::string& key)
+    -> std::filesystem::path {
     return root / "templates" / key.substr(0, 2) / (key + ".scan");
 }
 
@@ -1292,10 +1515,16 @@ auto writeCachedString(std::ostream& out, const std::string& text) -> void {
 // before anything is allocated for it.
 auto readCachedString(std::istream& in, std::uintmax_t fileSize, std::string& text) -> bool {
     std::size_t size = 0;
-    if (!(in >> size)) return false;
-    if (in.get() != '\n') return false;
+    if (!(in >> size)) {
+        return false;
+    }
+    if (in.get() != '\n') {
+        return false;
+    }
     const auto at = in.tellg();
-    if (at < 0 || size > fileSize - static_cast<std::uintmax_t>(at)) return false;
+    if (at < 0 || size > fileSize - static_cast<std::uintmax_t>(at)) {
+        return false;
+    }
     text.assign(size, '\0');
     return static_cast<bool>(in.read(text.data(), static_cast<std::streamsize>(size)));
 }
@@ -1305,27 +1534,43 @@ auto readCachedString(std::istream& in, std::uintmax_t fileSize, std::string& te
 auto readScanCache(const std::filesystem::path& entry) -> std::optional<ScannedTemplate> {
     std::error_code ec;
     const auto fileSize = std::filesystem::file_size(entry, ec);
-    if (ec) return std::nullopt;
+    if (ec) {
+        return std::nullopt;
+    }
     std::ifstream in(entry, std::ios::binary);
-    if (!in) return std::nullopt;
+    if (!in) {
+        return std::nullopt;
+    }
     std::string header;
-    if (!std::getline(in, header) || header != "kex-template-scan") return std::nullopt;
+    if (!std::getline(in, header) || header != "kex-template-scan") {
+        return std::nullopt;
+    }
     ScannedTemplate scanned;
     std::size_t nodeCount = 0;
-    if (!(in >> nodeCount)) return std::nullopt;
+    if (!(in >> nodeCount)) {
+        return std::nullopt;
+    }
     for (std::size_t i = 0; i < nodeCount; i++) {
         int kind = 0;
-        if (!(in >> kind) || kind < 0 || kind > static_cast<int>(TemplateNode::Kind::Comment)) return std::nullopt;
+        if (!(in >> kind) || kind < 0 || kind > static_cast<int>(TemplateNode::Kind::Comment)) {
+            return std::nullopt;
+        }
         std::string text;
-        if (!readCachedString(in, fileSize, text)) return std::nullopt;
+        if (!readCachedString(in, fileSize, text)) {
+            return std::nullopt;
+        }
         scanned.nodes.push_back({static_cast<TemplateNode::Kind>(kind), std::move(text)});
     }
     std::size_t paramCount = 0;
-    if (!(in >> paramCount)) return std::nullopt;
+    if (!(in >> paramCount)) {
+        return std::nullopt;
+    }
     for (std::size_t i = 0; i < paramCount; i++) {
         ExplicitParam param;
         if (!readCachedString(in, fileSize, param.name) ||
-            !readCachedString(in, fileSize, param.type)) return std::nullopt;
+            !readCachedString(in, fileSize, param.type)) {
+            return std::nullopt;
+        }
         scanned.explicitParams.push_back(std::move(param));
     }
     return scanned;
@@ -1338,7 +1583,9 @@ auto writeScanCache(const std::filesystem::path& entry, const ScannedTemplate& s
     namespace fs = std::filesystem;
     std::error_code ec;
     fs::create_directories(entry.parent_path(), ec);
-    if (ec) return;
+    if (ec) {
+        return;
+    }
     // A suffix no other writer of the same entry picks: a random value for
     // this process, and a count within it.
     static const auto process = [] {
@@ -1350,7 +1597,9 @@ auto writeScanCache(const std::filesystem::path& entry, const ScannedTemplate& s
     staging += ".tmp." + std::to_string(process) + "." + std::to_string(++counter);
     {
         std::ofstream out(staging, std::ios::binary);
-        if (!out) return;
+        if (!out) {
+            return;
+        }
         out << "kex-template-scan\n" << scanned.nodes.size();
         for (const auto& node : scanned.nodes) {
             out << " " << static_cast<int>(node.kind) << " ";
@@ -1363,24 +1612,34 @@ auto writeScanCache(const std::filesystem::path& entry, const ScannedTemplate& s
             out << " ";
             writeCachedString(out, param.type);
         }
-        if (!out) { out.close(); fs::remove(staging, ec); return; }
+        if (!out) {
+            out.close();
+            fs::remove(staging, ec);
+            return;
+        }
     }
     fs::rename(staging, entry, ec);
-    if (ec) fs::remove(staging, ec);
+    if (ec) {
+        fs::remove(staging, ec);
+    }
 }
 
-auto scanTemplateSourceUncached(const std::string& source, std::chrono::milliseconds timeout,
-                                std::vector<TemplateNode>& nodes,
-                                std::vector<ExplicitParam>& explicitParams,
-                                std::string& error) -> bool;
+auto scanTemplateSourceUncached(
+    const std::string& source,
+    std::chrono::milliseconds timeout,
+    std::vector<TemplateNode>& nodes,
+    std::vector<ExplicitParam>& explicitParams,
+    std::string& error) -> bool;
 
 // A template's scan: this process's own, then the cache's, then a real one
 // (written back to both). Only a scan that succeeded is kept — a failing one
 // must report its error again on the next build.
-auto scanTemplateSource(const std::string& source, std::chrono::milliseconds timeout,
-                         std::vector<TemplateNode>& nodes,
-                         std::vector<ExplicitParam>& explicitParams,
-                         std::string& error) -> bool {
+auto scanTemplateSource(
+    const std::string& source,
+    std::chrono::milliseconds timeout,
+    std::vector<TemplateNode>& nodes,
+    std::vector<ExplicitParam>& explicitParams,
+    std::string& error) -> bool {
     static std::unordered_map<std::string, ScannedTemplate> scannedHere;
     // An expansion without settings of its own uses the process's
     // (setDefaultScanCache): a module the semantic pass or a sandbox expands
@@ -1397,10 +1656,11 @@ auto scanTemplateSource(const std::string& source, std::chrono::milliseconds tim
         explicitParams = scanned.explicitParams;
         return true;
     };
-    if (auto found = scannedHere.find(key); found != scannedHere.end()) return use(found->second);
+    if (auto found = scannedHere.find(key); found != scannedHere.end()) {
+        return use(found->second);
+    }
     const bool persistent = !cacheRoot.empty() && !toolchainKey.empty();
-    const auto entry = persistent ? scanCachePath(cacheRoot, key)
-                                  : std::filesystem::path{};
+    const auto entry = persistent ? scanCachePath(cacheRoot, key) : std::filesystem::path{};
     if (persistent) {
         if (auto cached = readScanCache(entry)) {
             auto& kept = scannedHere.emplace(key, std::move(*cached)).first->second;
@@ -1408,9 +1668,13 @@ auto scanTemplateSource(const std::string& source, std::chrono::milliseconds tim
         }
     }
     ScannedTemplate scanned;
-    if (!scanTemplateSourceUncached(source, timeout, scanned.nodes, scanned.explicitParams, error))
+    if (!scanTemplateSourceUncached(
+            source, timeout, scanned.nodes, scanned.explicitParams, error)) {
         return false;
-    if (persistent) writeScanCache(entry, scanned);
+    }
+    if (persistent) {
+        writeScanCache(entry, scanned);
+    }
     auto& kept = scannedHere.emplace(key, std::move(scanned)).first->second;
     return use(kept);
 }
@@ -1423,10 +1687,12 @@ auto scanTemplateSource(const std::string& source, std::chrono::milliseconds tim
 //
 // Returns false and sets `error` on a scan failure or a sandbox crash; both
 // are compile errors at the call site, never a silently empty template.
-auto scanTemplateSourceUncached(const std::string& source, std::chrono::milliseconds timeout,
-                                std::vector<TemplateNode>& nodes,
-                                std::vector<ExplicitParam>& explicitParams,
-                                std::string& error) -> bool {
+auto scanTemplateSourceUncached(
+    const std::string& source,
+    std::chrono::milliseconds timeout,
+    std::vector<TemplateNode>& nodes,
+    std::vector<ExplicitParam>& explicitParams,
+    std::string& error) -> bool {
     ast::Expr sourceLit;
     sourceLit.kind = ast::StringLiteral{source, false};
     ast::Expr receiver;
@@ -1460,15 +1726,19 @@ auto scanTemplateSourceUncached(const std::string& source, std::chrono::millisec
     }
     if (results.empty() || !results[0]) {
         error = (reasons.empty() || reasons[0].empty())
-            ? "Template.scan could not be evaluated at compile time"
-            : reasons[0];
+                    ? "Template.scan could not be evaluated at compile time"
+                    : reasons[0];
         return false;
     }
     auto* outcome = std::get_if<interpreter::VariantValue>(&results[0]->data);
-    if (!outcome) { error = "Template.scan did not return a Result"; return false; }
+    if (!outcome) {
+        error = "Template.scan did not return a Result";
+        return false;
+    }
     if (outcome->tag != "Ok") {
         std::string message = (outcome->args.empty() || !outcome->args[0])
-            ? "scan failed" : outcome->args[0]->inspect();
+                                  ? "scan failed"
+                                  : outcome->args[0]->inspect();
         error = "template does not scan: " + message;
         return false;
     }
@@ -1477,25 +1747,40 @@ auto scanTemplateSourceUncached(const std::string& source, std::chrono::millisec
         return false;
     }
     auto* parsed = std::get_if<interpreter::RecordValue>(&outcome->args[0]->data);
-    if (!parsed) { error = "Template.scan's Ok value is not a Parsed record"; return false; }
+    if (!parsed) {
+        error = "Template.scan's Ok value is not a Parsed record";
+        return false;
+    }
 
     auto nodesField = parsed->fields.find("nodes");
     if (nodesField == parsed->fields.end() || !nodesField->second) {
-        error = "Parsed has no `nodes` field"; return false;
+        error = "Parsed has no `nodes` field";
+        return false;
     }
     auto* list = std::get_if<interpreter::ListValue>(&nodesField->second->data);
-    if (!list) { error = "Parsed.nodes is not a list"; return false; }
+    if (!list) {
+        error = "Parsed.nodes is not a list";
+        return false;
+    }
     for (const auto& elem : list->elements) {
-        if (!elem) continue;
+        if (!elem) {
+            continue;
+        }
         auto* variant = std::get_if<interpreter::VariantValue>(&elem->data);
         if (!variant || variant->args.size() != 1 || !variant->args[0]) {
             error = "Parsed.nodes holds something other than a Node";
             return false;
         }
         auto kind = templateNodeKind(variant->tag);
-        if (!kind) { error = "unknown template node: " + variant->tag; return false; }
+        if (!kind) {
+            error = "unknown template node: " + variant->tag;
+            return false;
+        }
         auto* text = std::get_if<interpreter::StringValue>(&variant->args[0]->data);
-        if (!text) { error = "a template Node's payload is not a String"; return false; }
+        if (!text) {
+            error = "a template Node's payload is not a String";
+            return false;
+        }
         nodes.push_back({*kind, text->value});
     }
 
@@ -1506,21 +1791,35 @@ auto scanTemplateSourceUncached(const std::string& source, std::chrono::millisec
     if (frontField != parsed->fields.end() && frontField->second) {
         if (auto* map = std::get_if<interpreter::MapValue>(&frontField->second->data)) {
             for (const auto& [key, value] : map->entries) {
-                const auto* keyStr = key ? std::get_if<interpreter::StringValue>(&key->data) : nullptr;
-                if (!keyStr || keyStr->value != "params" || !value) continue;
+                const auto* keyStr =
+                    key ? std::get_if<interpreter::StringValue>(&key->data) : nullptr;
+                if (!keyStr || keyStr->value != "params" || !value) {
+                    continue;
+                }
                 const auto* tag = std::get_if<interpreter::VariantValue>(&value->data);
-                if (!tag || tag->tag != "Tags" || tag->args.empty() || !tag->args[0]) continue;
+                if (!tag || tag->tag != "Tags" || tag->args.empty() || !tag->args[0]) {
+                    continue;
+                }
                 const auto* entries = std::get_if<interpreter::ListValue>(&tag->args[0]->data);
-                if (!entries) continue;
+                if (!entries) {
+                    continue;
+                }
                 for (const auto& entry : entries->elements) {
-                    const auto* entryStr = entry ? std::get_if<interpreter::StringValue>(&entry->data) : nullptr;
-                    if (!entryStr) continue;
+                    const auto* entryStr =
+                        entry ? std::get_if<interpreter::StringValue>(&entry->data) : nullptr;
+                    if (!entryStr) {
+                        continue;
+                    }
                     const auto colon = entryStr->value.find(':');
-                    auto name = trimmed(colon == std::string::npos
-                                            ? entryStr->value : entryStr->value.substr(0, colon));
+                    auto name = trimmed(
+                        colon == std::string::npos ? entryStr->value
+                                                   : entryStr->value.substr(0, colon));
                     auto type = colon == std::string::npos
-                        ? std::string{} : trimmed(entryStr->value.substr(colon + 1));
-                    if (!name.empty()) explicitParams.push_back({name, type});
+                                    ? std::string{}
+                                    : trimmed(entryStr->value.substr(colon + 1));
+                    if (!name.empty()) {
+                        explicitParams.push_back({name, type});
+                    }
                 }
             }
         }
@@ -1537,8 +1836,8 @@ struct ControlShape {
     ControlKind kind = ControlKind::Plain;
     std::vector<Token> tokens; // this node's own tokens, EOF excluded
     Token eof{TokenType::Eof, "", SourceLocation{}, -1, -1};
-    std::size_t keywordEnd = 0;    // If/Elif: condition tokens start here
-    std::size_t blockOpenAt = 0;   // BlockOpener: index of the `do` token
+    std::size_t keywordEnd = 0;           // If/Elif: condition tokens start here
+    std::size_t blockOpenAt = 0;          // BlockOpener: index of the `do` token
     std::vector<std::string> blockParams; // BlockOpener: `|params|`, if any
 };
 
@@ -1546,17 +1845,25 @@ auto classifyControl(const std::string& text) -> ControlShape {
     ControlShape shape;
     Lexer lexer(text, "<template>");
     for (auto& tok : lexer.tokenizeAll()) {
-        if (tok.type == TokenType::Eof) { shape.eof = tok; break; }
+        if (tok.type == TokenType::Eof) {
+            shape.eof = tok;
+            break;
+        }
         shape.tokens.push_back(std::move(tok));
     }
-    if (shape.tokens.empty()) return shape; // Plain, and lowerScope skips it
+    if (shape.tokens.empty()) {
+        return shape; // Plain, and lowerScope skips it
+    }
 
     const auto& first = shape.tokens.front();
     if (shape.tokens.size() == 1 && first.type == TokenType::End) {
         shape.kind = ControlKind::End;
         return shape;
     }
-    if (first.type == TokenType::Else) { shape.kind = ControlKind::Else; return shape; }
+    if (first.type == TokenType::Else) {
+        shape.kind = ControlKind::Else;
+        return shape;
+    }
     if (first.type == TokenType::Elif) {
         shape.kind = ControlKind::Elif;
         shape.keywordEnd = 1;
@@ -1576,12 +1883,16 @@ auto classifyControl(const std::string& text) -> ControlShape {
     // `|param, param|` list and nothing else.
     std::size_t doIdx = shape.tokens.size();
     for (std::size_t i = shape.tokens.size(); i-- > 0;) {
-        if (shape.tokens[i].type == TokenType::Do) { doIdx = i; break; }
+        if (shape.tokens[i].type == TokenType::Do) {
+            doIdx = i;
+            break;
+        }
         if (shape.tokens[i].type != TokenType::Pipe &&
             shape.tokens[i].type != TokenType::LowerIdent &&
             shape.tokens[i].type != TokenType::Underscore &&
-            shape.tokens[i].type != TokenType::Comma)
+            shape.tokens[i].type != TokenType::Comma) {
             break;
+        }
     }
     if (doIdx < shape.tokens.size()) {
         shape.kind = ControlKind::BlockOpener;
@@ -1589,10 +1900,11 @@ auto classifyControl(const std::string& text) -> ControlShape {
         if (doIdx + 1 < shape.tokens.size() && shape.tokens[doIdx + 1].type == TokenType::Pipe) {
             std::size_t j = doIdx + 2;
             while (j < shape.tokens.size() && shape.tokens[j].type != TokenType::Pipe) {
-                if (shape.tokens[j].type == TokenType::LowerIdent)
+                if (shape.tokens[j].type == TokenType::LowerIdent) {
                     shape.blockParams.push_back(shape.tokens[j].value);
-                else if (shape.tokens[j].type == TokenType::Underscore)
+                } else if (shape.tokens[j].type == TokenType::Underscore) {
                     shape.blockParams.push_back("_");
+                }
                 j++;
             }
         }
@@ -1614,21 +1926,29 @@ struct Lowerer {
     // nested scopes never name a fragment, so there is nothing to collide.
     int fragmentCounter = 0;
 
-    auto freshFragName() -> std::string { return "__frag" + std::to_string(fragmentCounter++); }
+    auto freshFragName() -> std::string {
+        return "__frag" + std::to_string(fragmentCounter++);
+    }
 
-    auto parseSlice(const std::vector<Token>& toks, std::size_t from, std::size_t to,
-                    const Token& eof, const char* what) -> ast::ExprPtr {
-        std::vector<Token> slice(toks.begin() + static_cast<std::ptrdiff_t>(from),
-                                 toks.begin() + static_cast<std::ptrdiff_t>(to));
+    auto parseSlice(
+        const std::vector<Token>& toks,
+        std::size_t from,
+        std::size_t to,
+        const Token& eof,
+        const char* what) -> ast::ExprPtr {
+        std::vector<Token> slice(
+            toks.begin() + static_cast<std::ptrdiff_t>(from),
+            toks.begin() + static_cast<std::ptrdiff_t>(to));
         slice.push_back(eof);
         Parser parser(std::move(slice), "<template>");
         auto expr = parseOrDiagnose([&] { return parser.parseExpr(); });
         if (!expr || !parser.diagnostics().empty()) {
             ok = false;
-            addError(diagnostics, blame,
-                     std::string("in a template ") + what + ": " +
-                         (parser.diagnostics().empty() ? std::string("expected an expression")
-                                                        : parser.diagnostics().front().message));
+            addError(
+                diagnostics, blame,
+                std::string("in a template ") + what + ": " +
+                    (parser.diagnostics().empty() ? std::string("expected an expression")
+                                                  : parser.diagnostics().front().message));
             return nullptr;
         }
         return expr;
@@ -1640,10 +1960,11 @@ struct Lowerer {
         auto expr = parseOrDiagnose([&] { return parser.parseExpr(); });
         if (!expr || !parser.diagnostics().empty()) {
             ok = false;
-            addError(diagnostics, blame,
-                     "in a template hole `" + text + "`: " +
-                         (parser.diagnostics().empty() ? std::string("expected an expression")
-                                                        : parser.diagnostics().front().message));
+            addError(
+                diagnostics, blame,
+                "in a template hole `" + text + "`: " +
+                    (parser.diagnostics().empty() ? std::string("expected an expression")
+                                                  : parser.diagnostics().front().message));
             return nullptr;
         }
         return expr;
@@ -1721,10 +2042,13 @@ struct Lowerer {
             literal.parts.push_back(current);
             current.clear();
             auto hole = parseHole(node.text);
-            if (!hole) hole = stringLiteral("");
+            if (!hole) {
+                hole = stringLiteral("");
+            }
             auto wrapped = showWrap(std::move(hole));
-            if (htmlMode && node.kind == TemplateNode::Kind::Interpolate)
+            if (htmlMode && node.kind == TemplateNode::Kind::Interpolate) {
                 wrapped = htmlEscapeWrap(std::move(wrapped));
+            }
             literal.values.push_back(std::move(wrapped));
         }
         literal.parts.push_back(current);
@@ -1749,7 +2073,9 @@ struct Lowerer {
     // any later `let` in the same scope), and rare enough elsewhere to
     // accept for v1.
     auto sumOf(std::vector<ast::ExprPtr> fragments) const -> ast::ExprPtr {
-        if (fragments.empty()) return stringLiteral("");
+        if (fragments.empty()) {
+            return stringLiteral("");
+        }
         ast::ExprPtr acc = std::move(fragments.front());
         for (std::size_t i = 1; i < fragments.size(); i++) {
             auto e = std::make_unique<ast::Expr>();
@@ -1798,8 +2124,8 @@ struct Lowerer {
     //   trade documented on `sumOf`.
     auto lowerScope(std::size_t start, bool topLevel) -> ScopeResult {
         std::vector<ast::ExprPtr> statements;
-        std::vector<ast::ExprPtr> fragments;      // used when !topLevel
-        std::vector<std::string> fragmentNames;   // used when topLevel
+        std::vector<ast::ExprPtr> fragments;    // used when !topLevel
+        std::vector<std::string> fragmentNames; // used when topLevel
         std::vector<TemplateNode> run;
 
         auto addFragment = [&](ast::ExprPtr value) {
@@ -1815,13 +2141,17 @@ struct Lowerer {
             if (topLevel) {
                 std::vector<ast::ExprPtr> refs;
                 refs.reserve(fragmentNames.size());
-                for (const auto& name : fragmentNames) refs.push_back(identifier(name));
+                for (const auto& name : fragmentNames) {
+                    refs.push_back(identifier(name));
+                }
                 return sumOf(std::move(refs));
             }
             return sumOf(std::move(fragments));
         };
         auto flushRun = [&]() {
-            if (run.empty()) return;
+            if (run.empty()) {
+                return;
+            }
             addFragment(buildRun(run));
             run.clear();
         };
@@ -1829,7 +2159,10 @@ struct Lowerer {
         std::size_t i = start;
         while (i < nodes.size()) {
             const auto& node = nodes[i];
-            if (node.kind == TemplateNode::Kind::Comment) { i++; continue; }
+            if (node.kind == TemplateNode::Kind::Comment) {
+                i++;
+                continue;
+            }
             if (node.kind != TemplateNode::Kind::Control) {
                 run.push_back(node);
                 i++;
@@ -1838,140 +2171,149 @@ struct Lowerer {
 
             auto shape = classifyControl(node.text);
             switch (shape.kind) {
-            case ControlKind::End:
-                flushRun();
-                statements.push_back(finalValue());
-                return {std::move(statements), Stop::End, nullptr, i + 1};
+                case ControlKind::End:
+                    flushRun();
+                    statements.push_back(finalValue());
+                    return {std::move(statements), Stop::End, nullptr, i + 1};
 
-            case ControlKind::Else:
-                flushRun();
-                statements.push_back(finalValue());
-                return {std::move(statements), Stop::Else, nullptr, i + 1};
+                case ControlKind::Else:
+                    flushRun();
+                    statements.push_back(finalValue());
+                    return {std::move(statements), Stop::Else, nullptr, i + 1};
 
-            case ControlKind::Elif: {
-                flushRun();
-                statements.push_back(finalValue());
-                auto cond = parseSlice(shape.tokens, shape.keywordEnd, shape.tokens.size(),
-                                       shape.eof, "elif condition");
-                return {std::move(statements), Stop::Elif, std::move(cond), i + 1};
-            }
-
-            case ControlKind::LetVar: {
-                flushRun();
-                auto stmt = parseSlice(shape.tokens, 0, shape.tokens.size(), shape.eof,
-                                       "let/var region");
-                if (stmt) statements.push_back(std::move(stmt));
-                i++;
-                break;
-            }
-
-            case ControlKind::If: {
-                flushRun();
-                auto cond = parseSlice(shape.tokens, shape.keywordEnd, shape.tokens.size(),
-                                       shape.eof, "if condition");
-                auto thenResult = lowerScope(i + 1, false);
-                ast::IfExpr ifExpr;
-                ifExpr.condition = cond ? std::move(cond) : stringLiteral("");
-                ifExpr.thenBody = std::move(thenResult.statements);
-
-                std::size_t cursor = thenResult.next;
-                Stop stop = thenResult.stop;
-                ast::ExprPtr elifCond = std::move(thenResult.elifCondition);
-                while (stop == Stop::Elif) {
-                    auto branch = lowerScope(cursor, false);
-                    ifExpr.elifs.emplace_back(std::move(elifCond), std::move(branch.statements));
-                    cursor = branch.next;
-                    stop = branch.stop;
-                    elifCond = std::move(branch.elifCondition);
-                }
-                bool hasElse = false;
-                if (stop == Stop::Else) {
-                    auto branch = lowerScope(cursor, false);
-                    ifExpr.elseBody = std::move(branch.statements);
-                    cursor = branch.next;
-                    stop = branch.stop;
-                    hasElse = true;
-                }
-                if (stop != Stop::End) {
-                    ok = false;
-                    addError(diagnostics, blame, "template `if` has no matching `end`");
-                }
-                // No else written: an if used as a value needs one on every
-                // arm, so an empty string stands in for "nothing here".
-                if (!hasElse) {
-                    std::vector<ast::ExprPtr> empty;
-                    empty.push_back(stringLiteral(""));
-                    ifExpr.elseBody = std::move(empty);
+                case ControlKind::Elif: {
+                    flushRun();
+                    statements.push_back(finalValue());
+                    auto cond = parseSlice(
+                        shape.tokens, shape.keywordEnd, shape.tokens.size(), shape.eof,
+                        "elif condition");
+                    return {std::move(statements), Stop::Elif, std::move(cond), i + 1};
                 }
 
-                auto e = std::make_unique<ast::Expr>();
-                e->location = blame;
-                e->kind = std::move(ifExpr);
-                addFragment(std::move(e));
-                i = cursor;
-                break;
-            }
-
-            case ControlKind::BlockOpener: {
-                flushRun();
-                auto prefix = parseSlice(shape.tokens, 0, shape.blockOpenAt, shape.eof,
-                                         "block call");
-                auto bodyResult = lowerScope(i + 1, false);
-                if (bodyResult.stop != Stop::End) {
-                    ok = false;
-                    addError(diagnostics, blame, "template block has no matching `end`");
-                }
-                ast::Lambda lambda;
-                for (const auto& p : shape.blockParams)
-                    lambda.params.push_back(ast::LambdaParam{p, std::nullopt});
-                lambda.body = std::move(bodyResult.statements);
-                auto lambdaExpr = std::make_unique<ast::Expr>();
-                lambdaExpr->location = blame;
-                lambdaExpr->kind = std::move(lambda);
-
-                bool attached = false;
-                if (prefix) {
-                    if (auto* mc = std::get_if<ast::MethodCall>(&prefix->kind)) {
-                        mc->block = std::move(lambdaExpr);
-                        attached = true;
-                    } else if (auto* fc = std::get_if<ast::FunctionCall>(&prefix->kind)) {
-                        fc->block = std::move(lambdaExpr);
-                        attached = true;
+                case ControlKind::LetVar: {
+                    flushRun();
+                    auto stmt = parseSlice(
+                        shape.tokens, 0, shape.tokens.size(), shape.eof, "let/var region");
+                    if (stmt) {
+                        statements.push_back(std::move(stmt));
                     }
+                    i++;
+                    break;
                 }
-                if (!attached) {
-                    ok = false;
-                    addError(diagnostics, blame,
-                             "template block `" + node.text +
-                                 "` is not a call that can take a block");
+
+                case ControlKind::If: {
+                    flushRun();
+                    auto cond = parseSlice(
+                        shape.tokens, shape.keywordEnd, shape.tokens.size(), shape.eof,
+                        "if condition");
+                    auto thenResult = lowerScope(i + 1, false);
+                    ast::IfExpr ifExpr;
+                    ifExpr.condition = cond ? std::move(cond) : stringLiteral("");
+                    ifExpr.thenBody = std::move(thenResult.statements);
+
+                    std::size_t cursor = thenResult.next;
+                    Stop stop = thenResult.stop;
+                    ast::ExprPtr elifCond = std::move(thenResult.elifCondition);
+                    while (stop == Stop::Elif) {
+                        auto branch = lowerScope(cursor, false);
+                        ifExpr.elifs.emplace_back(
+                            std::move(elifCond), std::move(branch.statements));
+                        cursor = branch.next;
+                        stop = branch.stop;
+                        elifCond = std::move(branch.elifCondition);
+                    }
+                    bool hasElse = false;
+                    if (stop == Stop::Else) {
+                        auto branch = lowerScope(cursor, false);
+                        ifExpr.elseBody = std::move(branch.statements);
+                        cursor = branch.next;
+                        stop = branch.stop;
+                        hasElse = true;
+                    }
+                    if (stop != Stop::End) {
+                        ok = false;
+                        addError(diagnostics, blame, "template `if` has no matching `end`");
+                    }
+                    // No else written: an if used as a value needs one on every
+                    // arm, so an empty string stands in for "nothing here".
+                    if (!hasElse) {
+                        std::vector<ast::ExprPtr> empty;
+                        empty.push_back(stringLiteral(""));
+                        ifExpr.elseBody = std::move(empty);
+                    }
+
+                    auto e = std::make_unique<ast::Expr>();
+                    e->location = blame;
+                    e->kind = std::move(ifExpr);
+                    addFragment(std::move(e));
+                    i = cursor;
+                    break;
+                }
+
+                case ControlKind::BlockOpener: {
+                    flushRun();
+                    auto prefix =
+                        parseSlice(shape.tokens, 0, shape.blockOpenAt, shape.eof, "block call");
+                    auto bodyResult = lowerScope(i + 1, false);
+                    if (bodyResult.stop != Stop::End) {
+                        ok = false;
+                        addError(diagnostics, blame, "template block has no matching `end`");
+                    }
+                    ast::Lambda lambda;
+                    for (const auto& p : shape.blockParams) {
+                        lambda.params.push_back(ast::LambdaParam{p, std::nullopt});
+                    }
+                    lambda.body = std::move(bodyResult.statements);
+                    auto lambdaExpr = std::make_unique<ast::Expr>();
+                    lambdaExpr->location = blame;
+                    lambdaExpr->kind = std::move(lambda);
+
+                    bool attached = false;
+                    if (prefix) {
+                        if (auto* mc = std::get_if<ast::MethodCall>(&prefix->kind)) {
+                            mc->block = std::move(lambdaExpr);
+                            attached = true;
+                        } else if (auto* fc = std::get_if<ast::FunctionCall>(&prefix->kind)) {
+                            fc->block = std::move(lambdaExpr);
+                            attached = true;
+                        }
+                    }
+                    if (!attached) {
+                        ok = false;
+                        addError(
+                            diagnostics, blame,
+                            "template block `" + node.text +
+                                "` is not a call that can take a block");
+                        i = bodyResult.next;
+                        break;
+                    }
+
+                    auto join = std::make_unique<ast::Expr>();
+                    join->location = blame;
+                    ast::MethodCall joinCall;
+                    joinCall.receiver = std::move(prefix);
+                    joinCall.method = "join";
+                    joinCall.parenthesized = true;
+                    joinCall.args.push_back(stringLiteral(""));
+                    join->kind = std::move(joinCall);
+
+                    addFragment(std::move(join));
                     i = bodyResult.next;
                     break;
                 }
 
-                auto join = std::make_unique<ast::Expr>();
-                join->location = blame;
-                ast::MethodCall joinCall;
-                joinCall.receiver = std::move(prefix);
-                joinCall.method = "join";
-                joinCall.parenthesized = true;
-                joinCall.args.push_back(stringLiteral(""));
-                join->kind = std::move(joinCall);
-
-                addFragment(std::move(join));
-                i = bodyResult.next;
-                break;
-            }
-
-            case ControlKind::Plain: {
-                flushRun();
-                if (!shape.tokens.empty()) {
-                    auto stmt = parseSlice(shape.tokens, 0, shape.tokens.size(), shape.eof,
-                                           "control region");
-                    if (stmt) statements.push_back(std::move(stmt));
+                case ControlKind::Plain: {
+                    flushRun();
+                    if (!shape.tokens.empty()) {
+                        auto stmt = parseSlice(
+                            shape.tokens, 0, shape.tokens.size(), shape.eof, "control region");
+                        if (stmt) {
+                            statements.push_back(std::move(stmt));
+                        }
+                    }
+                    i++;
+                    break;
                 }
-                i++;
-                break;
-            }
             }
         }
         flushRun();
@@ -1994,8 +2336,9 @@ auto collectFreeNames(std::vector<ast::ExprPtr>& body) -> std::vector<std::strin
     walker.onSlot = [&](ast::ExprPtr& slot) -> bool {
         if (slot) {
             if (const auto* id = std::get_if<ast::Identifier>(&slot->kind)) {
-                if (!walker.shadowed.count(id->name) && seen.insert(id->name).second)
+                if (!walker.shadowed.count(id->name) && seen.insert(id->name).second) {
                     ordered.push_back(id->name);
+                }
             }
         }
         return false;
@@ -2008,16 +2351,19 @@ auto collectFreeNames(std::vector<ast::ExprPtr>& body) -> std::vector<std::strin
 // parameter's `: Type` annotation would be. Reports through `diagnostics`
 // and returns null on a malformed type — the same treatment a hole or a
 // control region's Kex gets elsewhere in this file.
-auto parseParamType(const std::string& text, const SourceLocation& blame,
-                    std::vector<semantic::Diagnostic>& diagnostics) -> ast::TypeExprPtr {
+auto parseParamType(
+    const std::string& text,
+    const SourceLocation& blame,
+    std::vector<semantic::Diagnostic>& diagnostics) -> ast::TypeExprPtr {
     Lexer lexer(text, "<template>");
     Parser parser(lexer.tokenizeAll(), "<template>");
     auto type = parseOrDiagnose([&] { return parser.parseTypeExpr(); });
     if (!type || !parser.diagnostics().empty()) {
-        addError(diagnostics, blame,
-                 "in a template's `params:` frontmatter, `" + text + "` is not a type: " +
-                     (parser.diagnostics().empty() ? std::string("expected a type")
-                                                    : parser.diagnostics().front().message));
+        addError(
+            diagnostics, blame,
+            "in a template's `params:` frontmatter, `" + text + "` is not a type: " +
+                (parser.diagnostics().empty() ? std::string("expected a type")
+                                              : parser.diagnostics().front().message));
         return nullptr;
     }
     return type;
@@ -2028,11 +2374,14 @@ struct LoweredTemplate {
     ast::ExprPtr reference;
 };
 
-auto lowerTemplateFunction(bool htmlMode, const std::string& source, const SourceLocation& blame,
-                           const std::string& namePrefix, int& counter,
-                           std::chrono::milliseconds timeout,
-                           std::vector<semantic::Diagnostic>& diagnostics)
-    -> std::optional<LoweredTemplate> {
+auto lowerTemplateFunction(
+    bool htmlMode,
+    const std::string& source,
+    const SourceLocation& blame,
+    const std::string& namePrefix,
+    int& counter,
+    std::chrono::milliseconds timeout,
+    std::vector<semantic::Diagnostic>& diagnostics) -> std::optional<LoweredTemplate> {
     std::vector<TemplateNode> nodes;
     std::vector<ExplicitParam> explicitParams;
     std::string error;
@@ -2043,25 +2392,30 @@ auto lowerTemplateFunction(bool htmlMode, const std::string& source, const Sourc
 
     Lowerer lowerer{nodes, htmlMode, blame, diagnostics};
     auto result = lowerer.lowerScope(0, true);
-    if (!lowerer.ok) return std::nullopt;
+    if (!lowerer.ok) {
+        return std::nullopt;
+    }
     if (result.stop != Lowerer::Stop::Eof) {
         // Template.scan only ever emits a bare Control("end") for one this
         // pass itself opened (an if or a block), both of which consume
         // their own "end" above — so reaching here means a stray
         // "end"/"else"/"elif" the pass never opened, i.e. the template's
         // control regions do not balance.
-        addError(diagnostics, blame,
-                 "template's control regions do not balance — an `end`, "
-                 "`else` or `elif` with no opener");
+        addError(
+            diagnostics, blame,
+            "template's control regions do not balance — an `end`, "
+            "`else` or `elif` with no opener");
         return std::nullopt;
     }
 
     // Inference gives names only (untyped, left to unify from call sites);
     // `params:` frontmatter gives both — see ExplicitParam.
     std::vector<ExplicitParam> paramList = explicitParams;
-    if (paramList.empty())
-        for (auto& name : collectFreeNames(result.statements))
+    if (paramList.empty()) {
+        for (auto& name : collectFreeNames(result.statements)) {
             paramList.push_back({std::move(name), ""});
+        }
+    }
 
     auto fn = std::make_unique<ast::FunctionDef>();
     fn->location = blame;
@@ -2079,12 +2433,17 @@ auto lowerTemplateFunction(bool htmlMode, const std::string& source, const Sourc
             // a null-pointer dereference downstream) rather than empty —
             // exactly backwards from what a failed parse should produce.
             auto parsed = parseParamType(p.type, blame, diagnostics);
-            if (parsed) param.type = std::move(parsed);
-            else typesOk = false;
+            if (parsed) {
+                param.type = std::move(parsed);
+            } else {
+                typesOk = false;
+            }
         }
         clause.params.push_back(std::move(param));
     }
-    if (!typesOk) return std::nullopt;
+    if (!typesOk) {
+        return std::nullopt;
+    }
     clause.body = std::move(result.statements);
     fn->clauses.push_back(std::move(clause));
 
@@ -2109,35 +2468,44 @@ struct TemplateCallFolder {
     }
 
     auto claim(ast::ExprPtr& slot) -> bool {
-        if (!slot) return false;
+        if (!slot) {
+            return false;
+        }
         auto* call = std::get_if<ast::MethodCall>(&slot->kind);
-        if (!call || !call->receiver || !isTemplateReceiver(*call->receiver)) return false;
+        if (!call || !call->receiver || !isTemplateReceiver(*call->receiver)) {
+            return false;
+        }
         bool htmlMode;
-        if (call->method == "text") htmlMode = false;
-        else if (call->method == "html") htmlMode = true;
-        else return false;
+        if (call->method == "text") {
+            htmlMode = false;
+        } else if (call->method == "html") {
+            htmlMode = true;
+        } else {
+            return false;
+        }
 
         if (call->args.size() != 1 || !call->namedArgs.empty() || call->block) {
-            addError(diagnostics, slot->location,
-                     "Template." + call->method +
-                         " takes exactly one argument: the template's source text");
+            addError(
+                diagnostics, slot->location,
+                "Template." + call->method +
+                    " takes exactly one argument: the template's source text");
             ok = false;
             return true;
         }
         auto known = knownText(*call->args[0]);
         if (!known) {
-            addError(diagnostics, slot->location,
-                     "Template." + call->method +
-                         "'s argument must be a compile-time-known string (a plain literal, "
-                         "or Kex.embed(...)) — the template's text has to be knowable to the "
-                         "compiler, not just to the running program");
+            addError(
+                diagnostics, slot->location,
+                "Template." + call->method +
+                    "'s argument must be a compile-time-known string (a plain literal, "
+                    "or Kex.embed(...)) — the template's text has to be knowable to the "
+                    "compiler, not just to the running program");
             ok = false;
             return true;
         }
 
-        auto lowered =
-            lowerTemplateFunction(htmlMode, *known, slot->location, namePrefix, counter,
-                                  timeout, diagnostics);
+        auto lowered = lowerTemplateFunction(
+            htmlMode, *known, slot->location, namePrefix, counter, timeout, diagnostics);
         if (!lowered) {
             ok = false;
             return true;
@@ -2158,7 +2526,9 @@ struct TemplateCallFolder {
 // FNV-1a of the source path keeps each file's names apart and the output
 // deterministic for a given path (kexhq/kex#385).
 auto templateNamePrefix(const std::string& sourcePath) -> std::string {
-    if (sourcePath.empty()) return "__kexTemplate";
+    if (sourcePath.empty()) {
+        return "__kexTemplate";
+    }
     std::uint32_t hash = 2166136261u;
     for (unsigned char c : sourcePath) {
         hash ^= c;
@@ -2172,14 +2542,19 @@ auto templateNamePrefix(const std::string& sourcePath) -> std::string {
 //
 // `counter` carries over between calls: templates are folded once before
 // generation and again after it, and the second pass must not reuse a name.
-auto foldTemplates(ast::Program& program, std::vector<semantic::Diagnostic>& diagnostics,
-                    const ExpandOptions& options, int& counter) -> bool {
-    TemplateCallFolder folder{diagnostics, options.timeout, {},
-                              templateNamePrefix(options.sourcePath), counter, true};
+auto foldTemplates(
+    ast::Program& program,
+    std::vector<semantic::Diagnostic>& diagnostics,
+    const ExpandOptions& options,
+    int& counter) -> bool {
+    TemplateCallFolder folder{
+        diagnostics, options.timeout, {}, templateNamePrefix(options.sourcePath), counter, true};
     struct CounterSync {
         TemplateCallFolder& folder;
         int& counter;
-        ~CounterSync() { counter = folder.counter; }
+        ~CounterSync() {
+            counter = folder.counter;
+        }
     } sync{folder, counter};
     Constants none;
     Substituter walk{none, diagnostics, {}, {}, {}};
@@ -2192,16 +2567,23 @@ auto foldTemplates(ast::Program& program, std::vector<semantic::Diagnostic>& dia
     auto foldScope = [&](auto&& self, auto& items) -> void {
         walkScopeBodies(items, [&](auto& target) {
             using T = std::decay_t<decltype(target)>;
-            if constexpr (std::is_same_v<T, ast::FunctionDef>)
+            if constexpr (std::is_same_v<T, ast::FunctionDef>) {
                 walk.functionBody(target);
-            else
+            } else {
                 walk.substitute(target);
+            }
         });
-        for (auto& fn : folder.generated) items.push_back(std::move(fn));
+        for (auto& fn : folder.generated) {
+            items.push_back(std::move(fn));
+        }
         folder.generated.clear();
-        for (auto& item : items)
-            if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-                if (*mod) self(self, (*mod)->body);
+        for (auto& item : items) {
+            if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*mod) {
+                    self(self, (*mod)->body);
+                }
+            }
+        }
     };
     foldScope(foldScope, program.items);
     return folder.ok;
@@ -2215,8 +2597,8 @@ struct ChainCollapser {
     // descending, so a nested call is never collected separately.
     struct Candidate {
         ast::ExprPtr* slot;
-        std::vector<std::string> names;         // index -> name, as written
-        std::vector<const ast::Expr*> exprs;    // index -> what it stands for
+        std::vector<std::string> names;      // index -> name, as written
+        std::vector<const ast::Expr*> exprs; // index -> what it stands for
     };
     std::vector<Candidate> candidates;
 
@@ -2238,34 +2620,44 @@ struct ChainCollapser {
     // as a value would let a top-level binding be baked in, which is exactly
     // what must keep happening at runtime.
     static auto qualifierPath(const ast::Expr& expr, std::string& out) -> bool {
-        if (const auto* upper =
-                std::get_if<ast::UpperIdentifier>(&expr.kind)) {
+        if (const auto* upper = std::get_if<ast::UpperIdentifier>(&expr.kind)) {
             out = upper->name;
             return true;
         }
         const auto* call = std::get_if<ast::MethodCall>(&expr.kind);
-        if (!call || !call->receiver || !call->args.empty() ||
-            !call->namedArgs.empty() || call->block || call->parenthesized)
+        if (!call || !call->receiver || !call->args.empty() || !call->namedArgs.empty() ||
+            call->block || call->parenthesized) {
             return false;
-        if (!qualifierPath(*call->receiver, out)) return false;
+        }
+        if (!qualifierPath(*call->receiver, out)) {
+            return false;
+        }
         out += "." + call->method;
         return true;
     }
 
     auto allStatic(const std::vector<ast::ExprPtr>& list) const -> bool {
-        for (const auto& item : list)
-            if (!item || !isStatic(*item)) return false;
+        for (const auto& item : list) {
+            if (!item || !isStatic(*item)) {
+                return false;
+            }
+        }
         return true;
     }
-    auto allStatic(const std::vector<std::pair<std::string, ast::ExprPtr>>& list)
-        const -> bool {
-        for (const auto& [_, item] : list)
-            if (!item || !isStatic(*item)) return false;
+    auto allStatic(const std::vector<std::pair<std::string, ast::ExprPtr>>& list) const -> bool {
+        for (const auto& [_, item] : list) {
+            if (!item || !isStatic(*item)) {
+                return false;
+            }
+        }
         return true;
     }
     auto allStatic(const std::vector<ast::RecordEntry>& list) const -> bool {
-        for (const auto& entry : list)
-            if (!entry.value || !isStatic(*entry.value)) return false;
+        for (const auto& entry : list) {
+            if (!entry.value || !isStatic(*entry.value)) {
+                return false;
+            }
+        }
         return true;
     }
 
@@ -2291,28 +2683,33 @@ struct ChainCollapser {
         return std::visit(
             [&](const auto& node) -> bool {
                 using T = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<T, ast::Identifier> ||
-                              std::is_same_v<T, ast::UpperIdentifier>) {
-                    for (const auto& seen : freeNames)
-                        if (seen == node.name) return true;
+                if constexpr (
+                    std::is_same_v<T, ast::Identifier> || std::is_same_v<T, ast::UpperIdentifier>) {
+                    for (const auto& seen : freeNames) {
+                        if (seen == node.name) {
+                            return true;
+                        }
+                    }
                     freeNames.push_back(node.name);
                     freeExprs.push_back(&expr);
                     return true;
-                } else if constexpr (std::is_same_v<T, ast::IntLiteral> ||
-                              std::is_same_v<T, ast::FloatLiteral> ||
-                              std::is_same_v<T, ast::CharLiteral> ||
-                              std::is_same_v<T, ast::BoolLiteral> ||
-                              std::is_same_v<T, ast::NoneLiteral> ||
-                              std::is_same_v<T, ast::AtomLiteral>) {
+                } else if constexpr (
+                    std::is_same_v<T, ast::IntLiteral> || std::is_same_v<T, ast::FloatLiteral> ||
+                    std::is_same_v<T, ast::CharLiteral> || std::is_same_v<T, ast::BoolLiteral> ||
+                    std::is_same_v<T, ast::NoneLiteral> || std::is_same_v<T, ast::AtomLiteral>) {
                     return true;
                 } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
                     // `interpolating` is set for every double-quoted string,
                     // whether or not it contains a `${...}` — so it is not the
                     // question. What matters is whether anything is embedded,
                     // and whether that is itself known.
-                    if (!node.interpolating) return true;
+                    if (!node.interpolating) {
+                        return true;
+                    }
                     // Already pre-split into parts/values.
-                    if (!node.parts.empty()) return allStatic(node.values);
+                    if (!node.parts.empty()) {
+                        return allStatic(node.values);
+                    }
                     // Still raw text. No `${` means nothing to look up; with
                     // one, the reference is invisible from here and the string
                     // has to count as unknown.
@@ -2324,28 +2721,29 @@ struct ChainCollapser {
                 } else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
                     return allStatic(node.fields);
                 } else if constexpr (std::is_same_v<T, ast::MapExpr>) {
-                    for (const auto& entry : node.entries)
-                        if (!entry.key || !isStatic(*entry.key) ||
-                            !entry.value || !isStatic(*entry.value))
+                    for (const auto& entry : node.entries) {
+                        if (!entry.key || !isStatic(*entry.key) || !entry.value ||
+                            !isStatic(*entry.value)) {
                             return false;
+                        }
+                    }
                     return true;
                 } else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
-                    return node.left && node.right && isStatic(*node.left) &&
-                           isStatic(*node.right);
+                    return node.left && node.right && isStatic(*node.left) && isStatic(*node.right);
                 } else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
                     return node.operand && isStatic(*node.operand);
-                } else if constexpr (std::is_same_v<T, ast::MethodCall> ||
-                                     std::is_same_v<T, ast::FunctionCall>) {
+                } else if constexpr (
+                    std::is_same_v<T, ast::MethodCall> || std::is_same_v<T, ast::FunctionCall>) {
                     // `id.as(String)` only retags, statically: what it holds
                     // is what `id` holds, so it is known when `id` is. The
                     // argument names a type, not a runtime value.
-                    if constexpr (std::is_same_v<T, ast::MethodCall>)
-                        if (node.method == "as" && node.receiver &&
-                            node.args.size() == 1 && node.namedArgs.empty() &&
-                            !node.block && node.args[0] &&
-                            std::holds_alternative<ast::UpperIdentifier>(
-                                node.args[0]->kind))
+                    if constexpr (std::is_same_v<T, ast::MethodCall>) {
+                        if (node.method == "as" && node.receiver && node.args.size() == 1 &&
+                            node.namedArgs.empty() && !node.block && node.args[0] &&
+                            std::holds_alternative<ast::UpperIdentifier>(node.args[0]->kind)) {
                             return isStatic(*node.receiver);
+                        }
+                    }
                     // Only a call into compiled code counts: an ordinary
                     // runtime call on literals stays where the author put it.
                     return isCollapsible(expr);
@@ -2358,27 +2756,30 @@ struct ChainCollapser {
 
     auto isCollapsible(const ast::Expr& expr) const -> bool {
         if (const auto* call = std::get_if<ast::MethodCall>(&expr.kind)) {
-            if (call->block || !call->receiver) return false;
+            if (call->block || !call->receiver) {
+                return false;
+            }
             std::string owner;
             const bool qualified = qualifierPath(*call->receiver, owner);
-            const bool isCompiled = qualified
-                ? compiled.qualified.count(
-                      qualifiedName(owner, call->method)) > 0
-                : compiled.methods.count(call->method) > 0;
-            if (!isCompiled) return false;
+            const bool isCompiled =
+                qualified ? compiled.qualified.count(qualifiedName(owner, call->method)) > 0
+                          : compiled.methods.count(call->method) > 0;
+            if (!isCompiled) {
+                return false;
+            }
             const bool receiverKnown = qualified || isStatic(*call->receiver);
-            return receiverKnown && allStatic(call->args) &&
-                   allStatic(call->namedArgs);
+            return receiverKnown && allStatic(call->args) && allStatic(call->namedArgs);
         }
         if (const auto* call = std::get_if<ast::FunctionCall>(&expr.kind)) {
             const auto dot = call->name.rfind('.');
-            const bool isCompiled = dot == std::string::npos
-                ? compiled.functions.count(call->name) > 0
-                : compiled.qualified.count(
-                      qualifiedName(call->name.substr(0, dot),
-                                    call->name.substr(dot + 1))) > 0;
-            if ((!isCompiled && !call->reifiedConstructor) || call->block)
+            const bool isCompiled =
+                dot == std::string::npos
+                    ? compiled.functions.count(call->name) > 0
+                    : compiled.qualified.count(
+                          qualifiedName(call->name.substr(0, dot), call->name.substr(dot + 1))) > 0;
+            if ((!isCompiled && !call->reifiedConstructor) || call->block) {
                 return false;
+            }
             return allStatic(call->args) && allStatic(call->namedArgs);
         }
         return false;
@@ -2391,27 +2792,37 @@ struct ChainCollapser {
     // rebuild the literal it already is. Only walks the shapes `isStatic`
     // accepts, since it is never asked about anything else.
     auto callsCompiled(const ast::Expr& expr) const -> bool {
-        if (isCollapsible(expr)) return true;
+        if (isCollapsible(expr)) {
+            return true;
+        }
         return std::visit(
             [&](const auto& node) -> bool {
                 using T = std::decay_t<decltype(node)>;
                 auto anyOf = [&](const auto& list) {
-                    for (const auto& item : list)
-                        if (item && callsCompiled(*item)) return true;
+                    for (const auto& item : list) {
+                        if (item && callsCompiled(*item)) {
+                            return true;
+                        }
+                    }
                     return false;
                 };
-                if constexpr (std::is_same_v<T, ast::ListExpr> ||
-                              std::is_same_v<T, ast::TupleExpr>) {
+                if constexpr (
+                    std::is_same_v<T, ast::ListExpr> || std::is_same_v<T, ast::TupleExpr>) {
                     return anyOf(node.elements);
                 } else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
-                    for (const auto& field : node.fields)
-                        if (field.value && callsCompiled(*field.value)) return true;
+                    for (const auto& field : node.fields) {
+                        if (field.value && callsCompiled(*field.value)) {
+                            return true;
+                        }
+                    }
                     return false;
                 } else if constexpr (std::is_same_v<T, ast::MapExpr>) {
-                    for (const auto& entry : node.entries)
+                    for (const auto& entry : node.entries) {
                         if ((entry.key && callsCompiled(*entry.key)) ||
-                            (entry.value && callsCompiled(*entry.value)))
+                            (entry.value && callsCompiled(*entry.value))) {
                             return true;
+                        }
+                    }
                     return false;
                 } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
                     return anyOf(node.values);
@@ -2436,11 +2847,17 @@ struct ChainCollapser {
     // node was a `+` rather than a call. `isStatic` already computes the
     // property that matters; the chain shape never did.
     auto claim(ast::ExprPtr& slot) -> bool {
-        if (!slot) return false;
-        if (rejected && rejected->count(slot.get())) return false;
+        if (!slot) {
+            return false;
+        }
+        if (rejected && rejected->count(slot.get())) {
+            return false;
+        }
         freeNames.clear();
         freeExprs.clear();
-        if (!isStatic(*slot) || !callsCompiled(*slot)) return false;
+        if (!isStatic(*slot) || !callsCompiled(*slot)) {
+            return false;
+        }
         candidates.push_back({&slot, freeNames, freeExprs});
         return true;
     }
@@ -2448,9 +2865,10 @@ struct ChainCollapser {
 
 // Points a sandbox at the build's module roots, so a `using` inside the
 // program being expanded finds the same modules compilation does.
-auto useModuleRoots(interpreter::Evaluator& evaluator,
-                    const ExpandOptions& options) -> void {
-    if (options.moduleRoots.empty()) return;
+auto useModuleRoots(interpreter::Evaluator& evaluator, const ExpandOptions& options) -> void {
+    if (options.moduleRoots.empty()) {
+        return;
+    }
     auto roots = effectiveModuleRoots(options.moduleRoots);
     evaluator.setModuleRoots(std::move(roots));
 }
@@ -2459,12 +2877,12 @@ auto useModuleRoots(interpreter::Evaluator& evaluator,
 // module-qualified spelling even when the current source file does not import
 // that module directly. Recognize those calls so a query chain containing a
 // reified schema record can still be folded through to its SQL statement.
-auto constructorsInFile(const std::string& path)
-    -> const std::unordered_set<std::string>& {
+auto constructorsInFile(const std::string& path) -> const std::unordered_set<std::string>& {
     noteDependency(path);
     static std::unordered_map<std::string, std::unordered_set<std::string>> seen;
-    if (auto found = seen.find(path); found != seen.end())
+    if (auto found = seen.find(path); found != seen.end()) {
         return found->second;
+    }
     std::unordered_set<std::string> names;
     try {
         std::ifstream input(path);
@@ -2475,37 +2893,38 @@ auto constructorsInFile(const std::string& path)
         auto program = parser.parseProgram();
         if (parser.diagnostics().empty()) {
             auto scanType = [&](const ast::TypeDef& type, const std::string& scope) {
-                if (!type.variants || type.isDistinct ||
-                    kex::isTransparentTypeAlias(type)) return;
+                if (!type.variants || type.isDistinct || kex::isTransparentTypeAlias(type)) {
+                    return;
+                }
                 for (const auto& variant : *type.variants) {
-                    if (!variant) continue;
-                    const ast::TypeName* name =
-                        std::get_if<ast::TypeName>(&variant->kind);
-                    if (const auto* generic =
-                            std::get_if<ast::GenericType>(&variant->kind))
+                    if (!variant) {
+                        continue;
+                    }
+                    const ast::TypeName* name = std::get_if<ast::TypeName>(&variant->kind);
+                    if (const auto* generic = std::get_if<ast::GenericType>(&variant->kind)) {
                         name = &generic->name;
-                    if (name && !name->parts.empty())
+                    }
+                    if (name && !name->parts.empty()) {
                         names.insert(qualifiedName(scope, name->parts.back()));
+                    }
                 }
             };
             for (const auto& item : program.items) {
-                if (const auto* mod =
-                        std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
+                if (const auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
                     mod && *mod) {
-                    for (const auto& entry : (*mod)->body)
-                        if (const auto* type =
-                                std::get_if<std::unique_ptr<ast::TypeDef>>(&entry);
-                            type && *type)
+                    for (const auto& entry : (*mod)->body) {
+                        if (const auto* type = std::get_if<std::unique_ptr<ast::TypeDef>>(&entry);
+                            type && *type) {
                             scanType(**type, (*mod)->name);
-                } else if (const auto* type =
-                               std::get_if<std::unique_ptr<ast::TypeDef>>(&item);
+                        }
+                    }
+                } else if (const auto* type = std::get_if<std::unique_ptr<ast::TypeDef>>(&item);
                            type && *type) {
                     scanType(**type, "");
                 }
             }
         }
-    } catch (const std::exception&) {
-    }
+    } catch (const std::exception&) {}
     return seen.emplace(path, std::move(names)).first->second;
 }
 
@@ -2515,8 +2934,9 @@ auto constructorsInFile(const std::string& path)
 auto compiledNamesInFile(const std::string& path) -> const CompiledNames& {
     noteDependency(path);
     static std::unordered_map<std::string, CompiledNames> seen;
-    if (const auto found = seen.find(path); found != seen.end())
+    if (const auto found = seen.find(path); found != seen.end()) {
         return found->second;
+    }
     CompiledNames names;
     try {
         std::ifstream input(path);
@@ -2525,8 +2945,7 @@ auto compiledNamesInFile(const std::string& path) -> const CompiledNames& {
         Lexer lexer(source.str(), path);
         Parser parser(lexer.tokenizeAll(), path);
         names = compiledNames(parser.parseProgram());
-    } catch (const std::exception&) {
-    }
+    } catch (const std::exception&) {}
     return seen.emplace(path, std::move(names)).first->second;
 }
 
@@ -2541,49 +2960,57 @@ auto compiledNamesInFile(const std::string& path) -> const CompiledNames& {
 // Only recognition is widened. The sandbox already loads a used module from
 // the same roots, and still decides by trying: a name recognized here that
 // cannot be evaluated is kept for runtime, as any other.
-auto addImportedCompiledNames(const ast::Program& program,
-                              const ExpandOptions& options,
-                              CompiledNames& into) -> void {
+auto addImportedCompiledNames(
+    const ast::Program& program, const ExpandOptions& options, CompiledNames& into) -> void {
     auto roots = effectiveModuleRoots(options.moduleRoots);
     const module::Resolver resolver(roots);
 
     auto add = [&](const ast::UsingBlock& use, const std::string& scope) {
         std::string name = use.module.dotted();
         const auto resolved = resolver.resolve(name, scope);
-        if (!resolved) return;
+        if (!resolved) {
+            return;
+        }
         const auto& theirs = compiledNamesInFile(resolved->path);
         const auto prefix = resolved->moduleName + std::string(kex::mangle::kSeparator);
         for (const auto& identity : theirs.qualified) {
-            if (identity.rfind(prefix, 0) != 0) continue;
+            if (identity.rfind(prefix, 0) != 0) {
+                continue;
+            }
             const auto bare = identity.substr(prefix.size());
-            if (kex::mangle::hasScope(bare)) continue;
+            if (kex::mangle::hasScope(bare)) {
+                continue;
+            }
             into.qualified.insert(identity);
-            if (name != resolved->moduleName)
+            if (name != resolved->moduleName) {
                 into.qualified.insert(qualifiedName(name, bare));
+            }
             if (use.alias) {
                 into.qualified.insert(qualifiedName(*use.alias, bare));
                 continue;
             }
             const auto& only = use.onlyNames;
             const auto& except = use.exceptNames;
-            const bool brought =
-                only.empty()
-                    ? std::find(except.begin(), except.end(), bare) == except.end()
-                    : std::find(only.begin(), only.end(), bare) != only.end();
-            if (brought) into.functions.insert(bare);
+            const bool brought = only.empty()
+                                     ? std::find(except.begin(), except.end(), bare) == except.end()
+                                     : std::find(only.begin(), only.end(), bare) != only.end();
+            if (brought) {
+                into.functions.insert(bare);
+            }
         }
         into.methods.insert(theirs.methods.begin(), theirs.methods.end());
     };
 
-    auto scan = [&](auto&& self, const auto& items,
-                    const std::string& scope) -> void {
+    auto scan = [&](auto&& self, const auto& items, const std::string& scope) -> void {
         for (const auto& item : items) {
-            if (const auto* use =
-                    std::get_if<std::unique_ptr<ast::UsingBlock>>(&item)) {
-                if (*use) add(**use, scope);
-            } else if (const auto* mod =
-                           std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
-                if (*mod) self(self, (*mod)->body, (*mod)->name);
+            if (const auto* use = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item)) {
+                if (*use) {
+                    add(**use, scope);
+                }
+            } else if (const auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*mod) {
+                    self(self, (*mod)->body, (*mod)->name);
+                }
             }
         }
     };
@@ -2601,25 +3028,27 @@ auto addImportedCompiledNames(const ast::Program& program,
     finder.onSlot = [&](ast::ExprPtr& slot) {
         const auto* call = std::get_if<ast::MethodCall>(&slot->kind);
         std::string owner;
-        if (call && call->receiver &&
-            finder.qualifierPath(*call->receiver, owner)) {
+        if (call && call->receiver && finder.qualifierPath(*call->receiver, owner)) {
             auto [cached, fresh] = owners.try_emplace(owner);
-            if (fresh) cached->second = resolver.resolve(owner, "");
+            if (fresh) {
+                cached->second = resolver.resolve(owner, "");
+            }
             if (const auto& resolved = cached->second) {
-                const auto identity = qualifiedName(resolved->moduleName,
-                                                    call->method);
-                if (constructorsInFile(resolved->path).count(identity))
+                const auto identity = qualifiedName(resolved->moduleName, call->method);
+                if (constructorsInFile(resolved->path).count(identity)) {
                     into.qualified.insert(qualifiedName(owner, call->method));
+                }
             }
         }
         return false;
     };
     walkBodies(program.items, [&](auto& target) {
         using T = std::decay_t<decltype(target)>;
-        if constexpr (std::is_same_v<T, ast::FunctionDef>)
+        if constexpr (std::is_same_v<T, ast::FunctionDef>) {
             finder.functionBody(target);
-        else
+        } else {
             finder.substitute(target);
+        }
     });
 }
 
@@ -2650,16 +3079,17 @@ auto collapseMemo() -> std::unordered_map<std::string, MemoRound>& {
 
 // The file is named canonically: the build and a sandbox reach the same
 // module through different roots, and so by differently spelled paths.
-auto collapseRoundKey(const std::string& file, int round,
-                      const std::vector<ChainCollapser::Candidate>& candidates)
+auto collapseRoundKey(
+    const std::string& file, int round, const std::vector<ChainCollapser::Candidate>& candidates)
     -> std::string {
     std::string key = file + "#" + std::to_string(round);
     // With each candidate's own file: a program with dependencies merged
     // into it collapses their code too.
-    for (const auto& candidate : candidates)
+    for (const auto& candidate : candidates) {
         key += ":" + std::string((*candidate.slot)->location.file) + "@" +
                std::to_string((*candidate.slot)->location.startOffset) + "-" +
                std::to_string((*candidate.slot)->location.endOffset);
+    }
     return key;
 }
 
@@ -2676,11 +3106,11 @@ auto collapseRoundKey(const std::string& file, int round,
 
 // One round as an entry holds it.
 struct StoredRound {
-    std::vector<std::pair<std::string, std::string>> dependencies;  // path, stamp
+    std::vector<std::pair<std::string, std::string>> dependencies; // path, stamp
     RecordLayouts layouts;
     std::unordered_map<std::string, std::string> modules;
     struct Outcome {
-        interpreter::ValuePtr value;  // null: stayed a runtime chain
+        interpreter::ValuePtr value; // null: stayed a runtime chain
         std::string why;
     };
     std::vector<Outcome> outcomes;
@@ -2691,12 +3121,20 @@ auto dependencyStamp(const std::string& path) -> std::string {
     namespace fs = std::filesystem;
     std::error_code ec;
     const auto status = fs::status(path, ec);
-    if (ec || !fs::exists(status)) return "-";
+    if (ec || !fs::exists(status)) {
+        return "-";
+    }
     const auto modified = fs::last_write_time(path, ec).time_since_epoch().count();
-    if (ec) return "-";
-    if (fs::is_directory(status)) return "d" + std::to_string(static_cast<long long>(modified));
+    if (ec) {
+        return "-";
+    }
+    if (fs::is_directory(status)) {
+        return "d" + std::to_string(static_cast<long long>(modified));
+    }
     const auto size = fs::file_size(path, ec);
-    if (ec) return "-";
+    if (ec) {
+        return "-";
+    }
     return std::to_string(static_cast<unsigned long long>(size)) + ":" +
            std::to_string(static_cast<long long>(modified));
 }
@@ -2704,15 +3142,22 @@ auto dependencyStamp(const std::string& path) -> std::string {
 // A value in the entry's notation, a one-letter kind and what it holds, or
 // false for one with no literal form. The record types and sum types it
 // names are collected with the layouts and modules reifying it will need.
-auto writeStoredValue(std::ostream& out, const interpreter::ValuePtr& value,
-                      const RecordLayouts& layouts,
-                      const std::unordered_map<std::string, std::string>& modules,
-                      StoredRound& into) -> bool {
-    if (!value) return false;
+auto writeStoredValue(
+    std::ostream& out,
+    const interpreter::ValuePtr& value,
+    const RecordLayouts& layouts,
+    const std::unordered_map<std::string, std::string>& modules,
+    StoredRound& into) -> bool {
+    if (!value) {
+        return false;
+    }
     auto list = [&](char kind, const std::vector<interpreter::ValuePtr>& elements) {
         out << kind << elements.size() << " ";
-        for (const auto& element : elements)
-            if (!writeStoredValue(out, element, layouts, modules, into)) return false;
+        for (const auto& element : elements) {
+            if (!writeStoredValue(out, element, layouts, modules, into)) {
+                return false;
+            }
+        }
         return true;
     };
     return std::visit(
@@ -2721,7 +3166,9 @@ auto writeStoredValue(std::ostream& out, const interpreter::ValuePtr& value,
             if constexpr (std::is_same_v<T, interpreter::PlaceholderValue>) {
                 // The stored form has no room for a retag; such a result is
                 // simply not cached.
-                if (!node.retags.empty()) return false;
+                if (!node.retags.empty()) {
+                    return false;
+                }
                 out << "P" << node.index << " ";
                 writeCachedString(out, node.name);
             } else if constexpr (std::is_same_v<T, interpreter::UnitValue>) {
@@ -2753,38 +3200,47 @@ auto writeStoredValue(std::ostream& out, const interpreter::ValuePtr& value,
                 return list('X', node.elements);
             } else if constexpr (std::is_same_v<T, interpreter::MapValue>) {
                 out << "M" << node.entries.size() << " ";
-                for (const auto& [key, mapped] : node.entries)
+                for (const auto& [key, mapped] : node.entries) {
                     if (!writeStoredValue(out, key, layouts, modules, into) ||
-                        !writeStoredValue(out, mapped, layouts, modules, into))
+                        !writeStoredValue(out, mapped, layouts, modules, into)) {
                         return false;
+                    }
+                }
             } else if constexpr (std::is_same_v<T, interpreter::RecordValue>) {
                 // In name order, so the same record writes the same entry.
                 std::vector<const std::string*> names;
-                for (const auto& [field, _] : node.fields) names.push_back(&field);
-                std::sort(names.begin(), names.end(),
-                          [](const std::string* a, const std::string* b) { return *a < *b; });
+                for (const auto& [field, _] : node.fields) {
+                    names.push_back(&field);
+                }
+                std::sort(
+                    names.begin(), names.end(),
+                    [](const std::string* a, const std::string* b) { return *a < *b; });
                 out << "R";
                 writeCachedString(out, node.typeName);
                 out << names.size() << " ";
                 for (const auto* field : names) {
                     writeCachedString(out, *field);
-                    if (!writeStoredValue(out, node.fields.at(*field), layouts, modules, into))
+                    if (!writeStoredValue(out, node.fields.at(*field), layouts, modules, into)) {
                         return false;
+                    }
                 }
                 // valueToLiteral looks a layout up by the full name, then
                 // by its last segment.
                 const auto dot = node.typeName.rfind('.');
                 for (const auto& name :
-                     {node.typeName, dot == std::string::npos ? std::string{}
-                                                              : node.typeName.substr(dot + 1)})
-                    if (const auto found = layouts.find(name); found != layouts.end())
+                     {node.typeName,
+                      dot == std::string::npos ? std::string{} : node.typeName.substr(dot + 1)}) {
+                    if (const auto found = layouts.find(name); found != layouts.end()) {
                         into.layouts[name] = found->second;
+                    }
+                }
             } else if constexpr (std::is_same_v<T, interpreter::VariantValue>) {
                 out << "V";
                 writeCachedString(out, node.parentType);
                 writeCachedString(out, node.tag);
-                if (const auto found = modules.find(node.parentType); found != modules.end())
+                if (const auto found = modules.find(node.parentType); found != modules.end()) {
                     into.modules[node.parentType] = found->second;
+                }
                 return list(' ', node.args);
             } else {
                 return false;
@@ -2799,115 +3255,149 @@ auto readStoredValue(std::istream& in, std::uintmax_t fileSize) -> interpreter::
     auto count = [&](std::size_t& n) { return static_cast<bool>(in >> n) && in.get() == ' '; };
     auto elements = [&](std::vector<interpreter::ValuePtr>& into) {
         std::size_t n = 0;
-        if (!count(n) || n > fileSize) return false;
+        if (!count(n) || n > fileSize) {
+            return false;
+        }
         for (std::size_t i = 0; i < n; i++) {
             auto element = readStoredValue(in, fileSize);
-            if (!element) return false;
+            if (!element) {
+                return false;
+            }
             into.push_back(std::move(element));
         }
         return true;
     };
     std::string text;
     switch (in.get()) {
-    case 'P': {
-        std::size_t index = 0;
-        if (!count(index) || !readCachedString(in, fileSize, text)) return nullptr;
-        value->data = interpreter::PlaceholderValue{index, text};
-        break;
-    }
-    case 'U': value->data = interpreter::UnitValue{}; break;
-    case 'I':
-        if (!readCachedString(in, fileSize, text)) return nullptr;
-        try {
-            value->data = interpreter::IntValue{std::stoll(text)};
-        } catch (const std::exception&) {
-            return nullptr;
+        case 'P': {
+            std::size_t index = 0;
+            if (!count(index) || !readCachedString(in, fileSize, text)) {
+                return nullptr;
+            }
+            value->data = interpreter::PlaceholderValue{index, text};
+            break;
         }
-        break;
-    case 'N': {
-        if (!readCachedString(in, fileSize, text)) return nullptr;
-        mpz_class big;
-        if (big.set_str(text, 10) != 0) return nullptr;
-        value->data = interpreter::BigIntValue{big};
-        break;
-    }
-    case 'F': {
-        std::uint64_t bits = 0;
-        if (!(in >> bits) || in.get() != ' ') return nullptr;
-        double number = 0;
-        std::memcpy(&number, &bits, sizeof number);
-        value->data = interpreter::FloatValue{number};
-        break;
-    }
-    case 'S': {
-        if (!readCachedString(in, fileSize, text)) return nullptr;
-        interpreter::StringValue string;
-        string.value = std::move(text);
-        value->data = std::move(string);
-        break;
-    }
-    case 'C': {
-        std::uint32_t code = 0;
-        if (!(in >> code) || in.get() != ' ') return nullptr;
-        value->data = interpreter::CharValue{static_cast<char32_t>(code)};
-        break;
-    }
-    case 'T': value->data = interpreter::BoolValue{true}; break;
-    case 'B': value->data = interpreter::BoolValue{false}; break;
-    case 'A':
-        if (!readCachedString(in, fileSize, text)) return nullptr;
-        value->data = interpreter::AtomValue{std::move(text)};
-        break;
-    case 'L': {
-        interpreter::ListValue list;
-        if (!elements(list.elements)) return nullptr;
-        value->data = std::move(list);
-        break;
-    }
-    case 'X': {
-        interpreter::TupleValue tuple;
-        if (!elements(tuple.elements)) return nullptr;
-        value->data = std::move(tuple);
-        break;
-    }
-    case 'M': {
-        interpreter::MapValue map;
-        std::size_t n = 0;
-        if (!count(n) || n > fileSize) return nullptr;
-        for (std::size_t i = 0; i < n; i++) {
-            auto key = readStoredValue(in, fileSize);
-            auto mapped = key ? readStoredValue(in, fileSize) : nullptr;
-            if (!mapped) return nullptr;
-            map.entries.emplace_back(std::move(key), std::move(mapped));
+        case 'U': value->data = interpreter::UnitValue{}; break;
+        case 'I':
+            if (!readCachedString(in, fileSize, text)) {
+                return nullptr;
+            }
+            try {
+                value->data = interpreter::IntValue{std::stoll(text)};
+            } catch (const std::exception&) {
+                return nullptr;
+            }
+            break;
+        case 'N': {
+            if (!readCachedString(in, fileSize, text)) {
+                return nullptr;
+            }
+            mpz_class big;
+            if (big.set_str(text, 10) != 0) {
+                return nullptr;
+            }
+            value->data = interpreter::BigIntValue{big};
+            break;
         }
-        value->data = std::move(map);
-        break;
-    }
-    case 'R': {
-        interpreter::RecordValue record;
-        std::size_t n = 0;
-        if (!readCachedString(in, fileSize, record.typeName) || !count(n) || n > fileSize)
-            return nullptr;
-        for (std::size_t i = 0; i < n; i++) {
-            std::string field;
-            if (!readCachedString(in, fileSize, field)) return nullptr;
-            auto fieldValue = readStoredValue(in, fileSize);
-            if (!fieldValue) return nullptr;
-            record.fields.emplace(std::move(field), std::move(fieldValue));
+        case 'F': {
+            std::uint64_t bits = 0;
+            if (!(in >> bits) || in.get() != ' ') {
+                return nullptr;
+            }
+            double number = 0;
+            std::memcpy(&number, &bits, sizeof number);
+            value->data = interpreter::FloatValue{number};
+            break;
         }
-        value->data = std::move(record);
-        break;
-    }
-    case 'V': {
-        interpreter::VariantValue variant;
-        if (!readCachedString(in, fileSize, variant.parentType) ||
-            !readCachedString(in, fileSize, variant.tag) || in.get() != ' ' ||
-            !elements(variant.args))
-            return nullptr;
-        value->data = std::move(variant);
-        break;
-    }
-    default: return nullptr;
+        case 'S': {
+            if (!readCachedString(in, fileSize, text)) {
+                return nullptr;
+            }
+            interpreter::StringValue string;
+            string.value = std::move(text);
+            value->data = std::move(string);
+            break;
+        }
+        case 'C': {
+            std::uint32_t code = 0;
+            if (!(in >> code) || in.get() != ' ') {
+                return nullptr;
+            }
+            value->data = interpreter::CharValue{static_cast<char32_t>(code)};
+            break;
+        }
+        case 'T': value->data = interpreter::BoolValue{true}; break;
+        case 'B': value->data = interpreter::BoolValue{false}; break;
+        case 'A':
+            if (!readCachedString(in, fileSize, text)) {
+                return nullptr;
+            }
+            value->data = interpreter::AtomValue{std::move(text)};
+            break;
+        case 'L': {
+            interpreter::ListValue list;
+            if (!elements(list.elements)) {
+                return nullptr;
+            }
+            value->data = std::move(list);
+            break;
+        }
+        case 'X': {
+            interpreter::TupleValue tuple;
+            if (!elements(tuple.elements)) {
+                return nullptr;
+            }
+            value->data = std::move(tuple);
+            break;
+        }
+        case 'M': {
+            interpreter::MapValue map;
+            std::size_t n = 0;
+            if (!count(n) || n > fileSize) {
+                return nullptr;
+            }
+            for (std::size_t i = 0; i < n; i++) {
+                auto key = readStoredValue(in, fileSize);
+                auto mapped = key ? readStoredValue(in, fileSize) : nullptr;
+                if (!mapped) {
+                    return nullptr;
+                }
+                map.entries.emplace_back(std::move(key), std::move(mapped));
+            }
+            value->data = std::move(map);
+            break;
+        }
+        case 'R': {
+            interpreter::RecordValue record;
+            std::size_t n = 0;
+            if (!readCachedString(in, fileSize, record.typeName) || !count(n) || n > fileSize) {
+                return nullptr;
+            }
+            for (std::size_t i = 0; i < n; i++) {
+                std::string field;
+                if (!readCachedString(in, fileSize, field)) {
+                    return nullptr;
+                }
+                auto fieldValue = readStoredValue(in, fileSize);
+                if (!fieldValue) {
+                    return nullptr;
+                }
+                record.fields.emplace(std::move(field), std::move(fieldValue));
+            }
+            value->data = std::move(record);
+            break;
+        }
+        case 'V': {
+            interpreter::VariantValue variant;
+            if (!readCachedString(in, fileSize, variant.parentType) ||
+                !readCachedString(in, fileSize, variant.tag) || in.get() != ' ' ||
+                !elements(variant.args)) {
+                return nullptr;
+            }
+            value->data = std::move(variant);
+            break;
+        }
+        default: return nullptr;
     }
     return value;
 }
@@ -2922,48 +3412,69 @@ auto storedRoundPath(const std::filesystem::path& root, const std::string& key)
 auto readStoredRound(const std::filesystem::path& entry) -> std::optional<StoredRound> {
     std::error_code ec;
     const auto fileSize = std::filesystem::file_size(entry, ec);
-    if (ec) return std::nullopt;
+    if (ec) {
+        return std::nullopt;
+    }
     std::ifstream in(entry, std::ios::binary);
     std::string header;
-    if (!in || !std::getline(in, header) || header != "kex-collapse-round") return std::nullopt;
+    if (!in || !std::getline(in, header) || header != "kex-collapse-round") {
+        return std::nullopt;
+    }
     StoredRound round;
     std::size_t n = 0;
-    if (!(in >> n) || in.get() != ' ' || n > fileSize) return std::nullopt;
+    if (!(in >> n) || in.get() != ' ' || n > fileSize) {
+        return std::nullopt;
+    }
     for (std::size_t i = 0; i < n; i++) {
         std::string path, stamp;
-        if (!readCachedString(in, fileSize, path) || !readCachedString(in, fileSize, stamp))
+        if (!readCachedString(in, fileSize, path) || !readCachedString(in, fileSize, stamp)) {
             return std::nullopt;
-        if (dependencyStamp(path) != stamp) return std::nullopt;
+        }
+        if (dependencyStamp(path) != stamp) {
+            return std::nullopt;
+        }
         round.dependencies.emplace_back(std::move(path), std::move(stamp));
     }
-    if (!(in >> n) || in.get() != ' ' || n > fileSize) return std::nullopt;
+    if (!(in >> n) || in.get() != ' ' || n > fileSize) {
+        return std::nullopt;
+    }
     for (std::size_t i = 0; i < n; i++) {
         std::string type;
         std::size_t fields = 0;
         if (!readCachedString(in, fileSize, type) || !(in >> fields) || in.get() != ' ' ||
-            fields > fileSize)
+            fields > fileSize) {
             return std::nullopt;
+        }
         auto& layout = round.layouts[type];
         for (std::size_t f = 0; f < fields; f++) {
             std::string field;
-            if (!readCachedString(in, fileSize, field)) return std::nullopt;
+            if (!readCachedString(in, fileSize, field)) {
+                return std::nullopt;
+            }
             layout.push_back(std::move(field));
         }
     }
-    if (!(in >> n) || in.get() != ' ' || n > fileSize) return std::nullopt;
+    if (!(in >> n) || in.get() != ' ' || n > fileSize) {
+        return std::nullopt;
+    }
     for (std::size_t i = 0; i < n; i++) {
         std::string type, owner;
-        if (!readCachedString(in, fileSize, type) || !readCachedString(in, fileSize, owner))
+        if (!readCachedString(in, fileSize, type) || !readCachedString(in, fileSize, owner)) {
             return std::nullopt;
+        }
         round.modules.emplace(std::move(type), std::move(owner));
     }
-    if (!(in >> n) || in.get() != ' ' || n > fileSize) return std::nullopt;
+    if (!(in >> n) || in.get() != ' ' || n > fileSize) {
+        return std::nullopt;
+    }
     for (std::size_t i = 0; i < n; i++) {
         StoredRound::Outcome outcome;
         const auto kind = in.get();
         if (kind == 'v') {
             outcome.value = readStoredValue(in, fileSize);
-            if (!outcome.value) return std::nullopt;
+            if (!outcome.value) {
+                return std::nullopt;
+            }
         } else if (kind != 'w' || !readCachedString(in, fileSize, outcome.why)) {
             return std::nullopt;
         }
@@ -2977,7 +3488,9 @@ auto writeStoredRound(const std::filesystem::path& entry, const std::string& bod
     namespace fs = std::filesystem;
     std::error_code ec;
     fs::create_directories(entry.parent_path(), ec);
-    if (ec) return;
+    if (ec) {
+        return;
+    }
     static const auto process = [] {
         std::random_device device;
         return (static_cast<unsigned long long>(device()) << 32) ^ device();
@@ -2987,12 +3500,20 @@ auto writeStoredRound(const std::filesystem::path& entry, const std::string& bod
     staging += ".tmp." + std::to_string(process) + "." + std::to_string(++counter);
     {
         std::ofstream out(staging, std::ios::binary);
-        if (!out) return;
+        if (!out) {
+            return;
+        }
         out << "kex-collapse-round\n" << body;
-        if (!out) { out.close(); fs::remove(staging, ec); return; }
+        if (!out) {
+            out.close();
+            fs::remove(staging, ec);
+            return;
+        }
     }
     fs::rename(staging, entry, ec);
-    if (ec) fs::remove(staging, ec);
+    if (ec) {
+        fs::remove(staging, ec);
+    }
 }
 
 // When this process started: a file modified since may have changed after the
@@ -3002,16 +3523,18 @@ const auto processStarted = std::filesystem::file_time_type::clock::now();
 
 // The entry's text for a decided round, or nullopt for one that cannot be
 // kept: a value with no literal form, or a dependency changed while building.
-auto storedRoundText(const std::set<std::string>& dependencies,
-                     const std::vector<interpreter::ValuePtr>& values,
-                     const std::vector<std::string>& failures,
-                     const RecordLayouts& layouts,
-                     const std::unordered_map<std::string, std::string>& modules)
-    -> std::optional<std::string> {
+auto storedRoundText(
+    const std::set<std::string>& dependencies,
+    const std::vector<interpreter::ValuePtr>& values,
+    const std::vector<std::string>& failures,
+    const RecordLayouts& layouts,
+    const std::unordered_map<std::string, std::string>& modules) -> std::optional<std::string> {
     for (const auto& path : dependencies) {
         std::error_code ec;
         const auto modified = std::filesystem::last_write_time(path, ec);
-        if (!ec && modified >= processStarted) return std::nullopt;
+        if (!ec && modified >= processStarted) {
+            return std::nullopt;
+        }
     }
     StoredRound round;
     std::ostringstream outcomes;
@@ -3019,8 +3542,9 @@ auto storedRoundText(const std::set<std::string>& dependencies,
     for (std::size_t i = 0; i < values.size(); i++) {
         if (values[i]) {
             outcomes << "v";
-            if (!writeStoredValue(outcomes, values[i], layouts, modules, round))
+            if (!writeStoredValue(outcomes, values[i], layouts, modules, round)) {
                 return std::nullopt;
+            }
         } else {
             outcomes << "w";
             writeCachedString(outcomes, failures[i]);
@@ -3036,7 +3560,9 @@ auto storedRoundText(const std::set<std::string>& dependencies,
     for (const auto& [type, fields] : round.layouts) {
         writeCachedString(out, type);
         out << fields.size() << " ";
-        for (const auto& field : fields) writeCachedString(out, field);
+        for (const auto& field : fields) {
+            writeCachedString(out, field);
+        }
     }
     out << round.modules.size() << " ";
     for (const auto& [type, owner] : round.modules) {
@@ -3059,7 +3585,9 @@ auto roundStore() -> std::optional<RoundStore> {
     const bool own = activeOptions && !activeOptions->scanCache.empty();
     const auto& root = own ? activeOptions->scanCache : defaults.scanCache;
     const auto& toolchain = own ? activeOptions->toolchainKey : defaults.toolchainKey;
-    if (root.empty() || toolchain.empty()) return std::nullopt;
+    if (root.empty() || toolchain.empty()) {
+        return std::nullopt;
+    }
     return RoundStore{root, toolchain};
 }
 
@@ -3067,11 +3595,15 @@ auto roundStore() -> std::optional<RoundStore> {
 // it is part of what its collapses ran.
 auto programFiles(const ast::Program& program) -> std::set<std::string> {
     std::set<std::string> files;
-    for (const auto& item : program.items)
-        std::visit([&](const auto& node) {
-            if (node && !node->location.file.empty())
-                files.insert(std::string(node->location.file));
-        }, item);
+    for (const auto& item : program.items) {
+        std::visit(
+            [&](const auto& node) {
+                if (node && !node->location.file.empty()) {
+                    files.insert(std::string(node->location.file));
+                }
+            },
+            item);
+    }
     return files;
 }
 
@@ -3102,16 +3634,17 @@ auto canonicalFiles(const std::set<std::string>& files) -> std::set<std::string>
 auto callsBuilder(const ast::Expr& expr, const CompiledNames& compiled) -> bool {
     if (const auto* call = std::get_if<ast::MethodCall>(&expr.kind)) {
         std::string owner;
-        if (call->receiver && ChainCollapser::qualifierPath(*call->receiver, owner))
+        if (call->receiver && ChainCollapser::qualifierPath(*call->receiver, owner)) {
             return compiled.qualified.count(qualifiedName(owner, call->method)) > 0;
+        }
         return compiled.methods.count(call->method) > 0;
     }
     if (const auto* call = std::get_if<ast::FunctionCall>(&expr.kind)) {
         const auto dot = call->name.rfind('.');
         return dot == std::string::npos
-            ? compiled.functions.count(call->name) > 0
-            : compiled.qualified.count(qualifiedName(call->name.substr(0, dot),
-                                                     call->name.substr(dot + 1))) > 0;
+                   ? compiled.functions.count(call->name) > 0
+                   : compiled.qualified.count(
+                         qualifiedName(call->name.substr(0, dot), call->name.substr(dot + 1))) > 0;
     }
     return false;
 }
@@ -3121,21 +3654,26 @@ auto isNamed(const ast::Expr& expr, const std::string& name) -> bool {
     return identifier && identifier->name == name;
 }
 
-auto spreadMapBindings(std::vector<ast::ExprPtr>& body, const CompiledNames& compiled,
-                       int& counter) -> void {
+auto spreadMapBindings(std::vector<ast::ExprPtr>& body, const CompiledNames& compiled, int& counter)
+    -> void {
     Constants none;
     std::vector<semantic::Diagnostic> unused;
     for (std::size_t i = 0; i < body.size(); i++) {
         auto* let = body[i] ? std::get_if<ast::LetExpr>(&body[i]->kind) : nullptr;
-        const auto* bound = let && let->pattern
-            ? std::get_if<ast::VarPattern>(&let->pattern->kind) : nullptr;
+        const auto* bound =
+            let && let->pattern ? std::get_if<ast::VarPattern>(&let->pattern->kind) : nullptr;
         auto* map = bound && let->value ? std::get_if<ast::MapExpr>(&let->value->kind) : nullptr;
-        if (!map || map->entries.empty() || bound->name == "_") continue;
+        if (!map || map->entries.empty() || bound->name == "_") {
+            continue;
+        }
         bool literalKeys = true;
-        for (const auto& entry : map->entries)
+        for (const auto& entry : map->entries) {
             literalKeys = literalKeys && !entry.spread && entry.key && entry.value &&
                           std::holds_alternative<ast::AtomLiteral>(entry.key->kind);
-        if (!literalKeys) continue;
+        }
+        if (!literalKeys) {
+            continue;
+        }
         const auto name = bound->name;
 
         // What reads it after here: the builder arguments that become the
@@ -3150,53 +3688,90 @@ auto spreadMapBindings(std::vector<ast::ExprPtr>& body, const CompiledNames& com
             return std::find(names.begin(), names.end(), name) != names.end();
         };
         auto bindsIn = [&](const std::vector<ast::MatchClause>& clauses) {
-            for (const auto& clause : clauses)
-                for (const auto& pattern : clause.patterns)
-                    if (pattern && binds(*pattern)) return true;
+            for (const auto& clause : clauses) {
+                for (const auto& pattern : clause.patterns) {
+                    if (pattern && binds(*pattern)) {
+                        return true;
+                    }
+                }
+            }
             return false;
         };
         scan.onSlot = [&](ast::ExprPtr& slot) -> bool {
-            std::visit([&](auto& node) {
-                using T = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<T, ast::Identifier>) {
-                    if (node.name == name) readElsewhere = true;
-                } else if constexpr (std::is_same_v<T, ast::LetExpr>) {
-                    if (node.pattern && binds(*node.pattern)) rebound = true;
-                } else if constexpr (std::is_same_v<T, ast::VarExpr>) {
-                    if (node.pattern && binds(*node.pattern)) rebound = true;
-                } else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
-                    if (node.name == name) rebound = true;
-                } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
-                    if (node.letPattern && binds(*node.letPattern)) rebound = true;
-                } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
-                    if (node.subjectBinding == name || bindsIn(node.clauses)) rebound = true;
-                } else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
-                    if (node.senderBinding == name || bindsIn(node.clauses)) rebound = true;
-                } else if constexpr (std::is_same_v<T, ast::Lambda>) {
-                    for (const auto& param : node.params)
-                        if (param.name == name) rebound = true;
-                    if (node.rescue && (node.rescue->catchAllParam == name ||
-                                        bindsIn(node.rescue->clauses)))
-                        rebound = true;
-                } else if constexpr (std::is_same_v<T, ast::MethodCall> ||
-                                     std::is_same_v<T, ast::FunctionCall>) {
-                    if (callsBuilder(*slot, compiled))
-                        for (auto& arg : node.args)
-                            if (arg && isNamed(*arg, name)) givenTo.push_back(&arg);
-                }
-            }, slot->kind);
+            std::visit(
+                [&](auto& node) {
+                    using T = std::decay_t<decltype(node)>;
+                    if constexpr (std::is_same_v<T, ast::Identifier>) {
+                        if (node.name == name) {
+                            readElsewhere = true;
+                        }
+                    } else if constexpr (std::is_same_v<T, ast::LetExpr>) {
+                        if (node.pattern && binds(*node.pattern)) {
+                            rebound = true;
+                        }
+                    } else if constexpr (std::is_same_v<T, ast::VarExpr>) {
+                        if (node.pattern && binds(*node.pattern)) {
+                            rebound = true;
+                        }
+                    } else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
+                        if (node.name == name) {
+                            rebound = true;
+                        }
+                    } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
+                        if (node.letPattern && binds(*node.letPattern)) {
+                            rebound = true;
+                        }
+                    } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
+                        if (node.subjectBinding == name || bindsIn(node.clauses)) {
+                            rebound = true;
+                        }
+                    } else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
+                        if (node.senderBinding == name || bindsIn(node.clauses)) {
+                            rebound = true;
+                        }
+                    } else if constexpr (std::is_same_v<T, ast::Lambda>) {
+                        for (const auto& param : node.params) {
+                            if (param.name == name) {
+                                rebound = true;
+                            }
+                        }
+                        if (node.rescue &&
+                            (node.rescue->catchAllParam == name || bindsIn(node.rescue->clauses))) {
+                            rebound = true;
+                        }
+                    } else if constexpr (
+                        std::is_same_v<T, ast::MethodCall> ||
+                        std::is_same_v<T, ast::FunctionCall>) {
+                        if (callsBuilder(*slot, compiled)) {
+                            for (auto& arg : node.args) {
+                                if (arg && isNamed(*arg, name)) {
+                                    givenTo.push_back(&arg);
+                                }
+                            }
+                        }
+                    }
+                },
+                slot->kind);
             return false;
         };
-        for (std::size_t j = i + 1; j < body.size() && !rebound; j++) scan.substitute(body[j]);
-        if (rebound || givenTo.empty()) continue;
+        for (std::size_t j = i + 1; j < body.size() && !rebound; j++) {
+            scan.substitute(body[j]);
+        }
+        if (rebound || givenTo.empty()) {
+            continue;
+        }
         // Every read of the name that is not one of these arguments.
         std::size_t reads = 0;
         Substituter count{none, unused, {}, {}, {}};
         count.onSlot = [&](ast::ExprPtr& slot) {
-            if (isNamed(*slot, name)) reads++;
+            if (isNamed(*slot, name)) {
+                reads++;
+            }
             return false;
         };
-        for (std::size_t j = i + 1; j < body.size(); j++) count.substitute(body[j]);
+        for (std::size_t j = i + 1; j < body.size(); j++) {
+            count.substitute(body[j]);
+        }
         readElsewhere = reads > givenTo.size();
 
         // Each value bound on its own, in order, where the map was.
@@ -3217,12 +3792,16 @@ auto spreadMapBindings(std::vector<ast::ExprPtr>& body, const CompiledNames& com
             entry.value->location = where;
             entry.value->kind = ast::Identifier{fresh};
         }
-        for (auto* arg : givenTo) *arg = ast::clone(let->value);
+        for (auto* arg : givenTo) {
+            *arg = ast::clone(let->value);
+        }
         auto at = body.begin() + static_cast<std::ptrdiff_t>(i);
-        if (!readElsewhere) at = body.erase(at);
+        if (!readElsewhere) {
+            at = body.erase(at);
+        }
         const auto added = values.size();
-        body.insert(at, std::make_move_iterator(values.begin()),
-                    std::make_move_iterator(values.end()));
+        body.insert(
+            at, std::make_move_iterator(values.begin()), std::make_move_iterator(values.end()));
         i += added - (readElsewhere ? 0 : 1);
     }
     // And every block's own body, wherever one sits.
@@ -3235,7 +3814,9 @@ auto spreadMapBindings(std::vector<ast::ExprPtr>& body, const CompiledNames& com
         }
         return false;
     };
-    for (auto& expr : body) blocks.substitute(expr);
+    for (auto& expr : body) {
+        blocks.substitute(expr);
+    }
 }
 
 // Finds every collapsible expression in `program`, evaluates them in one
@@ -3252,16 +3833,20 @@ auto spreadMapBindings(std::vector<ast::ExprPtr>& body, const CompiledNames& com
 auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void {
     auto compiled = compiledNames(program);
     addImportedCompiledNames(program, options, compiled);
-    if (compiled.empty()) return;
+    if (compiled.empty()) {
+        return;
+    }
 
     int spread = 0;
     walkBodies(
         program.items,
         [&](auto& target) {
             using T = std::decay_t<decltype(target)>;
-            if constexpr (std::is_same_v<T, ast::FunctionDef>)
-                for (auto& clause : target.clauses)
+            if constexpr (std::is_same_v<T, ast::FunctionDef>) {
+                for (auto& clause : target.clauses) {
                     spreadMapBindings(clause.body, compiled, spread);
+                }
+            }
         },
         /*intoCompiled=*/false);
 
@@ -3270,7 +3855,9 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
     if (reuseCollapses()) {
         std::error_code ec;
         file = std::filesystem::weakly_canonical(options.sourcePath, ec).string();
-        if (ec || options.sourcePath.empty()) file.clear();
+        if (ec || options.sourcePath.empty()) {
+            file.clear();
+        }
     }
     const bool reuse = !file.empty();
     int round = 0;
@@ -3286,7 +3873,9 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
     std::unique_ptr<hir::CheckedProgram> checked;
     std::unique_ptr<interpreter::Evaluator> evaluator;
     auto replace = [&](ast::ExprPtr& slot, ast::ExprPtr literal) {
-        if (evaluator) replaced.push_back(std::move(slot));
+        if (evaluator) {
+            replaced.push_back(std::move(slot));
+        }
         slot = std::move(literal);
     };
     for (;;) {
@@ -3300,13 +3889,21 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
         Substituter walk{none, unused, {}, {}, {}};
         walk.onSlot = [&](ast::ExprPtr& slot) { return collapser.claim(slot); };
         walk.alsoSplit = [&](const std::string& text) {
-            for (const auto& name : compiled.functions)
-                if (text.find(name) != std::string::npos) return true;
-            for (const auto& name : compiled.methods)
-                if (text.find(name) != std::string::npos) return true;
+            for (const auto& name : compiled.functions) {
+                if (text.find(name) != std::string::npos) {
+                    return true;
+                }
+            }
+            for (const auto& name : compiled.methods) {
+                if (text.find(name) != std::string::npos) {
+                    return true;
+                }
+            }
             for (const auto& identity : compiled.qualified) {
                 const auto name = kex::mangle::memberOf(identity);
-                if (text.find(name) != std::string::npos) return true;
+                if (text.find(name) != std::string::npos) {
+                    return true;
+                }
             }
             return false;
         };
@@ -3314,17 +3911,20 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
             program.items,
             [&](auto& target) {
                 using T = std::decay_t<decltype(target)>;
-                if constexpr (std::is_same_v<T, ast::FunctionDef>)
+                if constexpr (std::is_same_v<T, ast::FunctionDef>) {
                     walk.functionBody(target);
-                else
+                } else {
                     walk.substitute(target);
+                }
             },
             /*intoCompiled=*/false);
-        if (collapser.candidates.empty()) return;
+        if (collapser.candidates.empty()) {
+            return;
+        }
 
         // Decided already, by an earlier expansion of the same file?
-        const auto key = reuse ? collapseRoundKey(file, round++, collapser.candidates)
-                               : std::string{};
+        const auto key =
+            reuse ? collapseRoundKey(file, round++, collapser.candidates) : std::string{};
         const auto known = reuse ? memo.find(key) : memo.end();
         if (known != memo.end()) {
             noteDependencies(known->second.dependencies);
@@ -3335,13 +3935,19 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
                 const SourceLocation where = (*candidate.slot)->location;
                 if (outcome.literal) {
                     replace(*candidate.slot, ast::clone(outcome.literal));
-                    if (options.report) options.report->push_back({where, true, {}});
+                    if (options.report) {
+                        options.report->push_back({where, true, {}});
+                    }
                     continue;
                 }
-                if (options.report) options.report->push_back({where, false, outcome.why});
+                if (options.report) {
+                    options.report->push_back({where, false, outcome.why});
+                }
                 grew = rejected.insert(candidate.slot->get()).second || grew;
             }
-            if (!grew) return;
+            if (!grew) {
+                return;
+            }
             continue;
         }
 
@@ -3352,11 +3958,11 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
             // With the roots: which file a module comes from depends on them,
             // and so does every dependency an entry lists.
             std::string material = "kex-collapse-v1\n" + store->toolchainKey + "\n";
-            for (const auto& root : options.moduleRoots) material += root + "\n";
+            for (const auto& root : options.moduleRoots) {
+                material += root + "\n";
+            }
             material += key;
-            entry = storedRoundPath(
-                store->root,
-                sha256Hex(material));
+            entry = storedRoundPath(store->root, sha256Hex(material));
         }
         if (auto kept = store ? readStoredRound(entry) : std::nullopt;
             kept && kept->outcomes.size() == collapser.candidates.size()) {
@@ -3366,17 +3972,20 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
             bool usable = true;
             for (std::size_t i = 0; usable && i < literals.size(); i++) {
                 const auto& candidate = collapser.candidates[i];
-                if (!kept->outcomes[i].value) continue;
+                if (!kept->outcomes[i].value) {
+                    continue;
+                }
                 std::string why;
-                literals[i] = valueToLiteral(kept->outcomes[i].value,
-                                             (*candidate.slot)->location, why,
-                                             {&kept->layouts, &candidate.exprs, &kept->modules});
+                literals[i] = valueToLiteral(
+                    kept->outcomes[i].value, (*candidate.slot)->location, why,
+                    {&kept->layouts, &candidate.exprs, &kept->modules});
                 usable = literals[i] != nullptr;
             }
             if (usable) {
                 MemoRound remembered;
-                for (const auto& [path, _] : kept->dependencies)
+                for (const auto& [path, _] : kept->dependencies) {
                     remembered.dependencies.insert(path);
+                }
                 noteDependencies(remembered.dependencies);
                 bool grew = false;
                 for (std::size_t i = 0; i < collapser.candidates.size(); i++) {
@@ -3385,24 +3994,30 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
                     if (literals[i]) {
                         remembered.outcomes.push_back({ast::clone(literals[i]), {}});
                         replace(*candidate.slot, std::move(literals[i]));
-                        if (options.report) options.report->push_back({where, true, {}});
+                        if (options.report) {
+                            options.report->push_back({where, true, {}});
+                        }
                         continue;
                     }
                     remembered.outcomes.push_back({nullptr, kept->outcomes[i].why});
-                    if (options.report)
+                    if (options.report) {
                         options.report->push_back({where, false, kept->outcomes[i].why});
+                    }
                     grew = rejected.insert(candidate.slot->get()).second || grew;
                 }
                 memo.emplace(key, std::move(remembered));
-                if (!grew) return;
+                if (!grew) {
+                    return;
+                }
                 continue;
             }
         }
 
         std::vector<interpreter::Evaluator::ExpressionRequest> requests;
         requests.reserve(collapser.candidates.size());
-        for (const auto& candidate : collapser.candidates)
+        for (const auto& candidate : collapser.candidates) {
             requests.push_back({candidate.slot->get(), candidate.names});
+        }
 
         std::vector<interpreter::ValuePtr> values;
         std::vector<std::string> reasons;
@@ -3428,7 +4043,9 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
             }
             layouts = evaluator->recordFieldOrder();
             typeModules = evaluator->typeModules();
-            if (evaluator->touchedOutside()) noteReachedOutside();
+            if (evaluator->touchedOutside()) {
+                noteReachedOutside();
+            }
         } catch (const std::exception&) {
             // Collapse is an optimization: if the sandbox itself cannot run,
             // the program still compiles and builds its values at runtime.
@@ -3441,8 +4058,7 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
         std::vector<interpreter::ValuePtr> keptValues;
         std::vector<std::string> keptWhy;
         bool grew = false;
-        for (std::size_t i = 0;
-             i < collapser.candidates.size() && i < values.size(); i++) {
+        for (std::size_t i = 0; i < collapser.candidates.size() && i < values.size(); i++) {
             const auto& candidate = collapser.candidates[i];
             const auto* claimed = candidate.slot->get();
             std::string why;
@@ -3451,54 +4067,75 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
             // before knowing that would leave a half-built literal.
             const SourceLocation where = (*candidate.slot)->location;
             auto literal =
-                values[i] ? valueToLiteral(values[i], where, why,
-                                           {&layouts, &candidate.exprs, &typeModules})
+                values[i] ? valueToLiteral(
+                                values[i], where, why, {&layouts, &candidate.exprs, &typeModules})
                           : nullptr;
             if (literal) {
                 replace(*candidate.slot, std::move(literal));
-                if (reuse) decided.push_back({ast::clone(*candidate.slot), {}});
+                if (reuse) {
+                    decided.push_back({ast::clone(*candidate.slot), {}});
+                }
                 if (reuse) {
                     keptValues.push_back(values[i]);
                     keptWhy.emplace_back();
                 }
-                if (options.report) options.report->push_back({where, true, {}});
+                if (options.report) {
+                    options.report->push_back({where, true, {}});
+                }
                 continue;
             }
             // `why` is set when reification failed; otherwise the reason came
             // from evaluation.
-            if (why.empty() && i < reasons.size()) why = reasons[i];
-            if (why.empty()) why = "it could not be evaluated";
-            if (reuse) decided.push_back({nullptr, why});
+            if (why.empty() && i < reasons.size()) {
+                why = reasons[i];
+            }
+            if (why.empty()) {
+                why = "it could not be evaluated";
+            }
+            if (reuse) {
+                decided.push_back({nullptr, why});
+            }
             if (reuse) {
                 keptValues.push_back(nullptr);
                 keptWhy.push_back(why);
             }
-            if (options.report) options.report->push_back({where, false, std::move(why)});
+            if (options.report) {
+                options.report->push_back({where, false, std::move(why)});
+            }
             grew = rejected.insert(claimed).second || grew;
         }
         // Only a round every candidate of which was decided.
         if (reuse && decided.size() == collapser.candidates.size()) {
             MemoRound remembered{std::move(decided), {}};
-            if (const auto* recorder = DependencyRecorder::current())
+            if (const auto* recorder = DependencyRecorder::current()) {
                 remembered.dependencies = recorder->files();
+            }
             std::set<std::string> own = programFiles(program);
-            for (const auto& candidate : collapser.candidates)
+            for (const auto& candidate : collapser.candidates) {
                 own.insert(std::string((*candidate.slot)->location.file));
+            }
             own.insert(options.sourcePath);
             own.erase(std::string{});
-            for (auto& path : canonicalFiles(own)) remembered.dependencies.insert(std::move(path));
-            const auto roots = effectiveModuleRoots(options.moduleRoots);
-            for (auto& path : shadowsOf(remembered.dependencies, roots))
+            for (auto& path : canonicalFiles(own)) {
                 remembered.dependencies.insert(std::move(path));
+            }
+            const auto roots = effectiveModuleRoots(options.moduleRoots);
+            for (auto& path : shadowsOf(remembered.dependencies, roots)) {
+                remembered.dependencies.insert(std::move(path));
+            }
             // Kept for later builds only when nothing the sandbox ran so far
             // reached outside the program.
-            if (store && !evaluator->touchedOutside())
-                if (const auto text = storedRoundText(remembered.dependencies, keptValues,
-                                                      keptWhy, layouts, typeModules))
+            if (store && !evaluator->touchedOutside()) {
+                if (const auto text = storedRoundText(
+                        remembered.dependencies, keptValues, keptWhy, layouts, typeModules)) {
                     writeStoredRound(entry, *text);
+                }
+            }
             memo.emplace(key, std::move(remembered));
         }
-        if (!grew) return;
+        if (!grew) {
+            return;
+        }
     }
 }
 
@@ -3540,16 +4177,21 @@ auto declaresConstants(const ast::Program& program) -> bool {
     bool found = false;
     auto scan = [&](auto&& self, const auto& items) -> void {
         for (const auto& item : items) {
-            if (const auto* block =
-                    std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item)) {
-                if (!*block) continue;
-                for (const auto& entry : (*block)->items)
-                    if (const auto* fn =
-                            std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry))
-                        if (*fn && isValueBinding(**fn)) found = true;
-            } else if (const auto* mod =
-                           std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
-                if (*mod) self(self, (*mod)->body);
+            if (const auto* block = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item)) {
+                if (!*block) {
+                    continue;
+                }
+                for (const auto& entry : (*block)->items) {
+                    if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry)) {
+                        if (*fn && isValueBinding(**fn)) {
+                            found = true;
+                        }
+                    }
+                }
+            } else if (const auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*mod) {
+                    self(self, (*mod)->body);
+                }
             }
         }
     };
@@ -3558,17 +4200,17 @@ auto declaresConstants(const ast::Program& program) -> bool {
 }
 
 // The names of every module a parsed file declares, nested ones included.
-auto declaredModules(const ast::Program& program)
-    -> std::unordered_set<std::string> {
+auto declaredModules(const ast::Program& program) -> std::unordered_set<std::string> {
     std::unordered_set<std::string> names;
     auto scan = [&](auto&& self, const auto& items) -> void {
-        for (const auto& item : items)
-            if (const auto* mod =
-                    std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+        for (const auto& item : items) {
+            if (const auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
                 if (*mod) {
                     names.insert((*mod)->name);
                     self(self, (*mod)->body);
                 }
+            }
+        }
     };
     scan(scan, program.items);
     return names;
@@ -3578,8 +4220,7 @@ auto declaredModules(const ast::Program& program)
 // parse of it, once per file. Null for a file already being expanded for its
 // constants further up — modules that refer to each other's constants in a
 // cycle cannot both be first, and the one asked second sees none.
-auto exportsOf(const std::string& path, const ExpandOptions& options)
-    -> const ModuleExports* {
+auto exportsOf(const std::string& path, const ExpandOptions& options) -> const ModuleExports* {
     static std::unordered_map<std::string, ModuleExports> seen;
     static std::unordered_set<std::string> underway;
     noteDependency(path);
@@ -3587,7 +4228,9 @@ auto exportsOf(const std::string& path, const ExpandOptions& options)
         noteDependencies(found->second.dependencies);
         return &found->second;
     }
-    if (!underway.insert(path).second) return nullptr;
+    if (!underway.insert(path).second) {
+        return nullptr;
+    }
     ModuleExports exports;
     std::optional<DependencyRecorder> recorder;
     if (recordingDependencies()) {
@@ -3616,11 +4259,12 @@ auto exportsOf(const std::string& path, const ExpandOptions& options)
             std::vector<semantic::Diagnostic> ignored;
             (void)expand(program, ignored, inner);
         }
-    } catch (const std::exception&) {
-    }
+    } catch (const std::exception&) {}
     exportSink = previous;
     underway.erase(path);
-    if (recorder) exports.dependencies = recorder->files();
+    if (recorder) {
+        exports.dependencies = recorder->files();
+    }
     return &seen.emplace(path, std::move(exports)).first->second;
 }
 
@@ -3630,27 +4274,31 @@ auto exportsOf(const std::string& path, const ExpandOptions& options)
 // own constants and chains may be made of them. Every qualified name the
 // program mentions is a candidate owner; one that is no module, or a module
 // that declares no constants, costs a lookup and a parse, once.
-auto importConstants(ast::Program& program, const ExpandOptions& options,
-                     std::vector<semantic::Diagnostic>& diagnostics) -> bool {
+auto importConstants(
+    ast::Program& program,
+    const ExpandOptions& options,
+    std::vector<semantic::Diagnostic>& diagnostics) -> bool {
     auto roots = effectiveModuleRoots(options.moduleRoots);
     const module::Resolver resolver(roots);
 
     // Fully qualified owners are the same everywhere. Aliases are lexical:
     // two modules may both call their own, different dependency `Config`.
     std::unordered_map<std::string, std::unordered_map<std::string, std::string>> owners;
-    std::unordered_map<std::string,
-                       std::unordered_map<std::string, std::string>> aliases;
-    auto scanUsings = [&](auto&& self, const auto& items,
-                          const std::string& scope) -> void {
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> aliases;
+    auto scanUsings = [&](auto&& self, const auto& items, const std::string& scope) -> void {
         for (const auto& item : items) {
-            if (const auto* use =
-                    std::get_if<std::unique_ptr<ast::UsingBlock>>(&item)) {
-                if (!*use) continue;
+            if (const auto* use = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item)) {
+                if (!*use) {
+                    continue;
+                }
                 std::string name = (*use)->module.dotted();
-                if ((*use)->alias) aliases[scope][*(*use)->alias] = name;
-            } else if (const auto* mod =
-                           std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
-                if (*mod) self(self, (*mod)->body, (*mod)->name);
+                if ((*use)->alias) {
+                    aliases[scope][*(*use)->alias] = name;
+                }
+            } else if (const auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*mod) {
+                    self(self, (*mod)->body, (*mod)->name);
+                }
             }
         }
     };
@@ -3663,24 +4311,29 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
         finder.onSlot = [&](ast::ExprPtr& slot) {
             const auto* call = std::get_if<ast::MethodCall>(&slot->kind);
             std::string owner;
-            if (call && call->receiver && call->args.empty() &&
-                call->namedArgs.empty() && !call->block &&
-                finder.qualifierPath(*call->receiver, owner))
+            if (call && call->receiver && call->args.empty() && call->namedArgs.empty() &&
+                !call->block && finder.qualifierPath(*call->receiver, owner)) {
                 owners[currentScope].emplace(owner, owner);
+            }
             return false;
         };
         auto scanOwners = [&](auto&& self, auto& items, const std::string& scope) -> void {
             currentScope = scope;
             walkScopeBodies(items, [&](auto& target) {
                 using T = std::decay_t<decltype(target)>;
-                if constexpr (std::is_same_v<T, ast::FunctionDef>)
+                if constexpr (std::is_same_v<T, ast::FunctionDef>) {
                     finder.functionBody(target);
-                else
+                } else {
                     finder.substitute(target);
+                }
             });
-            for (auto& item : items)
-                if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-                    if (*mod) self(self, (*mod)->body, (*mod)->name);
+            for (auto& item : items) {
+                if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                    if (*mod) {
+                        self(self, (*mod)->body, (*mod)->name);
+                    }
+                }
+            }
         };
         scanOwners(scanOwners, program.items, "");
     }
@@ -3690,10 +4343,12 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
     RecordLayouts layouts;
     std::unordered_map<std::string, std::string> modules;
     const auto ownModules = declaredModules(program);
-    auto gather = [&](const std::string& written, const std::string& named, const std::string& scope,
-                      ScopedConstants& destination) -> void {
+    auto gather = [&](const std::string& written, const std::string& named,
+                      const std::string& scope, ScopedConstants& destination) -> void {
         auto resolved = resolver.resolve(named, scope);
-        if (!resolved) return;
+        if (!resolved) {
+            return;
+        }
         const auto self = [&](const module::Resolution& found) {
             return std::filesystem::weakly_canonical(found.path) ==
                    std::filesystem::weakly_canonical(options.sourcePath);
@@ -3704,86 +4359,117 @@ auto importConstants(ast::Program& program, const ExpandOptions& options,
         // written inside `module Mid` means the top-level `Leaf`, as it does
         // to lsp::Workspace::ensureModule.
         const auto declares = [&](const module::Resolution& found) {
-            if (self(found)) return ownModules.contains(found.moduleName);
+            if (self(found)) {
+                return ownModules.contains(found.moduleName);
+            }
             const auto* exports = exportsOf(found.path, options);
             return exports && exports->declared.contains(found.moduleName);
         };
-        if (resolved->moduleName != named && !declares(*resolved))
-            if (auto plain = resolver.resolve(named, ""))
+        if (resolved->moduleName != named && !declares(*resolved)) {
+            if (auto plain = resolver.resolve(named, "")) {
                 resolved = std::move(plain);
-        if (self(*resolved)) return;
-        const auto* exports = exportsOf(resolved->path, options);
-        if (!exports) return;
-        const auto theirs = exports->constants.find(resolved->moduleName);
-        if (theirs == exports->constants.end() || theirs->second.empty())
+            }
+        }
+        if (self(*resolved)) {
             return;
+        }
+        const auto* exports = exportsOf(resolved->path, options);
+        if (!exports) {
+            return;
+        }
+        const auto theirs = exports->constants.find(resolved->moduleName);
+        if (theirs == exports->constants.end() || theirs->second.empty()) {
+            return;
+        }
         destination[written] = theirs->second;
-        for (const auto& [record, fields] : exports->layouts)
+        for (const auto& [record, fields] : exports->layouts) {
             layouts.emplace(record, fields);
-        for (const auto& [type, owner] : exports->modules)
+        }
+        for (const auto& [type, owner] : exports->modules) {
             modules.emplace(type, owner);
+        }
     };
-    for (const auto& [scope, names] : owners)
-        for (const auto& [written, named] : names)
+    for (const auto& [scope, names] : owners) {
+        for (const auto& [written, named] : names) {
             gather(written, named, scope, scopedImports[scope]);
-    for (const auto& [scope, names] : aliases)
-        for (const auto& [written, named] : names)
+        }
+    }
+    for (const auto& [scope, names] : aliases) {
+        for (const auto& [written, named] : names) {
             gather(written, named, scope, scopedImports[scope]);
-    if (imported.empty() && scopedImports.empty()) return true;
+        }
+    }
+    if (imported.empty() && scopedImports.empty()) {
+        return true;
+    }
 
     bool ok = true;
     std::unordered_set<std::string> reported;
-    auto substituteScope = [&](auto&& self, auto& items,
-                               const std::string& scope, ScopedConstants visible) -> void {
-        if (auto local = scopedImports.find(scope);
-            local != scopedImports.end())
-            for (const auto& [name, values] : local->second)
+    auto substituteScope = [&](auto&& self, auto& items, const std::string& scope,
+                               ScopedConstants visible) -> void {
+        if (auto local = scopedImports.find(scope); local != scopedImports.end()) {
+            for (const auto& [name, values] : local->second) {
                 visible[name] = values;
+            }
+        }
         Constants none;
-        Substituter substituter{
-            none, diagnostics, {}, {}, {}, {}, {}, {&layouts, nullptr, &modules}};
+        Substituter substituter{none, diagnostics, {}, {},
+                                {},   {},          {}, {&layouts, nullptr, &modules}};
         substituter.scoped = &visible;
         walkScopeBodies(items, [&](auto& target) {
             using T = std::decay_t<decltype(target)>;
-            if constexpr (std::is_same_v<T, ast::FunctionDef>)
+            if constexpr (std::is_same_v<T, ast::FunctionDef>) {
                 substituter.functionBody(target);
-            else
+            } else {
                 substituter.substitute(target);
+            }
         });
         for (const auto& reference : substituter.remaining) {
-            if (!reported.insert(qualifiedName(scope, reference)).second)
+            if (!reported.insert(qualifiedName(scope, reference)).second) {
                 continue;
+            }
             std::string why;
-            if (kex::mangle::hasScope(reference))
+            if (kex::mangle::hasScope(reference)) {
                 if (const auto found = visible.find(kex::mangle::scopeOf(reference));
-                    found != visible.end())
-                    if (const auto value = found->second.find(
-                            kex::mangle::memberOf(reference));
-                        value != found->second.end())
-                        (void)valueToLiteral(value->second, SourceLocation{},
-                                             why, {&layouts, nullptr, &modules});
-            addError(diagnostics, SourceLocation{},
-                     "compile-time constant `" + reference +
-                         "` cannot be inlined: " + why);
+                    found != visible.end()) {
+                    if (const auto value = found->second.find(kex::mangle::memberOf(reference));
+                        value != found->second.end()) {
+                        (void)valueToLiteral(
+                            value->second, SourceLocation{}, why, {&layouts, nullptr, &modules});
+                    }
+                }
+            }
+            addError(
+                diagnostics, SourceLocation{},
+                "compile-time constant `" + reference + "` cannot be inlined: " + why);
             ok = false;
         }
-        for (auto& item : items)
-            if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-                if (*mod) self(self, (*mod)->body, (*mod)->name, visible);
+        for (auto& item : items) {
+            if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*mod) {
+                    self(self, (*mod)->body, (*mod)->name, visible);
+                }
+            }
+        }
     };
     substituteScope(substituteScope, program.items, "", imported);
     return ok;
 }
 } // namespace
 
-auto expand(ast::Program& program,
-            std::vector<semantic::Diagnostic>& diagnostics,
-            const ExpandOptions& options) -> bool {
+auto expand(
+    ast::Program& program,
+    std::vector<semantic::Diagnostic>& diagnostics,
+    const ExpandOptions& options) -> bool {
     // Template scans read their cache settings from here (scanTemplateSource).
     struct ActiveOptions {
         const ExpandOptions* previous;
-        explicit ActiveOptions(const ExpandOptions& options) : previous(activeOptions) { activeOptions = &options; }
-        ~ActiveOptions() { activeOptions = previous; }
+        explicit ActiveOptions(const ExpandOptions& options) : previous(activeOptions) {
+            activeOptions = &options;
+        }
+        ~ActiveOptions() {
+            activeOptions = previous;
+        }
     } active{options};
     // What this file's collapses are made from, for keeping them (collapseChains).
     std::optional<DependencyRecorder> recorder;
@@ -3799,16 +4485,22 @@ auto expand(ast::Program& program,
     // literal before the template call's own argument-shape check runs.
     // A function whose embed path names its own parameter becomes one clause
     // per matching file first, so each clause has a literal path to fold.
-    if (!expandEmbedDispatch(program, options.sourcePath, diagnostics))
+    if (!expandEmbedDispatch(program, options.sourcePath, diagnostics)) {
         return false;
+    }
     int templateCounter = 0;
-    if (!foldEmbeds(program, options.sourcePath, diagnostics)) return false;
-    if (!foldTemplates(program, diagnostics, options, templateCounter))
+    if (!foldEmbeds(program, options.sourcePath, diagnostics)) {
         return false;
+    }
+    if (!foldTemplates(program, diagnostics, options, templateCounter)) {
+        return false;
+    }
 
     // --- 0b. Other modules' constants, as literals: before this file's own
     // are evaluated, since those may be made of them.
-    if (!importConstants(program, options, diagnostics)) return false;
+    if (!importConstants(program, options, diagnostics)) {
+        return false;
+    }
 
     // --- 1. Find the constants, in source order.
     std::vector<std::string> names;
@@ -3817,19 +4509,24 @@ auto expand(ast::Program& program,
     auto scan = [&](auto&& self, auto& items, const std::string& scope) -> void {
         for (auto& item : items) {
             if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
-                if (*mod) self(self, (*mod)->body, (*mod)->name);
+                if (*mod) {
+                    self(self, (*mod)->body, (*mod)->name);
+                }
                 continue;
             }
             auto* block = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item);
-            if (!block || !*block) continue;
+            if (!block || !*block) {
+                continue;
+            }
             hasBlock = true;
-            for (auto& entry : (*block)->items)
-                if (auto* fn =
-                    std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry))
+            for (auto& entry : (*block)->items) {
+                if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry)) {
                     if (*fn && isValueBinding(**fn)) {
                         names.push_back(qualifiedName(scope, (*fn)->name));
                         locations.push_back((*fn)->location);
                     }
+                }
+            }
         }
     };
     scan(scan, program.items, "");
@@ -3846,20 +4543,23 @@ auto expand(ast::Program& program,
     // map it to the owning module before anything runs. Null means top level.
     std::unordered_map<const void*, ast::ModuleDef*> templateOwner;
     {
-        auto record = [&](auto&& self, auto& items,
-                          ast::ModuleDef* owner) -> void {
+        auto record = [&](auto&& self, auto& items, ast::ModuleDef* owner) -> void {
             for (auto& item : items) {
-                if (auto* mod =
-                        std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
-                    if (*mod) self(self, (*mod)->body, mod->get());
+                if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                    if (*mod) {
+                        self(self, (*mod)->body, mod->get());
+                    }
                     continue;
                 }
-                auto* block =
-                    std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item);
-                if (!block || !*block) continue;
+                auto* block = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item);
+                if (!block || !*block) {
+                    continue;
+                }
                 for (auto& entry : (*block)->items) {
                     auto* expr = std::get_if<ast::ExprPtr>(&entry);
-                    if (!expr || !*expr) continue;
+                    if (!expr || !*expr) {
+                        continue;
+                    }
                     Constants none;
                     Substituter finder{none, diagnostics, {}, {}, {}};
                     finder.onGenerated = [&](const ast::GeneratedDecl& decl) {
@@ -3878,16 +4578,16 @@ auto expand(ast::Program& program,
                 };
                 walkBodies((*block)->items, [&](auto& target) {
                     using T = std::decay_t<decltype(target)>;
-                    if constexpr (std::is_same_v<T, ast::FunctionDef>)
+                    if constexpr (std::is_same_v<T, ast::FunctionDef>) {
                         finder.functionBody(target);
-                    else
+                    } else {
                         finder.substitute(target);
+                    }
                 });
             }
         };
         record(record, program.items, nullptr);
     }
-
 
     // --- 2. Run the block once, against the whole program.
     //
@@ -3904,37 +4604,42 @@ auto expand(ast::Program& program,
     RecordLayouts layouts;
     std::unordered_map<std::string, std::string> typeModules;
     // Checked first, so the sandbox reads the checker's answers.
-    const auto checked = options.interfaces
-        ? hir::checkCompileTime(program, options.interfaces) : nullptr;
+    const auto checked =
+        options.interfaces ? hir::checkCompileTime(program, options.interfaces) : nullptr;
     {
-        const SourceLocation blame =
-            locations.empty() ? SourceLocation{} : locations.front();
+        const SourceLocation blame = locations.empty() ? SourceLocation{} : locations.front();
         std::vector<interpreter::ValuePtr> values;
         try {
             SandboxClock clock;
             interpreter::Evaluator evaluator(options.interfaces);
             useModuleRoots(evaluator, options);
             evaluator.loadPrelude();
-            if (checked) evaluator.setProgram(&*checked->program);
+            if (checked) {
+                evaluator.setProgram(&*checked->program);
+            }
             clock.started();
             values = evaluator.evaluateConstants(program, names, options.timeout);
-            if (evaluator.touchedOutside()) noteReachedOutside();
+            if (evaluator.touchedOutside()) {
+                noteReachedOutside();
+            }
             generated = evaluator.generatedDeclarations();
             layouts = evaluator.recordFieldOrder();
             typeModules = evaluator.typeModules();
         } catch (const interpreter::EvaluationTimeout&) {
-            addError(diagnostics, blame,
-                     "compile-time evaluation timed out after " +
-                         std::to_string(options.timeout.count()) + " ms");
+            addError(
+                diagnostics, blame,
+                "compile-time evaluation timed out after " +
+                    std::to_string(options.timeout.count()) + " ms");
             return false;
         } catch (const std::exception& crash) {
-            addError(diagnostics, blame,
-                     std::string("compile-time evaluation failed: ") +
-                         crash.what());
+            addError(
+                diagnostics, blame, std::string("compile-time evaluation failed: ") + crash.what());
             return false;
         }
         for (std::size_t i = 0; i < names.size() && i < values.size(); i++) {
-            if (!values[i]) continue;
+            if (!values[i]) {
+                continue;
+            }
             const auto scope = kex::mangle::scopeOf(names[i]);
             const auto bare = kex::mangle::memberOf(names[i]);
             constants[scope].emplace(bare, values[i]);
@@ -3950,43 +4655,49 @@ auto expand(ast::Program& program,
     std::unordered_set<std::string> keep;
     bool ok = true;
     std::unordered_set<std::string> reportedFailures;
-    auto substituteScope =
-        [&](auto&& self, auto& items, const std::string& scope) -> void {
-            Constants visible = constants[""];
-            if (!scope.empty())
-                for (const auto& [name, value] : constants[scope])
-                    visible[name] = value;
-            Substituter substituter{
-                visible, diagnostics, {}, {}, {}, {}, {}, {&layouts, nullptr, &typeModules}};
-            substituter.scoped = &constants;
-            walkScopeBodies(items, [&](auto& target) {
-                using T = std::decay_t<decltype(target)>;
-                if constexpr (std::is_same_v<T, ast::FunctionDef>)
-                    substituter.functionBody(target);
-                else
-                    substituter.substitute(target);
-            });
-            for (const auto& reference : substituter.remaining) {
-                const auto name = kex::mangle::memberOf(reference);
-                const auto owner = kex::mangle::hasScope(reference)
-                    ? kex::mangle::scopeOf(reference)
-                    : (constants[scope].count(name) ? scope : std::string{});
-                const auto identity = qualifiedName(owner, name);
-                keep.insert(identity);
-                if (!reportedFailures.insert(identity).second) continue;
-                std::string why;
-                (void)valueToLiteral(constants[owner].at(name),
-                                     SourceLocation{}, why, {&layouts});
-                addError(diagnostics, SourceLocation{},
-                         "compile-time constant `" + identity +
-                             "` cannot be inlined: " + why);
-                ok = false;
+    auto substituteScope = [&](auto&& self, auto& items, const std::string& scope) -> void {
+        Constants visible = constants[""];
+        if (!scope.empty()) {
+            for (const auto& [name, value] : constants[scope]) {
+                visible[name] = value;
             }
-            for (auto& item : items)
-                if (auto* mod =
-                        std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-                    if (*mod) self(self, (*mod)->body, (*mod)->name);
-        };
+        }
+        Substituter substituter{visible, diagnostics, {}, {},
+                                {},      {},          {}, {&layouts, nullptr, &typeModules}};
+        substituter.scoped = &constants;
+        walkScopeBodies(items, [&](auto& target) {
+            using T = std::decay_t<decltype(target)>;
+            if constexpr (std::is_same_v<T, ast::FunctionDef>) {
+                substituter.functionBody(target);
+            } else {
+                substituter.substitute(target);
+            }
+        });
+        for (const auto& reference : substituter.remaining) {
+            const auto name = kex::mangle::memberOf(reference);
+            const auto owner = kex::mangle::hasScope(reference)
+                                   ? kex::mangle::scopeOf(reference)
+                                   : (constants[scope].count(name) ? scope : std::string{});
+            const auto identity = qualifiedName(owner, name);
+            keep.insert(identity);
+            if (!reportedFailures.insert(identity).second) {
+                continue;
+            }
+            std::string why;
+            (void)valueToLiteral(constants[owner].at(name), SourceLocation{}, why, {&layouts});
+            addError(
+                diagnostics, SourceLocation{},
+                "compile-time constant `" + identity + "` cannot be inlined: " + why);
+            ok = false;
+        }
+        for (auto& item : items) {
+            if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*mod) {
+                    self(self, (*mod)->body, (*mod)->name);
+                }
+            }
+        }
+    };
     substituteScope(substituteScope, program.items, "");
 
     // --- 3b. Instantiate the generated declarations.
@@ -4000,8 +4711,7 @@ auto expand(ast::Program& program,
     // Each entry is appended to the scope that declared its template.
     for (const auto& decl : generated) {
         if (decl.name.empty()) {
-            addError(diagnostics, decl.location,
-                     "generated declaration has an empty name");
+            addError(diagnostics, decl.location, "generated declaration has an empty name");
             ok = false;
             continue;
         }
@@ -4016,30 +4726,28 @@ auto expand(ast::Program& program,
                 std::holds_alternative<std::shared_ptr<ast::TypeDef>>(decl.function) ||
                 std::holds_alternative<std::shared_ptr<ast::RecordDef>>(decl.function) ||
                 std::holds_alternative<std::shared_ptr<ast::MakeDef>>(decl.function);
-            const unsigned char lead =
-                static_cast<unsigned char>(decl.name.front());
+            const unsigned char lead = static_cast<unsigned char>(decl.name.front());
             const bool isUpper = lead >= 'A' && lead <= 'Z';
             const bool isLower = (lead >= 'a' && lead <= 'z') || lead == '_';
             if (wantsUpper && !isUpper) {
-                addError(diagnostics, decl.location,
-                         std::string("generated ") +
-                             (std::holds_alternative<std::shared_ptr<ast::MakeDef>>(
-                                  decl.function)
-                                  ? "make target"
-                                  : std::holds_alternative<std::shared_ptr<ast::RecordDef>>(
-                                        decl.function)
-                                      ? "record"
-                                      : "type") +
-                             " name `" + decl.name +
-                             "` must start with an upper-case letter" +
-                             (isLower ? " — try `%{name.capitalize}`" : ""));
+                addError(
+                    diagnostics, decl.location,
+                    std::string("generated ") +
+                        (std::holds_alternative<std::shared_ptr<ast::MakeDef>>(decl.function)
+                             ? "make target"
+                         : std::holds_alternative<std::shared_ptr<ast::RecordDef>>(decl.function)
+                             ? "record"
+                             : "type") +
+                        " name `" + decl.name + "` must start with an upper-case letter" +
+                        (isLower ? " — try `%{name.capitalize}`" : ""));
                 ok = false;
                 continue;
             }
             if (!wantsUpper && !isLower) {
-                addError(diagnostics, decl.location,
-                         "generated function name `" + decl.name +
-                             "` must start with a lower-case letter");
+                addError(
+                    diagnostics, decl.location,
+                    "generated function name `" + decl.name +
+                        "` must start with a lower-case letter");
                 ok = false;
                 continue;
             }
@@ -4047,31 +4755,40 @@ auto expand(ast::Program& program,
         auto owner = templateOwner.find(templateId(decl.function));
         auto* into = owner != templateOwner.end() ? owner->second : nullptr;
 
-        if (auto* fnTemplate =
-                std::get_if<std::shared_ptr<ast::FunctionDef>>(&decl.function)) {
-            if (!*fnTemplate) continue;
+        if (auto* fnTemplate = std::get_if<std::shared_ptr<ast::FunctionDef>>(&decl.function)) {
+            if (!*fnTemplate) {
+                continue;
+            }
             auto copy = ast::clone(**fnTemplate);
             copy->name = decl.name;
             copy->location = decl.location;
             // A parameter of the generated function must win over a same-named
             // compile-time binding, so drop those from the substitution map.
             Constants captured;
-            for (const auto& [bound, value] : decl.bindings)
+            for (const auto& [bound, value] : decl.bindings) {
                 captured.emplace(bound, value);
-            for (const auto& clause : copy->clauses)
-                for (const auto& param : clause.params)
-                    if (param.name) captured.erase(*param.name);
-            Substituter inner{
-                captured, diagnostics, {}, {}, {}, {}, {}, {&layouts}};
+            }
+            for (const auto& clause : copy->clauses) {
+                for (const auto& param : clause.params) {
+                    if (param.name) {
+                        captured.erase(*param.name);
+                    }
+                }
+            }
+            Substituter inner{captured, diagnostics, {}, {}, {}, {}, {}, {&layouts}};
             inner.functionBody(*copy);
-            if (into) into->body.push_back(std::move(copy));
-            else program.items.push_back(std::move(copy));
+            if (into) {
+                into->body.push_back(std::move(copy));
+            } else {
+                program.items.push_back(std::move(copy));
+            }
             continue;
         }
 
-        if (auto* makeTemplate =
-                std::get_if<std::shared_ptr<ast::MakeDef>>(&decl.function)) {
-            if (!*makeTemplate) continue;
+        if (auto* makeTemplate = std::get_if<std::shared_ptr<ast::MakeDef>>(&decl.function)) {
+            if (!*makeTemplate) {
+                continue;
+            }
             auto copy = ast::clone(**makeTemplate);
             copy->location = decl.location;
             // The template's target is null — the name was not known when it
@@ -4084,47 +4801,61 @@ auto expand(ast::Program& program,
             // runtime, so they are baked in as literals. Each method's own
             // parameters shadow them.
             Constants captured;
-            for (const auto& [bound, value] : decl.bindings)
+            for (const auto& [bound, value] : decl.bindings) {
                 captured.emplace(bound, value);
+            }
             // Replace the driver loops with the methods they declared, then
             // apply hygiene to every method the block now has.
             spliceNestedMethods(*copy, decl, diagnostics, ok);
-            Substituter scope{
-                captured, diagnostics, {}, {}, {}, {}, {}, {&layouts}};
+            Substituter scope{captured, diagnostics, {}, {}, {}, {}, {}, {&layouts}};
             substituteMakeBodies(*copy, scope, captured);
-            if (into) into->body.push_back(std::move(copy));
-            else program.items.push_back(std::move(copy));
+            if (into) {
+                into->body.push_back(std::move(copy));
+            } else {
+                program.items.push_back(std::move(copy));
+            }
             continue;
         }
 
-        if (auto* typeTemplate =
-                std::get_if<std::shared_ptr<ast::TypeDef>>(&decl.function)) {
-            if (!*typeTemplate) continue;
+        if (auto* typeTemplate = std::get_if<std::shared_ptr<ast::TypeDef>>(&decl.function)) {
+            if (!*typeTemplate) {
+                continue;
+            }
             auto copy = ast::clone(**typeTemplate);
             copy->name = decl.name;
             copy->location = decl.location;
             // A generated type's body is types, not expressions, so there is
             // nothing for the hygiene substitution to do here.
-            if (into) into->body.push_back(std::move(copy));
-            else program.items.push_back(std::move(copy));
+            if (into) {
+                into->body.push_back(std::move(copy));
+            } else {
+                program.items.push_back(std::move(copy));
+            }
             continue;
         }
 
-        if (auto* recordTemplate =
-                std::get_if<std::shared_ptr<ast::RecordDef>>(&decl.function)) {
-            if (!*recordTemplate) continue;
+        if (auto* recordTemplate = std::get_if<std::shared_ptr<ast::RecordDef>>(&decl.function)) {
+            if (!*recordTemplate) {
+                continue;
+            }
             auto copy = ast::clone(**recordTemplate);
             copy->name = decl.name;
             copy->location = decl.location;
             Constants captured;
-            for (const auto& [bound, value] : decl.bindings)
+            for (const auto& [bound, value] : decl.bindings) {
                 captured.emplace(bound, value);
-            Substituter scope{
-                captured, diagnostics, {}, {}, {}, {}, {}, {&layouts}};
-            for (auto& field : copy->fields)
-                if (field.defaultValue) scope.substitute(*field.defaultValue);
-            if (into) into->body.push_back(std::move(copy));
-            else program.items.push_back(std::move(copy));
+            }
+            Substituter scope{captured, diagnostics, {}, {}, {}, {}, {}, {&layouts}};
+            for (auto& field : copy->fields) {
+                if (field.defaultValue) {
+                    scope.substitute(*field.defaultValue);
+                }
+            }
+            if (into) {
+                into->body.push_back(std::move(copy));
+            } else {
+                program.items.push_back(std::move(copy));
+            }
         }
     }
 
@@ -4137,18 +4868,19 @@ auto expand(ast::Program& program,
         Constants none;
         Substituter eraser{none, diagnostics, {}, {}, {}};
         eraser.onSlot = [](ast::ExprPtr& slot) {
-            if (!slot ||
-                !std::holds_alternative<ast::GeneratedDecl>(slot->kind))
+            if (!slot || !std::holds_alternative<ast::GeneratedDecl>(slot->kind)) {
                 return false;
+            }
             slot->kind = ast::TupleExpr{{}};
             return true;
         };
         walkBodies(program.items, [&](auto& target) {
             using T = std::decay_t<decltype(target)>;
-            if constexpr (std::is_same_v<T, ast::FunctionDef>)
+            if constexpr (std::is_same_v<T, ast::FunctionDef>) {
                 eraser.functionBody(target);
-            else
+            } else {
                 eraser.substitute(target);
+            }
         });
     }
 
@@ -4169,7 +4901,9 @@ auto expand(ast::Program& program,
     // `compiled` blocks that tell collapse which methods are its own. Getting
     // that order wrong disables the feature silently: `compiledNames` returns
     // an empty set and every chain is left alone.
-    if (ok) collapseChains(program, options);
+    if (ok) {
+        collapseChains(program, options);
+    }
 
     // --- 5. Drop the definitions. A constant is gone from the emitted module
     // entirely — no nullary function, nothing exported. Only constants whose
@@ -4189,37 +4923,44 @@ auto expand(ast::Program& program,
         using Item = std::decay_t<decltype(items[0])>;
         std::vector<Item> hoisted;
         for (std::size_t i = 0; i < items.size();) {
-            if (auto* mod =
-                    std::get_if<std::unique_ptr<ast::ModuleDef>>(&items[i])) {
-                if (*mod) self(self, (*mod)->body, (*mod)->name);
+            if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&items[i])) {
+                if (*mod) {
+                    self(self, (*mod)->body, (*mod)->name);
+                }
                 i++;
                 continue;
             }
             auto* block = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&items[i]);
-            if (!block || !*block) { i++; continue; }
+            if (!block || !*block) {
+                i++;
+                continue;
+            }
             for (auto& entry : (*block)->items) {
                 auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry);
                 const bool inlined = fn && *fn && isValueBinding(**fn) &&
                                      constants[scope].count((*fn)->name) &&
-                                     !keep.count(
-                                         qualifiedName(scope, (*fn)->name));
+                                     !keep.count(qualifiedName(scope, (*fn)->name));
                 // A bare expression in a compiled block is compile-time work
                 // and nothing else — a driver loop, typically. It has already
                 // run, and its generated declarations are now real items, so
                 // keeping it would re-run the loop at runtime.
-                if (inlined || std::holds_alternative<ast::ExprPtr>(entry))
+                if (inlined || std::holds_alternative<ast::ExprPtr>(entry)) {
                     continue;
+                }
                 std::visit(
                     [&](auto& held) {
                         using Held = std::decay_t<decltype(held)>;
-                        if constexpr (!std::is_same_v<Held, ast::ExprPtr>)
+                        if constexpr (!std::is_same_v<Held, ast::ExprPtr>) {
                             hoisted.push_back(std::move(held));
+                        }
                     },
                     entry);
             }
             items.erase(items.begin() + static_cast<long>(i));
         }
-        for (auto& item : hoisted) items.push_back(std::move(item));
+        for (auto& item : hoisted) {
+            items.push_back(std::move(item));
+        }
     };
     prune(prune, program.items, "");
 
@@ -4229,7 +4970,9 @@ auto expand(ast::Program& program,
     return ok;
 }
 
-auto fileStamp(const std::string& path) -> std::string { return dependencyStamp(path); }
+auto fileStamp(const std::string& path) -> std::string {
+    return dependencyStamp(path);
+}
 
 auto shadowsOf(const std::set<std::string>& files, const std::vector<std::string>& roots)
     -> std::set<std::string> {
@@ -4242,16 +4985,21 @@ auto shadowsOf(const std::set<std::string>& files, const std::vector<std::string
     std::set<std::string> shadows;
     for (const auto& file : files) {
         const fs::path path{file};
-        if (path.extension() != ".kex") continue;
+        if (path.extension() != ".kex") {
+            continue;
+        }
         for (const auto& root : canonicalRoots) {
             const auto relative = path.lexically_relative(root);
-            if (relative.empty() || *relative.begin() == "..") continue;
+            if (relative.empty() || *relative.begin() == "..") {
+                continue;
+            }
             for (const auto& other : canonicalRoots) {
                 shadows.insert((other / relative).lexically_normal().string());
                 for (auto parent = relative.parent_path(); !parent.empty();
-                     parent = parent.parent_path())
+                     parent = parent.parent_path()) {
                     shadows.insert(
                         (other / parent).lexically_normal().replace_extension(".kex").string());
+                }
             }
         }
     }

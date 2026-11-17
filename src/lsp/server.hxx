@@ -15,7 +15,6 @@ namespace kex::lsp {
 // method call on a call result typed as `unknown` and a builder chain
 // (`Web.Server.new(0).post(…)`) offered no completions at all, while the same
 // file checked correctly through `kex -C`.
-auto run(std::istream& input, std::ostream& output,
-         const std::string& runtimeBeamDir) -> int;
+auto run(std::istream& input, std::ostream& output, const std::string& runtimeBeamDir) -> int;
 
 } // namespace kex::lsp

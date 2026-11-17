@@ -20,52 +20,66 @@ namespace {
 // Whether the prelude also answers `name` as a receiver method, seen from a
 // module other than the prelude itself. Such a name keeps the guarded
 // receiver dispatcher, whose last clause falls back to `kex_prelude:name`.
-auto preludeAnswers(const Lowering& L, const std::string& module,
-                    const std::string& name) -> bool {
-    if (!L.externalModules || module == names::kPreludeModule) return false;
+auto preludeAnswers(const Lowering& L, const std::string& module, const std::string& name) -> bool {
+    if (!L.externalModules || module == names::kPreludeModule) {
+        return false;
+    }
     auto providers = L.externalModules->receiverFunctions.find(name);
-    if (providers == L.externalModules->receiverFunctions.end()) return false;
-    return std::any_of(providers->second.begin(), providers->second.end(),
-                       [](const ExternalModules::ReceiverFunction& fn) {
-                           return fn.moduleAtom == names::kPreludeModule;
-                       });
+    if (providers == L.externalModules->receiverFunctions.end()) {
+        return false;
+    }
+    return std::any_of(
+        providers->second.begin(), providers->second.end(),
+        [](const ExternalModules::ReceiverFunction& fn) {
+            return fn.moduleAtom == names::kPreludeModule;
+        });
 }
 
 } // namespace
 
-auto mergeExternalModules(const ExternalModules& base,
-                          const ExternalModules& overrides)
+auto mergeExternalModules(const ExternalModules& base, const ExternalModules& overrides)
     -> ExternalModules {
     auto result = base;
-    for (const auto& [name, atom] : overrides.nameToAtom)
+    for (const auto& [name, atom] : overrides.nameToAtom) {
         result.nameToAtom[name] = atom;
-    for (const auto& [name, function] : overrides.exportToBeamFn)
+    }
+    for (const auto& [name, function] : overrides.exportToBeamFn) {
         result.exportToBeamFn[name] = function;
-    for (const auto& [name, arity] : overrides.exportArity)
+    }
+    for (const auto& [name, arity] : overrides.exportArity) {
         result.exportArity[name] = arity;
-    for (const auto& [name, names] : overrides.exportParamNames)
+    }
+    for (const auto& [name, names] : overrides.exportParamNames) {
         result.exportParamNames[name] = names;
-    for (const auto& [name, defaults] : overrides.exportDefaults)
+    }
+    for (const auto& [name, defaults] : overrides.exportDefaults) {
         result.exportDefaults[name] = defaults;
-    for (const auto& name : overrides.foulExports)
+    }
+    for (const auto& name : overrides.foulExports) {
         result.foulExports.insert(name);
-    for (const auto& name : overrides.capabilityModules)
+    }
+    for (const auto& name : overrides.capabilityModules) {
         result.capabilityModules.insert(name);
-    for (const auto& [name, members] : overrides.capabilityMembers)
+    }
+    for (const auto& [name, members] : overrides.capabilityMembers) {
         result.capabilityMembers[name] = members;
-    for (const auto& [type, serving] : overrides.servingSlots)
+    }
+    for (const auto& [type, serving] : overrides.servingSlots) {
         result.servingSlots[type] = serving;
-    result.compiledApartModules.insert(overrides.compiledApartModules.begin(),
-                                                                          overrides.compiledApartModules.end());
-    for (const auto& [name, functions] : overrides.receiverFunctions)
+    }
+    result.compiledApartModules.insert(
+        overrides.compiledApartModules.begin(), overrides.compiledApartModules.end());
+    for (const auto& [name, functions] : overrides.receiverFunctions) {
         result.receiverFunctions[name] = functions;
-    for (const auto& [name, methods] : overrides.traitMethods)
+    }
+    for (const auto& [name, methods] : overrides.traitMethods) {
         result.traitMethods[name] = methods;
+    }
     return result;
 }
 
-auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
-                  const LowerContext& context) -> Module {
+auto lowerProgram(
+    const ast::Program& prog, const std::string& fileStem, const LowerContext& context) -> Module {
     const auto& sourcePath = context.sourcePath;
     const auto* externals = context.externals;
     const auto* externalRecords = context.externalRecords;
@@ -73,26 +87,31 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     const auto* externalVariants = context.externalVariants;
     // Lowering translates what the checker decided: there is nothing to
     // lower without the checked program.
-    if (!context.hir) throw LowerError("IR lower: " + fileStem + " was not checked");
+    if (!context.hir) {
+        throw LowerError("IR lower: " + fileStem + " was not checked");
+    }
     // The checker's answers, all read from the checked program (`L.hir`).
     Lowering L;
     L.sourceFile = sourcePath;
     L.externalModules = externals;
     L.hir = context.hir;
     L.lowersPrelude = lowersPrelude;
-    if (externals) L.traitMethods = externals->traitMethods;
-    if (externals)
+    if (externals) {
+        L.traitMethods = externals->traitMethods;
+    }
+    if (externals) {
         for (const auto& [name, candidates] : externals->receiverFunctions) {
             if (name.empty() ||
-                (std::isalnum(static_cast<unsigned char>(name[0])) ||
-                 name[0] == '_'))
+                (std::isalnum(static_cast<unsigned char>(name[0])) || name[0] == '_')) {
                 continue;
-            if (std::any_of(candidates.begin(), candidates.end(),
-                            [](const auto& candidate) {
-                                return candidate.beamArity == 2;
-                            }))
+            }
+            if (std::any_of(candidates.begin(), candidates.end(), [](const auto& candidate) {
+                    return candidate.beamArity == 2;
+                })) {
                 L.overloadedOps.insert(name);
+            }
         }
+    }
     Module mod;
     mod.name = "kex_" + fileStem;
     L.outputModule = mod.name;
@@ -102,27 +121,27 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // type's method group (inheritedDefaults, the checker's answer) so they go
     // through the same lowering and dispatch as the block's own methods.
     std::unordered_map<std::string, const ast::TraitDef*> traitDefs;
-    kex::forEachTraitDef(prog.items, [&](const ast::TraitDef& td,
-                                         const std::string& modulePath) {
+    kex::forEachTraitDef(prog.items, [&](const ast::TraitDef& td, const std::string& modulePath) {
         const auto identity = kex::traitIdentity(modulePath, td.name);
         traitDefs[identity] = &td;
         auto& methods = L.traitMethods[identity];
         methods.clear();
-        for (const auto& entry : td.body)
-            if (auto* annotation =
-                    std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&entry);
+        for (const auto& entry : td.body) {
+            if (auto* annotation = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&entry);
                 annotation && *annotation) {
                 int arity = 1;
                 const ast::TypeExpr* type = (*annotation)->type.get();
                 while (type) {
-                    const auto* fn =
-                        std::get_if<ast::FunctionType>(&type->kind);
-                    if (!fn) break;
+                    const auto* fn = std::get_if<ast::FunctionType>(&type->kind);
+                    if (!fn) {
+                        break;
+                    }
                     ++arity;
                     type = fn->result.get();
                 }
                 methods.push_back({(*annotation)->name, arity});
             }
+        }
     });
     // The trait defaults a `make` block inherits, as the checker decided them
     // (those the type does not define itself in any of its blocks), each found
@@ -130,13 +149,19 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // its own module answers it at run time.
     auto inheritedDefaults = [&](const ast::MakeDef& mk) {
         std::vector<const ast::FunctionDef*> bodies;
-        if (const auto* inherited = L.hir->inheritedDefaultsOf(mk))
-            for (const auto& [trait, method] : *inherited)
-                if (const auto found = traitDefs.find(trait); found != traitDefs.end())
-                    for (const auto& member : found->second->body)
-                        if (const auto* function = std::get_if<std::unique_ptr<ast::FunctionDef>>(&member);
-                            function && *function && (*function)->name == method)
+        if (const auto* inherited = L.hir->inheritedDefaultsOf(mk)) {
+            for (const auto& [trait, method] : *inherited) {
+                if (const auto found = traitDefs.find(trait); found != traitDefs.end()) {
+                    for (const auto& member : found->second->body) {
+                        if (const auto* function =
+                                std::get_if<std::unique_ptr<ast::FunctionDef>>(&member);
+                            function && *function && (*function)->name == method) {
                             bodies.push_back(function->get());
+                        }
+                    }
+                }
+            }
+        }
         return bodies;
     };
 
@@ -153,209 +178,256 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // field accessor is arity 1, so only an arity-1 function of that name
     // can own the symbol (see makeAccessors).
     std::unordered_set<std::string> definedFnArities;
-    auto preRecord = [&](const ast::RecordDef& rd,
-                         const std::string& owner = std::string{}) {
+    auto preRecord = [&](const ast::RecordDef& rd, const std::string& owner = std::string{}) {
         L.collectRecord(rd, owner);
         L.knownTypes.insert(rd.name);
-        if (!owner.empty()) L.knownTypes.insert(owner + "." + rd.name);
+        if (!owner.empty()) {
+            L.knownTypes.insert(owner + "." + rd.name);
+        }
     };
-    if (externalRecords)
+    if (externalRecords) {
         for (const auto& record : *externalRecords) {
             L.collectRecordLayout(record.name, record.fields);
             // A unit compiled apart: its module answers the defaults.
             if (!record.fieldDefaults.empty()) {
                 auto& info = L.records[record.name];
                 info.defaultsModule = record.moduleAtom;
-                for (const auto& source : record.fieldDefaults)
+                for (const auto& source : record.fieldDefaults) {
                     info.defaultedApart.push_back(!source.empty());
+                }
             }
             L.externalRecordNames.insert(record.name);
-            if (!record.methodOwner.empty())
+            if (!record.methodOwner.empty()) {
                 L.externalMethodOwners[record.name] = record.methodOwner;
+            }
             L.knownTypes.insert(record.name);
         }
+    }
     // Display info only — deliberately NOT added to variantTagSet, which
     // drives codegen decisions for tags this module declares itself.
-    if (externalVariants)
+    if (externalVariants) {
         for (const auto& variant : *externalVariants) {
             L.variantArity[variant.tag] = variant.arity;
             L.variantOwner[variant.tag] = variant.owner;
-            if (!variant.methodOwner.empty())
+            if (!variant.methodOwner.empty()) {
                 L.externalMethodOwners[variant.owner] = variant.methodOwner;
+            }
         }
+    }
     auto preFn = [&](const ast::FunctionDef& fd) {
-        for (const auto& clause : fd.clauses)
+        for (const auto& clause : fd.clauses) {
             L.fnNamedClauses[fd.name].push_back(&clause);
+        }
         definedFns.insert(fd.name);
-        if (fd.isFoul) L.foulFns.insert(fd.name);
+        if (fd.isFoul) {
+            L.foulFns.insert(fd.name);
+        }
         if (!fd.clauses.empty()) {
             const auto arity = std::to_string(fd.clauses[0].params.size());
-            if (!fd.isFoul) L.pureFnArities.insert(fd.name + "/" + arity);
-            else L.topLevelFoulArities.insert(fd.name + "/" + arity);
+            if (!fd.isFoul) {
+                L.pureFnArities.insert(fd.name + "/" + arity);
+            } else {
+                L.topLevelFoulArities.insert(fd.name + "/" + arity);
+            }
             definedFnArities.insert(fd.name + "/" + arity);
             L.definedFnArities.insert(fd.name + "/" + arity);
             L.localMethodArities.insert(fd.name + "/" + arity);
         }
         if (!fd.clauses.empty()) {
             auto pnames = ast::parameterNames(fd);
-            if (pnames.empty()) L.zeroArgFns.insert(fd.name);
-            for (const auto& clause : fd.clauses)
-                for (const auto& p : clause.params)
-                    if (p.name && !p.name->empty())
+            if (pnames.empty()) {
+                L.zeroArgFns.insert(fd.name);
+            }
+            for (const auto& clause : fd.clauses) {
+                for (const auto& p : clause.params) {
+                    if (p.name && !p.name->empty()) {
                         L.fnAllParamNames[fd.name].insert(*p.name);
+                    }
+                }
+            }
             L.fnParamNames[fd.name] = std::move(pnames);
             auto defaults = ast::parameterDefaults(fd);
-            if (std::any_of(defaults.begin(), defaults.end(),
-                            [](auto* value) { return value != nullptr; }))
+            if (std::any_of(defaults.begin(), defaults.end(), [](auto* value) {
+                    return value != nullptr;
+                })) {
                 L.fnDefaults[fd.name] = std::move(defaults);
-            for (std::size_t i = 0; i < fd.clauses[0].params.size(); ++i)
-                if (auto trait = L.hir->parameterTraitOf(fd.clauses[0].params[i]); !trait.empty())
+            }
+            for (std::size_t i = 0; i < fd.clauses[0].params.size(); ++i) {
+                if (auto trait = L.hir->parameterTraitOf(fd.clauses[0].params[i]); !trait.empty()) {
                     L.fnTraitParams[fd.name].push_back({i, std::move(trait)});
+                }
+            }
         }
     };
     auto preType = [&](const ast::TypeDef& td, const std::string& scope) {
-        if (!td.variants) return;
-        if (td.isDistinct) L.distinctTypes.insert(L.identityOf(scope, td.name));
+        if (!td.variants) {
+            return;
+        }
+        if (td.isDistinct) {
+            L.distinctTypes.insert(L.identityOf(scope, td.name));
+        }
         // A distinct type is erased to its backing type: it has no
         // constructors of its own to lay out.
-        if (td.isDistinct || kex::isTransparentTypeAlias(td)) return;
+        if (td.isDistinct || kex::isTransparentTypeAlias(td)) {
+            return;
+        }
         auto& layout = L.adtLayouts[td.name];
         layout.clear();
         for (const auto& v : *td.variants) {
             auto t = ast::dispatchNameOf(v);
-            if (t.empty()) continue;
+            if (t.empty()) {
+                continue;
+            }
             std::vector<semantic::StructuredType> argTypes;
-            if (auto* g = std::get_if<ast::GenericType>(&v->kind))
-                for (const auto& arg : g->args)
-                    argTypes.push_back(arg ? L.hir->declaredTypeOf(*arg)
-                                           : semantic::StructuredType{"Any", {}});
+            if (auto* g = std::get_if<ast::GenericType>(&v->kind)) {
+                for (const auto& arg : g->args) {
+                    argTypes.push_back(
+                        arg ? L.hir->declaredTypeOf(*arg) : semantic::StructuredType{"Any", {}});
+                }
+            }
             layout.emplace_back(t, std::move(argTypes));
             L.variantTagSet.insert(t);
-            if (auto* g = std::get_if<ast::GenericType>(&v->kind))
+            if (auto* g = std::get_if<ast::GenericType>(&v->kind)) {
                 L.variantArity[t] = static_cast<int>(g->args.size());
-            else
+            } else {
                 L.variantArity[t] = 0;
+            }
             L.variantOwner[t] = td.name;
         }
     };
-    auto moduleConstructorDef =
-        [&](const kex::TypeConstructorInfo& constructor,
-            const std::string& modulePath) {
-            FunDef def;
-            def.name =
-                mangleModuleMember(modulePath, constructor.name);
-            def.arity = static_cast<int>(constructor.arity);
-            FunClause clause;
-            std::vector<ExprPtr> args;
-            for (size_t i = 0; i < constructor.arity; ++i) {
-                const auto name = "_constructor_arg_" +
-                    std::to_string(i);
-                auto param = std::make_unique<Pattern>();
-                param->kind = PatKind::Var;
-                param->name = name;
-                clause.params.push_back(std::move(param));
-                args.push_back(var(name));
-            }
-            auto body = std::make_unique<Expr>();
-            body->node =
-                Construct{constructor.name, std::move(args)};
-            clause.body = std::move(body);
-            def.clauses.push_back(std::move(clause));
-            return def;
-        };
+    auto moduleConstructorDef = [&](const kex::TypeConstructorInfo& constructor,
+                                    const std::string& modulePath) {
+        FunDef def;
+        def.name = mangleModuleMember(modulePath, constructor.name);
+        def.arity = static_cast<int>(constructor.arity);
+        FunClause clause;
+        std::vector<ExprPtr> args;
+        for (size_t i = 0; i < constructor.arity; ++i) {
+            const auto name = "_constructor_arg_" + std::to_string(i);
+            auto param = std::make_unique<Pattern>();
+            param->kind = PatKind::Var;
+            param->name = name;
+            clause.params.push_back(std::move(param));
+            args.push_back(var(name));
+        }
+        auto body = std::make_unique<Expr>();
+        body->node = Construct{constructor.name, std::move(args)};
+        clause.body = std::move(body);
+        def.clauses.push_back(std::move(clause));
+        return def;
+    };
     // The module the make block being collected is written in.
     std::string makeModulePath;
     auto preMake = [&](const ast::MakeDef& md) {
         for (const auto& typeName : Lowering::makeTargetNameList(*L.hir, md)) {
-        std::unordered_map<std::string,
-            std::map<std::string, std::vector<std::string>>>
-            signaturesByNameAndArity;
-        auto collectMethod = [&](const ast::FunctionDef* fd) {
-            if (!fd) return;
-            if (md.isServing && fd->isSlot) {
-                auto& slots = L.servingSlotsByType[typeName];
-                if (std::find(slots.begin(), slots.end(), fd->name) == slots.end())
-                    slots.push_back(fd->name);
-                for (const auto& clause : fd->clauses)
-                    if (clause.returnAnnotation && *clause.returnAnnotation)
-                        if (const auto* named = std::get_if<ast::TypeName>(
-                                &(*clause.returnAnnotation)->kind);
-                            named && named->parts == std::vector<std::string>{"Void"})
-                            L.servingCastSlots.insert(fd->name);
-            }
-            if (md.isServing && !fd->isSlot && fd->name == "upgrade")
-                L.servingUpgradeTypes.insert(typeName);
-            definedFns.insert(fd->name);
-            // A make-block method is a definition like any other, so if it is
-            // foul it takes the capability context and every call to it has
-            // to pass one — including the dispatch a replaced capability
-            // routes through (kexhq/kex#181).
-            if (fd->isFoul) L.foulFns.insert(fd->name);
-            definedFnArities.insert(
-                fd->name + "/" + std::to_string(beamArity(fd)));
-            L.definedFnArities.insert(
-                fd->name + "/" + std::to_string(beamArity(fd)));
-            if (!fd->isFoul)
-                L.pureFnArities.insert(
-                    fd->name + "/" + std::to_string(beamArity(fd)));
-            if (!fd->clauses.empty()) {
-                // A make-block method reaches its receiver one of two ways:
-                // implicitly through `this` (params exclude it), or as its
-                // first pattern parameter (`let rangeStart(x.._)`,
-                // `let startsWith_(@['_' | rest])`). `beamArity` tells the two
-                // apart from the first parameter. Recording both spellings
-                // also recorded an arity nothing defines: a program's own
-                // `make Integer` `to(String, fmt)` claimed `3.to(Float)` for
-                // a local `to/2` that does not exist.
-                L.localMethodArities.insert(
-                    fd->name + "/" + std::to_string(beamArity(fd)));
-                auto dispatchTypes = methodSignatureTypes(*L.hir, *fd, typeName);
-                const auto signature =
-                    mangleReceiverSignature(fd->name, dispatchTypes);
-                signaturesByNameAndArity[
-                    fd->name + "/" + std::to_string(beamArity(fd))]
+            std::unordered_map<std::string, std::map<std::string, std::vector<std::string>>>
+                signaturesByNameAndArity;
+            auto collectMethod = [&](const ast::FunctionDef* fd) {
+                if (!fd) {
+                    return;
+                }
+                if (md.isServing && fd->isSlot) {
+                    auto& slots = L.servingSlotsByType[typeName];
+                    if (std::find(slots.begin(), slots.end(), fd->name) == slots.end()) {
+                        slots.push_back(fd->name);
+                    }
+                    for (const auto& clause : fd->clauses) {
+                        if (clause.returnAnnotation && *clause.returnAnnotation) {
+                            if (const auto* named =
+                                    std::get_if<ast::TypeName>(&(*clause.returnAnnotation)->kind);
+                                named && named->parts == std::vector<std::string>{"Void"}) {
+                                L.servingCastSlots.insert(fd->name);
+                            }
+                        }
+                    }
+                }
+                if (md.isServing && !fd->isSlot && fd->name == "upgrade") {
+                    L.servingUpgradeTypes.insert(typeName);
+                }
+                definedFns.insert(fd->name);
+                // A make-block method is a definition like any other, so if it is
+                // foul it takes the capability context and every call to it has
+                // to pass one — including the dispatch a replaced capability
+                // routes through (kexhq/kex#181).
+                if (fd->isFoul) {
+                    L.foulFns.insert(fd->name);
+                }
+                definedFnArities.insert(fd->name + "/" + std::to_string(beamArity(fd)));
+                L.definedFnArities.insert(fd->name + "/" + std::to_string(beamArity(fd)));
+                if (!fd->isFoul) {
+                    L.pureFnArities.insert(fd->name + "/" + std::to_string(beamArity(fd)));
+                }
+                if (!fd->clauses.empty()) {
+                    // A make-block method reaches its receiver one of two ways:
+                    // implicitly through `this` (params exclude it), or as its
+                    // first pattern parameter (`let rangeStart(x.._)`,
+                    // `let startsWith_(@['_' | rest])`). `beamArity` tells the two
+                    // apart from the first parameter. Recording both spellings
+                    // also recorded an arity nothing defines: a program's own
+                    // `make Integer` `to(String, fmt)` claimed `3.to(Float)` for
+                    // a local `to/2` that does not exist.
+                    L.localMethodArities.insert(fd->name + "/" + std::to_string(beamArity(fd)));
+                    auto dispatchTypes = methodSignatureTypes(*L.hir, *fd, typeName);
+                    const auto signature = mangleReceiverSignature(fd->name, dispatchTypes);
+                    signaturesByNameAndArity[fd->name + "/" + std::to_string(beamArity(fd))]
                         .emplace(signature, std::move(dispatchTypes));
+                }
+                const std::string& mn = fd->name;
+                if (!mn.empty() && !std::isalnum(static_cast<unsigned char>(mn[0])) &&
+                    mn[0] != '_') {
+                    L.overloadedOps.insert(mn);
+                }
+                if (!typeName.empty()) {
+                    auto& owners = L.methodOwners[fd->name];
+                    if (std::find(owners.begin(), owners.end(), typeName) == owners.end()) {
+                        owners.push_back(typeName);
+                    }
+                    if (!L.hir->makeTargetTraitOf(*fd).empty()) {
+                        L.traitOwners.insert(typeName);
+                    }
+                }
+                if (!fd->clauses.empty()) {
+                    L.makeMethods[fd->name].push_back({typeName, makeModulePath, fd});
+                }
+            };
+            for (const auto& bi : md.body) {
+                if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
+                    collectMethod(mfd->get());
+                } else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi)) {
+                    if (*vb) {
+                        for (const auto& vi : (*vb)->items) {
+                            if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi)) {
+                                collectMethod(vfd->get());
+                            }
+                        }
+                    }
+                }
             }
-            const std::string& mn = fd->name;
-            if (!mn.empty() && !std::isalnum(static_cast<unsigned char>(mn[0])) && mn[0] != '_')
-                L.overloadedOps.insert(mn);
-            if (!typeName.empty()) {
-                auto& owners = L.methodOwners[fd->name];
-                if (std::find(owners.begin(), owners.end(), typeName) == owners.end())
-                    owners.push_back(typeName);
-                if (!L.hir->makeTargetTraitOf(*fd).empty()) L.traitOwners.insert(typeName);
+            // Inherited trait defaults count as this type's methods too.
+            for (const auto* fd : inheritedDefaults(md)) {
+                collectMethod(fd);
             }
-            if (!fd->clauses.empty()) {
-                L.makeMethods[fd->name].push_back({typeName, makeModulePath, fd});
+            for (const auto& [nameAndArity, signatures] : signaturesByNameAndArity) {
+                if (signatures.size() < 2) {
+                    continue;
+                }
+                if (!separableOverloadSignatures(signatures)) {
+                    continue;
+                }
+                auto slash = nameAndArity.rfind('/');
+                if (slash == std::string::npos) {
+                    continue;
+                }
+                const auto method = nameAndArity.substr(0, slash);
+                const auto arity = static_cast<size_t>(std::stoul(nameAndArity.substr(slash + 1)));
+                L.argumentOverloadedMethods.insert(localOverloadKey(method, typeName, arity));
+                auto& recorded =
+                    L.argumentOverloadSignatures[localOverloadKey(method, typeName, arity)];
+                for (const auto& [signature, dispatchTypes] : signatures) {
+                    definedFns.insert(signature);
+                    recorded.push_back({signature, dispatchTypes});
+                }
             }
-        };
-        for (const auto& bi : md.body) {
-            if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi))
-                collectMethod(mfd->get());
-            else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi))
-                if (*vb) for (const auto& vi : (*vb)->items)
-                    if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
-                        collectMethod(vfd->get());
-        }
-        // Inherited trait defaults count as this type's methods too.
-        for (const auto* fd : inheritedDefaults(md)) collectMethod(fd);
-        for (const auto& [nameAndArity, signatures] : signaturesByNameAndArity) {
-            if (signatures.size() < 2) continue;
-            if (!separableOverloadSignatures(signatures)) continue;
-            auto slash = nameAndArity.rfind('/');
-            if (slash == std::string::npos) continue;
-            const auto method = nameAndArity.substr(0, slash);
-            const auto arity = static_cast<size_t>(
-                std::stoul(nameAndArity.substr(slash + 1)));
-            L.argumentOverloadedMethods.insert(
-                localOverloadKey(method, typeName, arity));
-            auto& recorded = L.argumentOverloadSignatures[
-                localOverloadKey(method, typeName, arity)];
-            for (const auto& [signature, dispatchTypes] : signatures) {
-                definedFns.insert(signature);
-                recorded.push_back({signature, dispatchTypes});
-            }
-        }
         }
     };
     std::function<void(const ast::ModuleDef&)> preModule;
@@ -365,14 +437,14 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             L.capabilityModules.insert(path);
             auto& members = L.capabilityMembers[path];
             for (const auto& item : module.body) {
-                if (const auto* fd =
-                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
-                    fd && *fd && (*fd)->isFoul)
+                if (const auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
+                    fd && *fd && (*fd)->isFoul) {
                     members.insert((*fd)->name);
-                else if (const auto* required =
-                             std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item);
-                         required && *required && (*required)->isFoul)
+                } else if (const auto* required =
+                               std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item);
+                           required && *required && (*required)->isFoul) {
                     members.insert((*required)->name);
+                }
             }
         }
         std::set<std::string> declaredTypes;
@@ -381,7 +453,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         std::set<std::string> declaredRecords;
         kex::collectDeclaredRecordNames(module.body, declaredRecords);
         auto preModuleFn = [&](const ast::FunctionDef* fd, bool isPublic = true) {
-            if (!fd) return;
+            if (!fd) {
+                return;
+            }
             const std::string emitted = mangleModuleMember(path, fd->name);
             definedFns.insert(emitted);
             // A module-scoped free function whose FIRST parameter is a type
@@ -397,24 +471,28 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (!fd->clauses.empty() && !fd->clauses[0].params.empty()) {
                 const auto& receiver = fd->clauses[0].params.front();
                 if (receiver.type && *receiver.type) {
-                    const auto owner = ownTypes.count(
-                        L.hir->typeTestOf(path, L.hir->annotationSpelling(**receiver.type))
-                            .writtenIdentity) > 0;
+                    const auto owner =
+                        ownTypes.count(
+                            L.hir->typeTestOf(path, L.hir->annotationSpelling(**receiver.type))
+                                .writtenIdentity) > 0;
                     if (owner) {
                         moduleReceiverMethods.insert(fd->name);
                         L.moduleReceiverNames.insert(fd->name);
                         // Reached under its BARE name now, so its foulness has
                         // to be recorded under that name too or the call goes
                         // out one argument short of the definition.
-                        if (fd->isFoul) L.foulFns.insert(fd->name);
+                        if (fd->isFoul) {
+                            L.foulFns.insert(fd->name);
+                        }
                         L.localMethodArities.insert(
-                            fd->name + "/" +
-                            std::to_string(fd->clauses[0].params.size()));
+                            fd->name + "/" + std::to_string(fd->clauses[0].params.size()));
                     }
                 }
             }
             // A capability's own members stay at their declared arity.
-            if (fd->isFoul) L.foulFns.insert(emitted);
+            if (fd->isFoul) {
+                L.foulFns.insert(emitted);
+            }
             // Also under the MANGLED name: a `using`-imported call is emitted
             // under the module function's symbol, the qualified designator
             // ("Rodolfo.get"), and callNeedsContext checks pureFnArities
@@ -431,12 +509,15 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // anyway, a private `failed/1` told the program's own foul
                 // `failed` to drop its context: `undefined function failed/1`
                 // (kexhq/kex#494).
-                if (isPublic) L.pureFnArities.insert(fd->name + "/" + arity);
+                if (isPublic) {
+                    L.pureFnArities.insert(fd->name + "/" + arity);
+                }
                 L.pureFnArities.insert(emitted + "/" + arity);
             }
             L.moduleFunctions[path + "." + fd->name] = emitted;
-            for (const auto& clause : fd->clauses)
+            for (const auto& clause : fd->clauses) {
                 L.fnNamedClauses[path + "." + fd->name].push_back(&clause);
+            }
             if (!fd->clauses.empty() && fd->clauses[0].params.empty()) {
                 L.moduleZeroArgFns.insert(path + "." + fd->name);
                 L.emittedModuleZeroArg.insert(emitted);
@@ -444,27 +525,27 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (!fd->clauses.empty()) {
                 L.fnParamNames[path + "." + fd->name] = ast::parameterNames(*fd);
                 auto defaults = ast::parameterDefaults(*fd);
-                if (std::any_of(defaults.begin(), defaults.end(),
-                                [](auto* value) { return value != nullptr; }))
+                if (std::any_of(defaults.begin(), defaults.end(), [](auto* value) {
+                        return value != nullptr;
+                    })) {
                     L.fnDefaults[path + "." + fd->name] = std::move(defaults);
-
+                }
             }
         };
         auto preModuleType = [&](const ast::TypeDef* td) {
-            if (!td) return;
+            if (!td) {
+                return;
+            }
             preType(*td, path);
-            if (auto constructors = kex::typeConstructors(*td))
+            if (auto constructors = kex::typeConstructors(*td)) {
                 for (const auto& constructor : *constructors) {
-                    const auto emitted =
-                        mangleModuleMember(path, constructor.name);
+                    const auto emitted = mangleModuleMember(path, constructor.name);
                     definedFns.insert(emitted);
-                    L.moduleFunctions[path + "." +
-                                      constructor.name] = emitted;
-                    L.fnParamNames[path + "." +
-                                   constructor.name] =
-                        std::vector<std::string>(
-                            constructor.arity);
+                    L.moduleFunctions[path + "." + constructor.name] = emitted;
+                    L.fnParamNames[path + "." + constructor.name] =
+                        std::vector<std::string>(constructor.arity);
                 }
+            }
         };
         // A make block in this module: its methods, and the module each
         // target's methods live in, by the identity the checker gives it.
@@ -472,37 +553,43 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             makeModulePath = path;
             preMake(md);
             makeModulePath.clear();
-            for (const auto& typeName : Lowering::makeTargetNameList(*L.hir, md))
-                if (!typeName.empty()) L.localTypeModules[typeName] = path;
+            for (const auto& typeName : Lowering::makeTargetNameList(*L.hir, md)) {
+                if (!typeName.empty()) {
+                    L.localTypeModules[typeName] = path;
+                }
+            }
         };
         for (const auto& item : module.body) {
-            if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
+            if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
                 preModuleFn(fd->get());
-            else if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
-                if (*rd) preRecord(**rd, path);
+            } else if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
+                if (*rd) {
+                    preRecord(**rd, path);
+                }
             } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
-                if (*md) preModuleMake(**md);
+                if (*md) {
+                    preModuleMake(**md);
+                }
             } else if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
                 preModuleType(td->get());
-            }
-            else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
+            } else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
                 // Visibility changes who may name a declaration, not what it
                 // is: a record in `private do` still needs its layout, or its
                 // values stay bare tuples (#495).
-                if (*vb) for (const auto& vi : (*vb)->items) {
-                    if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
-                        preModuleFn(vfd->get(), (*vb)->isPublic);
-                    else if (auto* vtd =
-                                 std::get_if<std::unique_ptr<ast::TypeDef>>(
-                                     &vi))
-                        preModuleType(vtd->get());
-                    else if (auto* vrd =
-                                 std::get_if<std::unique_ptr<ast::RecordDef>>(&vi)) {
-                        if (*vrd) preRecord(**vrd, path);
-                    } else if (auto* vmd =
-                                   std::get_if<std::unique_ptr<ast::MakeDef>>(&vi);
-                               vmd && *vmd) {
-                        preModuleMake(**vmd);
+                if (*vb) {
+                    for (const auto& vi : (*vb)->items) {
+                        if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi)) {
+                            preModuleFn(vfd->get(), (*vb)->isPublic);
+                        } else if (auto* vtd = std::get_if<std::unique_ptr<ast::TypeDef>>(&vi)) {
+                            preModuleType(vtd->get());
+                        } else if (auto* vrd = std::get_if<std::unique_ptr<ast::RecordDef>>(&vi)) {
+                            if (*vrd) {
+                                preRecord(**vrd, path);
+                            }
+                        } else if (auto* vmd = std::get_if<std::unique_ptr<ast::MakeDef>>(&vi);
+                                   vmd && *vmd) {
+                            preModuleMake(**vmd);
+                        }
                     }
                 }
             } else if (auto* ed = std::get_if<std::unique_ptr<ast::ExportDecl>>(&item)) {
@@ -513,19 +600,29 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     // Records need no rewrite here: which record
                     // `App.Geometry.Circle` means is the checker's answer.
                     for (const auto& [key, val] : L.moduleFunctions) {
-                        if (key.rfind(srcMod + ".", 0) != 0) continue;
+                        if (key.rfind(srcMod + ".", 0) != 0) {
+                            continue;
+                        }
                         auto bare = key.substr(srcMod.size() + 1);
-                        if (bare.find('.') != std::string::npos) continue;
-                        if (!(*ed)->onlyNames.empty()
-                            && std::find((*ed)->onlyNames.begin(), (*ed)->onlyNames.end(), bare)
-                                == (*ed)->onlyNames.end()) continue;
-                        if (std::find((*ed)->exceptNames.begin(), (*ed)->exceptNames.end(), bare)
-                            != (*ed)->exceptNames.end()) continue;
+                        if (bare.find('.') != std::string::npos) {
+                            continue;
+                        }
+                        if (!(*ed)->onlyNames.empty() &&
+                            std::find((*ed)->onlyNames.begin(), (*ed)->onlyNames.end(), bare) ==
+                                (*ed)->onlyNames.end()) {
+                            continue;
+                        }
+                        if (std::find((*ed)->exceptNames.begin(), (*ed)->exceptNames.end(), bare) !=
+                            (*ed)->exceptNames.end()) {
+                            continue;
+                        }
                         L.moduleFunctions[nsPath + "." + bare] = val;
                     }
                 }
             } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
-                if (*child) preModule(**child);
+                if (*child) {
+                    preModule(**child);
+                }
             }
         }
         // A module's free function and its own make receiver function share
@@ -534,13 +631,17 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         for (const auto& [name, owners] : L.methodOwners) {
             const auto key = path + "." + name;
             auto emitted = L.moduleFunctions.find(key);
-            if (emitted == L.moduleFunctions.end()) continue;
+            if (emitted == L.moduleFunctions.end()) {
+                continue;
+            }
             const auto ownerPrefix = path + ".";
-            const bool sameModuleOwner = std::any_of(
-                owners.begin(), owners.end(), [&](const std::string& owner) {
+            const bool sameModuleOwner =
+                std::any_of(owners.begin(), owners.end(), [&](const std::string& owner) {
                     return owner.rfind(ownerPrefix, 0) == 0;
                 });
-            if (!sameModuleOwner) continue;
+            if (!sameModuleOwner) {
+                continue;
+            }
             const auto oldSymbol = emitted->second;
             const auto newSymbol = mangleModuleMember(path, name + "$free");
             emitted->second = newSymbol;
@@ -550,48 +651,70 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             // a foul one left `foulFns` behind and every call went out without
             // its capability context — `fetch$free/1` against a defined
             // `fetch$free/2` (kexhq/kex#492).
-            if (L.foulFns.count(oldSymbol)) L.foulFns.insert(newSymbol);
-            if (L.emittedModuleZeroArg.count(oldSymbol))
+            if (L.foulFns.count(oldSymbol)) {
+                L.foulFns.insert(newSymbol);
+            }
+            if (L.emittedModuleZeroArg.count(oldSymbol)) {
                 L.emittedModuleZeroArg.insert(newSymbol);
+            }
             const auto renameArities = [&](auto& arities) {
                 std::vector<std::string> renamed;
-                for (const auto& entry : arities)
-                    if (entry.rfind(oldSymbol + "/", 0) == 0)
+                for (const auto& entry : arities) {
+                    if (entry.rfind(oldSymbol + "/", 0) == 0) {
                         renamed.push_back(newSymbol + entry.substr(oldSymbol.size()));
-                for (auto& entry : renamed) arities.insert(std::move(entry));
+                    }
+                }
+                for (auto& entry : renamed) {
+                    arities.insert(std::move(entry));
+                }
             };
             renameArities(L.pureFnArities);
             renameArities(L.definedFnArities);
             renameArities(definedFnArities);
-            for (auto& [_, value] : L.moduleFunctions)
-                if (value == oldSymbol) value = newSymbol;
+            for (auto& [_, value] : L.moduleFunctions) {
+                if (value == oldSymbol) {
+                    value = newSymbol;
+                }
+            }
         }
     };
     for (const auto& item : prog.items) {
         if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
-            if (*rd) preRecord(**rd);
+            if (*rd) {
+                preRecord(**rd);
+            }
         } else if (auto* mb = std::get_if<std::unique_ptr<ast::MainBlock>>(&item)) {
-            if (*mb && (*mb)->synthetic)
-                for (const auto& e : (*mb)->body)
-                    if (auto* le = std::get_if<ast::LetExpr>(&e->kind))
+            if (*mb && (*mb)->synthetic) {
+                for (const auto& e : (*mb)->body) {
+                    if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
                         if (le->pattern) {
                             // Every name, so a destructuring top-level `let`
                             // registers all of them and not just a bare one.
                             std::vector<std::string> names;
                             patternBoundNames(le->pattern, names);
-                            for (auto& name : names)
+                            for (auto& name : names) {
                                 L.topLevelConstants.insert(std::move(name));
+                            }
                         }
+                    }
+                }
+            }
         } else if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
-            if (*fd) preFn(**fd);
+            if (*fd) {
+                preFn(**fd);
+            }
         } else if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
-            if (*td) preType(**td, "");
+            if (*td) {
+                preType(**td, "");
+            }
         } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
             if (*md) {
                 preMake(**md);
             }
         } else if (auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
-            if (*module) preModule(**module);
+            if (*module) {
+                preModule(**module);
+            }
         }
     }
     // A method name the PRELUDE also answers for is a collision too, even
@@ -609,25 +732,27 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     auto preludeAlsoOwns = [&](const std::string& name) {
         return preludeAnswers(L, mod.name, name);
     };
-    for (const auto& [name, owners] : L.methodOwners)
+    for (const auto& [name, owners] : L.methodOwners) {
         if (owners.size() > 1 || L.fieldAccessors.count(name) ||
-            (owners.size() == 1 && preludeAlsoOwns(name) &&
-             !L.knownTypes.count(owners.front())))
-            L.collidingMethods.insert(name);  // order-free: a set membership
-    if (mod.name != names::kPreludeModule)
-        for (const auto& [name, owners] : L.methodOwners)
+            (owners.size() == 1 && preludeAlsoOwns(name) && !L.knownTypes.count(owners.front()))) {
+            L.collidingMethods.insert(name); // order-free: a set membership
+        }
+    }
+    if (mod.name != names::kPreludeModule) {
+        for (const auto& [name, owners] : L.methodOwners) {
             if (L.fnParamNames.count(name)) {
                 L.freeFunctionSymbols[name] = name + "$free";
                 L.collidingMethods.insert(name);
             }
+        }
+    }
     // A `.method` may use the local-apply UFCS fallback iff it names a real
     // local function or a record field accessor.
     L.knownFns = definedFns;
     L.localMethods = definedFns;
     // Assigned, not merged, so the module-owned receiver methods collected in
     // preModuleFn are folded in here rather than being overwritten.
-    L.localMethods.insert(moduleReceiverMethods.begin(),
-                          moduleReceiverMethods.end());
+    L.localMethods.insert(moduleReceiverMethods.begin(), moduleReceiverMethods.end());
     // Record field accessors participate in localMethods only when an
     // accessor is actually emitted for them — a field whose name collides
     // with an imported package-declared receiver function is skipped (see
@@ -636,15 +761,18 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         (void)entries;
         bool blocked = false;
         L.fieldAccessorDelegate(field, blocked);
-        if (blocked) continue;
+        if (blocked) {
+            continue;
+        }
         L.localMethods.insert(field);
         L.localMethodArities.insert(field + "/1");
         // Remember that this `field/1` is the SYNTHESIZED accessor rather than
         // a function someone wrote — the condition is makeAccessors' own. No
         // capability context is ever appended to it (kexhq/kex#191), and that
         // is only sound while nothing else owns the name at arity 1.
-        if (!(definedFns.count(field) && definedFnArities.count(field + "/1")))
+        if (!(definedFns.count(field) && definedFnArities.count(field + "/1"))) {
             L.accessorFields.insert(field);
+        }
     }
 
     // The parser already folded each function's clauses into one FunctionDef
@@ -680,274 +808,358 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             lowerFreeFunction(**fdp);
             continue;
         }
-        if (std::holds_alternative<std::unique_ptr<ast::TypeAnnotation>>(item))
+        if (std::holds_alternative<std::unique_ptr<ast::TypeAnnotation>>(item)) {
             continue;
-        std::visit([&](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                (void)node; // handled above
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
-                // Layout already collected; accessors emitted after the loop.
-                (void)node;
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
-                if (!node) return;
-                // A union target applies the block to every member, so the
-                // whole emission repeats once per name.
-                for (const auto& typeName :
-                     Lowering::makeTargetNameList(*L.hir, *node)) {
-                auto pushFn = [&](const ast::FunctionDef* fd) {
-                    if (fd) mod.functions.push_back(L.lowerMakeGroup({fd}, typeName));
-                };
-                for (const auto& bi : node->body) {
-                    if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
-                        pushFn(mfd->get());
-                    } else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi)) {
-                        // `private do ... end` / `public do ... end` — its
-                        // methods belong to the same type (visibility is
-                        // erased at the BEAM level).
-                        if (*vb) for (const auto& vi : (*vb)->items)
-                            if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
-                                pushFn(vfd->get());
+        }
+        std::visit(
+            [&](const auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                    (void)node; // handled above
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                    // Layout already collected; accessors emitted after the loop.
+                    (void)node;
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                    if (!node) {
+                        return;
                     }
-                    // TypeAnnotation items in a make block are erased.
-                }
-                // Splice in trait default methods this type doesn't override.
-                for (const auto* fd : inheritedDefaults(*node)) pushFn(fd);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
-                if (!node) return;
-                if (node->synthetic) {
-                    // Top-level `let name = expr` → a 0-arity function.
-                    for (const auto& e : node->body) {
-                        if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
-                            if (!le->pattern) continue;
-                            if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
-                                L.subst.clear();
-                                FunDef def; def.name = vp->name; def.arity = 0;
-                                FunClause fc; fc.body = L.lower(le->value);
-                                def.clauses.push_back(std::move(fc));
-                                mod.functions.push_back(std::move(def));
-                                continue;
+                    // A union target applies the block to every member, so the
+                    // whole emission repeats once per name.
+                    for (const auto& typeName : Lowering::makeTargetNameList(*L.hir, *node)) {
+                        auto pushFn = [&](const ast::FunctionDef* fd) {
+                            if (fd) {
+                                mod.functions.push_back(L.lowerMakeGroup({fd}, typeName));
                             }
-                            // `let (a, b) = …` at top level: one 0-arity
-                            // function per bound name. Without these the names
-                            // compiled to nothing and every later reference
-                            // died with "Undefined variable".
-                            std::vector<std::string> names;
-                            patternBoundNames(le->pattern, names);
-                            for (const auto& name : names) {
-                                L.subst.clear();
-                                FunDef def; def.name = name; def.arity = 0;
-                                FunClause fc;
-                                fc.body = L.topLevelPatternBinding(*le, name);
-                                def.clauses.push_back(std::move(fc));
-                                mod.functions.push_back(std::move(def));
+                        };
+                        for (const auto& bi : node->body) {
+                            if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
+                                pushFn(mfd->get());
+                            } else if (
+                                auto* vb =
+                                    std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi)) {
+                                // `private do ... end` / `public do ... end` — its
+                                // methods belong to the same type (visibility is
+                                // erased at the BEAM level).
+                                if (*vb) {
+                                    for (const auto& vi : (*vb)->items) {
+                                        if (auto* vfd =
+                                                std::get_if<std::unique_ptr<ast::FunctionDef>>(
+                                                    &vi)) {
+                                            pushFn(vfd->get());
+                                        }
+                                    }
+                                }
                             }
+                            // TypeAnnotation items in a make block are erased.
+                        }
+                        // Splice in trait default methods this type doesn't override.
+                        for (const auto* fd : inheritedDefaults(*node)) {
+                            pushFn(fd);
                         }
                     }
-                } else if (node->isExplicitMain) {
-                    L.subst.clear();
-                    for (const auto& p : node->params)
-                        if (p.name) L.subst[*p.name] = *p.name;
-                    FunDef def; def.name = "main";
-                    ExprPtr body = L.lowerBody(node->body);
-                    FunClause fc;
-                    if (node->params.empty()) {
-                        def.arity = 0; mod.mainArity = 0;
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
+                    if (!node) {
+                        return;
+                    }
+                    if (node->synthetic) {
+                        // Top-level `let name = expr` → a 0-arity function.
+                        for (const auto& e : node->body) {
+                            if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
+                                if (!le->pattern) {
+                                    continue;
+                                }
+                                if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
+                                    L.subst.clear();
+                                    FunDef def;
+                                    def.name = vp->name;
+                                    def.arity = 0;
+                                    FunClause fc;
+                                    fc.body = L.lower(le->value);
+                                    def.clauses.push_back(std::move(fc));
+                                    mod.functions.push_back(std::move(def));
+                                    continue;
+                                }
+                                // `let (a, b) = …` at top level: one 0-arity
+                                // function per bound name. Without these the names
+                                // compiled to nothing and every later reference
+                                // died with "Undefined variable".
+                                std::vector<std::string> names;
+                                patternBoundNames(le->pattern, names);
+                                for (const auto& name : names) {
+                                    L.subst.clear();
+                                    FunDef def;
+                                    def.name = name;
+                                    def.arity = 0;
+                                    FunClause fc;
+                                    fc.body = L.topLevelPatternBinding(*le, name);
+                                    def.clauses.push_back(std::move(fc));
+                                    mod.functions.push_back(std::move(def));
+                                }
+                            }
+                        }
+                    } else if (node->isExplicitMain) {
+                        L.subst.clear();
+                        for (const auto& p : node->params) {
+                            if (p.name) {
+                                L.subst[*p.name] = *p.name;
+                            }
+                        }
+                        FunDef def;
+                        def.name = "main";
+                        ExprPtr body = L.lowerBody(node->body);
+                        FunClause fc;
+                        if (node->params.empty()) {
+                            def.arity = 0;
+                            mod.mainArity = 0;
+                        } else {
+                            // main(args) / main(args, env): param 0 is the args
+                            // list (from init:get_plain_arguments); a second param
+                            // is the ENV map, bound in the body.
+                            def.arity = 1;
+                            mod.mainArity = 1;
+                            if (node->params.size() >= 2 && node->params[1].name) {
+                                body = L.makeLet(
+                                    *node->params[1].name, L.callE("kex_io", "env_map", 0, {}),
+                                    std::move(body));
+                            }
+                            auto p = std::make_unique<Pattern>();
+                            p->kind = PatKind::Var;
+                            p->name = node->params[0].name ? *node->params[0].name : "_args";
+                            fc.params.push_back(std::move(p));
+                        }
+                        if (node->rescue) {
+                            body = L.wrapWithTryCatch(std::move(body), *node->rescue);
+                        }
+                        explicitMain = ExplicitMain{
+                            std::move(def), std::move(fc), std::move(body), bareExprs.size()};
+                        mod.hasMain = true;
                     } else {
-                        // main(args) / main(args, env): param 0 is the args
-                        // list (from init:get_plain_arguments); a second param
-                        // is the ENV map, bound in the body.
-                        def.arity = 1; mod.mainArity = 1;
-                        if (node->params.size() >= 2 && node->params[1].name)
-                            body = L.makeLet(*node->params[1].name,
-                                             L.callE("kex_io", "env_map", 0, {}), std::move(body));
-                        auto p = std::make_unique<Pattern>();
-                        p->kind = PatKind::Var;
-                        p->name = node->params[0].name ? *node->params[0].name : "_args";
-                        fc.params.push_back(std::move(p));
+                        // Bare top-level expression(s) → accumulate for a synthetic main.
+                        for (const auto& e : node->body) {
+                            bareExprs.push_back(&e);
+                        }
                     }
-                    if (node->rescue) body = L.wrapWithTryCatch(std::move(body), *node->rescue);
-                    explicitMain = ExplicitMain{std::move(def), std::move(fc),
-                                                std::move(body), bareExprs.size()};
-                    mod.hasMain = true;
-                } else {
-                    // Bare top-level expression(s) → accumulate for a synthetic main.
-                    for (const auto& e : node->body) bareExprs.push_back(&e);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
-                // Erased: signatures produce nothing; default methods are
-                // spliced into each implementing type's method group above.
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>> ||
-                                 std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
-                // Types/annotations are erased, but collect variant tags first
-                // so dispatchers can wildcard-match them (see the nested module
-                // handler below for the same logic).
-                if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
-                    if (node) {
-                        std::vector<std::string> tags;
-                        if (auto constructors = kex::typeConstructors(*node)) {
-                            for (const auto& constructor : *constructors) {
-                                tags.push_back(constructor.name);
-                                if (constructor.arity == 0)
-                                    L.nullaryVariantTags.insert(
-                                        constructor.name);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
+                    // Erased: signatures produce nothing; default methods are
+                    // spliced into each implementing type's method group above.
+                } else if constexpr (
+                    std::is_same_v<T, std::unique_ptr<ast::TypeDef>> ||
+                    std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
+                    // Types/annotations are erased, but collect variant tags first
+                    // so dispatchers can wildcard-match them (see the nested module
+                    // handler below for the same logic).
+                    if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
+                        if (node) {
+                            std::vector<std::string> tags;
+                            if (auto constructors = kex::typeConstructors(*node)) {
+                                for (const auto& constructor : *constructors) {
+                                    tags.push_back(constructor.name);
+                                    if (constructor.arity == 0) {
+                                        L.nullaryVariantTags.insert(constructor.name);
+                                    }
+                                }
+                            }
+                            if (!tags.empty()) {
+                                L.typeVariantTags[L.identityOf("", node->name)] = std::move(tags);
                             }
                         }
-                        if (!tags.empty())
-                            L.typeVariantTags[L.identityOf("", node->name)] = std::move(tags);
                     }
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (node) {
-                    auto push = [&](const ast::FunctionDef* fd) {
-                        if (!fd) return;
-                        auto it = L.moduleFunctions.find(L.currentModulePath + "." + fd->name);
-                        auto def = L.lowerFunctionGroup({fd}, "",
-                            it == L.moduleFunctions.end() ? fd->name : it->second);
-                        def.isFreeFunction = true;
-                        def.declaringModule = L.currentModulePath;
-                        mod.functions.push_back(std::move(def));
-                    };
-                    auto emitMake = [&](const ast::MakeDef* mk) {
-                        if (!mk) return;
-                        for (const auto& typeName :
-                             Lowering::makeTargetNameList(*L.hir, *mk)) {
-                        auto pushMethod = [&](const ast::FunctionDef* fd) {
-                            if (!fd) return;
-                            auto def = L.lowerMakeGroup({fd}, typeName);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                    if (node) {
+                        auto push = [&](const ast::FunctionDef* fd) {
+                            if (!fd) {
+                                return;
+                            }
+                            auto it = L.moduleFunctions.find(L.currentModulePath + "." + fd->name);
+                            auto def = L.lowerFunctionGroup(
+                                {fd}, "", it == L.moduleFunctions.end() ? fd->name : it->second);
+                            def.isFreeFunction = true;
                             def.declaringModule = L.currentModulePath;
                             mod.functions.push_back(std::move(def));
                         };
-                        for (const auto& mi : mk->body) {
-                            if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&mi))
-                                pushMethod(fd->get());
-                            else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&mi))
-                                if (*vb) for (const auto& vi : (*vb)->items)
-                                    if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
-                                        pushMethod(fd->get());
-                        }
-                        for (const auto* fd : inheritedDefaults(*mk)) pushMethod(fd);
-                        }
-                    };
-                    std::function<void(const ast::ModuleDef&)> lowerModuleBody;
-                    lowerModuleBody = [&](const ast::ModuleDef& m) {
-                        auto savedModulePath = L.currentModulePath;
-                        L.currentModulePath = m.name;
-                        auto emitType = [&](const ast::TypeDef* td) {
-                            if (!td || !td->variants) return;
-                            if (auto constructors =
-                                    kex::typeConstructors(*td))
-                                for (const auto& constructor :
-                                     *constructors)
-                                    mod.functions.push_back(
-                                        moduleConstructorDef(
-                                            constructor, m.name));
-                            // As at the top level (kex::typeConstructors):
-                            // a distinct type has no tags of its own.
-                            if (td->isDistinct ||
-                                kex::isTransparentTypeAlias(*td))
+                        auto emitMake = [&](const ast::MakeDef* mk) {
+                            if (!mk) {
                                 return;
-                            std::vector<std::string> tags;
-                            for (const auto& variant :
-                                 *td->variants) {
-                                auto tag =
-                                    ast::dispatchNameOf(
-                                        variant);
-                                if (tag.empty()) continue;
-                                tags.push_back(tag);
-                                if (std::holds_alternative<
-                                        ast::TypeName>(
-                                        variant->kind))
-                                    L.nullaryVariantTags.insert(
-                                        tag);
                             }
-                            if (!tags.empty())
-                                L.typeVariantTags[L.identityOf(m.name, td->name)] =
-                                    std::move(tags);
-                        };
-                        for (const auto& bi : m.body) {
-                            if (auto* ub = std::get_if<std::unique_ptr<ast::UsingBlock>>(&bi)) {
-                                if (!*ub) continue;
-                                if ((*ub)->body.empty()) continue;
-                                // `using M do ... end`: scoped bindings, and
-                                // the body runs — first, in file order,
-                                // like the walker's elaboration phase. BEAM
-                                // used to drop it entirely.
-                                auto savedSubst = L.subst;
-                                L.subst.clear();
-                                for (const auto& e : (*ub)->body)
-                                    usingBodySteps.push_back(L.lower(e));
-                                L.subst = std::move(savedSubst);
-                                continue;
-                            } else if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
-                                push(mfd->get());
-                            } else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi)) {
-                                if (*vb) for (const auto& vi : (*vb)->items) {
-                                    if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
-                                        push(vfd->get());
-                                    else if (auto* vtd =
-                                                 std::get_if<
-                                                     std::unique_ptr<
-                                                         ast::TypeDef>>(
-                                                     &vi)) {
-                                        emitType(vtd->get());
-                                    } else if (auto* vmk =
-                                                   std::get_if<std::unique_ptr<
-                                                       ast::MakeDef>>(&vi)) {
-                                        emitMake(vmk->get());
+                            for (const auto& typeName : Lowering::makeTargetNameList(*L.hir, *mk)) {
+                                auto pushMethod = [&](const ast::FunctionDef* fd) {
+                                    if (!fd) {
+                                        return;
+                                    }
+                                    auto def = L.lowerMakeGroup({fd}, typeName);
+                                    def.declaringModule = L.currentModulePath;
+                                    mod.functions.push_back(std::move(def));
+                                };
+                                for (const auto& mi : mk->body) {
+                                    if (auto* fd =
+                                            std::get_if<std::unique_ptr<ast::FunctionDef>>(&mi)) {
+                                        pushMethod(fd->get());
+                                    } else if (
+                                        auto* vb =
+                                            std::get_if<std::unique_ptr<ast::VisibilityBlock>>(
+                                                &mi)) {
+                                        if (*vb) {
+                                            for (const auto& vi : (*vb)->items) {
+                                                if (auto* fd = std::get_if<
+                                                        std::unique_ptr<ast::FunctionDef>>(&vi)) {
+                                                    pushMethod(fd->get());
+                                                }
+                                            }
+                                        }
                                     }
                                 }
-                            } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&bi)) {
-                                emitMake(mk->get());
-                            } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&bi)) {
-                                if (*child) lowerModuleBody(**child);
-                            } else if (std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&bi) ||
-                                       std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
-                                if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
-                                    emitType(td->get());
+                                for (const auto* fd : inheritedDefaults(*mk)) {
+                                    pushMethod(fd);
                                 }
                             }
-                        }
-                        L.currentModulePath = std::move(savedModulePath);
-                    };
-                    lowerModuleBody(*node);
+                        };
+                        std::function<void(const ast::ModuleDef&)> lowerModuleBody;
+                        lowerModuleBody = [&](const ast::ModuleDef& m) {
+                            auto savedModulePath = L.currentModulePath;
+                            L.currentModulePath = m.name;
+                            auto emitType = [&](const ast::TypeDef* td) {
+                                if (!td || !td->variants) {
+                                    return;
+                                }
+                                if (auto constructors = kex::typeConstructors(*td)) {
+                                    for (const auto& constructor : *constructors) {
+                                        mod.functions.push_back(
+                                            moduleConstructorDef(constructor, m.name));
+                                    }
+                                }
+                                // As at the top level (kex::typeConstructors):
+                                // a distinct type has no tags of its own.
+                                if (td->isDistinct || kex::isTransparentTypeAlias(*td)) {
+                                    return;
+                                }
+                                std::vector<std::string> tags;
+                                for (const auto& variant : *td->variants) {
+                                    auto tag = ast::dispatchNameOf(variant);
+                                    if (tag.empty()) {
+                                        continue;
+                                    }
+                                    tags.push_back(tag);
+                                    if (std::holds_alternative<ast::TypeName>(variant->kind)) {
+                                        L.nullaryVariantTags.insert(tag);
+                                    }
+                                }
+                                if (!tags.empty()) {
+                                    L.typeVariantTags[L.identityOf(m.name, td->name)] =
+                                        std::move(tags);
+                                }
+                            };
+                            for (const auto& bi : m.body) {
+                                if (auto* ub = std::get_if<std::unique_ptr<ast::UsingBlock>>(&bi)) {
+                                    if (!*ub) {
+                                        continue;
+                                    }
+                                    if ((*ub)->body.empty()) {
+                                        continue;
+                                    }
+                                    // `using M do ... end`: scoped bindings, and
+                                    // the body runs — first, in file order,
+                                    // like the walker's elaboration phase. BEAM
+                                    // used to drop it entirely.
+                                    auto savedSubst = L.subst;
+                                    L.subst.clear();
+                                    for (const auto& e : (*ub)->body) {
+                                        usingBodySteps.push_back(L.lower(e));
+                                    }
+                                    L.subst = std::move(savedSubst);
+                                    continue;
+                                } else if (
+                                    auto* mfd =
+                                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
+                                    push(mfd->get());
+                                } else if (
+                                    auto* vb =
+                                        std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi)) {
+                                    if (*vb) {
+                                        for (const auto& vi : (*vb)->items) {
+                                            if (auto* vfd =
+                                                    std::get_if<std::unique_ptr<ast::FunctionDef>>(
+                                                        &vi)) {
+                                                push(vfd->get());
+                                            } else if (
+                                                auto* vtd =
+                                                    std::get_if<std::unique_ptr<ast::TypeDef>>(
+                                                        &vi)) {
+                                                emitType(vtd->get());
+                                            } else if (
+                                                auto* vmk =
+                                                    std::get_if<std::unique_ptr<ast::MakeDef>>(
+                                                        &vi)) {
+                                                emitMake(vmk->get());
+                                            }
+                                        }
+                                    }
+                                } else if (
+                                    auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&bi)) {
+                                    emitMake(mk->get());
+                                } else if (
+                                    auto* child =
+                                        std::get_if<std::unique_ptr<ast::ModuleDef>>(&bi)) {
+                                    if (*child) {
+                                        lowerModuleBody(**child);
+                                    }
+                                } else if (
+                                    std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&bi) ||
+                                    std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
+                                    if (auto* td =
+                                            std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
+                                        emitType(td->get());
+                                    }
+                                }
+                            }
+                            L.currentModulePath = std::move(savedModulePath);
+                        };
+                        lowerModuleBody(*node);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+                    if (!node) {
+                        return;
+                    }
+                    if (node->body.empty()) {
+                        return;
+                    }
+                    // `using M do ... end`: scoped bindings, and the body
+                    // runs — first, in file order, like the walker's
+                    // elaboration phase. BEAM used to drop it entirely.
+                    auto savedSubst = L.subst;
+                    L.subst.clear();
+                    for (const auto& e : node->body) {
+                        usingBodySteps.push_back(L.lower(e));
+                    }
+                    L.subst = std::move(savedSubst);
+                } else {
+                    throw LowerError(
+                        std::string("IR lower: unimplemented top-level item ") + typeid(T).name());
                 }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
-                if (!node) return;
-                if (node->body.empty()) return;
-                // `using M do ... end`: scoped bindings, and the body
-                // runs — first, in file order, like the walker's
-                // elaboration phase. BEAM used to drop it entirely.
-                auto savedSubst = L.subst;
-                L.subst.clear();
-                for (const auto& e : node->body)
-                    usingBodySteps.push_back(L.lower(e));
-                L.subst = std::move(savedSubst);
-            } else {
-                throw LowerError(std::string("IR lower: unimplemented top-level item ")
-                                 + typeid(T).name());
-            }
-        }, item);
+            },
+            item);
     }
 
     if (explicitMain) {
         L.subst.clear();
         std::vector<ExprPtr> steps;
-        for (auto& u : usingBodySteps) steps.push_back(std::move(u));
-        for (size_t i = 0; i < explicitMain->bareBefore; ++i)
+        for (auto& u : usingBodySteps) {
+            steps.push_back(std::move(u));
+        }
+        for (size_t i = 0; i < explicitMain->bareBefore; ++i) {
             steps.push_back(L.lower(*bareExprs[i]));
+        }
         steps.push_back(std::move(explicitMain->body));
-        for (size_t i = explicitMain->bareBefore; i < bareExprs.size(); ++i)
+        for (size_t i = explicitMain->bareBefore; i < bareExprs.size(); ++i) {
             steps.push_back(L.lower(*bareExprs[i]));
+        }
         ExprPtr sequence = std::move(steps.back());
         for (size_t i = steps.size() - 1; i-- > 0;) {
             auto let = std::make_unique<Expr>();
             let->node = Let{L.fresh("S"), std::move(steps[i]), std::move(sequence)};
             sequence = std::move(let);
         }
-        explicitMain->clause.body = L.withTestSummary(
-            L.withDisplayInfo(std::move(sequence), mod.name));
+        explicitMain->clause.body =
+            L.withTestSummary(L.withDisplayInfo(std::move(sequence), mod.name));
         explicitMain->def.clauses.push_back(std::move(explicitMain->clause));
         mod.functions.push_back(std::move(explicitMain->def));
     }
@@ -955,7 +1167,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // Synthetic main/0 from bare top-level expressions, if no explicit main.
     if ((!bareExprs.empty() || !usingBodySteps.empty()) && !mod.hasMain) {
         L.subst.clear();
-        FunDef def; def.name = "main"; def.arity = 0;
+        FunDef def;
+        def.name = "main";
+        def.arity = 0;
         FunClause fc;
         // Emit each expr as a statement; last is the value.
         // Using-body steps first (already lowered), then bare exprs —
@@ -963,32 +1177,41 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         const size_t usingCount = usingBodySteps.size();
         const size_t total = usingCount + bareExprs.size();
         std::function<ExprPtr(size_t)> at = [&](size_t i) -> ExprPtr {
-            if (i < usingCount) return std::move(usingBodySteps[i]);
+            if (i < usingCount) {
+                return std::move(usingBodySteps[i]);
+            }
             return L.lower(*bareExprs[i - usingCount]);
         };
         std::function<ExprPtr(size_t)> chain = [&](size_t i) -> ExprPtr {
-            if (i + 1 == total) return at(i);
+            if (i + 1 == total) {
+                return at(i);
+            }
             auto val = at(i);
             auto rest = chain(i + 1);
             auto let = std::make_unique<Expr>();
             let->node = Let{L.fresh("S"), std::move(val), std::move(rest)};
             return let;
         };
-        fc.body = L.withTestSummary(L.withDisplayInfo(
-            total == 0 ? lit(LitKind::Atom, "ok") : chain(0), mod.name));
+        fc.body = L.withTestSummary(
+            L.withDisplayInfo(total == 0 ? lit(LitKind::Atom, "ok") : chain(0), mod.name));
         def.clauses.push_back(std::move(fc));
         mod.functions.push_back(std::move(def));
-        mod.hasMain = true; mod.mainArity = 0;
+        mod.hasMain = true;
+        mod.mainArity = 0;
     }
     // Pure-declaration program (no main block, no bare exprs): synthesize an
     // empty main/0 so `kex -R file.kex` runs it as the no-op it is on the
     // walker, instead of erl dying with undef on the missing main.
     if (!mod.hasMain) {
-        FunDef def; def.name = "main"; def.arity = 0;
-        FunClause fc; fc.body = lit(LitKind::Atom, "ok");
+        FunDef def;
+        def.name = "main";
+        def.arity = 0;
+        FunClause fc;
+        fc.body = lit(LitKind::Atom, "ok");
         def.clauses.push_back(std::move(fc));
         mod.functions.push_back(std::move(def));
-        mod.hasMain = true; mod.mainArity = 0;
+        mod.hasMain = true;
+        mod.mainArity = 0;
     }
 
     // Operators do not have a MethodCall node from which lowering can consume
@@ -997,12 +1220,13 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // Sorted for the same reason: `argumentOverloadSignatures` is an
     // unordered_map, and the operator dispatchers it emits land in
     // `mod.functions` in iteration order.
-    std::vector<const decltype(L.argumentOverloadSignatures)::value_type*>
-        overloadEntries;
-    for (const auto& entry : L.argumentOverloadSignatures)
+    std::vector<const decltype(L.argumentOverloadSignatures)::value_type*> overloadEntries;
+    for (const auto& entry : L.argumentOverloadSignatures) {
         overloadEntries.push_back(&entry);
-    std::sort(overloadEntries.begin(), overloadEntries.end(),
-              [](const auto* a, const auto* b) { return a->first < b->first; });
+    }
+    std::sort(overloadEntries.begin(), overloadEntries.end(), [](const auto* a, const auto* b) {
+        return a->first < b->first;
+    });
     // The `name/Owner` argument dispatchers emitted below for named methods,
     // by name, owner and arity: the collision dispatcher may route to these.
     std::set<std::tuple<std::string, std::string, int>> namedArgumentDispatchers;
@@ -1011,10 +1235,13 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         const auto& overloads = overloadEntry->second;
         auto firstBreak = key.find('\n');
         auto lastBreak = key.rfind('\n');
-        if (firstBreak == std::string::npos || firstBreak == lastBreak)
+        if (firstBreak == std::string::npos || firstBreak == lastBreak) {
             continue;
+        }
         auto name = key.substr(0, firstBreak);
-        if (name.empty()) continue;
+        if (name.empty()) {
+            continue;
+        }
         auto arity = std::stoi(key.substr(lastBreak + 1));
         // A named method reached through its receiver dispatcher (`to/3`,
         // which another module calls) lands on `to/Measure`, and a split
@@ -1023,24 +1250,20 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         // one that picks between them by argument type, so `90.minute.to(
         // String, in: Hour)` from a user module reaches the TimeUnit clause
         // rather than the generic conversion.
-        if (std::isalnum(static_cast<unsigned char>(name.front())) ||
-            name.front() == '_') {
-            const auto owner =
-                key.substr(firstBreak + 1, lastBreak - firstBreak - 1);
+        if (std::isalnum(static_cast<unsigned char>(name.front())) || name.front() == '_') {
+            const auto owner = key.substr(firstBreak + 1, lastBreak - firstBreak - 1);
             // Only when every overload is a function of that arity. A `foul`
             // one also takes the capability context, and one with trait
             // dictionaries takes those: call sites reach those by their
             // exact signature, and a dispatcher at the source arity would
             // name functions that do not exist.
             auto targetsExistAt = [&](int targetArity) {
-                return std::all_of(
-                    overloads.begin(), overloads.end(), [&](const auto& overload) {
-                        return std::any_of(
-                            mod.functions.begin(), mod.functions.end(),
-                            [&](const FunDef& fn) {
-                                return fn.name == overload.first && fn.arity == targetArity;
-                            });
-                    });
+                return std::all_of(overloads.begin(), overloads.end(), [&](const auto& overload) {
+                    return std::any_of(
+                        mod.functions.begin(), mod.functions.end(), [&](const FunDef& fn) {
+                            return fn.name == overload.first && fn.arity == targetArity;
+                        });
+                });
             };
             // Every overload foul: each takes the context last, so the
             // dispatcher does too and passes it through unguarded. Without
@@ -1050,9 +1273,13 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             auto dispatched = overloads;
             int dispatchArity = arity;
             if (!targetsExistAt(arity)) {
-                if (!targetsExistAt(arity + 1)) continue;
+                if (!targetsExistAt(arity + 1)) {
+                    continue;
+                }
                 ++dispatchArity;
-                for (auto& [target, types] : dispatched) types.push_back("Any");
+                for (auto& [target, types] : dispatched) {
+                    types.push_back("Any");
+                }
             }
             namedArgumentDispatchers.emplace(name, owner, dispatchArity);
             auto def = L.makeArgumentDispatcher(
@@ -1064,17 +1291,16 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         if (L.externalModules) {
             auto external = L.externalModules->receiverFunctions.find(name);
             if (external != L.externalModules->receiverFunctions.end()) {
-                for (const auto& candidate : external->second)
-                    if (candidate.beamArity == arity &&
-                        candidate.beamFunction == name &&
+                for (const auto& candidate : external->second) {
+                    if (candidate.beamArity == arity && candidate.beamFunction == name &&
                         candidate.moduleAtom != mod.name) {
                         fallbackModule = candidate.moduleAtom;
                         break;
                     }
+                }
             }
         }
-        mod.functions.push_back(L.makeArgumentDispatcher(
-            name, arity, overloads, fallbackModule));
+        mod.functions.push_back(L.makeArgumentDispatcher(name, arity, overloads, fallbackModule));
     }
     // Cross-type collision dispatchers (bare name → runtime-type dispatch).
     // Generated PER ARITY, including only the owner types that actually have a
@@ -1083,8 +1309,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // per arity avoids referencing a variant that doesn't exist.
     // Sort the unordered set so generated Core is byte-for-byte reproducible
     // across standard-library implementations and architectures.
-    std::vector<std::string> collidingNames(L.collidingMethods.begin(),
-                                            L.collidingMethods.end());
+    std::vector<std::string> collidingNames(L.collidingMethods.begin(), L.collidingMethods.end());
     std::sort(collidingNames.begin(), collidingNames.end());
     for (const auto& name : collidingNames) {
         std::map<int, std::vector<std::string>> ownersByArity;
@@ -1109,24 +1334,28 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         // only reintroduces the bug, so an argument-overloaded owner is
         // excluded from this dispatcher entirely and left to that mechanism.
         for (const auto& fn : mod.functions) {
-            if (fn.name.rfind(prefix, 0) != 0) continue;
+            if (fn.name.rfind(prefix, 0) != 0) {
+                continue;
+            }
             const auto suffix = fn.name.substr(prefix.size());
             const auto owner = suffix.substr(0, suffix.find(','));
             // A named method's split owner has a `name/Owner` when the
             // argument dispatcher above was emitted for it, and stays an owner.
             const bool named =
-                std::isalnum(static_cast<unsigned char>(name.front())) ||
-                name.front() == '_';
-            if (L.argumentOverloadedMethods.count(
-                    localOverloadKey(name, owner, fn.arity)) &&
-                !(named && namedArgumentDispatchers.count({name, owner, fn.arity})))
+                std::isalnum(static_cast<unsigned char>(name.front())) || name.front() == '_';
+            if (L.argumentOverloadedMethods.count(localOverloadKey(name, owner, fn.arity)) &&
+                !(named && namedArgumentDispatchers.count({name, owner, fn.arity}))) {
                 continue;
+            }
             auto& owners = ownersByArity[fn.arity];
-            if (std::find(owners.begin(), owners.end(), owner) == owners.end())
+            if (std::find(owners.begin(), owners.end(), owner) == owners.end()) {
                 owners.push_back(owner);
+            }
         }
         for (const auto& [arity, owners] : ownersByArity) {
-            if (arity < 1 || owners.empty()) continue;
+            if (arity < 1 || owners.empty()) {
+                continue;
+            }
             // If every owner is an ADT type (has known variant tags), the
             // clauses from the mangled functions have distinct top-level
             // patterns — merge them into one function and skip the guard-
@@ -1155,37 +1384,45 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             // ADT dispatch happen natively.
             bool hasCatchAllClause = false;
             for (const auto& fn : mod.functions) {
-                if (fn.arity != arity ||
-                    fn.name.rfind(prefix, 0) != 0) continue;
+                if (fn.arity != arity || fn.name.rfind(prefix, 0) != 0) {
+                    continue;
+                }
                 for (const auto& clause : fn.clauses) {
-                    if (clause.guard) continue;
-                    if (std::all_of(clause.params.begin(), clause.params.end(),
-                                    [](const PatternPtr& pat) {
-                                        return pat->kind == PatKind::Var ||
-                                               pat->kind == PatKind::Wild;
-                                    }))
+                    if (clause.guard) {
+                        continue;
+                    }
+                    if (std::all_of(
+                            clause.params.begin(), clause.params.end(), [](const PatternPtr& pat) {
+                                return pat->kind == PatKind::Var || pat->kind == PatKind::Wild;
+                            })) {
                         hasCatchAllClause = true;
+                    }
                 }
             }
             bool allAdt = !owners.empty() && !L.freeFunctionSymbols.count(name) &&
-                          !L.fieldAccessors.count(name) &&
-                          !(preludeOwnsName && hasCatchAllClause);
+                          !L.fieldAccessors.count(name) && !(preludeOwnsName && hasCatchAllClause);
             for (const auto& o : owners) {
-                if (!L.typeVariantTags.count(o)) { allAdt = false; break; }
+                if (!L.typeVariantTags.count(o)) {
+                    allAdt = false;
+                    break;
+                }
             }
             if (allAdt) {
-                FunDef merged; merged.name = name; merged.arity = arity;
+                FunDef merged;
+                merged.name = name;
+                merged.arity = arity;
                 merged.isCollisionDispatcher = true;
                 // Each owner's `name/Owner` forwards into the merged function,
                 // so a direct call lands where the dispatch would: all routed.
                 std::vector<std::string> routes;
-                for (size_t i = 0; i < mod.functions.size(); ) {
+                for (size_t i = 0; i < mod.functions.size();) {
                     auto& f = mod.functions[i];
                     std::string prefix = receiverImplementationPrefix(name);
                     if (f.name.rfind(prefix, 0) == 0 && f.arity == arity) {
                         routes.push_back(f.name);
-                        for (auto& c : f.clauses)
+                        for (auto& c : f.clauses) {
                             merged.clauses.push_back(std::move(c));
+                        }
                         // The clauses now live in the merged function, but the
                         // mangled name is still what a trait dictionary binds
                         // (`makeTraitDictionaryFor` picks `name/Type` for any
@@ -1201,12 +1438,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             param->kind = PatKind::Var;
                             param->name = "_mergedArg" + std::to_string(a);
                             forward.params.push_back(std::move(param));
-                            args.push_back(
-                                var("_mergedArg" + std::to_string(a)));
+                            args.push_back(var("_mergedArg" + std::to_string(a)));
                         }
                         auto body = std::make_unique<Expr>();
-                        body->node =
-                            Call{"", name, arity, std::move(args), false};
+                        body->node = Call{"", name, arity, std::move(args), false};
                         forward.body = std::move(body);
                         f.clauses.push_back(std::move(forward));
                     }
@@ -1218,14 +1453,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // the walker reaches the prelude: with `let symbol(@Px)` in
                 // scope, `measure.symbol` on a Measure did exactly that.
                 if (preludeOwnsName) {
-                    const auto& providers =
-                        L.externalModules->receiverFunctions.at(name);
+                    const auto& providers = L.externalModules->receiverFunctions.at(name);
                     auto provider = std::find_if(
                         providers.begin(), providers.end(),
                         [&](const ExternalModules::ReceiverFunction& fn) {
                             return fn.moduleAtom == names::kPreludeModule &&
-                                   fn.beamArity == arity &&
-                                   fn.beamFunction == name;
+                                   fn.beamArity == arity && fn.beamFunction == name;
                         });
                     if (provider != providers.end()) {
                         FunClause fallback;
@@ -1233,19 +1466,18 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         for (int a = 0; a < arity; ++a) {
                             auto param = std::make_unique<Pattern>();
                             param->kind = PatKind::Var;
-                            param->name =
-                                "_preludeArg" + std::to_string(a);
+                            param->name = "_preludeArg" + std::to_string(a);
                             fallback.params.push_back(std::move(param));
-                            args.push_back(
-                                var("_preludeArg" + std::to_string(a)));
+                            args.push_back(var("_preludeArg" + std::to_string(a)));
                         }
-                        fallback.body = L.callE(names::kPreludeModule, name, arity,
-                                                std::move(args));
+                        fallback.body =
+                            L.callE(names::kPreludeModule, name, arity, std::move(args));
                         merged.clauses.push_back(std::move(fallback));
                     }
                 }
-                if (!merged.clauses.empty())
+                if (!merged.clauses.empty()) {
                     merged.clauses.front().routes = std::move(routes);
+                }
                 mod.functions.push_back(std::move(merged));
             } else {
                 // A universal top-level function may share a name/arity with
@@ -1258,8 +1490,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // A `foul` implementation's last parameter is the hidden
                 // capability context, so the prelude function this dispatcher
                 // falls back to lives one arity DOWN (see makeDispatcher).
-                const std::string mangledPrefix =
-                    receiverImplementationPrefix(name);
+                const std::string mangledPrefix = receiverImplementationPrefix(name);
                 // Only when EVERY owner at this arity carries the context: with
                 // a pure owner beside a foul one — `Headers.get(this, name)`
                 // and `Process.Shared.get` (this + context) are both get/2 —
@@ -1270,12 +1501,15 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // Net.HTTP (kexhq/kex#408).
                 bool contextualOwner = false;
                 bool pureOwner = false;
-                for (const auto& fn : mod.functions)
-                    if (fn.arity == arity &&
-                        fn.name.rfind(mangledPrefix, 0) == 0) {
-                        if (fn.hasCapabilityContext) contextualOwner = true;
-                        else pureOwner = true;
+                for (const auto& fn : mod.functions) {
+                    if (fn.arity == arity && fn.name.rfind(mangledPrefix, 0) == 0) {
+                        if (fn.hasCapabilityContext) {
+                            contextualOwner = true;
+                        } else {
+                            pureOwner = true;
+                        }
                     }
+                }
                 const bool contextualOwners = contextualOwner && !pureOwner;
                 // A dispatcher can mix a foul owner with a PURE prelude
                 // fallback — `write` is Mock.Files' (foul, context-carrying)
@@ -1285,76 +1519,72 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // dies with "Undefined method" (kexhq/kex#143).
                 int fallbackArity = contextualOwners ? arity - 1 : arity;
                 if (contextualOwners && L.externalModules) {
-                    auto external =
-                        L.externalModules->receiverFunctions.find(name);
+                    auto external = L.externalModules->receiverFunctions.find(name);
                     const bool answersStripped =
                         external != L.externalModules->receiverFunctions.end() &&
-                        std::any_of(external->second.begin(),
-                                    external->second.end(),
-                                    [&](const auto& candidate) {
-                                        return candidate.beamArity ==
-                                                   fallbackArity &&
-                                               candidate.moduleAtom != mod.name;
-                                    });
-                    if (!answersStripped) fallbackArity = arity;
+                        std::any_of(
+                            external->second.begin(), external->second.end(),
+                            [&](const auto& candidate) {
+                                return candidate.beamArity == fallbackArity &&
+                                       candidate.moduleAtom != mod.name;
+                            });
+                    if (!answersStripped) {
+                        fallbackArity = arity;
+                    }
                 }
                 for (auto& function : mod.functions) {
-                    if (function.name == L.prefixSymbol(name) &&
-                        function.name != name && function.arity == arity) {
+                    if (function.name == L.prefixSymbol(name) && function.name != name &&
+                        function.arity == arity) {
                         genericFallback = function.name;
                         break;
                     }
-                    if (function.name != name || function.arity != arity)
+                    if (function.name != name || function.arity != arity) {
                         continue;
+                    }
                     genericFallback = name + "$generic";
                     function.name = genericFallback;
                     break;
                 }
                 if (genericFallback.empty() && L.externalModules) {
-                    auto external =
-                        L.externalModules->receiverFunctions.find(name);
-                    if (external !=
-                        L.externalModules->receiverFunctions.end()) {
-                        for (const auto& candidate : external->second)
+                    auto external = L.externalModules->receiverFunctions.find(name);
+                    if (external != L.externalModules->receiverFunctions.end()) {
+                        for (const auto& candidate : external->second) {
                             if (candidate.beamArity == fallbackArity &&
                                 candidate.beamFunction == name &&
                                 candidate.moduleAtom != mod.name) {
                                 genericFallbackModule = candidate.moduleAtom;
                                 break;
                             }
-                        if (genericFallbackModule.empty())
-                        for (const auto& candidate : external->second) {
-                            if (candidate.beamArity != fallbackArity ||
-                                candidate.moduleAtom == mod.name)
-                                continue;
-                            if (genericFallbackModule.empty())
-                                genericFallbackModule = candidate.moduleAtom;
-                            else if (genericFallbackModule !=
-                                     candidate.moduleAtom) {
-                                genericFallbackModule.clear();
-                                break;
+                        }
+                        if (genericFallbackModule.empty()) {
+                            for (const auto& candidate : external->second) {
+                                if (candidate.beamArity != fallbackArity ||
+                                    candidate.moduleAtom == mod.name) {
+                                    continue;
+                                }
+                                if (genericFallbackModule.empty()) {
+                                    genericFallbackModule = candidate.moduleAtom;
+                                } else if (genericFallbackModule != candidate.moduleAtom) {
+                                    genericFallbackModule.clear();
+                                    break;
+                                }
                             }
                         }
-                        if (!genericFallbackModule.empty())
+                        if (!genericFallbackModule.empty()) {
                             genericFallback = name;
+                        }
                     }
                     if (genericFallback.empty()) {
-                        const auto key = std::string(
-                            semantic::kFileLevelPreludeModule) + "." + name;
-                        auto exported =
-                            L.externalModules->exportToBeamFn.find(key);
-                        auto exportedArity =
-                            L.externalModules->exportArity.find(key);
+                        const auto key =
+                            std::string(semantic::kFileLevelPreludeModule) + "." + name;
+                        auto exported = L.externalModules->exportToBeamFn.find(key);
+                        auto exportedArity = L.externalModules->exportArity.find(key);
                         auto prelude = L.externalModules->nameToAtom.find(
-                            std::string(
-                                semantic::kFileLevelPreludeModule));
-                        if (exported !=
-                                L.externalModules->exportToBeamFn.end() &&
-                            exportedArity !=
-                                L.externalModules->exportArity.end() &&
+                            std::string(semantic::kFileLevelPreludeModule));
+                        if (exported != L.externalModules->exportToBeamFn.end() &&
+                            exportedArity != L.externalModules->exportArity.end() &&
                             exportedArity->second == fallbackArity &&
-                            prelude !=
-                                L.externalModules->nameToAtom.end() &&
+                            prelude != L.externalModules->nameToAtom.end() &&
                             prelude->second != mod.name) {
                             genericFallbackModule = prelude->second;
                             genericFallback = name;
@@ -1396,25 +1626,28 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // leading `arity` of them.
                 if (!genericFallback.empty()) {
                     for (auto& function : mod.functions) {
-                        if (function.arity < arity) continue;
+                        if (function.arity < arity) {
+                            continue;
+                        }
                         auto slash = function.name.find('/');
                         if (slash == std::string::npos ||
-                            function.name.compare(0, slash, name) != 0)
+                            function.name.compare(0, slash, name) != 0) {
                             continue;
-                        if (!L.traitMethods.count(function.name.substr(slash + 1)))
+                        }
+                        if (!L.traitMethods.count(function.name.substr(slash + 1))) {
                             continue;
+                        }
                         const auto total = [](const FunClause& clause) {
-                            return !clause.guard &&
-                                std::all_of(clause.params.begin(),
-                                            clause.params.end(),
-                                            [](const PatternPtr& p) {
-                                                return p->kind == PatKind::Var ||
-                                                       p->kind == PatKind::Wild;
-                                            });
+                            return !clause.guard && std::all_of(
+                                                        clause.params.begin(), clause.params.end(),
+                                                        [](const PatternPtr& p) {
+                                                            return p->kind == PatKind::Var ||
+                                                                   p->kind == PatKind::Wild;
+                                                        });
                         };
-                        if (std::any_of(function.clauses.begin(),
-                                        function.clauses.end(), total))
+                        if (std::any_of(function.clauses.begin(), function.clauses.end(), total)) {
                             continue;
+                        }
                         FunClause fallback;
                         std::vector<ExprPtr> args;
                         for (int i = 0; i < function.arity; ++i) {
@@ -1422,27 +1655,26 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             param->kind = PatKind::Var;
                             param->name = "_traitFallback" + std::to_string(i);
                             fallback.params.push_back(std::move(param));
-                            if (i < arity)
-                                args.push_back(var(
-                                    "_traitFallback" + std::to_string(i)));
+                            if (i < arity) {
+                                args.push_back(var("_traitFallback" + std::to_string(i)));
+                            }
                         }
-                        fallback.body = L.callE(genericFallbackModule,
-                                                genericFallback, arity,
-                                                std::move(args));
+                        fallback.body =
+                            L.callE(genericFallbackModule, genericFallback, arity, std::move(args));
                         function.clauses.push_back(std::move(fallback));
                     }
                 }
-                mod.functions.push_back(
-                    L.makeDispatcher(name, arity, owners, genericFallback,
-                                     genericFallbackModule, fallbackArity,
-                                     contextualOwners));
+                mod.functions.push_back(L.makeDispatcher(
+                    name, arity, owners, genericFallback, genericFallbackModule, fallbackArity,
+                    contextualOwners));
             }
         }
     }
 
     // Field accessors last (so definedFns is fully known).
-    for (auto& acc : L.makeAccessors(definedFns, definedFnArities))
+    for (auto& acc : L.makeAccessors(definedFns, definedFnArities)) {
         mod.functions.push_back(std::move(acc));
+    }
 
     // Merge duplicate function definitions (same name + arity) by
     // concatenating their clauses — see mergeDuplicateFunctions's own doc
@@ -1453,17 +1685,23 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // makeDictionaryWrapper). Never shadows a real definition at that arity.
     {
         std::set<std::pair<std::string, int>> defined;
-        for (const auto& f : mod.functions) defined.insert({f.name, f.arity});
+        for (const auto& f : mod.functions) {
+            defined.insert({f.name, f.arity});
+        }
         std::vector<FunDef> wrappers;
         for (const auto& f : mod.functions) {
             auto wrapper = L.makeDictionaryWrapper(f);
-            if (!wrapper) continue;
-            if (!defined.insert({wrapper->name, wrapper->arity}).second)
+            if (!wrapper) {
                 continue;
+            }
+            if (!defined.insert({wrapper->name, wrapper->arity}).second) {
+                continue;
+            }
             wrappers.push_back(std::move(*wrapper));
         }
-        for (auto& wrapper : wrappers)
+        for (auto& wrapper : wrappers) {
             mod.functions.push_back(std::move(wrapper));
+        }
     }
     mod.typeVariantTags = L.typeVariantTags;
 
@@ -1494,7 +1732,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     std::map<std::string, FunDef> defaultFunctions;
     const auto defaultFunctionOf = [&](const std::string& module) -> FunDef& {
         auto name = names::kRecordDefaultFunction;
-        if (!module.empty() && !lowersPrelude) name += "@" + module;
+        if (!module.empty() && !lowersPrelude) {
+            name += "@" + module;
+        }
         auto& fn = defaultFunctions[name];
         fn.name = name;
         fn.arity = 2;
@@ -1503,8 +1743,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     for (const auto& name : L.localRecordNames) {
         const auto& info = L.records.at(name);
         for (size_t i = 0; i < info.fields.size(); i++) {
-            if (i >= info.defaults.size() || !info.defaults[i] || !*info.defaults[i])
+            if (i >= info.defaults.size() || !info.defaults[i] || !*info.defaults[i]) {
                 continue;
+            }
             FunClause clause;
             clause.params.push_back(atomPattern(name));
             clause.params.push_back(atomPattern(info.fields[i]));
@@ -1525,8 +1766,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         }
         defaultFunctionOf(declaringModule);
         mod.servingSlots[owner][typeName] = slots;
-        if (L.servingUpgradeTypes.count(typeName))
+        if (L.servingUpgradeTypes.count(typeName)) {
             mod.servingUpgrades[owner].insert(typeName);
+        }
     }
     for (auto& [_, fn] : defaultFunctions) {
         FunClause fallback;
@@ -1539,20 +1781,24 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     return mod;
 }
 
-auto lowerProgramTiered(const ast::Program& prog,
-                        const std::array<size_t, 5>& tierBounds,
-                        const std::string& fileStem,
-                        const LowerContext& context) -> Module {
+auto lowerProgramTiered(
+    const ast::Program& prog,
+    const std::array<size_t, 5>& tierBounds,
+    const std::string& fileStem,
+    const LowerContext& context) -> Module {
     // The prelude still lowers as one merged module, so the output is
     // lowerProgram's by construction and the two paths cannot drift apart.
     // The bounds only validate the tier partition for now; they become
     // load-bearing when tiers compile to separate units and cross-tier
     // receiver calls must route through imported interfaces.
-    for (size_t t = 0; t < 4; t++)
-        if (tierBounds[t] > tierBounds[t + 1])
+    for (size_t t = 0; t < 4; t++) {
+        if (tierBounds[t] > tierBounds[t + 1]) {
             throw LowerError("IR lower: non-monotonic prelude tier bounds");
-    if (tierBounds[4] != prog.items.size())
+        }
+    }
+    if (tierBounds[4] != prog.items.size()) {
         throw LowerError("IR lower: tier bounds do not cover the full prelude AST");
+    }
     return lowerProgram(prog, fileStem, context);
 }
 
@@ -1573,14 +1819,12 @@ using ModuleTargets = std::unordered_map<std::string, ModuleTarget>;
 // redirecting every `to`/2 in the program to it produced `undef` on BEAM and
 // an empty string on the walker for `42.to(String)`. Modules compiled
 // elsewhere are absent here and are trusted, as before.
-using ModuleDefined = std::unordered_map<std::string,
-                                         std::set<std::pair<std::string, int>>>;
+using ModuleDefined = std::unordered_map<std::string, std::set<std::pair<std::string, int>>>;
 // Where a call goes when its module redirect is rejected: the provider that
 // really exports that name at that arity (the prelude, in practice). Without
 // it a rejected redirect leaves the call bare and it resolves to nothing —
 // `42.to(String)` under `using Units.SI` became `undefined function to/2`.
-using ArityFallback =
-    std::map<std::pair<std::string, int>, ModuleTarget>;
+using ArityFallback = std::map<std::pair<std::string, int>, ModuleTarget>;
 
 // `local` is what the calling module itself defines, for the entry module
 // only: its functions keep the flat program's names, so one defined there at
@@ -1590,16 +1834,18 @@ using ArityFallback =
 // to the TCP `close` the bare-name winner names, and every `client.close` in
 // the program was then redirected to `Kex.Net.Socket.TCP:close`, which
 // badargs on a Client (kexhq/kex#454).
-auto rewriteModuleCalls(ExprPtr& expr, const ModuleTargets& targets,
-                        const ModuleDefined& defined,
-                        const ArityFallback& fallback,
-                        const std::set<std::pair<std::string, int>>* local = nullptr)
-    -> void {
-    if (!expr) return;
+auto rewriteModuleCalls(
+    ExprPtr& expr,
+    const ModuleTargets& targets,
+    const ModuleDefined& defined,
+    const ArityFallback& fallback,
+    const std::set<std::pair<std::string, int>>* local = nullptr) -> void {
+    if (!expr) {
+        return;
+    }
     if (auto* call = std::get_if<Call>(&expr->node)) {
         auto& node = *call;
-        if (node.module.empty() && local &&
-            local->count({node.name, node.arity})) {
+        if (node.module.empty() && local && local->count({node.name, node.arity})) {
             // Defined right here: stays a local call.
         } else if (node.module.empty()) {
             if (auto it = targets.find(node.name); it != targets.end()) {
@@ -1608,16 +1854,14 @@ auto rewriteModuleCalls(ExprPtr& expr, const ModuleTargets& targets,
                     built->second.count({it->second.sourceName, node.arity})) {
                     node.module = it->second.module;
                     node.name = it->second.sourceName;
-                } else if (auto external =
-                               fallback.find({node.name, node.arity});
+                } else if (auto external = fallback.find({node.name, node.arity});
                            external != fallback.end()) {
                     node.module = external->second.module;
                     node.name = external->second.sourceName;
                 }
             }
         } else if (auto built = defined.find(node.module);
-                   built != defined.end() &&
-                   !built->second.count({node.name, node.arity})) {
+                   built != defined.end() && !built->second.count({node.name, node.arity})) {
             // Already addressed to a module built HERE that turns out not
             // to define it. A trait dictionary aims at the concrete
             // type's owner module — right for a type that implements the
@@ -1639,13 +1883,16 @@ auto rewriteModuleCalls(ExprPtr& expr, const ModuleTargets& targets,
 
 } // namespace
 
-auto lowerModules(const ast::Program& prog, const std::string& fileStem,
-                  const LowerContext& context) -> std::vector<Module> {
+auto lowerModules(
+    const ast::Program& prog, const std::string& fileStem, const LowerContext& context)
+    -> std::vector<Module> {
     const auto* externals = context.externals;
     const auto* externalRecords = context.externalRecords;
     g_keepDeclaringModulesApart = true;
     struct Restore {
-        ~Restore() { g_keepDeclaringModulesApart = false; }
+        ~Restore() {
+            g_keepDeclaringModulesApart = false;
+        }
     } restore;
     auto flat = lowerProgram(prog, fileStem, context);
 
@@ -1691,85 +1938,113 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         // called `kex_prelude:value/0`, which does not exist — `undef` on
         // BEAM where the walker printed the constant (examples/closures.kex).
         std::unordered_set<std::string> localMethodNames;
-        std::function<void(const ast::RecordDef&)> noteRecord =
-            [&](const ast::RecordDef& rd) {
-                for (const auto& field : rd.fields) localRecordFields.insert(field.name);
-            };
-        std::function<void(const ast::MakeDef&)> noteMake =
-            [&](const ast::MakeDef& mk) {
-                for (const auto& mi : mk.body) {
-                    if (auto* fd =
-                            std::get_if<std::unique_ptr<ast::FunctionDef>>(&mi)) {
-                        if (*fd) localMethodNames.insert((*fd)->name);
-                    } else if (auto* vb = std::get_if<
-                                   std::unique_ptr<ast::VisibilityBlock>>(&mi)) {
-                        if (*vb)
-                            for (const auto& vi : (*vb)->items)
-                                if (auto* vfd = std::get_if<
-                                        std::unique_ptr<ast::FunctionDef>>(&vi))
-                                    if (*vfd) localMethodNames.insert((*vfd)->name);
+        std::function<void(const ast::RecordDef&)> noteRecord = [&](const ast::RecordDef& rd) {
+            for (const auto& field : rd.fields) {
+                localRecordFields.insert(field.name);
+            }
+        };
+        std::function<void(const ast::MakeDef&)> noteMake = [&](const ast::MakeDef& mk) {
+            for (const auto& mi : mk.body) {
+                if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&mi)) {
+                    if (*fd) {
+                        localMethodNames.insert((*fd)->name);
+                    }
+                } else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&mi)) {
+                    if (*vb) {
+                        for (const auto& vi : (*vb)->items) {
+                            if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi)) {
+                                if (*vfd) {
+                                    localMethodNames.insert((*vfd)->name);
+                                }
+                            }
+                        }
                     }
                 }
-            };
+            }
+        };
         std::function<void(const ast::ModuleDef&)> scanModule;
         auto scanItems = [&](const auto& items, auto&& self) -> void {
             for (const auto& item : items) {
                 if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
-                    if (*rd) noteRecord(**rd);
+                    if (*rd) {
+                        noteRecord(**rd);
+                    }
                 } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
-                    if (*mk) noteMake(**mk);
+                    if (*mk) {
+                        noteMake(**mk);
+                    }
                 } else if (auto* md = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
-                    if (*md) scanModule(**md);
+                    if (*md) {
+                        scanModule(**md);
+                    }
                 } else if constexpr (std::is_constructible_v<
                                          std::decay_t<decltype(item)>,
                                          std::unique_ptr<ast::VisibilityBlock>>) {
                     if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item);
-                        vb && *vb)
+                        vb && *vb) {
                         for (const auto& vi : (*vb)->items) {
                             if (auto* vrd = std::get_if<std::unique_ptr<ast::RecordDef>>(&vi)) {
-                                if (*vrd) noteRecord(**vrd);
-                            } else if (auto* vmk = std::get_if<std::unique_ptr<ast::MakeDef>>(&vi)) {
-                                if (*vmk) noteMake(**vmk);
+                                if (*vrd) {
+                                    noteRecord(**vrd);
+                                }
+                            } else if (
+                                auto* vmk = std::get_if<std::unique_ptr<ast::MakeDef>>(&vi)) {
+                                if (*vmk) {
+                                    noteMake(**vmk);
+                                }
                             }
                         }
+                    }
                 }
             }
             (void)self;
         };
-        scanModule = [&](const ast::ModuleDef& module) {
-            scanItems(module.body, scanItems);
-        };
+        scanModule = [&](const ast::ModuleDef& module) { scanItems(module.body, scanItems); };
         scanItems(prog.items, scanItems);
         // Top-level functions and `let` constants (the latter collected into
         // the synthetic main block) — Program-only item kinds, so they cannot
         // ride along in the shared module/program scan above.
         for (const auto& item : prog.items) {
             if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
-                if (*fd) localMethodNames.insert((*fd)->name);
+                if (*fd) {
+                    localMethodNames.insert((*fd)->name);
+                }
             } else if (auto* mb = std::get_if<std::unique_ptr<ast::MainBlock>>(&item)) {
-                if (!*mb || !(*mb)->synthetic) continue;
+                if (!*mb || !(*mb)->synthetic) {
+                    continue;
+                }
                 for (const auto& e : (*mb)->body) {
                     auto* le = std::get_if<ast::LetExpr>(&e->kind);
-                    if (!le || !le->pattern) continue;
+                    if (!le || !le->pattern) {
+                        continue;
+                    }
                     std::vector<std::string> names;
                     patternBoundNames(le->pattern, names);
-                    for (auto& name : names)
+                    for (auto& name : names) {
                         localMethodNames.insert(std::move(name));
+                    }
                 }
             }
         }
 
         for (const auto& record : *externalRecords) {
-            if (record.moduleAtom.empty()) continue;
+            if (record.moduleAtom.empty()) {
+                continue;
+            }
             for (const auto& field : record.fields) {
                 // A field accessor name can also be a real method (notably
                 // Unit.kind/factor/symbol). Route only the unambiguous record
                 // fields here; make-method dispatch remains module-local.
                 if (field != "unit" && field != "canonical" && field != "value" &&
-                    field != "conversionFactor" && field != "dimension" && field != "notation")
+                    field != "conversionFactor" && field != "dimension" && field != "notation") {
                     continue;
-                if (localRecordFields.count(field)) continue;
-                if (localMethodNames.count(field)) continue;
+                }
+                if (localRecordFields.count(field)) {
+                    continue;
+                }
+                if (localMethodNames.count(field)) {
+                    continue;
+                }
                 definitions.emplace(field, Definition{"", field, true, record.moduleAtom});
             }
         }
@@ -1792,39 +2067,50 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
     std::function<void(const ast::ModuleDef&)> collect;
     collect = [&](const ast::ModuleDef& module) {
         const auto& path = module.name;
-        if (seenModulePaths.insert(path).second)
+        if (seenModulePaths.insert(path).second) {
             modulePaths.push_back(path);
+        }
         std::set<std::string> declaredTypes;
         kex::collectDeclaredTypeNames(module.body, declaredTypes);
         const auto ownTypes = ownTypeIdentities(*context.hir, path, declaredTypes);
         auto add = [&](const ast::FunctionDef* fn, bool exported) {
-            if (!fn) return;
-            definitions[mangleModuleMember(path, fn->name)] =
-                {path, fn->name, exported};
+            if (!fn) {
+                return;
+            }
+            definitions[mangleModuleMember(path, fn->name)] = {path, fn->name, exported};
             // A module-scoped free function over one of the module's OWN types
             // is that type's receiver method, and a UFCS call reaches it under
             // its bare name — so the bare name has to redirect here too, the
             // way a make-block method's does just below. Without it
             // `listener.closed?` compiled to a local `closed?/2` that no
             // module defines (kexhq/kex#230).
-            if (fn->clauses.empty() || fn->clauses[0].params.empty()) return;
-            const auto& receiver = fn->clauses[0].params.front();
-            if (!receiver.type || !*receiver.type) return;
-            if (!ownTypes.count(context.hir->typeTestOf(path, context.hir->annotationSpelling(**receiver.type))
-                                    .writtenIdentity))
+            if (fn->clauses.empty() || fn->clauses[0].params.empty()) {
                 return;
-            const int arity = static_cast<int>(fn->clauses[0].params.size()) +
-                              (fn->isFoul ? 1 : 0);
-            if (!definitions.count(fn->name))
+            }
+            const auto& receiver = fn->clauses[0].params.front();
+            if (!receiver.type || !*receiver.type) {
+                return;
+            }
+            if (!ownTypes.count(
+                    context.hir->typeTestOf(path, context.hir->annotationSpelling(**receiver.type))
+                        .writtenIdentity)) {
+                return;
+            }
+            const int arity = static_cast<int>(fn->clauses[0].params.size()) + (fn->isFoul ? 1 : 0);
+            if (!definitions.count(fn->name)) {
                 definitions[fn->name] = {path, fn->name, true, "", arity, true};
+            }
         };
         auto addMake = [&](const ast::MakeDef* mk) {
-            if (!mk) return;
+            if (!mk) {
+                return;
+            }
             std::set<std::string> declaredRecords;
             kex::collectDeclaredRecordNames(module.body, declaredRecords);
-            auto collectMethod = [&](const ast::FunctionDef* fd,
-                                     const std::string& typeName) {
-                if (!fd) return;
+            auto collectMethod = [&](const ast::FunctionDef* fd, const std::string& typeName) {
+                if (!fd) {
+                    return;
+                }
                 // A make method's dispatcher outranks a free function's
                 // bare-name claim: it falls back to the prelude for other
                 // receivers, and a free function over its own type is
@@ -1835,94 +2121,109 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                 // module-path order (see `nextExtendingModule`), so a call
                 // has to enter at the first of them.
                 if (auto existing = definitions.find(fd->name);
-                    existing == definitions.end() ||
-                    existing->second.freeOverOwnType ||
-                    (fd->name == "to" && path < existing->second.path))
+                    existing == definitions.end() || existing->second.freeOverOwnType ||
+                    (fd->name == "to" && path < existing->second.path)) {
                     definitions[fd->name] = {path, fd->name, true};
+                }
                 // A make method is emitted as `method/Type` when the same
                 // method name has implementations for multiple receiver
                 // types. Keep that generated name in its declaring module;
                 // otherwise module-local calls get mistaken for flat/global
                 // functions and point at `kex_<stem>` on BEAM.
-                if (!typeName.empty())
-                    definitions[mangleReceiverImplementation(
-                        fd->name, typeName)] =
-                        {path, mangleReceiverImplementation(
-                            fd->name, typeName), true};
+                if (!typeName.empty()) {
+                    definitions[mangleReceiverImplementation(fd->name, typeName)] = {
+                        path, mangleReceiverImplementation(fd->name, typeName), true};
+                }
                 if (!typeName.empty()) {
                     auto exact = mangleReceiverSignature(
                         fd->name, methodSignatureTypes(*context.hir, *fd, typeName));
                     definitions[exact] = {path, exact, true};
                 }
-                if (mk->isServing && fd->isSlot)
-                    nestedServingSlots.push_back(
-                        {path, typeName, fd->name});
+                if (mk->isServing && fd->isSlot) {
+                    nestedServingSlots.push_back({path, typeName, fd->name});
+                }
             };
-            for (const auto& typeName :
-                 Lowering::makeTargetNameList(*context.hir, *mk)) {
+            for (const auto& typeName : Lowering::makeTargetNameList(*context.hir, *mk)) {
                 for (const auto& mi : mk->body) {
-                    if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&mi))
+                    if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&mi)) {
                         collectMethod(fd->get(), typeName);
-                    else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&mi))
-                        if (*vb) for (const auto& vi : (*vb)->items)
-                            if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
-                                collectMethod(fd->get(), typeName);
+                    } else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&mi)) {
+                        if (*vb) {
+                            for (const auto& vi : (*vb)->items) {
+                                if (auto* fd =
+                                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi)) {
+                                    collectMethod(fd->get(), typeName);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         };
         auto addRecord = [&](const ast::RecordDef* rd) {
-            if (!rd) return;
-            for (const auto& field : rd->fields)
-                if (!definitions.count(field.name))
+            if (!rd) {
+                return;
+            }
+            for (const auto& field : rd->fields) {
+                if (!definitions.count(field.name)) {
                     definitions[field.name] = {path, field.name, true};
+                }
+            }
         };
         auto addType = [&](const ast::TypeDef* td, bool exported) {
-            if (!td) return;
-            if (auto constructors = kex::typeConstructors(*td))
-                for (const auto& constructor : *constructors)
-                    definitions[mangleModuleMember(
-                        path, constructor.name)] = {
+            if (!td) {
+                return;
+            }
+            if (auto constructors = kex::typeConstructors(*td)) {
+                for (const auto& constructor : *constructors) {
+                    definitions[mangleModuleMember(path, constructor.name)] = {
                         path, constructor.name, exported};
+                }
+            }
         };
         for (const auto& item : module.body) {
-            if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) add(fn->get(), true);
-            else if (auto* visibility = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
-                if (*visibility) for (const auto& entry : (*visibility)->items) {
-                    if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry))
-                        add(fn->get(), (*visibility)->isPublic);
-                    else if (auto* td =
-                                 std::get_if<std::unique_ptr<
-                                     ast::TypeDef>>(&entry))
-                        addType(td->get(),
-                                (*visibility)->isPublic);
-                    else if (auto* rd =
-                                 std::get_if<std::unique_ptr<ast::RecordDef>>(&entry))
-                        addRecord(rd->get());
-                    else if (auto* mk =
-                                 std::get_if<std::unique_ptr<ast::MakeDef>>(&entry))
-                        addMake(mk->get());
+            if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+                add(fn->get(), true);
+            } else if (
+                auto* visibility = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
+                if (*visibility) {
+                    for (const auto& entry : (*visibility)->items) {
+                        if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry)) {
+                            add(fn->get(), (*visibility)->isPublic);
+                        } else if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&entry)) {
+                            addType(td->get(), (*visibility)->isPublic);
+                        } else if (
+                            auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&entry)) {
+                            addRecord(rd->get());
+                        } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&entry)) {
+                            addMake(mk->get());
+                        }
+                    }
                 }
             } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
                 addMake(mk->get());
             } else if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
                 addRecord(rd->get());
-            } else if (auto* td =
-                           std::get_if<std::unique_ptr<ast::TypeDef>>(
-                               &item)) {
+            } else if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
                 addType(td->get(), true);
             } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
-                if (*child) collect(**child);
+                if (*child) {
+                    collect(**child);
+                }
             }
         }
     };
-    for (const auto& item : prog.items)
-        if (auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item); module && *module)
+    for (const auto& item : prog.items) {
+        if (auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item); module && *module) {
             collect(**module);
+        }
+    }
 
     ModuleTargets targets;
-    for (const auto& [emitted, def] : definitions)
-        targets[emitted] = {def.beamModule.empty() ? names::moduleAtom(def.path) : def.beamModule,
-                            def.sourceName};
+    for (const auto& [emitted, def] : definitions) {
+        targets[emitted] = {
+            def.beamModule.empty() ? names::moduleAtom(def.path) : def.beamModule, def.sourceName};
+    }
 
     // Serving slots stay in the module that declares them. The distribution
     // below routes a function to whichever module `definitions` says owns its
@@ -1932,22 +2233,24 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
     // applies `Module:add(State, …)` against its OWN module, got
     // `{'function not exported', {…, add, 3}}` (rodolfo docs/kex-issues.md #1).
     std::unordered_set<std::string> topLevelServingSlots;
-    for (const auto& item : prog.items)
+    for (const auto& item : prog.items) {
         if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item);
-            make && *make && (*make)->isServing)
-            for (const auto& member : (*make)->body)
-                if (const auto* fn =
-                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&member);
-                    fn && *fn && (*fn)->isSlot)
+            make && *make && (*make)->isServing) {
+            for (const auto& member : (*make)->body) {
+                if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&member);
+                    fn && *fn && (*fn)->isSlot) {
                     topLevelServingSlots.insert((*fn)->name);
+                }
+            }
+        }
+    }
 
     std::vector<Module> result;
     std::unordered_map<std::string, std::vector<FunDef>> moduleBuckets;
     std::vector<FunDef> globalFunctions;
     for (auto& fn : flat.functions) {
         auto found = definitions.find(fn.name);
-        if (found == definitions.end() ||
-            topLevelServingSlots.count(fn.name)) {
+        if (found == definitions.end() || topLevelServingSlots.count(fn.name)) {
             globalFunctions.push_back(std::move(fn));
             continue;
         }
@@ -2020,28 +2323,34 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
     // is left alone.
     for (const auto& slot : nestedServingSlots) {
         const auto beamModuleName = names::moduleAtom(slot.modulePath);
-        auto moduleIt = std::find_if(
-            stdlibModules.begin(), stdlibModules.end(),
-            [&](const Module& m) { return m.name == beamModuleName; });
-        if (moduleIt == stdlibModules.end()) continue;
+        auto moduleIt =
+            std::find_if(stdlibModules.begin(), stdlibModules.end(), [&](const Module& m) {
+                return m.name == beamModuleName;
+            });
+        if (moduleIt == stdlibModules.end()) {
+            continue;
+        }
         const bool hasBare = std::any_of(
             moduleIt->functions.begin(), moduleIt->functions.end(),
             [&](const FunDef& fn) { return fn.name == slot.slotName; });
-        if (hasBare) continue;
-        const auto mangled =
-            mangleReceiverImplementation(slot.slotName, slot.typeName);
+        if (hasBare) {
+            continue;
+        }
+        const auto mangled = mangleReceiverImplementation(slot.slotName, slot.typeName);
         auto implIt = std::find_if(
             moduleIt->functions.begin(), moduleIt->functions.end(),
             [&](const FunDef& fn) { return fn.name == mangled; });
-        if (implIt == moduleIt->functions.end()) continue;
-        moduleIt->functions.push_back(
-            servingSlotBareAlias(slot.slotName, implIt->arity, mangled));
+        if (implIt == moduleIt->functions.end()) {
+            continue;
+        }
+        moduleIt->functions.push_back(servingSlotBareAlias(slot.slotName, implIt->arity, mangled));
     }
     // Built AFTER ejection above so a dispatcher moved into the flat module
     // at the last minute is still a valid target for a call rewritten below.
     ModuleTargets globalTargets;
-    for (const auto& fn : flat.functions)
+    for (const auto& fn : flat.functions) {
         globalTargets[fn.name] = {flat.name, fn.name};
+    }
     result.push_back(std::move(flat));
     for (auto& module : stdlibModules) {
         module.servingSlots = result.front().servingSlots;
@@ -2052,40 +2361,42 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
     // What each module in this unit actually ends up defining, so a redirect
     // can be checked against it rather than trusting the name alone.
     ModuleDefined defined;
-    for (const auto& module : result)
-        for (const auto& fn : module.functions)
+    for (const auto& module : result) {
+        for (const auto& fn : module.functions) {
             defined[module.name].insert({fn.name, fn.arity});
+        }
+    }
 
     // The provider each name/arity really comes from, dispatcher preferred.
     ArityFallback fallback;
-    if (externals)
-        for (const auto& [name, candidates] : externals->receiverFunctions)
+    if (externals) {
+        for (const auto& [name, candidates] : externals->receiverFunctions) {
             for (const auto& candidate : candidates) {
                 auto key = std::make_pair(name, candidate.beamArity);
-                if (candidate.beamFunction == name || !fallback.count(key))
-                    fallback[key] = {candidate.moduleAtom,
-                                     candidate.beamFunction};
+                if (candidate.beamFunction == name || !fallback.count(key)) {
+                    fallback[key] = {candidate.moduleAtom, candidate.beamFunction};
+                }
             }
+        }
+    }
 
     for (size_t moduleIndex = 0; moduleIndex < result.size(); moduleIndex++) {
         auto& module = result[moduleIndex];
-        const auto* local =
-            moduleIndex == 0 ? &defined[module.name] : nullptr;
-        for (auto& fn : module.functions)
+        const auto* local = moduleIndex == 0 ? &defined[module.name] : nullptr;
+        for (auto& fn : module.functions) {
             for (auto& clause : fn.clauses) {
-                if (clause.guard)
-                    rewriteModuleCalls(*clause.guard, targets, defined,
-                                       fallback, local);
-                rewriteModuleCalls(clause.body, targets, defined, fallback,
-                                   local);
+                if (clause.guard) {
+                    rewriteModuleCalls(*clause.guard, targets, defined, fallback, local);
+                }
+                rewriteModuleCalls(clause.body, targets, defined, fallback, local);
                 if (moduleIndex > 0) {
-                    if (clause.guard)
-                        rewriteModuleCalls(*clause.guard, globalTargets,
-                                           defined, fallback);
-                    rewriteModuleCalls(clause.body, globalTargets, defined,
-                                       fallback);
+                    if (clause.guard) {
+                        rewriteModuleCalls(*clause.guard, globalTargets, defined, fallback);
+                    }
+                    rewriteModuleCalls(clause.body, globalTargets, defined, fallback);
                 }
             }
+        }
     }
     return result;
 }

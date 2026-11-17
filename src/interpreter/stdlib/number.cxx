@@ -9,7 +9,9 @@ auto Evaluator::registerNumberBuiltins() -> void {
     // uniformly, so modulo/abs work the same on a value that's overflowed
     // into the bignum representation as on a plain Int.
     defineIntrinsic("Integer.modulo", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::integer(0);
+        if (args.size() < 2) {
+            return Value::integer(0);
+        }
         auto a = asInteger(args[0]);
         auto b = asInteger(args[1]);
         if (a && b && *b != 0) {
@@ -19,25 +21,37 @@ auto Evaluator::registerNumberBuiltins() -> void {
             // divisor's sign (number.kex: "the result has the same sign as
             // +n+, consistent with mathematical modulo"), which is what the
             // BEAM runtime computes. `7.modulo(-3)` was 1 here and -2 there.
-            if (*b < 0 && result != 0) result += *b;
+            if (*b < 0 && result != 0) {
+                result += *b;
+            }
             return integerResult(result);
         }
         return Value::integer(0);
     });
 
     defineIntrinsic("Number.abs", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::integer(0);
-        if (auto i = asInteger(args[0])) return integerResult(abs(*i));
-        if (auto* f = std::get_if<FloatValue>(&args[0]->data))
+        if (args.empty()) {
+            return Value::integer(0);
+        }
+        if (auto i = asInteger(args[0])) {
+            return integerResult(abs(*i));
+        }
+        if (auto* f = std::get_if<FloatValue>(&args[0]->data)) {
             return Value::floating(f->value < 0 ? -f->value : f->value);
+        }
         return args[0];
     });
 
     defineIntrinsic("Number.sqrt", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::floating(0.0);
-        if (auto* i = std::get_if<IntValue>(&args[0]->data)) return Value::floating(std::sqrt(static_cast<double>(i->value)));
-        if (auto* f = std::get_if<FloatValue>(&args[0]->data))
+        if (args.empty()) {
+            return Value::floating(0.0);
+        }
+        if (auto* i = std::get_if<IntValue>(&args[0]->data)) {
+            return Value::floating(std::sqrt(static_cast<double>(i->value)));
+        }
+        if (auto* f = std::get_if<FloatValue>(&args[0]->data)) {
             return Value::floating(std::sqrt(f->value));
+        }
         return Value::floating(0.0);
     });
 
@@ -47,10 +61,14 @@ auto Evaluator::registerNumberBuiltins() -> void {
     // (e.g. a named zero-arg function) that cannot accept one. Lambdas
     // tolerate the extra argument either way; named callables do not.
     defineIntrinsic("Integer.times", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return args.empty() ? Value::none() : args[0];
+        if (args.size() < 2) {
+            return args.empty() ? Value::none() : args[0];
+        }
         auto* n = std::get_if<IntValue>(&args[0]->data);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
-        if (!n || !fn || !fn->native) return args[0];
+        if (!n || !fn || !fn->native) {
+            return args[0];
+        }
         if (fn->arity == 0) {
             for (int64_t i = 0; i < n->value; i++) {
                 fn->native({});
@@ -64,18 +82,28 @@ auto Evaluator::registerNumberBuiltins() -> void {
     });
 
     defineIntrinsic("Number.floor", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::integer(0);
-        if (auto i = asInteger(args[0])) return integerResult(*i);
-        if (auto* f = std::get_if<FloatValue>(&args[0]->data))
+        if (args.empty()) {
+            return Value::integer(0);
+        }
+        if (auto i = asInteger(args[0])) {
+            return integerResult(*i);
+        }
+        if (auto* f = std::get_if<FloatValue>(&args[0]->data)) {
             return Value::integer(static_cast<int64_t>(std::floor(f->value)));
+        }
         return Value::integer(0);
     });
 
     defineIntrinsic("Number.ceil", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::integer(0);
-        if (auto i = asInteger(args[0])) return integerResult(*i);
-        if (auto* f = std::get_if<FloatValue>(&args[0]->data))
+        if (args.empty()) {
+            return Value::integer(0);
+        }
+        if (auto i = asInteger(args[0])) {
+            return integerResult(*i);
+        }
+        if (auto* f = std::get_if<FloatValue>(&args[0]->data)) {
             return Value::integer(static_cast<int64_t>(std::ceil(f->value)));
+        }
         return Value::integer(0);
     });
 
@@ -83,18 +111,28 @@ auto Evaluator::registerNumberBuiltins() -> void {
     // kex_intrinsic_number:toInteger/1, which number.kex's `Float.toInteger`
     // has always called on BEAM — the interpreter simply never defined it.
     defineIntrinsic("Number.toInteger", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::integer(0);
-        if (auto i = asInteger(args[0])) return integerResult(*i);
-        if (auto* f = std::get_if<FloatValue>(&args[0]->data))
+        if (args.empty()) {
+            return Value::integer(0);
+        }
+        if (auto i = asInteger(args[0])) {
+            return integerResult(*i);
+        }
+        if (auto* f = std::get_if<FloatValue>(&args[0]->data)) {
             return Value::integer(static_cast<int64_t>(std::trunc(f->value)));
+        }
         return Value::integer(0);
     });
 
     defineIntrinsic("Number.round", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::integer(0);
-        if (auto i = asInteger(args[0])) return integerResult(*i);
-        if (auto* f = std::get_if<FloatValue>(&args[0]->data))
+        if (args.empty()) {
+            return Value::integer(0);
+        }
+        if (auto i = asInteger(args[0])) {
+            return integerResult(*i);
+        }
+        if (auto* f = std::get_if<FloatValue>(&args[0]->data)) {
             return Value::integer(static_cast<int64_t>(std::round(f->value)));
+        }
         return Value::integer(0);
     });
 
@@ -106,26 +144,26 @@ auto Evaluator::registerNumberBuiltins() -> void {
     // without re-parsing. Complete failure stores Value::none() for value.
     // Built directly as RecordValue rather than calling the registered
     // constructors (those aren't wired for native-to-native calls).
-    auto parseError = [](const std::string& input, size_t position,
-                         ValuePtr value,
-                         const std::string& message,
-                         const std::string& rest) -> ValuePtr {
-        return Value::record("ParseError", {
-            {"input",    Value::string(input)},
-            {"position", Value::integer(static_cast<int64_t>(position))},
-            {"value",    value},
-            {"message",  Value::string(message)},
-            {"rest",     Value::string(rest)},
-        });
+    auto parseError = [](const std::string& input, size_t position, ValuePtr value,
+                         const std::string& message, const std::string& rest) -> ValuePtr {
+        return Value::record(
+            "ParseError", {
+                              {"input", Value::string(input)},
+                              {"position", Value::integer(static_cast<int64_t>(position))},
+                              {"value", value},
+                              {"message", Value::string(message)},
+                              {"rest", Value::string(rest)},
+                          });
     };
-    auto noVal = []() { return Value::none(); };  // no value parsed
+    auto noVal = []() { return Value::none(); }; // no value parsed
 
     defineModule("Float");
     defineIntrinsic("Float.formatFixed", [](std::vector<ValuePtr> args) -> ValuePtr {
         const auto places = args.size() > 1 ? asInteger(args[1]) : std::nullopt;
-        if (args.size() != 2 || !std::holds_alternative<FloatValue>(args[0]->data) ||
-            !places || *places < 0 || *places > 15)
+        if (args.size() != 2 || !std::holds_alternative<FloatValue>(args[0]->data) || !places ||
+            *places < 0 || *places > 15) {
             throw RuntimeError("decimal places must be between 0 and 15", {});
+        }
         const auto value = std::get<FloatValue>(args[0]->data).value;
         const auto count = static_cast<size_t>(places->get_ui());
         // Round the exact binary value, with ties away from zero, without
@@ -136,46 +174,61 @@ auto Evaluator::registerNumberBuiltins() -> void {
         mpz_class numerator = exact.get_num() * scale;
         const mpz_class denominator = exact.get_den();
         mpz_class rounded = numerator / denominator;
-        if ((numerator % denominator) * 2 >= denominator) ++rounded;
+        if ((numerator % denominator) * 2 >= denominator) {
+            ++rounded;
+        }
         auto result = rounded.get_str();
         if (count > 0) {
-            if (result.size() <= count) result.insert(0, count + 1 - result.size(), '0');
+            if (result.size() <= count) {
+                result.insert(0, count + 1 - result.size(), '0');
+            }
             result.insert(result.size() - count, 1, '.');
         }
-        if (value < 0 && rounded != 0) result.insert(0, 1, '-');
+        if (value < 0 && rounded != 0) {
+            result.insert(0, 1, '-');
+        }
         return Value::string(result);
     });
     defineIntrinsic("Float.parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!s) return Value::error(parseError("", 0, noVal(), "Float.parse expects a String", ""));
+        if (!s) {
+            return Value::error(parseError("", 0, noVal(), "Float.parse expects a String", ""));
+        }
         size_t consumed = 0;
         try {
             double v = std::stod(s->value, &consumed);
             // std::stod accepts "nan" and "inf"; Kex has no such Float values
             // (see nonFiniteFloatError), so they are invalid input here just
             // as they are for Erlang's binary_to_float.
-            if (auto bad = nonFiniteFloatError(v, "Float.parse"))
+            if (auto bad = nonFiniteFloatError(v, "Float.parse")) {
                 return Value::error(parseError(s->value, 0, noVal(), "invalid float", s->value));
-            if (consumed != s->value.size())
-                return Value::error(parseError(s->value, consumed, Value::floating(v),
-                                               "trailing characters after float",
-                                               s->value.substr(consumed)));
+            }
+            if (consumed != s->value.size()) {
+                return Value::error(parseError(
+                    s->value, consumed, Value::floating(v), "trailing characters after float",
+                    s->value.substr(consumed)));
+            }
             return Value::ok(Value::floating(v));
         } catch (const std::exception&) {
-            return Value::error(parseError(s->value, consumed, noVal(), "invalid float",
-                                           s->value.substr(consumed)));
+            return Value::error(parseError(
+                s->value, consumed, noVal(), "invalid float", s->value.substr(consumed)));
         }
     });
 
     // Float.parsePrefix(s) -> Just((Float, String)) | None
     defineIntrinsic("Float.parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!s) return Value::none();
+        if (!s) {
+            return Value::none();
+        }
         size_t consumed = 0;
         try {
             double v = std::stod(s->value, &consumed);
-            if (nonFiniteFloatError(v, "Float.parsePrefix")) return Value::none();
-            return Value::just(Value::tuple({Value::floating(v), Value::string(s->value.substr(consumed))}));
+            if (nonFiniteFloatError(v, "Float.parsePrefix")) {
+                return Value::none();
+            }
+            return Value::just(
+                Value::tuple({Value::floating(v), Value::string(s->value.substr(consumed))}));
         } catch (const std::exception&) {
             return Value::none();
         }
@@ -184,7 +237,9 @@ auto Evaluator::registerNumberBuiltins() -> void {
     defineModule("Integer");
     defineIntrinsic("Integer.parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!s) return Value::error(parseError("", 0, noVal(), "Integer.parse expects a String", ""));
+        if (!s) {
+            return Value::error(parseError("", 0, noVal(), "Integer.parse expects a String", ""));
+        }
 
         // Integer.parse(s, radix: 16) — the whole string in the given base.
         // Unlike base 10 there is no partial-parse story worth telling here:
@@ -192,82 +247,105 @@ auto Evaluator::registerNumberBuiltins() -> void {
         // bad digit is simply an invalid integer.
         if (args.size() >= 2) {
             auto radix = asInteger(args[1]);
-            if (!radix || *radix < 2 || *radix > 36)
-                return Value::error(parseError(s->value, 0, noVal(),
-                                               "radix must be between 2 and 36", s->value));
-            if (auto parsed = parseIntegerInBase(s->value, static_cast<int>(radix->get_si())))
+            if (!radix || *radix < 2 || *radix > 36) {
+                return Value::error(
+                    parseError(s->value, 0, noVal(), "radix must be between 2 and 36", s->value));
+            }
+            if (auto parsed = parseIntegerInBase(s->value, static_cast<int>(radix->get_si()))) {
                 return Value::ok(integerResult(*parsed));
-            return Value::error(parseError(s->value, 0, noVal(),
-                                           "invalid integer for radix " + radix->get_str(),
-                                           s->value));
+            }
+            return Value::error(parseError(
+                s->value, 0, noVal(), "invalid integer for radix " + radix->get_str(), s->value));
         }
 
         size_t consumed = 0;
         try {
             int64_t v = std::stoll(s->value, &consumed);
-            if (consumed != s->value.size())
-                return Value::error(parseError(s->value, consumed, Value::integer(v),
-                                               "trailing characters after integer",
-                                               s->value.substr(consumed)));
+            if (consumed != s->value.size()) {
+                return Value::error(parseError(
+                    s->value, consumed, Value::integer(v), "trailing characters after integer",
+                    s->value.substr(consumed)));
+            }
             return Value::ok(Value::integer(v));
         } catch (const std::out_of_range&) {
             ValuePtr prefixVal = noVal();
             if (consumed > 0) {
-                try { prefixVal = integerResult(mpz_class(s->value.substr(0, consumed))); }
-                catch (...) {}
+                try {
+                    prefixVal = integerResult(mpz_class(s->value.substr(0, consumed)));
+                } catch (...) {}
             }
             try {
                 return Value::ok(integerResult(mpz_class(s->value)));
             } catch (const std::exception&) {
-                return Value::error(parseError(s->value, consumed, prefixVal, "invalid integer",
-                                               s->value.substr(consumed)));
+                return Value::error(parseError(
+                    s->value, consumed, prefixVal, "invalid integer", s->value.substr(consumed)));
             }
         } catch (const std::exception&) {
-            return Value::error(parseError(s->value, consumed, noVal(), "invalid integer",
-                                           s->value.substr(consumed)));
+            return Value::error(parseError(
+                s->value, consumed, noVal(), "invalid integer", s->value.substr(consumed)));
         }
     });
 
     // Integer.parsePrefix(s) -> Just((Integer, String)) | None
     defineIntrinsic("Integer.parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!s) return Value::none();
+        if (!s) {
+            return Value::none();
+        }
         size_t consumed = 0;
         try {
             int64_t v = std::stoll(s->value, &consumed);
-            return Value::just(Value::tuple({Value::integer(v), Value::string(s->value.substr(consumed))}));
+            return Value::just(
+                Value::tuple({Value::integer(v), Value::string(s->value.substr(consumed))}));
         } catch (const std::out_of_range&) {
             size_t i = 0;
-            if (i < s->value.size() && (s->value[i] == '+' || s->value[i] == '-')) i++;
+            if (i < s->value.size() && (s->value[i] == '+' || s->value[i] == '-')) {
+                i++;
+            }
             size_t d = i;
-            while (d < s->value.size() && s->value[d] >= '0' && s->value[d] <= '9') d++;
-            if (d == i) return Value::none();
+            while (d < s->value.size() && s->value[d] >= '0' && s->value[d] <= '9') {
+                d++;
+            }
+            if (d == i) {
+                return Value::none();
+            }
             try {
                 auto big = mpz_class(s->value.substr(0, d));
-                return Value::just(Value::tuple({integerResult(big), Value::string(s->value.substr(d))}));
-            } catch (const std::exception&) { return Value::none(); }
-        } catch (const std::exception&) { return Value::none(); }
+                return Value::just(
+                    Value::tuple({integerResult(big), Value::string(s->value.substr(d))}));
+            } catch (const std::exception&) {
+                return Value::none();
+            }
+        } catch (const std::exception&) {
+            return Value::none();
+        }
     });
 
     defineModule("Number");
     defineIntrinsic("Number.parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!s) return Value::error(parseError("", 0, noVal(), "Number.parse expects a String", ""));
+        if (!s) {
+            return Value::error(parseError("", 0, noVal(), "Number.parse expects a String", ""));
+        }
         size_t consumed = 0;
         try {
             int64_t v = std::stoll(s->value, &consumed);
-            if (consumed == s->value.size()) return Value::ok(Value::integer(v));
+            if (consumed == s->value.size()) {
+                return Value::ok(Value::integer(v));
+            }
         } catch (const std::out_of_range&) {
-            try { return Value::ok(integerResult(mpz_class(s->value))); } catch (...) {}
+            try {
+                return Value::ok(integerResult(mpz_class(s->value)));
+            } catch (...) {}
         } catch (...) {}
         try {
             double v = std::stod(s->value, &consumed);
-            if (consumed == s->value.size() && !nonFiniteFloatError(v, "Number.parse"))
+            if (consumed == s->value.size() && !nonFiniteFloatError(v, "Number.parse")) {
                 return Value::ok(Value::floating(v));
+            }
         } catch (...) {}
         return Value::error(parseError(s->value, 0, noVal(), "invalid number", s->value));
     });
-
 }
 
 } // namespace kex::interpreter

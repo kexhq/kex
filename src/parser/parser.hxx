@@ -40,7 +40,9 @@ public:
         // for every node the parser completes cost every build a share of
         // its parse time, for a tree only `--emit-syntax` prints.
         const std::type_info* type = nullptr;
-        auto kind() const -> std::string { return syntaxKindName(*type); }
+        auto kind() const -> std::string {
+            return syntaxKindName(*type);
+        }
         int startOffset = -1;
         int endOffset = -1;
     };
@@ -61,24 +63,28 @@ private:
     auto expect(TokenType type, const std::string& message) -> const Token&;
     auto skipNewlines() -> void;
     auto currentLocation() const -> SourceLocation;
-    template<typename T>
+    template <typename T>
     auto complete(std::unique_ptr<T> node) const -> std::unique_ptr<T> {
-        if (node && m_pos > 0)
+        if (node && m_pos > 0) {
             node->location.endOffset = m_tokens[m_pos - 1].endOffset;
-        if (node)
-            m_syntaxSpans.push_back({&syntaxKindOf(*node),
-                                     node->location.startOffset,
-                                     node->location.endOffset});
+        }
+        if (node) {
+            m_syntaxSpans.push_back(
+                {&syntaxKindOf(*node), node->location.startOffset, node->location.endOffset});
+        }
         return node;
     }
     // A node's syntax kind: its type's name, or — for the variant-shaped
     // Expr, Pattern and TypeExpr — the name of the alternative it holds.
-    template<typename T>
+    template <typename T>
     static auto syntaxKindOf(const T& node) -> const std::type_info& {
-        if constexpr (requires { node.kind.valueless_by_exception(); })
-            return std::visit([](const auto& alternative) -> const std::type_info& {
-                return typeid(alternative);
-            }, node.kind);
+        if constexpr (requires { node.kind.valueless_by_exception(); }) {
+            return std::visit(
+                [](const auto& alternative) -> const std::type_info& {
+                    return typeid(alternative);
+                },
+                node.kind);
+        }
         return typeid(node);
     }
     static auto syntaxKindName(const std::type_info& type) -> std::string;
@@ -86,8 +92,8 @@ private:
 
     // Top-level
     auto parseTopLevelItem() -> ast::TopLevelItem;
-    auto parseModuleDef(bool allowStandalone = false,
-                        const std::string& parentModule = "") -> std::unique_ptr<ast::ModuleDef>;
+    auto parseModuleDef(bool allowStandalone = false, const std::string& parentModule = "")
+        -> std::unique_ptr<ast::ModuleDef>;
     auto parseTypeDef() -> std::unique_ptr<ast::TypeDef>;
     auto parseRecordDef() -> std::unique_ptr<ast::RecordDef>;
     auto parseRecordBody(ast::RecordDef& into) -> void;
@@ -104,9 +110,10 @@ private:
     auto parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock>;
     auto parseUsingBlock() -> std::unique_ptr<ast::UsingBlock>;
     auto parseExportDecl() -> std::unique_ptr<ast::ExportDecl>;
-    auto parseUsingOptions(std::optional<std::string>& alias,
-                           std::vector<std::string>& onlyNames,
-                           std::vector<std::string>& exceptNames) -> void;
+    auto parseUsingOptions(
+        std::optional<std::string>& alias,
+        std::vector<std::string>& onlyNames,
+        std::vector<std::string>& exceptNames) -> void;
     auto parseMainBlock() -> std::unique_ptr<ast::MainBlock>;
     auto parsePragma() -> std::unique_ptr<ast::Pragma>;
     auto parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock>;
@@ -216,7 +223,7 @@ private:
     int m_pos = 0;
     bool m_noDoBlocks = false;
     std::vector<ast::TopLevelItem> m_deferredTopLevelItems;
-    bool m_noThenExpr = false; // suppress `then` as ternary inside if-conditions
+    bool m_noThenExpr = false;      // suppress `then` as ternary inside if-conditions
     bool m_inTypeSignature = false; // `name : T`: `->` may lead the next line
     // Set by a make body for the member it is about to parse: any keyword may
     // name it, since it is only reached after `.` (kexhq/kex#508).

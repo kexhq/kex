@@ -1,6 +1,6 @@
 #pragma once
 
-#include "analyzer.hxx"  // completes db.hxx's forward-declared Diagnostic
+#include "analyzer.hxx" // completes db.hxx's forward-declared Diagnostic
 #include "symbol_info.hxx"
 #include "imported_interfaces.hxx"
 #include "types.hxx"
@@ -24,8 +24,8 @@ auto completionQualifierForType(const TypePtr& type) -> std::string;
 // Walks the real shape of the receiver — identifiers, balanced `(...)`/
 // `[...]`, and quoted strings, joined by dots, across line breaks.
 struct DotReceiver {
-    size_t start = 0;  // first byte of the receiver expression
-    size_t dot = 0;    // the '.' the member being typed hangs off
+    size_t start = 0; // first byte of the receiver expression
+    size_t dot = 0;   // the '.' the member being typed hangs off
     // Where the AST records the OUTERMOST expression of the receiver. A call
     // is recorded at its argument list's `(`, not at the receiver it hangs
     // off: in a builder chain `Web.Server.new(0)\n  .get("/", ~h)` the last
@@ -63,9 +63,12 @@ struct CheckedReceiver {
     CheckedSource checked;
     const ast::Expr* expression = nullptr;
 };
-auto checkedReceiver(const CompletionChecker& check, const std::string& source,
-                     const std::string& path, const DotReceiver& receiver,
-                     size_t cursor) -> std::optional<CheckedReceiver>;
+auto checkedReceiver(
+    const CompletionChecker& check,
+    const std::string& source,
+    const std::string& path,
+    const DotReceiver& receiver,
+    size_t cursor) -> std::optional<CheckedReceiver>;
 // Whether the receiver ends in a call by a bare name (`words()`), which is
 // recorded where the name is, not at the call's `(`.
 auto bareCallReceiver(const std::string& source, const DotReceiver& receiver) -> bool;
@@ -75,21 +78,23 @@ auto receiverTypeOf(const Analyzer& analyzer, const ast::Expr* expression) -> Ty
 
 // The type of an arbitrary receiver expression, by re-checking `source` with
 // the half-typed member removed and asking the analyzer.
-auto recoveredReceiverQualifier(const CompletionChecker& check,
-                                const std::string& source,
-                                const std::string& path,
-                                const DotReceiver& receiver, size_t cursor,
-                                const ImportedInterfaces* interfaces)
-    -> std::string;
+auto recoveredReceiverQualifier(
+    const CompletionChecker& check,
+    const std::string& source,
+    const std::string& path,
+    const DotReceiver& receiver,
+    size_t cursor,
+    const ImportedInterfaces* interfaces) -> std::string;
 
 // What the files at `paths` declare, each parsed and expanded (with `roots`
 // for the modules an expansion reads): the base of the names completion
 // offers, such as the prelude's sources, or a module loaded for its members.
-auto symbolsOfFiles(const std::vector<std::string>& paths,
-                    const std::vector<std::string>& roots) -> std::vector<SymbolInfo>;
+auto symbolsOfFiles(const std::vector<std::string>& paths, const std::vector<std::string>& roots)
+    -> std::vector<SymbolInfo>;
 // What `source`, read as the file `path`, declares.
-auto symbolsOfSource(const std::string& path, std::string source,
-                     const std::vector<std::string>& roots) -> std::vector<SymbolInfo>;
+auto symbolsOfSource(
+    const std::string& path, std::string source, const std::vector<std::string>& roots)
+    -> std::vector<SymbolInfo>;
 
 // The delimiters and `do` blocks still open at the end of `text`, closed in
 // order: what a half-typed line needs appended so that it parses.
@@ -108,10 +113,13 @@ struct CompletionAt {
 // Completions at byte offset `cursor` in `source`, checked under `path`.
 // Names are those the checked program declares (the user's definitions, its
 // `using` modules) and `base`'s (the prelude's, modules loaded besides).
-auto completeAt(const std::vector<SymbolInfo>& base, const CompletionChecker& check,
-                const std::string& path, const std::string& source,
-                size_t cursor, const ImportedInterfaces* interfaces)
-    -> CompletionAt;
+auto completeAt(
+    const std::vector<SymbolInfo>& base,
+    const CompletionChecker& check,
+    const std::string& path,
+    const std::string& source,
+    size_t cursor,
+    const ImportedInterfaces* interfaces) -> CompletionAt;
 
 // Completions for a REPL input line, shared by the native REPL (main.cxx) and
 // the wasm REPL (wasm_repl.cxx) so their program-splicing cannot drift.
@@ -123,11 +131,15 @@ auto completeAt(const std::vector<SymbolInfo>& base, const CompletionChecker& ch
 // analyzer types the receiver exactly as it is being typed. `declaration`
 // selects the definition splice (no `main do`/`end` wrapper). The result's
 // `replaceFrom` is an offset within `line`.
-auto completeReplInput(const std::vector<SymbolInfo>& base, const CompletionChecker& check,
-                       const std::string& definitions,
-                       const std::string& bindings,
-                       const std::string& input, const std::string& line,
-                       size_t point, bool declaration,
-                       const ImportedInterfaces* interfaces) -> CompletionAt;
+auto completeReplInput(
+    const std::vector<SymbolInfo>& base,
+    const CompletionChecker& check,
+    const std::string& definitions,
+    const std::string& bindings,
+    const std::string& input,
+    const std::string& line,
+    size_t point,
+    bool declaration,
+    const ImportedInterfaces* interfaces) -> CompletionAt;
 
 } // namespace kex::semantic

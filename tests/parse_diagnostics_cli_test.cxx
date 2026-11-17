@@ -45,17 +45,15 @@ auto runKexParse(const std::string& sourcePath) -> Result {
     close(outFd);
     close(errFd);
 
-    std::string cmd = std::string(KEX_BINARY_PATH) + " --parse " + sourcePath +
-                       " > " + outPath + " 2> " + errPath;
+    std::string cmd = std::string(KEX_BINARY_PATH) + " --parse " + sourcePath + " > " + outPath +
+                      " 2> " + errPath;
     int status = std::system(cmd.c_str());
 
     auto read = [](const char* path) {
         std::ifstream file(path);
-        return std::string(std::istreambuf_iterator<char>(file),
-                           std::istreambuf_iterator<char>());
+        return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     };
-    Result result{read(outPath), read(errPath),
-                  WIFEXITED(status) ? WEXITSTATUS(status) : -1};
+    Result result{read(outPath), read(errPath), WIFEXITED(status) ? WEXITSTATUS(status) : -1};
     std::remove(outPath);
     std::remove(errPath);
     return result;
@@ -83,12 +81,15 @@ int main() {
             const auto result = runKexParse(path);
             std::remove(path.c_str());
 
-            assertTrue(result.exitCode != 0,
-                       "a malformed multi-line condition must fail --parse, not exit 0");
-            assertTrue(result.err.find("error") != std::string::npos,
-                       "stderr should report the syntax error");
-            assertTrue(result.out.find("Program (0 items)") == std::string::npos,
-                       "must not silently print an empty/partial AST as if nothing were wrong");
+            assertTrue(
+                result.exitCode != 0,
+                "a malformed multi-line condition must fail --parse, not exit 0");
+            assertTrue(
+                result.err.find("error") != std::string::npos,
+                "stderr should report the syntax error");
+            assertTrue(
+                result.out.find("Program (0 items)") == std::string::npos,
+                "must not silently print an empty/partial AST as if nothing were wrong");
         });
 
         it("still parses cleanly when the multi-line condition is parenthesized", [&]() {
@@ -103,8 +104,9 @@ int main() {
             std::remove(path.c_str());
 
             assertEqual(result.exitCode, 0);
-            assertTrue(result.out.find("later") != std::string::npos,
-                       "the declaration after the parenthesized condition must survive");
+            assertTrue(
+                result.out.find("later") != std::string::npos,
+                "the declaration after the parenthesized condition must survive");
         });
     });
 

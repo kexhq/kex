@@ -12,14 +12,22 @@ auto Lowering::lowerParam(const ast::Param& p) -> PatternPtr {
     // duplicate `_` in the clause head and erlc refused the module.
     if (p.name && !names::isWildcard(*p.name)) {
         auto pat = std::make_unique<Pattern>();
-        pat->kind = PatKind::Var; pat->name = *p.name;
+        pat->kind = PatKind::Var;
+        pat->name = *p.name;
         subst[*p.name] = *p.name;
         return pat;
     }
-    if (p.pattern)
-        if (auto selector = typeNameParameter(**p.pattern)) return selector;
-    if (p.pattern) return lowerPattern(*p.pattern);
-    auto w = std::make_unique<Pattern>(); w->kind = PatKind::Wild; return w;
+    if (p.pattern) {
+        if (auto selector = typeNameParameter(**p.pattern)) {
+            return selector;
+        }
+    }
+    if (p.pattern) {
+        return lowerPattern(*p.pattern);
+    }
+    auto w = std::make_unique<Pattern>();
+    w->kind = PatKind::Wild;
+    return w;
 }
 
 // A parameter written as a type name (`let to(value, String)`) takes that
@@ -27,7 +35,9 @@ auto Lowering::lowerParam(const ast::Param& p) -> PatternPtr {
 // the pattern matches the record's name. Which parameters are, the checker
 // decided (typeSelectorParameter).
 auto Lowering::typeNameParameter(const ast::Pattern& p) -> PatternPtr {
-    if (!hir->isTypeSelector(p)) return nullptr;
+    if (!hir->isTypeSelector(p)) {
+        return nullptr;
+    }
     const auto& name = std::get<ast::ConstructorPattern>(p.kind).name;
     auto record = std::make_unique<Pattern>();
     record->kind = PatKind::Construct;
@@ -37,7 +47,9 @@ auto Lowering::typeNameParameter(const ast::Pattern& p) -> PatternPtr {
     text->litKind = LitKind::String;
     text->litText = name;
     record->args.push_back(std::move(text));
-    for (int field = 0; field < 2; ++field) record->args.push_back(wildPat());
+    for (int field = 0; field < 2; ++field) {
+        record->args.push_back(wildPat());
+    }
     return record;
 }
 
@@ -47,10 +59,18 @@ auto Lowering::typeNameParameter(const ast::Pattern& p) -> PatternPtr {
 // guarding on one would emit a tag comparison nothing satisfies.
 auto Lowering::discriminatingType(const std::string& written) const -> bool {
     const auto test = typeTestOf(written);
-    if (test.form == semantic::TypeForm::Any) return false;
-    if (test.form != semantic::TypeForm::Named) return true;
-    if (primGuardBifs().count(test.name) || test.name == "Char") return true;
-    if (records.count(test.identity)) return true;
+    if (test.form == semantic::TypeForm::Any) {
+        return false;
+    }
+    if (test.form != semantic::TypeForm::Named) {
+        return true;
+    }
+    if (primGuardBifs().count(test.name) || test.name == "Char") {
+        return true;
+    }
+    if (records.count(test.identity)) {
+        return true;
+    }
     // An ADT TYPE discriminates through `adtGuard`, which tests each of
     // its variant tags — the nullary ones as bare atoms. Before that
     // existed, typeGuard's tagged fallback asked `element(1, V)`, which no
@@ -58,8 +78,9 @@ auto Lowering::discriminatingType(const std::string& written) const -> bool {
     // clause had to be left unguarded. That is how a free function
     // overloaded on two ADTs answered from its first clause on BEAM while
     // the walker dispatched it (docs/issue-free-function-overloads.md).
-    if (auto tags = typeVariantTags.find(test.identity); tags != typeVariantTags.end())
+    if (auto tags = typeVariantTags.find(test.identity); tags != typeVariantTags.end()) {
         return !tags->second.empty();
+    }
     // A type a module declares is tagged with its identity.
     return localTypeModules.count(test.name) > 0 || test.identity != test.name;
 }
@@ -68,31 +89,32 @@ auto Lowering::discriminatingType(const std::string& written) const -> bool {
 // functions as separate `let` declarations) into one multi-clause FunDef.
 // implicitThisName: when non-empty, a receiver param of that name is
 // prepended to every clause (make-block methods: `this`).
-auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& group,
-                        const std::string& implicitThisName ,
-                        const std::string& nameOverride ) -> FunDef {
+auto Lowering::lowerFunctionGroup(
+    const std::vector<const ast::FunctionDef*>& group,
+    const std::string& implicitThisName,
+    const std::string& nameOverride) -> FunDef {
     FunDef def;
     def.name = nameOverride.empty() ? group[0]->name : nameOverride;
-    int explicitArity = group[0]->clauses.empty()
-        ? 0 : static_cast<int>(group[0]->clauses[0].params.size());
+    int explicitArity =
+        group[0]->clauses.empty() ? 0 : static_cast<int>(group[0]->clauses[0].params.size());
     auto traitNameOf = [&](const ast::Param& param) { return hir->parameterTraitOf(param); };
     int dictionaryArity = 0;
-    if (!group[0]->clauses.empty())
-        for (const auto& param : group[0]->clauses[0].params)
+    if (!group[0]->clauses.empty()) {
+        for (const auto& param : group[0]->clauses[0].params) {
             if (auto trait = traitNameOf(param); !trait.empty()) {
                 ++dictionaryArity;
                 def.dictionaryTraits.push_back(trait);
             }
+        }
+    }
     // `make Shape do` inside `module Geo` targets the trait `Geo.Shape`.
-    const auto makeTrait = implicitThisName.empty()
-        ? std::string{} : hir->makeTargetTraitOf(*group[0]);
-    const bool implicitThisDictionary = !makeTrait.empty() &&
+    const auto makeTrait =
+        implicitThisName.empty() ? std::string{} : hir->makeTargetTraitOf(*group[0]);
+    const bool implicitThisDictionary =
+        !makeTrait.empty() &&
         std::none_of(
-            traitMethods.at(makeTrait).begin(),
-            traitMethods.at(makeTrait).end(),
-            [&](const auto& required) {
-                return required.name == group[0]->name;
-            });
+            traitMethods.at(makeTrait).begin(), traitMethods.at(makeTrait).end(),
+            [&](const auto& required) { return required.name == group[0]->name; });
     if (implicitThisDictionary) {
         ++dictionaryArity;
         def.dictionaryTraits.push_back(makeTrait);
@@ -107,8 +129,7 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
     // threaded caller — the substitution dispatch passes the context
     // through as well (kexhq/kex#181).
     const bool wantsContext = threadsCapabilities() && foulDef;
-    def.arity = explicitArity + dictionaryArity +
-                (implicitThisName.empty() ? 0 : 1) +
+    def.arity = explicitArity + dictionaryArity + (implicitThisName.empty() ? 0 : 1) +
                 (wantsContext ? 1 : 0);
     def.hasCapabilityContext = wantsContext;
     auto savedModulePath = currentModulePath;
@@ -130,20 +151,27 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
     // (`{ status, body }`, no type name) stays excluded: it matches any
     // record with those fields, which is structural, not a single tag.
     auto namedRecordPatternType = [](const ast::Param& p) -> std::string {
-        if (p.name || !p.pattern) return "";
-        if (auto* rp = std::get_if<ast::RecordPattern>(&(*p.pattern)->kind))
+        if (p.name || !p.pattern) {
+            return "";
+        }
+        if (auto* rp = std::get_if<ast::RecordPattern>(&(*p.pattern)->kind)) {
             return rp->typeName;
+        }
         return "";
     };
     const bool overloadedByParamType = [&] {
         // Clauses, not declarations: overloads folded into one function
         // (kexhq/kex#262) arrive as a single FunctionDef.
         std::size_t clauses = 0;
-        for (const auto* fn : group) clauses += fn->clauses.size();
-        if (clauses < 2) return false;
+        for (const auto* fn : group) {
+            clauses += fn->clauses.size();
+        }
+        if (clauses < 2) {
+            return false;
+        }
         std::vector<std::string> signature;
         bool differs = false;
-        for (const auto* fn : group)
+        for (const auto* fn : group) {
             for (const auto& clause : fn->clauses) {
                 std::vector<std::string> current;
                 for (const auto& p : clause.params) {
@@ -160,12 +188,18 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
                     // and the whole clause set fell through to
                     // function_clause.
                     const auto* declared = dispatchParamType(p);
-                    if (!p.name || !declared) return false;
+                    if (!p.name || !declared) {
+                        return false;
+                    }
                     current.push_back(hir->annotationSpelling(*declared));
                 }
-                if (signature.empty()) signature = current;
-                else if (signature != current) differs = true;
+                if (signature.empty()) {
+                    signature = current;
+                } else if (signature != current) {
+                    differs = true;
+                }
             }
+        }
         return differs;
     }();
     for (const auto* fn : group) {
@@ -181,7 +215,8 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
                 subst["new"] = implicitThisName;
                 immutableBindings.erase("new");
                 auto pat = std::make_unique<Pattern>();
-                pat->kind = PatKind::Var; pat->name = implicitThisName;
+                pat->kind = PatKind::Var;
+                pat->name = implicitThisName;
                 fc.params.push_back(std::move(pat));
             }
             // A record-destructure or range receiver param can't be a
@@ -200,24 +235,41 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
                     auto& pk = (*p.pattern)->kind;
                     if (auto* rp = std::get_if<ast::RecordPattern>(&pk)) {
                         std::string rv = fresh("rec");
-                        auto vp = std::make_unique<Pattern>(); vp->kind = PatKind::Var; vp->name = rv;
+                        auto vp = std::make_unique<Pattern>();
+                        vp->kind = PatKind::Var;
+                        vp->name = rv;
                         fc.params.push_back(std::move(vp));
                         recordPatterns.push_back({rv, rp});
-                        if (!rp->typeName.empty())
+                        if (!rp->typeName.empty()) {
                             recordDispatchTargets.push_back({hir->recordOfPattern(*rp), rv});
+                        }
                         std::vector<std::string> names;
                         collectRecordBindings(*rp, names);
-                        for (const auto& name : names) subst[name] = name;
+                        for (const auto& name : names) {
+                            subst[name] = name;
+                        }
                         continue;
                     }
                     if (auto* rgp = std::get_if<ast::RangePattern>(&pk)) {
                         std::string rv = fresh("rng");
-                        auto vp = std::make_unique<Pattern>(); vp->kind = PatKind::Var; vp->name = rv;
+                        auto vp = std::make_unique<Pattern>();
+                        vp->kind = PatKind::Var;
+                        vp->name = rv;
                         fc.params.push_back(std::move(vp));
-                        if (rgp->start) if (auto* sv = std::get_if<ast::VarPattern>(&rgp->start->kind))
-                            prefix.push_back({sv->name, callE("kex_intrinsic_range","first",1,one(var(rv)))});
-                        if (rgp->end) if (auto* ev = std::get_if<ast::VarPattern>(&rgp->end->kind))
-                            prefix.push_back({ev->name, callE("kex_intrinsic_range","last",1,one(var(rv)))});
+                        if (rgp->start) {
+                            if (auto* sv = std::get_if<ast::VarPattern>(&rgp->start->kind)) {
+                                prefix.push_back(
+                                    {sv->name,
+                                     callE("kex_intrinsic_range", "first", 1, one(var(rv)))});
+                            }
+                        }
+                        if (rgp->end) {
+                            if (auto* ev = std::get_if<ast::VarPattern>(&rgp->end->kind)) {
+                                prefix.push_back(
+                                    {ev->name,
+                                     callE("kex_intrinsic_range", "last", 1, one(var(rv)))});
+                            }
+                        }
                         continue;
                     }
                 }
@@ -225,10 +277,12 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
             }
             for (const auto& p : clause.params) {
                 auto trait = traitNameOf(p);
-                if (trait.empty()) continue;
-                if (!p.name)
-                    throw LowerError(
-                        "IR lower: trait-typed dictionary parameter must be named");
+                if (trait.empty()) {
+                    continue;
+                }
+                if (!p.name) {
+                    throw LowerError("IR lower: trait-typed dictionary parameter must be named");
+                }
                 auto dictionary = fresh("Dict_" + *p.name + "_" + trait);
                 auto pat = std::make_unique<Pattern>();
                 pat->kind = PatKind::Var;
@@ -237,14 +291,12 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
                 traitDictionaries[*p.name][trait] = dictionary;
             }
             if (implicitThisDictionary) {
-                auto dictionary = fresh("Dict_" + implicitThisName + "_" +
-                                        currentMakeType);
+                auto dictionary = fresh("Dict_" + implicitThisName + "_" + currentMakeType);
                 auto pat = std::make_unique<Pattern>();
                 pat->kind = PatKind::Var;
                 pat->name = dictionary;
                 fc.params.push_back(std::move(pat));
-                traitDictionaries[implicitThisName][currentMakeType] =
-                    dictionary;
+                traitDictionaries[implicitThisName][currentMakeType] = dictionary;
             }
             // The context is the last parameter, after any trait
             // dictionaries, and is in scope for the whole body so calls
@@ -275,21 +327,24 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
             if (overloadedByParamType) {
                 ExprPtr guard;
                 auto addGuardTest = [&](const std::string& written, ExprPtr subject) {
-                    if (!discriminatingType(written)) return;
+                    if (!discriminatingType(written)) {
+                        return;
+                    }
                     auto test = typeGuard(written, std::move(subject));
-                    guard = guard ? intrin(Op::And, two(std::move(guard),
-                                                        std::move(test)))
+                    guard = guard ? intrin(Op::And, two(std::move(guard), std::move(test)))
                                   : std::move(test);
                 };
                 for (const auto& p : clause.params) {
                     const auto* declared = dispatchParamType(p);
-                    if (!p.name || !declared) continue;
+                    if (!p.name || !declared) {
+                        continue;
+                    }
                     // An argument left out arrives as the sentinel, whose
                     // default is this clause's to give.
                     if (p.defaultValue && discriminatingType(guardTypeOf(*declared))) {
-                        auto test = intrin(Op::Or, two(
-                            intrin(Op::Eq, two(var(*p.name), defaultArgument())),
-                            typeGuard(guardTypeOf(*declared), var(*p.name))));
+                        auto test = intrin(
+                            Op::Or, two(intrin(Op::Eq, two(var(*p.name), defaultArgument())),
+                                        typeGuard(guardTypeOf(*declared), var(*p.name))));
                         guard = guard ? intrin(Op::And, two(std::move(guard), std::move(test)))
                                       : std::move(test);
                         continue;
@@ -300,17 +355,26 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
                 // dispatch on their tag exactly like a plain `reply: JSON`
                 // parameter would, but against the fresh var substituted
                 // for the pattern (kexhq/kex#347).
-                for (const auto& [written, rv] : recordDispatchTargets)
+                for (const auto& [written, rv] : recordDispatchTargets) {
                     addGuardTest(written, var(rv));
-                if (guard) fc.guard = std::move(guard);
+                }
+                if (guard) {
+                    fc.guard = std::move(guard);
+                }
             }
-            for (const auto& [nm, _] : prefix) subst[nm] = nm;
-            if (fn->isSlot) subst["from"] = "from";
+            for (const auto& [nm, _] : prefix) {
+                subst[nm] = nm;
+            }
+            if (fn->isSlot) {
+                subst["from"] = "from";
+            }
             // Each argument the caller left out, from its default: in
             // parameter order, so a default reads the parameters before it.
             std::vector<std::pair<std::string, ExprPtr>> defaulted;
             for (const auto& p : clause.params) {
-                if (!p.name || !p.defaultValue || names::isWildcard(*p.name)) continue;
+                if (!p.name || !p.defaultValue || names::isWildcard(*p.name)) {
+                    continue;
+                }
                 Match chosen;
                 chosen.subjects.push_back(var(subst[*p.name]));
                 MatchClause omitted;
@@ -330,21 +394,28 @@ auto Lowering::lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& gr
                 subst[*p.name] = bound;
             }
             ExprPtr body = lowerBody(clause.body);
-            if (!clause.body.empty()) body = wrapSuccess(std::move(body), clause.body.back().get());
-            if (fn->isSlot)
+            if (!clause.body.empty()) {
+                body = wrapSuccess(std::move(body), clause.body.back().get());
+            }
+            if (fn->isSlot) {
                 body = makeLet(
-                    "from",
-                    callE("erlang", "get", 1,
-                          one(lit(LitKind::Atom, "kex_serving_from"))),
+                    "from", callE("erlang", "get", 1, one(lit(LitKind::Atom, "kex_serving_from"))),
                     std::move(body));
-            for (auto it = prefix.rbegin(); it != prefix.rend(); ++it)
+            }
+            for (auto it = prefix.rbegin(); it != prefix.rend(); ++it) {
                 body = makeLet(it->first, std::move(it->second), std::move(body));
-            for (auto it = recordPatterns.rbegin(); it != recordPatterns.rend(); ++it)
+            }
+            for (auto it = recordPatterns.rbegin(); it != recordPatterns.rend(); ++it) {
                 body = wrapRecordPattern(it->first, *it->second, std::move(body));
-            if (clause.rescue) body = wrapWithTryCatch(std::move(body), *clause.rescue);
-            else if (irHasEscapingTryThrow(body)) body = wrapPropagateTryError(std::move(body));
-            for (auto it = defaulted.rbegin(); it != defaulted.rend(); ++it)
+            }
+            if (clause.rescue) {
+                body = wrapWithTryCatch(std::move(body), *clause.rescue);
+            } else if (irHasEscapingTryThrow(body)) {
+                body = wrapPropagateTryError(std::move(body));
+            }
+            for (auto it = defaulted.rbegin(); it != defaulted.rend(); ++it) {
                 body = makeLet(it->first, std::move(it->second), std::move(body));
+            }
             fc.body = std::move(body);
             currentContextVar = savedContextVar;
             def.clauses.push_back(std::move(fc));

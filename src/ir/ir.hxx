@@ -51,9 +51,22 @@ struct Var {
 
 // ---- Primitive operations (operators) ------------------------------------
 enum class Op {
-    Add, Sub, Mul, Div, Mod, Pow, Neg,
-    Eq, Neq, Lt, Gt, Lte, Gte,
-    And, Or, Not,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Pow,
+    Neg,
+    Eq,
+    Neq,
+    Lt,
+    Gt,
+    Lte,
+    Gte,
+    And,
+    Or,
+    Not,
     Concat,
 };
 struct Intrinsic {
@@ -128,11 +141,11 @@ struct MatchClause {
 // BEAM guards cannot hold arbitrary calls, so a guard written in source
 // becomes ordinary code.
 enum class GuardExpansion {
-    Native,  // as lowered: lowering's own matches, `receive`
-    Source,  // a `match`: guards fail on anything but `true`; no clause
-             // matching is the walker's "no matching clause" error
-    Rescue,  // rescue arms: only a literal `false` skips one, and an error
-             // no arm takes is thrown again
+    Native, // as lowered: lowering's own matches, `receive`
+    Source, // a `match`: guards fail on anything but `true`; no clause
+            // matching is the walker's "no matching clause" error
+    Rescue, // rescue arms: only a literal `false` skips one, and an error
+            // no arm takes is thrown again
 };
 struct Match {
     std::vector<ExprPtr> subjects; // usually 1; >1 for multi-value dispatch
@@ -154,13 +167,13 @@ struct MakeTuple {
 };
 // List: [a, b | rest].  rest empty => proper list [a, b].
 struct MakeList {
-    std::vector<ExprPtr> elements;  // atomic
-    std::optional<ExprPtr> rest;    // atomic
+    std::vector<ExprPtr> elements; // atomic
+    std::optional<ExprPtr> rest;   // atomic
 };
 // Read field at a fixed 1-based tuple position (resolved from the record type).
 struct FieldGet {
-    ExprPtr record; // atomic
-    int position;   // 1-based erlang element index (tag is 1)
+    ExprPtr record;        // atomic
+    int position;          // 1-based erlang element index (tag is 1)
     std::string fieldName; // for debugging/dump only
 };
 
@@ -201,7 +214,7 @@ struct ReceiveClause {
 struct Receive {
     std::vector<ReceiveClause> clauses;
     std::optional<std::string> senderVar;
-    std::optional<ExprPtr> timeout;     // `after <timeout> -> afterBody`
+    std::optional<ExprPtr> timeout; // `after <timeout> -> afterBody`
     std::optional<ExprPtr> afterBody;
 };
 
@@ -219,9 +232,25 @@ struct LetRec {
 // ---- Expr variant ---------------------------------------------------------
 struct Expr {
     std::variant<
-        Lit, Var, Intrinsic, Call, CallIndirect,
-        Let, Seq, Match, Construct, MakeTuple, MakeList, FieldGet, Lambda, Return, TryThrow, TryCatch, LetRec, Receive
-    > node;
+        Lit,
+        Var,
+        Intrinsic,
+        Call,
+        CallIndirect,
+        Let,
+        Seq,
+        Match,
+        Construct,
+        MakeTuple,
+        MakeList,
+        FieldGet,
+        Lambda,
+        Return,
+        TryThrow,
+        TryCatch,
+        LetRec,
+        Receive>
+        node;
 };
 
 // ---- Top level ------------------------------------------------------------
@@ -352,6 +381,8 @@ inline auto atomPattern(std::string atom) -> PatternPtr {
     return p;
 }
 // What a caller passes for an argument it leaves out (names::kDefaultArgument).
-inline auto defaultArgument() -> ExprPtr { return lit(LitKind::Atom, kex::names::kDefaultArgument); }
+inline auto defaultArgument() -> ExprPtr {
+    return lit(LitKind::Atom, kex::names::kDefaultArgument);
+}
 
 } // namespace kex::ir

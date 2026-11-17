@@ -55,10 +55,11 @@ constexpr auto kGitRevision = "";
 // "0.3.0", or "0.4.0-rc.1" on a pre-release build.
 inline auto versionNumber() -> const std::string& {
     static const std::string value = [] {
-        auto number = std::to_string(kVersionMajor) + "." +
-                      std::to_string(kVersionMinor) + "." +
+        auto number = std::to_string(kVersionMajor) + "." + std::to_string(kVersionMinor) + "." +
                       std::to_string(kVersionPatch);
-        if (*kVersionPreRelease) number += std::string("-") + kVersionPreRelease;
+        if (*kVersionPreRelease) {
+            number += std::string("-") + kVersionPreRelease;
+        }
         return number;
     }();
     return value;
@@ -81,8 +82,7 @@ constexpr auto kBuildDate = "";
 // what a human sees.
 inline auto versionString() -> const std::string& {
     static const std::string value =
-        *kGitRevision ? versionNumber() + " (" + kGitRevision + ")"
-                      : versionNumber();
+        *kGitRevision ? versionNumber() + " (" + kGitRevision + ")" : versionNumber();
     return value;
 }
 
@@ -91,8 +91,12 @@ inline auto versionString() -> const std::string& {
 // shorter versionString() stays for places with no room for a date.
 inline auto versionStringWithBuild() -> const std::string& {
     static const std::string value = [] {
-        if (!*kBuildDate) return versionString();
-        if (!*kGitRevision) return versionNumber() + " (built " + kBuildDate + ")";
+        if (!*kBuildDate) {
+            return versionString();
+        }
+        if (!*kGitRevision) {
+            return versionNumber() + " (built " + kBuildDate + ")";
+        }
         return versionNumber() + " (" + kGitRevision + ", built " + kBuildDate + ")";
     }();
     return value;

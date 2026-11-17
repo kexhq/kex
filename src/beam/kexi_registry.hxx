@@ -41,25 +41,25 @@ public:
 
     auto allLoadedModules() const -> std::vector<const LoadedModule*>;
 
-    auto declarePackage(const kex::module::PackageMetadata& package)
-        -> std::vector<LoadError>;
+    auto declarePackage(const kex::module::PackageMetadata& package) -> std::vector<LoadError>;
 
     auto automaticImportModules() const -> std::vector<const LoadedModule*>;
 
-    auto findMethodsForReceiver(const std::string& methodName,
-                                const std::string& receiverTypeName) const
+    auto
+    findMethodsForReceiver(const std::string& methodName, const std::string& receiverTypeName) const
         -> std::vector<std::pair<std::string, const KexiMethod*>>;
 
     auto getUnit(const std::string& entryAtom) const -> const LoadedUnit*;
 
     void unloadUnit(const std::string& entryAtom);
 
-    auto lastLoadedEntryAtom() const -> const std::string& { return m_lastLoaded; }
+    auto lastLoadedEntryAtom() const -> const std::string& {
+        return m_lastLoaded;
+    }
 
     auto buildExternalModules() const -> kex::ir::ExternalModules;
 
-    auto buildSemanticInterfaces() const
-        -> kex::semantic::ImportedInterfaces;
+    auto buildSemanticInterfaces() const -> kex::semantic::ImportedInterfaces;
 
     auto generateDisplayRegistration(const LoadedUnit& unit) const -> std::string;
 

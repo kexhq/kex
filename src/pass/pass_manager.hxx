@@ -28,7 +28,9 @@ namespace kex::pass {
 
 template <typename Derived>
 struct PassInfoMixin {
-    static auto name() -> std::string_view { return Derived::kName; }
+    static auto name() -> std::string_view {
+        return Derived::kName;
+    }
 };
 
 namespace detail {
@@ -43,7 +45,8 @@ template <typename Pass, typename = void>
 struct HasPrintPipeline : std::false_type {};
 template <typename Pass>
 struct HasPrintPipeline<
-    Pass, std::void_t<decltype(std::declval<const Pass&>().printPipeline(std::declval<std::ostream&>()))>>
+    Pass,
+    std::void_t<decltype(std::declval<const Pass&>().printPipeline(std::declval<std::ostream&>()))>>
     : std::true_type {};
 
 } // namespace detail
@@ -65,11 +68,18 @@ struct PassModel final : PassConcept<IRUnit> {
     auto run(IRUnit& unit, AnalysisManager<IRUnit>& analyses) -> PreservedAnalyses override {
         return m_pass.run(unit, analyses);
     }
-    auto name() const -> std::string_view override { return Pass::name(); }
-    auto required() const -> bool override { return detail::IsRequired<Pass>::value; }
+    auto name() const -> std::string_view override {
+        return Pass::name();
+    }
+    auto required() const -> bool override {
+        return detail::IsRequired<Pass>::value;
+    }
     auto printPipeline(std::ostream& out) const -> void override {
-        if constexpr (detail::HasPrintPipeline<Pass>::value) m_pass.printPipeline(out);
-        else out << Pass::name();
+        if constexpr (detail::HasPrintPipeline<Pass>::value) {
+            m_pass.printPipeline(out);
+        } else {
+            out << Pass::name();
+        }
     }
     Pass m_pass;
 };
@@ -99,7 +109,9 @@ public:
         const PassInstrumentation instrumentation(analyses.callbacks());
         auto preserved = PreservedAnalyses::all();
         for (const auto& pass : m_passes) {
-            if (!instrumentation.runBeforePass(pass->name(), pass->required(), unit)) continue;
+            if (!instrumentation.runBeforePass(pass->name(), pass->required(), unit)) {
+                continue;
+            }
             const auto passPreserved = pass->run(unit, analyses);
             analyses.invalidate(unit, passPreserved);
             instrumentation.runAfterPass(pass->name(), unit);
@@ -108,11 +120,17 @@ public:
         return preserved;
     }
 
-    auto empty() const -> bool { return m_passes.empty(); }
-    auto size() const -> std::size_t { return m_passes.size(); }
+    auto empty() const -> bool {
+        return m_passes.empty();
+    }
+    auto size() const -> std::size_t {
+        return m_passes.size();
+    }
     auto printPipeline(std::ostream& out) const -> void {
         for (std::size_t i = 0; i < m_passes.size(); ++i) {
-            if (i > 0) out << ",";
+            if (i > 0) {
+                out << ",";
+            }
             m_passes[i]->printPipeline(out);
         }
     }

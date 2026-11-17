@@ -6,25 +6,33 @@
 
 namespace kex::semantic::resolve_core {
 
-auto resolveModulePathIn(const std::string& currentModule,
-                         const std::string& requested,
-                         const std::function<bool(const std::string&)>& exists)
-    -> std::string {
-    if (exists(requested)) return requested;
+auto resolveModulePathIn(
+    const std::string& currentModule,
+    const std::string& requested,
+    const std::function<bool(const std::string&)>& exists) -> std::string {
+    if (exists(requested)) {
+        return requested;
+    }
     for (auto context = currentModule; !context.empty();) {
         const auto relative = context + "." + requested;
-        if (exists(relative)) return relative;
+        if (exists(relative)) {
+            return relative;
+        }
         const auto dot = context.rfind('.');
-        if (dot == std::string::npos) break;
+        if (dot == std::string::npos) {
+            break;
+        }
         context.resize(dot);
     }
     return requested;
 }
 
-auto mergeImportOrigin(std::vector<ImportScope>& scopes,
-                       const std::string& name, ImportOrigin origin)
+auto mergeImportOrigin(
+    std::vector<ImportScope>& scopes, const std::string& name, ImportOrigin origin)
     -> MergeOutcome {
-    if (scopes.empty()) scopes.emplace_back();
+    if (scopes.empty()) {
+        scopes.emplace_back();
+    }
     ImportOrigin* previous = nullptr;
     for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
         if (auto found = it->find(name); found != it->end()) {
@@ -49,10 +57,10 @@ auto mergeImportOrigin(std::vector<ImportScope>& scopes,
             // binds nothing locally.
             return {.proceed = false};
         } else {
-            return {.proceed = false,
-                    .ambiguity = "ambiguous name `" + name +
-                        "`, imported from both `" + previous->module +
-                        "` and `" + origin.module + "`"};
+            return {
+                .proceed = false,
+                .ambiguity = "ambiguous name `" + name + "`, imported from both `" +
+                             previous->module + "` and `" + origin.module + "`"};
         }
     } else if (!previous) {
         scopes.back()[name] = std::move(origin);
@@ -60,17 +68,18 @@ auto mergeImportOrigin(std::vector<ImportScope>& scopes,
     return {};
 }
 
-auto usingImportsNames(const std::optional<std::string>& alias,
-                       const std::vector<std::string>& only) -> bool {
+auto usingImportsNames(
+    const std::optional<std::string>& alias, const std::vector<std::string>& only) -> bool {
     return !alias || !only.empty();
 }
 
-auto usingSelectsName(const std::string& name,
-                      const std::vector<std::string>& only,
-                      const std::vector<std::string>& except) -> bool {
-    if (!only.empty() &&
-        std::find(only.begin(), only.end(), name) == only.end())
+auto usingSelectsName(
+    const std::string& name,
+    const std::vector<std::string>& only,
+    const std::vector<std::string>& except) -> bool {
+    if (!only.empty() && std::find(only.begin(), only.end(), name) == only.end()) {
         return false;
+    }
     return std::find(except.begin(), except.end(), name) == except.end();
 }
 
@@ -78,7 +87,9 @@ namespace {
 
 auto lastSegment(const std::string& dotted) -> std::string_view {
     const auto dot = dotted.rfind('.');
-    if (dot == std::string::npos) return std::string_view(dotted);
+    if (dot == std::string::npos) {
+        return std::string_view(dotted);
+    }
     return std::string_view(dotted).substr(dot + 1);
 }
 
@@ -88,43 +99,58 @@ auto lastSegment(const std::string& dotted) -> std::string_view {
 // match records exactly only (a qualified alias/opaque/ADT head may
 // have emitted bare — `ownedByModule` qualifies what `makeTargetNames`
 // leaves alone — while records qualify on both sides).
-auto nominalHeadDeclared(const std::string& head,
-                         const ImportedInterfaces& ifaces) -> bool {
+auto nominalHeadDeclared(const std::string& head, const ImportedInterfaces& ifaces) -> bool {
     const bool qualified = head.find('.') != std::string::npos;
-    if (qualified) return ifaces.recordFields.count(head) > 0;
+    if (qualified) {
+        return ifaces.recordFields.count(head) > 0;
+    }
     const auto seg = lastSegment(head);
-    for (const auto& [key, _] : ifaces.recordFields)
-        if (lastSegment(key) == seg) return true;
-    for (const auto& adt : ifaces.adts)
-        if (lastSegment(adt.name) == seg) return true;
-    for (const auto& [key, _] : ifaces.distinctTypes)
-        if (lastSegment(key) == seg) return true;
+    for (const auto& [key, _] : ifaces.recordFields) {
+        if (lastSegment(key) == seg) {
+            return true;
+        }
+    }
+    for (const auto& adt : ifaces.adts) {
+        if (lastSegment(adt.name) == seg) {
+            return true;
+        }
+    }
+    for (const auto& [key, _] : ifaces.distinctTypes) {
+        if (lastSegment(key) == seg) {
+            return true;
+        }
+    }
     // An opaque type (`type Range<A>`): a declared name that is no alias.
     // Its values are whatever its own functions make; the recorded route
     // (implementationHead) says the dispatcher sends them to its own.
-    for (const auto& name : ifaces.typeNames)
+    for (const auto& name : ifaces.typeNames) {
         if (lastSegment(name) == seg && !ifaces.typeAliases.count(name) &&
-            !ifaces.typeAliases.count(std::string(seg)))
+            !ifaces.typeAliases.count(std::string(seg))) {
             return true;
+        }
+    }
     return false;
 }
 
 } // namespace
 
 auto writtenTargetHead(const TypePtr& type) -> std::optional<TargetHead> {
-    if (!type) return std::nullopt;
+    if (!type) {
+        return std::nullopt;
+    }
     return std::visit(
         [](const auto& node) -> std::optional<TargetHead> {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, PrimitiveType>) {
                 switch (node.kind) {
-                    case PrimitiveType::Integer:
-                        return TargetHead{"Integer"};
+                    case PrimitiveType::Integer: return TargetHead{"Integer"};
                     case PrimitiveType::Char: return TargetHead{"Char"};
                     case PrimitiveType::String: return TargetHead{"String"};
                     case PrimitiveType::Bool: return TargetHead{"Bool"};
                     case PrimitiveType::Atom:
-                        if (!node.atomName.empty()) return std::nullopt;
+                        if (!node.atomName.empty()) {
+                            return std::nullopt;
+                        }
                         return TargetHead{"Atom"};
                     case PrimitiveType::Unit: return std::nullopt;
                 }
@@ -134,9 +160,9 @@ auto writtenTargetHead(const TypePtr& type) -> std::optional<TargetHead> {
             } else if constexpr (std::is_same_v<T, SizedFloatType>) {
                 return std::nullopt;
             } else if constexpr (std::is_same_v<T, NamedType>) {
-                if (node.name.empty() || node.name == "Block" ||
-                    node.name == "Optional")
+                if (node.name.empty() || node.name == "Block" || node.name == "Optional") {
                     return std::nullopt;
+                }
                 return TargetHead{node.name, true};
             } else if constexpr (std::is_same_v<T, ListType>) {
                 return TargetHead{"List"};
@@ -149,9 +175,11 @@ auto writtenTargetHead(const TypePtr& type) -> std::optional<TargetHead> {
         type->kind);
 }
 
-auto receiverCoversHead(const TypePtr& receiver, const std::string& head,
-                        const ImportedInterfaces& ifaces) -> bool {
-    if (!receiver || head.empty()) return false;
+auto receiverCoversHead(
+    const TypePtr& receiver, const std::string& head, const ImportedInterfaces& ifaces) -> bool {
+    if (!receiver || head.empty()) {
+        return false;
+    }
     return std::visit(
         [&](const auto& node) -> bool {
             using T = std::decay_t<decltype(node)>;
@@ -166,8 +194,7 @@ auto receiverCoversHead(const TypePtr& receiver, const std::string& head,
                 }
                 return false;
             } else if constexpr (std::is_same_v<T, NamedType>) {
-                return node.name == head ||
-                       lastSegment(node.name) == lastSegment(head);
+                return node.name == head || lastSegment(node.name) == lastSegment(head);
             } else if constexpr (std::is_same_v<T, ListType>) {
                 return head == kex::names::kListType;
             } else if constexpr (std::is_same_v<T, MapType>) {
@@ -184,9 +211,10 @@ auto receiverCoversHead(const TypePtr& receiver, const std::string& head,
 }
 
 auto staticReceiverHead(
-    const ImportedFunction& winner, const TypePtr& receiverType,
-    const ImportedInterfaces& ifaces, AliasExpander expandAlias)
-    -> std::optional<std::string> {
+    const ImportedFunction& winner,
+    const TypePtr& receiverType,
+    const ImportedInterfaces& ifaces,
+    AliasExpander expandAlias) -> std::optional<std::string> {
     // (0): a pure make-block winner with a receiver. Module
     // functions (`isReceiverMethod == false`) keep the bare name —
     // their `name/T` belongs to a same-headed make block, if one
@@ -195,36 +223,44 @@ auto staticReceiverHead(
     // appends the capability context by consulting a registry keyed
     // on the BARE name, so a mangled foul call would go out one
     // argument short of its definition.
-    if (!winner.isReceiverMethod || winner.remoteSlot ||
-        winner.signature.isFoul || winner.signature.params.empty())
+    if (!winner.isReceiverMethod || winner.remoteSlot || winner.signature.isFoul ||
+        winner.signature.params.empty()) {
         return std::nullopt;
+    }
     // (1): a provable emitted head for the winner's written receiver.
     const auto winnerHead = writtenTargetHead(winner.signature.params[0]);
-    if (!winnerHead) return std::nullopt;
+    if (!winnerHead) {
+        return std::nullopt;
+    }
     // (1b): a nominal head names a declared record/ADT/distinct type
     // (aliases and opaques keep the dispatcher).
-    if (winnerHead->nominal &&
-        !nominalHeadDeclared(winnerHead->spelling, ifaces))
+    if (winnerHead->nominal && !nominalHeadDeclared(winnerHead->spelling, ifaces)) {
         return std::nullopt;
+    }
     // The call receiver, aliases expanded; gradual receivers stay
     // dynamic (0b).
-    const TypePtr expanded =
-        expandAlias ? expandAlias(receiverType) : receiverType;
+    const TypePtr expanded = expandAlias ? expandAlias(receiverType) : receiverType;
     // Clause (0b): a gradual (partially unknown) receiver may carry a value of
     // another type — static dispatch would lie where the dispatcher adapts.
     // A missing type is as unknown as `?`.
-    if (mentionsUnknown(expanded, NullType::Unknown)) return std::nullopt;
+    if (mentionsUnknown(expanded, NullType::Unknown)) {
+        return std::nullopt;
+    }
 
     const auto& head = winnerHead->spelling;
     // The call's receiver is of the winner's head: every value it can hold
     // is one of that type.
-    if (!receiverCoversHead(expanded, head, ifaces)) return std::nullopt;
+    if (!receiverCoversHead(expanded, head, ifaces)) {
+        return std::nullopt;
+    }
     // A value of that type reaches `name/Head` through the dispatcher, as its
     // module recorded when it emitted it (KexiMethod::implementation: the
     // routes lowering laid out, nothing merged in ahead). That one fact
     // replaces the routing clauses (5), (12), (13b), (DS) and the `''` and
     // module-function vetoes, which re-derived it from the overloads.
-    if (winner.implementationHead != head) return std::nullopt;
+    if (winner.implementationHead != head) {
+        return std::nullopt;
+    }
     return head;
 }
 

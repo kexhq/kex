@@ -76,8 +76,7 @@ auto indexOf(const std::string& usingName) -> kex::help::ApiIndex {
     return index;
 }
 
-auto topic(const kex::help::ApiIndex& index, const std::string& query)
-    -> std::string {
+auto topic(const kex::help::ApiIndex& index, const std::string& query) -> std::string {
     std::ostringstream out, err;
     index.printTopic(query, out, err);
     return out.str() + err.str();
@@ -91,11 +90,14 @@ auto runKex(const std::string& args) -> std::string {
     std::string cmd = std::string(KEX_BINARY_PATH) + " " + args + " 2>&1";
     std::string result;
     FILE* pipe = popen(cmd.c_str(), "r");
-    if (!pipe) return result;
+    if (!pipe) {
+        return result;
+    }
     std::array<char, 4096> buf;
     size_t n;
-    while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+    while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0) {
         result.append(buf.data(), n);
+    }
     pclose(pipe);
     return result;
 }
@@ -111,25 +113,22 @@ int main() {
 
     describe("an owner", [&]() {
         it("shows a record with its fields and without their comments", [&]() {
-            assertTrue(has(point, "record Point do\n  x : Float = 0.0\n"
-                                  "  y : Float = 0.0\nend"));
+            assertTrue(
+                has(point, "record Point do\n  x : Float = 0.0\n"
+                           "  y : Float = 0.0\nend"));
         });
 
         it("says which using it needs, spelled as the source spells it",
            [&]() { assertTrue(has(point, "needs `using Shapes`")); });
 
-        it("lists the module of the same name with the type", [&]() {
-            assertTrue(has(point, "origin : Point"));
-        });
+        it("lists the module of the same name with the type",
+           [&]() { assertTrue(has(point, "origin : Point")); });
 
         it("gives a function typed inline the signature line it implies",
-           [&]() {
-            assertTrue(has(point, "scaled : Point -> (Point -> Float) -> Float"));
-        });
+           [&]() { assertTrue(has(point, "scaled : Point -> (Point -> Float) -> Float")); });
 
-        it("keeps the parens that make a parameter a function", [&]() {
-            assertTrue(has(point, "keep :> (Point -> Bool) -> Point?"));
-        });
+        it("keeps the parens that make a parameter a function",
+           [&]() { assertTrue(has(point, "keep :> (Point -> Bool) -> Point?")); });
 
         it("puts the first sentence of the doc beside each member", [&]() {
             assertTrue(has(point, "Whether the point sits at the origin.\n"));
@@ -137,27 +136,24 @@ int main() {
         });
 
         it("does not end a sentence at an abbreviation", [&]() {
-            assertTrue(has(point, "The distance from the origin, i.e. the "
-                                  "length.\n"));
+            assertTrue(
+                has(point, "The distance from the origin, i.e. the "
+                           "length.\n"));
             assertFalse(has(point, "Never negative"));
         });
 
-        it("keeps the parens around a union a function takes", [&]() {
-            assertTrue(has(point, "moved :> ((Point | Float) -> Float) -> Point"));
-        });
+        it("keeps the parens around a union a function takes",
+           [&]() { assertTrue(has(point, "moved :> ((Point | Float) -> Float) -> Point")); });
 
-        it("leaves private members out", [&]() {
-            assertFalse(has(point, "secret"));
-        });
+        it("leaves private members out", [&]() { assertFalse(has(point, "secret")); });
 
         it("names what its traits add", [&]() {
             assertTrue(has(point, "from Shapes.Measurable"));
             assertTrue(has(point, "size, double"));
         });
 
-        it("is found by its last segment and in any case", [&]() {
-            assertEqual(topic(index, "point"), point);
-        });
+        it("is found by its last segment and in any case",
+           [&]() { assertEqual(topic(index, "point"), point); });
 
         it("files a make on a list under List", [&]() {
             assertTrue(has(topic(index, "List"), "lead :> Point?"));
@@ -174,22 +170,19 @@ int main() {
 
         it("respells RDoc code marks as backticks, in prose only", [&]() {
             const auto origin = topic(index, "Point.origin");
-            assertTrue(has(origin, "The point at `(0, 0)`: start with "
-                                   "`using Shapes`."));
+            assertTrue(
+                has(origin, "The point at `(0, 0)`: start with "
+                            "`using Shapes`."));
         });
 
-        it("is found without the ? a shell would have eaten", [&]() {
-            assertTrue(has(topic(index, "Point.origin"), "origin? :> Bool"));
-        });
+        it("is found without the ? a shell would have eaten",
+           [&]() { assertTrue(has(topic(index, "Point.origin"), "origin? :> Bool")); });
 
-        it("is found on a trait the owner implements", [&]() {
-            assertTrue(has(topic(index, "Point.size"),
-                           "Shapes.Measurable.size"));
-        });
+        it("is found on a trait the owner implements",
+           [&]() { assertTrue(has(topic(index, "Point.size"), "Shapes.Measurable.size")); });
 
-        it("is found by its bare name", [&]() {
-            assertTrue(has(topic(index, "lead"), "List.lead  (make [Point])"));
-        });
+        it("is found by its bare name",
+           [&]() { assertTrue(has(topic(index, "lead"), "List.lead  (make [Point])")); });
     });
 
     describe("a miss", [&]() {
@@ -202,9 +195,8 @@ int main() {
     });
 
     describe("a prelude source", [&]() {
-        it("needs no using", [&]() {
-            assertFalse(has(topic(indexOf(""), "Point"), "needs `using"));
-        });
+        it("needs no using",
+           [&]() { assertFalse(has(topic(indexOf(""), "Point"), "needs `using")); });
     });
 
     describe("kex -s", [&]() {
@@ -222,8 +214,8 @@ int main() {
         });
 
         it("still summarises a source file", [&]() {
-            assertEqual(runKex("-s examples/fact.kex"),
-                        std::string("factorial : Integer -> Integer\n"));
+            assertEqual(
+                runKex("-s examples/fact.kex"), std::string("factorial : Integer -> Integer\n"));
         });
     });
 

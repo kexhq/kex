@@ -28,38 +28,55 @@ auto Evaluator::registerEnvBuiltins() -> void {
     // never the thing `ENV` named. These implement the capability instead, so
     // both backends answer through the same declaration.
     const auto entries = [this]() -> std::vector<std::pair<ValuePtr, ValuePtr>> {
-        if (!m_envMap) return {};
-        if (auto* map = std::get_if<MapValue>(&m_envMap->data)) return map->entries;
+        if (!m_envMap) {
+            return {};
+        }
+        if (auto* map = std::get_if<MapValue>(&m_envMap->data)) {
+            return map->entries;
+        }
         return {};
     };
     const auto lookup = [entries](const std::string& key) -> ValuePtr {
-        for (const auto& [name, value] : entries())
-            if (name && name->toString() == key) return value;
+        for (const auto& [name, value] : entries()) {
+            if (name && name->toString() == key) {
+                return value;
+            }
+        }
         return nullptr;
     };
 
     defineIntrinsic("Env.get", [lookup](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
+        if (args.empty()) {
+            return Value::none();
+        }
         auto found = lookup(args[0]->toString());
         return found ? Value::just(found) : Value::none();
     });
     defineIntrinsic("Env.getWithDefault", [lookup](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::string("");
+        if (args.size() < 2) {
+            return Value::string("");
+        }
         auto found = lookup(args[0]->toString());
         return found ? found : args[1];
     });
     defineIntrinsic("Env.has?", [lookup](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(false);
+        if (args.empty()) {
+            return Value::boolean(false);
+        }
         return Value::boolean(lookup(args[0]->toString()) != nullptr);
     });
     defineIntrinsic("Env.keys", [entries](std::vector<ValuePtr>) -> ValuePtr {
         std::vector<ValuePtr> keys;
-        for (const auto& [name, _] : entries()) keys.push_back(name);
+        for (const auto& [name, _] : entries()) {
+            keys.push_back(name);
+        }
         return Value::list(std::move(keys));
     });
     defineIntrinsic("Env.values", [entries](std::vector<ValuePtr>) -> ValuePtr {
         std::vector<ValuePtr> values;
-        for (const auto& [_, value] : entries()) values.push_back(value);
+        for (const auto& [_, value] : entries()) {
+            values.push_back(value);
+        }
         return Value::list(std::move(values));
     });
     defineIntrinsic("Env.count", [entries](std::vector<ValuePtr>) -> ValuePtr {
@@ -67,17 +84,24 @@ auto Evaluator::registerEnvBuiltins() -> void {
     });
     defineIntrinsic("Env.entries", [entries](std::vector<ValuePtr>) -> ValuePtr {
         std::vector<ValuePtr> pairs;
-        for (const auto& [name, value] : entries())
+        for (const auto& [name, value] : entries()) {
             pairs.push_back(Value::tuple({name, value}));
+        }
         return Value::list(std::move(pairs));
     });
     // `each` takes the pair as two arguments, matching `maps:foreach/2` on
     // BEAM and the `{ |key, value| ... }` a caller writes.
     defineIntrinsic("Env.each", [entries](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::unit();
+        if (args.empty()) {
+            return Value::unit();
+        }
         auto* fn = std::get_if<FunctionValue>(&args[0]->data);
-        if (!fn || !fn->native) return Value::unit();
-        for (const auto& [name, value] : entries()) fn->native({name, value});
+        if (!fn || !fn->native) {
+            return Value::unit();
+        }
+        for (const auto& [name, value] : entries()) {
+            fn->native({name, value});
+        }
         return Value::unit();
     });
 
@@ -94,12 +118,18 @@ auto Evaluator::registerEnvBuiltins() -> void {
     // the only channel between them is whatever PATH happens to hold, and a
     // manifest was being parsed by an unrelated `kex` or by none at all.
     defineIntrinsic("Env.set", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::unit();
+        if (args.size() < 2) {
+            return Value::unit();
+        }
         auto* name = std::get_if<StringValue>(&args[0]->data);
         auto* value = std::get_if<StringValue>(&args[1]->data);
-        if (!name || !value || name->value.empty()) return Value::unit();
+        if (!name || !value || name->value.empty()) {
+            return Value::unit();
+        }
         // An `=` in the NAME would write a variable nobody can read back.
-        if (name->value.find('=') != std::string::npos) return Value::unit();
+        if (name->value.find('=') != std::string::npos) {
+            return Value::unit();
+        }
         setenv(name->value.c_str(), value->value.c_str(), 1);
         rebuildEnvMap();
         return Value::unit();
@@ -107,9 +137,13 @@ auto Evaluator::registerEnvBuiltins() -> void {
 
     // ENV.unset(name) — remove a variable from this process and its children.
     defineIntrinsic("Env.unset", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::unit();
+        if (args.empty()) {
+            return Value::unit();
+        }
         if (auto* name = std::get_if<StringValue>(&args[0]->data)) {
-            if (name->value.empty()) return Value::unit();
+            if (name->value.empty()) {
+                return Value::unit();
+            }
             unsetenv(name->value.c_str());
             rebuildEnvMap();
         }
@@ -136,12 +170,13 @@ auto Evaluator::registerEnvBuiltins() -> void {
 
     defineIntrinsic("Env.mockUnset", [this](std::vector<ValuePtr> args) -> ValuePtr {
         requireMocksAllowed("Mock.ENV.unset");
-        if (!args.empty())
+        if (!args.empty()) {
             if (auto* name = std::get_if<StringValue>(&args[0]->data)) {
                 m_mockEnv.erase(name->value);
                 m_mockEnvUnset.insert(name->value);
                 rebuildEnvMap();
             }
+        }
         return Value::unit();
     });
 
@@ -149,13 +184,18 @@ auto Evaluator::registerEnvBuiltins() -> void {
     // call, matching how `Mock.Env { vars: ... }` is written (kexhq/kex#143).
     defineIntrinsic("Env.mockVars", [this](std::vector<ValuePtr> args) -> ValuePtr {
         requireMocksAllowed("Mock.ENV.vars");
-        if (args.empty()) return Value::unit();
-        if (auto* map = std::get_if<MapValue>(&args[0]->data))
+        if (args.empty()) {
+            return Value::unit();
+        }
+        if (auto* map = std::get_if<MapValue>(&args[0]->data)) {
             for (const auto& [key, value] : map->entries) {
-                if (!key || !value) continue;
+                if (!key || !value) {
+                    continue;
+                }
                 m_mockEnv[key->toString()] = value->toString();
                 m_mockEnvUnset.erase(key->toString());
             }
+        }
         rebuildEnvMap();
         return Value::unit();
     });
@@ -175,13 +215,18 @@ auto Evaluator::rebuildEnvMap() -> void {
     for (char** e = KEX_ENVIRON; e && *e; e++) {
         std::string entry(*e);
         auto eq = entry.find('=');
-        if (eq == std::string::npos) continue;
+        if (eq == std::string::npos) {
+            continue;
+        }
         auto name = entry.substr(0, eq);
-        if (m_mockEnvUnset.count(name) || m_mockEnv.count(name)) continue;
+        if (m_mockEnvUnset.count(name) || m_mockEnv.count(name)) {
+            continue;
+        }
         entries.push_back({Value::string(name), Value::string(entry.substr(eq + 1))});
     }
-    for (const auto& [name, value] : m_mockEnv)
+    for (const auto& [name, value] : m_mockEnv) {
         entries.push_back({Value::string(name), Value::string(value)});
+    }
     auto snapshot = std::make_shared<Value>();
     snapshot->data = MapValue{std::move(entries)};
     m_envMap = std::move(snapshot);

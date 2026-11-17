@@ -33,11 +33,11 @@ public:
     static auto interfaceDigest(const beam::LoadedUnit& unit) -> std::string;
     // A unit's key: its sources and the interface digests of the units it
     // is checked against.
-    static auto keyFor(const std::string& toolchain,
-                       const std::string& runtimeStamp,
-                       std::vector<Source> sources,
-                       const std::vector<std::string>& dependencyDigests)
-        -> std::string;
+    static auto keyFor(
+        const std::string& toolchain,
+        const std::string& runtimeStamp,
+        std::vector<Source> sources,
+        const std::vector<std::string>& dependencyDigests) -> std::string;
     auto load(const std::string& key) const -> std::optional<CachedSeparateUnit>;
     auto store(const std::string& key, const CachedSeparateUnit& unit) const -> void;
 

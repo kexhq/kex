@@ -70,8 +70,7 @@ struct Document {
     // Where a completable expression STARTS -> what to complete against.
     // Keyed by start because that is what the AST records (nodes carry no end
     // position) and what a backwards scan from the cursor can recover.
-    static auto receiverKey(unsigned int line, unsigned int byteColumn)
-        -> uint64_t {
+    static auto receiverKey(unsigned int line, unsigned int byteColumn) -> uint64_t {
         return (static_cast<uint64_t>(line) << 32) | byteColumn;
     }
 
@@ -159,18 +158,21 @@ struct Document {
 
 class Iostream final : public ::lsp::io::Stream {
 public:
-    Iostream(std::istream& input, std::ostream& output)
-        : m_input(input), m_output(output) {}
+    Iostream(std::istream& input, std::ostream& output) : m_input(input), m_output(output) {}
 
     void read(char* buffer, std::size_t size) override {
         m_input.read(buffer, static_cast<std::streamsize>(size));
-        if (m_input.bad()) throw ::lsp::io::Error("failed to read LSP input");
+        if (m_input.bad()) {
+            throw ::lsp::io::Error("failed to read LSP input");
+        }
     }
 
     void write(const char* buffer, std::size_t size) override {
         m_output.write(buffer, static_cast<std::streamsize>(size));
         m_output.flush();
-        if (!m_output) throw ::lsp::io::Error("failed to write LSP output");
+        if (!m_output) {
+            throw ::lsp::io::Error("failed to write LSP output");
+        }
     }
 
 private:
@@ -183,8 +185,9 @@ auto uriPath(const ::lsp::DocumentUri& uri) -> std::string {
 }
 
 void appendRoot(std::vector<std::string>& roots, std::string root) {
-    if (std::find(roots.begin(), roots.end(), root) == roots.end())
+    if (std::find(roots.begin(), roots.end(), root) == roots.end()) {
         roots.push_back(std::move(root));
+    }
 }
 
 // A document's sibling modules, parsed and kept alive. AST locations hold a
@@ -207,11 +210,12 @@ struct ProjectModules {
 // SKIPPED rather than fatal. A language server sees half-typed files
 // constantly, including in the modules next door, and the right response is
 // to check what it can.
-auto mergeProjectModules(ast::Program& program,
-                         const std::string& documentPath,
-                         const std::vector<std::string>& moduleRoots,
-                         const semantic::ImportedInterfaces* interfaces,
-                         ProjectModules& retained) -> void {
+auto mergeProjectModules(
+    ast::Program& program,
+    const std::string& documentPath,
+    const std::vector<std::string>& moduleRoots,
+    const semantic::ImportedInterfaces* interfaces,
+    ProjectModules& retained) -> void {
     module::Resolver resolver(moduleRoots);
     // Keyed by canonical path, so two spellings of one file are one file.
     auto identity = [](const std::string& path) {
@@ -238,26 +242,33 @@ auto mergeProjectModules(ast::Program& program,
         for (const auto& name : ordered) {
             if (interfaces) {
                 auto imported = interfaces->modules.find(name);
-                if (imported != interfaces->modules.end() &&
-                    imported->second.automaticImport)
+                if (imported != interfaces->modules.end() && imported->second.automaticImport) {
                     continue;
+                }
             }
             names.push_back(name);
         }
         for (const auto& name : names) {
             auto resolved = resolver.resolve(name);
-            if (!resolved) continue;
-            if (!loaded.insert(identity(resolved->path)).second) continue;
+            if (!resolved) {
+                continue;
+            }
+            if (!loaded.insert(identity(resolved->path)).second) {
+                continue;
+            }
             auto path = std::make_unique<std::string>(resolved->path);
             std::ifstream file(*path, std::ios::binary);
-            if (!file) continue;
+            if (!file) {
+                continue;
+            }
             auto source = std::make_unique<std::string>(
-                std::istreambuf_iterator<char>(file),
-                std::istreambuf_iterator<char>());
+                std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
             Lexer lexer(std::string(*source), *path);
             Parser parser(lexer.tokenizeAll(), *path);
             auto parsed = std::make_unique<ast::Program>(parser.parseProgram());
-            if (!parser.diagnostics().empty()) continue;
+            if (!parser.diagnostics().empty()) {
+                continue;
+            }
             // Expanded against its own path before it is merged, as the
             // compiler does (kexhq/kex#385): a sibling's `compiled do`
             // declarations are otherwise missing here, and every call to one
@@ -268,8 +279,9 @@ auto mergeProjectModules(ast::Program& program,
             expandOptions.sourcePath = *path;
             expandOptions.moduleRoots = moduleRoots;
             expandOptions.interfaces = interfaces;
-            if (!compiled::expand(*parsed, expansionDiagnostics, expandOptions))
+            if (!compiled::expand(*parsed, expansionDiagnostics, expandOptions)) {
                 continue;
+            }
             pending.push_back(parsed.get());
             retained.paths.push_back(std::move(path));
             retained.sources.push_back(std::move(source));
@@ -280,15 +292,24 @@ auto mergeProjectModules(ast::Program& program,
     discover(program);
     // Breadth-first: a module just merged can name modules of its own, and
     // discovery must not stop after one hop.
-    for (size_t i = 0; i < pending.size(); ++i) discover(*pending[i]);
+    for (size_t i = 0; i < pending.size(); ++i) {
+        discover(*pending[i]);
+    }
 
-    if (retained.programs.empty()) return;
+    if (retained.programs.empty()) {
+        return;
+    }
     std::vector<ast::TopLevelItem> merged;
-    for (auto& dependency : retained.programs)
-        for (auto& item : dependency->items)
-            if (ast::isMergedDeclaration(item))
+    for (auto& dependency : retained.programs) {
+        for (auto& item : dependency->items) {
+            if (ast::isMergedDeclaration(item)) {
                 merged.push_back(std::move(item));
-    for (auto& item : program.items) merged.push_back(std::move(item));
+            }
+        }
+    }
+    for (auto& item : program.items) {
+        merged.push_back(std::move(item));
+    }
     program.items = std::move(merged);
 }
 
@@ -300,45 +321,57 @@ auto mergeProjectModules(ast::Program& program,
 // package, then the standard library. Own-first is deliberate — a package
 // that shadows a dependency's module name means its own
 // (tey/src/tey/commands.kex, `sourceRoots`).
-auto documentSearchPath(const std::string& filepath,
-                    const std::vector<std::string>& configured)
+auto documentSearchPath(const std::string& filepath, const std::vector<std::string>& configured)
     -> std::vector<std::string> {
     namespace fs = std::filesystem;
     std::error_code ec;
     auto sourceDir = fs::weakly_canonical(filepath, ec).parent_path();
-    if (ec) sourceDir = fs::path(filepath).parent_path();
+    if (ec) {
+        sourceDir = fs::path(filepath).parent_path();
+    }
     std::vector<std::string> roots;
     for (const auto* relative : {"lib", "src"}) {
         const auto candidate = sourceDir / relative;
         ec.clear();
-        if (fs::is_directory(candidate, ec) && !ec)
+        if (fs::is_directory(candidate, ec) && !ec) {
             roots.push_back(candidate.string());
+        }
     }
     // The document's own directory only when it is itself the module root: a
     // file beside its modules (`src/foo.kex` next to `using Foo`) keeps
     // resolving. For anything deeper, the package roots below are the answer
     // and the directory itself would only shadow.
     const auto packageDirectory = teyPackageDirectory(filepath);
-    if (roots.empty() && packageDirectory.empty())
+    if (roots.empty() && packageDirectory.empty()) {
         roots.push_back(sourceDir.string());
+    }
     if (!packageDirectory.empty()) {
         for (const auto* relative : {"lib", "src"}) {
             const auto candidate = fs::path(packageDirectory) / relative;
             ec.clear();
-            if (fs::is_directory(candidate, ec) && !ec)
+            if (fs::is_directory(candidate, ec) && !ec) {
                 appendRoot(roots, candidate.string());
+            }
         }
         // A package that names its source folders keeps them at its top, and
         // its own directory is the root: `app/models/user.kex` is
         // `App.Models.User` (tey/src/tey/commands.kex, `sourceDirectoryAt`).
-        if (teyPackageDeclaresSources(packageDirectory))
+        if (teyPackageDeclaresSources(packageDirectory)) {
             appendRoot(roots, packageDirectory);
+        }
     }
-    if (roots.empty()) roots.push_back(sourceDir.string());
-    for (const auto& root : configured) appendRoot(roots, root);
-    for (auto& root : teyDependencyRoots(filepath)) appendRoot(roots, std::move(root));
-    for (auto& root : standardLibraryModuleRoots())
+    if (roots.empty()) {
+        roots.push_back(sourceDir.string());
+    }
+    for (const auto& root : configured) {
+        appendRoot(roots, root);
+    }
+    for (auto& root : teyDependencyRoots(filepath)) {
         appendRoot(roots, std::move(root));
+    }
+    for (auto& root : standardLibraryModuleRoots()) {
+        appendRoot(roots, std::move(root));
+    }
     return roots;
 }
 
@@ -347,30 +380,41 @@ auto documentSearchPath(const std::string& filepath,
 // convention covers: a vendored tree, a monorepo sibling, a checkout that is
 // not a tey package. Relative entries resolve against the first workspace
 // folder, which is what an editor's project-local settings file means by one.
-auto configuredSourceRoots(const ::lsp::InitializeParams& params)
-    -> std::vector<std::string> {
-    if (!params.initializationOptions) return {};
+auto configuredSourceRoots(const ::lsp::InitializeParams& params) -> std::vector<std::string> {
+    if (!params.initializationOptions) {
+        return {};
+    }
     const auto& options = *params.initializationOptions;
-    if (!options.isObject()) return {};
+    if (!options.isObject()) {
+        return {};
+    }
     const auto* entries = options.object().find("sourceRoots");
-    if (!entries || !entries->isArray()) return {};
+    if (!entries || !entries->isArray()) {
+        return {};
+    }
     std::filesystem::path base;
     if (params.workspaceFolders && !params.workspaceFolders->isNull() &&
         !params.workspaceFolders->value().empty() &&
-        params.workspaceFolders->value().front().uri.isFileUri())
+        params.workspaceFolders->value().front().uri.isFileUri()) {
         base = params.workspaceFolders->value().front().uri.fsPath();
-    else if (!params.rootUri.isNull() && params.rootUri->isFileUri())
+    } else if (!params.rootUri.isNull() && params.rootUri->isFileUri()) {
         base = params.rootUri->fsPath();
+    }
     std::vector<std::string> roots;
     for (const auto& entry : entries->array()) {
-        if (!entry.isString() || entry.string().empty()) continue;
+        if (!entry.isString() || entry.string().empty()) {
+            continue;
+        }
         std::filesystem::path root(entry.string());
-        if (root.is_relative() && !base.empty()) root = base / root;
+        if (root.is_relative() && !base.empty()) {
+            root = base / root;
+        }
         std::error_code ec;
         // Silently dropped rather than reported: a stale entry in a shared
         // settings file should not turn into a diagnostic on every file.
-        if (std::filesystem::is_directory(root, ec) && !ec)
+        if (std::filesystem::is_directory(root, ec) && !ec) {
             roots.push_back(root.lexically_normal().string());
+        }
     }
     return roots;
 }
@@ -381,28 +425,33 @@ auto configuredSourceRoots(const ::lsp::InitializeParams& params)
 // function" into hover and completion — the same companion mechanism a
 // `.spec.kex` uses for its base file.
 auto manifestCompanion(const std::string& filepath) -> std::vector<std::string> {
-    if (std::filesystem::path(filepath).filename() != "package.kex") return {};
-    if (auto vocabulary = kex::manifestVocabularyFile(); !vocabulary.empty())
+    if (std::filesystem::path(filepath).filename() != "package.kex") {
+        return {};
+    }
+    if (auto vocabulary = kex::manifestVocabularyFile(); !vocabulary.empty()) {
         return {vocabulary};
+    }
     return {};
 }
 
 auto specCompanions(const std::string& filepath) -> std::vector<std::string> {
     constexpr std::string_view suffix = ".spec.kex";
-    if (!std::string_view(filepath).ends_with(suffix))
+    if (!std::string_view(filepath).ends_with(suffix)) {
         return manifestCompanion(filepath);
+    }
     const auto stem = filepath.substr(0, filepath.size() - suffix.size());
     std::vector<std::string> candidates{stem + ".kex"};
     const auto directory = std::filesystem::path(stem).parent_path();
-    if (directory.filename() == "spec")
-        candidates.push_back(
-            (directory.parent_path() / "examples" /
-             (std::filesystem::path(stem).filename().string() + ".kex"))
-                .string());
+    if (directory.filename() == "spec") {
+        candidates.push_back((directory.parent_path() / "examples" /
+                              (std::filesystem::path(stem).filename().string() + ".kex"))
+                                 .string());
+    }
     for (const auto& candidate : candidates) {
         std::error_code error;
-        if (std::filesystem::is_regular_file(candidate, error) && !error)
+        if (std::filesystem::is_regular_file(candidate, error) && !error) {
             return {candidate};
+        }
     }
     return {};
 }
@@ -431,25 +480,30 @@ auto templateHost(const std::string& templatePath) -> std::optional<TemplateHost
         const auto relative = target.lexically_relative(directory).generic_string();
         const auto needle = "Kex.embed(\"" + relative + "\")";
         std::vector<fs::path> sources;
-        for (const auto& entry : fs::directory_iterator(directory, ec))
-            if (entry.path().extension() == ".kex" &&
-                entry.is_regular_file(ec))
+        for (const auto& entry : fs::directory_iterator(directory, ec)) {
+            if (entry.path().extension() == ".kex" && entry.is_regular_file(ec)) {
                 sources.push_back(entry.path());
+            }
+        }
         // Sorted, so two files embedding the same template always resolve to
         // the same host whatever order the directory lists them in.
         std::sort(sources.begin(), sources.end());
         for (const auto& source : sources) {
             std::ifstream input(source, std::ios::binary);
-            const std::string text((std::istreambuf_iterator<char>(input)),
-                                   std::istreambuf_iterator<char>());
-            if (text.find(needle) == std::string::npos) continue;
+            const std::string text(
+                (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+            if (text.find(needle) == std::string::npos) {
+                continue;
+            }
             TemplateHost host{source.string(), ""};
             // `module App.Views.Chat` heading the file, or the first
             // `module X do` in it.
             size_t lineStart = 0;
             while (lineStart < text.size()) {
                 auto lineEnd = text.find('\n', lineStart);
-                if (lineEnd == std::string::npos) lineEnd = text.size();
+                if (lineEnd == std::string::npos) {
+                    lineEnd = text.size();
+                }
                 const auto line = std::string_view(text).substr(lineStart, lineEnd - lineStart);
                 if (line.starts_with("module ")) {
                     auto name = line.substr(7);
@@ -462,10 +516,10 @@ auto templateHost(const std::string& templatePath) -> std::optional<TemplateHost
             return host;
         }
         // Outside any package, only the template's own directory.
-        if (package.empty() ||
-            directory == fs::path(package).lexically_normal() ||
-            !directory.has_relative_path())
+        if (package.empty() || directory == fs::path(package).lexically_normal() ||
+            !directory.has_relative_path()) {
             break;
+        }
     }
     return std::nullopt;
 }
@@ -474,46 +528,63 @@ auto utf16Column(const std::string& source, int line, int byteColumn) -> int {
     size_t offset = 0;
     for (int current = 1; current < line && offset < source.size(); ++current) {
         const auto newline = source.find('\n', offset);
-        if (newline == std::string::npos) return 0;
+        if (newline == std::string::npos) {
+            return 0;
+        }
         offset = newline + 1;
     }
-    const auto byteLimit = std::min(
-        source.size(), offset + static_cast<size_t>(std::max(0, byteColumn - 1)));
+    const auto byteLimit =
+        std::min(source.size(), offset + static_cast<size_t>(std::max(0, byteColumn - 1)));
     int units = 0;
     while (offset < byteLimit) {
         const unsigned char lead = source[offset];
         size_t width = 1;
-        if ((lead & 0xE0) == 0xC0) width = 2;
-        else if ((lead & 0xF0) == 0xE0) width = 3;
-        else if ((lead & 0xF8) == 0xF0) width = 4;
-        if (offset + width > byteLimit) width = 1;
+        if ((lead & 0xE0) == 0xC0) {
+            width = 2;
+        } else if ((lead & 0xF0) == 0xE0) {
+            width = 3;
+        } else if ((lead & 0xF8) == 0xF0) {
+            width = 4;
+        }
+        if (offset + width > byteLimit) {
+            width = 1;
+        }
         units += width == 4 ? 2 : 1;
         offset += width;
     }
     return units;
 }
 
-auto byteOffsetForUtf16Column(const std::string& source, size_t lineStart,
-                              size_t lineEnd, unsigned int targetUnits) -> size_t {
+auto byteOffsetForUtf16Column(
+    const std::string& source, size_t lineStart, size_t lineEnd, unsigned int targetUnits)
+    -> size_t {
     auto offset = lineStart;
     unsigned int units = 0;
     while (offset < lineEnd && units < targetUnits) {
         const unsigned char lead = source[offset];
         size_t width = 1;
-        if ((lead & 0xE0) == 0xC0) width = 2;
-        else if ((lead & 0xF0) == 0xE0) width = 3;
-        else if ((lead & 0xF8) == 0xF0) width = 4;
-        if (offset + width > lineEnd) width = 1;
+        if ((lead & 0xE0) == 0xC0) {
+            width = 2;
+        } else if ((lead & 0xF0) == 0xE0) {
+            width = 3;
+        } else if ((lead & 0xF8) == 0xF0) {
+            width = 4;
+        }
+        if (offset + width > lineEnd) {
+            width = 1;
+        }
         const unsigned int nextUnits = width == 4 ? 2 : 1;
-        if (units + nextUnits > targetUnits) break;
+        if (units + nextUnits > targetUnits) {
+            break;
+        }
         units += nextUnits;
         offset += width;
     }
     return offset;
 }
 
-auto protocolPosition(const SourceLocation& location,
-                      const std::string* source = nullptr) -> ::lsp::Position {
+auto protocolPosition(const SourceLocation& location, const std::string* source = nullptr)
+    -> ::lsp::Position {
     return {
         .line = static_cast<unsigned int>(std::max(0, location.line - 1)),
         .character = static_cast<unsigned int>(
@@ -524,8 +595,7 @@ auto protocolPosition(const SourceLocation& location,
 
 // Forward-declared: the token length lives further down, next to the other
 // source helpers.
-auto identifierLengthAt(const std::string& source, const SourceLocation& location)
-    -> unsigned int;
+auto identifierLengthAt(const std::string& source, const SourceLocation& location) -> unsigned int;
 
 // Translates a SYNTHETIC location the analyzer reported for a `.ket`
 // document's generated Kex (see `Document::ketOriginalText`) back into the
@@ -536,7 +606,9 @@ auto identifierLengthAt(const std::string& source, const SourceLocation& locatio
 // document (`ketOriginalText` empty).
 auto translateKetLocation(const Document& document, SourceLocation location)
     -> std::optional<SourceLocation> {
-    if (document.ketOriginalText.empty()) return location;
+    if (document.ketOriginalText.empty()) {
+        return location;
+    }
     // By line and column, which is where an ordinary `.kex` document shows
     // the diagnostic, rather than by `startOffset`: a checker diagnostic's
     // offset is often where its EXPRESSION starts, and for a `<%= %>` hole
@@ -547,19 +619,23 @@ auto translateKetLocation(const Document& document, SourceLocation location)
         size_t lineStart = 0;
         for (int line = 1; line < location.line && lineStart != std::string::npos; ++line) {
             lineStart = document.text.find('\n', lineStart);
-            if (lineStart != std::string::npos) ++lineStart;
+            if (lineStart != std::string::npos) {
+                ++lineStart;
+            }
         }
-        if (lineStart != std::string::npos)
+        if (lineStart != std::string::npos) {
             synOffset = static_cast<int>(lineStart) + location.column - 1;
+        }
     }
-    if (synOffset < 0) return std::nullopt;
-    const auto origOffset =
-        kex::lsp::ket::mapOffset(document.ketSegments, synOffset);
-    if (origOffset < 0) return std::nullopt;
+    if (synOffset < 0) {
+        return std::nullopt;
+    }
+    const auto origOffset = kex::lsp::ket::mapOffset(document.ketSegments, synOffset);
+    if (origOffset < 0) {
+        return std::nullopt;
+    }
     int line = 1, column = 1;
-    for (int i = 0; i < origOffset &&
-                    i < static_cast<int>(document.ketOriginalText.size());
-         i++) {
+    for (int i = 0; i < origOffset && i < static_cast<int>(document.ketOriginalText.size()); i++) {
         if (document.ketOriginalText[i] == '\n') {
             line++;
             column = 1;
@@ -580,33 +656,36 @@ auto translateKetLocation(const Document& document, SourceLocation location)
 // nullopt when the position falls outside every hole (the template's own
 // literal text, or its frontmatter): there is no Kex there to ask about.
 // Identity for an ordinary `.kex` document.
-auto translateKetPositionToSynthetic(const Document& document,
-                                     ::lsp::Position original)
+auto translateKetPositionToSynthetic(const Document& document, ::lsp::Position original)
     -> std::optional<::lsp::Position> {
-    if (document.ketOriginalText.empty()) return original;
+    if (document.ketOriginalText.empty()) {
+        return original;
+    }
     size_t lineStart = 0;
     for (unsigned int current = 0; current < original.line; ++current) {
         const auto newline = document.ketOriginalText.find('\n', lineStart);
-        if (newline == std::string::npos) return std::nullopt;
+        if (newline == std::string::npos) {
+            return std::nullopt;
+        }
         lineStart = newline + 1;
     }
     const auto newline = document.ketOriginalText.find('\n', lineStart);
-    const auto lineEnd = newline == std::string::npos
-        ? document.ketOriginalText.size() : newline;
-    const auto origOffset = byteOffsetForUtf16Column(
-        document.ketOriginalText, lineStart, lineEnd, original.character);
+    const auto lineEnd = newline == std::string::npos ? document.ketOriginalText.size() : newline;
+    const auto origOffset =
+        byteOffsetForUtf16Column(document.ketOriginalText, lineStart, lineEnd, original.character);
     int synOffset = -1;
-    for (const auto& seg : document.ketSegments)
+    for (const auto& seg : document.ketSegments) {
         if (static_cast<int>(origOffset) >= seg.origStart &&
             static_cast<int>(origOffset) < seg.origEnd) {
-            synOffset = seg.synStart +
-                        (static_cast<int>(origOffset) - seg.origStart);
+            synOffset = seg.synStart + (static_cast<int>(origOffset) - seg.origStart);
             break;
         }
-    if (synOffset < 0) return std::nullopt;
+    }
+    if (synOffset < 0) {
+        return std::nullopt;
+    }
     int line = 1, column = 1;
-    for (int i = 0; i < synOffset && i < static_cast<int>(document.text.size());
-         i++) {
+    for (int i = 0; i < synOffset && i < static_cast<int>(document.text.size()); i++) {
         if (document.text[i] == '\n') {
             line++;
             column = 1;
@@ -614,34 +693,35 @@ auto translateKetPositionToSynthetic(const Document& document,
             column++;
         }
     }
-    return protocolPosition(SourceLocation{document.path, line, column},
-                            &document.text);
+    return protocolPosition(SourceLocation{document.path, line, column}, &document.text);
 }
 
 // Where a diagnostic's squiggle ends when the checker reported only a start.
 // One character was all it ever underlined, so an error about `parseValue`
 // marked a single letter — usually the last one the eye lands on — and said
 // nothing about which name it meant. An identifier is underlined whole.
-auto pointEnd(const SourceLocation& location,
-              const std::string* source = nullptr) -> ::lsp::Position {
-    if (source)
-        if (const auto length = identifierLengthAt(*source, location);
-            length > 1) {
+auto pointEnd(const SourceLocation& location, const std::string* source = nullptr)
+    -> ::lsp::Position {
+    if (source) {
+        if (const auto length = identifierLengthAt(*source, location); length > 1) {
             SourceLocation end = location;
             end.column += static_cast<int>(length);
             return protocolPosition(end, source);
         }
+    }
     auto start = protocolPosition(location, source);
     ++start.character;
     return start;
 }
 
-auto completionPrefix(const std::string& source, unsigned int line,
-                      unsigned int character) -> std::string {
+auto completionPrefix(const std::string& source, unsigned int line, unsigned int character)
+    -> std::string {
     size_t start = 0;
     for (unsigned int current = 0; current < line && start < source.size(); ++current) {
         const auto newline = source.find('\n', start);
-        if (newline == std::string::npos) return {};
+        if (newline == std::string::npos) {
+            return {};
+        }
         start = newline + 1;
     }
     const auto lineEnd = source.find('\n', start);
@@ -650,7 +730,9 @@ auto completionPrefix(const std::string& source, unsigned int line,
     auto begin = cursor;
     while (begin > start) {
         const unsigned char c = source[begin - 1];
-        if (!std::isalnum(c) && c != '_' && c != '?' && c != '!') break;
+        if (!std::isalnum(c) && c != '_' && c != '?' && c != '!') {
+            break;
+        }
         --begin;
     }
     if (begin > start && source[begin - 1] == '.') {
@@ -660,23 +742,29 @@ auto completionPrefix(const std::string& source, unsigned int line,
             --receiver;
             while (receiver > start && depth > 0) {
                 --receiver;
-                if (source[receiver] == ']') ++depth;
-                else if (source[receiver] == '[') --depth;
+                if (source[receiver] == ']') {
+                    ++depth;
+                } else if (source[receiver] == '[') {
+                    --depth;
+                }
             }
-        } else if (receiver > start &&
-                   (source[receiver - 1] == '"' || source[receiver - 1] == '\'')) {
+        } else if (
+            receiver > start && (source[receiver - 1] == '"' || source[receiver - 1] == '\'')) {
             const char quote = source[receiver - 1];
             --receiver;
             while (receiver > start) {
                 --receiver;
                 if (source[receiver] == quote &&
-                    (receiver == start || source[receiver - 1] != '\\'))
+                    (receiver == start || source[receiver - 1] != '\\')) {
                     break;
+                }
             }
         } else {
             while (receiver > start) {
                 const unsigned char c = source[receiver - 1];
-                if (!std::isalnum(c) && c != '_' && c != '.') break;
+                if (!std::isalnum(c) && c != '_' && c != '.') {
+                    break;
+                }
                 --receiver;
             }
         }
@@ -685,12 +773,14 @@ auto completionPrefix(const std::string& source, unsigned int line,
     return source.substr(begin, cursor - begin);
 }
 
-auto completionByteColumn(const std::string& source, unsigned int line,
-                          unsigned int character) -> uint32_t {
+auto completionByteColumn(const std::string& source, unsigned int line, unsigned int character)
+    -> uint32_t {
     size_t start = 0;
     for (unsigned int current = 0; current < line && start < source.size(); ++current) {
         const auto newline = source.find('\n', start);
-        if (newline == std::string::npos) return 1;
+        if (newline == std::string::npos) {
+            return 1;
+        }
         start = newline + 1;
     }
     const auto newline = source.find('\n', start);
@@ -702,42 +792,51 @@ auto completionByteColumn(const std::string& source, unsigned int line,
 // If the cursor is naming the left-hand side of `with Capability = ...`,
 // return the text already typed. The replacement expression after `=` is an
 // ordinary expression and deliberately falls through to normal completion.
-auto withTargetPrefix(const std::string& source, unsigned int line,
-                      unsigned int utf16Column) -> std::optional<std::string> {
+auto withTargetPrefix(const std::string& source, unsigned int line, unsigned int utf16Column)
+    -> std::optional<std::string> {
     size_t lineStart = 0;
     for (unsigned int current = 0; current < line; ++current) {
         const auto newline = source.find('\n', lineStart);
-        if (newline == std::string::npos) return std::nullopt;
+        if (newline == std::string::npos) {
+            return std::nullopt;
+        }
         lineStart = newline + 1;
     }
     const auto lineEndPosition = source.find('\n', lineStart);
-    const auto lineEnd = lineEndPosition == std::string::npos
-        ? source.size() : lineEndPosition;
-    const auto cursor = byteOffsetForUtf16Column(
-        source, lineStart, lineEnd, utf16Column);
-    auto beforeCursor = std::string_view(source).substr(
-        lineStart, cursor - lineStart);
+    const auto lineEnd = lineEndPosition == std::string::npos ? source.size() : lineEndPosition;
+    const auto cursor = byteOffsetForUtf16Column(source, lineStart, lineEnd, utf16Column);
+    auto beforeCursor = std::string_view(source).substr(lineStart, cursor - lineStart);
     const auto first = beforeCursor.find_first_not_of(" \t");
-    if (first != std::string_view::npos) beforeCursor.remove_prefix(first);
-    if (beforeCursor == "with") return std::string{};
-    if (beforeCursor.rfind("with ", 0) != 0) return std::nullopt;
+    if (first != std::string_view::npos) {
+        beforeCursor.remove_prefix(first);
+    }
+    if (beforeCursor == "with") {
+        return std::string{};
+    }
+    if (beforeCursor.rfind("with ", 0) != 0) {
+        return std::nullopt;
+    }
     auto target = beforeCursor.substr(5);
-    while (!target.empty() && std::isspace(
-               static_cast<unsigned char>(target.front())))
+    while (!target.empty() && std::isspace(static_cast<unsigned char>(target.front()))) {
         target.remove_prefix(1);
-    if (target.find('=') != std::string_view::npos) return std::nullopt;
+    }
+    if (target.find('=') != std::string_view::npos) {
+        return std::nullopt;
+    }
     return std::string(target);
 }
 
-auto capabilityCompletions(const Workspace& db,
-                           const semantic::ImportedInterfaces& interfaces,
-                           const std::string& path,
-                           std::string_view prefix)
-    -> ::lsp::Array<::lsp::CompletionItem> {
+auto capabilityCompletions(
+    const Workspace& db,
+    const semantic::ImportedInterfaces& interfaces,
+    const std::string& path,
+    std::string_view prefix) -> ::lsp::Array<::lsp::CompletionItem> {
     ::lsp::Array<::lsp::CompletionItem> result;
     std::unordered_set<std::string> added;
     auto add = [&](const std::string& name) {
-        if (name.rfind(prefix, 0) != 0 || !added.insert(name).second) return;
+        if (name.rfind(prefix, 0) != 0 || !added.insert(name).second) {
+            return;
+        }
         result.push_back({
             .label = name,
             .kind = ::lsp::CompletionItemKind::Struct,
@@ -746,80 +845,101 @@ auto capabilityCompletions(const Workspace& db,
             .insertText = name,
         });
     };
-    for (const auto& symbol : db.symbolsFor(path))
-        if (symbol.kind == semantic::SymbolKind::Module && symbol.isCapability)
-            add(symbol.module.empty()
-                ? symbol.name : symbol.module + "." + symbol.name);
-    for (const auto& [name, interface] : interfaces.modules)
-        if (interface.isCapability) add(name);
+    for (const auto& symbol : db.symbolsFor(path)) {
+        if (symbol.kind == semantic::SymbolKind::Module && symbol.isCapability) {
+            add(symbol.module.empty() ? symbol.name : symbol.module + "." + symbol.name);
+        }
+    }
+    for (const auto& [name, interface] : interfaces.modules) {
+        if (interface.isCapability) {
+            add(name);
+        }
+    }
     return result;
 }
 
-auto sourceLocalReceiverQualifier(const std::string& source,
-                                  std::string_view receiver,
-                                  size_t beforeOffset) -> std::string {
+auto sourceLocalReceiverQualifier(
+    const std::string& source, std::string_view receiver, size_t beforeOffset) -> std::string {
     const auto needle = "let " + std::string(receiver);
     auto found = source.rfind(needle, beforeOffset);
     while (found != std::string::npos) {
-        const bool boundary = found == 0 || source[found - 1] == ' ' ||
-            source[found - 1] == '\t' || source[found - 1] == '\n';
+        const bool boundary = found == 0 || source[found - 1] == ' ' || source[found - 1] == '\t' ||
+                              source[found - 1] == '\n';
         const auto afterName = found + needle.size();
         const bool nameBoundary = afterName >= source.size() ||
-            !std::isalnum(static_cast<unsigned char>(source[afterName]));
+                                  !std::isalnum(static_cast<unsigned char>(source[afterName]));
         if (boundary && nameBoundary) {
             auto cursor = afterName;
-            while (cursor < source.size() &&
-                   (source[cursor] == ' ' || source[cursor] == '\t'))
+            while (cursor < source.size() && (source[cursor] == ' ' || source[cursor] == '\t')) {
                 ++cursor;
+            }
             if (cursor < source.size() && source[cursor] == ':') {
                 ++cursor;
-                while (cursor < source.size() && std::isspace(
-                           static_cast<unsigned char>(source[cursor])))
+                while (cursor < source.size() &&
+                       std::isspace(static_cast<unsigned char>(source[cursor]))) {
                     ++cursor;
+                }
                 auto end = cursor;
                 while (end < source.size() &&
                        (std::isalnum(static_cast<unsigned char>(source[end])) ||
-                        source[end] == '_' || source[end] == '.'))
+                        source[end] == '_' || source[end] == '.')) {
                     ++end;
-                if (end > cursor) return source.substr(cursor, end - cursor);
+                }
+                if (end > cursor) {
+                    return source.substr(cursor, end - cursor);
+                }
             }
             const auto equals = source.find('=', cursor);
             const auto lineEnd = source.find('\n', cursor);
-            if (equals != std::string::npos &&
-                (lineEnd == std::string::npos || equals < lineEnd)) {
+            if (equals != std::string::npos && (lineEnd == std::string::npos || equals < lineEnd)) {
                 cursor = equals + 1;
-                while (cursor < source.size() && std::isspace(
-                           static_cast<unsigned char>(source[cursor])))
+                while (cursor < source.size() &&
+                       std::isspace(static_cast<unsigned char>(source[cursor]))) {
                     ++cursor;
+                }
                 if (cursor < source.size()) {
-                    if (source[cursor] == '[') return "List";
-                    if (source[cursor] == '{') return "Map";
-                    if (source[cursor] == '"') return "String";
-                    if (source[cursor] == '\'') return "Char";
-                    if (std::isdigit(static_cast<unsigned char>(source[cursor])))
+                    if (source[cursor] == '[') {
+                        return "List";
+                    }
+                    if (source[cursor] == '{') {
+                        return "Map";
+                    }
+                    if (source[cursor] == '"') {
+                        return "String";
+                    }
+                    if (source[cursor] == '\'') {
+                        return "Char";
+                    }
+                    if (std::isdigit(static_cast<unsigned char>(source[cursor]))) {
                         return "Integer";
+                    }
                     if (kex::startsUppercase(std::string_view(source).substr(cursor))) {
                         auto end = cursor + 1;
                         while (end < source.size() &&
                                (std::isalnum(static_cast<unsigned char>(source[end])) ||
-                                source[end] == '_' || source[end] == '.'))
+                                source[end] == '_' || source[end] == '.')) {
                             ++end;
+                        }
                         return source.substr(cursor, end - cursor);
                     }
                 }
             }
             return {};
         }
-        if (!found) break;
+        if (!found) {
+            break;
+        }
         found = source.rfind(needle, found - 1);
     }
     return {};
 }
 
-auto sourceLocalDefinition(const std::string& source, const std::string& path,
-                           std::string_view name, size_t beforeOffset)
+auto sourceLocalDefinition(
+    const std::string& source, const std::string& path, std::string_view name, size_t beforeOffset)
     -> std::optional<SourceLocation> {
-    if (name.empty() || source.empty()) return std::nullopt;
+    if (name.empty() || source.empty()) {
+        return std::nullopt;
+    }
     auto identifier = [](unsigned char c) {
         return std::isalnum(c) || c == '_' || c == '?' || c == '!';
     };
@@ -828,32 +948,32 @@ auto sourceLocalDefinition(const std::string& source, const std::string& path,
         const auto end = found + name.size();
         const bool boundaries =
             (found == 0 || !identifier(static_cast<unsigned char>(source[found - 1]))) &&
-            (end >= source.size() ||
-             !identifier(static_cast<unsigned char>(source[end])));
+            (end >= source.size() || !identifier(static_cast<unsigned char>(source[end])));
         if (boundaries) {
             const auto lineStartPosition = source.rfind('\n', found);
-            const auto lineStart = lineStartPosition == std::string::npos
-                ? 0 : lineStartPosition + 1;
+            const auto lineStart =
+                lineStartPosition == std::string::npos ? 0 : lineStartPosition + 1;
             auto prefixEnd = found;
-            while (prefixEnd > lineStart && std::isspace(
-                       static_cast<unsigned char>(source[prefixEnd - 1])))
+            while (prefixEnd > lineStart &&
+                   std::isspace(static_cast<unsigned char>(source[prefixEnd - 1]))) {
                 --prefixEnd;
+            }
             auto prefixStart = prefixEnd;
-            while (prefixStart > lineStart && identifier(
-                       static_cast<unsigned char>(source[prefixStart - 1])))
+            while (prefixStart > lineStart &&
+                   identifier(static_cast<unsigned char>(source[prefixStart - 1]))) {
                 --prefixStart;
-            const auto declarationKeyword = std::string_view(source).substr(
-                prefixStart, prefixEnd - prefixStart);
+            }
+            const auto declarationKeyword =
+                std::string_view(source).substr(prefixStart, prefixEnd - prefixStart);
 
             auto suffix = end;
-            while (suffix < source.size() &&
-                   (source[suffix] == ' ' || source[suffix] == '\t'))
+            while (suffix < source.size() && (source[suffix] == ' ' || source[suffix] == '\t')) {
                 ++suffix;
+            }
             const auto lineEndPosition = source.find('\n', found);
-            const auto lineEnd = lineEndPosition == std::string::npos
-                ? source.size() : lineEndPosition;
-            const auto line = std::string_view(source).substr(
-                lineStart, lineEnd - lineStart);
+            const auto lineEnd =
+                lineEndPosition == std::string::npos ? source.size() : lineEndPosition;
+            const auto line = std::string_view(source).substr(lineStart, lineEnd - lineStart);
             const auto relative = found - lineStart;
             const auto declaration = line.find("let ");
             const auto mutation = line.find("var ");
@@ -863,30 +983,32 @@ auto sourceLocalDefinition(const std::string& source, const std::string& path,
             const auto closeBar = line.find('|', relative + name.size());
             const auto openParen = line.rfind('(', relative);
             const auto closeParen = line.find(')', relative + name.size());
-            const bool simpleBinding = declarationKeyword == "let" ||
-                                       declarationKeyword == "var";
+            const bool simpleBinding = declarationKeyword == "let" || declarationKeyword == "var";
             const bool destructuredBinding =
                 ((declaration != std::string_view::npos && declaration < relative) ||
                  (mutation != std::string_view::npos && mutation < relative)) &&
                 equals != std::string_view::npos;
             const bool clauseBinding = arrow != std::string_view::npos;
-            const bool blockParameter =
-                openBar != std::string_view::npos &&
-                closeBar != std::string_view::npos && openBar < relative;
+            const bool blockParameter = openBar != std::string_view::npos &&
+                                        closeBar != std::string_view::npos && openBar < relative;
             const bool functionParameter =
                 declaration != std::string_view::npos && declaration < relative &&
                 openParen != std::string_view::npos && openParen < relative &&
                 closeParen != std::string_view::npos;
-            if (simpleBinding || destructuredBinding || clauseBinding ||
-                blockParameter || functionParameter) {
+            if (simpleBinding || destructuredBinding || clauseBinding || blockParameter ||
+                functionParameter) {
                 int line = 1;
-                for (size_t cursor = 0; cursor < found; ++cursor)
-                    if (source[cursor] == '\n') ++line;
-                return SourceLocation{
-                    path, line, static_cast<int>(found - lineStart + 1)};
+                for (size_t cursor = 0; cursor < found; ++cursor) {
+                    if (source[cursor] == '\n') {
+                        ++line;
+                    }
+                }
+                return SourceLocation{path, line, static_cast<int>(found - lineStart + 1)};
             }
         }
-        if (!found) break;
+        if (!found) {
+            break;
+        }
         found = source.rfind(name, found - 1);
     }
     return std::nullopt;
@@ -895,13 +1017,16 @@ auto sourceLocalDefinition(const std::string& source, const std::string& path,
 // Byte offset of a 1-based line/column, and the inverse. Both appear inline in
 // several places already; these are for callers that need to walk the source
 // from a node's position and then report what they found.
-auto offsetOfLocation(const std::string& source, const SourceLocation& location)
-    -> size_t {
-    if (location.line < 1 || location.column < 1) return std::string::npos;
+auto offsetOfLocation(const std::string& source, const SourceLocation& location) -> size_t {
+    if (location.line < 1 || location.column < 1) {
+        return std::string::npos;
+    }
     size_t offset = 0;
     for (int line = 1; line < location.line; ++line) {
         const auto newline = source.find('\n', offset);
-        if (newline == std::string::npos) return std::string::npos;
+        if (newline == std::string::npos) {
+            return std::string::npos;
+        }
         offset = newline + 1;
     }
     offset += static_cast<size_t>(location.column - 1);
@@ -912,8 +1037,12 @@ auto locationOfOffset(const std::string& source, size_t offset)
     -> std::pair<unsigned int, unsigned int> {
     unsigned int line = 1;
     size_t lineStart = 0;
-    for (size_t i = 0; i < offset && i < source.size(); ++i)
-        if (source[i] == '\n') { ++line; lineStart = i + 1; }
+    for (size_t i = 0; i < offset && i < source.size(); ++i) {
+        if (source[i] == '\n') {
+            ++line;
+            lineStart = i + 1;
+        }
+    }
     return {line, static_cast<unsigned int>(offset - lineStart) + 1};
 }
 
@@ -929,8 +1058,8 @@ auto locationOfOffset(const std::string& source, size_t offset)
 // `.ket` location fails to map back (should not happen for a location the
 // analyzer itself reported, but a request answered "no definition" is
 // always safer than one pointing at the wrong place).
-auto definitionLocation(const Document& document, SourceLocation location,
-                        size_t nameLength, const std::string* source)
+auto definitionLocation(
+    const Document& document, SourceLocation location, size_t nameLength, const std::string* source)
     -> std::optional<::lsp::Location>;
 
 // `location` moved onto `name` when it points at the keyword before it: a
@@ -940,18 +1069,23 @@ auto definitionLocation(const Document& document, SourceLocation location,
 // the field's own line, up to the record's `end`.
 auto fieldDeclaration(const std::string& source, SourceLocation record, const std::string& field)
     -> std::optional<SourceLocation> {
-    if (record.line < 1) return std::nullopt;
+    if (record.line < 1) {
+        return std::nullopt;
+    }
     size_t lineStart = 0;
     for (int line = 1; line < record.line; ++line) {
         const auto newline = source.find('\n', lineStart);
-        if (newline == std::string::npos) return std::nullopt;
+        if (newline == std::string::npos) {
+            return std::nullopt;
+        }
         lineStart = newline + 1;
     }
     // Past the `record` line itself.
-    if (const auto newline = source.find('\n', lineStart); newline != std::string::npos)
+    if (const auto newline = source.find('\n', lineStart); newline != std::string::npos) {
         lineStart = newline + 1;
-    else
+    } else {
         return std::nullopt;
+    }
     for (int line = record.line + 1; lineStart < source.size(); ++line) {
         const auto newline = source.find('\n', lineStart);
         const auto end = newline == std::string::npos ? source.size() : newline;
@@ -959,80 +1093,99 @@ auto fieldDeclaration(const std::string& source, SourceLocation record, const st
         const auto indent = text.find_first_not_of(" \t");
         if (indent != std::string_view::npos) {
             const auto rest = text.substr(indent);
-            if (rest == "end" || rest.starts_with("end ")) return std::nullopt;
+            if (rest == "end" || rest.starts_with("end ")) {
+                return std::nullopt;
+            }
             if (rest.starts_with(field)) {
                 const auto after = rest.substr(field.size()).find_first_not_of(" \t");
-                if (after != std::string_view::npos && rest[field.size() + after] == ':')
+                if (after != std::string_view::npos && rest[field.size() + after] == ':') {
                     return SourceLocation{record.file, line, static_cast<int>(indent) + 1};
+                }
             }
         }
-        if (newline == std::string::npos) break;
+        if (newline == std::string::npos) {
+            break;
+        }
         lineStart = newline + 1;
     }
     return std::nullopt;
 }
 
-auto atDeclaredName(const std::string& source, SourceLocation location,
-                    const std::string& name) -> SourceLocation {
-    if (location.line < 1 || location.column < 1 || name.empty()) return location;
+auto atDeclaredName(const std::string& source, SourceLocation location, const std::string& name)
+    -> SourceLocation {
+    if (location.line < 1 || location.column < 1 || name.empty()) {
+        return location;
+    }
     size_t offset = 0;
     for (int line = 1; line < location.line; ++line) {
         const auto newline = source.find('\n', offset);
-        if (newline == std::string::npos) return location;
+        if (newline == std::string::npos) {
+            return location;
+        }
         offset = newline + 1;
     }
     const auto start = offset + static_cast<size_t>(location.column - 1);
-    if (source.compare(start, name.size(), name) == 0) return location;
-    for (const std::string keyword : {"let ", "foul ", "slot ", "foul slot "})
+    if (source.compare(start, name.size(), name) == 0) {
+        return location;
+    }
+    for (const std::string keyword : {"let ", "foul ", "slot ", "foul slot "}) {
         if (source.compare(start, keyword.size(), keyword) == 0 &&
             source.compare(start + keyword.size(), name.size(), name) == 0) {
             location.column += static_cast<int>(keyword.size());
             return location;
         }
+    }
     return location;
 }
 
-auto definitionLocation(const Document& document, SourceLocation location,
-                        size_t nameLength, const std::string* source)
+auto definitionLocation(
+    const Document& document, SourceLocation location, size_t nameLength, const std::string* source)
     -> std::optional<::lsp::Location> {
     auto endLocation = location;
     endLocation.column += static_cast<int>(nameLength);
     if (location.file == document.path && !document.ketOriginalText.empty()) {
-        location.startOffset =
-            static_cast<int>(offsetOfLocation(document.text, location));
-        endLocation.startOffset =
-            location.startOffset + static_cast<int>(nameLength);
+        location.startOffset = static_cast<int>(offsetOfLocation(document.text, location));
+        endLocation.startOffset = location.startOffset + static_cast<int>(nameLength);
         const auto translatedStart = translateKetLocation(document, location);
         const auto translatedEnd = translateKetLocation(document, endLocation);
-        if (!translatedStart || !translatedEnd) return std::nullopt;
+        if (!translatedStart || !translatedEnd) {
+            return std::nullopt;
+        }
         return ::lsp::Location{
             .uri = ::lsp::Uri::fileUriFromPath(document.path),
-            .range = {
-                .start = protocolPosition(*translatedStart, &document.ketOriginalText),
-                .end = protocolPosition(*translatedEnd, &document.ketOriginalText),
-            },
+            .range =
+                {
+                    .start = protocolPosition(*translatedStart, &document.ketOriginalText),
+                    .end = protocolPosition(*translatedEnd, &document.ketOriginalText),
+                },
         };
     }
     return ::lsp::Location{
         .uri = ::lsp::Uri::fileUriFromPath(location.file),
-        .range = {
-            .start = protocolPosition(location, source),
-            .end = protocolPosition(endLocation, source),
-        },
+        .range =
+            {
+                .start = protocolPosition(location, source),
+                .end = protocolPosition(endLocation, source),
+            },
     };
 }
 
-auto identifierLengthAt(const std::string& source, const SourceLocation& location)
-    -> unsigned int {
-    if (location.line < 1 || location.column < 1) return 0;
+auto identifierLengthAt(const std::string& source, const SourceLocation& location) -> unsigned int {
+    if (location.line < 1 || location.column < 1) {
+        return 0;
+    }
     size_t offset = 0;
     for (int line = 1; line < location.line; ++line) {
         const auto newline = source.find('\n', offset);
-        if (newline == std::string::npos) return 0;
+        if (newline == std::string::npos) {
+            return 0;
+        }
         offset = newline + 1;
     }
     offset += static_cast<size_t>(location.column - 1);
-    if (offset >= source.size()) return 0;
+    if (offset >= source.size()) {
+        return 0;
+    }
     auto isIdentifier = [](unsigned char c) {
         return std::isalnum(c) || c == '_' || c == '?' || c == '!';
     };
@@ -1040,22 +1193,28 @@ auto identifierLengthAt(const std::string& source, const SourceLocation& locatio
     // `!` of `!control.hint` this is the negation, not a name, and claiming
     // `!control` for it hid `control`'s own hover (kexhq/kex#456).
     const auto first = static_cast<unsigned char>(source[offset]);
-    if (!std::isalnum(first) && first != '_') return 0;
+    if (!std::isalnum(first) && first != '_') {
+        return 0;
+    }
     const auto start = offset;
-    while (offset < source.size() &&
-           isIdentifier(static_cast<unsigned char>(source[offset])))
+    while (offset < source.size() && isIdentifier(static_cast<unsigned char>(source[offset]))) {
         ++offset;
+    }
     return static_cast<unsigned int>(offset - start);
 }
 
-auto callNameLocation(const std::string& source, const ast::Expr& expression,
-                      const std::string& name, bool method)
+auto callNameLocation(
+    const std::string& source, const ast::Expr& expression, const std::string& name, bool method)
     -> std::optional<SourceLocation> {
-    if (expression.location.line < 1 || name.empty()) return std::nullopt;
+    if (expression.location.line < 1 || name.empty()) {
+        return std::nullopt;
+    }
     size_t lineStart = 0;
     for (int line = 1; line < expression.location.line; ++line) {
         const auto newline = source.find('\n', lineStart);
-        if (newline == std::string::npos) return std::nullopt;
+        if (newline == std::string::npos) {
+            return std::nullopt;
+        }
         lineStart = newline + 1;
     }
     const auto newline = source.find('\n', lineStart);
@@ -1067,18 +1226,18 @@ auto callNameLocation(const std::string& source, const ast::Expr& expression,
     auto identifier = [](unsigned char c) {
         return std::isalnum(c) || c == '_' || c == '?' || c == '!';
     };
-    while ((cursor = source.find(name, cursor)) != std::string::npos &&
-           cursor < lineEnd) {
-        const bool leftBoundary = cursor == lineStart ||
-            !identifier(static_cast<unsigned char>(source[cursor - 1]));
-        const bool rightBoundary = cursor + name.size() >= lineEnd ||
+    while ((cursor = source.find(name, cursor)) != std::string::npos && cursor < lineEnd) {
+        const bool leftBoundary =
+            cursor == lineStart || !identifier(static_cast<unsigned char>(source[cursor - 1]));
+        const bool rightBoundary =
+            cursor + name.size() >= lineEnd ||
             !identifier(static_cast<unsigned char>(source[cursor + name.size()]));
-        const bool methodBoundary = !method ||
-            (cursor > lineStart && source[cursor - 1] == '.');
-        if (leftBoundary && rightBoundary && methodBoundary)
-            return SourceLocation{expression.location.file,
-                                  expression.location.line,
-                                  static_cast<int>(cursor - lineStart + 1)};
+        const bool methodBoundary = !method || (cursor > lineStart && source[cursor - 1] == '.');
+        if (leftBoundary && rightBoundary && methodBoundary) {
+            return SourceLocation{
+                expression.location.file, expression.location.line,
+                static_cast<int>(cursor - lineStart + 1)};
+        }
         cursor += name.size();
     }
     return std::nullopt;
@@ -1090,12 +1249,14 @@ struct WordAtPosition {
     std::string text;
 };
 
-auto wordAt(const std::string& source, unsigned int line,
-            unsigned int character) -> WordAtPosition {
+auto wordAt(const std::string& source, unsigned int line, unsigned int character)
+    -> WordAtPosition {
     size_t lineStart = 0;
     for (unsigned int current = 0; current < line && lineStart < source.size(); ++current) {
         const auto newline = source.find('\n', lineStart);
-        if (newline == std::string::npos) return {};
+        if (newline == std::string::npos) {
+            return {};
+        }
         lineStart = newline + 1;
     }
     const auto newline = source.find('\n', lineStart);
@@ -1106,24 +1267,27 @@ auto wordAt(const std::string& source, unsigned int line,
     };
     if (cursor == lineEnd ||
         (cursor < lineEnd && !isIdentifier(static_cast<unsigned char>(source[cursor])))) {
-        if (cursor == lineStart ||
-            !isIdentifier(static_cast<unsigned char>(source[cursor - 1])))
+        if (cursor == lineStart || !isIdentifier(static_cast<unsigned char>(source[cursor - 1]))) {
             return {};
+        }
         --cursor;
     }
     auto start = cursor;
     auto end = cursor + 1;
-    while (start > lineStart &&
-           isIdentifier(static_cast<unsigned char>(source[start - 1])))
+    while (start > lineStart && isIdentifier(static_cast<unsigned char>(source[start - 1]))) {
         --start;
-    while (end < lineEnd &&
-           isIdentifier(static_cast<unsigned char>(source[end])))
+    }
+    while (end < lineEnd && isIdentifier(static_cast<unsigned char>(source[end]))) {
         ++end;
+    }
     // Only a name's END may be `!` or `?`: in `!control.hint` the word is
     // `control`, after the negation (kexhq/kex#456).
-    while (start < end && (source[start] == '!' || source[start] == '?'))
+    while (start < end && (source[start] == '!' || source[start] == '?')) {
         ++start;
-    if (start == end) return {};
+    }
+    if (start == end) {
+        return {};
+    }
     return {
         .byteColumn = static_cast<uint32_t>(start - lineStart + 1),
         .byteLength = static_cast<uint32_t>(end - start),
@@ -1131,39 +1295,49 @@ auto wordAt(const std::string& source, unsigned int line,
     };
 }
 
-auto moduleQualifierBeforeWord(const std::string& source, unsigned int line,
-                               uint32_t byteColumn) -> std::string {
+auto moduleQualifierBeforeWord(const std::string& source, unsigned int line, uint32_t byteColumn)
+    -> std::string {
     size_t lineStart = 0;
     for (unsigned int current = 0; current < line && lineStart < source.size(); ++current) {
         const auto newline = source.find('\n', lineStart);
-        if (newline == std::string::npos) return {};
+        if (newline == std::string::npos) {
+            return {};
+        }
         lineStart = newline + 1;
     }
     const auto wordStart = lineStart + byteColumn - 1;
-    if (wordStart <= lineStart || source[wordStart - 1] != '.') return {};
+    if (wordStart <= lineStart || source[wordStart - 1] != '.') {
+        return {};
+    }
     auto begin = wordStart - 1;
     while (begin > lineStart) {
         const unsigned char c = source[begin - 1];
-        if (!std::isalnum(c) && c != '_' && c != '.') break;
+        if (!std::isalnum(c) && c != '_' && c != '.') {
+            break;
+        }
         --begin;
     }
     auto qualifier = source.substr(begin, wordStart - begin - 1);
-    if (qualifier.empty() ||
-        !kex::startsUppercase(qualifier))
+    if (qualifier.empty() || !kex::startsUppercase(qualifier)) {
         return {};
+    }
     return qualifier;
 }
 
-auto isTypeAnnotationPosition(const std::string& source, unsigned int line,
-                              uint32_t byteColumn) -> bool {
+auto isTypeAnnotationPosition(const std::string& source, unsigned int line, uint32_t byteColumn)
+    -> bool {
     size_t lineStart = 0;
     for (unsigned int current = 0; current < line && lineStart < source.size(); ++current) {
         const auto newline = source.find('\n', lineStart);
-        if (newline == std::string::npos) return false;
+        if (newline == std::string::npos) {
+            return false;
+        }
         lineStart = newline + 1;
     }
     const auto wordStart = lineStart + static_cast<size_t>(byteColumn - 1);
-    if (wordStart > source.size()) return false;
+    if (wordStart > source.size()) {
+        return false;
+    }
     auto prefix = std::string_view(source).substr(lineStart, wordStart - lineStart);
 
     // Parameter, binding, and record-field annotations all introduce their
@@ -1173,25 +1347,27 @@ auto isTypeAnnotationPosition(const std::string& source, unsigned int line,
     const auto colon = prefix.rfind(':');
     const auto arrow = prefix.rfind("->");
     const auto assignment = prefix.rfind('=');
-    const auto marker = std::max(colon == std::string_view::npos ? 0 : colon + 1,
-                                 arrow == std::string_view::npos ? 0 : arrow + 2);
-    return marker > 0 &&
-           (assignment == std::string_view::npos || assignment < marker);
+    const auto marker = std::max(
+        colon == std::string_view::npos ? 0 : colon + 1,
+        arrow == std::string_view::npos ? 0 : arrow + 2);
+    return marker > 0 && (assignment == std::string_view::npos || assignment < marker);
 }
 
-auto isNamespaceReceiverPosition(const std::string& source, unsigned int line,
-                                 uint32_t byteColumn,
-                                 uint32_t byteLength) -> bool {
+auto isNamespaceReceiverPosition(
+    const std::string& source, unsigned int line, uint32_t byteColumn, uint32_t byteLength)
+    -> bool {
     size_t lineStart = 0;
     for (unsigned int current = 0; current < line && lineStart < source.size(); ++current) {
         const auto newline = source.find('\n', lineStart);
-        if (newline == std::string::npos) return false;
+        if (newline == std::string::npos) {
+            return false;
+        }
         lineStart = newline + 1;
     }
     auto offset = lineStart + static_cast<size_t>(byteColumn - 1 + byteLength);
-    while (offset < source.size() &&
-           (source[offset] == ' ' || source[offset] == '\t'))
+    while (offset < source.size() && (source[offset] == ' ' || source[offset] == '\t')) {
         ++offset;
+    }
     return offset < source.size() && source[offset] == '.';
 }
 
@@ -1203,94 +1379,124 @@ auto isNamespaceReceiverPosition(const std::string& source, unsigned int line,
 // file is the document's own; any other spelling of the same path (relative,
 // through a symlink) still counts, so no real error of this file is dropped.
 auto belongsToDocument(std::string_view file, std::string_view document) -> bool {
-    if (file.empty() || file == document) return true;
+    if (file.empty() || file == document) {
+        return true;
+    }
     std::error_code error;
-    return std::filesystem::equivalent(std::filesystem::path(file),
-                                       std::filesystem::path(document), error) &&
+    return std::filesystem::equivalent(
+               std::filesystem::path(file), std::filesystem::path(document), error) &&
            !error;
 }
 
-auto insideAtomLiteral(const std::string& text, unsigned int line,
-                       unsigned int character) -> bool {
+auto insideAtomLiteral(const std::string& text, unsigned int line, unsigned int character) -> bool {
     size_t lineStart = 0;
     for (unsigned int current = 0; current < line; ++current) {
         const auto newline = text.find('\n', lineStart);
-        if (newline == std::string::npos) return false;
+        if (newline == std::string::npos) {
+            return false;
+        }
         lineStart = newline + 1;
     }
     const auto lineEndPosition = text.find('\n', lineStart);
-    const auto lineEnd =
-        lineEndPosition == std::string::npos ? text.size() : lineEndPosition;
+    const auto lineEnd = lineEndPosition == std::string::npos ? text.size() : lineEndPosition;
     const auto cursor = byteOffsetForUtf16Column(text, lineStart, lineEnd, character);
     auto start = cursor;
-    while (start > lineStart &&
-           (std::isalnum(static_cast<unsigned char>(text[start - 1])) ||
-            text[start - 1] == '_' || text[start - 1] == '@'))
+    while (start > lineStart && (std::isalnum(static_cast<unsigned char>(text[start - 1])) ||
+                                 text[start - 1] == '_' || text[start - 1] == '@')) {
         --start;
-    if (start == cursor || start == lineStart || text[start - 1] != ':') return false;
-    if (start - 1 > lineStart && text[start - 2] == ':') return false;
+    }
+    if (start == cursor || start == lineStart || text[start - 1] != ':') {
+        return false;
+    }
+    if (start - 1 > lineStart && text[start - 2] == ':') {
+        return false;
+    }
     return std::islower(static_cast<unsigned char>(text[start]));
 }
 
-auto atFieldType(const std::string& source, unsigned int line,
-                 uint32_t byteColumn, std::string_view field,
-                 const Workspace& db,
-                 const std::string& file) -> std::string {
+auto atFieldType(
+    const std::string& source,
+    unsigned int line,
+    uint32_t byteColumn,
+    std::string_view field,
+    const Workspace& db,
+    const std::string& file) -> std::string {
     size_t lineStart = 0;
     for (unsigned int current = 0; current < line; ++current) {
         const auto newline = source.find('\n', lineStart);
-        if (newline == std::string::npos) return {};
+        if (newline == std::string::npos) {
+            return {};
+        }
         lineStart = newline + 1;
     }
     const auto offset = lineStart + static_cast<size_t>(byteColumn - 1);
-    if (offset == 0 || offset > source.size() || source[offset - 1] != '@')
+    if (offset == 0 || offset > source.size() || source[offset - 1] != '@') {
         return {};
+    }
     auto make = source.rfind("make ", offset);
-    if (make == std::string::npos) return {};
+    if (make == std::string::npos) {
+        return {};
+    }
     auto targetStart = make + 5;
-    while (targetStart < source.size() && std::isspace(
-               static_cast<unsigned char>(source[targetStart])))
+    while (targetStart < source.size() &&
+           std::isspace(static_cast<unsigned char>(source[targetStart]))) {
         ++targetStart;
+    }
     auto targetEnd = targetStart;
     while (targetEnd < source.size() &&
            (std::isalnum(static_cast<unsigned char>(source[targetEnd])) ||
-            source[targetEnd] == '_' || source[targetEnd] == '.'))
+            source[targetEnd] == '_' || source[targetEnd] == '.')) {
         ++targetEnd;
-    if (targetEnd == targetStart) return {};
-    const auto* record = db.findSymbol(
-        source.substr(targetStart, targetEnd - targetStart), file);
-    if (!record || record->kind != semantic::SymbolKind::Record) return {};
+    }
+    if (targetEnd == targetStart) {
+        return {};
+    }
+    const auto* record = db.findSymbol(source.substr(targetStart, targetEnd - targetStart), file);
+    if (!record || record->kind != semantic::SymbolKind::Record) {
+        return {};
+    }
     const auto marker = "\n  " + std::string(field) + " : ";
     const auto fieldStart = record->detail.find(marker);
-    if (fieldStart == std::string::npos) return {};
+    if (fieldStart == std::string::npos) {
+        return {};
+    }
     const auto typeStart = fieldStart + marker.size();
     const auto typeEnd = record->detail.find('\n', typeStart);
-    return record->detail.substr(typeStart, typeEnd == std::string::npos
-        ? std::string::npos : typeEnd - typeStart);
+    return record->detail.substr(
+        typeStart, typeEnd == std::string::npos ? std::string::npos : typeEnd - typeStart);
 }
 
-auto documentationBeforeSource(std::string_view source,
-                               const SourceLocation& definition) -> std::string {
-    if (definition.line <= 1) return {};
+auto documentationBeforeSource(std::string_view source, const SourceLocation& definition)
+    -> std::string {
+    if (definition.line <= 1) {
+        return {};
+    }
     std::vector<std::string_view> lines;
     size_t start = 0;
     while (start <= source.size()) {
         const auto end = source.find('\n', start);
-        lines.push_back(source.substr(start, end == std::string_view::npos
-                                                ? source.size() - start
-                                                : end - start));
-        if (end == std::string_view::npos) break;
+        lines.push_back(source.substr(
+            start, end == std::string_view::npos ? source.size() - start : end - start));
+        if (end == std::string_view::npos) {
+            break;
+        }
         start = end + 1;
     }
     auto index = static_cast<size_t>(definition.line - 1);
-    if (index > lines.size()) index = lines.size();
+    if (index > lines.size()) {
+        index = lines.size();
+    }
     std::vector<std::string> docs;
     while (index > 0) {
         auto line = lines[--index];
         const auto first = line.find_first_not_of(" \t");
-        if (first == std::string_view::npos || line[first] != '#') break;
+        if (first == std::string_view::npos || line[first] != '#') {
+            break;
+        }
         line.remove_prefix(first + 1);
-        if (!line.empty() && line.front() == ' ') line.remove_prefix(1);
+        if (!line.empty() && line.front() == ' ') {
+            line.remove_prefix(1);
+        }
         // A section banner separates groups of declarations for a reader; it
         // documents none of them. Collected as documentation it became the
         // first line of a hover — the type `Integer` answered with a rule and
@@ -1310,20 +1516,23 @@ auto documentationBeforeSource(std::string_view source,
             }
             return rule >= 8;
         };
-        if (isBanner(line)) break;
+        if (isBanner(line)) {
+            break;
+        }
         docs.emplace_back(line);
     }
     std::reverse(docs.begin(), docs.end());
     std::string result;
     for (const auto& line : docs) {
-        if (!result.empty()) result += '\n';
+        if (!result.empty()) {
+            result += '\n';
+        }
         result += line;
     }
     return result;
 }
 
-auto documentationBefore(const FileState& state,
-                         const SourceLocation& definition) -> std::string {
+auto documentationBefore(const FileState& state, const SourceLocation& definition) -> std::string {
     return documentationBeforeSource(state.source, definition);
 }
 
@@ -1332,8 +1541,13 @@ auto renderRdoc(std::string documentation) -> std::string {
         size_t cursor = 0;
         while ((cursor = line.find('+', cursor)) != std::string::npos) {
             const auto end = line.find('+', cursor + 1);
-            if (end == std::string::npos) break;
-            if (end == cursor + 1) { cursor = end + 1; continue; }
+            if (end == std::string::npos) {
+                break;
+            }
+            if (end == cursor + 1) {
+                cursor = end + 1;
+                continue;
+            }
             line[cursor] = '`';
             line[end] = '`';
             cursor = end + 1;
@@ -1346,11 +1560,15 @@ auto renderRdoc(std::string documentation) -> std::string {
     std::string line;
     bool example = false;
     auto appendLine = [&](const std::string& value = std::string{}) {
-        if (!output.empty()) output += '\n';
+        if (!output.empty()) {
+            output += '\n';
+        }
         output += value;
     };
     auto closeExample = [&]() {
-        if (!example) return;
+        if (!example) {
+            return;
+        }
         appendLine("```");
         example = false;
     };
@@ -1363,12 +1581,12 @@ auto renderRdoc(std::string documentation) -> std::string {
             example = true;
             auto inlineExample = line.substr(std::string("@example").size());
             const auto first = inlineExample.find_first_not_of(" \t");
-            if (first != std::string::npos)
+            if (first != std::string::npos) {
                 appendLine(inlineExample.substr(first));
+            }
             continue;
         }
-        if (line.rfind("@param ", 0) == 0 ||
-            line.rfind("@return", 0) == 0) {
+        if (line.rfind("@param ", 0) == 0 || line.rfind("@return", 0) == 0) {
             closeExample();
             const bool parameter = line.rfind("@param ", 0) == 0;
             auto rest = line.substr(parameter ? 7 : 7);
@@ -1376,26 +1594,32 @@ auto renderRdoc(std::string documentation) -> std::string {
             if (parameter) {
                 const auto separator = rest.find_first_of(" \t");
                 name = rest.substr(0, separator);
-                rest = separator == std::string::npos ? std::string{} :
-                    rest.substr(separator + 1);
+                rest = separator == std::string::npos ? std::string{} : rest.substr(separator + 1);
             }
             const auto first = rest.find_first_not_of(" \t");
-            if (first != std::string::npos) rest.erase(0, first);
+            if (first != std::string::npos) {
+                rest.erase(0, first);
+            }
             std::string type;
             if (!rest.empty() && rest.front() == '[') {
                 if (const auto end = rest.find(']'); end != std::string::npos) {
                     type = rest.substr(1, end - 1);
                     rest.erase(0, end + 1);
                     const auto description = rest.find_first_not_of(" \t");
-                    if (description != std::string::npos) rest.erase(0, description);
-                    else rest.clear();
+                    if (description != std::string::npos) {
+                        rest.erase(0, description);
+                    } else {
+                        rest.clear();
+                    }
                 }
             }
-            std::string rendered = parameter
-                ? "**Parameter `" + name + "`:**"
-                : "**Returns:**";
-            if (!type.empty()) rendered += " `" + type + "`";
-            if (!rest.empty()) rendered += " " + inlineCode(rest);
+            std::string rendered = parameter ? "**Parameter `" + name + "`:**" : "**Returns:**";
+            if (!type.empty()) {
+                rendered += " `" + type + "`";
+            }
+            if (!rest.empty()) {
+                rendered += " " + inlineCode(rest);
+            }
             appendLine(rendered);
             continue;
         }
@@ -1404,7 +1628,9 @@ auto renderRdoc(std::string documentation) -> std::string {
                 closeExample();
                 appendLine();
             } else {
-                if (line.rfind("  ", 0) == 0) line.erase(0, 2);
+                if (line.rfind("  ", 0) == 0) {
+                    line.erase(0, 2);
+                }
                 appendLine(line);
             }
             continue;
@@ -1417,29 +1643,46 @@ auto renderRdoc(std::string documentation) -> std::string {
 
 auto documentedDeclarationName(std::string_view line) -> std::string {
     const auto first = line.find_first_not_of(" \t");
-    if (first == std::string_view::npos) return {};
+    if (first == std::string_view::npos) {
+        return {};
+    }
     line.remove_prefix(first);
-    if (line.rfind("foul ", 0) == 0) line.remove_prefix(5);
-    if (line.rfind("public ", 0) == 0) line.remove_prefix(7);
-    if (line.rfind("private ", 0) == 0) line.remove_prefix(8);
+    if (line.rfind("foul ", 0) == 0) {
+        line.remove_prefix(5);
+    }
+    if (line.rfind("public ", 0) == 0) {
+        line.remove_prefix(7);
+    }
+    if (line.rfind("private ", 0) == 0) {
+        line.remove_prefix(8);
+    }
     for (const auto keyword : {"module ", "record ", "type ", "trait ", "make "}) {
-        if (line.rfind(keyword, 0) != 0) continue;
+        if (line.rfind(keyword, 0) != 0) {
+            continue;
+        }
         line.remove_prefix(std::char_traits<char>::length(keyword));
         const auto end = line.find_first_of(" <(=,\t");
         return std::string(line.substr(0, end));
     }
-    if (line.rfind("let ", 0) == 0) line.remove_prefix(4);
-    else if (line.rfind("var ", 0) == 0) line.remove_prefix(4);
-    else {
+    if (line.rfind("let ", 0) == 0) {
+        line.remove_prefix(4);
+    } else if (line.rfind("var ", 0) == 0) {
+        line.remove_prefix(4);
+    } else {
         const auto annotation = line.find(" :");
-        if (annotation == std::string_view::npos) return {};
+        if (annotation == std::string_view::npos) {
+            return {};
+        }
         line = line.substr(0, annotation);
     }
     const auto end = line.find_first_of("( =\t");
     auto name = line.substr(0, end);
-    if (name.empty()) return {};
-    if (!std::isalnum(static_cast<unsigned char>(name.front())) &&
-        name.front() != '_') return {};
+    if (name.empty()) {
+        return {};
+    }
+    if (!std::isalnum(static_cast<unsigned char>(name.front())) && name.front() != '_') {
+        return {};
+    }
     return std::string(name);
 }
 
@@ -1469,8 +1712,9 @@ auto sourceDocumentation(const std::string& source)
         const auto first = line.find_first_not_of(" \t");
         if (first != std::string::npos && line[first] == '#') {
             auto comment = line.substr(first + 1);
-            if (!comment.empty() && comment.front() == ' ')
+            if (!comment.empty() && comment.front() == ' ') {
                 comment.erase(0, 1);
+            }
             // A section banner documents nothing — it separates groups of
             // declarations for a reader. Kept, it became the opening line of a
             // hover: the type `Integer` answered with a rule and a paragraph
@@ -1484,29 +1728,34 @@ auto sourceDocumentation(const std::string& source)
             continue;
         }
         if (first == std::string::npos) {
-            if (!pending.empty()) pending.emplace_back();
+            if (!pending.empty()) {
+                pending.emplace_back();
+            }
             continue;
         }
         const auto name = documentedDeclarationName(line);
         if (!name.empty() && !pending.empty()) {
-            while (!pending.empty() && pending.back().empty()) pending.pop_back();
+            while (!pending.empty() && pending.back().empty()) {
+                pending.pop_back();
+            }
             std::string docs;
             for (const auto& comment : pending) {
-                if (!docs.empty()) docs += '\n';
+                if (!docs.empty()) {
+                    docs += '\n';
+                }
                 docs += comment;
             }
             auto& entries = result[name];
-            if (!docs.empty() &&
-                std::find(entries.begin(), entries.end(), docs) == entries.end())
+            if (!docs.empty() && std::find(entries.begin(), entries.end(), docs) == entries.end()) {
                 entries.push_back(std::move(docs));
+            }
         }
         pending.clear();
     }
     return result;
 }
 
-auto qualifiedSourceDocumentation(const std::string& source,
-                                  const std::string& path)
+auto qualifiedSourceDocumentation(const std::string& source, const std::string& path)
     -> std::unordered_map<std::string, std::vector<std::string>> {
     std::unordered_map<std::string, std::vector<std::string>> result;
     Lexer lexer(source, path);
@@ -1515,117 +1764,131 @@ auto qualifiedSourceDocumentation(const std::string& source,
     auto add = [&](const std::string& module, const std::string& name,
                    const SourceLocation& location) {
         auto docs = documentationBeforeSource(source, location);
-        if (module.empty() || docs.empty()) return;
+        if (module.empty() || docs.empty()) {
+            return;
+        }
         auto& entries = result[module + "." + name];
-        if (std::find(entries.begin(), entries.end(), docs) == entries.end())
+        if (std::find(entries.begin(), entries.end(), docs) == entries.end()) {
             entries.push_back(std::move(docs));
+        }
     };
-    std::function<void(const ast::VisibilityBlock&, const std::string&)>
-        collectVisibility;
-    collectVisibility = [&](const ast::VisibilityBlock& block,
-                            const std::string& module) {
-        for (const auto& item : block.items)
-            std::visit([&](const auto& node) {
-                using T = std::decay_t<decltype(node)>;
-                if (!node) return;
-                if constexpr (std::is_same_v<T,
-                                  std::unique_ptr<ast::FunctionDef>>)
-                    add(module, node->name, node->location);
-                else if constexpr (std::is_same_v<T,
-                                       std::unique_ptr<ast::TypeAnnotation>>)
-                    if (node->type) add(module, node->name,
-                                        node->type->location);
-            }, item);
+    std::function<void(const ast::VisibilityBlock&, const std::string&)> collectVisibility;
+    collectVisibility = [&](const ast::VisibilityBlock& block, const std::string& module) {
+        for (const auto& item : block.items) {
+            std::visit(
+                [&](const auto& node) {
+                    using T = std::decay_t<decltype(node)>;
+                    if (!node) {
+                        return;
+                    }
+                    if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                        add(module, node->name, node->location);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
+                        if (node->type) {
+                            add(module, node->name, node->type->location);
+                        }
+                    }
+                },
+                item);
+        }
     };
-    auto makeTargetName = [](const ast::MakeDef& make) {
-        return makeTargetLeaf(make.target);
-    };
-    auto collectMake = [&](const ast::MakeDef& make,
-                           const std::string& owner) {
+    auto makeTargetName = [](const ast::MakeDef& make) { return makeTargetLeaf(make.target); };
+    auto collectMake = [&](const ast::MakeDef& make, const std::string& owner) {
         const auto target = owner.empty() ? makeTargetName(make) : owner;
-        if (target.empty()) return;
-        for (const auto& item : make.body)
-            std::visit([&](const auto& node) {
-                using T = std::decay_t<decltype(node)>;
-                if (!node) return;
-                if constexpr (std::is_same_v<T,
-                                  std::unique_ptr<ast::FunctionDef>>)
-                    add(target, node->name, node->location);
-                else if constexpr (std::is_same_v<T,
-                                       std::unique_ptr<ast::TypeAnnotation>>) {
-                    if (node->type)
-                        add(target, node->name, node->type->location);
-                }
-                else if constexpr (std::is_same_v<T,
-                                       std::unique_ptr<ast::VisibilityBlock>>)
-                    collectVisibility(*node, target);
-            }, item);
+        if (target.empty()) {
+            return;
+        }
+        for (const auto& item : make.body) {
+            std::visit(
+                [&](const auto& node) {
+                    using T = std::decay_t<decltype(node)>;
+                    if (!node) {
+                        return;
+                    }
+                    if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                        add(target, node->name, node->location);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
+                        if (node->type) {
+                            add(target, node->name, node->type->location);
+                        }
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                        collectVisibility(*node, target);
+                    }
+                },
+                item);
+        }
     };
     std::function<void(const ast::ModuleDef&, const std::string&)> collectModule;
-    collectModule = [&](const ast::ModuleDef& module,
-                        const std::string& parent) {
-        const auto qualified = parent.empty() || module.name.find('.') !=
-                                                   std::string::npos
-            ? module.name : parent + "." + module.name;
-        for (const auto& item : module.body)
-            std::visit([&](const auto& node) {
-                using T = std::decay_t<decltype(node)>;
-                if (!node) return;
-                if constexpr (std::is_same_v<T,
-                                  std::unique_ptr<ast::ModuleDef>>)
-                    collectModule(*node, qualified);
-                else if constexpr (std::is_same_v<T,
-                                       std::unique_ptr<ast::FunctionDef>>)
-                    add(qualified, node->name, node->location);
-                else if constexpr (std::is_same_v<T,
-                                       std::unique_ptr<ast::TypeAnnotation>>) {
-                    if (node->type) add(qualified, node->name,
-                                        node->type->location);
-                } else if constexpr (std::is_same_v<T,
-                                       std::unique_ptr<ast::VisibilityBlock>>)
-                    collectVisibility(*node, qualified);
-                else if constexpr (std::is_same_v<T,
-                                       std::unique_ptr<ast::MakeDef>>)
-                    collectMake(*node, qualified);
-            }, item);
+    collectModule = [&](const ast::ModuleDef& module, const std::string& parent) {
+        const auto qualified = parent.empty() || module.name.find('.') != std::string::npos
+                                   ? module.name
+                                   : parent + "." + module.name;
+        for (const auto& item : module.body) {
+            std::visit(
+                [&](const auto& node) {
+                    using T = std::decay_t<decltype(node)>;
+                    if (!node) {
+                        return;
+                    }
+                    if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                        collectModule(*node, qualified);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                        add(qualified, node->name, node->location);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
+                        if (node->type) {
+                            add(qualified, node->name, node->type->location);
+                        }
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                        collectVisibility(*node, qualified);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                        collectMake(*node, qualified);
+                    }
+                },
+                item);
+        }
     };
-    for (const auto& item : program.items)
-        if (const auto* module =
-                std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
-            module && *module)
+    for (const auto& item : program.items) {
+        if (const auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
+            module && *module) {
             collectModule(**module, "");
-        else if (const auto* make =
-                     std::get_if<std::unique_ptr<ast::MakeDef>>(&item);
-                 make && *make)
+        } else if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item);
+                   make && *make) {
             collectMake(**make, "");
+        }
+    }
     return result;
 }
 
-auto standardLibraryDocumentation()
-    -> std::unordered_map<std::string, std::vector<std::string>> {
+auto standardLibraryDocumentation() -> std::unordered_map<std::string, std::vector<std::string>> {
     std::unordered_map<std::string, std::vector<std::string>> result;
     auto files = standardLibrarySourceFiles();
-    for (const auto& file : preludeSourceFiles())
-        if (std::find(files.begin(), files.end(), file) == files.end())
+    for (const auto& file : preludeSourceFiles()) {
+        if (std::find(files.begin(), files.end(), file) == files.end()) {
             files.push_back(file);
+        }
+    }
     for (const auto& path : files) {
         std::ifstream input(path);
-        if (!input) continue;
-        std::string source((std::istreambuf_iterator<char>(input)),
-                           std::istreambuf_iterator<char>());
+        if (!input) {
+            continue;
+        }
+        std::string source(
+            (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
         for (auto& [name, entries] : sourceDocumentation(source)) {
             auto& destination = result[name];
-            for (auto& docs : entries)
-                if (std::find(destination.begin(), destination.end(), docs) ==
-                    destination.end())
+            for (auto& docs : entries) {
+                if (std::find(destination.begin(), destination.end(), docs) == destination.end()) {
                     destination.push_back(std::move(docs));
+                }
+            }
         }
         for (auto& [name, entries] : qualifiedSourceDocumentation(source, path)) {
             auto& destination = result[name];
-            for (auto& docs : entries)
-                if (std::find(destination.begin(), destination.end(), docs) ==
-                    destination.end())
+            for (auto& docs : entries) {
+                if (std::find(destination.begin(), destination.end(), docs) == destination.end()) {
                     destination.push_back(std::move(docs));
+                }
+            }
         }
     }
     return result;
@@ -1638,45 +1901,58 @@ auto sourceParameterNames(const std::string& source)
     std::string line;
     while (std::getline(input, line)) {
         const auto first = line.find_first_not_of(" \t");
-        if (first == std::string::npos) continue;
+        if (first == std::string::npos) {
+            continue;
+        }
         auto declaration = std::string_view(line).substr(first);
         // `foul` REPLACES `let` on a definition, it does not precede it. When
         // module-level foulness went away every effectful stdlib function was
         // respelled `foul name(...)`, and requiring a `let` after the prefix
         // dropped all of their parameter names from completion.
-        if (declaration.rfind("foul ", 0) == 0) declaration.remove_prefix(5);
-        else if (declaration.rfind("let ", 0) == 0) declaration.remove_prefix(4);
-        else continue;
-        const auto open = declaration.find('(');
-        const auto close = open == std::string_view::npos
-            ? std::string_view::npos : declaration.find(')', open + 1);
-        if (open == std::string_view::npos || close == std::string_view::npos)
+        if (declaration.rfind("foul ", 0) == 0) {
+            declaration.remove_prefix(5);
+        } else if (declaration.rfind("let ", 0) == 0) {
+            declaration.remove_prefix(4);
+        } else {
             continue;
+        }
+        const auto open = declaration.find('(');
+        const auto close = open == std::string_view::npos ? std::string_view::npos
+                                                          : declaration.find(')', open + 1);
+        if (open == std::string_view::npos || close == std::string_view::npos) {
+            continue;
+        }
         auto name = std::string(declaration.substr(0, open));
-        while (!name.empty() && std::isspace(
-                   static_cast<unsigned char>(name.back())))
+        while (!name.empty() && std::isspace(static_cast<unsigned char>(name.back()))) {
             name.pop_back();
-        if (name.empty()) continue;
+        }
+        if (name.empty()) {
+            continue;
+        }
         std::vector<std::string> params;
         auto arguments = declaration.substr(open + 1, close - open - 1);
         size_t start = 0;
         while (start < arguments.size()) {
             auto end = arguments.find(',', start);
-            if (end == std::string_view::npos) end = arguments.size();
+            if (end == std::string_view::npos) {
+                end = arguments.size();
+            }
             auto parameter = arguments.substr(start, end - start);
             const auto paramFirst = parameter.find_first_not_of(" \t");
             if (paramFirst != std::string_view::npos) {
                 parameter.remove_prefix(paramFirst);
                 const auto paramEnd = parameter.find_first_of(":= \t");
                 auto paramName = std::string(parameter.substr(0, paramEnd));
-                if (!paramName.empty() && paramName != "_")
+                if (!paramName.empty() && paramName != "_") {
                     params.push_back(std::move(paramName));
+                }
             }
             start = end + 1;
         }
         auto& overloads = result[name];
-        if (std::find(overloads.begin(), overloads.end(), params) == overloads.end())
+        if (std::find(overloads.begin(), overloads.end(), params) == overloads.end()) {
             overloads.push_back(std::move(params));
+        }
     }
     return result;
 }
@@ -1685,102 +1961,118 @@ auto standardLibraryParameterNames()
     -> std::unordered_map<std::string, std::vector<std::vector<std::string>>> {
     std::unordered_map<std::string, std::vector<std::vector<std::string>>> result;
     auto files = standardLibrarySourceFiles();
-    for (const auto& file : preludeSourceFiles())
-        if (std::find(files.begin(), files.end(), file) == files.end())
+    for (const auto& file : preludeSourceFiles()) {
+        if (std::find(files.begin(), files.end(), file) == files.end()) {
             files.push_back(file);
+        }
+    }
     for (const auto& path : files) {
         std::ifstream input(path);
-        if (!input) continue;
-        std::string source((std::istreambuf_iterator<char>(input)),
-                           std::istreambuf_iterator<char>());
+        if (!input) {
+            continue;
+        }
+        std::string source(
+            (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
         for (auto& [name, overloads] : sourceParameterNames(source)) {
             auto& destination = result[name];
-            for (auto& params : overloads)
+            for (auto& params : overloads) {
                 if (std::find(destination.begin(), destination.end(), params) ==
-                    destination.end())
+                    destination.end()) {
                     destination.push_back(std::move(params));
+                }
+            }
         }
     }
     return result;
 }
 
-auto functionDetail(const ast::FunctionDef& function,
-                    const std::vector<semantic::Signature>& signatures,
-                    const semantic::Analyzer& analyzer)
-    -> std::string {
+auto functionDetail(
+    const ast::FunctionDef& function,
+    const std::vector<semantic::Signature>& signatures,
+    const semantic::Analyzer& analyzer) -> std::string {
     std::string result;
     for (const auto& signature : signatures) {
-        if (!result.empty()) result += '\n';
-        if (signature.isFoul || function.isFoul) result += "foul ";
-        if (function.isSlot) result += "slot ";
+        if (!result.empty()) {
+            result += '\n';
+        }
+        if (signature.isFoul || function.isFoul) {
+            result += "foul ";
+        }
+        if (function.isSlot) {
+            result += "slot ";
+        }
         result += analyzer.displaySignature(function.name, signature);
     }
     // A capability requirement is written nowhere in the source — that is the
     // point of the feature — so hover is where a reader learns it, together
     // with the chain that explains why this function has it (kexhq/kex#143).
-    if (const auto* capabilities =
-            analyzer.requiredCapabilities(function.name)) {
+    if (const auto* capabilities = analyzer.requiredCapabilities(function.name)) {
         for (const auto& [capability, _] : *capabilities) {
             result += "\nrequires " + capability;
-            for (const auto& [caller, via] :
-                 analyzer.capabilityChain(function.name, capability))
-                result += via.empty()
-                    ? "\n  \u2190 " + caller + " uses " + capability
-                    : "\n  \u2190 " + caller + " calls " + via;
+            for (const auto& [caller, via] : analyzer.capabilityChain(function.name, capability)) {
+                result += via.empty() ? "\n  \u2190 " + caller + " uses " + capability
+                                      : "\n  \u2190 " + caller + " calls " + via;
+            }
         }
     }
     return result;
 }
 
 auto importedAdtScore(const semantic::ImportedADT& adt) -> size_t {
-    size_t score = adt.typeParamNames.size() * 8 +
-                   adt.constructorParamTypes.size() * 4 +
+    size_t score = adt.typeParamNames.size() * 8 + adt.constructorParamTypes.size() * 4 +
                    adt.constructorTypeParamSlots.size() * 2;
-    for (const auto& [_, params] : adt.constructorParamTypes)
+    for (const auto& [_, params] : adt.constructorParamTypes) {
         score += params.size();
+    }
     return score;
 }
 
-auto importedAdtNamed(const semantic::ImportedInterfaces& interfaces,
-                      const std::string& name)
+auto importedAdtNamed(const semantic::ImportedInterfaces& interfaces, const std::string& name)
     -> const semantic::ImportedADT* {
     const semantic::ImportedADT* result = nullptr;
-    for (const auto& adt : interfaces.adts)
-        if (adt.name == name &&
-            (!result || importedAdtScore(adt) > importedAdtScore(*result)))
+    for (const auto& adt : interfaces.adts) {
+        if (adt.name == name && (!result || importedAdtScore(adt) > importedAdtScore(*result))) {
             result = &adt;
+        }
+    }
     return result;
 }
 
-auto importedAdtWithConstructor(const semantic::ImportedInterfaces& interfaces,
-                                const std::string& constructor)
+auto importedAdtWithConstructor(
+    const semantic::ImportedInterfaces& interfaces, const std::string& constructor)
     -> const semantic::ImportedADT* {
     const semantic::ImportedADT* result = nullptr;
-    for (const auto& adt : interfaces.adts)
-        if (std::find(adt.constructors.begin(), adt.constructors.end(),
-                      constructor) != adt.constructors.end() &&
-            (!result || importedAdtScore(adt) > importedAdtScore(*result)))
+    for (const auto& adt : interfaces.adts) {
+        if (std::find(adt.constructors.begin(), adt.constructors.end(), constructor) !=
+                adt.constructors.end() &&
+            (!result || importedAdtScore(adt) > importedAdtScore(*result))) {
             result = &adt;
+        }
+    }
     return result;
 }
 
-auto importedAdtTypeParameters(const semantic::ImportedADT& adt)
-    -> std::vector<std::string> {
-    if (!adt.typeParamNames.empty()) return adt.typeParamNames;
+auto importedAdtTypeParameters(const semantic::ImportedADT& adt) -> std::vector<std::string> {
+    if (!adt.typeParamNames.empty()) {
+        return adt.typeParamNames;
+    }
     std::vector<std::string> result;
     result.reserve(adt.typeParamCount);
-    for (size_t i = 0; i < adt.typeParamCount; ++i)
+    for (size_t i = 0; i < adt.typeParamCount; ++i) {
         result.push_back(std::string(1, static_cast<char>('A' + i % 26)));
+    }
     return result;
 }
 
-auto importedAdtType(const semantic::ImportedADT& adt,
-                     const std::vector<std::string>& parameters) -> std::string {
+auto importedAdtType(const semantic::ImportedADT& adt, const std::vector<std::string>& parameters)
+    -> std::string {
     std::string result = adt.name;
     if (!parameters.empty()) {
         result += '<';
         for (size_t i = 0; i < parameters.size(); ++i) {
-            if (i) result += ", ";
+            if (i) {
+                result += ", ";
+            }
             result += parameters[i];
         }
         result += '>';
@@ -1788,32 +2080,35 @@ auto importedAdtType(const semantic::ImportedADT& adt,
     return result;
 }
 
-auto importedConstructorParameters(const semantic::ImportedADT& adt,
-                                   const std::string& constructor,
-                                   const std::vector<std::string>& typeParameters)
-    -> std::vector<std::string> {
+auto importedConstructorParameters(
+    const semantic::ImportedADT& adt,
+    const std::string& constructor,
+    const std::vector<std::string>& typeParameters) -> std::vector<std::string> {
     std::vector<std::string> result;
     const auto slots = adt.constructorTypeParamSlots.find(constructor);
     const auto exact = adt.constructorParamTypes.find(constructor);
     size_t count = 0;
     if (auto arity = adt.constructorArities.find(constructor);
-        arity != adt.constructorArities.end())
+        arity != adt.constructorArities.end()) {
         count = static_cast<size_t>(std::max(0, arity->second));
-    if (slots != adt.constructorTypeParamSlots.end())
+    }
+    if (slots != adt.constructorTypeParamSlots.end()) {
         count = std::max(count, slots->second.size());
-    if (exact != adt.constructorParamTypes.end())
+    }
+    if (exact != adt.constructorParamTypes.end()) {
         count = std::max(count, exact->second.size());
+    }
     for (size_t i = 0; i < count; ++i) {
-        const int slot = slots != adt.constructorTypeParamSlots.end() &&
-                                 i < slots->second.size()
-            ? slots->second[i] : -1;
-        if (slot >= 0 && static_cast<size_t>(slot) < typeParameters.size())
+        const int slot = slots != adt.constructorTypeParamSlots.end() && i < slots->second.size()
+                             ? slots->second[i]
+                             : -1;
+        if (slot >= 0 && static_cast<size_t>(slot) < typeParameters.size()) {
             result.push_back(typeParameters[slot]);
-        else if (exact != adt.constructorParamTypes.end() &&
-                 i < exact->second.size())
+        } else if (exact != adt.constructorParamTypes.end() && i < exact->second.size()) {
             result.push_back(semantic::typeToString(exact->second[i]));
-        else
+        } else {
             result.push_back("Any");
+        }
     }
     return result;
 }
@@ -1825,12 +2120,13 @@ auto importedAdtDetail(const semantic::ImportedADT& adt) -> std::string {
         const auto& constructor = adt.constructors[i];
         result += i == 0 ? "\n  " : "\n| ";
         result += constructor;
-        const auto params = importedConstructorParameters(
-            adt, constructor, typeParameters);
+        const auto params = importedConstructorParameters(adt, constructor, typeParameters);
         if (!params.empty()) {
             result += '(';
             for (size_t p = 0; p < params.size(); ++p) {
-                if (p) result += ", ";
+                if (p) {
+                    result += ", ";
+                }
                 result += params[p];
             }
             result += ')';
@@ -1839,13 +2135,14 @@ auto importedAdtDetail(const semantic::ImportedADT& adt) -> std::string {
     return result;
 }
 
-auto importedConstructorDetail(const semantic::ImportedADT& adt,
-                               const std::string& constructor) -> std::string {
+auto importedConstructorDetail(const semantic::ImportedADT& adt, const std::string& constructor)
+    -> std::string {
     const auto typeParameters = importedAdtTypeParameters(adt);
-    const auto params = importedConstructorParameters(
-        adt, constructor, typeParameters);
+    const auto params = importedConstructorParameters(adt, constructor, typeParameters);
     std::string result = constructor + " : ";
-    for (const auto& param : params) result += param + " -> ";
+    for (const auto& param : params) {
+        result += param + " -> ";
+    }
     return result + importedAdtType(adt, typeParameters);
 }
 
@@ -1853,10 +2150,12 @@ auto importedConstructorDetail(const semantic::ImportedADT& adt,
 // "". Hovering a field used to answer with whatever global function shared its
 // name — `b.size` reported `foul size : String -> Integer?` — because a field
 // is not a symbol in its own right and the name-based lookup was all there was.
-auto fieldTypeOf(const semantic::SymbolInfo& record, const std::string& field)
-    -> std::string {
-    for (const auto& [name, type] : record.fields)
-        if (name == field) return type;
+auto fieldTypeOf(const semantic::SymbolInfo& record, const std::string& field) -> std::string {
+    for (const auto& [name, type] : record.fields) {
+        if (name == field) {
+            return type;
+        }
+    }
     return {};
 }
 
@@ -1866,7 +2165,9 @@ auto fieldTypeOf(const semantic::SymbolInfo& record, const std::string& field)
 auto modulesInScope(const Document& document, int line, int column)
     -> std::unordered_set<std::string> {
     const auto& positions = document.scopePositions;
-    if (positions.empty()) return {};
+    if (positions.empty()) {
+        return {};
+    }
     auto after = std::upper_bound(
         positions.begin(), positions.end(),
         std::tuple<int, int, std::size_t>{line, column, static_cast<std::size_t>(-1)});
@@ -1881,17 +2182,24 @@ auto servingTargetDeclaring(const ast::Program& program, int line, const std::st
     -> std::string {
     std::string target;
     ast::forEachDeclared<ast::MakeDef>(program, [&](const ast::MakeDef& make) {
-        if (!target.empty() || !make.isServing) return;
+        if (!target.empty() || !make.isServing) {
+            return;
+        }
         for (const auto& item : make.body) {
             bool declares = false;
             if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
-                fn && *fn && (*fn)->isSlot && (*fn)->name == name)
+                fn && *fn && (*fn)->isSlot && (*fn)->name == name) {
                 declares = (*fn)->nameLocation.line == line || (*fn)->location.line == line;
-            else if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item);
-                     ann && *ann && (*ann)->name == name)
+            } else if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item);
+                       ann && *ann && (*ann)->name == name) {
                 declares = (*ann)->location.line == line;
-            if (!declares) continue;
-            if (const auto written = writtenMakeTarget(make.target)) target = written->dotted();
+            }
+            if (!declares) {
+                continue;
+            }
+            if (const auto written = writtenMakeTarget(make.target)) {
+                target = written->dotted();
+            }
             return;
         }
     });
@@ -1903,27 +2211,40 @@ auto servingTargetDeclaring(const ast::Program& program, int line, const std::st
 // nothing — but a name-based lookup happily found a same-named export and
 // answered with its signature and prose: `name` reported OptionParser's
 // documentation about `kex install`.
-auto isMapKeyPosition(const std::string& source, unsigned int line,
-                      unsigned int byteColumn, size_t wordLength) -> bool {
+auto isMapKeyPosition(
+    const std::string& source, unsigned int line, unsigned int byteColumn, size_t wordLength)
+    -> bool {
     size_t lineStart = 0;
     for (unsigned int current = 1; current < line; ++current) {
         const auto newline = source.find('\n', lineStart);
-        if (newline == std::string::npos) return false;
+        if (newline == std::string::npos) {
+            return false;
+        }
         lineStart = newline + 1;
     }
-    if (byteColumn == 0) return false;
+    if (byteColumn == 0) {
+        return false;
+    }
     const size_t start = lineStart + byteColumn - 1;
     size_t after = start + wordLength;
-    while (after < source.size() && source[after] == ' ') ++after;
+    while (after < source.size() && source[after] == ' ') {
+        ++after;
+    }
     // `name:` — but not `name ::` or a `?:` conditional.
-    if (after >= source.size() || source[after] != ':') return false;
-    // Not `::`, and not the `:>` of a method declaration.
-    if (after + 1 < source.size() &&
-        (source[after + 1] == ':' || source[after + 1] == '>'))
+    if (after >= source.size() || source[after] != ':') {
         return false;
+    }
+    // Not `::`, and not the `:>` of a method declaration.
+    if (after + 1 < source.size() && (source[after + 1] == ':' || source[after + 1] == '>')) {
+        return false;
+    }
     size_t before = start;
-    while (before > lineStart && source[before - 1] == ' ') --before;
-    if (before == lineStart) return false;
+    while (before > lineStart && source[before - 1] == ' ') {
+        --before;
+    }
+    if (before == lineStart) {
+        return false;
+    }
     const char opener = source[before - 1];
     return opener == '{' || opener == ',';
 }
@@ -1932,31 +2253,44 @@ auto isMapKeyPosition(const std::string& source, unsigned int line,
 // `User { name: "Alice" }`. Empty for a plain map literal, whose keys really
 // are atoms. Only the same line is examined; a literal opened on an earlier
 // line simply falls back to the map reading.
-auto literalRecordName(const std::string& source, unsigned int line,
-                       unsigned int byteColumn) -> std::string {
+auto literalRecordName(const std::string& source, unsigned int line, unsigned int byteColumn)
+    -> std::string {
     size_t lineStart = 0;
     for (unsigned int current = 1; current < line; ++current) {
         const auto newline = source.find('\n', lineStart);
-        if (newline == std::string::npos) return {};
+        if (newline == std::string::npos) {
+            return {};
+        }
         lineStart = newline + 1;
     }
-    if (byteColumn == 0) return {};
+    if (byteColumn == 0) {
+        return {};
+    }
     size_t i = lineStart + byteColumn - 1;
     // Back to the `{` that opened this literal, past any earlier `key: value,`.
-    while (i > lineStart && source[i - 1] != '{') --i;
-    if (i == lineStart || source[i - 1] != '{') return {};
+    while (i > lineStart && source[i - 1] != '{') {
+        --i;
+    }
+    if (i == lineStart || source[i - 1] != '{') {
+        return {};
+    }
     size_t brace = i - 1;
-    while (brace > lineStart && source[brace - 1] == ' ') --brace;
-    const size_t nameEnd = brace;
-    while (brace > lineStart &&
-           (std::isalnum(static_cast<unsigned char>(source[brace - 1])) ||
-            source[brace - 1] == '_' || source[brace - 1] == '.'))
+    while (brace > lineStart && source[brace - 1] == ' ') {
         --brace;
-    if (brace == nameEnd) return {};
+    }
+    const size_t nameEnd = brace;
+    while (brace > lineStart && (std::isalnum(static_cast<unsigned char>(source[brace - 1])) ||
+                                 source[brace - 1] == '_' || source[brace - 1] == '.')) {
+        --brace;
+    }
+    if (brace == nameEnd) {
+        return {};
+    }
     auto name = source.substr(brace, nameEnd - brace);
     // A record name is capitalised; anything else is not a record literal.
-    if (name.empty() || !kex::startsUppercase(name))
+    if (name.empty() || !kex::startsUppercase(name)) {
         return {};
+    }
     return name;
 }
 
@@ -1964,66 +2298,87 @@ auto literalRecordName(const std::string& source, unsigned int line,
 // a reference, so the same name-based lookup answered with an unrelated
 // export — hovering `size` reported `foul size : String -> Integer?`. Returns
 // the declared type as written, or empty when this is not such a line.
-auto declaredFieldType(const std::string& source, unsigned int line,
-                       unsigned int byteColumn, size_t wordLength)
+auto declaredFieldType(
+    const std::string& source, unsigned int line, unsigned int byteColumn, size_t wordLength)
     -> std::string {
     size_t lineStart = 0;
     for (unsigned int current = 1; current < line; ++current) {
         const auto newline = source.find('\n', lineStart);
-        if (newline == std::string::npos) return {};
+        if (newline == std::string::npos) {
+            return {};
+        }
         lineStart = newline + 1;
     }
-    if (byteColumn == 0) return {};
+    if (byteColumn == 0) {
+        return {};
+    }
     const size_t start = lineStart + byteColumn - 1;
     // Nothing but indentation may precede it: an expression that happens to
     // contain `x : y` is not a declaration.
-    for (size_t i = lineStart; i < start; ++i)
-        if (source[i] != ' ' && source[i] != '\t') return {};
+    for (size_t i = lineStart; i < start; ++i) {
+        if (source[i] != ' ' && source[i] != '\t') {
+            return {};
+        }
+    }
     size_t after = start + wordLength;
-    while (after < source.size() && source[after] == ' ') ++after;
-    if (after >= source.size() || source[after] != ':') return {};
+    while (after < source.size() && source[after] == ' ') {
+        ++after;
+    }
+    if (after >= source.size() || source[after] != ':') {
+        return {};
+    }
     // `push :> X -> [X]` DECLARES a method, not a field: taking the text after
     // the colon there produced the nonsense `push : > X -> [X]`.
-    if (after + 1 < source.size() &&
-        (source[after + 1] == ':' || source[after + 1] == '>'))
+    if (after + 1 < source.size() && (source[after + 1] == ':' || source[after + 1] == '>')) {
         return {};
+    }
     ++after;
-    while (after < source.size() && source[after] == ' ') ++after;
+    while (after < source.size() && source[after] == ' ') {
+        ++after;
+    }
     const auto lineEnd = source.find('\n', after);
-    auto text = source.substr(after, (lineEnd == std::string::npos
-                                          ? source.size() : lineEnd) - after);
+    auto text =
+        source.substr(after, (lineEnd == std::string::npos ? source.size() : lineEnd) - after);
     // A default value is not part of the type: `count : Integer = 0`.
-    if (const auto equals = text.find('='); equals != std::string::npos)
+    if (const auto equals = text.find('='); equals != std::string::npos) {
         text = text.substr(0, equals);
-    while (!text.empty() &&
-           std::isspace(static_cast<unsigned char>(text.back())))
+    }
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) {
         text.pop_back();
+    }
     return text;
 }
 
 // Module names this file opted into with `using`. Read from the text rather
 // than the AST so it still answers while the buffer is mid-edit and cannot be
 // parsed — which is exactly when an editor asks about a symbol.
-auto documentImports(const std::string& source)
-    -> std::unordered_set<std::string> {
+auto documentImports(const std::string& source) -> std::unordered_set<std::string> {
     std::unordered_set<std::string> modules;
     size_t lineStart = 0;
     while (lineStart <= source.size()) {
         const auto newline = source.find('\n', lineStart);
         const auto end = newline == std::string::npos ? source.size() : newline;
         size_t i = lineStart;
-        while (i < end && std::isspace(static_cast<unsigned char>(source[i]))) ++i;
+        while (i < end && std::isspace(static_cast<unsigned char>(source[i]))) {
+            ++i;
+        }
         if (source.compare(i, 6, "using ") == 0) {
             i += 6;
-            while (i < end && std::isspace(static_cast<unsigned char>(source[i]))) ++i;
-            const size_t nameStart = i;
-            while (i < end &&
-                   (std::isalnum(static_cast<unsigned char>(source[i])) ||
-                    source[i] == '_' || source[i] == '.'))
+            while (i < end && std::isspace(static_cast<unsigned char>(source[i]))) {
                 ++i;
-            if (i > nameStart) modules.insert(source.substr(nameStart, i - nameStart));
+            }
+            const size_t nameStart = i;
+            while (i < end && (std::isalnum(static_cast<unsigned char>(source[i])) ||
+                               source[i] == '_' || source[i] == '.')) {
+                ++i;
+            }
+            if (i > nameStart) {
+                modules.insert(source.substr(nameStart, i - nameStart));
+            }
         }
-        if (newline == std::string::npos) break;
+        if (newline == std::string::npos) {
+            break;
+        }
         lineStart = newline + 1;
     }
     return modules;
@@ -2032,27 +2387,30 @@ auto documentImports(const std::string& source)
 // The shared recovery analysis, checking through a Workspace kept between
 // calls so the module sources are parsed once rather than per keystroke.
 auto recoveredReceiverQualifier(
-    const std::string& source, const std::string& path,
-    const DotReceiver& receiver, size_t cursor,
+    const std::string& source,
+    const std::string& path,
+    const DotReceiver& receiver,
+    size_t cursor,
     const semantic::ImportedInterfaces* interfaces,
     const std::vector<std::string>& moduleRoots) -> std::string {
     static Workspace recoveryDb;
     recoveryDb.setImportedInterfaces(interfaces);
     recoveryDb.setModuleRoots(moduleRoots);
     const semantic::CompletionChecker check =
-        [&](const std::string& file, const std::string& text)
-        -> std::optional<semantic::CheckedSource> {
+        [&](const std::string& file,
+            const std::string& text) -> std::optional<semantic::CheckedSource> {
         recoveryDb.updateFile(file, text);
         auto* state = recoveryDb.fileState(file);
-        if (!state) return std::nullopt;
+        if (!state) {
+            return std::nullopt;
+        }
         auto analyzer = std::make_shared<semantic::Analyzer>(interfaces);
         analyzer->analyze(state->ast);
         // The program is the index's, which outlives the call.
         return semantic::CheckedSource{
             std::shared_ptr<ast::Program>(std::shared_ptr<void>{}, &state->ast), analyzer, nullptr};
     };
-    return semantic::recoveredReceiverQualifier(check, source, path, receiver, cursor,
-                                                interfaces);
+    return semantic::recoveredReceiverQualifier(check, source, path, receiver, cursor, interfaces);
 }
 
 // The receiver's type, cheaply where possible. `recoveredReceiverQualifier`
@@ -2063,32 +2421,43 @@ auto recoveredReceiverQualifier(
 // keep the re-analysis for receivers it cannot describe — a call result, an
 // index, a chain.
 template <typename Document>
-auto receiverQualifier(const Document& document, const DotReceiver& receiver,
-                       size_t cursor,
-                       const semantic::ImportedInterfaces* interfaces,
-                       const std::vector<std::string>& moduleRoots)
-    -> std::string {
-    if (!receiver.valid) return {};
+auto receiverQualifier(
+    const Document& document,
+    const DotReceiver& receiver,
+    size_t cursor,
+    const semantic::ImportedInterfaces* interfaces,
+    const std::vector<std::string>& moduleRoots) -> std::string {
+    if (!receiver.valid) {
+        return {};
+    }
     // The last good analysis already typed this expression; find it by where
     // it starts.
     const auto spanAt = [&](size_t offset) -> std::string {
         unsigned int line = 1;
         size_t lineStart = 0;
-        for (size_t i = 0; i < offset; ++i)
-            if (document.text[i] == '\n') { ++line; lineStart = i + 1; }
-        auto span = document.receiverSpans.find(Document::receiverKey(
-            line, static_cast<unsigned int>(offset - lineStart) + 1));
+        for (size_t i = 0; i < offset; ++i) {
+            if (document.text[i] == '\n') {
+                ++line;
+                lineStart = i + 1;
+            }
+        }
+        auto span = document.receiverSpans.find(
+            Document::receiverKey(line, static_cast<unsigned int>(offset - lineStart) + 1));
         return span == document.receiverSpans.end() ? std::string{} : span->second;
     };
     // The call's `(` first: for a chain that is where the OUTERMOST expression
     // is recorded, and its type is the one being completed against. The
     // receiver's start answers the plain `identifier.` case.
     if (receiver.callOpen) {
-        if (auto qualifier = spanAt(receiver.callOpen); !qualifier.empty())
+        if (auto qualifier = spanAt(receiver.callOpen); !qualifier.empty()) {
             return qualifier;
+        }
         // A bare call (`words()`) is recorded where its name is.
-        if (semantic::bareCallReceiver(document.text, receiver))
-            if (auto qualifier = spanAt(receiver.start); !qualifier.empty()) return qualifier;
+        if (semantic::bareCallReceiver(document.text, receiver)) {
+            if (auto qualifier = spanAt(receiver.start); !qualifier.empty()) {
+                return qualifier;
+            }
+        }
     } else if (auto qualifier = receiver.member ? std::string{} : spanAt(receiver.start);
                !qualifier.empty()) {
         // Only a receiver that is ONE expression is recorded at its start:
@@ -2096,96 +2465,108 @@ auto receiverQualifier(const Document& document, const DotReceiver& receiver,
         return qualifier;
     }
 
-
-    const auto text = document.text.substr(receiver.start,
-                                           receiver.dot - receiver.start);
+    const auto text = document.text.substr(receiver.start, receiver.dot - receiver.start);
     // A literal receiver needs no analysis to type: `36.hours` is an Integer
     // with a method on it, and the time files are full of them. They were the bulk of
     // the misses that fell through to re-analysis.
     if (!text.empty()) {
-        if (text.front() == '"') return "String";
+        if (text.front() == '"') {
+            return "String";
+        }
         if (std::isdigit(static_cast<unsigned char>(text.front()))) {
             const bool fractional = text.find('.') != std::string::npos;
             return fractional ? "Float" : "Integer";
         }
     }
-    if (!text.empty() &&
-        text.find_first_of(" \t\n()[]{}.\"'`") == std::string::npos)
+    if (!text.empty() && text.find_first_of(" \t\n()[]{}.\"'`") == std::string::npos) {
         if (auto known = document.localReceiverTypes.find(text);
-            known != document.localReceiverTypes.end() && !known->second.empty())
+            known != document.localReceiverTypes.end() && !known->second.empty()) {
             return known->second;
+        }
+    }
     // Nothing recorded — the buffer may not have parsed since this expression
     // was written. Re-analyze with the half-typed member removed, once.
     if (auto cached = document.recoveredReceivers.find(receiver.start);
-        cached != document.recoveredReceivers.end())
+        cached != document.recoveredReceivers.end()) {
         return cached->second;
-    auto recovered = recoveredReceiverQualifier(document.text, document.path,
-                                                receiver, cursor, interfaces,
-                                                moduleRoots);
+    }
+    auto recovered = recoveredReceiverQualifier(
+        document.text, document.path, receiver, cursor, interfaces, moduleRoots);
     document.recoveredReceivers.insert_or_assign(receiver.start, recovered);
     return recovered;
 }
 
 auto recoveredDotReceiverQualifier(
-    const std::string& source, const std::string& path,
-    std::string_view receiver, unsigned int protocolLine,
+    const std::string& source,
+    const std::string& path,
+    std::string_view receiver,
+    unsigned int protocolLine,
     unsigned int protocolCharacter,
     const semantic::ImportedInterfaces* interfaces) -> std::string {
-    if (receiver.empty()) return {};
+    if (receiver.empty()) {
+        return {};
+    }
     size_t lineStart = 0;
     for (unsigned int current = 0; current < protocolLine; ++current) {
         const auto newline = source.find('\n', lineStart);
-        if (newline == std::string::npos) return {};
+        if (newline == std::string::npos) {
+            return {};
+        }
         lineStart = newline + 1;
     }
     const auto lineEndPosition = source.find('\n', lineStart);
-    const auto lineEnd = lineEndPosition == std::string::npos
-        ? source.size() : lineEndPosition;
-    const auto cursor = byteOffsetForUtf16Column(
-        source, lineStart, lineEnd, protocolCharacter);
-    if (!cursor || source[cursor - 1] != '.') return {};
+    const auto lineEnd = lineEndPosition == std::string::npos ? source.size() : lineEndPosition;
+    const auto cursor = byteOffsetForUtf16Column(source, lineStart, lineEnd, protocolCharacter);
+    if (!cursor || source[cursor - 1] != '.') {
+        return {};
+    }
 
     auto recovered = source;
     recovered.erase(cursor - 1, 1);
     Lexer lexer(recovered, path);
     Parser parser(lexer.tokenizeAll(), path);
     auto program = parser.parseProgram();
-    if (!parser.diagnostics().empty()) return {};
+    if (!parser.diagnostics().empty()) {
+        return {};
+    }
     semantic::Analyzer analyzer(interfaces);
     analyzer.analyze(program);
-    const auto receiverColumn = static_cast<int>(
-        cursor - lineStart - receiver.size() + 1);
+    const auto receiverColumn = static_cast<int>(cursor - lineStart - receiver.size() + 1);
     for (const auto& [expression, _] : analyzer.typeMap()) {
-        if (!expression ||
-            expression->location.line != static_cast<int>(protocolLine + 1) ||
-            expression->location.column != receiverColumn)
+        if (!expression || expression->location.line != static_cast<int>(protocolLine + 1) ||
+            expression->location.column != receiverColumn) {
             continue;
+        }
         const auto* identifier = std::get_if<ast::Identifier>(&expression->kind);
-        if (!identifier || identifier->name != receiver) continue;
+        if (!identifier || identifier->name != receiver) {
+            continue;
+        }
         return completionQualifierForType(analyzer.displayTypeOf(expression));
     }
     return {};
 }
 
-void enrichFunctionSymbols(FileState& state,
-                           const semantic::Analyzer& analyzer) {
+void enrichFunctionSymbols(FileState& state, const semantic::Analyzer& analyzer) {
     auto enrich = [&](const ast::FunctionDef& function) {
         const auto* signatures = analyzer.functionSignatures(&function);
-        if (!signatures || signatures->empty()) return;
+        if (!signatures || signatures->empty()) {
+            return;
+        }
         // The symbol is declared at the name, where collectSymbols puts it.
         const auto& declared =
             function.nameLocation.line > 0 ? function.nameLocation : function.location;
         for (auto& symbol : state.symbols) {
-            if (symbol.name != function.name ||
-                symbol.definition.line != declared.line ||
-                symbol.definition.column != declared.column)
+            if (symbol.name != function.name || symbol.definition.line != declared.line ||
+                symbol.definition.column != declared.column) {
                 continue;
+            }
             symbol.detail = functionDetail(function, *signatures, analyzer);
-            symbol.type = semantic::Type::func(signatures->front().params,
-                                               signatures->front().result);
-            for (size_t i = 0; i < symbol.params.size() &&
-                               i < signatures->front().params.size(); ++i)
+            symbol.type =
+                semantic::Type::func(signatures->front().params, signatures->front().result);
+            for (size_t i = 0; i < symbol.params.size() && i < signatures->front().params.size();
+                 ++i) {
                 symbol.params[i].second = signatures->front().params[i];
+            }
             break;
         }
     };
@@ -2194,21 +2575,23 @@ void enrichFunctionSymbols(FileState& state,
 
 // A checked file's record fields as the checker resolved them, in place of
 // the types the declarations wrote.
-void enrichRecordSymbols(FileState& state,
-                         const semantic::Analyzer& analyzer) {
+void enrichRecordSymbols(FileState& state, const semantic::Analyzer& analyzer) {
     ast::forEachDeclared<ast::RecordDef>(state.ast, [&](const ast::RecordDef& record) {
         for (auto& symbol : state.symbols) {
             if (symbol.kind != semantic::SymbolKind::Record || symbol.name != record.name ||
                 symbol.definition.line != record.location.line ||
-                symbol.definition.column != record.location.column)
+                symbol.definition.column != record.location.column) {
                 continue;
-            const auto key = symbol.module.empty() ? symbol.name
-                                                   : symbol.module + "." + symbol.name;
-            for (auto& [field, type] : symbol.fields)
+            }
+            const auto key =
+                symbol.module.empty() ? symbol.name : symbol.module + "." + symbol.name;
+            for (auto& [field, type] : symbol.fields) {
                 if (const auto checked =
                         analyzer.checker().recordFieldType(key, field, record.typeParams);
-                    checked && !std::holds_alternative<semantic::UnknownType>(checked->kind))
+                    checked && !std::holds_alternative<semantic::UnknownType>(checked->kind)) {
                     type = semantic::typeToString(checked);
+                }
+            }
             break;
         }
     });
@@ -2218,8 +2601,11 @@ void enrichRecordSymbols(FileState& state,
 // local each name use means is bound, the places locals and fields are
 // declared, and the record each field read reads. `replace` when the
 // analysis is a good one; a buffer that did not parse keeps the last.
-void recordNavigation(Document& document, const semantic::Analyzer& analyzer,
-                      const ast::Program& program, bool replace) {
+void recordNavigation(
+    Document& document,
+    const semantic::Analyzer& analyzer,
+    const ast::Program& program,
+    bool replace) {
     document.checked = replace;
     // Locals, as the checker bound them: a use to its binding, and the
     // bindings themselves, each at the name as written.
@@ -2240,113 +2626,146 @@ void recordNavigation(Document& document, const semantic::Analyzer& analyzer,
     }
     for (const auto& [use, bound] : analyzer.checker().localDefinitions()) {
         const auto* identifier = use ? std::get_if<ast::Identifier>(&use->kind) : nullptr;
-        if (!identifier || use->location.file != document.path) continue;
+        if (!identifier || use->location.file != document.path) {
+            continue;
+        }
         const auto declared = atDeclaredName(document.text, bound, identifier->name);
         document.localDefinitions.insert_or_assign(
-            Document::receiverKey(static_cast<unsigned int>(use->location.line),
-                                  static_cast<unsigned int>(use->location.column)),
+            Document::receiverKey(
+                static_cast<unsigned int>(use->location.line),
+                static_cast<unsigned int>(use->location.column)),
             std::pair{declared.line, declared.column});
     }
     // A record's field declarations are their own definitions.
     ast::forEachDeclared<ast::RecordDef>(program, [&](const ast::RecordDef& record) {
-        if (record.location.file != document.path) return;
-        for (const auto& field : record.fields)
-            if (const auto at = fieldDeclaration(document.text, record.location, field.name))
+        if (record.location.file != document.path) {
+            return;
+        }
+        for (const auto& field : record.fields) {
+            if (const auto at = fieldDeclaration(document.text, record.location, field.name)) {
                 document.bindingSites.insert(
-                    Document::receiverKey(static_cast<unsigned int>(at->line),
-                                          static_cast<unsigned int>(at->column)));
+                    Document::receiverKey(
+                        static_cast<unsigned int>(at->line),
+                        static_cast<unsigned int>(at->column)));
+            }
+        }
     });
     for (const auto& [expression, decided] : analyzer.decidedCalls()) {
         if (expression && decided.kind == semantic::CallKind::ModuleReference &&
             std::holds_alternative<ast::UpperIdentifier>(expression->kind) &&
-            expression->location.file == document.path)
+            expression->location.file == document.path) {
             document.moduleReferences.insert_or_assign(
-                Document::receiverKey(static_cast<unsigned int>(expression->location.line),
-                                      static_cast<unsigned int>(expression->location.column)),
+                Document::receiverKey(
+                    static_cast<unsigned int>(expression->location.line),
+                    static_cast<unsigned int>(expression->location.column)),
                 decided.owner);
+        }
         const auto* call = expression ? std::get_if<ast::MethodCall>(&expression->kind) : nullptr;
-        if (!call || call->methodLocation.line == 0 ||
-            expression->location.file != document.path)
+        if (!call || call->methodLocation.line == 0 || expression->location.file != document.path) {
             continue;
-        const auto at =
-            Document::receiverKey(static_cast<unsigned int>(call->methodLocation.line),
-                                  static_cast<unsigned int>(call->methodLocation.column));
+        }
+        const auto at = Document::receiverKey(
+            static_cast<unsigned int>(call->methodLocation.line),
+            static_cast<unsigned int>(call->methodLocation.column));
         if (decided.kind == semantic::CallKind::FieldRead) {
             document.fieldReads.insert_or_assign(at, decided.owner);
             if (const auto read = analyzer.typeMap().find(expression);
-                read != analyzer.typeMap().end() && read->second)
+                read != analyzer.typeMap().end() && read->second) {
                 document.fieldReadTypes.insert_or_assign(
                     at, call->method + " : " + semantic::typeToString(read->second));
-        }
-        else if (decided.kind == semantic::CallKind::OwnMethod)
+            }
+        } else if (decided.kind == semantic::CallKind::OwnMethod) {
             document.ownMethodCalls.insert_or_assign(at, decided.owner);
+        }
     }
     for (const auto& key : analyzer.checker().recordKeys()) {
-        if (key.location.file != document.path) continue;
-        const auto at = Document::receiverKey(static_cast<unsigned int>(key.location.line),
-                                              static_cast<unsigned int>(key.location.column));
+        if (key.location.file != document.path) {
+            continue;
+        }
+        const auto at = Document::receiverKey(
+            static_cast<unsigned int>(key.location.line),
+            static_cast<unsigned int>(key.location.column));
         document.fieldReads.insert_or_assign(at, key.record);
         document.recordKeys.insert_or_assign(
             at, key.field + " : " + semantic::typeToString(key.type));
     }
     for (const auto& reference : analyzer.checker().typeReferences()) {
-        if (reference.location.file != document.path || !reference.type) continue;
-        const auto at =
-            Document::receiverKey(static_cast<unsigned int>(reference.location.line),
-                                  static_cast<unsigned int>(reference.location.column));
+        if (reference.location.file != document.path || !reference.type) {
+            continue;
+        }
+        const auto at = Document::receiverKey(
+            static_cast<unsigned int>(reference.location.line),
+            static_cast<unsigned int>(reference.location.column));
         if (const auto* reply = std::get_if<semantic::NamedType>(&reference.type->kind);
             reply && reply->name == "Reply" && reply->typeArgs.size() == 1 &&
-            (reference.makeType || !document.replyContracts.contains(at)))
+            (reference.makeType || !document.replyContracts.contains(at))) {
             document.replyContracts.insert_or_assign(
-                at, std::pair{semantic::typeToString(reply->typeArgs.front()),
-                              reference.makeType ? semantic::typeToString(reference.makeType)
-                                                 : std::string("State")});
+                at, std::pair{
+                        semantic::typeToString(reply->typeArgs.front()),
+                        reference.makeType ? semantic::typeToString(reference.makeType)
+                                           : std::string("State")});
+        }
         // Resolved where no `make` block was in scope yet: not its meaning.
-        if (semantic::isThisPlaceholder(reference.type)) continue;
+        if (semantic::isThisPlaceholder(reference.type)) {
+            continue;
+        }
         document.typeReferences.insert_or_assign(at, semantic::typeToString(reference.type));
-        if (const auto* named = std::get_if<semantic::NamedType>(&reference.type->kind))
+        if (const auto* named = std::get_if<semantic::NamedType>(&reference.type->kind)) {
             document.typeIdentities.insert_or_assign(at, named->name);
-        else if (const auto* bound = std::get_if<semantic::ConstrainedType>(&reference.type->kind))
+        } else if (
+            const auto* bound = std::get_if<semantic::ConstrainedType>(&reference.type->kind)) {
             document.typeIdentities.insert_or_assign(at, bound->traitName);
+        }
     }
     if (replace) {
         for (const auto& context : analyzer.checker().scopeContexts()) {
             auto& modules = document.scopeModules.emplace_back();
-            for (const auto& selection : context.imports) modules.insert(selection.module);
+            for (const auto& selection : context.imports) {
+                modules.insert(selection.module);
+            }
         }
-        for (const auto& [expression, names] : analyzer.checker().scopeNames())
+        for (const auto& [expression, names] : analyzer.checker().scopeNames()) {
             if (expression && expression->location.file == document.path &&
-                names.context < document.scopeModules.size())
-                document.scopePositions.emplace_back(expression->location.line,
-                                                     expression->location.column, names.context);
+                names.context < document.scopeModules.size()) {
+                document.scopePositions.emplace_back(
+                    expression->location.line, expression->location.column, names.context);
+            }
+        }
         std::sort(document.scopePositions.begin(), document.scopePositions.end());
     }
     // The traits a `make` block implements, at each name after `implement:`:
     // the trait the checker resolved it to.
     for (const auto& [make, traits] : analyzer.checker().resolvedTraits()) {
-        if (!make || make->location.file != document.path) continue;
-        for (std::size_t i = 0; i < traits.size() && i < make->implementLocations.size(); ++i)
-            if (!traits[i].empty())
+        if (!make || make->location.file != document.path) {
+            continue;
+        }
+        for (std::size_t i = 0; i < traits.size() && i < make->implementLocations.size(); ++i) {
+            if (!traits[i].empty()) {
                 document.implementedTraits.insert_or_assign(
                     Document::receiverKey(
                         static_cast<unsigned int>(make->implementLocations[i].line),
                         static_cast<unsigned int>(make->implementLocations[i].column)),
                     traits[i]);
+            }
+        }
     }
     for (const auto& [name, where] : analyzer.checker().bindingSites()) {
-        if (where.file != document.path) continue;
+        if (where.file != document.path) {
+            continue;
+        }
         const auto declared = atDeclaredName(document.text, where, name);
         document.bindingSites.insert(
-            Document::receiverKey(static_cast<unsigned int>(declared.line),
-                                  static_cast<unsigned int>(declared.column)));
+            Document::receiverKey(
+                static_cast<unsigned int>(declared.line),
+                static_cast<unsigned int>(declared.column)));
     }
 }
 
 class Server {
 public:
-    Server(std::istream& input, std::ostream& output,
-           const std::string& runtimeBeamDir)
-        : m_stream(input, output), m_connection(m_stream),
+    Server(std::istream& input, std::ostream& output, const std::string& runtimeBeamDir)
+        : m_stream(input, output),
+          m_connection(m_stream),
           m_handler(m_connection, 0),
           m_interfaces(preludeSemanticInterfaces(runtimeBeamDir)),
           m_standardDocumentation(standardLibraryDocumentation()),
@@ -2359,7 +2778,9 @@ public:
     }
 
     auto run() -> int {
-        while (m_running) m_handler.processIncomingMessages();
+        while (m_running) {
+            m_handler.processIncomingMessages();
+        }
         return m_cleanShutdown ? 0 : 1;
     }
 
@@ -2369,52 +2790,58 @@ private:
         SourceLocation location;
     };
 
-    auto initialize(::lsp::InitializeParams&& params)
-        -> ::lsp::requests::Initialize::Result {
-        if (m_initialized)
-            throw ::lsp::RequestError(::lsp::MessageError::InvalidRequest,
-                                      "Kex language server is already initialized");
+    auto initialize(::lsp::InitializeParams&& params) -> ::lsp::requests::Initialize::Result {
+        if (m_initialized) {
+            throw ::lsp::RequestError(
+                ::lsp::MessageError::InvalidRequest, "Kex language server is already initialized");
+        }
         m_initialized = true;
         if (params.workspaceFolders && !params.workspaceFolders->isNull()) {
-            for (const auto& folder : params.workspaceFolders->value())
-                if (folder.uri.isFileUri())
+            for (const auto& folder : params.workspaceFolders->value()) {
+                if (folder.uri.isFileUri()) {
                     m_workspaceRoots.push_back(folder.uri.fsPath());
+                }
+            }
         } else if (!params.rootUri.isNull() && params.rootUri->isFileUri()) {
             m_workspaceRoots.push_back(params.rootUri->fsPath());
         }
         m_configuredSourceRoots = configuredSourceRoots(params);
         return {
-            .capabilities = {
-                .positionEncoding = ::lsp::PositionEncodingKind::UTF16,
-                .textDocumentSync = ::lsp::TextDocumentSyncOptions{
-                    .openClose = true,
-                    .change = ::lsp::TextDocumentSyncKind::Full,
-                    .save = ::lsp::SaveOptions{.includeText = true},
+            .capabilities =
+                {
+                    .positionEncoding = ::lsp::PositionEncodingKind::UTF16,
+                    .textDocumentSync =
+                        ::lsp::TextDocumentSyncOptions{
+                            .openClose = true,
+                            .change = ::lsp::TextDocumentSyncKind::Full,
+                            .save = ::lsp::SaveOptions{.includeText = true},
+                        },
+                    .completionProvider =
+                        ::lsp::CompletionOptions{
+                            .triggerCharacters = ::lsp::Array<::lsp::String>{".", "@"},
+                        },
+                    .hoverProvider = true,
+                    .signatureHelpProvider =
+                        ::lsp::SignatureHelpOptions{
+                            .triggerCharacters = ::lsp::Array<::lsp::String>{"(", ","},
+                            .retriggerCharacters = ::lsp::Array<::lsp::String>{","},
+                        },
+                    .definitionProvider = true,
+                    .referencesProvider = true,
+                    .renameProvider = ::lsp::RenameOptions{.prepareProvider = true},
                 },
-                .completionProvider = ::lsp::CompletionOptions{
-                    .triggerCharacters = ::lsp::Array<::lsp::String>{".", "@"},
+            .serverInfo =
+                ::lsp::ServerInfo{
+                    .name = "kex",
+                    .version = versionNumber(),
                 },
-                .hoverProvider = true,
-                .signatureHelpProvider = ::lsp::SignatureHelpOptions{
-                    .triggerCharacters = ::lsp::Array<::lsp::String>{"(", ","},
-                    .retriggerCharacters = ::lsp::Array<::lsp::String>{","},
-                },
-                .definitionProvider = true,
-                .referencesProvider = true,
-                .renameProvider = ::lsp::RenameOptions{.prepareProvider = true},
-            },
-            .serverInfo = ::lsp::ServerInfo{
-                .name = "kex",
-                .version = versionNumber(),
-            },
         };
     }
 
     // Every module-root derivation in the server goes through here, so a
     // dependency reachable to `tey build` is reachable to completion, hover,
     // go-to-definition and diagnostics alike.
-    auto documentModuleRoots(const std::string& path) const
-        -> std::vector<std::string> {
+    auto documentModuleRoots(const std::string& path) const -> std::vector<std::string> {
         return documentSearchPath(path, m_configuredSourceRoots);
     }
 
@@ -2425,8 +2852,7 @@ private:
     // through a read-only FileHandle stopped being an error
     // (spec/typestate_survives_standin.kex). Merging is for the PROJECT's own
     // modules, which have no interface to consult.
-    auto projectModuleRoots(const std::string& path) const
-        -> std::vector<std::string> {
+    auto projectModuleRoots(const std::string& path) const -> std::vector<std::string> {
         return withoutStandardLibraryRoots(documentModuleRoots(path));
     }
 
@@ -2434,19 +2860,20 @@ private:
     // (publishDiagnostics): with its companions, the project's modules merged
     // in, and its names recorded. What completion asks about a buffer the
     // editor holds mid-edit, so that its answer is the build's.
-    auto checkAsDocument(const Document& document, const std::string& file,
-                         const std::string& text) -> std::optional<semantic::CheckedSource> {
+    auto checkAsDocument(const Document& document, const std::string& file, const std::string& text)
+        -> std::optional<semantic::CheckedSource> {
         m_recoveryDb.setImportedInterfaces(&m_interfaces);
         m_recoveryDb.setModuleRoots(documentModuleRoots(document.path));
         m_recoveryDb.updateFile(file, text, document.companions);
         auto* state = m_recoveryDb.fileState(file);
-        if (!state) return std::nullopt;
+        if (!state) {
+            return std::nullopt;
+        }
         auto retained = std::make_shared<ProjectModules>();
         mergeProjectModules(state->ast, file, projectModuleRoots(file), &m_interfaces, *retained);
         auto analyzer = std::make_shared<semantic::Analyzer>(&m_interfaces);
         std::vector<std::string> entryFiles{file};
-        entryFiles.insert(entryFiles.end(), document.companions.begin(),
-                          document.companions.end());
+        entryFiles.insert(entryFiles.end(), document.companions.begin(), document.companions.end());
         analyzer->setEntryFiles(std::move(entryFiles));
         analyzer->setMissingModuleIsError(false);
         analyzer->setIndexesNames(true);
@@ -2470,56 +2897,76 @@ private:
         size_t lineStart = 0;
         for (unsigned int line = 0; line < position.line; ++line) {
             const auto newline = text.find('\n', lineStart);
-            if (newline == std::string::npos) return std::nullopt;
+            if (newline == std::string::npos) {
+                return std::nullopt;
+            }
             lineStart = newline + 1;
         }
         const auto lineEndPosition = text.find('\n', lineStart);
         const auto lineEnd = lineEndPosition == std::string::npos ? text.size() : lineEndPosition;
         const auto cursor = byteOffsetForUtf16Column(text, lineStart, lineEnd, position.character);
         const auto receiver = scanDotReceiver(text, cursor);
-        if (!receiver.valid) return std::nullopt;
+        if (!receiver.valid) {
+            return std::nullopt;
+        }
         // A path of capitalized names is a namespace (`IO.`, `Web.Server.`).
         // Spaced as written: a chain may continue across lines.
         auto written = text.substr(receiver.start, receiver.dot - receiver.start);
         std::erase_if(written, [](char c) { return std::isspace(static_cast<unsigned char>(c)); });
         const bool namespacePath =
             !written.empty() && kex::startsUppercase(written) &&
-            std::all_of(written.begin(), written.end(), [](char c) {
-                return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.';
-            }) &&
+            std::all_of(
+                written.begin(), written.end(),
+                [](char c) {
+                    return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.';
+                }) &&
             [&] {
-                for (size_t at = 0; at < written.size(); ++at)
+                for (size_t at = 0; at < written.size(); ++at) {
                     if ((at == 0 || written[at - 1] == '.') &&
-                        !kex::startsUppercase(std::string_view(written).substr(at)))
+                        !kex::startsUppercase(std::string_view(written).substr(at))) {
                         return false;
+                    }
+                }
                 return true;
             }();
-        if (namespacePath) return std::nullopt;
+        if (namespacePath) {
+            return std::nullopt;
+        }
         auto typed = text.substr(receiver.dot + 1, cursor - receiver.dot - 1);
         typed.erase(0, typed.find_first_not_of(" \t\r\n"));
-        if (typed.find_first_of(" \t\r\n") != std::string::npos) typed.clear();
+        if (typed.find_first_of(" \t\r\n") != std::string::npos) {
+            typed.clear();
+        }
         // `xs.push!|`: the bang rebinds the receiver; the name is `push`.
-        if (!typed.empty() && typed.back() == '!') typed.pop_back();
+        if (!typed.empty() && typed.back() == '!') {
+            typed.pop_back();
+        }
         const auto withPrefix = [&](const std::vector<::lsp::CompletionItem>& all) {
             ::lsp::Array<::lsp::CompletionItem> items;
-            for (const auto& item : all)
-                if (item.filterText.value_or(item.label).starts_with(typed)) items.push_back(item);
+            for (const auto& item : all) {
+                if (item.filterText.value_or(item.label).starts_with(typed)) {
+                    items.push_back(item);
+                }
+            }
             return items;
         };
         auto checkedText = text;
         checkedText.erase(receiver.dot, cursor - receiver.dot);
-        if (const auto& cached = document.memberAnswer;
-            cached && cached->receiverStart == receiver.start &&
-            cached->checkedText == checkedText)
+        if (const auto& cached = document.memberAnswer; cached &&
+                                                        cached->receiverStart == receiver.start &&
+                                                        cached->checkedText == checkedText) {
             return withPrefix(cached->items);
+        }
 
-        const semantic::CompletionChecker check =
-            [&](const std::string& file, const std::string& source) {
-                return checkAsDocument(document, file, source);
-            };
+        const semantic::CompletionChecker check = [&](const std::string& file,
+                                                      const std::string& source) {
+            return checkAsDocument(document, file, source);
+        };
         const auto checked =
             semantic::checkedReceiver(check, text, document.path, receiver, cursor);
-        if (!checked) return std::nullopt;
+        if (!checked) {
+            return std::nullopt;
+        }
         std::vector<::lsp::CompletionItem> all;
         if (checked->expression) {
             auto& analyzer = *checked->checked.analyzer;
@@ -2529,29 +2976,32 @@ private:
                 const auto owner = !signature.makeModule.empty() ? signature.makeModule
                                                                  : signature.declaringModule;
                 auto detail = member.field
-                    ? member.name + " : " + semantic::typeToString(member.result)
-                    : analyzer.checker().displaySignature(member.name, signature);
+                                  ? member.name + " : " + semantic::typeToString(member.result)
+                                  : analyzer.checker().displaySignature(member.name, signature);
                 // Labelled as the declaration reads: `foul slot later`.
-                const auto label = (member.declaredFoul && !member.field ? "foul " : std::string{}) +
-                                   (member.slot ? "slot " : "") + member.name;
-                all.push_back(::lsp::CompletionItem{
-                    .label = label,
-                    .labelDetails = ::lsp::CompletionItemLabelDetails{
-                        .detail = " : " + semantic::typeToString(member.result),
-                        .description = owner.empty() ? std::optional<::lsp::String>{}
-                                                     : std::optional<::lsp::String>{owner},
-                    },
-                    .kind = member.field ? ::lsp::CompletionItemKind::Field
-                                         : ::lsp::CompletionItemKind::Method,
-                    .detail = std::move(detail),
-                    .sortText = (member.field ? "0" : "1") + member.name,
-                    .filterText = member.name,
-                    .insertText = member.name,
-                });
+                const auto label =
+                    (member.declaredFoul && !member.field ? "foul " : std::string{}) +
+                    (member.slot ? "slot " : "") + member.name;
+                all.push_back(
+                    ::lsp::CompletionItem{
+                        .label = label,
+                        .labelDetails =
+                            ::lsp::CompletionItemLabelDetails{
+                                .detail = " : " + semantic::typeToString(member.result),
+                                .description = owner.empty() ? std::optional<::lsp::String>{}
+                                                             : std::optional<::lsp::String>{owner},
+                            },
+                        .kind = member.field ? ::lsp::CompletionItemKind::Field
+                                             : ::lsp::CompletionItemKind::Method,
+                        .detail = std::move(detail),
+                        .sortText = (member.field ? "0" : "1") + member.name,
+                        .filterText = member.name,
+                        .insertText = member.name,
+                    });
             }
         }
-        document.memberAnswer = Document::MemberAnswer{std::move(checkedText), receiver.start,
-                                                       std::move(all)};
+        document.memberAnswer =
+            Document::MemberAnswer{std::move(checkedText), receiver.start, std::move(all)};
         return withPrefix(document.memberAnswer->items);
     }
 
@@ -2560,17 +3010,22 @@ private:
     // is. Null when the buffer could not be checked.
     // The expression a word at `line`:`column` of `path` is, or else the
     // nearest one before it: the scope there is the one the word is written in.
-    static auto scopeAt(const semantic::CheckedSource& checked, const std::string& path,
-                        int line, int column) -> const ast::Expr* {
+    static auto
+    scopeAt(const semantic::CheckedSource& checked, const std::string& path, int line, int column)
+        -> const ast::Expr* {
         const ast::Expr* at = nullptr;
         for (const auto& [expression, _] : checked.analyzer->checker().scopeNames()) {
-            if (!expression || expression->location.file != path) continue;
-            const auto& location = expression->location;
-            if (location.line > line || (location.line == line && location.column > column))
+            if (!expression || expression->location.file != path) {
                 continue;
+            }
+            const auto& location = expression->location;
+            if (location.line > line || (location.line == line && location.column > column)) {
+                continue;
+            }
             if (!at || location.line > at->location.line ||
-                (location.line == at->location.line && location.column > at->location.column))
+                (location.line == at->location.line && location.column > at->location.column)) {
                 at = expression;
+            }
         }
         return at;
     }
@@ -2581,43 +3036,58 @@ private:
         size_t wordStart = std::min(cursor, text.size());
         while (wordStart > 0 && (std::isalnum(static_cast<unsigned char>(text[wordStart - 1])) ||
                                  text[wordStart - 1] == '_' || text[wordStart - 1] == '?' ||
-                                 text[wordStart - 1] == '!'))
+                                 text[wordStart - 1] == '!')) {
             --wordStart;
+        }
         auto checkedText = text;
         checkedText.erase(wordStart, cursor - wordStart);
         if (const auto& cached = document.bareAnswer;
-            cached && cached->wordStart == wordStart && cached->checkedText == checkedText)
+            cached && cached->wordStart == wordStart && cached->checkedText == checkedText) {
             return cached->names;
+        }
 
         auto checked = checkAsDocument(document, document.path, text);
-        if (!checked) return std::nullopt;
+        if (!checked) {
+            return std::nullopt;
+        }
         int line = 1;
         size_t lineStart = 0;
-        for (size_t i = 0; i < wordStart; ++i)
-            if (text[i] == '\n') { ++line; lineStart = i + 1; }
+        for (size_t i = 0; i < wordStart; ++i) {
+            if (text[i] == '\n') {
+                ++line;
+                lineStart = i + 1;
+            }
+        }
         const int column = static_cast<int>(wordStart - lineStart) + 1;
         const auto* at = scopeAt(*checked, document.path, line, column);
-        if (!at) return std::nullopt;
+        if (!at) {
+            return std::nullopt;
+        }
         auto names = checked->analyzer->bareCompletions(*at);
         document.bareAnswer = Document::BareAnswer{std::move(checkedText), wordStart, names};
         return names;
     }
 
     void verifyInitialized() const {
-        if (!m_initialized)
-            throw ::lsp::RequestError(::lsp::MessageError::ServerNotInitialized,
-                                      "Kex language server is not initialized");
-        if (m_cleanShutdown)
-            throw ::lsp::RequestError(::lsp::MessageError::InvalidRequest,
-                                      "Kex language server has shut down");
+        if (!m_initialized) {
+            throw ::lsp::RequestError(
+                ::lsp::MessageError::ServerNotInitialized,
+                "Kex language server is not initialized");
+        }
+        if (m_cleanShutdown) {
+            throw ::lsp::RequestError(
+                ::lsp::MessageError::InvalidRequest, "Kex language server has shut down");
+        }
     }
 
     void ensureReferenceIndex(std::string_view requestedName) {
         if ((m_referenceIndexReady && m_referenceIndexWord == requestedName) ||
-            m_workspaceRoots.empty())
+            m_workspaceRoots.empty()) {
             return;
-        for (const auto& path : m_referenceIndexedPaths)
+        }
+        for (const auto& path : m_referenceIndexedPaths) {
             m_referenceDb.removeFile(path);
+        }
         m_referenceIndexedPaths.clear();
         m_referenceProjectModules.clear();
         m_indexedCallReferences.clear();
@@ -2629,45 +3099,48 @@ private:
             for (const auto* child : {"lib", "src"}) {
                 const auto candidate = std::filesystem::path(root) / child;
                 std::error_code error;
-                if (std::filesystem::is_directory(candidate, error) && !error)
+                if (std::filesystem::is_directory(candidate, error) && !error) {
                     moduleRoots.push_back(candidate.string());
+                }
             }
         }
-        for (const auto& root : m_configuredSourceRoots)
+        for (const auto& root : m_configuredSourceRoots) {
             appendRoot(moduleRoots, root);
+        }
         // The index answers `textDocument/references` across the workspace; a
         // reference living in a dependency is only findable if the dependency
         // resolves here too.
-        for (const auto& root : m_workspaceRoots)
-            for (auto& dependency : teyDependencyRoots(root))
+        for (const auto& root : m_workspaceRoots) {
+            for (auto& dependency : teyDependencyRoots(root)) {
                 appendRoot(moduleRoots, std::move(dependency));
-        for (auto& root : standardLibraryModuleRoots())
+            }
+        }
+        for (auto& root : standardLibraryModuleRoots()) {
             appendRoot(moduleRoots, std::move(root));
+        }
         m_referenceDb.setModuleRoots(std::move(moduleRoots));
 
-        const std::unordered_set<std::string> ignored{
-            ".git", ".claude", ".opencode", "build", "build-wasm",
-            "node_modules", "third_party", "Testing"};
+        const std::unordered_set<std::string> ignored{".git",        ".claude",    ".opencode",
+                                                      "build",       "build-wasm", "node_modules",
+                                                      "third_party", "Testing"};
         std::unordered_set<std::string> preindexedPaths;
-        for (const auto& path : standardLibrarySourceFiles())
+        for (const auto& path : standardLibrarySourceFiles()) {
             preindexedPaths.insert(std::filesystem::path(path).lexically_normal().string());
-        for (const auto& path : preludeSourceFiles())
+        }
+        for (const auto& path : preludeSourceFiles()) {
             preindexedPaths.insert(std::filesystem::path(path).lexically_normal().string());
+        }
         for (const auto& root : m_workspaceRoots) {
             std::error_code error;
             std::filesystem::recursive_directory_iterator iterator(
-                root, std::filesystem::directory_options::skip_permission_denied,
-                error);
+                root, std::filesystem::directory_options::skip_permission_denied, error);
             const std::filesystem::recursive_directory_iterator end;
             while (!error && iterator != end) {
                 const auto entry = *iterator;
-                if (entry.is_directory(error) &&
-                    ignored.count(entry.path().filename().string())) {
+                if (entry.is_directory(error) && ignored.count(entry.path().filename().string())) {
                     iterator.disable_recursion_pending();
-                } else if (entry.is_regular_file(error) &&
-                           entry.path().extension() == ".kex") {
-                    if (preindexedPaths.count(
-                            entry.path().lexically_normal().string())) {
+                } else if (entry.is_regular_file(error) && entry.path().extension() == ".kex") {
+                    if (preindexedPaths.count(entry.path().lexically_normal().string())) {
                         iterator.increment(error);
                         continue;
                     }
@@ -2677,28 +3150,27 @@ private:
                             (std::istreambuf_iterator<char>(input)),
                             std::istreambuf_iterator<char>());
                         const auto path = entry.path().string();
-                        for (const auto& [_, open] : m_documents)
+                        for (const auto& [_, open] : m_documents) {
                             if (open.path == path) {
                                 source = open.text;
                                 break;
                             }
+                        }
                         auto containsIdentifier = [&] {
                             auto position = source.find(requestedName);
                             auto identifier = [](unsigned char c) {
-                                return std::isalnum(c) || c == '_' ||
-                                       c == '?' || c == '!';
+                                return std::isalnum(c) || c == '_' || c == '?' || c == '!';
                             };
                             while (position != std::string::npos) {
                                 const auto after = position + requestedName.size();
-                                if ((position == 0 || !identifier(
-                                         static_cast<unsigned char>(
-                                             source[position - 1]))) &&
-                                    (after >= source.size() || !identifier(
-                                         static_cast<unsigned char>(
-                                             source[after]))))
+                                if ((position == 0 ||
+                                     !identifier(
+                                         static_cast<unsigned char>(source[position - 1]))) &&
+                                    (after >= source.size() ||
+                                     !identifier(static_cast<unsigned char>(source[after])))) {
                                     return true;
-                                position = source.find(requestedName,
-                                                       position + 1);
+                                }
+                                position = source.find(requestedName, position + 1);
                             }
                             return false;
                         };
@@ -2715,25 +3187,22 @@ private:
         // Collect module declarations before their consumers so references
         // attach to the final indexed SymbolInfo rather than a transient
         // symbol loaded on demand by `using`.
-        std::stable_sort(sources.begin(), sources.end(),
-            [](const auto& left, const auto& right) {
-                const bool leftModule = left.second.find("module ") !=
-                    std::string::npos;
-                const bool rightModule = right.second.find("module ") !=
-                    std::string::npos;
-                return leftModule != rightModule ? leftModule :
-                    left.first < right.first;
-            });
+        std::stable_sort(sources.begin(), sources.end(), [](const auto& left, const auto& right) {
+            const bool leftModule = left.second.find("module ") != std::string::npos;
+            const bool rightModule = right.second.find("module ") != std::string::npos;
+            return leftModule != rightModule ? leftModule : left.first < right.first;
+        });
         m_referenceIndexPartial = sources.size() > 64;
         if (sources.size() > 64) {
-            sources.erase(std::remove_if(
-                sources.begin(), sources.end(), [&](const auto& candidate) {
-                    return std::none_of(
-                        m_documents.begin(), m_documents.end(),
-                        [&](const auto& open) {
-                            return open.second.path == candidate.first;
-                        });
-                }), sources.end());
+            sources.erase(
+                std::remove_if(
+                    sources.begin(), sources.end(),
+                    [&](const auto& candidate) {
+                        return std::none_of(
+                            m_documents.begin(), m_documents.end(),
+                            [&](const auto& open) { return open.second.path == candidate.first; });
+                    }),
+                sources.end());
         }
         // Indexed and checked, then their references recorded together once
         // the modules they name are loaded too (resolveTogether, below).
@@ -2745,36 +3214,42 @@ private:
         std::vector<std::pair<std::string, const semantic::TypeChecker*>> checked;
         for (const auto& [path, _] : sources) {
             auto* state = m_referenceDb.fileState(path);
-            if (!state) continue;
+            if (!state) {
+                continue;
+            }
             // Checked as an open document is: with the project modules it
             // uses merged in. Checked alone, `Geo.area(2)` in main.kex named
             // an unknown module (geo.kex is another file), and the qualified
             // call was no reference to `area`, so a rename missed it.
-            auto& retained = *m_referenceProjectModules.emplace_back(
-                std::make_shared<ProjectModules>());
-            mergeProjectModules(state->ast, path, projectModuleRoots(path), &m_interfaces,
-                                retained);
-            auto& analyzer = *analyses.emplace_back(
-                std::make_unique<semantic::Analyzer>(&m_interfaces));
+            auto& retained =
+                *m_referenceProjectModules.emplace_back(std::make_shared<ProjectModules>());
+            mergeProjectModules(
+                state->ast, path, projectModuleRoots(path), &m_interfaces, retained);
+            auto& analyzer =
+                *analyses.emplace_back(std::make_unique<semantic::Analyzer>(&m_interfaces));
             analyzer.setIndexesNames(true);
             analyzer.analyze(state->ast);
             checked.emplace_back(path, &analyzer.checker());
-            for (const auto& module : analyzer.referencedModules())
+            for (const auto& module : analyzer.referencedModules()) {
                 m_referenceDb.ensureModule(module);
+            }
             for (const auto& [call, target] : analyzer.resolvedCalls()) {
-                if (!call || target.sourceModule.empty()) continue;
-                for (const auto& [expression, _] :
-                     analyzer.selectedCallSignatures()) {
-                    const auto* method = expression
-                        ? std::get_if<ast::MethodCall>(&expression->kind)
-                        : nullptr;
-                    if (method != call) continue;
-                    if (auto location = callNameLocation(
-                            state->source, *expression, call->method, true))
+                if (!call || target.sourceModule.empty()) {
+                    continue;
+                }
+                for (const auto& [expression, _] : analyzer.selectedCallSignatures()) {
+                    const auto* method =
+                        expression ? std::get_if<ast::MethodCall>(&expression->kind) : nullptr;
+                    if (method != call) {
+                        continue;
+                    }
+                    if (auto location =
+                            callNameLocation(state->source, *expression, call->method, true)) {
                         m_indexedCallReferences.push_back({
                             target.sourceModule + "." + call->method,
                             *location,
                         });
+                    }
                     break;
                 }
             }
@@ -2840,16 +3315,15 @@ private:
         if (auto* state = m_db.fileState(path)) {
             auto& retained = m_projectModules[path];
             retained = {};
-            mergeProjectModules(state->ast, path, projectModuleRoots(path),
-                                &m_interfaces, retained);
+            mergeProjectModules(
+                state->ast, path, projectModuleRoots(path), &m_interfaces, retained);
         }
         m_referenceIndexReady = false;
         m_referenceIndexWord.clear();
         publishDiagnostics(uri, document);
     }
 
-    void publishDiagnostics(const ::lsp::DocumentUri& uri,
-                            Document& document) {
+    void publishDiagnostics(const ::lsp::DocumentUri& uri, Document& document) {
         auto* state = m_db.fileState(document.path);
         // What the parser and expansion found, then the one sema the build
         // runs: names (for this document), module rules, purity and types.
@@ -2858,8 +3332,8 @@ private:
         if (state) {
             semantic::Analyzer analyzer(&m_interfaces);
             std::vector<std::string> entryFiles{document.path};
-            entryFiles.insert(entryFiles.end(), document.companions.begin(),
-                              document.companions.end());
+            entryFiles.insert(
+                entryFiles.end(), document.companions.begin(), document.companions.end());
             analyzer.setEntryFiles(std::move(entryFiles));
             analyzer.setMissingModuleIsError(false);
             analyzer.setIndexesNames(true);
@@ -2871,11 +3345,13 @@ private:
             const bool analyzed = analyzer.analyze(state->ast);
             // Its symbols, the references to them and the names in scope, as
             // the checker resolved them: what navigation and completion read.
-            m_db.setResolved(document.path, analyzer.nameIndex().symbols,
-                             analyzer.nameIndex().completionScopes);
+            m_db.setResolved(
+                document.path, analyzer.nameIndex().symbols, analyzer.nameIndex().completionScopes);
             // The modules it names, indexed for navigation into their source
             // (their own names are not resolved: kexhq/kex#323).
-            for (const auto& module : analyzer.referencedModules()) m_db.ensureModule(module);
+            for (const auto& module : analyzer.referencedModules()) {
+                m_db.ensureModule(module);
+            }
             enrichFunctionSymbols(*state, analyzer);
             enrichRecordSymbols(*state, analyzer);
             recordNavigation(document, analyzer, state->ast, analyzed);
@@ -2891,26 +3367,30 @@ private:
             // its right operand. The map's order decided it before.
             std::unordered_map<uint64_t, int> spanRanks;
             const auto recordSpan = [&](const ast::Expr& expression, std::string qualifier) {
-                if (std::holds_alternative<ast::BinaryOp>(expression.kind)) return;
+                if (std::holds_alternative<ast::BinaryOp>(expression.kind)) {
+                    return;
+                }
                 const int rank = std::holds_alternative<ast::MethodCall>(expression.kind) ||
                                          std::holds_alternative<ast::FunctionCall>(expression.kind)
-                                     ? 1 : 0;
+                                     ? 1
+                                     : 0;
                 const auto key = Document::receiverKey(
                     static_cast<unsigned int>(expression.location.line),
                     static_cast<unsigned int>(expression.location.column));
                 const auto [held, fresh] = spanRanks.try_emplace(key, rank);
-                if (!fresh && held->second < rank) return;
+                if (!fresh && held->second < rank) {
+                    return;
+                }
                 held->second = rank;
                 document.receiverSpans.insert_or_assign(key, std::move(qualifier));
             };
             for (const auto& [expression, _] : analyzer.typeMap()) {
-                if (!expression || expression->location.file != document.path)
+                if (!expression || expression->location.file != document.path) {
                     continue;
+                }
                 bool hasAssignmentTarget = false;
-                if (const auto* assignment =
-                        std::get_if<ast::AssignExpr>(&expression->kind)) {
-                    if (const auto target =
-                            analyzer.assignmentTargetTypeOf(expression)) {
+                if (const auto* assignment = std::get_if<ast::AssignExpr>(&expression->kind)) {
+                    if (const auto target = analyzer.assignmentTargetTypeOf(expression)) {
                         hasAssignmentTarget = true;
                         if (auto qualifier = completionQualifierForType(target);
                             !qualifier.empty()) {
@@ -2918,14 +3398,10 @@ private:
                             recordSpan(*expression, std::move(qualifier));
                         }
                         document.hoverEntries.push_back({
-                            .line = static_cast<unsigned int>(
-                                expression->location.line),
-                            .byteColumn = static_cast<unsigned int>(
-                                expression->location.column),
-                            .byteLength = static_cast<unsigned int>(
-                                assignment->name.size()),
-                            .detail = assignment->name + " : " +
-                                      semantic::typeToString(target),
+                            .line = static_cast<unsigned int>(expression->location.line),
+                            .byteColumn = static_cast<unsigned int>(expression->location.column),
+                            .byteLength = static_cast<unsigned int>(assignment->name.size()),
+                            .detail = assignment->name + " : " + semantic::typeToString(target),
                             .completeDetail = true,
                         });
                     }
@@ -2934,37 +3410,33 @@ private:
                 // it starts. Answering a member completion from this costs a
                 // hash lookup; re-deriving it by re-analyzing the buffer cost
                 // ~18ms a keystroke in a 900-line file.
-                if (auto spanQualifier = hasAssignmentTarget
-                        ? std::string{}
-                        : completionQualifierForType(
-                              analyzer.displayTypeOf(expression));
-                    !spanQualifier.empty())
+                if (auto spanQualifier =
+                        hasAssignmentTarget
+                            ? std::string{}
+                            : completionQualifierForType(analyzer.displayTypeOf(expression));
+                    !spanQualifier.empty()) {
                     recordSpan(*expression, std::move(spanQualifier));
-                if (const auto* binding =
-                        std::get_if<ast::LetExpr>(&expression->kind);
+                }
+                if (const auto* binding = std::get_if<ast::LetExpr>(&expression->kind);
                     binding && binding->pattern && binding->value) {
                     if (const auto* variable =
                             std::get_if<ast::VarPattern>(&binding->pattern->kind)) {
-                        const auto bindingType =
-                            analyzer.displayTypeOf(binding->value.get());
-                        if (bindingType && !std::holds_alternative<
-                                semantic::UnknownType>(bindingType->kind)) {
-                            if (auto qualifier = completionQualifierForType(
-                                    bindingType); !qualifier.empty())
-                                document.localReceiverTypes[variable->name] =
-                                    std::move(qualifier);
+                        const auto bindingType = analyzer.displayTypeOf(binding->value.get());
+                        if (bindingType &&
+                            !std::holds_alternative<semantic::UnknownType>(bindingType->kind)) {
+                            if (auto qualifier = completionQualifierForType(bindingType);
+                                !qualifier.empty()) {
+                                document.localReceiverTypes[variable->name] = std::move(qualifier);
+                            }
                             semantic::Signature display;
                             display.name = variable->name;
                             display.result = bindingType;
                             document.hoverEntries.push_back({
-                                .line = static_cast<unsigned int>(
-                                    binding->pattern->location.line),
-                                .byteColumn = static_cast<unsigned int>(
-                                    binding->pattern->location.column),
-                                .byteLength = static_cast<unsigned int>(
-                                    variable->name.size()),
-                                .detail = analyzer.displaySignature(
-                                    variable->name, display),
+                                .line = static_cast<unsigned int>(binding->pattern->location.line),
+                                .byteColumn =
+                                    static_cast<unsigned int>(binding->pattern->location.column),
+                                .byteLength = static_cast<unsigned int>(variable->name.size()),
+                                .detail = analyzer.displaySignature(variable->name, display),
                                 .completeDetail = true,
                                 // A `let` in a body binds a local: what it is
                                 // is this, not a same-named declaration's
@@ -2978,17 +3450,19 @@ private:
                     continue;
                 }
                 const auto type = analyzer.displayTypeOf(expression);
-                if (!type || std::holds_alternative<semantic::UnknownType>(type->kind))
+                if (!type || std::holds_alternative<semantic::UnknownType>(type->kind)) {
                     continue;
+                }
                 // An operator is recorded at its right operand: `"s" + tree` hovered
                 // `tree` as the String the sum is.
-                if (std::holds_alternative<ast::BinaryOp>(expression->kind)) continue;
-                if (const auto* identifier =
-                        std::get_if<ast::Identifier>(&expression->kind))
-                    if (auto qualifier = completionQualifierForType(type);
-                        !qualifier.empty())
-                        document.localReceiverTypes[identifier->name] =
-                            std::move(qualifier);
+                if (std::holds_alternative<ast::BinaryOp>(expression->kind)) {
+                    continue;
+                }
+                if (const auto* identifier = std::get_if<ast::Identifier>(&expression->kind)) {
+                    if (auto qualifier = completionQualifierForType(type); !qualifier.empty()) {
+                        document.localReceiverTypes[identifier->name] = std::move(qualifier);
+                    }
+                }
                 auto location = expression->location;
                 auto length = identifierLengthAt(document.text, location);
                 semantic::Signature expressionSignature;
@@ -2997,25 +3471,24 @@ private:
                 auto renderedType = analyzer.displaySignature("_", expressionSignature);
                 const auto typeSeparator = renderedType.find(": ");
                 std::string detail = typeSeparator == std::string::npos
-                    ? semantic::typeToString(type)
-                    : renderedType.substr(typeSeparator + 2);
+                                         ? semantic::typeToString(type)
+                                         : renderedType.substr(typeSeparator + 2);
                 bool completeDetail = false;
-                if (const auto* identifier =
-                        std::get_if<ast::Identifier>(&expression->kind)) {
+                if (const auto* identifier = std::get_if<ast::Identifier>(&expression->kind)) {
                     detail = identifier->name + " : " + detail;
                     completeDetail = true;
                 }
-                if (const auto* curry =
-                        std::get_if<ast::CurryExpr>(&expression->kind)) {
-                    location.column += curry->isOperator ? 2 :
-                        1 + static_cast<int>(curry->module.empty()
-                            ? 0 : curry->module.size() + 1);
+                if (const auto* curry = std::get_if<ast::CurryExpr>(&expression->kind)) {
+                    location.column +=
+                        curry->isOperator
+                            ? 2
+                            : 1 + static_cast<int>(
+                                      curry->module.empty() ? 0 : curry->module.size() + 1);
                     length = static_cast<unsigned int>(curry->name.size());
-                    const auto displayName = "~" +
-                        (curry->module.empty() ? std::string{} : curry->module + ".") +
+                    const auto displayName =
+                        "~" + (curry->module.empty() ? std::string{} : curry->module + ".") +
                         curry->name;
-                    if (const auto* function =
-                            std::get_if<semantic::FuncType>(&type->kind)) {
+                    if (const auto* function = std::get_if<semantic::FuncType>(&type->kind)) {
                         semantic::Signature signature;
                         signature.name = displayName;
                         signature.params = function->params;
@@ -3026,28 +3499,27 @@ private:
                     }
                     completeDetail = true;
                 }
-                if (const auto* methodCall =
-                        std::get_if<ast::MethodCall>(&expression->kind);
+                if (const auto* methodCall = std::get_if<ast::MethodCall>(&expression->kind);
                     methodCall && location.line > 0 && location.column > 0) {
                     size_t lineStart = 0;
-                    for (int sourceLine = 1; sourceLine < location.line;
-                         ++sourceLine) {
+                    for (int sourceLine = 1; sourceLine < location.line; ++sourceLine) {
                         const auto newline = document.text.find('\n', lineStart);
-                        if (newline == std::string::npos) break;
+                        if (newline == std::string::npos) {
+                            break;
+                        }
                         lineStart = newline + 1;
                     }
-                    const auto offset = lineStart +
-                        static_cast<size_t>(location.column - 1);
-                    if (offset < document.text.size() &&
-                        document.text[offset] == '@') {
+                    const auto offset = lineStart + static_cast<size_t>(location.column - 1);
+                    if (offset < document.text.size() && document.text[offset] == '@') {
                         ++location.column;
-                        length = static_cast<unsigned int>(
-                            methodCall->method.size());
+                        length = static_cast<unsigned int>(methodCall->method.size());
                         detail = "@" + methodCall->method + " : " + detail;
                         completeDetail = true;
                     }
                 }
-                if (!length) continue;
+                if (!length) {
+                    continue;
+                }
                 document.hoverEntries.push_back({
                     .line = static_cast<unsigned int>(location.line),
                     .byteColumn = static_cast<unsigned int>(location.column),
@@ -3060,17 +3532,17 @@ private:
             // entry above. Hovering `b` in `Boxed(b)` answered nothing at all
             // until these were recorded.
             for (const auto& binding : analyzer.patternBindings()) {
-                if (binding.location.file != document.path || !binding.type)
+                if (binding.location.file != document.path || !binding.type) {
                     continue;
+                }
                 // An unknown type is still a binding: skipped, `let name =
                 // json["name"].or(x)` hovered as Weekday's `name`. `Any` is
                 // what a value of unknown type is to the program.
                 semantic::Signature display;
                 display.name = binding.name;
-                display.result =
-                    std::holds_alternative<semantic::UnknownType>(binding.type->kind)
-                        ? semantic::Type::named("Any")
-                        : binding.type;
+                display.result = std::holds_alternative<semantic::UnknownType>(binding.type->kind)
+                                     ? semantic::Type::named("Any")
+                                     : binding.type;
                 // The recorded position is the binding's own for a pattern,
                 // but only an ANCHOR for a block parameter — `{ |x| … }` marks
                 // the block, since a LambdaParam has no location. When the
@@ -3078,17 +3550,16 @@ private:
                 // that follows.
                 auto line = static_cast<unsigned int>(binding.location.line);
                 auto column = static_cast<unsigned int>(binding.location.column);
-                if (auto offset = offsetOfLocation(document.text,
-                                                   binding.location);
+                if (auto offset = offsetOfLocation(document.text, binding.location);
                     offset != std::string::npos &&
-                    document.text.compare(offset, binding.name.size(),
-                                          binding.name) != 0) {
+                    document.text.compare(offset, binding.name.size(), binding.name) != 0) {
                     const auto lineEnd = document.text.find('\n', offset);
-                    const auto limit = lineEnd == std::string::npos
-                        ? document.text.size() : lineEnd;
-                    const auto found =
-                        document.text.find(binding.name, offset);
-                    if (found == std::string::npos || found >= limit) continue;
+                    const auto limit =
+                        lineEnd == std::string::npos ? document.text.size() : lineEnd;
+                    const auto found = document.text.find(binding.name, offset);
+                    if (found == std::string::npos || found >= limit) {
+                        continue;
+                    }
                     const auto position = locationOfOffset(document.text, found);
                     line = position.first;
                     column = position.second;
@@ -3102,42 +3573,44 @@ private:
                     .localBinding = true,
                 });
             }
-            for (const auto& [expression, signature] :
-                 analyzer.selectedCallSignatures()) {
-                if (!expression || expression->location.file != document.path)
+            for (const auto& [expression, signature] : analyzer.selectedCallSignatures()) {
+                if (!expression || expression->location.file != document.path) {
                     continue;
+                }
                 std::string name;
                 bool method = false;
-                if (const auto* call =
-                        std::get_if<ast::FunctionCall>(&expression->kind)) {
+                if (const auto* call = std::get_if<ast::FunctionCall>(&expression->kind)) {
                     name = call->name;
-                } else if (const auto* call =
-                               std::get_if<ast::MethodCall>(&expression->kind)) {
+                } else if (const auto* call = std::get_if<ast::MethodCall>(&expression->kind)) {
                     name = call->method;
                     method = true;
                 } else {
                     continue;
                 }
-                auto location = callNameLocation(
-                    document.text, *expression, name, method);
-                if (!location) continue;
+                auto location = callNameLocation(document.text, *expression, name, method);
+                if (!location) {
+                    continue;
+                }
                 std::string documentationKey;
-                if (const auto* methodCall =
-                        std::get_if<ast::MethodCall>(&expression->kind))
+                if (const auto* methodCall = std::get_if<ast::MethodCall>(&expression->kind)) {
                     if (auto resolved = analyzer.resolvedCalls().find(methodCall);
                         resolved != analyzer.resolvedCalls().end() &&
-                        !resolved->second.sourceModule.empty())
-                        documentationKey =
-                            resolved->second.sourceModule + "." + name;
-                if (documentationKey.empty())
+                        !resolved->second.sourceModule.empty()) {
+                        documentationKey = resolved->second.sourceModule + "." + name;
+                    }
+                }
+                if (documentationKey.empty()) {
                     if (const auto called = analyzer.checker().calledModules().find(expression);
                         called != analyzer.checker().calledModules().end() &&
-                        !called->second.empty())
+                        !called->second.empty()) {
                         documentationKey = called->second + "." + name;
+                    }
+                }
                 // The prelude's file-level functions are documented bare.
                 if (const auto prelude = std::string(semantic::kFileLevelPreludeModule) + ".";
-                    documentationKey.starts_with(prelude))
+                    documentationKey.starts_with(prelude)) {
                     documentationKey.erase(0, prelude.size());
+                }
                 document.selectedCallEntries.push_back({
                     .line = static_cast<unsigned int>(location->line),
                     .byteColumn = static_cast<unsigned int>(location->column),
@@ -3148,18 +3621,18 @@ private:
                     .completeDetail = true,
                 });
             }
-            diagnostics.insert(diagnostics.end(), analyzer.diagnostics().begin(),
-                               analyzer.diagnostics().end());
-            const bool hasError = std::any_of(
-                diagnostics.begin(), diagnostics.end(), [](const auto& item) {
+            diagnostics.insert(
+                diagnostics.end(), analyzer.diagnostics().begin(), analyzer.diagnostics().end());
+            const bool hasError =
+                std::any_of(diagnostics.begin(), diagnostics.end(), [](const auto& item) {
                     return item.level == semantic::Diagnostic::Level::Error;
                 });
             if (analyzed && !hasError) {
                 auto validation = validation::validateTaggedLiterals(
                     state->ast, analyzer, documentModuleRoots(document.path));
-                diagnostics.insert(diagnostics.end(),
-                                   std::make_move_iterator(validation.begin()),
-                                   std::make_move_iterator(validation.end()));
+                diagnostics.insert(
+                    diagnostics.end(), std::make_move_iterator(validation.begin()),
+                    std::make_move_iterator(validation.end()));
             }
         }
 
@@ -3172,12 +3645,14 @@ private:
             // other file's line numbers — errors from a dependency scattered
             // over every file that used it, often past this file's last
             // line. Each file shows its own diagnostics when it is open.
-            if (!belongsToDocument(diagnostic.location.file, document.path))
+            if (!belongsToDocument(diagnostic.location.file, document.path)) {
                 continue;
+            }
             const auto key = std::to_string(diagnostic.location.line) + ":" +
-                             std::to_string(diagnostic.location.column) + ":" +
-                             diagnostic.message;
-            if (!seen.insert(key).second) continue;
+                             std::to_string(diagnostic.location.column) + ":" + diagnostic.message;
+            if (!seen.insert(key).second) {
+                continue;
+            }
             // For a `.ket` document, every location below is in SYNTHETIC
             // coordinates (what the generated Kex the analyzer actually saw
             // looks like) — translate back to the template's own bytes, or
@@ -3188,15 +3663,17 @@ private:
             std::optional<SourceLocation> translatedLocation;
             std::optional<SourceLocation> translatedEndLocation;
             const bool isKetLocation =
-                !document.ketOriginalText.empty() &&
-                diagnostic.location.file == document.path;
+                !document.ketOriginalText.empty() && diagnostic.location.file == document.path;
             if (isKetLocation) {
                 translatedLocation = translateKetLocation(document, diagnostic.location);
-                if (!translatedLocation) continue;
+                if (!translatedLocation) {
+                    continue;
+                }
                 if (diagnostic.endLocation) {
-                    translatedEndLocation =
-                        translateKetLocation(document, *diagnostic.endLocation);
-                    if (!translatedEndLocation) translatedEndLocation = translatedLocation;
+                    translatedEndLocation = translateKetLocation(document, *diagnostic.endLocation);
+                    if (!translatedEndLocation) {
+                        translatedEndLocation = translatedLocation;
+                    }
                 }
             }
             const std::string* diagnosticSource =
@@ -3206,16 +3683,16 @@ private:
             const SourceLocation& effectiveLocation =
                 translatedLocation ? *translatedLocation : diagnostic.location;
             const SourceLocation* effectiveEndLocation =
-                isKetLocation
-                    ? (translatedEndLocation ? &*translatedEndLocation : nullptr)
-                    : (diagnostic.endLocation ? &*diagnostic.endLocation : nullptr);
+                isKetLocation ? (translatedEndLocation ? &*translatedEndLocation : nullptr)
+                              : (diagnostic.endLocation ? &*diagnostic.endLocation : nullptr);
             ::lsp::Diagnostic item{
-                .range = {
-                    .start = protocolPosition(effectiveLocation, diagnosticSource),
-                    .end = effectiveEndLocation
-                               ? protocolPosition(*effectiveEndLocation, diagnosticSource)
-                               : pointEnd(effectiveLocation, diagnosticSource),
-                },
+                .range =
+                    {
+                        .start = protocolPosition(effectiveLocation, diagnosticSource),
+                        .end = effectiveEndLocation
+                                   ? protocolPosition(*effectiveEndLocation, diagnosticSource)
+                                   : pointEnd(effectiveLocation, diagnosticSource),
+                    },
                 .message = diagnostic.message,
                 .severity = diagnostic.level == semantic::Diagnostic::Level::Error
                                 ? ::lsp::DiagnosticSeverity::Error
@@ -3226,13 +3703,15 @@ private:
                 ::lsp::Array<::lsp::DiagnosticRelatedInformation> related;
                 for (const auto& note : diagnostic.notes) {
                     related.push_back({
-                        .location = {
-                            .uri = ::lsp::Uri::fileUriFromPath(note.location.file),
-                            .range = {
-                                .start = protocolPosition(note.location),
-                                .end = pointEnd(note.location),
+                        .location =
+                            {
+                                .uri = ::lsp::Uri::fileUriFromPath(note.location.file),
+                                .range =
+                                    {
+                                        .start = protocolPosition(note.location),
+                                        .end = pointEnd(note.location),
+                                    },
                             },
-                        },
                         .message = note.message,
                     });
                 }
@@ -3252,7 +3731,9 @@ private:
         verifyInitialized();
         const auto key = params.textDocument.uri.toString();
         const auto found = m_documents.find(key);
-        if (found == m_documents.end()) return ::lsp::Array<::lsp::CompletionItem>{};
+        if (found == m_documents.end()) {
+            return ::lsp::Array<::lsp::CompletionItem>{};
+        }
         // A `.ket` template's positions arrive in the ORIGINAL file's
         // coordinates; everything below reads `document.text`, the
         // SYNTHETIC Kex the analyzer indexed (kexhq/kex#317). Translate
@@ -3262,33 +3743,35 @@ private:
         // what inserts it, against the buffer it actually has open.
         if (!found->second.ketOriginalText.empty()) {
             auto synthetic = translateKetPositionToSynthetic(found->second, params.position);
-            if (!synthetic) return ::lsp::Array<::lsp::CompletionItem>{};
+            if (!synthetic) {
+                return ::lsp::Array<::lsp::CompletionItem>{};
+            }
             params.position = *synthetic;
         }
-        const auto prefix = completionPrefix(found->second.text,
-                                             params.position.line,
-                                             params.position.character);
+        const auto prefix =
+            completionPrefix(found->second.text, params.position.line, params.position.character);
 
         // Inside an atom — `:ok`, or `:b@localhost` just after its `@`, which
         // is a trigger character for `@field` — nothing can be completed: an
         // atom names itself. Offering identifiers there turned typing a node
         // name into a popup.
-        if (insideAtomLiteral(found->second.text, params.position.line,
-                              params.position.character))
+        if (insideAtomLiteral(
+                found->second.text, params.position.line, params.position.character)) {
             return ::lsp::Array<::lsp::CompletionItem>{};
+        }
 
-        if (auto target = withTargetPrefix(found->second.text,
-                                           params.position.line,
-                                           params.position.character))
-            return capabilityCompletions(m_db, m_interfaces,
-                                         found->second.path, *target);
+        if (auto target = withTargetPrefix(
+                found->second.text, params.position.line, params.position.character)) {
+            return capabilityCompletions(m_db, m_interfaces, found->second.path, *target);
+        }
 
         // After `receiver.`, what the checker accepts on the receiver's type
         // there. A module or type path (`IO.`, `Web.Server.`) names a
         // namespace, not a value, and is completed from its declarations
         // below.
-        if (auto members = memberCompletionsAt(found->second, params.position))
+        if (auto members = memberCompletionsAt(found->second, params.position)) {
             return std::move(*members);
+        }
 
         // Inside a typed record literal only fields are legal. Generic lexical
         // completion here floods `New { ... }` with every function, module and
@@ -3300,14 +3783,16 @@ private:
             size_t lineStart = 0;
             for (unsigned int line = 0; line < params.position.line; ++line) {
                 const auto newline = text.find('\n', lineStart);
-                if (newline == std::string::npos) break;
+                if (newline == std::string::npos) {
+                    break;
+                }
                 lineStart = newline + 1;
             }
             const auto lineEndPosition = text.find('\n', lineStart);
-            const auto lineEnd = lineEndPosition == std::string::npos
-                ? text.size() : lineEndPosition;
-            const auto cursor = byteOffsetForUtf16Column(
-                text, lineStart, lineEnd, params.position.character);
+            const auto lineEnd =
+                lineEndPosition == std::string::npos ? text.size() : lineEndPosition;
+            const auto cursor =
+                byteOffsetForUtf16Column(text, lineStart, lineEnd, params.position.character);
             // A Server<State> slot call has one compiler-owned named option,
             // `within:`. Once all positional parameters are present, global
             // lexical completion is pure noise (`counter.shutdown(|)` used to
@@ -3315,45 +3800,49 @@ private:
             size_t parenDepth = 0;
             size_t callOpen = std::string::npos;
             for (size_t i = cursor; i > 0; --i) {
-                if (text[i - 1] == ')') ++parenDepth;
-                else if (text[i - 1] == '(') {
-                    if (parenDepth) --parenDepth;
-                    else { callOpen = i - 1; break; }
+                if (text[i - 1] == ')') {
+                    ++parenDepth;
+                } else if (text[i - 1] == '(') {
+                    if (parenDepth) {
+                        --parenDepth;
+                    } else {
+                        callOpen = i - 1;
+                        break;
+                    }
                 }
             }
             if (callOpen != std::string::npos) {
                 size_t methodEnd = callOpen;
-                while (methodEnd && std::isspace(
-                           static_cast<unsigned char>(text[methodEnd - 1])))
+                while (methodEnd && std::isspace(static_cast<unsigned char>(text[methodEnd - 1]))) {
                     --methodEnd;
+                }
                 size_t methodStart = methodEnd;
-                while (methodStart && (std::isalnum(static_cast<unsigned char>(
-                           text[methodStart - 1])) || text[methodStart - 1] == '_' ||
-                           text[methodStart - 1] == '?')) --methodStart;
+                while (methodStart &&
+                       (std::isalnum(static_cast<unsigned char>(text[methodStart - 1])) ||
+                        text[methodStart - 1] == '_' || text[methodStart - 1] == '?')) {
+                    --methodStart;
+                }
                 if (methodStart > 0 && text[methodStart - 1] == '.') {
                     size_t receiverEnd = methodStart - 1;
                     size_t receiverStart = receiverEnd;
-                    while (receiverStart && (std::isalnum(
-                               static_cast<unsigned char>(text[receiverStart - 1])) ||
-                               text[receiverStart - 1] == '_')) --receiverStart;
-                    const auto receiver = text.substr(
-                        receiverStart, receiverEnd - receiverStart);
+                    while (receiverStart &&
+                           (std::isalnum(static_cast<unsigned char>(text[receiverStart - 1])) ||
+                            text[receiverStart - 1] == '_')) {
+                        --receiverStart;
+                    }
+                    const auto receiver = text.substr(receiverStart, receiverEnd - receiverStart);
                     if (auto known = found->second.localReceiverTypes.find(receiver);
                         known != found->second.localReceiverTypes.end() &&
-                        known->second.rfind("Server<", 0) == 0 &&
-                        known->second.ends_with('>')) {
-                        const auto state = known->second.substr(
-                            7, known->second.size() - 8);
-                        const auto method = text.substr(
-                            methodStart, methodEnd - methodStart);
+                        known->second.rfind("Server<", 0) == 0 && known->second.ends_with('>')) {
+                        const auto state = known->second.substr(7, known->second.size() - 8);
+                        const auto method = text.substr(methodStart, methodEnd - methodStart);
                         if (const auto* slot = m_db.receiverSymbol(state, method);
                             slot && slot->isServingSlot) {
-                            const auto supplied = text.substr(
-                                callOpen + 1, cursor - callOpen - 1);
-                            const auto commas = static_cast<size_t>(std::count(
-                                supplied.begin(), supplied.end(), ','));
-                            const bool empty = std::all_of(
-                                supplied.begin(), supplied.end(), [](char c) {
+                            const auto supplied = text.substr(callOpen + 1, cursor - callOpen - 1);
+                            const auto commas = static_cast<size_t>(
+                                std::count(supplied.begin(), supplied.end(), ','));
+                            const bool empty =
+                                std::all_of(supplied.begin(), supplied.end(), [](char c) {
                                     return std::isspace(static_cast<unsigned char>(c));
                                 });
                             const bool positionalComplete =
@@ -3361,7 +3850,7 @@ private:
                                 (!slot->params.empty() && commas >= slot->params.size());
                             if (positionalComplete) {
                                 ::lsp::Array<::lsp::CompletionItem> options;
-                                if (supplied.find("within:") == std::string::npos)
+                                if (supplied.find("within:") == std::string::npos) {
                                     options.push_back({
                                         .label = "within",
                                         .kind = ::lsp::CompletionItemKind::Property,
@@ -3369,6 +3858,7 @@ private:
                                         .filterText = "within",
                                         .insertText = "within: ",
                                     });
+                                }
                                 return options;
                             }
                         }
@@ -3376,9 +3866,11 @@ private:
                 }
             }
             size_t atName = cursor;
-            while (atName > lineStart && (std::isalnum(
-                       static_cast<unsigned char>(text[atName - 1])) ||
-                       text[atName - 1] == '_')) --atName;
+            while (atName > lineStart &&
+                   (std::isalnum(static_cast<unsigned char>(text[atName - 1])) ||
+                    text[atName - 1] == '_')) {
+                --atName;
+            }
             if (atName > 0 && text[atName - 1] == '@') {
                 std::string receiver;
                 // The `make` block the cursor is in, from the parsed program: the
@@ -3388,52 +3880,61 @@ private:
                 if (const auto* parsed = m_db.fileState(found->second.path)) {
                     int nearest = 0;
                     const auto cursorLine = static_cast<int>(params.position.line + 1);
-                    for (const auto& item : parsed->ast.items)
+                    for (const auto& item : parsed->ast.items) {
                         if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item);
                             make && *make && (*make)->location.line <= cursorLine &&
-                            (*make)->location.line > nearest)
+                            (*make)->location.line > nearest) {
                             if (const auto target = writtenMakeTarget((*make)->target)) {
                                 receiver = target->dotted();
                                 nearest = (*make)->location.line;
                             }
+                        }
+                    }
                 }
-                if (receiver.empty())
-                if (auto known = found->second.localReceiverTypes.find("new");
-                    known != found->second.localReceiverTypes.end())
-                    receiver = known->second;
-                if (receiver.empty())
-                    if (auto known = found->second.localReceiverTypes.find("this");
-                        known != found->second.localReceiverTypes.end())
+                if (receiver.empty()) {
+                    if (auto known = found->second.localReceiverTypes.find("new");
+                        known != found->second.localReceiverTypes.end()) {
                         receiver = known->second;
+                    }
+                }
+                if (receiver.empty()) {
+                    if (auto known = found->second.localReceiverTypes.find("this");
+                        known != found->second.localReceiverTypes.end()) {
+                        receiver = known->second;
+                    }
+                }
                 // As with an incomplete New literal, syntax recovery may have
                 // dropped implicit bindings. The nearest make/serving header
                 // still gives the receiver type.
                 if (receiver.empty()) {
                     const auto make = text.rfind("make ", cursor);
                     const auto serving = text.rfind("serving ", cursor);
-                    const auto header = make == std::string::npos
-                        ? serving : serving == std::string::npos
-                        ? make : std::max(make, serving);
+                    const auto header = make == std::string::npos      ? serving
+                                        : serving == std::string::npos ? make
+                                                                       : std::max(make, serving);
                     if (header != std::string::npos) {
                         size_t type = header + (header == make ? 5 : 8);
-                        while (type < cursor && std::isspace(
-                                   static_cast<unsigned char>(text[type]))) ++type;
+                        while (type < cursor &&
+                               std::isspace(static_cast<unsigned char>(text[type]))) {
+                            ++type;
+                        }
                         size_t end = type;
-                        while (end < cursor && (std::isalnum(
-                                   static_cast<unsigned char>(text[end])) ||
-                                   text[end] == '_' || text[end] == '.')) ++end;
+                        while (end < cursor &&
+                               (std::isalnum(static_cast<unsigned char>(text[end])) ||
+                                text[end] == '_' || text[end] == '.')) {
+                            ++end;
+                        }
                         receiver = text.substr(type, end - type);
                     }
                 }
-                if (const auto* declaration =
-                        m_db.findSymbol(receiver, found->second.path);
-                    declaration && declaration->kind ==
-                        semantic::SymbolKind::Record) {
+                if (const auto* declaration = m_db.findSymbol(receiver, found->second.path);
+                    declaration && declaration->kind == semantic::SymbolKind::Record) {
                     const auto typed = text.substr(atName, cursor - atName);
                     ::lsp::Array<::lsp::CompletionItem> fields;
-                    for (const auto& [name, type] :
-                         declaration->fields) {
-                        if (name.rfind(typed, 0) != 0) continue;
+                    for (const auto& [name, type] : declaration->fields) {
+                        if (name.rfind(typed, 0) != 0) {
+                            continue;
+                        }
                         fields.push_back({
                             .label = name,
                             .kind = ::lsp::CompletionItemKind::Field,
@@ -3448,10 +3949,15 @@ private:
             size_t depth = 0;
             size_t brace = std::string::npos;
             for (size_t i = cursor; i > 0; --i) {
-                if (text[i - 1] == '}') ++depth;
-                else if (text[i - 1] == '{') {
-                    if (depth) --depth;
-                    else { brace = i - 1; break; }
+                if (text[i - 1] == '}') {
+                    ++depth;
+                } else if (text[i - 1] == '{') {
+                    if (depth) {
+                        --depth;
+                    } else {
+                        brace = i - 1;
+                        break;
+                    }
                 }
             }
             // Only a KEY position takes a field name: the word being typed
@@ -3462,35 +3968,38 @@ private:
             bool keyPosition = false;
             {
                 size_t before = atName;
-                while (before > 0 && std::isspace(static_cast<unsigned char>(text[before - 1])))
+                while (before > 0 && std::isspace(static_cast<unsigned char>(text[before - 1]))) {
                     --before;
+                }
                 keyPosition = before > 0 && (text[before - 1] == '{' || text[before - 1] == ',');
             }
             if (brace != std::string::npos && keyPosition) {
-                const auto written = text.substr(brace + 1,
-                                                 cursor - brace - 1);
+                const auto written = text.substr(brace + 1, cursor - brace - 1);
                 size_t first = 0;
-                while (first < written.size() && std::isspace(
-                           static_cast<unsigned char>(written[first]))) ++first;
+                while (first < written.size() &&
+                       std::isspace(static_cast<unsigned char>(written[first]))) {
+                    ++first;
+                }
                 size_t beforeBrace = brace;
-                while (beforeBrace && std::isspace(
-                           static_cast<unsigned char>(text[beforeBrace - 1])))
+                while (beforeBrace &&
+                       std::isspace(static_cast<unsigned char>(text[beforeBrace - 1]))) {
                     --beforeBrace;
+                }
                 const auto currentLine = text.rfind('\n', brace);
                 const auto returnStart = text.rfind("return", brace);
-                const bool emptyServingReturn = first == written.size() &&
-                    returnStart != std::string::npos &&
-                    (currentLine == std::string::npos ||
-                     returnStart > currentLine) &&
+                const bool emptyServingReturn =
+                    first == written.size() && returnStart != std::string::npos &&
+                    (currentLine == std::string::npos || returnStart > currentLine) &&
                     text.rfind("serving ", brace) != std::string::npos;
-                const bool servingTransition = emptyServingReturn ||
+                const bool servingTransition =
+                    emptyServingReturn ||
                     (written.compare(first, 3, "new") == 0 &&
                      (first + 3 == written.size() ||
                       std::isspace(static_cast<unsigned char>(written[first + 3])) ||
                       written[first + 3] == ','));
                 if (servingTransition) {
                     ::lsp::Array<::lsp::CompletionItem> fields;
-                    if (written.find("new") == std::string::npos)
+                    if (written.find("new") == std::string::npos) {
                         fields.push_back({
                             .label = "new",
                             .kind = ::lsp::CompletionItemKind::Field,
@@ -3498,7 +4007,8 @@ private:
                             .filterText = "new",
                             .insertText = "new, ",
                         });
-                    if (written.find("reply:") == std::string::npos)
+                    }
+                    if (written.find("reply:") == std::string::npos) {
                         fields.push_back({
                             .label = "reply",
                             .kind = ::lsp::CompletionItemKind::Field,
@@ -3506,7 +4016,8 @@ private:
                             .filterText = "reply",
                             .insertText = "reply: ",
                         });
-                    if (written.find("stop:") == std::string::npos)
+                    }
+                    if (written.find("stop:") == std::string::npos) {
                         fields.push_back({
                             .label = "stop",
                             .kind = ::lsp::CompletionItemKind::Field,
@@ -3514,58 +4025,62 @@ private:
                             .filterText = "stop",
                             .insertText = "stop: ",
                         });
+                    }
                     return fields;
                 }
                 size_t end = brace;
-                while (end && std::isspace(static_cast<unsigned char>(text[end - 1])))
+                while (end && std::isspace(static_cast<unsigned char>(text[end - 1]))) {
                     --end;
+                }
                 size_t start = end;
-                while (start && (std::isalnum(static_cast<unsigned char>(
-                           text[start - 1])) || text[start - 1] == '_' ||
-                           text[start - 1] == '.')) --start;
+                while (start && (std::isalnum(static_cast<unsigned char>(text[start - 1])) ||
+                                 text[start - 1] == '_' || text[start - 1] == '.')) {
+                    --start;
+                }
                 auto record = text.substr(start, end - start);
-                if (record == "New" || record == "new" ||
-                    record == "This" || record == "this") {
-                    const auto binding = record == "New" || record == "new"
-                        ? "new" : "this";
+                if (record == "New" || record == "new" || record == "This" || record == "this") {
+                    const auto binding = record == "New" || record == "new" ? "new" : "this";
                     if (auto known = found->second.localReceiverTypes.find(binding);
-                        known != found->second.localReceiverTypes.end())
+                        known != found->second.localReceiverTypes.end()) {
                         record = known->second;
+                    }
                     // An incomplete literal may prevent the fresh analysis
                     // from retaining implicit bindings. The surrounding
                     // make/serving header still states the same type plainly.
-                    if (record == "New" || record == "new" ||
-                        record == "This" || record == "this") {
+                    if (record == "New" || record == "new" || record == "This" ||
+                        record == "this") {
                         const auto make = text.rfind("make ", brace);
                         const auto serving = text.rfind("serving ", brace);
-                        const auto header = make == std::string::npos
-                            ? serving : serving == std::string::npos
-                            ? make : std::max(make, serving);
+                        const auto header = make == std::string::npos ? serving
+                                            : serving == std::string::npos
+                                                ? make
+                                                : std::max(make, serving);
                         if (header != std::string::npos) {
                             size_t type = header + (header == make ? 5 : 8);
-                            while (type < brace && std::isspace(
-                                       static_cast<unsigned char>(text[type])))
+                            while (type < brace &&
+                                   std::isspace(static_cast<unsigned char>(text[type]))) {
                                 ++type;
+                            }
                             size_t typeEnd = type;
-                            while (typeEnd < brace && (std::isalnum(
-                                       static_cast<unsigned char>(text[typeEnd])) ||
-                                       text[typeEnd] == '_' || text[typeEnd] == '.'))
+                            while (typeEnd < brace &&
+                                   (std::isalnum(static_cast<unsigned char>(text[typeEnd])) ||
+                                    text[typeEnd] == '_' || text[typeEnd] == '.')) {
                                 ++typeEnd;
-                            if (typeEnd > type)
+                            }
+                            if (typeEnd > type) {
                                 record = text.substr(type, typeEnd - type);
+                            }
                         }
                     }
                 }
-                if (!record.empty() && kex::startsUppercase(record))
-                    if (const auto* declaration =
-                            m_db.findSymbol(record, found->second.path);
-                        declaration && declaration->kind ==
-                            semantic::SymbolKind::Record) {
+                if (!record.empty() && kex::startsUppercase(record)) {
+                    if (const auto* declaration = m_db.findSymbol(record, found->second.path);
+                        declaration && declaration->kind == semantic::SymbolKind::Record) {
                         ::lsp::Array<::lsp::CompletionItem> fields;
-                        for (const auto& [name, type] :
-                             declaration->fields) {
-                            if (written.find(name + ":") != std::string::npos)
+                        for (const auto& [name, type] : declaration->fields) {
+                            if (written.find(name + ":") != std::string::npos) {
                                 continue;
+                            }
                             fields.push_back({
                                 .label = name,
                                 .kind = ::lsp::CompletionItemKind::Field,
@@ -3576,6 +4091,7 @@ private:
                         }
                         return fields;
                     }
+                }
             }
         }
         auto query = resolveCompletionQuery(prefix.c_str(), 0, prefix.c_str());
@@ -3590,18 +4106,20 @@ private:
             const auto& text = found->second.text;
             size_t lineStart = 0;
             bool haveLine = true;
-            for (unsigned int current = 0; current < params.position.line;
-                 ++current) {
+            for (unsigned int current = 0; current < params.position.line; ++current) {
                 const auto newline = text.find('\n', lineStart);
-                if (newline == std::string::npos) { haveLine = false; break; }
+                if (newline == std::string::npos) {
+                    haveLine = false;
+                    break;
+                }
                 lineStart = newline + 1;
             }
             if (haveLine) {
                 const auto lineEndPosition = text.find('\n', lineStart);
-                const auto lineEnd = lineEndPosition == std::string::npos
-                    ? text.size() : lineEndPosition;
-                const auto cursor = byteOffsetForUtf16Column(
-                    text, lineStart, lineEnd, params.position.character);
+                const auto lineEnd =
+                    lineEndPosition == std::string::npos ? text.size() : lineEndPosition;
+                const auto cursor =
+                    byteOffsetForUtf16Column(text, lineStart, lineEnd, params.position.character);
                 const auto receiver = scanDotReceiver(text, cursor);
                 // A module path is completed from the module the checker
                 // resolved its first name to: `URL.` under `using URI` is
@@ -3612,15 +4130,17 @@ private:
                         return std::isspace(static_cast<unsigned char>(c));
                     });
                     const auto startLine = static_cast<unsigned int>(
-                        1 + std::count(text.begin(), text.begin() +
-                                                         static_cast<std::ptrdiff_t>(receiver.start),
-                                       '\n'));
-                    const auto startLineBegin = text.rfind('\n', receiver.start == 0
-                                                                     ? 0 : receiver.start - 1);
+                        1 + std::count(
+                                text.begin(),
+                                text.begin() + static_cast<std::ptrdiff_t>(receiver.start), '\n'));
+                    const auto startLineBegin =
+                        text.rfind('\n', receiver.start == 0 ? 0 : receiver.start - 1);
                     const auto startColumn = static_cast<unsigned int>(
                         receiver.start -
                         (startLineBegin == std::string::npos || receiver.start == 0
-                             ? 0 : startLineBegin + 1) + 1);
+                             ? 0
+                             : startLineBegin + 1) +
+                        1);
                     if (const auto module = found->second.moduleReferences.find(
                             Document::receiverKey(startLine, startColumn));
                         module != found->second.moduleReferences.end() &&
@@ -3628,7 +4148,7 @@ private:
                         const auto firstEnd = std::min(written.find('.'), written.size());
                         const auto resolved = module->second + written.substr(firstEnd);
                         query.dbQuery = resolved + "." +
-                            text.substr(receiver.dot + 1, cursor - receiver.dot - 1);
+                                        text.substr(receiver.dot + 1, cursor - receiver.dot - 1);
                         query.rewriteFrom = resolved;
                         query.rewriteTo = written;
                         resolvedByAnalyzer = true;
@@ -3640,39 +4160,38 @@ private:
                             documentModuleRoots(found->second.path));
                         !qualifier.empty()) {
                         query.dbQuery = qualifier + "." +
-                            text.substr(receiver.dot + 1,
-                                        cursor - receiver.dot - 1);
+                                        text.substr(receiver.dot + 1, cursor - receiver.dot - 1);
                         query.rewriteFrom = qualifier;
-                        query.rewriteTo = text.substr(
-                            receiver.start, receiver.dot - receiver.start);
+                        query.rewriteTo =
+                            text.substr(receiver.start, receiver.dot - receiver.start);
                         resolvedByAnalyzer = true;
                     }
                 }
             }
         }
 
-        if (const auto dot = prefix.find('.');
-            !resolvedByAnalyzer && dot != std::string::npos) {
+        if (const auto dot = prefix.find('.'); !resolvedByAnalyzer && dot != std::string::npos) {
             const auto receiver = prefix.substr(0, dot);
             auto inferredQualifier = [&]() -> std::string {
                 if (auto inferred = found->second.localReceiverTypes.find(receiver);
-                    inferred != found->second.localReceiverTypes.end())
+                    inferred != found->second.localReceiverTypes.end()) {
                     return inferred->second;
+                }
                 size_t lineStart = 0;
-                for (unsigned int current = 0; current < params.position.line;
-                     ++current) {
+                for (unsigned int current = 0; current < params.position.line; ++current) {
                     const auto newline = found->second.text.find('\n', lineStart);
-                    if (newline == std::string::npos) break;
+                    if (newline == std::string::npos) {
+                        break;
+                    }
                     lineStart = newline + 1;
                 }
-                return sourceLocalReceiverQualifier(
-                    found->second.text, receiver, lineStart);
+                return sourceLocalReceiverQualifier(found->second.text, receiver, lineStart);
             }();
-            if (inferredQualifier.empty() && prefix.ends_with('.'))
+            if (inferredQualifier.empty() && prefix.ends_with('.')) {
                 inferredQualifier = recoveredDotReceiverQualifier(
-                    found->second.text, found->second.path, receiver,
-                    params.position.line, params.position.character,
-                    &m_interfaces);
+                    found->second.text, found->second.path, receiver, params.position.line,
+                    params.position.character, &m_interfaces);
+            }
             if (!inferredQualifier.empty()) {
                 query.dbQuery = inferredQualifier + prefix.substr(dot);
                 query.rewriteFrom = inferredQualifier;
@@ -3686,152 +4205,177 @@ private:
             size_t lineStart = 0;
             for (unsigned int line = 0; line < params.position.line; ++line) {
                 const auto newline = text.find('\n', lineStart);
-                if (newline == std::string::npos) break;
+                if (newline == std::string::npos) {
+                    break;
+                }
                 lineStart = newline + 1;
             }
             const auto lineEndPosition = text.find('\n', lineStart);
             const auto lineEnd =
                 lineEndPosition == std::string::npos ? text.size() : lineEndPosition;
             if (auto names = bareCompletionsAt(
-                    found->second,
-                    byteOffsetForUtf16Column(text, lineStart, lineEnd, params.position.character))) {
+                    found->second, byteOffsetForUtf16Column(
+                                       text, lineStart, lineEnd, params.position.character))) {
                 std::erase_if(*names, [&](const std::string& name) {
                     return !name.starts_with(query.dbQuery);
                 });
                 bare = std::move(names);
             }
         }
-        auto matches = bare ? std::move(*bare)
-                            : rewriteCompletions(
-                                  m_db.completionsAt(found->second.path, params.position.line + 1,
-                                                     completionByteColumn(found->second.text,
-                                                                          params.position.line,
-                                                                          params.position.character),
-                                                     query.dbQuery),
-                                  query.rewriteFrom, query.rewriteTo);
+        auto matches =
+            bare ? std::move(*bare)
+                 : rewriteCompletions(
+                       m_db.completionsAt(
+                           found->second.path, params.position.line + 1,
+                           completionByteColumn(
+                               found->second.text, params.position.line, params.position.character),
+                           query.dbQuery),
+                       query.rewriteFrom, query.rewriteTo);
         ::lsp::Array<::lsp::CompletionItem> result;
         for (auto& match : matches) {
             const auto separator = match.rfind('.');
             auto leaf = match.substr(separator == std::string::npos ? 0 : separator + 1);
             std::vector<const semantic::ImportedFunction*> functions;
-            const auto qualifier = separator == std::string::npos
-                ? std::string{} : match.substr(0, separator);
+            const auto qualifier =
+                separator == std::string::npos ? std::string{} : match.substr(0, separator);
             if (auto module = m_interfaces.modules.find(qualifier);
                 !qualifier.empty() && module != m_interfaces.modules.end()) {
                 if (auto exports = module->second.exports.find(leaf);
-                    exports != module->second.exports.end())
-                    for (const auto& function : exports->second)
+                    exports != module->second.exports.end()) {
+                    for (const auto& function : exports->second) {
                         functions.push_back(&function);
+                    }
+                }
             } else if (auto receivers = m_interfaces.receiverFunctions.find(leaf);
                        receivers != m_interfaces.receiverFunctions.end()) {
-                for (const auto& function : receivers->second)
+                for (const auto& function : receivers->second) {
                     functions.push_back(&function);
-            }
-            if (functions.empty() && qualifier.empty())
-                for (const auto& [_, module] : m_interfaces.modules) {
-                    if (!module.automaticImport) continue;
-                    if (auto exports = module.exports.find(leaf);
-                        exports != module.exports.end())
-                        for (const auto& function : exports->second)
-                            functions.push_back(&function);
                 }
+            }
+            if (functions.empty() && qualifier.empty()) {
+                for (const auto& [_, module] : m_interfaces.modules) {
+                    if (!module.automaticImport) {
+                        continue;
+                    }
+                    if (auto exports = module.exports.find(leaf); exports != module.exports.end()) {
+                        for (const auto& function : exports->second) {
+                            functions.push_back(&function);
+                        }
+                    }
+                }
+            }
 
             semantic::TypeChecker renderer(&m_interfaces);
             std::vector<std::string> signatures;
             for (const auto* function : functions) {
                 auto rendered = renderer.displaySignature(leaf, function->signature);
-                if (function->signature.isFoul) rendered = "foul " + rendered;
-                if (std::find(signatures.begin(), signatures.end(), rendered) ==
-                    signatures.end())
+                if (function->signature.isFoul) {
+                    rendered = "foul " + rendered;
+                }
+                if (std::find(signatures.begin(), signatures.end(), rendered) == signatures.end()) {
                     signatures.push_back(std::move(rendered));
+                }
             }
             std::string servingState;
-            if (query.rewriteFrom.rfind("Server<", 0) == 0 &&
-                query.rewriteFrom.ends_with('>'))
-                servingState = query.rewriteFrom.substr(
-                    7, query.rewriteFrom.size() - 8);
+            if (query.rewriteFrom.rfind("Server<", 0) == 0 && query.rewriteFrom.ends_with('>')) {
+                servingState = query.rewriteFrom.substr(7, query.rewriteFrom.size() - 8);
+            }
             const auto* localSymbol = servingState.empty()
-                ? m_db.findSymbol(leaf, found->second.path)
-                : m_db.receiverSymbol(servingState, leaf);
+                                          ? m_db.findSymbol(leaf, found->second.path)
+                                          : m_db.receiverSymbol(servingState, leaf);
             std::string completionFieldType;
-            if (servingState.empty() && !query.rewriteFrom.empty())
-                if (const auto* record = m_db.findSymbol(
-                        query.rewriteFrom, found->second.path);
-                    record && record->kind == semantic::SymbolKind::Record)
+            if (servingState.empty() && !query.rewriteFrom.empty()) {
+                if (const auto* record = m_db.findSymbol(query.rewriteFrom, found->second.path);
+                    record && record->kind == semantic::SymbolKind::Record) {
                     completionFieldType = fieldTypeOf(*record, leaf);
+                }
+            }
             // A slot's local protocol declaration is authoritative. A global
             // or imported function sharing its short name must not supply the
             // completion signature (`counter.get` used to show String.get).
-            if ((localSymbol && localSymbol->isServingSlot) ||
-                !completionFieldType.empty()) {
+            if ((localSymbol && localSymbol->isServingSlot) || !completionFieldType.empty()) {
                 functions.clear();
                 signatures.clear();
             }
-            if (!completionFieldType.empty())
+            if (!completionFieldType.empty()) {
                 signatures.push_back(leaf + " : " + completionFieldType);
-            if (signatures.empty() && localSymbol &&
-                !localSymbol->detail.empty()) {
+            }
+            if (signatures.empty() && localSymbol && !localSymbol->detail.empty()) {
                 std::istringstream details(localSymbol->detail);
                 std::string signature;
-                while (std::getline(details, signature))
-                    if (!signature.empty()) signatures.push_back(signature);
+                while (std::getline(details, signature)) {
+                    if (!signature.empty()) {
+                        signatures.push_back(signature);
+                    }
+                }
             }
             std::string signatureDetail;
             for (const auto& signature : signatures) {
-                if (!signatureDetail.empty()) signatureDetail += '\n';
+                if (!signatureDetail.empty()) {
+                    signatureDetail += '\n';
+                }
                 signatureDetail += signature;
             }
             std::optional<::lsp::CompletionItemLabelDetails> labelDetails;
             if (!signatures.empty()) {
                 auto suffix = signatures.front();
                 const bool foulSignature = suffix.rfind("foul ", 0) == 0;
-                if (foulSignature) suffix.erase(0, 5);
-                if (suffix.rfind("slot ", 0) == 0) suffix.erase(0, 5);
+                if (foulSignature) {
+                    suffix.erase(0, 5);
+                }
+                if (suffix.rfind("slot ", 0) == 0) {
+                    suffix.erase(0, 5);
+                }
                 const auto name = suffix.find(leaf + " :");
-                if (name != std::string::npos)
+                if (name != std::string::npos) {
                     suffix.erase(name, leaf.size());
+                }
                 std::vector<std::string> parameterNames;
-                if (!functions.empty())
+                if (!functions.empty()) {
                     parameterNames = functions.front()->paramNames;
-                else if (localSymbol)
-                    for (const auto& [name, _] : localSymbol->params)
+                } else if (localSymbol) {
+                    for (const auto& [name, _] : localSymbol->params) {
                         parameterNames.push_back(name);
-                if (parameterNames.empty())
+                    }
+                }
+                if (parameterNames.empty()) {
                     if (auto names = m_standardParameterNames.find(leaf);
-                        names != m_standardParameterNames.end() &&
-                        !names->second.empty())
+                        names != m_standardParameterNames.end() && !names->second.empty()) {
                         parameterNames = names->second.front();
+                    }
+                }
                 if (!parameterNames.empty()) {
                     std::string names = "(";
                     for (size_t i = 0; i < parameterNames.size(); ++i) {
-                        if (i) names += ", ";
+                        if (i) {
+                            names += ", ";
+                        }
                         names += parameterNames[i];
                     }
                     names += ")";
                     suffix = names + suffix;
                 }
-                if (signatures.size() > 1)
-                    suffix += " (+" + std::to_string(signatures.size() - 1) +
-                        " overloads)";
+                if (signatures.size() > 1) {
+                    suffix += " (+" + std::to_string(signatures.size() - 1) + " overloads)";
+                }
                 // VS Code renders labelDetails.detail directly after the label
                 // with no spacing, so a suffix starting with a word runs into
                 // it: `ParsedOptionsrecord ParsedOptions do`. Parameter lists
                 // start with `(` and read correctly as they are.
-                if (!suffix.empty() && suffix.front() != ' ' &&
-                    suffix.front() != '(')
+                if (!suffix.empty() && suffix.front() != ' ' && suffix.front() != '(') {
                     suffix.insert(0, " ");
+                }
                 labelDetails = ::lsp::CompletionItemLabelDetails{
                     .detail = std::move(suffix),
-                    .description = qualifier.empty()
-                        ? std::optional<::lsp::String>{}
-                        : std::optional<::lsp::String>{qualifier},
+                    .description = qualifier.empty() ? std::optional<::lsp::String>{}
+                                                     : std::optional<::lsp::String>{qualifier},
                 };
             }
-            const bool foulCompletion = !signatures.empty() &&
-                signatures.front().rfind("foul ", 0) == 0;
+            const bool foulCompletion =
+                !signatures.empty() && signatures.front().rfind("foul ", 0) == 0;
             const bool slotCompletion = localSymbol && localSymbol->isServingSlot;
-            const auto importedModule = qualifier.empty()
-                ? m_interfaces.modules.find(leaf) : m_interfaces.modules.end();
+            const auto importedModule =
+                qualifier.empty() ? m_interfaces.modules.find(leaf) : m_interfaces.modules.end();
             const bool capabilityCompletion =
                 (localSymbol && localSymbol->kind == semantic::SymbolKind::Module &&
                  localSymbol->isCapability) ||
@@ -3839,35 +4383,28 @@ private:
                  importedModule->second.isCapability);
             const bool traitCompletion =
                 (localSymbol && localSymbol->kind == semantic::SymbolKind::Trait) ||
-                std::any_of(m_interfaces.traits.begin(), m_interfaces.traits.end(),
-                            [&](const auto& trait) { return trait.name == leaf; });
+                std::any_of(
+                    m_interfaces.traits.begin(), m_interfaces.traits.end(),
+                    [&](const auto& trait) { return trait.name == leaf; });
             const bool moduleCompletion =
                 (localSymbol && localSymbol->kind == semantic::SymbolKind::Module) ||
                 importedModule != m_interfaces.modules.end();
             ::lsp::CompletionItem item{
-                .label = slotCompletion
-                    ? (foulCompletion ? "foul slot " : "slot ") + leaf
-                    : (foulCompletion ? "foul " + leaf : leaf),
+                .label = slotCompletion ? (foulCompletion ? "foul slot " : "slot ") + leaf
+                                        : (foulCompletion ? "foul " + leaf : leaf),
                 .labelDetails = std::move(labelDetails),
-                .kind = !completionFieldType.empty()
-                    ? ::lsp::CompletionItemKind::Field
-                    : slotCompletion
-                    ? ::lsp::CompletionItemKind::Event
-                    : capabilityCompletion
-                    ? ::lsp::CompletionItemKind::Struct
-                    : traitCompletion
-                    ? ::lsp::CompletionItemKind::Interface
-                    : moduleCompletion
-                    ? ::lsp::CompletionItemKind::Module
-                    : !leaf.empty() &&
-                                kex::startsUppercase(leaf)
+                .kind = !completionFieldType.empty() ? ::lsp::CompletionItemKind::Field
+                        : slotCompletion             ? ::lsp::CompletionItemKind::Event
+                        : capabilityCompletion       ? ::lsp::CompletionItemKind::Struct
+                        : traitCompletion            ? ::lsp::CompletionItemKind::Interface
+                        : moduleCompletion           ? ::lsp::CompletionItemKind::Module
+                        : !leaf.empty() && kex::startsUppercase(leaf)
                             ? ::lsp::CompletionItemKind::Class
                             : ::lsp::CompletionItemKind::Function,
-                .detail = capabilityCompletion
-                    ? "capability " + match
-                    : traitCompletion
-                    ? "trait " + match
-                    : signatureDetail.empty() ? match : signatureDetail,
+                .detail = capabilityCompletion      ? "capability " + match
+                          : traitCompletion         ? "trait " + match
+                          : signatureDetail.empty() ? match
+                                                    : signatureDetail,
                 .filterText = leaf,
                 .insertText = std::move(leaf),
             };
@@ -3878,24 +4415,26 @@ private:
                     docs != found->second.documentation.end()) {
                     completionDocs = &docs->second;
                 } else {
-                    const auto standardName = !qualifier.empty() &&
-                            m_interfaces.modules.count(qualifier)
-                        ? qualifier + "." + documentationName
-                        : documentationName;
-                    if (auto standard =
-                            m_standardDocumentation.find(standardName);
-                        standard != m_standardDocumentation.end())
+                    const auto standardName =
+                        !qualifier.empty() && m_interfaces.modules.count(qualifier)
+                            ? qualifier + "." + documentationName
+                            : documentationName;
+                    if (auto standard = m_standardDocumentation.find(standardName);
+                        standard != m_standardDocumentation.end()) {
                         completionDocs = &standard->second;
+                    }
                 }
             }
             if (completionDocs) {
                 std::string documentation;
                 for (const auto& entry : *completionDocs) {
-                    if (!documentation.empty()) documentation += "\n\n";
+                    if (!documentation.empty()) {
+                        documentation += "\n\n";
+                    }
                     documentation += entry;
                 }
-                item.documentation = ::lsp::OneOf<::lsp::String,
-                    ::lsp::MarkupContent>{::lsp::MarkupContent{
+                item.documentation =
+                    ::lsp::OneOf<::lsp::String, ::lsp::MarkupContent>{::lsp::MarkupContent{
                         .kind = ::lsp::MarkupKind::Markdown,
                         .value = renderRdoc(std::move(documentation)),
                     }};
@@ -3910,23 +4449,24 @@ private:
             // turned every match's `Box.` into the receiver text, so they all
             // look alike by then. `makeTarget` is the `make TypeName` a method
             // was declared in, which is exactly the question being asked.
-            if (!query.rewriteFrom.empty() && localSymbol)
+            if (!query.rewriteFrom.empty() && localSymbol) {
                 item.sortText =
-                    (localSymbol->makeTarget == query.rewriteFrom ? "0" : "1") +
-                    item.label;
-            else if (!query.rewriteFrom.empty())
+                    (localSymbol->makeTarget == query.rewriteFrom ? "0" : "1") + item.label;
+            } else if (!query.rewriteFrom.empty()) {
                 item.sortText = "1" + item.label;
+            }
             result.push_back(std::move(item));
         }
         return result;
     }
 
-    auto hover(::lsp::HoverParams&& params)
-        -> ::lsp::requests::TextDocument_Hover::Result {
+    auto hover(::lsp::HoverParams&& params) -> ::lsp::requests::TextDocument_Hover::Result {
         verifyInitialized();
         const auto key = params.textDocument.uri.toString();
         const auto found = m_documents.find(key);
-        if (found == m_documents.end()) return {};
+        if (found == m_documents.end()) {
+            return {};
+        }
         const auto& document = found->second;
         // A `.ket` template's positions arrive in the ORIGINAL file's
         // coordinates; everything below reads `document.text`, which is the
@@ -3934,31 +4474,36 @@ private:
         // here, so the rest of this function needs no idea `.ket` exists.
         if (!document.ketOriginalText.empty()) {
             auto synthetic = translateKetPositionToSynthetic(document, params.position);
-            if (!synthetic) return {};
+            if (!synthetic) {
+                return {};
+            }
             params.position = *synthetic;
         }
-        const auto word = wordAt(document.text, params.position.line,
-                                 params.position.character);
-        if (word.text.empty()) return {};
+        const auto word = wordAt(document.text, params.position.line, params.position.character);
+        if (word.text.empty()) {
+            return {};
+        }
         // `xs.push!(v)` is the mutating form of `push`, produced by the
         // language rather than declared anywhere: no symbol, no signature and
         // no documentation is ever registered under `push!`, so every lookup
         // below has to ask about the base name. The bang is kept for display.
         std::string lookupName = word.text;
         if (lookupName.size() > 1 && lookupName.back() == '!' &&
-            !m_db.findSymbol(lookupName, document.path))
+            !m_db.findSymbol(lookupName, document.path)) {
             lookupName.pop_back();
-        const auto moduleQualifier = moduleQualifierBeforeWord(
-            document.text, params.position.line, word.byteColumn);
+        }
+        const auto moduleQualifier =
+            moduleQualifierBeforeWord(document.text, params.position.line, word.byteColumn);
 
-        const semantic::SymbolInfo* symbol = m_db.symbolAt(
-            document.path, params.position.line + 1, word.byteColumn);
+        const semantic::SymbolInfo* symbol =
+            m_db.symbolAt(document.path, params.position.line + 1, word.byteColumn);
         const bool resolvedSymbolAtPosition = symbol != nullptr;
         size_t hoverLineStart = 0;
-        for (unsigned int current = 0; current < params.position.line;
-             ++current) {
+        for (unsigned int current = 0; current < params.position.line; ++current) {
             const auto newline = document.text.find('\n', hoverLineStart);
-            if (newline == std::string::npos) break;
+            if (newline == std::string::npos) {
+                break;
+            }
             hoverLineStart = newline + 1;
         }
         const auto hoverWordOffset = hoverLineStart + word.byteColumn - 1;
@@ -3969,40 +4514,48 @@ private:
         // bracketed spelling and the state the word after the nearest
         // `serving ` above; that is left for a buffer that does not check.
         std::optional<std::pair<std::string, std::string>> replyContract;
-        if (lookupName == "Reply")
+        if (lookupName == "Reply") {
             if (const auto checked = document.replyContracts.find(
                     Document::receiverKey(params.position.line + 1, word.byteColumn));
-                checked != document.replyContracts.end())
+                checked != document.replyContracts.end()) {
                 replyContract = checked->second;
+            }
+        }
         if (lookupName == "Reply" && !replyContract && !document.checked) {
             size_t open = hoverWordOffset + word.byteLength;
-            while (open < document.text.size() && std::isspace(
-                       static_cast<unsigned char>(document.text[open]))) ++open;
+            while (open < document.text.size() &&
+                   std::isspace(static_cast<unsigned char>(document.text[open]))) {
+                ++open;
+            }
             if (open < document.text.size() && document.text[open] == '<') {
                 size_t depth = 1;
                 size_t close = open + 1;
                 for (; close < document.text.size() && depth; ++close) {
-                    if (document.text[close] == '<') ++depth;
-                    else if (document.text[close] == '>') --depth;
+                    if (document.text[close] == '<') {
+                        ++depth;
+                    } else if (document.text[close] == '>') {
+                        --depth;
+                    }
                 }
                 if (!depth) {
-                    const auto payload = document.text.substr(
-                        open + 1, close - open - 2);
+                    const auto payload = document.text.substr(open + 1, close - open - 2);
                     std::string state = "State";
-                    if (const auto serving =
-                            document.text.rfind("serving ", hoverWordOffset);
+                    if (const auto serving = document.text.rfind("serving ", hoverWordOffset);
                         serving != std::string::npos) {
                         size_t start = serving + 8;
-                        while (start < hoverWordOffset && std::isspace(
-                                   static_cast<unsigned char>(document.text[start])))
+                        while (start < hoverWordOffset &&
+                               std::isspace(static_cast<unsigned char>(document.text[start]))) {
                             ++start;
+                        }
                         size_t end = start;
-                        while (end < hoverWordOffset && (std::isalnum(
-                                   static_cast<unsigned char>(document.text[end])) ||
-                                   document.text[end] == '_' ||
-                                   document.text[end] == '.')) ++end;
-                        if (end > start)
+                        while (end < hoverWordOffset &&
+                               (std::isalnum(static_cast<unsigned char>(document.text[end])) ||
+                                document.text[end] == '_' || document.text[end] == '.')) {
+                            ++end;
+                        }
+                        if (end > start) {
                             state = document.text.substr(start, end - start);
+                        }
                     }
                     replyContract = std::pair{payload, state};
                 }
@@ -4010,17 +4563,14 @@ private:
         }
         if (replyContract) {
             const auto& [payload, state] = *replyContract;
-            replyContractDetail = "record Reply<" + payload + "> do\n" +
-                "  reply : " + payload + "\n" +
-                "  new : " + state + "?\n" +
-                "  stop : ProcessExitReason?\n" +
-                "end";
-            replyContractDocumentation =
-                "`reply` is required for an immediate call response. "
-                "It may be omitted only when the slot sends a deferred "
-                "response with `from.reply(...)`. `new` installs the "
-                "updated serving state; `stop` terminates the server "
-                "after the transition.";
+            replyContractDetail = "record Reply<" + payload + "> do\n" + "  reply : " + payload +
+                                  "\n" + "  new : " + state + "?\n" +
+                                  "  stop : ProcessExitReason?\n" + "end";
+            replyContractDocumentation = "`reply` is required for an immediate call response. "
+                                         "It may be omitted only when the slot sends a deferred "
+                                         "response with `from.reply(...)`. `new` installs the "
+                                         "updated serving state; `stop` terminates the server "
+                                         "after the transition.";
         }
         // A local, as the checker bound it: a use names its binding, and a binding
         // is its own. By name, a text search for the nearest definition before
@@ -4030,44 +4580,51 @@ private:
         if (!resolvedSymbolAtPosition && moduleQualifier.empty()) {
             const auto at = Document::receiverKey(params.position.line + 1, word.byteColumn);
             if (const auto use = document.localDefinitions.find(at);
-                use != document.localDefinitions.end())
-                localDefinition = SourceLocation{document.path, use->second.first,
-                                                 use->second.second};
-            else if (document.bindingSites.contains(at))
-                localDefinition = SourceLocation{document.path,
-                                                 static_cast<int>(params.position.line + 1),
-                                                 static_cast<int>(word.byteColumn)};
+                use != document.localDefinitions.end()) {
+                localDefinition =
+                    SourceLocation{document.path, use->second.first, use->second.second};
+            } else if (document.bindingSites.contains(at)) {
+                localDefinition = SourceLocation{
+                    document.path, static_cast<int>(params.position.line + 1),
+                    static_cast<int>(word.byteColumn)};
+            }
         }
         const bool lexicalReference = localDefinition.has_value();
-        const bool symbolDefinitionAtPosition = symbol &&
-            symbol->definition.file == document.path &&
+        const bool symbolDefinitionAtPosition =
+            symbol && symbol->definition.file == document.path &&
             symbol->definition.line == static_cast<int>(params.position.line + 1) &&
             word.byteColumn >= static_cast<uint32_t>(symbol->definition.column) &&
-            word.byteColumn < static_cast<uint32_t>(symbol->definition.column) +
-                                  symbol->name.size();
-        if (!symbol && moduleQualifier.empty())
+            word.byteColumn <
+                static_cast<uint32_t>(symbol->definition.column) + symbol->name.size();
+        if (!symbol && moduleQualifier.empty()) {
             symbol = m_db.findSymbol(lookupName, document.path);
+        }
         // A slot's declaration: its own symbol at its name, or, on its `::>`
         // line, the slot of the `serving` block declaring it.
         const semantic::SymbolInfo* slotDeclarationSymbol = nullptr;
         if (resolvedSymbolAtPosition && symbolDefinitionAtPosition && symbol &&
-            symbol->isServingSlot)
+            symbol->isServingSlot) {
             slotDeclarationSymbol = symbol;
-        else if (moduleQualifier.empty())
-            if (const auto* state = m_db.fileState(document.path))
+        } else if (moduleQualifier.empty()) {
+            if (const auto* state = m_db.fileState(document.path)) {
                 if (const auto target = servingTargetDeclaring(
                         state->ast, static_cast<int>(params.position.line + 1), lookupName);
-                    !target.empty())
+                    !target.empty()) {
                     if (const auto* slot = m_db.receiverSymbol(target, lookupName);
                         slot && slot->isServingSlot) {
                         slotDeclarationSymbol = slot;
                         symbol = slot;
                     }
+                }
+            }
+        }
         // A source-recognized lexical binding always shadows global/module
         // symbols, even when inference could not produce a hover entry for
         // it. Returning no type is preferable to claiming that a lambda
         // parameter named `name` is the unrelated `Weekday.name` method.
-        if (lexicalReference && !resolvedSymbolAtPosition) symbol = nullptr;
+        if (lexicalReference && !resolvedSymbolAtPosition) {
+            symbol = nullptr;
+        }
 
         std::string detail;
         std::string documentation;
@@ -4078,20 +4635,24 @@ private:
         // there. By position, it was the make target of a symbol declared on
         // the same line, which only a signature line has; that is left for a
         // buffer that does not check.
-        if (lookupName == "This")
+        if (lookupName == "This") {
             if (const auto resolved = document.typeReferences.find(
                     Document::receiverKey(params.position.line + 1, word.byteColumn));
-                resolved != document.typeReferences.end())
+                resolved != document.typeReferences.end()) {
                 thisTypeDetail = "This : " + resolved->second;
-        if (lookupName == "This" && thisTypeDetail.empty() && !document.checked)
-            if (const auto* state = m_db.fileState(document.path))
-                for (const auto& candidate : state->symbols)
+            }
+        }
+        if (lookupName == "This" && thisTypeDetail.empty() && !document.checked) {
+            if (const auto* state = m_db.fileState(document.path)) {
+                for (const auto& candidate : state->symbols) {
                     if (!candidate.makeTarget.empty() &&
-                        candidate.definition.line ==
-                            static_cast<int>(params.position.line + 1)) {
+                        candidate.definition.line == static_cast<int>(params.position.line + 1)) {
                         thisTypeDetail = "This : " + candidate.makeTarget;
                         break;
                     }
+                }
+            }
+        }
         // `using FS` names a MODULE, and nothing downstream knows that: the
         // symbol search resolved `FS` to whatever else carried the name and
         // hovering an import reported an unrelated declaration from the same
@@ -4099,8 +4660,7 @@ private:
         // Anything on a `using` line is part of a module path by
         // construction, qualified (`using Units.SI`) or not, so no lookup can
         // make it something else.
-        const bool importLine =
-            document.text.compare(hoverLineStart, 6, "using ") == 0;
+        const bool importLine = document.text.compare(hoverLineStart, 6, "using ") == 0;
         // A type written in an annotation, as the checker resolved it there:
         // the trait, capability or imported type it names is that one. By
         // name, the bare word was looked up, which a same-named declaration
@@ -4109,29 +4669,34 @@ private:
         std::string resolvedType;
         if (const auto identity = document.typeIdentities.find(
                 Document::receiverKey(params.position.line + 1, word.byteColumn));
-            identity != document.typeIdentities.end())
+            identity != document.typeIdentities.end()) {
             resolvedType = identity->second;
+        }
         const auto implemented = document.implementedTraits.find(
             Document::receiverKey(params.position.line + 1, word.byteColumn));
-        if (implemented != document.implementedTraits.end()) resolvedType = implemented->second;
+        if (implemented != document.implementedTraits.end()) {
+            resolvedType = implemented->second;
+        }
         semantic::TypeChecker traitLookup(&m_interfaces);
-        const bool traitName = implemented != document.implementedTraits.end() ||
+        const bool traitName =
+            implemented != document.implementedTraits.end() ||
             traitLookup.isTrait(resolvedType.empty() ? lookupName : resolvedType) ||
             (symbol && symbol->kind == semantic::SymbolKind::Trait);
         const auto capabilityLookup = m_interfaces.modules.find(
-            !resolvedType.empty()   ? resolvedType
+            !resolvedType.empty()     ? resolvedType
             : moduleQualifier.empty() ? lookupName
-                                    : moduleQualifier + "." + lookupName);
+                                      : moduleQualifier + "." + lookupName);
         const bool capabilityName =
-            (symbol && symbol->kind == semantic::SymbolKind::Module &&
-             symbol->isCapability) ||
+            (symbol && symbol->kind == semantic::SymbolKind::Module && symbol->isCapability) ||
             (capabilityLookup != m_interfaces.modules.end() &&
              capabilityLookup->second.isCapability);
-        const auto* importedAdt = !resolvedType.empty()
-            ? importedAdtNamed(m_interfaces, resolvedType)
-            : moduleQualifier.empty() ? importedAdtNamed(m_interfaces, lookupName) : nullptr;
+        const auto* importedAdt =
+            !resolvedType.empty()     ? importedAdtNamed(m_interfaces, resolvedType)
+            : moduleQualifier.empty() ? importedAdtNamed(m_interfaces, lookupName)
+                                      : nullptr;
         const auto* constructorAdt = moduleQualifier.empty()
-            ? importedAdtWithConstructor(m_interfaces, lookupName) : nullptr;
+                                         ? importedAdtWithConstructor(m_interfaces, lookupName)
+                                         : nullptr;
         const Document::HoverEntry* expressionHover = nullptr;
         const Document::HoverEntry* selectedCallHover = nullptr;
         const auto line = params.position.line + 1;
@@ -4141,26 +4706,27 @@ private:
                 (!expressionHover || entry.completeDetail) &&
                 !(expressionHover && expressionHover->localBinding)) {
                 expressionHover = &entry;
-                if (entry.localBinding) break;
+                if (entry.localBinding) {
+                    break;
+                }
             }
         }
-        for (const auto& entry : document.selectedCallEntries)
+        for (const auto& entry : document.selectedCallEntries) {
             if (entry.line == line && word.byteColumn >= entry.byteColumn &&
                 word.byteColumn < entry.byteColumn + entry.byteLength) {
                 selectedCallHover = &entry;
                 break;
             }
+        }
         const bool primitiveTypeReference =
             semantic::isPrimitiveTypeName(word.text) &&
-            (isTypeAnnotationPosition(document.text, params.position.line,
-                                      word.byteColumn) ||
-             !isNamespaceReceiverPosition(document.text, params.position.line,
-                                          word.byteColumn, word.byteLength));
-        const bool typeReference = isTypeAnnotationPosition(
-            document.text, params.position.line, word.byteColumn);
+            (isTypeAnnotationPosition(document.text, params.position.line, word.byteColumn) ||
+             !isNamespaceReceiverPosition(
+                 document.text, params.position.line, word.byteColumn, word.byteLength));
+        const bool typeReference =
+            isTypeAnnotationPosition(document.text, params.position.line, word.byteColumn);
         const auto shorthandFieldType = atFieldType(
-            document.text, params.position.line, word.byteColumn, word.text,
-            m_db, document.path);
+            document.text, params.position.line, word.byteColumn, word.text, m_db, document.path);
         // A field of the record the receiver actually has. Resolved through
         // the same analyzer-backed receiver lookup completion uses, so it
         // works for `b.size`, `makeBox(3).size`, and a match binding alike.
@@ -4170,69 +4736,73 @@ private:
         // that is left for a buffer that does not check yet (`user.na`).
         if (const auto read = document.fieldReadTypes.find(
                 Document::receiverKey(params.position.line + 1, word.byteColumn));
-            read != document.fieldReadTypes.end())
+            read != document.fieldReadTypes.end()) {
             fieldDetail = read->second;
-        if (fieldDetail.empty() && !document.checked && moduleQualifier.empty() &&
-            !importLine) {
-            const auto wordEnd = hoverLineStart + word.byteColumn - 1 +
-                                 word.byteLength;
+        }
+        if (fieldDetail.empty() && !document.checked && moduleQualifier.empty() && !importLine) {
+            const auto wordEnd = hoverLineStart + word.byteColumn - 1 + word.byteLength;
             const auto receiver = scanDotReceiver(document.text, wordEnd);
-            if (receiver.valid)
+            if (receiver.valid) {
                 if (auto qualifier = receiverQualifier(
                         document, receiver, wordEnd, &m_interfaces,
                         documentModuleRoots(document.path));
-                    !qualifier.empty())
-                    if (const auto* record =
-                            m_db.findSymbol(qualifier, document.path);
-                        record && record->kind == semantic::SymbolKind::Record)
-                        if (auto type = fieldTypeOf(*record, lookupName);
-                            !type.empty())
+                    !qualifier.empty()) {
+                    if (const auto* record = m_db.findSymbol(qualifier, document.path);
+                        record && record->kind == semantic::SymbolKind::Record) {
+                        if (auto type = fieldTypeOf(*record, lookupName); !type.empty()) {
                             fieldDetail = word.text + " : " + type;
+                        }
+                    }
+                }
+            }
             // The receiver's own hover entry knows its type even where the
             // lookup above cannot ask the analyzer for it — a `.ket` hole,
             // whose analysis is of the generated Kex. Without it a field read
             // there hovered as whatever function shares the field's name
             // (`control.hint` as `function hint`, kexhq/kex#456).
-            if (fieldDetail.empty() && receiver.valid &&
-                receiver.start >= hoverLineStart)
+            if (fieldDetail.empty() && receiver.valid && receiver.start >= hoverLineStart) {
                 for (const auto& entry : document.hoverEntries) {
                     if (entry.line != params.position.line + 1 ||
                         entry.byteColumn != receiver.start - hoverLineStart + 1 ||
-                        entry.byteColumn + entry.byteLength !=
-                            receiver.dot - hoverLineStart + 1)
+                        entry.byteColumn + entry.byteLength != receiver.dot - hoverLineStart + 1) {
                         continue;
+                    }
                     const auto separator = entry.detail.rfind(" : ");
-                    if (separator == std::string::npos) break;
+                    if (separator == std::string::npos) {
+                        break;
+                    }
                     auto typeName = entry.detail.substr(separator + 3);
-                    if (const auto angle = typeName.find('<');
-                        angle != std::string::npos)
+                    if (const auto angle = typeName.find('<'); angle != std::string::npos) {
                         typeName.resize(angle);
+                    }
                     // The record symbol is filed under its bare name; the
                     // entry may spell it qualified (`Views.FormField`).
                     const auto* record = m_db.findSymbol(typeName, document.path);
                     if ((!record || record->kind != semantic::SymbolKind::Record) &&
-                        typeName.rfind('.') != std::string::npos)
+                        typeName.rfind('.') != std::string::npos) {
                         record = m_db.findSymbol(
                             typeName.substr(typeName.rfind('.') + 1), document.path);
-                    if (record && record->kind == semantic::SymbolKind::Record)
-                        if (auto type = fieldTypeOf(*record, lookupName);
-                            !type.empty())
+                    }
+                    if (record && record->kind == semantic::SymbolKind::Record) {
+                        if (auto type = fieldTypeOf(*record, lookupName); !type.empty()) {
                             fieldDetail = word.text + " : " + type;
+                        }
+                    }
                     break;
                 }
+            }
         }
 
         // Documentation is looked up by BARE NAME, so a field must not take
         // it: `user.name` showed the right type and then OptionParser's prose
         // about `kex install`, because that module happens to export a `name`.
-        const bool mapKey = isMapKeyPosition(document.text,
-                                             params.position.line + 1,
-                                             word.byteColumn, word.byteLength);
+        const bool mapKey = isMapKeyPosition(
+            document.text, params.position.line + 1, word.byteColumn, word.byteLength);
         const bool recordField = !fieldDetail.empty();
-        const auto fieldDeclaration = mapKey
-            ? std::string{}
-            : declaredFieldType(document.text, params.position.line + 1,
-                                word.byteColumn, word.byteLength);
+        const auto fieldDeclaration =
+            mapKey ? std::string{}
+                   : declaredFieldType(
+                         document.text, params.position.line + 1, word.byteColumn, word.byteLength);
         const auto recordKey = document.recordKeys.find(
             Document::receiverKey(params.position.line + 1, word.byteColumn));
         if (recordKey != document.recordKeys.end()) {
@@ -4246,18 +4816,19 @@ private:
             // In a RECORD literal the key is that record's field, so it has a
             // declared type; in a map literal it is genuinely an atom.
             detail.clear();
-            if (const auto record = literalRecordName(
-                    document.text, params.position.line + 1, word.byteColumn);
-                !record.empty())
-                if (const auto* declaration =
-                        m_db.findSymbol(record, document.path);
-                    declaration &&
-                    declaration->kind == semantic::SymbolKind::Record)
-                    if (auto type = fieldTypeOf(*declaration,
-                                                    word.text);
-                        !type.empty())
+            if (const auto record =
+                    literalRecordName(document.text, params.position.line + 1, word.byteColumn);
+                !record.empty()) {
+                if (const auto* declaration = m_db.findSymbol(record, document.path);
+                    declaration && declaration->kind == semantic::SymbolKind::Record) {
+                    if (auto type = fieldTypeOf(*declaration, word.text); !type.empty()) {
                         detail = word.text + " : " + type;
-            if (detail.empty()) detail = word.text + " : Atom";
+                    }
+                }
+            }
+            if (detail.empty()) {
+                detail = word.text + " : Atom";
+            }
             symbol = nullptr;
         } else if (!fieldDeclaration.empty()) {
             detail = word.text + " : " + fieldDeclaration;
@@ -4271,9 +4842,8 @@ private:
             // String` from the same file, or a `Feature` type — because the
             // branches below answer for values and types, and an import is
             // neither.
-            detail = "module " + (moduleQualifier.empty()
-                                      ? word.text
-                                      : moduleQualifier + "." + word.text);
+            detail = "module " +
+                     (moduleQualifier.empty() ? word.text : moduleQualifier + "." + word.text);
             symbol = nullptr;
         } else if (!shorthandFieldType.empty()) {
             detail = "@" + word.text + " : " + shorthandFieldType;
@@ -4283,72 +4853,77 @@ private:
             documentation = std::move(replyContractDocumentation);
             symbol = nullptr;
         } else if (slotDeclarationSymbol) {
-            detail = slotDeclarationSymbol->detail.empty()
-                ? "slot " + slotDeclarationSymbol->name
-                : slotDeclarationSymbol->detail;
+            detail = slotDeclarationSymbol->detail.empty() ? "slot " + slotDeclarationSymbol->name
+                                                           : slotDeclarationSymbol->detail;
             documentation.clear();
         } else if (!thisTypeDetail.empty()) {
             detail = std::move(thisTypeDetail);
             symbol = nullptr;
         } else if (primitiveTypeReference) {
             detail = "type " + word.text;
-            if (traitName) detail += "\ntrait " + word.text;
+            if (traitName) {
+                detail += "\ntrait " + word.text;
+            }
             symbol = nullptr;
         } else if (capabilityName) {
-            detail = "capability " + (moduleQualifier.empty()
-                ? word.text : moduleQualifier + "." + word.text);
+            detail = "capability " +
+                     (moduleQualifier.empty() ? word.text : moduleQualifier + "." + word.text);
         } else if (traitName && (moduleQualifier.empty() || !resolvedType.empty())) {
             detail = "trait " + (resolvedType.empty() ? word.text : resolvedType);
-        } else if (symbol && symbol->kind == semantic::SymbolKind::Type &&
-                   (symbol->detail.rfind("type ", 0) == 0 ||
-                    symbol->detail.rfind("distinct type ", 0) == 0) &&
-                   (symbolDefinitionAtPosition || typeReference)) {
+        } else if (
+            symbol && symbol->kind == semantic::SymbolKind::Type &&
+            (symbol->detail.rfind("type ", 0) == 0 ||
+             symbol->detail.rfind("distinct type ", 0) == 0) &&
+            (symbolDefinitionAtPosition || typeReference)) {
             detail = symbol->detail;
             if (const auto* definitionState =
-                    m_db.fileState(std::string(symbol->definition.file)))
-                documentation = documentationBefore(*definitionState,
-                                                     symbol->definition);
-        } else if (symbol && symbol->kind == semantic::SymbolKind::Record &&
-                   symbol->detail.rfind("record ", 0) == 0) {
+                    m_db.fileState(std::string(symbol->definition.file))) {
+                documentation = documentationBefore(*definitionState, symbol->definition);
+            }
+        } else if (
+            symbol && symbol->kind == semantic::SymbolKind::Record &&
+            symbol->detail.rfind("record ", 0) == 0) {
             detail = symbol->detail;
             if (const auto* definitionState =
-                    m_db.fileState(std::string(symbol->definition.file)))
-                documentation = documentationBefore(*definitionState,
-                                                     symbol->definition);
+                    m_db.fileState(std::string(symbol->definition.file))) {
+                documentation = documentationBefore(*definitionState, symbol->definition);
+            }
         } else if (importedAdt && typeReference) {
             detail = importedAdtDetail(*importedAdt);
-        } else if (expressionHover &&
-                   (expressionHover->completeDetail ||
-                    (!selectedCallHover && moduleQualifier.empty()) ||
-                    (!word.text.empty() && kex::startsUppercase(word.text)))) {
-            detail = expressionHover->completeDetail
-                ? expressionHover->detail
-                : word.text + " : " + expressionHover->detail;
+        } else if (
+            expressionHover &&
+            (expressionHover->completeDetail || (!selectedCallHover && moduleQualifier.empty()) ||
+             (!word.text.empty() && kex::startsUppercase(word.text)))) {
+            detail = expressionHover->completeDetail ? expressionHover->detail
+                                                     : word.text + " : " + expressionHover->detail;
         } else if (symbol && resolvedSymbolAtPosition) {
             detail = symbol->detail;
             if (detail.empty() && symbol->type &&
-                !std::holds_alternative<semantic::UnknownType>(symbol->type->kind))
+                !std::holds_alternative<semantic::UnknownType>(symbol->type->kind)) {
                 detail = symbol->name + " : " + semantic::typeToString(symbol->type);
+            }
             if (const auto* definitionState =
-                    m_db.fileState(std::string(symbol->definition.file)))
-                documentation = documentationBefore(*definitionState,
-                                                     symbol->definition);
+                    m_db.fileState(std::string(symbol->definition.file))) {
+                documentation = documentationBefore(*definitionState, symbol->definition);
+            }
         } else if (constructorAdt) {
             detail = importedConstructorDetail(*constructorAdt, word.text);
         } else if (symbol) {
             detail = symbol->detail;
             if (detail.empty() && symbol->type &&
-                !std::holds_alternative<semantic::UnknownType>(symbol->type->kind))
+                !std::holds_alternative<semantic::UnknownType>(symbol->type->kind)) {
                 detail = symbol->name + " : " + semantic::typeToString(symbol->type);
+            }
             if (const auto* definitionState =
-                    m_db.fileState(std::string(symbol->definition.file)))
-                documentation = documentationBefore(*definitionState,
-                                                     symbol->definition);
+                    m_db.fileState(std::string(symbol->definition.file))) {
+                documentation = documentationBefore(*definitionState, symbol->definition);
+            }
         }
 
         if (detail.empty()) {
-            if (constructorAdt)
+            if (constructorAdt) {
                 detail = importedConstructorDetail(*constructorAdt, word.text);
+            }
         }
 
         // A LOCAL binding shadows anything imported under the same name, so
@@ -4360,13 +4935,15 @@ private:
             std::vector<std::pair<semantic::Signature, bool>> importedSignatures;
             if (!moduleQualifier.empty()) {
                 if (auto module = m_interfaces.modules.find(moduleQualifier);
-                    module != m_interfaces.modules.end())
+                    module != m_interfaces.modules.end()) {
                     if (auto functions = module->second.exports.find(lookupName);
-                        functions != module->second.exports.end())
-                        for (const auto& function : functions->second)
+                        functions != module->second.exports.end()) {
+                        for (const auto& function : functions->second) {
                             importedSignatures.emplace_back(
-                                function.signature,
-                                function.signature.isFoul);
+                                function.signature, function.signature.isFoul);
+                        }
+                    }
+                }
             } else {
                 // Modules this file opted into with `using`, as well as the
                 // automatic ones. Without the former, hovering `meter` in
@@ -4377,46 +4954,60 @@ private:
                 // written, a nested module's own included. By text, every `using`
                 // line of the file; that is left for a buffer that does not check.
                 auto opened = document.checked
-                    ? modulesInScope(document, static_cast<int>(params.position.line + 1),
-                                     static_cast<int>(word.byteColumn))
-                    : documentImports(found->second.text);
+                                  ? modulesInScope(
+                                        document, static_cast<int>(params.position.line + 1),
+                                        static_cast<int>(word.byteColumn))
+                                  : documentImports(found->second.text);
                 for (const auto& [moduleName, module] : m_interfaces.modules) {
-                    if (!module.automaticImport && !opened.count(moduleName))
+                    if (!module.automaticImport && !opened.count(moduleName)) {
                         continue;
+                    }
                     if (auto functions = module.exports.find(lookupName);
-                        functions != module.exports.end())
-                        for (const auto& function : functions->second)
+                        functions != module.exports.end()) {
+                        for (const auto& function : functions->second) {
                             importedSignatures.emplace_back(
-                                function.signature,
-                                function.signature.isFoul);
+                                function.signature, function.signature.isFoul);
+                        }
+                    }
                 }
                 if (auto functions = m_interfaces.receiverFunctions.find(lookupName);
-                    functions != m_interfaces.receiverFunctions.end())
+                    functions != m_interfaces.receiverFunctions.end()) {
                     for (const auto& function : functions->second) {
-                        importedSignatures.emplace_back(function.signature,
-                                                       function.signature.isFoul);
+                        importedSignatures.emplace_back(
+                            function.signature, function.signature.isFoul);
                     }
+                }
             }
             semantic::TypeChecker renderer(&m_interfaces);
             std::unordered_set<std::string> rendered;
             for (const auto& [signature, isFoul] : importedSignatures) {
                 auto lineDetail = renderer.displaySignature(lookupName, signature);
-                if (isFoul) lineDetail = "foul " + lineDetail;
-                if (!rendered.insert(lineDetail).second) continue;
-                if (!detail.empty()) detail += '\n';
+                if (isFoul) {
+                    lineDetail = "foul " + lineDetail;
+                }
+                if (!rendered.insert(lineDetail).second) {
+                    continue;
+                }
+                if (!detail.empty()) {
+                    detail += '\n';
+                }
                 detail += std::move(lineDetail);
             }
             if (!importedSignatures.empty()) {
-                const auto standardName = moduleQualifier.empty()
-                    ? lookupName : moduleQualifier + "." + lookupName;
+                const auto standardName =
+                    moduleQualifier.empty() ? lookupName : moduleQualifier + "." + lookupName;
                 if (auto docs = m_standardDocumentation.find(standardName);
-                    docs != m_standardDocumentation.end())
+                    docs != m_standardDocumentation.end()) {
                     for (const auto& entry : docs->second) {
-                        if (documentation.find(entry) != std::string::npos)
+                        if (documentation.find(entry) != std::string::npos) {
                             continue;
-                        if (!documentation.empty()) documentation += "\n\n";
+                        }
+                        if (!documentation.empty()) {
+                            documentation += "\n\n";
+                        }
                         documentation += entry;
                     }
+                }
             }
         }
         // Whether what is being shown came from a DECLARATION of this name
@@ -4431,8 +5022,8 @@ private:
         if (detail.empty() || (expressionHover && expressionHover->localBinding)) {
             if (expressionHover) {
                 detail = expressionHover->completeDetail
-                    ? expressionHover->detail
-                    : word.text + " : " + expressionHover->detail;
+                             ? expressionHover->detail
+                             : word.text + " : " + expressionHover->detail;
                 detailFromExpression = true;
                 // Anything gathered above belonged to a same-named DECLARATION
                 // that this expression is not. The lookups run before the
@@ -4445,25 +5036,28 @@ private:
         // interpolation (`"${name}"`) never reaches the type map at all — but
         // its local definition was found, and THAT was typed. Answer with what
         // the binding says rather than the bare word "function name".
-        if (detail.empty() && localDefinition)
-            for (const auto& entry : document.hoverEntries)
-                if (entry.line ==
-                        static_cast<unsigned int>(localDefinition->line) &&
-                    entry.byteColumn ==
-                        static_cast<unsigned int>(localDefinition->column)) {
-                    detail = entry.completeDetail
-                        ? entry.detail
-                        : word.text + " : " + entry.detail;
+        if (detail.empty() && localDefinition) {
+            for (const auto& entry : document.hoverEntries) {
+                if (entry.line == static_cast<unsigned int>(localDefinition->line) &&
+                    entry.byteColumn == static_cast<unsigned int>(localDefinition->column)) {
+                    detail = entry.completeDetail ? entry.detail : word.text + " : " + entry.detail;
                     break;
                 }
+            }
+        }
         if (detail.empty() && symbol) {
             const char* kind = "symbol";
-            if (symbol->kind == semantic::SymbolKind::Module)
+            if (symbol->kind == semantic::SymbolKind::Module) {
                 kind = symbol->isCapability ? "capability" : "module";
-            else if (symbol->kind == semantic::SymbolKind::Type) kind = "type";
-            else if (symbol->kind == semantic::SymbolKind::Trait) kind = "trait";
-            else if (symbol->kind == semantic::SymbolKind::Record) kind = "record";
-            else if (symbol->kind == semantic::SymbolKind::Function) kind = "function";
+            } else if (symbol->kind == semantic::SymbolKind::Type) {
+                kind = "type";
+            } else if (symbol->kind == semantic::SymbolKind::Trait) {
+                kind = "trait";
+            } else if (symbol->kind == semantic::SymbolKind::Record) {
+                kind = "record";
+            } else if (symbol->kind == semantic::SymbolKind::Function) {
+                kind = "function";
+            }
             detail = std::string(kind) + " " + symbol->name;
         }
         bool documentationDecided = false;
@@ -4473,76 +5067,90 @@ private:
             std::istringstream existing(detail);
             std::string overload;
             while (std::getline(existing, overload)) {
-                if (overload.empty() || overload == selectedCallHover->detail)
+                if (overload.empty() || overload == selectedCallHover->detail) {
                     continue;
-                if (!remaining.empty()) remaining += '\n';
+                }
+                if (!remaining.empty()) {
+                    remaining += '\n';
+                }
                 remaining += overload;
             }
             detail = std::move(remaining);
             // The function the checker chose is the one documented, where its
             // prose is filed under it: not a same-named one found by the name.
-            if (!selectedCallHover->documentationKey.empty())
-                if (auto docs = m_standardDocumentation.find(
-                        selectedCallHover->documentationKey);
+            if (!selectedCallHover->documentationKey.empty()) {
+                if (auto docs = m_standardDocumentation.find(selectedCallHover->documentationKey);
                     docs != m_standardDocumentation.end()) {
                     documentationDecided = true;
                     documentation.clear();
                     for (const auto& entry : docs->second) {
-                        if (!documentation.empty()) documentation += "\n\n";
+                        if (!documentation.empty()) {
+                            documentation += "\n\n";
+                        }
                         documentation += entry;
                     }
                 }
+            }
         }
         if (documentation.empty() && !documentationDecided && !recordField && !mapKey &&
-            fieldDeclaration.empty() && !detailFromExpression)
+            fieldDeclaration.empty() && !detailFromExpression) {
             if (auto docs = document.documentation.find(lookupName);
-                docs != document.documentation.end())
+                docs != document.documentation.end()) {
                 for (const auto& entry : docs->second) {
-                    if (!documentation.empty()) documentation += "\n\n";
+                    if (!documentation.empty()) {
+                        documentation += "\n\n";
+                    }
                     documentation += entry;
                 }
+            }
+        }
         // A declaration of the program's own is not the standard library's
         // same-named one: `let add(a, b)` was shown with `Set.add`'s prose.
-        const bool ownDeclaration =
-            symbol && !symbol->definition.file.empty() &&
-            inWorkspace(std::string(symbol->definition.file));
-        if (documentation.empty() && !documentationDecided && !lexicalReference &&
-            !recordField && !ownDeclaration &&
-            !mapKey && fieldDeclaration.empty() && !detailFromExpression) {
-            const auto standardName = moduleQualifier.empty()
-                ? lookupName : moduleQualifier + "." + lookupName;
+        const bool ownDeclaration = symbol && !symbol->definition.file.empty() &&
+                                    inWorkspace(std::string(symbol->definition.file));
+        if (documentation.empty() && !documentationDecided && !lexicalReference && !recordField &&
+            !ownDeclaration && !mapKey && fieldDeclaration.empty() && !detailFromExpression) {
+            const auto standardName =
+                moduleQualifier.empty() ? lookupName : moduleQualifier + "." + lookupName;
             if (auto docs = m_standardDocumentation.find(standardName);
-                docs != m_standardDocumentation.end())
+                docs != m_standardDocumentation.end()) {
                 for (const auto& entry : docs->second) {
-                    if (!documentation.empty()) documentation += "\n\n";
+                    if (!documentation.empty()) {
+                        documentation += "\n\n";
+                    }
                     documentation += entry;
                 }
+            }
         }
-        if (detail.empty() && selectedCallDetail.empty()) return {};
+        if (detail.empty() && selectedCallDetail.empty()) {
+            return {};
+        }
 
         std::string markdown;
         if (!selectedCallDetail.empty()) {
-            markdown = "**Selected overload**\n\n```kex\n" +
-                       selectedCallDetail + "\n```";
-            if (!detail.empty())
-                markdown += "\n\n**Other overloads**\n\n```kex\n" +
-                            detail + "\n```";
+            markdown = "**Selected overload**\n\n```kex\n" + selectedCallDetail + "\n```";
+            if (!detail.empty()) {
+                markdown += "\n\n**Other overloads**\n\n```kex\n" + detail + "\n```";
+            }
         } else {
             markdown = "```kex\n" + detail + "\n```";
         }
         // `push!` is not a function: the `!` is a marker that rebinds the
         // receiver, and what it calls is `push`. Signatures above are rendered
         // under that real name, so say where the bang went.
-        if (lookupName != word.text)
-            markdown += "\n\n`" + word.text + "` calls `" + lookupName +
-                        "` and rebinds the receiver.";
-        if (!documentation.empty()) markdown += "\n\n" + renderRdoc(documentation);
-        SourceLocation start{document.path,
-                             static_cast<int>(params.position.line + 1),
-                             static_cast<int>(word.byteColumn)};
-        SourceLocation end{document.path,
-                          static_cast<int>(params.position.line + 1),
-                          static_cast<int>(word.byteColumn + word.byteLength)};
+        if (lookupName != word.text) {
+            markdown +=
+                "\n\n`" + word.text + "` calls `" + lookupName + "` and rebinds the receiver.";
+        }
+        if (!documentation.empty()) {
+            markdown += "\n\n" + renderRdoc(documentation);
+        }
+        SourceLocation start{
+            document.path, static_cast<int>(params.position.line + 1),
+            static_cast<int>(word.byteColumn)};
+        SourceLocation end{
+            document.path, static_cast<int>(params.position.line + 1),
+            static_cast<int>(word.byteColumn + word.byteLength)};
         // Both carry their byte offset in the SYNTHETIC source (the same
         // one `hoverWordOffset` was computed from above) so a `.ket`
         // document's range can be translated back through its hole map,
@@ -4551,21 +5159,22 @@ private:
         end.startOffset = static_cast<int>(hoverWordOffset + word.byteLength);
         const auto translatedStart = translateKetLocation(document, start);
         const auto translatedEnd = translateKetLocation(document, end);
-        if (!document.ketOriginalText.empty() &&
-            (!translatedStart || !translatedEnd))
+        if (!document.ketOriginalText.empty() && (!translatedStart || !translatedEnd)) {
             return {};
-        const std::string* rangeSource = document.ketOriginalText.empty()
-            ? &document.text
-            : &document.ketOriginalText;
+        }
+        const std::string* rangeSource =
+            document.ketOriginalText.empty() ? &document.text : &document.ketOriginalText;
         return ::lsp::Hover{
-            .contents = ::lsp::MarkupContent{
-                .kind = ::lsp::MarkupKind::Markdown,
-                .value = std::move(markdown),
-            },
-            .range = ::lsp::Range{
-                .start = protocolPosition(*translatedStart, rangeSource),
-                .end = protocolPosition(*translatedEnd, rangeSource),
-            },
+            .contents =
+                ::lsp::MarkupContent{
+                    .kind = ::lsp::MarkupKind::Markdown,
+                    .value = std::move(markdown),
+                },
+            .range =
+                ::lsp::Range{
+                    .start = protocolPosition(*translatedStart, rangeSource),
+                    .end = protocolPosition(*translatedEnd, rangeSource),
+                },
         };
     }
 
@@ -4573,102 +5182,121 @@ private:
         -> ::lsp::requests::TextDocument_SignatureHelp::Result {
         verifyInitialized();
         const auto found = m_documents.find(params.textDocument.uri.toString());
-        if (found == m_documents.end()) return {};
+        if (found == m_documents.end()) {
+            return {};
+        }
         const auto& document = found->second;
         size_t lineStart = 0;
         for (unsigned int line = 0; line < params.position.line; ++line) {
             const auto newline = document.text.find('\n', lineStart);
-            if (newline == std::string::npos) return {};
+            if (newline == std::string::npos) {
+                return {};
+            }
             lineStart = newline + 1;
         }
         const auto lineEndPosition = document.text.find('\n', lineStart);
-        const auto lineEnd = lineEndPosition == std::string::npos
-            ? document.text.size() : lineEndPosition;
-        const auto cursor = byteOffsetForUtf16Column(
-            document.text, lineStart, lineEnd, params.position.character);
+        const auto lineEnd =
+            lineEndPosition == std::string::npos ? document.text.size() : lineEndPosition;
+        const auto cursor =
+            byteOffsetForUtf16Column(document.text, lineStart, lineEnd, params.position.character);
         size_t depth = 0;
         size_t open = std::string::npos;
         for (size_t i = cursor; i > 0; --i) {
-            if (document.text[i - 1] == ')') ++depth;
-            else if (document.text[i - 1] == '(') {
-                if (depth) --depth;
-                else { open = i - 1; break; }
+            if (document.text[i - 1] == ')') {
+                ++depth;
+            } else if (document.text[i - 1] == '(') {
+                if (depth) {
+                    --depth;
+                } else {
+                    open = i - 1;
+                    break;
+                }
             }
         }
-        if (open == std::string::npos) return {};
+        if (open == std::string::npos) {
+            return {};
+        }
         size_t methodEnd = open;
-        while (methodEnd && std::isspace(
-                   static_cast<unsigned char>(document.text[methodEnd - 1])))
+        while (methodEnd &&
+               std::isspace(static_cast<unsigned char>(document.text[methodEnd - 1]))) {
             --methodEnd;
+        }
         size_t methodStart = methodEnd;
-        while (methodStart && (std::isalnum(static_cast<unsigned char>(
-                   document.text[methodStart - 1])) ||
-                   document.text[methodStart - 1] == '_' ||
-                   document.text[methodStart - 1] == '?')) --methodStart;
-        const auto method = document.text.substr(
-            methodStart, methodEnd - methodStart);
-        const bool hasReceiver = methodStart > 0 &&
-            document.text[methodStart - 1] == '.';
+        while (methodStart &&
+               (std::isalnum(static_cast<unsigned char>(document.text[methodStart - 1])) ||
+                document.text[methodStart - 1] == '_' || document.text[methodStart - 1] == '?')) {
+            --methodStart;
+        }
+        const auto method = document.text.substr(methodStart, methodEnd - methodStart);
+        const bool hasReceiver = methodStart > 0 && document.text[methodStart - 1] == '.';
         std::string receiver;
         std::string qualifier;
         if (hasReceiver) {
             const size_t receiverEnd = methodStart - 1;
             size_t receiverStart = receiverEnd;
-            while (receiverStart && (std::isalnum(static_cast<unsigned char>(
-                       document.text[receiverStart - 1])) ||
-                       document.text[receiverStart - 1] == '_' ||
-                       document.text[receiverStart - 1] == '.')) --receiverStart;
-            receiver = document.text.substr(receiverStart,
-                                            receiverEnd - receiverStart);
+            while (receiverStart &&
+                   (std::isalnum(static_cast<unsigned char>(document.text[receiverStart - 1])) ||
+                    document.text[receiverStart - 1] == '_' ||
+                    document.text[receiverStart - 1] == '.')) {
+                --receiverStart;
+            }
+            receiver = document.text.substr(receiverStart, receiverEnd - receiverStart);
             if (auto known = document.localReceiverTypes.find(receiver);
-                known != document.localReceiverTypes.end())
+                known != document.localReceiverTypes.end()) {
                 qualifier = known->second;
-            else
+            } else {
                 qualifier = receiver;
+            }
         }
 
         ::lsp::Array<::lsp::SignatureInformation> signatures;
         auto append = [&](const std::vector<std::string>& names,
                           const std::vector<semantic::TypePtr>& types,
-                          const semantic::TypePtr& result,
-                          bool addWithin = false) {
+                          const semantic::TypePtr& result, bool addWithin = false) {
             auto displayedNames = names;
             // Type-only `:>` declarations carry no parameter names in their
             // interface metadata even though the matching implementation does
             // (`at :> Integer` / `let at(i)`). Completion already recovers
             // those names from the stdlib source index; signature help must do
             // the same or it renders a misleading `at()` signature.
-            if (displayedNames.empty())
+            if (displayedNames.empty()) {
                 if (auto known = m_standardParameterNames.find(method);
                     known != m_standardParameterNames.end()) {
-                    const auto visibleCount = types.size() -
-                        (hasReceiver && !types.empty() ? 1 : 0);
-                    for (const auto& candidate : known->second)
+                    const auto visibleCount =
+                        types.size() - (hasReceiver && !types.empty() ? 1 : 0);
+                    for (const auto& candidate : known->second) {
                         if (candidate.size() == visibleCount) {
                             displayedNames = candidate;
                             break;
                         }
+                    }
                 }
+            }
             ::lsp::Array<::lsp::ParameterInformation> parameters;
             std::string label = method + "(";
-            const size_t offset = types.size() > displayedNames.size()
-                ? types.size() - displayedNames.size() : 0;
+            const size_t offset =
+                types.size() > displayedNames.size() ? types.size() - displayedNames.size() : 0;
             for (size_t i = 0; i < displayedNames.size(); ++i) {
-                if (i) label += ", ";
-                const auto parameter = displayedNames[i] + ": " +
-                    (i + offset < types.size()
-                        ? semantic::typeToString(types[i + offset]) : "Any");
+                if (i) {
+                    label += ", ";
+                }
+                const auto parameter =
+                    displayedNames[i] + ": " +
+                    (i + offset < types.size() ? semantic::typeToString(types[i + offset]) : "Any");
                 label += parameter;
                 parameters.push_back({.label = parameter});
             }
             if (addWithin) {
-                if (!displayedNames.empty()) label += ", ";
+                if (!displayedNames.empty()) {
+                    label += ", ";
+                }
                 label += "within: Integer?";
-                parameters.push_back({
-                    .label = ::lsp::String{"within: Integer?"}});
+                parameters.push_back({.label = ::lsp::String{"within: Integer?"}});
             }
             label += ')';
-            if (result) label += " -> " + semantic::typeToString(result);
+            if (result) {
+                label += " -> " + semantic::typeToString(result);
+            }
             signatures.push_back({
                 .label = std::move(label),
                 .parameters = std::move(parameters),
@@ -4677,10 +5305,12 @@ private:
 
         const semantic::SymbolInfo* local = nullptr;
         if (hasReceiver && !qualifier.empty()) {
-            if (qualifier.rfind("Server<", 0) == 0 && qualifier.ends_with('>'))
-                local = m_db.receiverSymbol(
-                    qualifier.substr(7, qualifier.size() - 8), method);
-            if (!local) local = m_db.receiverSymbol(qualifier, method);
+            if (qualifier.rfind("Server<", 0) == 0 && qualifier.ends_with('>')) {
+                local = m_db.receiverSymbol(qualifier.substr(7, qualifier.size() - 8), method);
+            }
+            if (!local) {
+                local = m_db.receiverSymbol(qualifier, method);
+            }
         } else {
             local = m_db.findSymbol(method, document.path);
         }
@@ -4692,54 +5322,71 @@ private:
                 types.push_back(type);
             }
             semantic::TypePtr result;
-            if (local->type)
-                if (const auto* function =
-                        std::get_if<semantic::FuncType>(&local->type->kind))
+            if (local->type) {
+                if (const auto* function = std::get_if<semantic::FuncType>(&local->type->kind)) {
                     result = function->result;
+                }
+            }
             append(names, types, result, local->isServingSlot);
         }
 
         if (signatures.empty() && hasReceiver) {
             if (auto module = m_interfaces.modules.find(qualifier);
-                module != m_interfaces.modules.end())
+                module != m_interfaces.modules.end()) {
                 if (auto overloads = module->second.exports.find(method);
-                    overloads != module->second.exports.end())
-                    for (const auto& function : overloads->second)
-                        append(function.paramNames, function.signature.params,
-                               function.signature.result);
+                    overloads != module->second.exports.end()) {
+                    for (const auto& function : overloads->second) {
+                        append(
+                            function.paramNames, function.signature.params,
+                            function.signature.result);
+                    }
+                }
+            }
             if (auto overloads = m_interfaces.receiverFunctions.find(method);
-                overloads != m_interfaces.receiverFunctions.end())
+                overloads != m_interfaces.receiverFunctions.end()) {
                 for (const auto& function : overloads->second) {
-                    if (function.signature.params.empty()) continue;
-                    const auto declared = semantic::typeToString(
-                        function.signature.params.front());
+                    if (function.signature.params.empty()) {
+                        continue;
+                    }
+                    const auto declared = semantic::typeToString(function.signature.params.front());
                     const auto generic = declared.find('<');
-                    const auto expected = generic == std::string::npos
-                        ? declared : declared.substr(0, generic);
+                    const auto expected =
+                        generic == std::string::npos ? declared : declared.substr(0, generic);
                     const auto actualGeneric = qualifier.find('<');
                     const auto actual = actualGeneric == std::string::npos
-                        ? qualifier : qualifier.substr(0, actualGeneric);
-                    if (declared != qualifier && expected != actual) continue;
-                    append(function.paramNames, function.signature.params,
-                           function.signature.result);
+                                            ? qualifier
+                                            : qualifier.substr(0, actualGeneric);
+                    if (declared != qualifier && expected != actual) {
+                        continue;
+                    }
+                    append(
+                        function.paramNames, function.signature.params, function.signature.result);
                 }
+            }
         } else if (signatures.empty()) {
             for (const auto& [_, module] : m_interfaces.modules) {
-                if (!module.automaticImport) continue;
+                if (!module.automaticImport) {
+                    continue;
+                }
                 if (auto overloads = module.exports.find(method);
-                    overloads != module.exports.end())
-                    for (const auto& function : overloads->second)
-                        append(function.paramNames, function.signature.params,
-                               function.signature.result);
+                    overloads != module.exports.end()) {
+                    for (const auto& function : overloads->second) {
+                        append(
+                            function.paramNames, function.signature.params,
+                            function.signature.result);
+                    }
+                }
             }
         }
-        if (signatures.empty()) return {};
+        if (signatures.empty()) {
+            return {};
+        }
         const auto supplied = document.text.substr(open + 1, cursor - open - 1);
         const auto active = std::min<size_t>(
             std::count(supplied.begin(), supplied.end(), ','),
-            signatures.front().parameters &&
-                    !signatures.front().parameters->empty()
-                ? signatures.front().parameters->size() - 1 : 0);
+            signatures.front().parameters && !signatures.front().parameters->empty()
+                ? signatures.front().parameters->size() - 1
+                : 0);
         return ::lsp::SignatureHelp{
             .signatures = std::move(signatures),
             .activeSignature = 0,
@@ -4752,20 +5399,25 @@ private:
         verifyInitialized();
         const auto key = params.textDocument.uri.toString();
         const auto found = m_documents.find(key);
-        if (found == m_documents.end()) return {};
+        if (found == m_documents.end()) {
+            return {};
+        }
         const auto& document = found->second;
         // Same translation hover/completion do: the incoming position is in
         // the `.ket` template's own coordinates (kexhq/kex#317).
         if (!document.ketOriginalText.empty()) {
             auto synthetic = translateKetPositionToSynthetic(document, params.position);
-            if (!synthetic) return {};
+            if (!synthetic) {
+                return {};
+            }
             params.position = *synthetic;
         }
-        const auto word = wordAt(document.text, params.position.line,
-                                 params.position.character);
-        if (word.text.empty()) return {};
-        const auto qualifier = moduleQualifierBeforeWord(
-            document.text, params.position.line, word.byteColumn);
+        const auto word = wordAt(document.text, params.position.line, params.position.character);
+        if (word.text.empty()) {
+            return {};
+        }
+        const auto qualifier =
+            moduleQualifierBeforeWord(document.text, params.position.line, word.byteColumn);
         // A local, as the checker bound it: a use leads to its binding, and a
         // binding is its own definition. By name a `let offset` led to some
         // stdlib record's `offset` field.
@@ -4773,68 +5425,79 @@ private:
             const auto at = Document::receiverKey(params.position.line + 1, word.byteColumn);
             std::optional<std::pair<int, int>> bound;
             if (const auto use = document.localDefinitions.find(at);
-                use != document.localDefinitions.end())
+                use != document.localDefinitions.end()) {
                 bound = use->second;
-            else if (document.bindingSites.contains(at))
-                bound = std::pair{static_cast<int>(params.position.line + 1),
-                                  static_cast<int>(word.byteColumn)};
+            } else if (document.bindingSites.contains(at)) {
+                bound = std::pair{
+                    static_cast<int>(params.position.line + 1), static_cast<int>(word.byteColumn)};
+            }
             if (bound) {
                 SourceLocation binding{document.path, bound->first, bound->second};
-                if (auto location = definitionLocation(document, binding, word.text.size(),
-                                                       &document.text))
+                if (auto location =
+                        definitionLocation(document, binding, word.text.size(), &document.text)) {
                     return ::lsp::Definition{std::move(*location)};
+                }
                 return {};
             }
             // A field read: the field's line in the record the checker read
             // it of.
             if (const auto read = document.fieldReads.find(at); read != document.fieldReads.end()) {
                 const auto dot = read->second.rfind('.');
-                const auto* record = dot == std::string::npos
-                    ? m_db.findSymbol(read->second, document.path)
-                    : m_db.symbolInModule(read->second.substr(0, dot), read->second.substr(dot + 1));
+                const auto* record =
+                    dot == std::string::npos
+                        ? m_db.findSymbol(read->second, document.path)
+                        : m_db.symbolInModule(
+                              read->second.substr(0, dot), read->second.substr(dot + 1));
                 if (record && record->kind == semantic::SymbolKind::Record &&
                     !record->definition.file.empty()) {
                     const auto* state = m_db.fileState(std::string(record->definition.file));
-                    if (state)
-                        if (auto field = fieldDeclaration(state->source, record->definition, word.text))
-                            if (auto location = definitionLocation(document, *field, word.text.size(),
-                                                                   &state->source))
+                    if (state) {
+                        if (auto field =
+                                fieldDeclaration(state->source, record->definition, word.text)) {
+                            if (auto location = definitionLocation(
+                                    document, *field, word.text.size(), &state->source)) {
                                 return ::lsp::Definition{std::move(*location)};
+                            }
+                        }
+                    }
                 }
             }
         }
-        const semantic::SymbolInfo* symbol = m_db.symbolAt(
-            document.path, params.position.line + 1, word.byteColumn);
+        const semantic::SymbolInfo* symbol =
+            m_db.symbolAt(document.path, params.position.line + 1, word.byteColumn);
         // The checker's answer for this name, when the index has one; the
         // lookups below by name only stand in where it has none.
         // A call the checker decided is a type's own `make` function: that type's.
         // By name, the text search took the nearest `let render` above the call,
         // which is some other type's whenever theirs is declared later.
-        if (!symbol && qualifier.empty())
-            if (const auto own = document.ownMethodCalls.find(Document::receiverKey(
-                    params.position.line + 1, word.byteColumn));
+        if (!symbol && qualifier.empty()) {
+            if (const auto own = document.ownMethodCalls.find(
+                    Document::receiverKey(params.position.line + 1, word.byteColumn));
                 own != document.ownMethodCalls.end()) {
                 symbol = m_db.receiverSymbol(own->second, word.text);
-                if (const auto dot = own->second.rfind('.'); !symbol && dot != std::string::npos)
+                if (const auto dot = own->second.rfind('.'); !symbol && dot != std::string::npos) {
                     symbol = m_db.receiverSymbol(own->second.substr(dot + 1), word.text);
+                }
             }
+        }
         if (!symbol && !qualifier.empty()) {
             symbol = m_db.symbolInModule(qualifier, word.text);
             // Source collection currently stores a nested module under its
             // local name (`File`) while imported interfaces expose its fully
             // qualified identity (`FS.File`). Keep navigation useful until
             // those indexes share one canonical module key.
-            if (!symbol)
-                if (const auto dot = qualifier.rfind('.');
-                    dot != std::string::npos)
-                    symbol = m_db.symbolInModule(
-                        qualifier.substr(dot + 1), word.text);
+            if (!symbol) {
+                if (const auto dot = qualifier.rfind('.'); dot != std::string::npos) {
+                    symbol = m_db.symbolInModule(qualifier.substr(dot + 1), word.text);
+                }
+            }
         }
         size_t lineStart = 0;
-        for (unsigned int current = 0; current < params.position.line;
-             ++current) {
+        for (unsigned int current = 0; current < params.position.line; ++current) {
             const auto newline = document.text.find('\n', lineStart);
-            if (newline == std::string::npos) break;
+            if (newline == std::string::npos) {
+                break;
+            }
             lineStart = newline + 1;
         }
         // `t.text(…)` is a function of the receiver's type, found through
@@ -4843,21 +5506,19 @@ private:
         // a dependency — and a block parameter's receiver, typed only by the
         // block it is in, never resolved at all (kexhq/kex#541).
         if (!symbol && qualifier.empty()) {
-            const auto wordEnd =
-                lineStart + word.byteColumn - 1 + word.byteLength;
+            const auto wordEnd = lineStart + word.byteColumn - 1 + word.byteLength;
             const auto receiver = scanDotReceiver(document.text, wordEnd);
             if (receiver.valid) {
-                auto type = receiverQualifier(document, receiver, wordEnd,
-                                              &m_interfaces,
-                                              documentModuleRoots(document.path));
-                if (const auto angle = type.find('<'); angle != std::string::npos)
+                auto type = receiverQualifier(
+                    document, receiver, wordEnd, &m_interfaces, documentModuleRoots(document.path));
+                if (const auto angle = type.find('<'); angle != std::string::npos) {
                     type.resize(angle);
+                }
                 if (!type.empty()) {
                     symbol = m_db.receiverSymbol(type, word.text);
-                    if (const auto dot = type.rfind('.');
-                        !symbol && dot != std::string::npos)
-                        symbol = m_db.receiverSymbol(type.substr(dot + 1),
-                                                     word.text);
+                    if (const auto dot = type.rfind('.'); !symbol && dot != std::string::npos) {
+                        symbol = m_db.receiverSymbol(type.substr(dot + 1), word.text);
+                    }
                 }
             }
         }
@@ -4865,37 +5526,42 @@ private:
         // unfinished `lines.`), has no answer for a name it binds anew: found
         // in the text until it parses and checks again.
         const auto* parsed = m_db.fileState(document.path);
-        const bool unfinished = !document.checked ||
-                                (parsed && !parsed->sourceDiagnostics.empty());
+        const bool unfinished = !document.checked || (parsed && !parsed->sourceDiagnostics.empty());
         if (!symbol && qualifier.empty() && unfinished) {
             const auto referenceOffset = lineStart + word.byteColumn - 1;
             if (auto local = sourceLocalDefinition(
                     document.text, document.path, word.text,
                     referenceOffset ? referenceOffset - 1 : 0)) {
-                if (auto location = definitionLocation(
-                        document, *local, word.text.size(), &document.text))
+                if (auto location =
+                        definitionLocation(document, *local, word.text.size(), &document.text)) {
                     return ::lsp::Definition{std::move(*location)};
+                }
                 return {};
             }
         }
-        if (!symbol || symbol->definition.file.empty()) return {};
-        const auto* state = m_db.fileState(
-            std::string(symbol->definition.file));
+        if (!symbol || symbol->definition.file.empty()) {
+            return {};
+        }
+        const auto* state = m_db.fileState(std::string(symbol->definition.file));
         const std::string* source = state ? &state->source : nullptr;
         // A record answers for its fields: the field's own line, in that
         // record's declaration.
         if (symbol->kind == semantic::SymbolKind::Record && symbol->name != word.text && source &&
-            std::any_of(symbol->fields.begin(), symbol->fields.end(),
-                        [&](const auto& field) { return field.first == word.text; }))
-            if (auto field = fieldDeclaration(*source, symbol->definition, word.text))
-                if (auto location = definitionLocation(document, *field, word.text.size(), source))
+            std::any_of(symbol->fields.begin(), symbol->fields.end(), [&](const auto& field) {
+                return field.first == word.text;
+            })) {
+            if (auto field = fieldDeclaration(*source, symbol->definition, word.text)) {
+                if (auto location =
+                        definitionLocation(document, *field, word.text.size(), source)) {
                     return ::lsp::Definition{std::move(*location)};
-        const auto declared = source
-            ? atDeclaredName(*source, symbol->definition, symbol->name)
-            : symbol->definition;
-        if (auto location = definitionLocation(
-                document, declared, symbol->name.size(), source))
+                }
+            }
+        }
+        const auto declared =
+            source ? atDeclaredName(*source, symbol->definition, symbol->name) : symbol->definition;
+        if (auto location = definitionLocation(document, declared, symbol->name.size(), source)) {
             return ::lsp::Definition{std::move(*location)};
+        }
         return {};
     }
 
@@ -4904,10 +5570,10 @@ private:
     // says what rename may do with it.
     struct ReferenceAnswer {
         enum class Kind {
-            None,      // nothing the checker bound the name to
-            Local,     // a local, as the checker bound it
-            Declared,  // a declaration the name index holds
-            Imported,  // a receiver function of an imported module
+            None,     // nothing the checker bound the name to
+            Local,    // a local, as the checker bound it
+            Declared, // a declaration the name index holds
+            Imported, // a receiver function of an imported module
         };
         Kind kind = Kind::None;
         std::string word;
@@ -4915,68 +5581,79 @@ private:
         std::vector<SourceLocation> locations;
     };
 
-    auto referenceAnswer(const Document& document, const ::lsp::Position& position,
-                         bool includeDeclaration) -> ReferenceAnswer {
+    auto referenceAnswer(
+        const Document& document, const ::lsp::Position& position, bool includeDeclaration)
+        -> ReferenceAnswer {
         ReferenceAnswer answer;
         const auto word = wordAt(document.text, position.line, position.character);
-        if (word.text.empty()) return answer;
+        if (word.text.empty()) {
+            return answer;
+        }
         answer.word = word.text;
 
-        const auto qualifier = moduleQualifierBeforeWord(
-            document.text, position.line, word.byteColumn);
-        const semantic::SymbolInfo* symbol = m_db.symbolAt(
-            document.path, position.line + 1, word.byteColumn);
+        const auto qualifier =
+            moduleQualifierBeforeWord(document.text, position.line, word.byteColumn);
+        const semantic::SymbolInfo* symbol =
+            m_db.symbolAt(document.path, position.line + 1, word.byteColumn);
         // The checker's answer for this name, when the index has one; the
         // lookups below by name only stand in where it has none.
         if (!symbol && !qualifier.empty()) {
             symbol = m_db.symbolInModule(qualifier, word.text);
-            if (!symbol)
-                if (const auto dot = qualifier.rfind('.');
-                    dot != std::string::npos)
-                    symbol = m_db.symbolInModule(
-                        qualifier.substr(dot + 1), word.text);
+            if (!symbol) {
+                if (const auto dot = qualifier.rfind('.'); dot != std::string::npos) {
+                    symbol = m_db.symbolInModule(qualifier.substr(dot + 1), word.text);
+                }
+            }
         }
 
         ensureReferenceIndex(word.text);
         if (m_referenceIndexReady) {
             const semantic::SymbolInfo* indexed = nullptr;
             if (symbol) {
-                if (!symbol->module.empty())
-                    indexed = m_referenceDb.symbolInModule(
-                        symbol->module, symbol->name);
-                else if (!symbol->makeTarget.empty())
-                    indexed = m_referenceDb.receiverSymbol(
-                        symbol->makeTarget, symbol->name);
-                else
+                if (!symbol->module.empty()) {
+                    indexed = m_referenceDb.symbolInModule(symbol->module, symbol->name);
+                } else if (!symbol->makeTarget.empty()) {
+                    indexed = m_referenceDb.receiverSymbol(symbol->makeTarget, symbol->name);
+                } else {
                     indexed = m_referenceDb.findSymbol(
                         symbol->name, std::string(symbol->definition.file));
+                }
             } else if (!qualifier.empty()) {
                 indexed = m_referenceDb.symbolInModule(qualifier, word.text);
-                if (!indexed)
-                    if (const auto dot = qualifier.rfind('.');
-                        dot != std::string::npos)
-                        indexed = m_referenceDb.symbolInModule(
-                            qualifier.substr(dot + 1), word.text);
+                if (!indexed) {
+                    if (const auto dot = qualifier.rfind('.'); dot != std::string::npos) {
+                        indexed =
+                            m_referenceDb.symbolInModule(qualifier.substr(dot + 1), word.text);
+                    }
+                }
             }
-            if (indexed) symbol = indexed;
+            if (indexed) {
+                symbol = indexed;
+            }
         }
 
         std::unordered_set<std::string> seen;
         auto append = [&](const SourceLocation& location) {
-            const auto identity = std::string(location.file) + ":" +
-                std::to_string(location.line) + ":" +
-                std::to_string(location.column);
-            if (seen.insert(identity).second) answer.locations.push_back(location);
+            const auto identity = std::string(location.file) + ":" + std::to_string(location.line) +
+                                  ":" + std::to_string(location.column);
+            if (seen.insert(identity).second) {
+                answer.locations.push_back(location);
+            }
         };
         auto spellsWord = [&](const SourceLocation& location) {
             const auto* state = m_db.fileState(std::string(location.file));
-            if (!state)
+            if (!state) {
                 state = m_referenceDb.fileState(std::string(location.file));
-            if (!state || location.line < 1 || location.column < 1) return false;
+            }
+            if (!state || location.line < 1 || location.column < 1) {
+                return false;
+            }
             size_t offset = 0;
             for (int line = 1; line < location.line; ++line) {
                 const auto newline = state->source.find('\n', offset);
-                if (newline == std::string::npos) return false;
+                if (newline == std::string::npos) {
+                    return false;
+                }
                 offset = newline + 1;
             }
             offset += static_cast<size_t>(location.column - 1);
@@ -4992,75 +5669,93 @@ private:
             const auto at = Document::receiverKey(position.line + 1, word.byteColumn);
             std::optional<std::pair<int, int>> bound;
             if (const auto use = document.localDefinitions.find(at);
-                use != document.localDefinitions.end())
+                use != document.localDefinitions.end()) {
                 bound = use->second;
-            else if (document.bindingSites.contains(at))
-                bound = std::pair{static_cast<int>(position.line + 1),
-                                  static_cast<int>(word.byteColumn)};
+            } else if (document.bindingSites.contains(at)) {
+                bound = std::pair{
+                    static_cast<int>(position.line + 1), static_cast<int>(word.byteColumn)};
+            }
             if (bound) {
-                if (includeDeclaration)
+                if (includeDeclaration) {
                     append(SourceLocation{document.path, bound->first, bound->second});
+                }
                 std::vector<SourceLocation> uses;
-                for (const auto& [key, binding] : document.localDefinitions)
-                    if (binding == *bound)
-                        uses.push_back(SourceLocation{document.path,
-                                                      static_cast<int>(key >> 32),
-                                                      static_cast<int>(key & 0xFFFFFFFFu)});
+                for (const auto& [key, binding] : document.localDefinitions) {
+                    if (binding == *bound) {
+                        uses.push_back(
+                            SourceLocation{
+                                document.path, static_cast<int>(key >> 32),
+                                static_cast<int>(key & 0xFFFFFFFFu)});
+                    }
+                }
                 std::sort(uses.begin(), uses.end(), [](const auto& a, const auto& b) {
                     return std::pair{a.line, a.column} < std::pair{b.line, b.column};
                 });
-                for (const auto& use : uses) append(use);
+                for (const auto& use : uses) {
+                    append(use);
+                }
                 answer.kind = ReferenceAnswer::Kind::Local;
                 return answer;
             }
         }
         if (symbol) {
-            if (includeDeclaration) append(symbol->definition);
-            for (const auto& reference : symbol->references)
-                if (spellsWord(reference)) append(reference);
+            if (includeDeclaration) {
+                append(symbol->definition);
+            }
+            for (const auto& reference : symbol->references) {
+                if (spellsWord(reference)) {
+                    append(reference);
+                }
+            }
 
             if (!qualifier.empty()) {
                 const auto ownerKey = qualifier + "." + word.text;
-                for (const auto& reference : m_indexedCallReferences)
-                    if (reference.ownerKey == ownerKey)
+                for (const auto& reference : m_indexedCallReferences) {
+                    if (reference.ownerKey == ownerKey) {
                         append(reference.location);
+                    }
+                }
             }
             answer.kind = ReferenceAnswer::Kind::Declared;
             answer.symbol = symbol;
             return answer;
         }
 
-
         // Imported receiver methods have no source SymbolInfo in the current
         // compilation unit. The analyzer still records the exact selected
         // owner for every call; use it to keep overload families such as
         // Optional.or and Bits.or separate.
         const Document::HoverEntry* selectedCall = nullptr;
-        for (const auto& entry : document.selectedCallEntries)
-            if (entry.line == position.line + 1 &&
-                word.byteColumn >= entry.byteColumn &&
+        for (const auto& entry : document.selectedCallEntries) {
+            if (entry.line == position.line + 1 && word.byteColumn >= entry.byteColumn &&
                 word.byteColumn < entry.byteColumn + entry.byteLength) {
                 selectedCall = &entry;
                 break;
             }
+        }
         if (selectedCall && !selectedCall->documentationKey.empty()) {
             const auto separator = selectedCall->documentationKey.rfind('.');
-            if (includeDeclaration &&
-                separator != std::string::npos)
+            if (includeDeclaration && separator != std::string::npos) {
                 if (const auto* declaration = m_db.receiverSymbol(
-                        selectedCall->documentationKey.substr(0, separator),
-                        word.text))
+                        selectedCall->documentationKey.substr(0, separator), word.text)) {
                     append(declaration->definition);
-            for (const auto& [_, open] : m_documents)
-                for (const auto& entry : open.selectedCallEntries)
-                    if (entry.documentationKey ==
-                        selectedCall->documentationKey)
-                        append(SourceLocation{
-                            open.path, static_cast<int>(entry.line),
-                            static_cast<int>(entry.byteColumn)});
-            for (const auto& reference : m_indexedCallReferences)
-                if (reference.ownerKey == selectedCall->documentationKey)
+                }
+            }
+            for (const auto& [_, open] : m_documents) {
+                for (const auto& entry : open.selectedCallEntries) {
+                    if (entry.documentationKey == selectedCall->documentationKey) {
+                        append(
+                            SourceLocation{
+                                open.path, static_cast<int>(entry.line),
+                                static_cast<int>(entry.byteColumn)});
+                    }
+                }
+            }
+            for (const auto& reference : m_indexedCallReferences) {
+                if (reference.ownerKey == selectedCall->documentationKey) {
                     append(reference.location);
+                }
+            }
             answer.kind = ReferenceAnswer::Kind::Imported;
             return answer;
         }
@@ -5073,12 +5768,15 @@ private:
         -> ::lsp::requests::TextDocument_References::Result {
         verifyInitialized();
         const auto found = m_documents.find(params.textDocument.uri.toString());
-        if (found == m_documents.end()) return ::lsp::Array<::lsp::Location>{};
-        const auto answer = referenceAnswer(found->second, params.position,
-                                            params.context.includeDeclaration);
+        if (found == m_documents.end()) {
+            return ::lsp::Array<::lsp::Location>{};
+        }
+        const auto answer =
+            referenceAnswer(found->second, params.position, params.context.includeDeclaration);
         ::lsp::Array<::lsp::Location> result;
-        for (const auto& location : answer.locations)
+        for (const auto& location : answer.locations) {
             result.push_back(protocolLocation(location, answer.word));
+        }
         return result;
     }
 
@@ -5086,16 +5784,19 @@ private:
     auto protocolLocation(const SourceLocation& location, std::string_view name)
         -> ::lsp::Location {
         const auto* state = m_db.fileState(std::string(location.file));
-        if (!state) state = m_referenceDb.fileState(std::string(location.file));
+        if (!state) {
+            state = m_referenceDb.fileState(std::string(location.file));
+        }
         const std::string* source = state ? &state->source : nullptr;
         auto end = location;
         end.column += static_cast<int>(name.size());
         return {
             .uri = ::lsp::Uri::fileUriFromPath(location.file),
-            .range = {
-                .start = protocolPosition(location, source),
-                .end = protocolPosition(end, source),
-            },
+            .range =
+                {
+                    .start = protocolPosition(location, source),
+                    .end = protocolPosition(end, source),
+                },
         };
     }
 
@@ -5105,41 +5806,52 @@ private:
     // renamed by its spelling.
     auto renameRefusal(const Document& document, const ReferenceAnswer& answer) const
         -> std::optional<std::string> {
-        if (answer.word.empty()) return "There is no name here to rename.";
-        if (!document.ketSegments.empty())
+        if (answer.word.empty()) {
+            return "There is no name here to rename.";
+        }
+        if (!document.ketSegments.empty()) {
             return "Renaming is not supported in `.ket` templates yet.";
+        }
         const auto& word = answer.word;
-        if (kex::startsUppercase(word))
+        if (kex::startsUppercase(word)) {
             return "Renaming types, modules and constants is not supported yet: `" + word +
                    "`'s uses in annotations are not all known to the checker's index.";
-        switch (answer.kind) {
-        case ReferenceAnswer::Kind::None:
-            return "`" + word + "` is nothing the checker resolved here.";
-        case ReferenceAnswer::Kind::Imported:
-            return "`" + word + "` is declared outside this workspace.";
-        case ReferenceAnswer::Kind::Local:
-            break;
-        case ReferenceAnswer::Kind::Declared:
-            if (!answer.symbol || answer.symbol->kind != semantic::SymbolKind::Function)
-                return "Only functions and locals can be renamed yet.";
-            if (!answer.symbol->makeTarget.empty())
-                return "Renaming a `make` function is not supported yet: a call through "
-                       "another receiver type may pick it at run time.";
-            // Its uses in other files are found through the workspace index.
-            if (m_workspaceRoots.empty())
-                return "Open a workspace folder to rename `" + word +
-                       "`: its uses in other files are found through it.";
-            if (m_referenceIndexPartial)
-                return "Too many files spell `" + word +
-                       "` for the workspace index to read them all, so a rename could miss "
-                       "uses; open the files that use it.";
-            break;
         }
-        if (answer.locations.empty()) return "`" + word + "` has no declaration to rename.";
-        for (const auto& location : answer.locations)
-            if (!inWorkspace(std::string(location.file)))
+        switch (answer.kind) {
+            case ReferenceAnswer::Kind::None:
+                return "`" + word + "` is nothing the checker resolved here.";
+            case ReferenceAnswer::Kind::Imported:
+                return "`" + word + "` is declared outside this workspace.";
+            case ReferenceAnswer::Kind::Local: break;
+            case ReferenceAnswer::Kind::Declared:
+                if (!answer.symbol || answer.symbol->kind != semantic::SymbolKind::Function) {
+                    return "Only functions and locals can be renamed yet.";
+                }
+                if (!answer.symbol->makeTarget.empty()) {
+                    return "Renaming a `make` function is not supported yet: a call through "
+                           "another receiver type may pick it at run time.";
+                }
+                // Its uses in other files are found through the workspace index.
+                if (m_workspaceRoots.empty()) {
+                    return "Open a workspace folder to rename `" + word +
+                           "`: its uses in other files are found through it.";
+                }
+                if (m_referenceIndexPartial) {
+                    return "Too many files spell `" + word +
+                           "` for the workspace index to read them all, so a rename could miss "
+                           "uses; open the files that use it.";
+                }
+                break;
+        }
+        if (answer.locations.empty()) {
+            return "`" + word + "` has no declaration to rename.";
+        }
+        for (const auto& location : answer.locations) {
+            if (!inWorkspace(std::string(location.file))) {
                 return "`" + word + "` is declared or used outside this workspace (" +
                        std::string(location.file) + ").";
+            }
+        }
         return std::nullopt;
     }
 
@@ -5148,32 +5860,41 @@ private:
     auto inWorkspace(const std::string& path) const -> bool {
         const auto within = [](const std::string& file, const std::string& root) {
             std::error_code error;
-            const auto relative = std::filesystem::weakly_canonical(file, error)
-                                      .lexically_relative(
-                                          std::filesystem::weakly_canonical(root, error));
+            const auto relative =
+                std::filesystem::weakly_canonical(file, error)
+                    .lexically_relative(std::filesystem::weakly_canonical(root, error));
             return !relative.empty() && *relative.begin() != "..";
         };
-        for (const auto& root : standardLibraryModuleRoots())
-            if (within(path, root)) return false;
-        if (m_workspaceRoots.empty()) return m_documents.contains(
-                                          ::lsp::Uri::fileUriFromPath(path).toString());
-        return std::any_of(m_workspaceRoots.begin(), m_workspaceRoots.end(),
-                           [&](const std::string& root) { return within(path, root); });
+        for (const auto& root : standardLibraryModuleRoots()) {
+            if (within(path, root)) {
+                return false;
+            }
+        }
+        if (m_workspaceRoots.empty()) {
+            return m_documents.contains(::lsp::Uri::fileUriFromPath(path).toString());
+        }
+        return std::any_of(
+            m_workspaceRoots.begin(), m_workspaceRoots.end(),
+            [&](const std::string& root) { return within(path, root); });
     }
 
     auto prepareRename(::lsp::PrepareRenameParams&& params)
         -> ::lsp::requests::TextDocument_PrepareRename::Result {
         verifyInitialized();
         const auto found = m_documents.find(params.textDocument.uri.toString());
-        if (found == m_documents.end()) return nullptr;
+        if (found == m_documents.end()) {
+            return nullptr;
+        }
         const auto& document = found->second;
         const auto answer = referenceAnswer(document, params.position, true);
-        if (const auto refusal = renameRefusal(document, answer))
+        if (const auto refusal = renameRefusal(document, answer)) {
             throw ::lsp::RequestError(::lsp::MessageError::InvalidRequest, *refusal);
+        }
         const auto word = wordAt(document.text, params.position.line, params.position.character);
         const auto name = renamedSpelling(answer.word);
-        auto start = SourceLocation{document.path, static_cast<int>(params.position.line + 1),
-                                    static_cast<int>(word.byteColumn)};
+        auto start = SourceLocation{
+            document.path, static_cast<int>(params.position.line + 1),
+            static_cast<int>(word.byteColumn)};
         return ::lsp::PrepareRenameResult{protocolLocation(start, name).range};
     }
 
@@ -5182,56 +5903,71 @@ private:
         return word.size() > 1 && word.back() == '!' ? word.substr(0, word.size() - 1) : word;
     }
 
-    auto rename(::lsp::RenameParams&& params)
-        -> ::lsp::requests::TextDocument_Rename::Result {
+    auto rename(::lsp::RenameParams&& params) -> ::lsp::requests::TextDocument_Rename::Result {
         verifyInitialized();
         const auto found = m_documents.find(params.textDocument.uri.toString());
-        if (found == m_documents.end()) return nullptr;
+        if (found == m_documents.end()) {
+            return nullptr;
+        }
         const auto& document = found->second;
         const auto answer = referenceAnswer(document, params.position, true);
-        if (const auto refusal = renameRefusal(document, answer))
+        if (const auto refusal = renameRefusal(document, answer)) {
             throw ::lsp::RequestError(::lsp::MessageError::InvalidRequest, *refusal);
+        }
         const auto refuse = [](const std::string& why) {
             throw ::lsp::RequestError(::lsp::MessageError::InvalidRequest, why);
         };
         const auto oldName = renamedSpelling(answer.word);
         const auto& newName = params.newName;
-        if (newName == oldName) return ::lsp::WorkspaceEdit{};
+        if (newName == oldName) {
+            return ::lsp::WorkspaceEdit{};
+        }
         // The new name is one lowercase name as the lexer reads it, so not a
         // keyword, and no `!`, which is the call's, not the name's.
         {
             Lexer lexer(newName, "<rename>");
             const auto tokens = lexer.tokenizeAll();
             if (tokens.size() != 2 || tokens[0].type != TokenType::LowerIdent ||
-                tokens[0].value != newName)
+                tokens[0].value != newName) {
                 refuse("`" + newName + "` is not a name a function or local can have.");
+            }
         }
 
         // The text of each file an edit lands in, and the edits by file.
         std::map<std::string, std::vector<SourceLocation>> byFile;
-        for (const auto& location : answer.locations)
+        for (const auto& location : answer.locations) {
             byFile[std::string(location.file)].push_back(location);
+        }
         const auto textOf = [&](const std::string& path) -> std::optional<std::string> {
             if (const auto open = m_documents.find(::lsp::Uri::fileUriFromPath(path).toString());
-                open != m_documents.end())
+                open != m_documents.end()) {
                 return open->second.text;
-            if (const auto* state = m_db.fileState(path)) return state->source;
-            if (const auto* state = m_referenceDb.fileState(path)) return state->source;
+            }
+            if (const auto* state = m_db.fileState(path)) {
+                return state->source;
+            }
+            if (const auto* state = m_referenceDb.fileState(path)) {
+                return state->source;
+            }
             return std::nullopt;
         };
 
         ::lsp::Map<::lsp::DocumentUri, ::lsp::Array<::lsp::TextEdit>> changes;
         for (auto& [path, locations] : byFile) {
             const auto text = textOf(path);
-            if (!text) refuse("Could not read " + path + ".");
+            if (!text) {
+                refuse("Could not read " + path + ".");
+            }
             // Each edit replaces the old name exactly where it is written.
             for (const auto& location : locations) {
                 const auto offset = offsetOfLocation(*text, location);
                 if (offset == std::string::npos ||
-                    text->compare(offset, oldName.size(), oldName) != 0)
-                    refuse("`" + oldName + "` is not written where the checker recorded it, " +
-                           path + ":" + std::to_string(location.line) + ":" +
-                           std::to_string(location.column) + ".");
+                    text->compare(offset, oldName.size(), oldName) != 0) {
+                    refuse(
+                        "`" + oldName + "` is not written where the checker recorded it, " + path +
+                        ":" + std::to_string(location.line) + ":" +
+                        std::to_string(location.column) + ".");
+                }
             }
             // The checker's scope at each one: the new name already meaning
             // something there would be shadowed, or would capture the uses.
@@ -5240,29 +5976,35 @@ private:
             if (path != document.path) {
                 if (const auto open =
                         m_documents.find(::lsp::Uri::fileUriFromPath(path).toString());
-                    open != m_documents.end())
+                    open != m_documents.end()) {
                     scoped = &open->second;
-                else {
+                } else {
                     probe.path = path;
                     probe.text = *text;
                     scoped = &probe;
                 }
             }
-            if (const auto checked = checkAsDocument(*scoped, path, *text))
-                for (const auto& location : locations)
+            if (const auto checked = checkAsDocument(*scoped, path, *text)) {
+                for (const auto& location : locations) {
                     if (const auto* at = scopeAt(*checked, path, location.line, location.column)) {
                         const auto names = checked->analyzer->bareCompletions(*at);
-                        if (std::find(names.begin(), names.end(), newName) != names.end())
-                            refuse("`" + newName + "` already names something at " + path +
-                                   ":" + std::to_string(location.line) + ":" +
-                                   std::to_string(location.column) + ".");
+                        if (std::find(names.begin(), names.end(), newName) != names.end()) {
+                            refuse(
+                                "`" + newName + "` already names something at " + path + ":" +
+                                std::to_string(location.line) + ":" +
+                                std::to_string(location.column) + ".");
+                        }
                     }
+                }
+            }
             auto& edits = changes[::lsp::Uri::fileUriFromPath(path)];
-            for (const auto& location : locations)
-                edits.push_back(::lsp::TextEdit{
-                    .range = protocolLocation(location, oldName).range,
-                    .newText = newName,
-                });
+            for (const auto& location : locations) {
+                edits.push_back(
+                    ::lsp::TextEdit{
+                        .range = protocolLocation(location, oldName).range,
+                        .newText = newName,
+                    });
+            }
         }
 
         // Renamed within one file, the file is checked as it would read: a
@@ -5278,23 +6020,33 @@ private:
                 Document probe;
                 probe.path = path;
                 probe.text = source;
-                if (path == document.path) probe.companions = document.companions;
+                if (path == document.path) {
+                    probe.companions = document.companions;
+                }
                 std::vector<std::string> messages;
-                if (const auto checked = checkAsDocument(probe, path, source))
-                    for (const auto& diagnostic : checked->analyzer->diagnostics())
-                        if (diagnostic.level == semantic::Diagnostic::Level::Error)
+                if (const auto checked = checkAsDocument(probe, path, source)) {
+                    for (const auto& diagnostic : checked->analyzer->diagnostics()) {
+                        if (diagnostic.level == semantic::Diagnostic::Level::Error) {
                             messages.push_back(diagnostic.message);
+                        }
+                    }
+                }
                 return messages;
             };
             const auto before = errors(text);
-            for (const auto& location : ordered)
+            for (const auto& location : ordered) {
                 text.replace(offsetOfLocation(text, location), oldName.size(), newName);
+            }
             const auto after = errors(text);
-            if (after.size() > before.size())
-                for (const auto& message : after)
-                    if (std::find(before.begin(), before.end(), message) == before.end())
-                        refuse("Renaming `" + oldName + "` to `" + newName +
-                               "` would not check: " + message);
+            if (after.size() > before.size()) {
+                for (const auto& message : after) {
+                    if (std::find(before.begin(), before.end(), message) == before.end()) {
+                        refuse(
+                            "Renaming `" + oldName + "` to `" + newName +
+                            "` would not check: " + message);
+                    }
+                }
+            }
             // Back to the buffer as it is, for the answers that follow.
             (void)checkAsDocument(document, document.path, document.text);
         }
@@ -5304,11 +6056,8 @@ private:
     void registerHandlers() {
         m_handler
             .add<::lsp::requests::Initialize>(
-                [this](::lsp::InitializeParams&& params) {
-                    return initialize(std::move(params));
-            })
-            .add<::lsp::notifications::Initialized>(
-                [](::lsp::InitializedParams&&) {})
+                [this](::lsp::InitializeParams&& params) { return initialize(std::move(params)); })
+            .add<::lsp::notifications::Initialized>([](::lsp::InitializedParams&&) {})
             .add<::lsp::requests::Shutdown>([this]() {
                 m_cleanShutdown = true;
                 return ::lsp::requests::Shutdown::Result{};
@@ -5321,18 +6070,24 @@ private:
                 })
             .add<::lsp::notifications::TextDocument_DidChange>(
                 [this](::lsp::DidChangeTextDocumentParams&& params) {
-                    if (params.contentChanges.empty()) return;
+                    if (params.contentChanges.empty()) {
+                        return;
+                    }
                     auto& change = params.contentChanges.back();
-                    if (auto* whole = std::get_if<::lsp::TextDocumentContentChangeWholeDocument>(&change))
-                        update(params.textDocument.uri, std::move(whole->text),
-                               params.textDocument.version);
+                    if (auto* whole =
+                            std::get_if<::lsp::TextDocumentContentChangeWholeDocument>(&change)) {
+                        update(
+                            params.textDocument.uri, std::move(whole->text),
+                            params.textDocument.version);
+                    }
                 })
             .add<::lsp::notifications::TextDocument_DidSave>(
                 [this](::lsp::DidSaveTextDocumentParams&& params) {
                     verifyInitialized();
                     const auto found = m_documents.find(params.textDocument.uri.toString());
-                    if (found != m_documents.end())
+                    if (found != m_documents.end()) {
                         publishDiagnostics(params.textDocument.uri, found->second);
+                    }
                 })
             .add<::lsp::notifications::TextDocument_DidClose>(
                 [this](::lsp::DidCloseTextDocumentParams&& params) {
@@ -5344,50 +6099,38 @@ private:
                         m_referenceIndexReady = false;
                         m_referenceIndexWord.clear();
                     }
-                    m_handler.sendNotification<
-                        ::lsp::notifications::TextDocument_PublishDiagnostics>({
-                        .uri = params.textDocument.uri,
-                        .diagnostics = {},
-                    });
+                    m_handler
+                        .sendNotification<::lsp::notifications::TextDocument_PublishDiagnostics>({
+                            .uri = params.textDocument.uri,
+                            .diagnostics = {},
+                        });
                 })
             .add<::lsp::requests::TextDocument_Completion>(
-                [this](::lsp::CompletionParams&& params) {
-                    return completions(std::move(params));
-                })
+                [this](::lsp::CompletionParams&& params) { return completions(std::move(params)); })
             .add<::lsp::requests::TextDocument_Hover>(
-                [this](::lsp::HoverParams&& params) {
-                    return hover(std::move(params));
-                })
+                [this](::lsp::HoverParams&& params) { return hover(std::move(params)); })
             .add<::lsp::requests::TextDocument_SignatureHelp>(
                 [this](::lsp::SignatureHelpParams&& params) {
                     return signatureHelp(std::move(params));
                 })
             .add<::lsp::requests::TextDocument_Definition>(
-                [this](::lsp::DefinitionParams&& params) {
-                    return definition(std::move(params));
-                })
+                [this](::lsp::DefinitionParams&& params) { return definition(std::move(params)); })
             .add<::lsp::requests::TextDocument_References>(
-                [this](::lsp::ReferenceParams&& params) {
-                    return references(std::move(params));
-                })
+                [this](::lsp::ReferenceParams&& params) { return references(std::move(params)); })
             .add<::lsp::requests::TextDocument_PrepareRename>(
                 [this](::lsp::PrepareRenameParams&& params) {
                     return prepareRename(std::move(params));
                 })
             .add<::lsp::requests::TextDocument_Rename>(
-                [this](::lsp::RenameParams&& params) {
-                    return rename(std::move(params));
-                });
+                [this](::lsp::RenameParams&& params) { return rename(std::move(params)); });
     }
 
     Iostream m_stream;
     ::lsp::Connection m_connection;
     ::lsp::MessageHandler m_handler;
     semantic::ImportedInterfaces m_interfaces;
-    std::unordered_map<std::string, std::vector<std::string>>
-        m_standardDocumentation;
-    std::unordered_map<std::string, std::vector<std::vector<std::string>>>
-        m_standardParameterNames;
+    std::unordered_map<std::string, std::vector<std::string>> m_standardDocumentation;
+    std::unordered_map<std::string, std::vector<std::vector<std::string>>> m_standardParameterNames;
     Workspace m_db;
     Workspace m_referenceDb;
     // Where a buffer mid-edit is checked for completion (checkAsDocument),
@@ -5417,8 +6160,7 @@ private:
 
 } // namespace
 
-auto run(std::istream& input, std::ostream& output,
-         const std::string& runtimeBeamDir) -> int {
+auto run(std::istream& input, std::ostream& output, const std::string& runtimeBeamDir) -> int {
     try {
         return Server(input, output, runtimeBeamDir).run();
     } catch (const std::exception& error) {

@@ -9,17 +9,25 @@ namespace kex::interpreter {
 // Helper: extract an integer field from an EvaluatorOptions record
 static auto getIntField(const RecordValue& rec, const std::string& name, int64_t def) -> int64_t {
     auto it = rec.fields.find(name);
-    if (it == rec.fields.end()) return def;
-    if (auto* iv = std::get_if<IntValue>(&it->second->data)) return iv->value;
+    if (it == rec.fields.end()) {
+        return def;
+    }
+    if (auto* iv = std::get_if<IntValue>(&it->second->data)) {
+        return iv->value;
+    }
     return def;
 }
 
 // Helper: extract the allow list from EvaluatorOptions
 static auto getAllowList(const RecordValue& rec) -> std::vector<std::string> {
     auto it = rec.fields.find("allow");
-    if (it == rec.fields.end()) return defaultEvalAllowList();
+    if (it == rec.fields.end()) {
+        return defaultEvalAllowList();
+    }
     auto* list = std::get_if<ListValue>(&it->second->data);
-    if (!list) return defaultEvalAllowList();
+    if (!list) {
+        return defaultEvalAllowList();
+    }
     std::vector<std::string> result;
     for (const auto& elem : list->elements) {
         if (auto* atom = std::get_if<AtomValue>(&elem->data)) {
@@ -36,19 +44,20 @@ static auto getAllowList(const RecordValue& rec) -> std::vector<std::string> {
 static auto limitsFrom(const std::vector<ValuePtr>& args) -> SandboxLimits {
     SandboxLimits limits;
     limits.allow = defaultEvalAllowList();
-    if (args.size() > 1)
+    if (args.size() > 1) {
         if (auto* rec = std::get_if<RecordValue>(&args[1]->data)) {
             limits.maxSteps = getIntField(*rec, "maxSteps", limits.maxSteps);
             limits.maxDepth = getIntField(*rec, "maxDepth", limits.maxDepth);
             limits.allow = getAllowList(*rec);
         }
+    }
     return limits;
 }
 
 // Sandboxed eval: a fresh Evaluator, put under `limits` once its prelude is
 // loaded, runs `source` — a whole program, or with `exprOnly` one expression.
-static auto sandboxedEval(const std::string& source, bool exprOnly,
-                          SandboxLimits limits) -> ValuePtr {
+static auto sandboxedEval(const std::string& source, bool exprOnly, SandboxLimits limits)
+    -> ValuePtr {
     try {
         const std::string filename = "<eval>";
         std::string toParse = exprOnly ? ("main do\n" + source + "\nend") : source;
@@ -56,8 +65,8 @@ static auto sandboxedEval(const std::string& source, bool exprOnly,
         Parser parser(lexer.tokenizeAll(), filename);
         auto program = parser.parseProgram();
         // Checked first, as the walker runs every program.
-        const auto checked = driver::prepareForWalker(
-            program, {}, &defaultPreludeInterfaces(), filename);
+        const auto checked =
+            driver::prepareForWalker(program, {}, &defaultPreludeInterfaces(), filename);
 
         Evaluator eval;
         eval.setSandbox(std::move(limits));
@@ -73,8 +82,9 @@ static auto sandboxedEval(const std::string& source, bool exprOnly,
 static auto evaluatorEntry(const std::string& function, bool exprOnly) -> NativeFunc {
     return [function, exprOnly](std::vector<ValuePtr> args) -> ValuePtr {
         auto* source = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!source)
+        if (!source) {
             return Value::error(Value::string(function + " requires a source string"));
+        }
         return sandboxedEval(source->value, exprOnly, limitsFrom(args));
     };
 }
@@ -82,8 +92,7 @@ static auto evaluatorEntry(const std::string& function, bool exprOnly) -> Native
 auto Evaluator::registerEvalBuiltins() -> void {
     defineModule("Evaluator");
     defineIntrinsic("Evaluator.run", evaluatorEntry("Evaluator.run", false));
-    defineIntrinsic("Evaluator.runExpression",
-                    evaluatorEntry("Evaluator.runExpression", true));
+    defineIntrinsic("Evaluator.runExpression", evaluatorEntry("Evaluator.runExpression", true));
 }
 
 } // namespace kex::interpreter

@@ -167,8 +167,7 @@ struct ImportedDistinctType {
 // package policy has approved their provider module.
 struct ImportedInterfaces {
     std::unordered_map<std::string, ImportedModuleInterface> modules;
-    std::unordered_map<std::string, std::vector<ImportedFunction>>
-        receiverFunctions;
+    std::unordered_map<std::string, std::vector<ImportedFunction>> receiverFunctions;
     std::vector<ImportedTraitConformance> traitConformances;
     std::vector<ImportedADT> adts;
     // Field count per imported record, so a pattern that destructures the
@@ -181,14 +180,12 @@ struct ImportedInterfaces {
     // prelude's Time resolved to units.kex's `Integer.nanosecond` Measure
     // constructor and failed to typecheck. Names alone settle that question —
     // the field's TYPE is not carried, so such a read stays gradual.
-    std::unordered_map<std::string, std::unordered_set<std::string>>
-        recordFieldNames;
+    std::unordered_map<std::string, std::unordered_set<std::string>> recordFieldNames;
     // Complete declared field types, used for open-record width/depth checks
     // across module boundaries. Keys include qualified runtime identities;
     // bare aliases are retained only where the existing record registry can
     // resolve them unambiguously.
-    std::unordered_map<
-        std::string, std::unordered_map<std::string, TypePtr>> recordFields;
+    std::unordered_map<std::string, std::unordered_map<std::string, TypePtr>> recordFields;
     // Bodies of transparent aliases (`type FilePath = String`), keyed by the
     // bare name the way the local alias table is. Distinct types are NOT here
     // — those stay nominal and live in `distinctTypes`.
@@ -212,15 +209,22 @@ struct ImportedInterfaces {
 // is foul — this is consulted before overload resolution has picked a winner,
 // so the conservative answer is the correct one, and the post-typecheck
 // enrichment pass narrows it to the resolved target.
-inline auto isExportFoul(const ImportedInterfaces& ifaces,
-                         const std::string& module,
-                         const std::string& member) -> bool {
+inline auto
+isExportFoul(const ImportedInterfaces& ifaces, const std::string& module, const std::string& member)
+    -> bool {
     auto mod = ifaces.modules.find(module);
-    if (mod == ifaces.modules.end()) return false;
+    if (mod == ifaces.modules.end()) {
+        return false;
+    }
     auto exported = mod->second.exports.find(member);
-    if (exported == mod->second.exports.end()) return false;
-    for (const auto& overload : exported->second)
-        if (overload.signature.isFoul) return true;
+    if (exported == mod->second.exports.end()) {
+        return false;
+    }
+    for (const auto& overload : exported->second) {
+        if (overload.signature.isFoul) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -235,24 +239,35 @@ inline auto isExportFoul(const ImportedInterfaces& ifaces,
 // declares one; anything else is left as written.
 inline auto qualifyModuleTypeIdentities(ImportedInterfaces& ifaces) -> void {
     std::unordered_set<std::string> moduleAdts;
-    for (const auto& adt : ifaces.adts)
-        if (adt.name.find('.') != std::string::npos) moduleAdts.insert(adt.name);
+    for (const auto& adt : ifaces.adts) {
+        if (adt.name.find('.') != std::string::npos) {
+            moduleAdts.insert(adt.name);
+        }
+    }
     // Records only in a module function's own signature: a receiver function
     // of an opt-in module read from source has no backend of its own, and
     // matching its receiver exactly would choose it over the type's `make`
     // function (`cursor.peek` in template.kex, run at compile time).
     std::unordered_set<std::string> moduleRecords;
-    for (const auto& [record, _] : ifaces.recordArities)
-        if (record.find('.') != std::string::npos) moduleRecords.insert(record);
-    if (moduleAdts.empty() && moduleRecords.empty()) return;
+    for (const auto& [record, _] : ifaces.recordArities) {
+        if (record.find('.') != std::string::npos) {
+            moduleRecords.insert(record);
+        }
+    }
+    if (moduleAdts.empty() && moduleRecords.empty()) {
+        return;
+    }
     bool withRecords = false;
     auto adtIn = [&](std::string scope, const std::string& name) -> std::string {
         while (!scope.empty()) {
             if (auto candidate = scope + "." + name;
-                moduleAdts.count(candidate) || (withRecords && moduleRecords.count(candidate)))
+                moduleAdts.count(candidate) || (withRecords && moduleRecords.count(candidate))) {
                 return candidate;
+            }
             const auto dot = scope.rfind('.');
-            if (dot == std::string::npos) break;
+            if (dot == std::string::npos) {
+                break;
+            }
             scope.resize(dot);
         }
         return "";
@@ -260,41 +275,54 @@ inline auto qualifyModuleTypeIdentities(ImportedInterfaces& ifaces) -> void {
     // Rebuilt, never edited in place: types are shared between signatures.
     std::function<TypePtr(const TypePtr&, const std::string&)> qualified =
         [&](const TypePtr& type, const std::string& scope) -> TypePtr {
-            if (!type) return type;
-            auto rebuilt = mapTypeChildren(type, [&](const TypePtr& child) {
-                return qualified(child, scope);
-            });
-            if (const auto* named = std::get_if<NamedType>(&rebuilt->kind);
-                named && named->name.find('.') == std::string::npos)
-                if (auto owned = adtIn(scope, named->name); !owned.empty())
-                    return Type::named(owned, named->typeArgs);
-            return rebuilt;
-        };
-    auto qualify = [&](TypePtr& type, const std::string& scope) {
-        type = qualified(type, scope);
+        if (!type) {
+            return type;
+        }
+        auto rebuilt =
+            mapTypeChildren(type, [&](const TypePtr& child) { return qualified(child, scope); });
+        if (const auto* named = std::get_if<NamedType>(&rebuilt->kind);
+            named && named->name.find('.') == std::string::npos) {
+            if (auto owned = adtIn(scope, named->name); !owned.empty()) {
+                return Type::named(owned, named->typeArgs);
+            }
+        }
+        return rebuilt;
     };
+    auto qualify = [&](TypePtr& type, const std::string& scope) { type = qualified(type, scope); };
     auto qualifySignature = [&](ImportedFunction& function) {
-        if (function.sourceModule.empty()) return;
-        for (auto& param : function.signature.params)
+        if (function.sourceModule.empty()) {
+            return;
+        }
+        for (auto& param : function.signature.params) {
             qualify(param, function.sourceModule);
+        }
         qualify(function.signature.result, function.sourceModule);
     };
-    for (auto& [_, module] : ifaces.modules)
-        for (auto& [__, functions] : module.exports)
+    for (auto& [_, module] : ifaces.modules) {
+        for (auto& [__, functions] : module.exports) {
             for (auto& function : functions) {
                 withRecords = !function.isReceiverMethod;
                 qualifySignature(function);
             }
+        }
+    }
     withRecords = false;
-    for (auto& [_, functions] : ifaces.receiverFunctions)
-        for (auto& function : functions) qualifySignature(function);
+    for (auto& [_, functions] : ifaces.receiverFunctions) {
+        for (auto& function : functions) {
+            qualifySignature(function);
+        }
+    }
     // A record's field types are spelled in the record's own module:
     // `operation : NetOperation` in `Net.NetError` is `Net.NetOperation`.
     for (auto& [record, fields] : ifaces.recordFields) {
         const auto dot = record.rfind('.');
-        if (dot == std::string::npos) continue;
+        if (dot == std::string::npos) {
+            continue;
+        }
         const auto scope = record.substr(0, dot);
-        for (auto& [__, fieldType] : fields) qualify(fieldType, scope);
+        for (auto& [__, fieldType] : fields) {
+            qualify(fieldType, scope);
+        }
     }
 }
 

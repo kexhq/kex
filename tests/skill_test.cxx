@@ -26,15 +26,17 @@ struct Run {
 };
 
 auto runKex(const std::string& args) -> Run {
-    const std::string cmd =
-        std::string(KEX_BINARY_PATH) + " --no-colors " + args + " 2>&1";
+    const std::string cmd = std::string(KEX_BINARY_PATH) + " --no-colors " + args + " 2>&1";
     Run run;
     FILE* pipe = popen(cmd.c_str(), "r");
-    if (!pipe) return run;
+    if (!pipe) {
+        return run;
+    }
     std::array<char, 4096> buf;
     size_t n;
-    while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+    while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0) {
         run.output.append(buf.data(), n);
+    }
     run.status = pclose(pipe);
     return run;
 }
@@ -53,20 +55,22 @@ auto examplesOf(const kex::skill::Topic& topic) -> std::vector<Example> {
     size_t at = 0;
     while (true) {
         const auto fence = text.find(open, at);
-        if (fence == std::string_view::npos) break;
+        if (fence == std::string_view::npos) {
+            break;
+        }
         const auto lineEnd = text.find('\n', fence);
         const auto end = text.find(close, lineEnd);
-        if (lineEnd == std::string_view::npos ||
-            end == std::string_view::npos)
+        if (lineEnd == std::string_view::npos || end == std::string_view::npos) {
             break;
-        auto name = std::string(
-            text.substr(fence + open.size(), lineEnd - fence - open.size()));
-        while (!name.empty() && name.front() == ' ') name.erase(0, 1);
-        if (name.empty())
-            name = std::string(topic.name) + "_" +
-                   std::to_string(examples.size() + 1) + ".kex";
-        examples.push_back(
-            {name, std::string(text.substr(lineEnd + 1, end - lineEnd))});
+        }
+        auto name = std::string(text.substr(fence + open.size(), lineEnd - fence - open.size()));
+        while (!name.empty() && name.front() == ' ') {
+            name.erase(0, 1);
+        }
+        if (name.empty()) {
+            name = std::string(topic.name) + "_" + std::to_string(examples.size() + 1) + ".kex";
+        }
+        examples.push_back({name, std::string(text.substr(lineEnd + 1, end - lineEnd))});
         at = end + close.size();
     }
     return examples;
@@ -84,8 +88,7 @@ int main() {
     // its temp directory behind a symlink, and two spellings of one file
     // once hid a spec that loaded its base twice from every Mac but not CI.
     const auto root =
-        std::filesystem::canonical(std::filesystem::temp_directory_path()) /
-        "kex-skill-test";
+        std::filesystem::canonical(std::filesystem::temp_directory_path()) / "kex-skill-test";
     std::filesystem::remove_all(root);
 
     describe("the guide", [&]() {
@@ -98,15 +101,16 @@ int main() {
 
         it("names every topic, so a reader can find each one", [&]() {
             for (const auto& topic : topics) {
-                if (topic.name == kex::skill::kGuideTopic) continue;
-                assertTrue(has(topics.front().text,
-                               "kex --skill " + std::string(topic.name)),
-                           std::string(topic.name));
+                if (topic.name == kex::skill::kGuideTopic) {
+                    continue;
+                }
+                assertTrue(
+                    has(topics.front().text, "kex --skill " + std::string(topic.name)),
+                    std::string(topic.name));
             }
         });
 
-        it("points at the lookup and the checker it tells a model to use",
-           [&]() {
+        it("points at the lookup and the checker it tells a model to use", [&]() {
             assertTrue(has(topics.front().text, "kex -s List"));
             assertTrue(has(topics.front().text, "kex -C file.kex"));
         });
@@ -118,23 +122,24 @@ int main() {
             std::filesystem::create_directories(directory);
             const auto examples = examplesOf(topic);
             // Written before any is checked: a spec loads the source beside it.
-            for (const auto& example : examples)
+            for (const auto& example : examples) {
                 std::ofstream(directory / example.file) << example.source;
+            }
 
-            it(std::string(topic.name) + " has one", [examples]() {
-                assertTrue(!examples.empty());
-            });
+            it(std::string(topic.name) + " has one",
+               [examples]() { assertTrue(!examples.empty()); });
 
             for (const auto& example : examples) {
                 const auto path = (directory / example.file).string();
                 it(example.file + " checks", [path]() {
                     const auto run = runKex("-C '" + path + "'");
-                    assertEqual(run.output,
-                                std::string("No errors found.\n"));
+                    assertEqual(run.output, std::string("No errors found.\n"));
                 });
-                const bool runs = has(example.source, "\nmain do\n") ||
-                                  example.file.ends_with(".spec.kex");
-                if (!runs) continue;
+                const bool runs =
+                    has(example.source, "\nmain do\n") || example.file.ends_with(".spec.kex");
+                if (!runs) {
+                    continue;
+                }
                 it(example.file + " runs", [path]() {
                     const auto run = runKex("--run-walker '" + path + "'");
                     assertEqual(run.status, 0);
@@ -145,20 +150,16 @@ int main() {
     });
 
     describe("kex --skill", [&]() {
-        it("prints the guide, and nothing else", [&]() {
-            assertEqual(runKex("--skill").output,
-                        std::string(topics.front().text));
-        });
+        it("prints the guide, and nothing else",
+           [&]() { assertEqual(runKex("--skill").output, std::string(topics.front().text)); });
 
         it("prints one topic by name, in any case", [&]() {
             const auto* errors = kex::skill::findTopic("errors");
             assertTrue(errors != nullptr);
-            assertEqual(runKex("--skill Errors").output,
-                        std::string(errors->text));
+            assertEqual(runKex("--skill Errors").output, std::string(errors->text));
         });
 
-        it("fails on a topic it does not have, and lists the ones it does",
-           [&]() {
+        it("fails on a topic it does not have, and lists the ones it does", [&]() {
             const auto run = runKex("--skill nonsense");
             assertTrue(run.status != 0);
             assertTrue(has(run.output, "errors"));

@@ -24,10 +24,12 @@ auto environmentValue(const char* name) -> std::string {
 // Tey.Cache.root: `$TEY_CACHE`, else `$HOME/.cache/tey`, else a relative
 // directory — the same three-way fallback, in the same order.
 auto cacheRoot() -> std::string {
-    if (const auto configured = environmentValue("TEY_CACHE"); !configured.empty())
+    if (const auto configured = environmentValue("TEY_CACHE"); !configured.empty()) {
         return configured;
-    if (const auto home = environmentValue("HOME"); !home.empty())
+    }
+    if (const auto home = environmentValue("HOME"); !home.empty()) {
         return home + "/.cache/tey";
+    }
     return ".tey-cache";
 }
 
@@ -37,19 +39,25 @@ auto cacheRoot() -> std::string {
 auto packageDirectoryFor(const std::string& start) -> fs::path {
     std::error_code ec;
     auto directory = fs::weakly_canonical(start, ec);
-    if (ec) directory = fs::path(start).lexically_normal();
-    if (!fs::is_directory(directory, ec) || ec) directory = directory.parent_path();
+    if (ec) {
+        directory = fs::path(start).lexically_normal();
+    }
+    if (!fs::is_directory(directory, ec) || ec) {
+        directory = directory.parent_path();
+    }
     for (; !directory.empty(); directory = directory.parent_path()) {
         ec.clear();
-        if (fs::is_regular_file(directory / "package.kex", ec) && !ec)
+        if (fs::is_regular_file(directory / "package.kex", ec) && !ec) {
             return directory;
-        if (!directory.has_relative_path()) break;
+        }
+        if (!directory.has_relative_path()) {
+            break;
+        }
     }
     return {};
 }
 
-auto stringField(const ::lsp::json::Object& object, std::string_view key)
-    -> std::string {
+auto stringField(const ::lsp::json::Object& object, std::string_view key) -> std::string {
     const auto* value = object.find(key);
     return value && value->isString() ? value->string() : std::string();
 }
@@ -61,14 +69,17 @@ auto declaresWorkspace(const fs::path& directory) -> bool {
     size_t lineStart = 0;
     while (lineStart < manifest.size()) {
         auto lineEnd = manifest.find('\n', lineStart);
-        if (lineEnd == std::string::npos) lineEnd = manifest.size();
+        if (lineEnd == std::string::npos) {
+            lineEnd = manifest.size();
+        }
         auto first = manifest.find_first_not_of(" \t", lineStart);
         if (first != std::string::npos && first < lineEnd &&
             manifest.compare(first, 9, "workspace") == 0) {
             auto after = manifest.find_first_not_of(" \t", first + 9);
             if (after != std::string::npos && after < lineEnd &&
-                manifest.compare(after, 2, "do") == 0)
+                manifest.compare(after, 2, "do") == 0) {
                 return true;
+            }
         }
         lineStart = lineEnd + 1;
     }
@@ -86,9 +97,12 @@ auto lockDirectoryFor(const fs::path& packageDirectory) -> fs::path {
          directory = directory.parent_path()) {
         ec.clear();
         if (fs::is_regular_file(directory / "package.kex", ec) && !ec &&
-            declaresWorkspace(directory))
+            declaresWorkspace(directory)) {
             chosen = directory;
-        if (!directory.has_relative_path()) break;
+        }
+        if (!directory.has_relative_path()) {
+            break;
+        }
     }
     return chosen;
 }
@@ -108,13 +122,20 @@ auto localOverrides(const fs::path& workspaceRoot) -> std::map<std::string, fs::
     while ((at = text.find("local(", at)) != std::string::npos) {
         at += 6;
         const auto nameOpen = text.find('"', at);
-        const auto nameClose = nameOpen == std::string::npos ? nameOpen : text.find('"', nameOpen + 1);
-        const auto pathKey = nameClose == std::string::npos ? nameClose : text.find("path:", nameClose);
+        const auto nameClose =
+            nameOpen == std::string::npos ? nameOpen : text.find('"', nameOpen + 1);
+        const auto pathKey =
+            nameClose == std::string::npos ? nameClose : text.find("path:", nameClose);
         const auto pathOpen = pathKey == std::string::npos ? pathKey : text.find('"', pathKey);
-        const auto pathClose = pathOpen == std::string::npos ? pathOpen : text.find('"', pathOpen + 1);
-        if (pathClose == std::string::npos) break;
+        const auto pathClose =
+            pathOpen == std::string::npos ? pathOpen : text.find('"', pathOpen + 1);
+        if (pathClose == std::string::npos) {
+            break;
+        }
         fs::path path = text.substr(pathOpen + 1, pathClose - pathOpen - 1);
-        if (path.is_relative()) path = workspaceRoot / path;
+        if (path.is_relative()) {
+            path = workspaceRoot / path;
+        }
         overrides[text.substr(nameOpen + 1, nameClose - nameOpen - 1)] = path;
         at = pathClose;
     }
@@ -141,21 +162,29 @@ auto packageRootFor(const ::lsp::json::Object& entry, const fs::path& workspaceR
     -> std::vector<fs::path> {
     const auto source = stringField(entry, "source");
     const auto path = stringField(entry, "path");
-    if (source == "workspace") return {workspaceRoot / path};
+    if (source == "workspace") {
+        return {workspaceRoot / path};
+    }
     if (source == "path") {
         std::vector<fs::path> candidates;
-        if (!path.empty())
-            candidates.push_back(fs::path(path).is_relative() ? workspaceRoot / path : fs::path(path));
-        if (const auto digest = stringField(entry, "sha256"); !digest.empty())
+        if (!path.empty()) {
+            candidates.push_back(
+                fs::path(path).is_relative() ? workspaceRoot / path : fs::path(path));
+        }
+        if (const auto digest = stringField(entry, "sha256"); !digest.empty()) {
             candidates.push_back(fs::path(cacheRoot()) / "snapshots" / digest);
+        }
         return candidates;
     }
     const auto git = stringField(entry, "git");
     const auto commit = stringField(entry, "commit");
-    if (git.empty() || commit.empty()) return {};
+    if (git.empty() || commit.empty()) {
+        return {};
+    }
     auto checkout = fs::path(teyCachePackagePath(git, commit));
-    if (const auto subdir = stringField(entry, "subdir"); !subdir.empty() && subdir != ".")
+    if (const auto subdir = stringField(entry, "subdir"); !subdir.empty() && subdir != ".") {
         checkout /= subdir;
+    }
     return {checkout};
 }
 
@@ -166,36 +195,50 @@ auto rootsFromLock(const std::string& text, const fs::path& workspaceRoot) -> Lo
     } catch (const ::lsp::json::Error&) {
         return {};
     }
-    if (!document.isObject()) return {};
+    if (!document.isObject()) {
+        return {};
+    }
     const auto& root = document.object();
 
     // Version 1 is the only shape this derivation knows. A future lockfile is
     // left to `tey` rather than guessed at.
     const auto* version = root.find("version");
-    if (!version || !version->isNumber() || version->number() != 1) return {};
+    if (!version || !version->isNumber() || version->number() != 1) {
+        return {};
+    }
 
     // `packages` is the lockfile tey writes today; `deps`, git-only, is the
     // shape it wrote first and an old checkout may still carry.
     const auto* packages = root.find("packages");
-    if (!packages || !packages->isObject()) packages = root.find("deps");
-    if (!packages || !packages->isObject()) return {};
+    if (!packages || !packages->isObject()) {
+        packages = root.find("deps");
+    }
+    if (!packages || !packages->isObject()) {
+        return {};
+    }
 
     const auto overrides = localOverrides(workspaceRoot);
     LockRoots result;
     std::map<std::string, std::string> byName;
     for (const auto& [name, entry] : packages->object().keyValueMap()) {
-        if (!entry.isObject()) continue;
+        if (!entry.isObject()) {
+            continue;
+        }
         std::vector<fs::path> candidates;
-        if (const auto local = overrides.find(std::string(name)); local != overrides.end())
+        if (const auto local = overrides.find(std::string(name)); local != overrides.end()) {
             candidates.push_back(local->second);
-        for (auto& candidate : packageRootFor(entry.object(), workspaceRoot))
+        }
+        for (auto& candidate : packageRootFor(entry.object(), workspaceRoot)) {
             candidates.push_back(std::move(candidate));
-        if (candidates.empty()) continue;
+        }
+        if (candidates.empty()) {
+            continue;
+        }
         bool found = false;
         for (const auto& candidate : candidates) {
             std::error_code ec;
-            const auto source = teyPackageDeclaresSources(candidate.string())
-                ? candidate : candidate / "src";
+            const auto source =
+                teyPackageDeclaresSources(candidate.string()) ? candidate : candidate / "src";
             if (fs::is_directory(source, ec) && !ec) {
                 byName.emplace(std::string(name), canonicalRoot(source));
                 found = true;
@@ -204,11 +247,15 @@ auto rootsFromLock(const std::string& text, const fs::path& workspaceRoot) -> Lo
         }
         // Not yet fetched: the answer is `tey install`, and dropping the root
         // leaves the resolver to say the module is missing — which is true.
-        if (!found) result.complete = false;
+        if (!found) {
+            result.complete = false;
+        }
     }
 
     result.roots.reserve(byName.size());
-    for (auto& [name, path] : byName) result.roots.push_back(std::move(path));
+    for (auto& [name, path] : byName) {
+        result.roots.push_back(std::move(path));
+    }
     return result;
 }
 
@@ -224,14 +271,20 @@ struct CacheEntry {
 auto teyPackageDeclaresSources(const std::string& packageDirectory) -> bool {
     namespace fs = std::filesystem;
     std::ifstream manifest(fs::path(packageDirectory) / "package.kex");
-    if (!manifest) return false;
+    if (!manifest) {
+        return false;
+    }
     // A declaration is a line of its own inside `package ... do`; a comment
     // that mentions one starts with `#` and is not it.
     std::string line;
     while (std::getline(manifest, line)) {
         const auto first = line.find_first_not_of(" \t");
-        if (first == std::string::npos) continue;
-        if (line.compare(first, 8, "sources(") == 0) return true;
+        if (first == std::string::npos) {
+            continue;
+        }
+        if (line.compare(first, 8, "sources(") == 0) {
+            return true;
+        }
     }
     return false;
 }
@@ -240,8 +293,7 @@ auto teyPackageDirectory(const std::string& start) -> std::string {
     return packageDirectoryFor(start).string();
 }
 
-auto teyCachePackagePath(const std::string& gitUrl, const std::string& commit)
-    -> std::string {
+auto teyCachePackagePath(const std::string& gitUrl, const std::string& commit) -> std::string {
     // Content-addressed by source URL, then by commit: two packages sharing a
     // display name must never share a checkout (Tey.Cache.sourceRoot).
     return cacheRoot() + "/src/" + sha256Hex(gitUrl) + "/" + commit;
@@ -249,16 +301,22 @@ auto teyCachePackagePath(const std::string& gitUrl, const std::string& commit)
 
 auto teyDependencyRoots(const std::string& start) -> std::vector<std::string> {
     const auto packageDirectory = packageDirectoryFor(start);
-    if (packageDirectory.empty()) return {};
+    if (packageDirectory.empty()) {
+        return {};
+    }
     const auto workspaceRoot = lockDirectoryFor(packageDirectory);
     const auto lockPath = workspaceRoot / "tey.lock";
 
     std::error_code ec;
     const auto modified = fs::last_write_time(lockPath, ec);
-    if (ec) return {};
+    if (ec) {
+        return {};
+    }
     ec.clear();
     const auto size = fs::file_size(lockPath, ec);
-    if (ec) return {};
+    if (ec) {
+        return {};
+    }
 
     // `tey install` rewrites the lockfile and populates the cache behind the
     // server's back, so the cached answer is only good while the file it was
@@ -266,13 +324,16 @@ auto teyDependencyRoots(const std::string& start) -> std::vector<std::string> {
     // `package.local.kex` changes the answer as well.
     ec.clear();
     auto localModified = fs::last_write_time(workspaceRoot / "package.local.kex", ec);
-    if (ec) localModified = {};
+    if (ec) {
+        localModified = {};
+    }
     static std::unordered_map<std::string, CacheEntry> cache;
     const auto key = lockPath.string();
     if (const auto cached = cache.find(key);
         cached != cache.end() && cached->second.modified == modified &&
-        cached->second.size == size && cached->second.localModified == localModified)
+        cached->second.size == size && cached->second.localModified == localModified) {
         return cached->second.roots;
+    }
 
     auto derived = rootsFromLock(readFileText(lockPath).value_or(""), workspaceRoot);
     // An incomplete answer is not remembered: the next request re-stats the

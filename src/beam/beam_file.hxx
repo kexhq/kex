@@ -15,8 +15,8 @@ struct BeamError : std::runtime_error {
 };
 
 struct Chunk {
-    std::string id;              // 4-byte ASCII chunk ID
-    std::vector<uint8_t> data;   // raw payload (unpadded)
+    std::string id;            // 4-byte ASCII chunk ID
+    std::vector<uint8_t> data; // raw payload (unpadded)
 };
 
 struct BeamFile {

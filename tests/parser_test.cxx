@@ -31,9 +31,11 @@ auto itemCount(const std::string& source) -> size_t {
     return parse(source).items.size();
 }
 
-template<typename T>
+template <typename T>
 auto firstItemIs(const ast::Program& program) -> bool {
-    if (program.items.empty()) return false;
+    if (program.items.empty()) {
+        return false;
+    }
     return std::holds_alternative<T>(program.items[0]);
 }
 
@@ -41,8 +43,7 @@ int main() {
     describe("Parser — Source Spans", []() {
         it("nests binary expression byte spans", []() {
             auto program = parse("1 + 2 * 3");
-            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
-                program.items[0]);
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             auto& addition = *main->body[0];
             auto& additionOp = std::get<ast::BinaryOp>(addition.kind);
             auto& multiplication = *additionOp.right;
@@ -51,16 +52,13 @@ int main() {
             assertEqual(addition.location.endOffset, 9);
             assertEqual(multiplication.location.startOffset, 4);
             assertEqual(multiplication.location.endOffset, 9);
-            assertTrue(addition.location.startOffset <=
-                       multiplication.location.startOffset);
-            assertTrue(multiplication.location.endOffset <=
-                       addition.location.endOffset);
+            assertTrue(addition.location.startOffset <= multiplication.location.startOffset);
+            assertTrue(multiplication.location.endOffset <= addition.location.endOffset);
         });
 
         it("includes grouping and postfix syntax in type spans", []() {
             auto program = parse("value : (Int | String)?");
-            auto& annotation =
-                std::get<std::unique_ptr<ast::TypeAnnotation>>(program.items[0]);
+            auto& annotation = std::get<std::unique_ptr<ast::TypeAnnotation>>(program.items[0]);
             auto& optional = *annotation->type;
             auto& unionType = *std::get<ast::OptionalType>(optional.kind).inner;
 
@@ -74,28 +72,22 @@ int main() {
 
         it("includes pattern delimiters in parent spans", []() {
             auto program = parse("let pick([head | tail]) = head");
-            auto& function = std::get<std::unique_ptr<ast::FunctionDef>>(
-                program.items[0]);
+            auto& function = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[0]);
             auto& list = **function->clauses[0].params[0].pattern;
             auto& listPattern = std::get<ast::ListPattern>(list.kind);
 
             assertEqual(list.location.startOffset, 9);
             assertEqual(list.location.endOffset, 22);
-            assertTrue(list.location.startOffset <=
-                       listPattern.elements[0]->location.startOffset);
-            assertTrue(listPattern.elements[0]->location.endOffset <=
-                       list.location.endOffset);
-            assertTrue((*listPattern.rest)->location.endOffset <=
-                       list.location.endOffset);
+            assertTrue(list.location.startOffset <= listPattern.elements[0]->location.startOffset);
+            assertTrue(listPattern.elements[0]->location.endOffset <= list.location.endOffset);
+            assertTrue((*listPattern.rest)->location.endOffset <= list.location.endOffset);
         });
 
         it("completes every step of a postfix chain", []() {
             auto program = parse("foo.bar(1)[0]");
-            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
-                program.items[0]);
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             auto& indexCall = std::get<ast::MethodCall>(main->body[0]->kind);
-            auto& methodCall =
-                std::get<ast::MethodCall>(indexCall.receiver->kind);
+            auto& methodCall = std::get<ast::MethodCall>(indexCall.receiver->kind);
 
             assertEqual(indexCall.receiver->location.startOffset, 0);
             assertEqual(indexCall.receiver->location.endOffset, 10);
@@ -107,8 +99,7 @@ int main() {
 
         it("extends spread nodes through their operand", []() {
             auto program = parse("[...items]");
-            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
-                program.items[0]);
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             auto& list = std::get<ast::ListExpr>(main->body[0]->kind);
 
             assertEqual(list.elements[0]->location.startOffset, 1);
@@ -116,35 +107,27 @@ int main() {
         });
 
         it("includes effect markers and closing ends in declaration spans", []() {
-            const std::string source =
-                "module Demo do\n"
-                "  foul run() = 1\n"
-                "end";
+            const std::string source = "module Demo do\n"
+                                       "  foul run() = 1\n"
+                                       "end";
             auto program = parse(source);
-            auto& module = std::get<std::unique_ptr<ast::ModuleDef>>(
-                program.items[0]);
-            auto& function = std::get<std::unique_ptr<ast::FunctionDef>>(
-                module->body[0]);
+            auto& module = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
+            auto& function = std::get<std::unique_ptr<ast::FunctionDef>>(module->body[0]);
 
             assertEqual(module->location.startOffset, 0);
-            assertEqual(module->location.endOffset,
-                        static_cast<int>(source.size()));
-            assertEqual(function->location.startOffset,
-                        static_cast<int>(source.find("foul")));
-            assertEqual(function->location.endOffset,
-                        static_cast<int>(source.find('\n',
-                                                     source.find("foul"))));
-            assertTrue(module->location.startOffset <=
-                       function->location.startOffset);
-            assertTrue(function->location.endOffset <=
-                       module->location.endOffset);
+            assertEqual(module->location.endOffset, static_cast<int>(source.size()));
+            assertEqual(function->location.startOffset, static_cast<int>(source.find("foul")));
+            assertEqual(
+                function->location.endOffset,
+                static_cast<int>(source.find('\n', source.find("foul"))));
+            assertTrue(module->location.startOffset <= function->location.startOffset);
+            assertTrue(function->location.endOffset <= module->location.endOffset);
         });
 
         it("keeps UTF-8 interpolation spans in outer-source bytes", []() {
             const std::string source = "$`é ${1 + 2}`";
             auto program = parse(source);
-            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
-                program.items[0]);
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             auto& literal = std::get<ast::StringLiteral>(main->body[0]->kind);
             auto& showCall = std::get<ast::MethodCall>(literal.values[0]->kind);
             auto& interpolation = *showCall.receiver;
@@ -152,11 +135,9 @@ int main() {
 
             assertEqual(interpolation.location.startOffset, start);
             assertEqual(interpolation.location.endOffset, start + 5);
-            assertEqual(std::get<ast::BinaryOp>(interpolation.kind)
-                            .left->location.endOffset,
-                        start + 1);
-            assertTrue(interpolation.location.endOffset <=
-                       main->body[0]->location.endOffset);
+            assertEqual(
+                std::get<ast::BinaryOp>(interpolation.kind).left->location.endOffset, start + 1);
+            assertTrue(interpolation.location.endOffset <= main->body[0]->location.endOffset);
         });
     });
 
@@ -175,8 +156,7 @@ int main() {
         it("parses an = body that opens on the next line", []() {
             auto program = parse(
                 "let double(n: Int) -> Int\n"
-                "  = n * 2\n"
-            );
+                "  = n * 2\n");
             assertEqual(program.items.size(), size_t(1));
             auto& def = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[0]);
             assertEqual(def->clauses.size(), size_t(1));
@@ -188,8 +168,7 @@ int main() {
                 "let chooseTag(name: String, git: String)\n"
                 "    -> Result<String, String> do\n"
                 "  return Ok(name)\n"
-                "end\n"
-            );
+                "end\n");
             assertEqual(program.items.size(), size_t(1));
             auto& def = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[0]);
             assertTrue(def->clauses[0].returnAnnotation.has_value());
@@ -201,8 +180,7 @@ int main() {
             auto program = parse(
                 "let twice(n: Int) = n * 2\n"
                 "\n"
-                "let thrice(n: Int) = n * 3\n"
-            );
+                "let thrice(n: Int) = n * 3\n");
             assertEqual(program.items.size(), size_t(2));
         });
 
@@ -211,8 +189,7 @@ int main() {
             // whether or not they annotate their parameters.
             auto program = parse(
                 "let factorial(0) = 1\n"
-                "let factorial(n: Int) = n * factorial(n - 1)\n"
-            );
+                "let factorial(n: Int) = n * factorial(n - 1)\n");
             assertEqual(program.items.size(), size_t(1));
             auto& def = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[0]);
             assertEqual(def->clauses.size(), size_t(2));
@@ -225,8 +202,7 @@ int main() {
         it("folds adjacent same-name pattern clauses into one FunctionDef", []() {
             auto program = parse(
                 "let factorial(0) = 1\n"
-                "let factorial(n) = n * factorial(n - 1)\n"
-            );
+                "let factorial(n) = n * factorial(n - 1)\n");
             assertEqual(program.items.size(), size_t(1));
             auto& def = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[0]);
             assertEqual(def->clauses.size(), size_t(2));
@@ -239,8 +215,7 @@ int main() {
                 "speak : Dog -> String\n"
                 "let speak(d) = \"woof\"\n"
                 "speak : Cat -> String\n"
-                "let speak(c) = \"meow\"\n"
-            );
+                "let speak(c) = \"meow\"\n");
             assertEqual(program.items.size(), size_t(3));
             auto& def = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[1]);
             assertEqual(def->clauses.size(), size_t(2));
@@ -254,8 +229,7 @@ int main() {
                 "make Set do\n"
                 "  let +(other: Set) = other\n"
                 "  let +(other: List) = other\n"
-                "end\n"
-            );
+                "end\n");
             auto& make = std::get<std::unique_ptr<ast::MakeDef>>(program.items[0]);
             assertEqual(make->body.size(), size_t(2));
         });
@@ -267,8 +241,7 @@ int main() {
                 "make Ordering do\n"
                 "  let combine(@Equal, other: Ordering) = other\n"
                 "  let combine(@Less, _) = Less\n"
-                "end\n"
-            );
+                "end\n");
             auto& make = std::get<std::unique_ptr<ast::MakeDef>>(program.items[0]);
             assertEqual(make->body.size(), size_t(1));
         });
@@ -280,8 +253,7 @@ int main() {
                 "  private do\n"
                 "    let size(n) = n\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             auto& make = std::get<std::unique_ptr<ast::MakeDef>>(program.items[0]);
             assertEqual(make->body.size(), size_t(2));
         });
@@ -289,8 +261,7 @@ int main() {
         it("gives each folded clause its own source location", []() {
             auto program = parse(
                 "let factorial(0) = 1\n"
-                "let factorial(n) = n * factorial(n - 1)\n"
-            );
+                "let factorial(n) = n * factorial(n - 1)\n");
             auto& def = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[0]);
             assertEqual(def->clauses.size(), size_t(2));
             assertEqual(def->clauses[0].location.line, 1);
@@ -300,16 +271,14 @@ int main() {
         it("does not fold a foul clause into a pure one of the same name", []() {
             auto program = parse(
                 "let step(0) = 1\n"
-                "foul step(n) = n\n"
-            );
+                "foul step(n) = n\n");
             assertEqual(program.items.size(), size_t(2));
         });
 
         it("does not fold clauses of different written arity", []() {
             auto program = parse(
                 "let step(0) = 1\n"
-                "let step(n, extra) = n + extra\n"
-            );
+                "let step(n, extra) = n + extra\n");
             assertEqual(program.items.size(), size_t(2));
         });
 
@@ -319,8 +288,7 @@ int main() {
                 "make Tree do\n"
                 "  let insert(@Empty, value) = Node(value, Empty, Empty)\n"
                 "  let insert(@Node(c, l, r), value) = Node(c, l, r)\n"
-                "end\n"
-            );
+                "end\n");
             auto& make = std::get<std::unique_ptr<ast::MakeDef>>(program.items[1]);
             assertEqual(make->body.size(), size_t(1));
             auto& fn = std::get<std::unique_ptr<ast::FunctionDef>>(make->body[0]);
@@ -349,19 +317,16 @@ int main() {
             assertEqual(program.items.size(), size_t(1));
         });
 
-        it("allows after as a top-level annotation name", []() {
-            assertTrue(!parseFails("after : Block<Void> -> Void\n"));
-        });
+        it("allows after as a top-level annotation name",
+           []() { assertTrue(!parseFails("after : Block<Void> -> Void\n")); });
     });
 
     describe("Parser — Tagged Literals", []() {
         it("keeps an adjacent raw tag as a dedicated AST node", []() {
             auto program = parse("main do\n  csv`a,b`\nend\n");
-            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
-                program.items[0]);
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             assertEqual(main->body.size(), size_t(1));
-            assertTrue(std::holds_alternative<ast::TaggedLiteral>(
-                main->body[0]->kind));
+            assertTrue(std::holds_alternative<ast::TaggedLiteral>(main->body[0]->kind));
             auto& tagged = std::get<ast::TaggedLiteral>(main->body[0]->kind);
             assertEqual(tagged.tag, std::string("csv"));
             assertEqual(tagged.parts.size(), size_t(1));
@@ -372,20 +337,15 @@ int main() {
 
         it("requires byte adjacency between tag and body", []() {
             auto program = parse("main do\n  csv `a,b`\nend\n");
-            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
-                program.items[0]);
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             assertTrue(!main->body.empty());
-            assertFalse(std::holds_alternative<ast::TaggedLiteral>(
-                main->body[0]->kind));
+            assertFalse(std::holds_alternative<ast::TaggedLiteral>(main->body[0]->kind));
         });
 
         it("parses interpolating backticks into parts and AST values", []() {
-            auto program = parse(
-                "main do\n  $`hello ${name}, ${1 + 2}!`\nend\n");
-            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
-                program.items[0]);
-            auto& literal =
-                std::get<ast::StringLiteral>(main->body[0]->kind);
+            auto program = parse("main do\n  $`hello ${name}, ${1 + 2}!`\nend\n");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& literal = std::get<ast::StringLiteral>(main->body[0]->kind);
             assertEqual(literal.parts.size(), size_t(3));
             assertEqual(literal.parts[0], std::string("hello "));
             assertEqual(literal.parts[1], std::string(", "));
@@ -398,19 +358,14 @@ int main() {
             auto& second = std::get<ast::MethodCall>(literal.values[1]->kind);
             assertEqual(first.method, std::string("showValue"));
             assertEqual(second.method, std::string("showValue"));
-            assertTrue(std::holds_alternative<ast::Identifier>(
-                first.receiver->kind));
-            assertTrue(std::holds_alternative<ast::BinaryOp>(
-                second.receiver->kind));
+            assertTrue(std::holds_alternative<ast::Identifier>(first.receiver->kind));
+            assertTrue(std::holds_alternative<ast::BinaryOp>(second.receiver->kind));
         });
 
         it("parses interpolating tags into the parts and values ABI", []() {
-            auto program = parse(
-                "main do\n  html$`<p>${body}</p>`\nend\n");
-            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
-                program.items[0]);
-            auto& tagged =
-                std::get<ast::TaggedLiteral>(main->body[0]->kind);
+            auto program = parse("main do\n  html$`<p>${body}</p>`\nend\n");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& tagged = std::get<ast::TaggedLiteral>(main->body[0]->kind);
             assertTrue(tagged.interpolating);
             assertEqual(tagged.parts.size(), size_t(2));
             assertEqual(tagged.parts[0], std::string("<p>"));
@@ -419,15 +374,11 @@ int main() {
         });
 
         it("turns $${ into literal interpolation syntax", []() {
-            auto program = parse(
-                "main do\n  $`literal $${name}`\nend\n");
-            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
-                program.items[0]);
-            auto& literal =
-                std::get<ast::StringLiteral>(main->body[0]->kind);
+            auto program = parse("main do\n  $`literal $${name}`\nend\n");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& literal = std::get<ast::StringLiteral>(main->body[0]->kind);
             assertEqual(literal.parts.size(), size_t(1));
-            assertEqual(
-                literal.parts[0], std::string("literal ${name}"));
+            assertEqual(literal.parts[0], std::string("literal ${name}"));
             assertTrue(literal.values.empty());
         });
 
@@ -447,9 +398,8 @@ int main() {
     });
 
     describe("Parser — Exponentiation", []() {
-        it("parses right-associative powers with the expected precedence", []() {
-            assertTrue(!parseFails("main do\n  let x = -2 ^ 3 ^ 2 * 4\nend\n"));
-        });
+        it("parses right-associative powers with the expected precedence",
+           []() { assertTrue(!parseFails("main do\n  let x = -2 ^ 3 ^ 2 * 4\nend\n")); });
     });
 
     describe("Parser — Modules", []() {
@@ -475,8 +425,7 @@ int main() {
         it("desugars a standalone file module", []() {
             auto program = parse(
                 "module Math\n"
-                "let twice(n: Int) = n * 2\n"
-            );
+                "let twice(n: Int) = n * 2\n");
             assertEqual(program.items.size(), size_t(1));
             auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
             assertEqual(mod->name, std::string("Math"));
@@ -492,8 +441,7 @@ int main() {
                 "let buildEntry() do\n"
                 "  Records.Entry { value: 42 }\n"
                 "end\n"
-                "let answer() = 42\n"
-            );
+                "let answer() = 42\n");
             assertEqual(program.items.size(), size_t(1));
             auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
             assertEqual(mod->body.size(), size_t(3));
@@ -522,8 +470,7 @@ int main() {
             auto program = parse(
                 "module Math do\n"
                 "  let abs(n: Int) = n\n"
-                "end\n"
-            );
+                "end\n");
             auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
             assertEqual(mod->body.size(), size_t(1));
         });
@@ -533,8 +480,7 @@ int main() {
                 "module A do\n"
                 "  module B do\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
             assertEqual(mod->body.size(), size_t(1));
             auto& nested = std::get<std::unique_ptr<ast::ModuleDef>>(mod->body[0]);
@@ -545,8 +491,7 @@ int main() {
             auto program = parse(
                 "module App do\n"
                 "  using Http.Router, as: Router, only: [get, Request]\n"
-                "end\n"
-            );
+                "end\n");
             auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
             auto& usingBlock = std::get<std::unique_ptr<ast::UsingBlock>>(mod->body[0]);
             assertTrue(usingBlock->alias.has_value());
@@ -560,8 +505,7 @@ int main() {
             auto program = parse(
                 "module App do\n"
                 "  using Math, except: [(+), (==)]\n"
-                "end\n"
-            );
+                "end\n");
             auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
             auto& usingBlock = std::get<std::unique_ptr<ast::UsingBlock>>(mod->body[0]);
             assertEqual(usingBlock->exceptNames.size(), size_t(2));
@@ -573,16 +517,14 @@ int main() {
             assertTrue(parseFails(
                 "module App do\n"
                 "  using Math, only: [sqrt], except: [sin]\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("parses export declaration options", []() {
             auto program = parse(
                 "module App do\n"
                 "  export Http.Methods, as: Methods, only: [get, (+)]\n"
-                "end\n"
-            );
+                "end\n");
             auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
             auto& exportDecl = std::get<std::unique_ptr<ast::ExportDecl>>(mod->body[0]);
             assertTrue(exportDecl->alias.has_value());
@@ -600,16 +542,14 @@ int main() {
                 "  timeout : Integer = 30000\n"
                 "end\n");
             assertTrue(firstItemIs<std::unique_ptr<ast::RecordDef>>(program));
-            auto& record =
-                std::get<std::unique_ptr<ast::RecordDef>>(program.items[0]);
+            auto& record = std::get<std::unique_ptr<ast::RecordDef>>(program.items[0]);
             assertEqual(record->fields.size(), size_t(1));
             assertEqual(record->fields[0].name, std::string("timeout"));
             assertTrue(record->fields[0].defaultValue.has_value());
         });
 
-        it("allows timeout in record construction", []() {
-            assertTrue(!parseFails("let opts = HttpOptions { timeout: 5000 }"));
-        });
+        it("allows timeout in record construction",
+           []() { assertTrue(!parseFails("let opts = HttpOptions { timeout: 5000 }")); });
     });
 
     describe("Parser — Types", []() {
@@ -638,8 +578,7 @@ int main() {
             auto program = parse(
                 "type Shape\n"
                 "  = Circle(Float)\n"
-                "  | Rectangle(Float, Float)\n"
-            );
+                "  | Rectangle(Float, Float)\n");
             auto& td = std::get<std::unique_ptr<ast::TypeDef>>(program.items[0]);
             assertEqual(td->variants->size(), size_t(2));
         });
@@ -655,8 +594,7 @@ int main() {
             auto program = parse(
                 "type Comparable do\n"
                 "  compare :> This -> This -> Int\n"
-                "end\n"
-            );
+                "end\n");
             auto& td = std::get<std::unique_ptr<ast::TypeDef>>(program.items[0]);
             assertTrue(td->abstractFunctions.has_value());
             assertEqual(td->abstractFunctions->size(), size_t(1));
@@ -669,8 +607,7 @@ int main() {
                 "record User do\n"
                 "  name : String\n"
                 "  age : Int\n"
-                "end\n"
-            );
+                "end\n");
             assertTrue(firstItemIs<std::unique_ptr<ast::RecordDef>>(program));
             auto& rec = std::get<std::unique_ptr<ast::RecordDef>>(program.items[0]);
             assertEqual(rec->name, std::string("User"));
@@ -682,8 +619,7 @@ int main() {
                 "record Config do\n"
                 "  port : Int = 8080\n"
                 "  host : String = \"localhost\"\n"
-                "end\n"
-            );
+                "end\n");
             auto& rec = std::get<std::unique_ptr<ast::RecordDef>>(program.items[0]);
             assertTrue(rec->fields[0].defaultValue.has_value());
             assertTrue(rec->fields[1].defaultValue.has_value());
@@ -694,8 +630,7 @@ int main() {
                 "record Pair<A, B> do\n"
                 "  first : A\n"
                 "  second : B\n"
-                "end\n"
-            );
+                "end\n");
             auto& rec = std::get<std::unique_ptr<ast::RecordDef>>(program.items[0]);
             assertEqual(rec->typeParams.size(), size_t(2));
         });
@@ -706,8 +641,7 @@ int main() {
             auto program = parse(
                 "make Integer do\n"
                 "  let double = this * 2\n"
-                "end\n"
-            );
+                "end\n");
             assertTrue(firstItemIs<std::unique_ptr<ast::MakeDef>>(program));
         });
 
@@ -715,8 +649,7 @@ int main() {
             auto program = parse(
                 "make final: Bool do\n"
                 "  let negate = !this\n"
-                "end\n"
-            );
+                "end\n");
             auto& make = std::get<std::unique_ptr<ast::MakeDef>>(program.items[0]);
             assertTrue(make->isFinal);
         });
@@ -725,8 +658,7 @@ int main() {
             auto program = parse(
                 "make [A] do\n"
                 "  let first(@[x | _]) = Just(x)\n"
-                "end\n"
-            );
+                "end\n");
             assertTrue(firstItemIs<std::unique_ptr<ast::MakeDef>>(program));
         });
 
@@ -734,8 +666,7 @@ int main() {
             auto program = parse(
                 "make [Int] do\n"
                 "  let sum = this.reduce(0, ~(+))\n"
-                "end\n"
-            );
+                "end\n");
             assertTrue(firstItemIs<std::unique_ptr<ast::MakeDef>>(program));
         });
 
@@ -756,19 +687,19 @@ int main() {
                 "  let take(n) = [1]\n"
                 "end\n"
                 "\n"
-                "let useIt(f) = f.next\n"
-            );
-            assertTrue(!parseFails(
-                "make Feed do\n"
-                "  next :> Integer?\n"
-                "  let next = 1\n"
-                "\n"
-                "  take :> Integer -> [Integer]\n"
-                "  let take(n) = [1]\n"
-                "end\n"
-                "\n"
-                "let useIt(f) = f.next\n"
-            ), "declaring and calling a 'next' method must not be a parse error");
+                "let useIt(f) = f.next\n");
+            assertTrue(
+                !parseFails(
+                    "make Feed do\n"
+                    "  next :> Integer?\n"
+                    "  let next = 1\n"
+                    "\n"
+                    "  take :> Integer -> [Integer]\n"
+                    "  let take(n) = [1]\n"
+                    "end\n"
+                    "\n"
+                    "let useIt(f) = f.next\n"),
+                "declaring and calling a 'next' method must not be a parse error");
             assertEqual(program.items.size(), size_t{2});
             auto& make = std::get<std::unique_ptr<ast::MakeDef>>(program.items[0]);
             // Both 'next' (contract + let) and 'take' (contract + let) must
@@ -782,8 +713,7 @@ int main() {
                 "  loop do\n"
                 "    next if true\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -798,14 +728,12 @@ int main() {
                 "main do\n"
                 "  let (_, after) = (\"x\", 1)\n"
                 "  IO.printLine(after)\n"
-                "end\n"
-            );
+                "end\n");
             assertTrue(!parseFails(
                 "main do\n"
                 "  let (_, after) = (\"x\", 1)\n"
                 "  IO.printLine(after)\n"
-                "end\n"
-            ));
+                "end\n"));
             assertEqual(program.items.size(), size_t{1});
         });
 
@@ -815,12 +743,10 @@ int main() {
                 "\n"
                 "let after -> Integer do\n"
                 "  2\n"
-                "end\n"
-            );
+                "end\n");
             assertEqual(program.items.size(), size_t{2});
             assertTrue(firstItemIs<std::unique_ptr<ast::FunctionDef>>(program));
-            auto& second =
-                std::get<std::unique_ptr<ast::FunctionDef>>(program.items[1]);
+            auto& second = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[1]);
             assertEqual(second->name, std::string("after"));
         });
 
@@ -834,8 +760,7 @@ int main() {
                 "\n"
                 "main do\n"
                 "  IO.printLine(describe(Timer { after: 5 }))\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("still lexes 'after' as the receive-clause keyword", []() {
@@ -846,8 +771,7 @@ int main() {
                 "  after timeout: 100\n"
                 "    IO.printLine(\"timed out\")\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
     });
 
@@ -952,8 +876,7 @@ int main() {
                 "  else\n"
                 "    -x\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             assertEqual(main->body.size(), size_t(1));
         });
@@ -965,8 +888,7 @@ int main() {
                 "    0 => \"zero\"\n"
                 "    _ => \"other\"\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             assertEqual(main->body.size(), size_t(1));
         });
@@ -987,8 +909,7 @@ int main() {
                 "      end\n"
                 "    end\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             assertEqual(main->body.size(), size_t(1));
         });
@@ -1000,16 +921,15 @@ int main() {
                 "  while i < 3 do\n"
                 "    i = i + 1\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             auto& loop = std::get<ast::WhileExpr>(main->body[1]->kind);
             assertEqual(loop.body.size(), size_t(1));
         });
 
         it("rejects while without 'do'", []() {
-            assertTrue(parseFails(
-                "main do\n  var i = 0\n  while i < 3\n    i = i + 1\n  end\nend\n"));
+            assertTrue(
+                parseFails("main do\n  var i = 0\n  while i < 3\n    i = i + 1\n  end\nend\n"));
         });
 
         it("desugars '+=' to 'x = x + value'", []() {
@@ -1019,8 +939,7 @@ int main() {
             assertEqual(assign.name, std::string("x"));
             auto& binary = std::get<ast::BinaryOp>(assign.value->kind);
             assertTrue(binary.op == TokenType::Plus);
-            assertEqual(std::get<ast::Identifier>(binary.left->kind).name,
-                        std::string("x"));
+            assertEqual(std::get<ast::Identifier>(binary.left->kind).name, std::string("x"));
         });
 
         it("desugars '&&=' and '||=' to their binary op", []() {
@@ -1030,15 +949,12 @@ int main() {
                 "  a &&= false\n"
                 "  var b = false\n"
                 "  b ||= true\n"
-                "end\n"
-            );
+                "end\n");
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             auto& andAssign = std::get<ast::AssignExpr>(main->body[1]->kind);
-            assertTrue(std::get<ast::BinaryOp>(andAssign.value->kind).op ==
-                       TokenType::AmpAmp);
+            assertTrue(std::get<ast::BinaryOp>(andAssign.value->kind).op == TokenType::AmpAmp);
             auto& orAssign = std::get<ast::AssignExpr>(main->body[3]->kind);
-            assertTrue(std::get<ast::BinaryOp>(orAssign.value->kind).op ==
-                       TokenType::PipePipe);
+            assertTrue(std::get<ast::BinaryOp>(orAssign.value->kind).op == TokenType::PipePipe);
         });
 
         it("desugars compound assignment on a record field path", []() {
@@ -1056,7 +972,6 @@ int main() {
     });
 
     describe("Parser — Receive clause body", []() {
-
         it("parses sender binding", []() {
             auto prog = parse(
                 "foul wait do\n"
@@ -1077,16 +992,14 @@ int main() {
                 "  receive do\n"
                 "    :ping => :pong\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             assertFalse(parseFails(
                 "# kex: no-check\n"
                 "foul loop do\n"
                 "  receive do\n"
                 "    :ping => :pong\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
             assertEqual(prog.items.size(), size_t(1));
         });
 
@@ -1100,8 +1013,7 @@ int main() {
                 "      IO.printLine(\"pong\")\n"
                 "    :stop => :done\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("multi-statement arm body with do...end keeps enclosing foul function", []() {
@@ -1118,8 +1030,7 @@ int main() {
                 "end\n"
                 "main do\n"
                 "  IO.printLine(\"hi\")\n"
-                "end\n"
-            );
+                "end\n");
             // Both the foul function AND main must be present.
             assertEqual(prog.items.size(), size_t(2));
             assertTrue((std::holds_alternative<std::unique_ptr<ast::FunctionDef>>(prog.items[0])));
@@ -1136,9 +1047,8 @@ int main() {
                 "      counter(n + 1)\n"
                 "    end\n"
                 "  end\n"
-                "end\n"
-            );
-            auto& fn  = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
+                "end\n");
+            auto& fn = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
             auto& recv = std::get<ast::ReceiveExpr>(fn->clauses[0].body[0]->kind);
             assertEqual(recv.clauses.size(), size_t(1));
             // The two-expression body must be wrapped in a BlockExpr.
@@ -1155,9 +1065,8 @@ int main() {
                 "    :ping =>\n"
                 "      counter(1)\n"
                 "  end\n"
-                "end\n"
-            );
-            auto& fn   = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
+                "end\n");
+            auto& fn = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
             auto& recv = std::get<ast::ReceiveExpr>(fn->clauses[0].body[0]->kind);
             assertEqual(recv.clauses.size(), size_t(1));
             // Single expression: returned as-is, not wrapped.
@@ -1175,9 +1084,8 @@ int main() {
                 "    end\n"
                 "    :stop => :done\n"
                 "  end\n"
-                "end\n"
-            );
-            auto& fn   = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
+                "end\n");
+            auto& fn = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
             auto& recv = std::get<ast::ReceiveExpr>(fn->clauses[0].body[0]->kind);
             // Must have exactly 2 clauses: :ping and :stop.
             assertEqual(recv.clauses.size(), size_t(2));
@@ -1192,9 +1100,8 @@ int main() {
                 "      counter(n + 1)\n"
                 "    (:get, sender) => sender\n"
                 "  end\n"
-                "end\n"
-            );
-            auto& fn   = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
+                "end\n");
+            auto& fn = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
             auto& recv = std::get<ast::ReceiveExpr>(fn->clauses[0].body[0]->kind);
             assertEqual(recv.clauses.size(), size_t(2));
         });
@@ -1208,9 +1115,8 @@ int main() {
                 "    :ping =>\n"
                 "      counter(name, n + 1)\n"
                 "  end\n"
-                "end\n"
-            );
-            auto& fn   = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
+                "end\n");
+            auto& fn = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
             auto& recv = std::get<ast::ReceiveExpr>(fn->clauses[0].body[0]->kind);
             // Only one clause: :ping
             assertEqual(recv.clauses.size(), size_t(1));
@@ -1228,8 +1134,7 @@ int main() {
                 "      loop()\n"
                 "    end\n"
                 "  end\n"
-                "end\n"
-            ));
+                "end\n"));
         });
 
         it("parses receive with timeout", []() {
@@ -1241,9 +1146,8 @@ int main() {
                 "  after timeout: 500\n"
                 "    :timeout\n"
                 "  end\n"
-                "end\n"
-            );
-            auto& fn   = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
+                "end\n");
+            auto& fn = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
             auto& recv = std::get<ast::ReceiveExpr>(fn->clauses[0].body[0]->kind);
             assertTrue(recv.timeout.has_value());
             assertTrue(recv.afterBody.has_value());
@@ -1269,8 +1173,7 @@ int main() {
                 "  list.each do |x|\n"
                 "    print(x)\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             assertEqual(main->body.size(), size_t(1));
         });
@@ -1297,13 +1200,11 @@ int main() {
             assertTrue(parseFails("main do\n  let x = list.reduce(0, &.+)\nend"));
         });
 
-        it("rejects &function — capture is spelled with ~", []() {
-            assertTrue(parseFails("main do\n  let x = list.sort(&compare)\nend"));
-        });
+        it("rejects &function — capture is spelled with ~",
+           []() { assertTrue(parseFails("main do\n  let x = list.sort(&compare)\nend")); });
 
-        it("rejects &operator — capture is spelled with ~(op)", []() {
-            assertTrue(parseFails("main do\n  let x = list.reduce(0, &+)\nend"));
-        });
+        it("rejects &operator — capture is spelled with ~(op)",
+           []() { assertTrue(parseFails("main do\n  let x = list.reduce(0, &+)\nend")); });
     });
 
     describe("Parser — Spread", []() {
@@ -1330,8 +1231,7 @@ int main() {
         });
 
         it("accepts a spread as a do-block statement", []() {
-            assertFalse(parseFails(
-                "main do\n  let x = div do\n    ...items\n  end\nend"));
+            assertFalse(parseFails("main do\n  let x = div do\n    ...items\n  end\nend"));
         });
 
         it("rejects a spread outside a collection", []() {
@@ -1351,9 +1251,8 @@ int main() {
         });
 
         it("parses every binary operator capture", []() {
-            for (const auto* op : {"+", "-", "*", "/", "%", "^",
-                                   "==", "!=", "<", "<=", ">", ">=",
-                                   "&&", "||"}) {
+            for (const auto* op :
+                 {"+", "-", "*", "/", "%", "^", "==", "!=", "<", "<=", ">", ">=", "&&", "||"}) {
                 assertFalse(parseFails(
                     "main do\n  let x = list.reduce(0, ~(" + std::string(op) + "))\nend"));
             }
@@ -1370,8 +1269,7 @@ int main() {
         });
 
         it("parses a nested-submodule capture", []() {
-            auto program = parse(
-                "main do\n  let x = list.map(~Outer.Inner.Deep.shout)\nend");
+            auto program = parse("main do\n  let x = list.map(~Outer.Inner.Deep.shout)\nend");
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             auto& let = std::get<ast::LetExpr>(main->body[0]->kind);
             auto& map = std::get<ast::MethodCall>(let.value->kind);
@@ -1381,13 +1279,11 @@ int main() {
         });
 
         it("parses partial application of a qualified name", []() {
-            assertFalse(parseFails(
-                "main do\n  let x = list.map(~Outer.Inner.add(10))\nend"));
+            assertFalse(parseFails("main do\n  let x = list.map(~Outer.Inner.add(10))\nend"));
         });
 
-        it("rejects a qualified capture with no function name", []() {
-            assertTrue(parseFails("main do\n  let x = list.map(~Outer.Inner)\nend"));
-        });
+        it("rejects a qualified capture with no function name",
+           []() { assertTrue(parseFails("main do\n  let x = list.map(~Outer.Inner)\nend")); });
     });
 
     describe("Parser — Patterns", []() {
@@ -1414,8 +1310,7 @@ int main() {
                 "make [A] do\n"
                 "  let first(@[]) = Nothing\n"
                 "  let first(@[x | _]) = Just(x)\n"
-                "end\n"
-            );
+                "end\n");
             assertTrue(firstItemIs<std::unique_ptr<ast::MakeDef>>(program));
         });
 
@@ -1426,8 +1321,7 @@ int main() {
                 "    Just(x) => x\n"
                 "    Nothing => 0\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             assertEqual(main->body.size(), size_t(1));
         });
@@ -1436,8 +1330,7 @@ int main() {
             auto program = parse(
                 "make Foo do\n"
                 "  let bar({ config: { timeout: t } }) = t\n"
-                "end\n"
-            );
+                "end\n");
             assertTrue(firstItemIs<std::unique_ptr<ast::MakeDef>>(program));
         });
     });
@@ -1514,55 +1407,42 @@ int main() {
 
         it("parses intersection types tighter than function and union types", []() {
             auto program = parse("reader : A & B -> C | D");
-            auto& annotation =
-                std::get<std::unique_ptr<ast::TypeAnnotation>>(program.items[0]);
-            auto* unionType =
-                std::get_if<ast::UnionType>(&annotation->type->kind);
+            auto& annotation = std::get<std::unique_ptr<ast::TypeAnnotation>>(program.items[0]);
+            auto* unionType = std::get_if<ast::UnionType>(&annotation->type->kind);
             assertTrue(unionType != nullptr);
-            auto* functionType =
-                std::get_if<ast::FunctionType>(&unionType->left->kind);
+            auto* functionType = std::get_if<ast::FunctionType>(&unionType->left->kind);
             assertTrue(functionType != nullptr);
-            assertTrue(std::holds_alternative<ast::IntersectionType>(
-                functionType->param->kind));
+            assertTrue(std::holds_alternative<ast::IntersectionType>(functionType->param->kind));
         });
 
         it("parses an intersection on the right side of a type alias", []() {
-            auto program = parse(
-                "type ActiveNamed = Named & { active: Bool }");
-            auto& definition =
-                std::get<std::unique_ptr<ast::TypeDef>>(program.items[0]);
+            auto program = parse("type ActiveNamed = Named & { active: Bool }");
+            auto& definition = std::get<std::unique_ptr<ast::TypeDef>>(program.items[0]);
             assertTrue(definition->variants.has_value());
             assertEqual(definition->variants->size(), size_t(1));
-            assertTrue(std::holds_alternative<ast::IntersectionType>(
-                (*definition->variants)[0]->kind));
+            assertTrue(
+                std::holds_alternative<ast::IntersectionType>((*definition->variants)[0]->kind));
         });
 
         it("disambiguates open record types from map types", []() {
             auto records = parse("labelOf : { label: String, age: Integer } -> String");
             auto& recordAnnotation =
                 std::get<std::unique_ptr<ast::TypeAnnotation>>(records.items[0]);
-            auto* functionType =
-                std::get_if<ast::FunctionType>(&recordAnnotation->type->kind);
+            auto* functionType = std::get_if<ast::FunctionType>(&recordAnnotation->type->kind);
             assertTrue(functionType != nullptr);
-            auto* recordType =
-                std::get_if<ast::RecordType>(&functionType->param->kind);
+            auto* recordType = std::get_if<ast::RecordType>(&functionType->param->kind);
             assertTrue(recordType != nullptr);
             assertEqual(recordType->fields.size(), size_t(2));
 
             auto maps = parse("lookup : { String: Integer } -> Integer");
-            auto& mapAnnotation =
-                std::get<std::unique_ptr<ast::TypeAnnotation>>(maps.items[0]);
-            auto* mapFunction =
-                std::get_if<ast::FunctionType>(&mapAnnotation->type->kind);
+            auto& mapAnnotation = std::get<std::unique_ptr<ast::TypeAnnotation>>(maps.items[0]);
+            auto* mapFunction = std::get_if<ast::FunctionType>(&mapAnnotation->type->kind);
             assertTrue(mapFunction != nullptr);
-            assertTrue(std::holds_alternative<ast::MapType>(
-                mapFunction->param->kind));
+            assertTrue(std::holds_alternative<ast::MapType>(mapFunction->param->kind));
         });
 
-        it("rejects duplicate labels in an open record type", []() {
-            assertTrue(parseFails(
-                "bad : { name: String, name: Integer } -> String"));
-        });
+        it("rejects duplicate labels in an open record type",
+           []() { assertTrue(parseFails("bad : { name: String, name: Integer } -> String")); });
     });
 
     describe("Parser — Using", []() {
@@ -1571,8 +1451,7 @@ int main() {
                 "using Html.Language do\n"
                 "  html do\n"
                 "  end\n"
-                "end\n"
-            );
+                "end\n");
             assertTrue(firstItemIs<std::unique_ptr<ast::UsingBlock>>(program));
         });
 
@@ -1599,17 +1478,11 @@ int main() {
     });
 
     describe("Parser — Error Cases", []() {
-        it("rejects unclosed do block", []() {
-            assertTrue(parseFails("main do\n  let x = 5\n"));
-        });
+        it("rejects unclosed do block", []() { assertTrue(parseFails("main do\n  let x = 5\n")); });
 
-        it("rejects unclosed module", []() {
-            assertTrue(parseFails("module Foo do\n"));
-        });
+        it("rejects unclosed module", []() { assertTrue(parseFails("module Foo do\n")); });
 
-        it("rejects invalid token at top level", []() {
-            assertTrue(parseFails("+ 5"));
-        });
+        it("rejects invalid token at top level", []() { assertTrue(parseFails("+ 5")); });
 
         it("accepts rescue pipe catch-all", []() {
             assertFalse(parseFails(
@@ -1634,15 +1507,21 @@ int main() {
             return args.empty() ? Value{} : args.front();
         }
         auto record(std::string name, Fields fields) const -> Value {
-            if (name == "SyntaxToken") return fields[2].second + fields[1].second;
-            return fields[1].second;  // SyntaxNode: its children, in order
+            if (name == "SyntaxToken") {
+                return fields[2].second + fields[1].second;
+            }
+            return fields[1].second; // SyntaxNode: its children, in order
         }
         auto list(std::vector<Value> values) const -> Value {
             std::string out;
-            for (const auto& value : values) out += value;
+            for (const auto& value : values) {
+                out += value;
+            }
             return out;
         }
-        auto string(std::string value) const -> Value { return value; }
+        auto string(std::string value) const -> Value {
+            return value;
+        }
     };
     // The same tree as nested node kinds only: `(Program (FunctionDef ...))`.
     struct ShapeBuilder {
@@ -1652,40 +1531,50 @@ int main() {
             return args.empty() ? Value{} : args.front();
         }
         auto record(std::string name, Fields fields) const -> Value {
-            if (name == "SyntaxToken") return "";
+            if (name == "SyntaxToken") {
+                return "";
+            }
             return "(" + fields[0].second + fields[1].second + ")";
         }
         auto list(std::vector<Value> values) const -> Value {
             std::string out;
-            for (const auto& value : values) out += value;
+            for (const auto& value : values) {
+                out += value;
+            }
             return out;
         }
-        auto string(std::string value) const -> Value { return value; }
+        auto string(std::string value) const -> Value {
+            return value;
+        }
     };
-    auto buildWith = [](auto builder, const std::string& source)
-        -> std::optional<std::string> {
+    auto buildWith = [](auto builder, const std::string& source) -> std::optional<std::string> {
         Lexer lexer(source);
         auto tokens = lexer.tokenizeAll();
         Parser parser(tokens);
         parser.parseProgram();
-        if (!parser.diagnostics().empty()) return std::nullopt;
+        if (!parser.diagnostics().empty()) {
+            return std::nullopt;
+        }
         return ast::buildSyntaxTree(builder, tokens, source, parser.syntaxSpans());
     };
 
     describe("Parser — lossless syntax tree", [buildWith]() {
         it("reprints comments, blank lines and spellings exactly", [buildWith]() {
-            const std::string source =
-                "# lead\n\n\nmodule M do\n  let f(a, b) = a + b   # sum\n\n"
-                "  let s = \"x ${f(1, 2)}\"\nend\n# ends without a newline";
+            const std::string source = "# lead\n\n\nmodule M do\n  let f(a, b) = a + b   # sum\n\n"
+                                       "  let s = \"x ${f(1, 2)}\"\nend\n# ends without a newline";
             auto out = buildWith(ReprintBuilder{}, source);
             assertTrue(out.has_value());
-            if (out) assertEqual(*out, source);
+            if (out) {
+                assertEqual(*out, source);
+            }
         });
 
         it("nests nodes rather than flattening them under Program", [buildWith]() {
             auto shape = buildWith(ShapeBuilder{}, "let f(a) = a + 1\n");
             assertTrue(shape.has_value());
-            if (!shape) return;
+            if (!shape) {
+                return;
+            }
             assertTrue(shape->rfind("(Program", 0) == 0, *shape);
             assertTrue(shape->find("(FunctionDef") != std::string::npos, *shape);
             assertTrue(std::count(shape->begin(), shape->end(), '(') >= 3, *shape);
@@ -1698,10 +1587,13 @@ int main() {
             size_t parsed = 0;
             std::vector<std::string> failures;
             for (const auto* dir : {"examples", "spec", "src/stdlib"}) {
-                if (!fs::exists(root / dir)) continue;
+                if (!fs::exists(root / dir)) {
+                    continue;
+                }
                 for (const auto& entry : fs::recursive_directory_iterator(root / dir)) {
-                    if (!entry.is_regular_file() || entry.path().extension() != ".kex")
+                    if (!entry.is_regular_file() || entry.path().extension() != ".kex") {
                         continue;
+                    }
                     std::ifstream in(entry.path(), std::ios::binary);
                     std::stringstream buffer;
                     buffer << in.rdbuf();
@@ -1713,19 +1605,23 @@ int main() {
                     parser.parseProgram();
                     // A file written to fail parsing (an error spec) has no
                     // tree to reprint; it is not a losslessness failure.
-                    if (!parser.diagnostics().empty()) continue;
+                    if (!parser.diagnostics().empty()) {
+                        continue;
+                    }
                     ++parsed;
-                    auto out = ast::buildSyntaxTree(ReprintBuilder{}, tokens, source,
-                                                    parser.syntaxSpans());
-                    if (!out || *out != source)
+                    auto out = ast::buildSyntaxTree(
+                        ReprintBuilder{}, tokens, source, parser.syntaxSpans());
+                    if (!out || *out != source) {
                         failures.push_back(entry.path().lexically_relative(root).string());
+                    }
                 }
             }
-            for (const auto& failure : failures)
+            for (const auto& failure : failures) {
                 std::cerr << "    not reprinted: " << failure << "\n";
-            assertTrue(parsed > 300, std::to_string(parsed) + " of " +
-                                         std::to_string(files) +
-                                         " files parsed");
+            }
+            assertTrue(
+                parsed > 300,
+                std::to_string(parsed) + " of " + std::to_string(files) + " files parsed");
             assertEqual(failures.size(), size_t{0});
         });
     });
@@ -1743,105 +1639,132 @@ int main() {
         // fixes: it took a `#` line inside a multi-line string (a Markdown
         // heading in a README template, `# <%= title %>` in a .ket) for a doc
         // comment on the string's next line. Everything else must match.
-        it("finds the line scanner's doc comments in every .kex file, minus those inside strings", [fromTokens]() {
-            namespace fs = std::filesystem;
-            const auto root = fs::path(KEX_SOURCE_DIR);
-            size_t files = 0;
-            size_t insideStrings = 0;
-            std::vector<std::string> differences;
-            for (const auto* dir : {"examples", "spec", "src/stdlib", "tey/src"}) {
-                if (!fs::exists(root / dir)) continue;
-                for (const auto& entry : fs::recursive_directory_iterator(root / dir)) {
-                    if (!entry.is_regular_file() || entry.path().extension() != ".kex")
-                        continue;
-                    std::ifstream in(entry.path(), std::ios::binary);
-                    std::stringstream buffer;
-                    buffer << in.rdbuf();
-                    const auto source = buffer.str();
-                    ++files;
-                    const auto lines = ast::extractDocComments(source);
-                    const auto tokens = fromTokens(source);
-                    const auto name = entry.path().lexically_relative(root).string();
+        it("finds the line scanner's doc comments in every .kex file, minus those inside strings",
+           [fromTokens]() {
+               namespace fs = std::filesystem;
+               const auto root = fs::path(KEX_SOURCE_DIR);
+               size_t files = 0;
+               size_t insideStrings = 0;
+               std::vector<std::string> differences;
+               for (const auto* dir : {"examples", "spec", "src/stdlib", "tey/src"}) {
+                   if (!fs::exists(root / dir)) {
+                       continue;
+                   }
+                   for (const auto& entry : fs::recursive_directory_iterator(root / dir)) {
+                       if (!entry.is_regular_file() || entry.path().extension() != ".kex") {
+                           continue;
+                       }
+                       std::ifstream in(entry.path(), std::ios::binary);
+                       std::stringstream buffer;
+                       buffer << in.rdbuf();
+                       const auto source = buffer.str();
+                       ++files;
+                       const auto lines = ast::extractDocComments(source);
+                       const auto tokens = fromTokens(source);
+                       const auto name = entry.path().lexically_relative(root).string();
 
-                    // Lines that lie inside a token, past its first line: the
-                    // interior of a multi-line string.
-                    std::vector<bool> interior;
-                    {
-                        Lexer lexer(source);
-                        for (const auto& token : lexer.tokenizeAll()) {
-                            if (token.startOffset < 0 || token.endOffset <= token.startOffset)
-                                continue;
-                            const auto raw = std::string_view(source).substr(
-                                token.startOffset, token.endOffset - token.startOffset);
-                            const auto breaks = static_cast<int>(std::count(raw.begin(), raw.end(), '\n'));
-                            for (int line = token.location.line + 1;
-                                 line <= token.location.line + breaks; ++line) {
-                                if (static_cast<int>(interior.size()) <= line) interior.resize(line + 1, false);
-                                interior[line] = true;
-                            }
-                        }
-                    }
-                    std::vector<std::string_view> sourceLines;
-                    for (size_t start = 0; start <= source.size();) {
-                        const auto end = source.find('\n', start);
-                        sourceLines.push_back(std::string_view(source).substr(
-                            start, end == std::string::npos ? std::string::npos : end - start));
-                        if (end == std::string::npos) break;
-                        start = end + 1;
-                    }
-                    // The doc for `line` came from inside a string when the
-                    // closest non-blank line above it is a string's interior.
-                    auto fromInsideString = [&](int line) {
-                        for (int above = line - 1; above >= 1; --above) {
-                            const auto text = sourceLines[above - 1];
-                            if (text.find_first_not_of(" \t\r") == std::string_view::npos) continue;
-                            return above < static_cast<int>(interior.size()) && interior[above];
-                        }
-                        return false;
-                    };
+                       // Lines that lie inside a token, past its first line: the
+                       // interior of a multi-line string.
+                       std::vector<bool> interior;
+                       {
+                           Lexer lexer(source);
+                           for (const auto& token : lexer.tokenizeAll()) {
+                               if (token.startOffset < 0 || token.endOffset <= token.startOffset) {
+                                   continue;
+                               }
+                               const auto raw = std::string_view(source).substr(
+                                   token.startOffset, token.endOffset - token.startOffset);
+                               const auto breaks =
+                                   static_cast<int>(std::count(raw.begin(), raw.end(), '\n'));
+                               for (int line = token.location.line + 1;
+                                    line <= token.location.line + breaks; ++line) {
+                                   if (static_cast<int>(interior.size()) <= line) {
+                                       interior.resize(line + 1, false);
+                                   }
+                                   interior[line] = true;
+                               }
+                           }
+                       }
+                       std::vector<std::string_view> sourceLines;
+                       for (size_t start = 0; start <= source.size();) {
+                           const auto end = source.find('\n', start);
+                           sourceLines.push_back(
+                               std::string_view(source).substr(
+                                   start,
+                                   end == std::string::npos ? std::string::npos : end - start));
+                           if (end == std::string::npos) {
+                               break;
+                           }
+                           start = end + 1;
+                       }
+                       // The doc for `line` came from inside a string when the
+                       // closest non-blank line above it is a string's interior.
+                       auto fromInsideString = [&](int line) {
+                           for (int above = line - 1; above >= 1; --above) {
+                               const auto text = sourceLines[above - 1];
+                               if (text.find_first_not_of(" \t\r") == std::string_view::npos) {
+                                   continue;
+                               }
+                               return above < static_cast<int>(interior.size()) && interior[above];
+                           }
+                           return false;
+                       };
 
-                    for (const auto& [line, doc] : lines) {
-                        const auto found = tokens.find(line);
-                        if (found != tokens.end() && found->second == doc) continue;
-                        if (found == tokens.end() && fromInsideString(line)) {
-                            ++insideStrings;
-                            continue;
-                        }
-                        differences.push_back(name + ":" + std::to_string(line));
-                    }
-                    for (const auto& [line, doc] : tokens)
-                        if (!lines.count(line))
-                            differences.push_back(name + ":" + std::to_string(line) + " (new)");
-                }
-            }
-            for (const auto& difference : differences)
-                std::cerr << "    doc comment differs: " << difference << "\n";
-            assertTrue(files > 300);
-            assertTrue(insideStrings > 0, "expected the string cases the line scanner got wrong");
-            assertEqual(differences.size(), size_t{0});
-        });
+                       for (const auto& [line, doc] : lines) {
+                           const auto found = tokens.find(line);
+                           if (found != tokens.end() && found->second == doc) {
+                               continue;
+                           }
+                           if (found == tokens.end() && fromInsideString(line)) {
+                               ++insideStrings;
+                               continue;
+                           }
+                           differences.push_back(name + ":" + std::to_string(line));
+                       }
+                       for (const auto& [line, doc] : tokens) {
+                           if (!lines.count(line)) {
+                               differences.push_back(name + ":" + std::to_string(line) + " (new)");
+                           }
+                       }
+                   }
+               }
+               for (const auto& difference : differences) {
+                   std::cerr << "    doc comment differs: " << difference << "\n";
+               }
+               assertTrue(files > 300);
+               assertTrue(
+                   insideStrings > 0, "expected the string cases the line scanner got wrong");
+               assertEqual(differences.size(), size_t{0});
+           });
 
         it("does not take a # line inside a multi-line string for a doc comment", [fromTokens]() {
             const std::string source = "let text = `\n# not a comment\n`\nlet x = 1\n";
-            assertFalse(ast::extractDocComments(source).empty(),
-                        "the line scanner's mistake this replaces");
+            assertFalse(
+                ast::extractDocComments(source).empty(),
+                "the line scanner's mistake this replaces");
             assertTrue(fromTokens(source).empty());
         });
 
-        it("attaches a comment block, blank lines inside it kept, to the next code line", [fromTokens]() {
-            const auto docs = fromTokens("# first\n#\n# third\nlet x = 1\n");
-            const auto found = docs.find(4);
-            assertTrue(found != docs.end());
-            if (found != docs.end()) assertEqual(found->second, std::string("first\n\nthird"));
-        });
+        it("attaches a comment block, blank lines inside it kept, to the next code line",
+           [fromTokens]() {
+               const auto docs = fromTokens("# first\n#\n# third\nlet x = 1\n");
+               const auto found = docs.find(4);
+               assertTrue(found != docs.end());
+               if (found != docs.end()) {
+                   assertEqual(found->second, std::string("first\n\nthird"));
+               }
+           });
     });
 
     describe("Parser — Qualified paren-less calls", []() {
         auto firstCall = [](const ast::Program& program) -> const ast::MethodCall* {
-            if (program.items.empty()) return nullptr;
-            auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(
-                &program.items[0]);
-            if (!main || (*main)->body.empty()) return nullptr;
+            if (program.items.empty()) {
+                return nullptr;
+            }
+            auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(&program.items[0]);
+            if (!main || (*main)->body.empty()) {
+                return nullptr;
+            }
             return std::get_if<ast::MethodCall>(&(*main)->body[0]->kind);
         };
 
@@ -1852,7 +1775,9 @@ int main() {
             auto program = parse(source);
             const auto* call = firstCall(program);
             assertTrue(call != nullptr);
-            if (!call) return;
+            if (!call) {
+                return;
+            }
             assertEqual(call->method, std::string("define"));
             assertEqual(call->args.size(), size_t(1));
             assertEqual(call->namedArgs.size(), size_t(1));
@@ -1869,12 +1794,13 @@ int main() {
             auto program = parse("Migration.count\n:done\n");
             const auto* call = firstCall(program);
             assertTrue(call != nullptr);
-            if (call) assertEqual(call->args.size(), size_t(0));
+            if (call) {
+                assertEqual(call->args.size(), size_t(0));
+            }
         });
 
         it("still ends a condition at its own do", []() {
-            assertFalse(parseFails(
-                "main do\n  while queue.size - 1 do\n    1\n  end\nend\n"));
+            assertFalse(parseFails("main do\n  while queue.size - 1 do\n    1\n  end\nend\n"));
         });
     });
 
@@ -1884,15 +1810,16 @@ int main() {
             Parser parser(lexer.tokenizeAll());
             parser.parseProgram();
             assertEqual(parser.diagnostics().size(), size_t(1));
-            if (!parser.diagnostics().empty())
-                assertEqual(parser.diagnostics()[0].message,
-                            std::string("`T` is a type parameter, so it cannot "
-                                        "name a module, give it a longer name"));
+            if (!parser.diagnostics().empty()) {
+                assertEqual(
+                    parser.diagnostics()[0].message, std::string(
+                                                         "`T` is a type parameter, so it cannot "
+                                                         "name a module, give it a longer name"));
+            }
         });
 
-        it("accepts a longer alias", []() {
-            assertFalse(parseFails("using Lib.Columns, as: Columns\n"));
-        });
+        it("accepts a longer alias",
+           []() { assertFalse(parseFails("using Lib.Columns, as: Columns\n")); });
     });
 
     return runAll();

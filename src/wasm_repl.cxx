@@ -30,7 +30,7 @@
 
 #include <algorithm>
 #include <memory>
-#include <new>  // IWYU pragma: keep (the standard declares placement new here)
+#include <new> // IWYU pragma: keep (the standard declares placement new here)
 #include <sstream>
 #include <string>
 #include <vector>
@@ -67,7 +67,9 @@ extern "C" {
 static std::string g_banner;
 
 EMSCRIPTEN_KEEPALIVE
-const char* kex_version() { return kex::versionString().c_str(); }
+const char* kex_version() {
+    return kex::versionString().c_str();
+}
 
 EMSCRIPTEN_KEEPALIVE
 const char* kex_repl_banner() {
@@ -117,23 +119,25 @@ namespace {
 // directly; everything else (a plain `let x = 5`, or any bare expression
 // like `1 + 2`) gets wrapped so the grammar accepts it as a `main` body.
 auto looksLikeTopLevelDef(const std::string& source) -> bool {
-    auto startsWith = [&](const char* prefix) {
-        return source.rfind(prefix, 0) == 0;
-    };
+    auto startsWith = [&](const char* prefix) { return source.rfind(prefix, 0) == 0; };
     if (startsWith("module ") || startsWith("type ") || startsWith("record ") ||
         startsWith("make ") || startsWith("foul module ")) {
         return true;
     }
     size_t defOffset = std::string::npos;
-    if (startsWith("let ")) defOffset = 4;
-    else if (startsWith("foul ")) defOffset = 5;
-    if (defOffset == std::string::npos) return false;
+    if (startsWith("let ")) {
+        defOffset = 4;
+    } else if (startsWith("foul ")) {
+        defOffset = 5;
+    }
+    if (defOffset == std::string::npos) {
+        return false;
+    }
 
     auto parenPos = source.find('(', defOffset);
     auto eqPos = source.find('=', defOffset);
     auto doPos = source.find(" do", defOffset);
-    return parenPos != std::string::npos &&
-           (eqPos == std::string::npos || parenPos < eqPos) &&
+    return parenPos != std::string::npos && (eqPos == std::string::npos || parenPos < eqPos) &&
            (doPos == std::string::npos || parenPos < doPos);
 }
 
@@ -217,22 +221,26 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
         // never refused an input the checker rejects, so one that fails the
         // check still runs, on the values alone.
         std::optional<hir::CheckedInput> checked;
-        if (!isDef) try {
-            Lexer sessionLexer(session->replAccumSource + "main do\n" +
-                                   session->replBindings + "end\n",
-                               "<repl>");
-            Parser sessionParser(sessionLexer.tokenizeAll(), "<repl>");
-            checked = hir::checkReplInput(
-                std::make_unique<ast::Program>(sessionParser.parseProgram()),
-                *program, {}, nullptr, &preludeSemanticInterfaces(""));
-        } catch (...) {
-            checked.reset();  // a session history that does not re-parse
+        if (!isDef) {
+            try {
+                Lexer sessionLexer(
+                    session->replAccumSource + "main do\n" + session->replBindings + "end\n",
+                    "<repl>");
+                Parser sessionParser(sessionLexer.tokenizeAll(), "<repl>");
+                checked = hir::checkReplInput(
+                    std::make_unique<ast::Program>(sessionParser.parseProgram()), *program, {},
+                    nullptr, &preludeSemanticInterfaces(""));
+            } catch (...) {
+                checked.reset(); // a session history that does not re-parse
+            }
         }
         session->evaluator.setProgram(
             checked && checked->program ? checked->program.get() : nullptr);
         struct Unset {
             interpreter::Evaluator& evaluator;
-            ~Unset() { evaluator.setProgram(nullptr); }
+            ~Unset() {
+                evaluator.setProgram(nullptr);
+            }
         } unset{session->evaluator};
 
         size_t outputBefore = session->evaluator.output().size();
@@ -242,30 +250,31 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
         // As main.cxx's REPL: only definitions accumulate for completion,
         // since a bare expression like `1 + 2` isn't a name anything else
         // can reference.
-        if (isDef) session->replAccumSource += source + "\n";
-        else if (source.rfind("let ", 0) == 0 || source.rfind("var ", 0) == 0)
+        if (isDef) {
+            session->replAccumSource += source + "\n";
+        } else if (source.rfind("let ", 0) == 0 || source.rfind("var ", 0) == 0) {
             session->replBindings += source + "\n";
+        }
 
         // Matches main.cxx's real REPL showResult lambda exactly (gray "=>"
         // and ":", plain value, cyan type — showTypes defaults to on there
         // too), so the two look identical once rendered through a real
         // terminal instead of a plain-text diff.
         if (!isDef && value && !std::holds_alternative<UnitValue>(value->data)) {
-            result += std::string(color::apply(color::gray)) + "=> " +
-                      color::apply(color::reset) + value->inspect() + " " +
-                      color::apply(color::gray) + ":" + color::apply(color::reset) +
-                      " " + color::apply(color::cyan) + value->typeName() +
-                      color::apply(color::reset) + "\n";
+            result += std::string(color::apply(color::gray)) + "=> " + color::apply(color::reset) +
+                      value->inspect() + " " + color::apply(color::gray) + ":" +
+                      color::apply(color::reset) + " " + color::apply(color::cyan) +
+                      value->typeName() + color::apply(color::reset) + "\n";
         }
     } catch (const std::exception& e) {
         // Matches main.cxx's real REPL error formatting exactly (see its
         // `catch (const std::exception &e)` blocks) so the two look
         // identical once rendered through a real terminal.
-        result = std::string("  ") + color::apply(color::red) + "error:" +
-                 color::apply(color::reset) + " " + e.what() + "\n";
+        result = std::string("  ") + color::apply(color::red) +
+                 "error:" + color::apply(color::reset) + " " + e.what() + "\n";
     } catch (...) {
-        result = std::string("  ") + color::apply(color::red) + "error:" +
-                 color::apply(color::reset) + " unknown failure\n";
+        result = std::string("  ") + color::apply(color::red) +
+                 "error:" + color::apply(color::reset) + " unknown failure\n";
     }
 
     session->lastResult = std::move(result);
@@ -309,19 +318,18 @@ const char* kex_repl_last_result(KexReplSession* session) {
 // synchronous call — never touches evaluator.execute()/Asyncify — so unlike
 // kex_repl_eval this can return its result directly.
 EMSCRIPTEN_KEEPALIVE
-const char* kex_repl_complete(KexReplSession* session, const char* lineIn,
-                               int start, const char* textIn) {
+const char*
+kex_repl_complete(KexReplSession* session, const char* lineIn, int start, const char* textIn) {
     using namespace kex;
 
     std::string line(lineIn ? lineIn : "");
     std::string text(textIn ? textIn : "");
-    const auto wordStart = std::min(static_cast<size_t>(std::max(start, 0)),
-                                    line.size());
+    const auto wordStart = std::min(static_cast<size_t>(std::max(start, 0)), line.size());
     // Checked as the wasm REPL runs an input: parsed, expanded and analyzed,
     // against no prebuilt interfaces.
     const semantic::CompletionChecker check =
-        [](const std::string& path, const std::string& source)
-        -> std::optional<semantic::CheckedSource> {
+        [](const std::string& path,
+           const std::string& source) -> std::optional<semantic::CheckedSource> {
         auto program = std::make_shared<ast::Program>();
         Lexer lexer(source, path);
         Parser parser(lexer.tokenizeAll(), path);
@@ -339,9 +347,8 @@ const char* kex_repl_complete(KexReplSession* session, const char* lineIn,
         return semantic::CheckedSource{program, analyzer, nullptr};
     };
     auto completion = semantic::completeReplInput(
-        session->preludeSymbols, check, session->replAccumSource,
-        session->replBindings, line, line, wordStart + text.size(), false,
-        nullptr);
+        session->preludeSymbols, check, session->replAccumSource, session->replBindings, line, line,
+        wordStart + text.size(), false, nullptr);
     const auto replaceFrom = std::max(completion.replaceFrom, wordStart);
     const auto lead = line.substr(wordStart, replaceFrom - wordStart);
 

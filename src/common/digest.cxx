@@ -15,6 +15,7 @@ namespace kex {
 // Returns false when the host has no synchronous digest to offer, rather than
 // producing a wrong answer — a bad digest would surface far away, as an
 // unexplained "implementation digest mismatch" on a perfectly good artifact.
+// clang-format off: the body is JavaScript, which clang-format would mangle
 EM_JS(bool, hostSha256, (const uint8_t* data, size_t len, uint8_t* out), {
     try {
         // `require` is absent when this module is loaded as an ES module, so
@@ -30,6 +31,7 @@ EM_JS(bool, hostSha256, (const uint8_t* data, size_t len, uint8_t* out), {
         return false;
     }
 });
+// clang-format on
 #endif
 
 auto sha256(std::span<const uint8_t> bytes) -> Sha256 {
@@ -44,10 +46,11 @@ auto sha256(std::span<const uint8_t> bytes) -> Sha256 {
     // that loads compiled artifacts (the browser REPL ships no unit and takes
     // the source-derived path), and node:crypto's hashing is synchronous,
     // which the SubtleCrypto API in browsers is not.
-    if (!hostSha256(bytes.data(), bytes.size(), out.data()))
+    if (!hostSha256(bytes.data(), bytes.size(), out.data())) {
         throw std::runtime_error(
             "cannot verify compiled artifacts here: this environment provides "
             "no synchronous SHA-256");
+    }
 #else
     SHA256(bytes.data(), bytes.size(), out.data());
 #endif
@@ -55,8 +58,8 @@ auto sha256(std::span<const uint8_t> bytes) -> Sha256 {
 }
 
 auto sha256(std::string_view text) -> Sha256 {
-    return sha256(std::span<const uint8_t>(
-        reinterpret_cast<const uint8_t*>(text.data()), text.size()));
+    return sha256(
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(text.data()), text.size()));
 }
 
 auto hexEncode(std::span<const uint8_t> bytes) -> std::string {

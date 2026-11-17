@@ -18,7 +18,7 @@ struct PrimitiveType {
     // String is its OWN kind, not `[Char]`. Modelling it as a list of Char
     // made the two indistinguishable to the checker, so `contains? : String ->
     // Bool` silently accepted a Char and `[Char]` reported itself as "String".
-    enum Kind { Integer, Char, String, Bool, Atom, Unit };  // Integer = arbitrary precision
+    enum Kind { Integer, Char, String, Bool, Atom, Unit }; // Integer = arbitrary precision
     Kind kind;
     // For Atom only, and for DISPLAY only: the literal an atom type was
     // written as (`:macos`), empty for a plain `Atom`. Without it a union of
@@ -29,12 +29,12 @@ struct PrimitiveType {
 };
 
 struct SizedIntType {
-    int bits;       // 8, 16, 32, 64
-    bool isSigned;  // Byte == SizedIntType{8, false}
+    int bits;      // 8, 16, 32, 64
+    bool isSigned; // Byte == SizedIntType{8, false}
 };
 
 struct SizedFloatType {
-    int bits;  // 32, 64
+    int bits; // 32, 64
 };
 
 struct NamedType {
@@ -135,10 +135,10 @@ struct Type {
         TypeVar,
         UnknownType,
         VoidType,
-        ConstrainedType
-    > kind;
+        ConstrainedType>
+        kind;
 
-    static auto integer() -> TypePtr;  // arbitrary precision
+    static auto integer() -> TypePtr; // arbitrary precision
     static auto charT() -> TypePtr;
     static auto string() -> TypePtr;
     static auto boolean() -> TypePtr;
@@ -149,26 +149,26 @@ struct Type {
     static auto named(const std::string& name, std::vector<TypePtr> args = {}) -> TypePtr;
     // The type of the nullary variant `variant` of the ADT `adt` (NamedType::variant).
     static auto variantOf(const std::string& adt, const std::string& variant) -> TypePtr;
-    static auto func(std::vector<TypePtr> params, TypePtr result,
-                     bool block = false, bool foul = false) -> TypePtr;
+    static auto
+    func(std::vector<TypePtr> params, TypePtr result, bool block = false, bool foul = false)
+        -> TypePtr;
     static auto list(TypePtr element) -> TypePtr;
     static auto tuple(std::vector<TypePtr> elements) -> TypePtr;
     static auto map(TypePtr key, TypePtr value) -> TypePtr;
     static auto optional(TypePtr inner) -> TypePtr;
     static auto intersection(std::vector<TypePtr> members) -> TypePtr;
-    static auto record(std::vector<std::pair<std::string, TypePtr>> fields)
-        -> TypePtr;
+    static auto record(std::vector<std::pair<std::string, TypePtr>> fields) -> TypePtr;
     static auto typeVar(int id) -> TypePtr;
-    static auto constrained(const std::string& varName,
-                            const std::string& traitName,
-                            int genericId = 0) -> TypePtr;
+    static auto
+    constrained(const std::string& varName, const std::string& traitName, int genericId = 0)
+        -> TypePtr;
 
     // Sized integers — explicit opt-ins for fixed width.
-    static auto byte() -> TypePtr;     // UInt8
+    static auto byte() -> TypePtr; // UInt8
     static auto int8() -> TypePtr;
     static auto int16() -> TypePtr;
     static auto int32() -> TypePtr;
-    static auto int64() -> TypePtr;    // "Int" is a name alias for this
+    static auto int64() -> TypePtr; // "Int" is a name alias for this
     static auto uint8() -> TypePtr;
     static auto uint16() -> TypePtr;
     static auto uint32() -> TypePtr;
@@ -192,21 +192,21 @@ auto primitiveKindNamed(std::string_view name) -> std::optional<PrimitiveType::K
 // types. Spell out only the kinds a walk treats specially; hand the rest here.
 //
 // Each type directly nested in `type`, in order (a child may be null).
-auto forEachTypeChild(const TypePtr& type,
-                      const std::function<void(const TypePtr&)>& visit) -> void;
+auto forEachTypeChild(const TypePtr& type, const std::function<void(const TypePtr&)>& visit)
+    -> void;
 // `type` rebuilt with each directly nested type replaced by `map(child)`. A
 // leaf, or a type none of whose children changed, comes back as the same
 // object.
-auto mapTypeChildren(const TypePtr& type,
-                     const std::function<TypePtr(const TypePtr&)>& map)
+auto mapTypeChildren(const TypePtr& type, const std::function<TypePtr(const TypePtr&)>& map)
     -> TypePtr;
 // What a missing (null) type counts as, for walks that must decide.
 enum class NullType { Known, Unknown };
 // Whether `predicate` holds for `type` or any type nested in it, pre-order;
 // stops at the first hit. A null type is a hit only for NullType::Unknown.
-auto anyType(const TypePtr& type,
-             const std::function<bool(const TypePtr&)>& predicate,
-             NullType nullType = NullType::Known) -> bool;
+auto anyType(
+    const TypePtr& type,
+    const std::function<bool(const TypePtr&)>& predicate,
+    NullType nullType = NullType::Known) -> bool;
 
 // Does a type contain an Unknown anywhere? On a signature PARAMETER this
 // marks a contract the checker never learned — the shape-only entries the
@@ -334,7 +334,9 @@ public:
     // Every name bound here, for a hint beside an undefined one.
     auto names() const -> std::vector<std::string> {
         std::vector<std::string> result;
-        for (const auto& [name, _] : m_entries) result.push_back(name);
+        for (const auto& [name, _] : m_entries) {
+            result.push_back(name);
+        }
         return result;
     }
 

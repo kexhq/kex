@@ -7,7 +7,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #if !defined(__EMSCRIPTEN__)
-#include <sys/random.h>  // getentropy: glibc, macOS, musl
+#include <sys/random.h> // getentropy: glibc, macOS, musl
 #endif
 #endif
 
@@ -27,7 +27,9 @@ namespace {
 volatile sig_atomic_t g_streamedChild = -1;
 
 extern "C" void forwardSignalToStreamedChild(int sig) {
-    if (g_streamedChild > 0) kill(static_cast<pid_t>(g_streamedChild), sig);
+    if (g_streamedChild > 0) {
+        kill(static_cast<pid_t>(g_streamedChild), sig);
+    }
 }
 
 // Forward SIGINT/SIGTERM/SIGHUP/SIGQUIT to `child` for as long as this object
@@ -43,7 +45,7 @@ class SignalForwarder {
 public:
     explicit SignalForwarder(pid_t child, bool group = false) {
         g_streamedChild = group ? -child : child;
-        struct sigaction forward {};
+        struct sigaction forward{};
         forward.sa_handler = forwardSignalToStreamedChild;
         sigemptyset(&forward.sa_mask);
         forward.sa_flags = 0; // no SA_RESTART: waitpid must return EINTR
@@ -63,37 +65,45 @@ public:
     auto operator=(const SignalForwarder&) -> SignalForwarder& = delete;
 
 private:
-    struct sigaction m_int {}, m_term {}, m_hup {}, m_quit {};
+    struct sigaction m_int{}, m_term{}, m_hup{}, m_quit{};
 };
 
 // Reads both pipes to EOF, closing each as it ends. Interleaved rather than
 // sequential on purpose: a child that writes a lot to the stream we are not
 // reading yet would block forever once its pipe buffer filled.
-auto drainPipes(int outFd, std::string& out, int errFd, std::string& err)
-    -> void {
+auto drainPipes(int outFd, std::string& out, int errFd, std::string& err) -> void {
     struct pollfd fds[2] = {{outFd, POLLIN, 0}, {errFd, POLLIN, 0}};
     std::string* targets[2] = {&out, &err};
     char buffer[4096];
     while (fds[0].fd >= 0 || fds[1].fd >= 0) {
         if (poll(fds, 2, -1) < 0) {
-            if (errno == EINTR) continue;
+            if (errno == EINTR) {
+                continue;
+            }
             break;
         }
         for (int i = 0; i < 2; ++i) {
-            if (fds[i].fd < 0 || !fds[i].revents) continue;
+            if (fds[i].fd < 0 || !fds[i].revents) {
+                continue;
+            }
             const auto got = read(fds[i].fd, buffer, sizeof(buffer));
             if (got > 0) {
                 targets[i]->append(buffer, static_cast<std::size_t>(got));
                 continue;
             }
-            if (got < 0 && errno == EINTR) continue;
+            if (got < 0 && errno == EINTR) {
+                continue;
+            }
             // EOF, or an error there is no way to report per-stream.
             close(fds[i].fd);
             fds[i].fd = -1;
         }
     }
-    for (auto& descriptor : fds)
-        if (descriptor.fd >= 0) close(descriptor.fd);
+    for (auto& descriptor : fds) {
+        if (descriptor.fd >= 0) {
+            close(descriptor.fd);
+        }
+    }
 }
 #endif
 
@@ -106,18 +116,24 @@ auto executableExists(const std::string& command) -> bool {
     auto runnable = [](const std::string& path) {
         return !path.empty() && access(path.c_str(), X_OK) == 0;
     };
-    if (command.find('/') != std::string::npos) return runnable(command);
+    if (command.find('/') != std::string::npos) {
+        return runnable(command);
+    }
     const char* search = std::getenv("PATH");
-    if (!search) return false;
+    if (!search) {
+        return false;
+    }
     const std::string paths = search;
     for (std::size_t start = 0; start <= paths.size();) {
         const auto end = paths.find(':', start);
-        const auto directory = paths.substr(
-            start, end == std::string::npos ? std::string::npos : end - start);
-        if (runnable((directory.empty() ? std::string(".") : directory) +
-                     "/" + command))
+        const auto directory =
+            paths.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (runnable((directory.empty() ? std::string(".") : directory) + "/" + command)) {
             return true;
-        if (end == std::string::npos) break;
+        }
+        if (end == std::string::npos) {
+            break;
+        }
         start = end + 1;
     }
     return false;
@@ -148,11 +164,15 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::string(args.empty() ? std::string{} : args[0]->toString());
     });
     defineIntrinsic("Shared.put", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() == 2) sharedValues[args[0]->toString()] = args[1];
+        if (args.size() == 2) {
+            sharedValues[args[0]->toString()] = args[1];
+        }
         return Value::unit();
     });
     defineIntrinsic("Shared.get", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
+        if (args.empty()) {
+            return Value::none();
+        }
         auto found = sharedValues.find(args[0]->toString());
         return found == sharedValues.end() ? Value::none() : Value::just(found->second);
     });
@@ -164,12 +184,14 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // at most 256 bytes per call (kexhq/kex#404).
     defineIntrinsic("Random.secureBytes", [](std::vector<ValuePtr> args) -> ValuePtr {
         const auto* count = args.empty() ? nullptr : std::get_if<IntValue>(&args[0]->data);
-        std::vector<uint8_t> bytes(count && count->value > 0 ? static_cast<size_t>(count->value) : 0);
+        std::vector<uint8_t> bytes(
+            count && count->value > 0 ? static_cast<size_t>(count->value) : 0);
 #if defined(__EMSCRIPTEN__)
         // Emscripten's random_device reads crypto.getRandomValues (or Node's
         // crypto.randomFillSync): the host's CSPRNG.
         std::random_device source;
-        for (auto& byte : bytes) byte = static_cast<uint8_t>(source() & 0xff);
+        for (auto& byte : bytes)
+            byte = static_cast<uint8_t>(source() & 0xff);
 #else
         for (size_t offset = 0; offset < bytes.size(); offset += 256) {
             const auto chunk = std::min<size_t>(256, bytes.size() - offset);
@@ -181,30 +203,44 @@ auto Evaluator::registerProcessBuiltins() -> void {
     });
 
     defineIntrinsic("Task.sleep", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::unit();
+        if (args.empty()) {
+            return Value::unit();
+        }
         // A Duration is a time Measure (units.kex): its canonical value is
         // the span in seconds.
         auto* duration = std::get_if<RecordValue>(&args[0]->data);
-        if (!duration || duration->typeName != names::kMeasureRecord) return Value::unit();
+        if (!duration || duration->typeName != names::kMeasureRecord) {
+            return Value::unit();
+        }
         auto found = duration->fields.find(names::kMeasureCanonical);
-        if (found == duration->fields.end()) return Value::unit();
+        if (found == duration->fields.end()) {
+            return Value::unit();
+        }
         double seconds = 0.0;
-        if (auto* value = std::get_if<FloatValue>(&found->second->data)) seconds = value->value;
-        else if (auto* value = std::get_if<IntValue>(&found->second->data)) seconds = value->value;
-        if (seconds <= 0.0) return Value::unit();
+        if (auto* value = std::get_if<FloatValue>(&found->second->data)) {
+            seconds = value->value;
+        } else if (auto* value = std::get_if<IntValue>(&found->second->data)) {
+            seconds = value->value;
+        }
+        if (seconds <= 0.0) {
+            return Value::unit();
+        }
         // Inside a process the sleep yields to the scheduler, as a BEAM
         // process's does: blocking the thread stopped every other process,
         // so a task sleeping 2s held up the one awaiting it with a 10ms
         // timeout until the task had finished (spec/task_await_timeout).
         const auto deadline = std::chrono::steady_clock::now() +
-            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                std::chrono::duration<double>(seconds));
+                              std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                  std::chrono::duration<double>(seconds));
         if (m_scheduler && m_scheduler->inProcess()) {
             // A message arriving wakes the sleeper early: sleep on.
             for (auto now = std::chrono::steady_clock::now(); now < deadline;
-                 now = std::chrono::steady_clock::now())
-                m_scheduler->sleepFor(std::max<int64_t>(
-                    1, std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count()));
+                 now = std::chrono::steady_clock::now()) {
+                m_scheduler->sleepFor(
+                    std::max<int64_t>(
+                        1, std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now)
+                               .count()));
+            }
             return Value::unit();
         }
         std::this_thread::sleep_until(deadline);
@@ -440,7 +476,6 @@ auto Evaluator::registerProcessBuiltins() -> void {
 #endif
     });
 
-
     // Process.stream — run a child on THIS process's stdout and stderr, and
     // answer only its exit code.
     //
@@ -521,23 +556,33 @@ auto Evaluator::registerProcessBuiltins() -> void {
     });
 
     defineIntrinsic("Process.register", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::unit();
+        if (args.size() < 2) {
+            return Value::unit();
+        }
         auto* process = std::get_if<ProcessValue>(&args[0]->data);
         auto* name = std::get_if<AtomValue>(&args[1]->data);
-        if (process && name) m_scheduler->registerName(name->name, process->pid);
+        if (process && name) {
+            m_scheduler->registerName(name->name, process->pid);
+        }
         return Value::unit();
     });
 
     defineIntrinsic("Process.whereIs", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
+        if (args.empty()) {
+            return Value::none();
+        }
         auto* name = std::get_if<AtomValue>(&args[0]->data);
-        if (!name) return Value::none();
+        if (!name) {
+            return Value::none();
+        }
         auto id = m_scheduler->whereIs(name->name);
         return id ? Value::just(Value::process(*id, m_scheduler.get())) : Value::none();
     });
 
     defineDual("Process.spawn", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
+        if (args.empty()) {
+            return Value::none();
+        }
         return Value::server(m_scheduler->startServer(args[0]), m_scheduler.get());
     });
 
@@ -545,29 +590,42 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::record("Reply", {{"reply", args.empty() ? Value::unit() : args[0]}});
     });
 
-    defineIntrinsic("Process.cast", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::unit();
-    });
+    defineIntrinsic(
+        "Process.cast", [](std::vector<ValuePtr>) -> ValuePtr { return Value::unit(); });
 
     defineIntrinsic("Process.replyFrom", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::unit();
+        if (args.size() < 2) {
+            return Value::unit();
+        }
         auto* from = std::get_if<RecordValue>(&args[0]->data);
-        if (!from || from->typeName != "From") return Value::unit();
+        if (!from || from->typeName != "From") {
+            return Value::unit();
+        }
         auto pidIt = from->fields.find("pid");
         auto refIt = from->fields.find("ref");
-        if (pidIt == from->fields.end() || refIt == from->fields.end()) return Value::unit();
+        if (pidIt == from->fields.end() || refIt == from->fields.end()) {
+            return Value::unit();
+        }
         auto* pid = std::get_if<ProcessValue>(&pidIt->second->data);
         auto* ref = std::get_if<IntValue>(&refIt->second->data);
-        if (!pid || !ref) return Value::unit();
-        pid->scheduler->send(pid->pid, Value::tuple({Value::atom("server_reply"),
-            Value::integer(ref->value), Value::ok(args[1])}));
+        if (!pid || !ref) {
+            return Value::unit();
+        }
+        pid->scheduler->send(
+            pid->pid,
+            Value::tuple(
+                {Value::atom("server_reply"), Value::integer(ref->value), Value::ok(args[1])}));
         return Value::unit();
     });
 
     defineIntrinsic("Process.fromPid", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
+        if (args.empty()) {
+            return Value::none();
+        }
         auto* from = std::get_if<RecordValue>(&args[0]->data);
-        if (!from) return Value::none();
+        if (!from) {
+            return Value::none();
+        }
         auto found = from->fields.find("pid");
         return found == from->fields.end() ? Value::none() : found->second;
     });
@@ -575,17 +633,25 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // Private receiver primitives. The public methods are defined by
     // process.kex and call these category-qualified identities.
     defineIntrinsic("Process.send", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::unit();
+        if (args.size() < 2) {
+            return Value::unit();
+        }
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
-        if (!p) return Value::unit();
+        if (!p) {
+            return Value::unit();
+        }
         p->scheduler->send(p->pid, args[1]);
         return Value::unit();
     });
 
     defineIntrinsic("Process.sendFrom", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::unit();
+        if (args.size() < 2) {
+            return Value::unit();
+        }
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
-        if (!p) return Value::unit();
+        if (!p) {
+            return Value::unit();
+        }
         auto sender = Value::process(m_scheduler->currentProcessId(), m_scheduler.get());
         p->scheduler->send(p->pid, Value::tuple({std::move(sender), args[1]}));
         return Value::unit();
@@ -597,16 +663,24 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // only — see Scheduler::link's doc comment for why this deliberately
     // doesn't carry BEAM's signal-propagation semantics.
     defineIntrinsic("Process.link", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::unit();
+        if (args.empty()) {
+            return Value::unit();
+        }
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
-        if (!p) return Value::unit();
+        if (!p) {
+            return Value::unit();
+        }
         p->scheduler->link(p->pid);
         return Value::unit();
     });
     defineIntrinsic("Process.unlink", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::unit();
+        if (args.empty()) {
+            return Value::unit();
+        }
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
-        if (!p) return Value::unit();
+        if (!p) {
+            return Value::unit();
+        }
         p->scheduler->unlink(p->pid);
         return Value::unit();
     });
@@ -615,9 +689,13 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // by a normal return or an uncaught exception caught by its own
     // fiber's outer handler — see Scheduler::spawn/runToCompletion).
     defineIntrinsic("Process.alive?", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(false);
+        if (args.empty()) {
+            return Value::boolean(false);
+        }
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
-        if (!p) return Value::boolean(false);
+        if (!p) {
+            return Value::boolean(false);
+        }
         return Value::boolean(p->scheduler->isAlive(p->pid));
     });
 
@@ -629,7 +707,9 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // Walker-native scheduler fallback. Starting a child while a Kex wrapper's
     // shared evaluator frame is active can corrupt later process execution.
     defineDual("Task.start", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::unit();
+        if (args.empty()) {
+            return Value::unit();
+        }
         auto pid = m_scheduler->startTask(args[0]);
         return Value::task(pid, m_scheduler.get());
     });
@@ -643,17 +723,25 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // atom/value ends up in Error(...) — no separate error ADT to keep
     // this from growing beyond what the interpreter needs).
     NativeFunc await = [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::error(Value::string("not a task"));
+        if (args.empty()) {
+            return Value::error(Value::string("not a task"));
+        }
         auto* t = std::get_if<TaskValue>(&args[0]->data);
-        if (!t) return Value::error(Value::string("not a task"));
+        if (!t) {
+            return Value::error(Value::string("not a task"));
+        }
 
         std::optional<int64_t> timeoutMs;
         if (args.size() > 1) {
-            if (auto* iv = std::get_if<IntValue>(&args[1]->data)) timeoutMs = iv->value;
+            if (auto* iv = std::get_if<IntValue>(&args[1]->data)) {
+                timeoutMs = iv->value;
+            }
         }
 
         auto msg = t->scheduler->awaitTaskMessage(t->pid, timeoutMs);
-        if (!msg) return Value::error(Value::atom("timeout"));
+        if (!msg) {
+            return Value::error(Value::atom("timeout"));
+        }
 
         auto* tup = std::get_if<TupleValue>(&(*msg)->data);
         if (!tup || tup->elements.size() != 2) {
@@ -682,9 +770,13 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // multi-word Kex builtin (was briefly registered as "await_all" here,
     // the one snake_case outlier — fixed to match).
     defineDual("Task.awaitAll", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::list({});
+        if (args.empty()) {
+            return Value::list({});
+        }
         auto* lst = std::get_if<ListValue>(&args[0]->data);
-        if (!lst) return Value::list({});
+        if (!lst) {
+            return Value::list({});
+        }
 
         std::vector<ValuePtr> results;
         for (const auto& taskVal : lst->elements) {
@@ -721,7 +813,9 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // both call now (to start it) and recall later (to restart it, from the
     // exact same start function).
     defineIntrinsic("Supervisor.worker", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::unit();
+        if (args.empty()) {
+            return Value::unit();
+        }
         return Value::tuple({Value::atom("worker"), args[0]});
     });
 
@@ -730,7 +824,9 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // interpreter's polling supervisor can't nest; Supervisor.start rejects
     // a spec carrying this tag with an Error(...).
     defineIntrinsic("Supervisor.nested", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::unit();
+        if (args.size() < 2) {
+            return Value::unit();
+        }
         return Value::tuple({Value::atom("supervisor"), args[1]});
     });
 
@@ -749,20 +845,26 @@ auto Evaluator::registerProcessBuiltins() -> void {
         ValuePtr specsVal;
         std::string strategy = "only_crashed";
         for (const auto& arg : args) {
-            if (auto* fn = std::get_if<FunctionValue>(&arg->data); fn && fn->native)
+            if (auto* fn = std::get_if<FunctionValue>(&arg->data); fn && fn->native) {
                 specsVal = fn->native({});
-            else if (std::holds_alternative<ListValue>(arg->data)) specsVal = arg;
-            else if (auto* av = std::get_if<AtomValue>(&arg->data)) strategy = av->name;
+            } else if (std::holds_alternative<ListValue>(arg->data)) {
+                specsVal = arg;
+            } else if (auto* av = std::get_if<AtomValue>(&arg->data)) {
+                strategy = av->name;
+            }
         }
         if (strategy != "only_crashed") {
-            return Value::error(Value::string(
-                "Supervisor restart strategy :" + strategy + " isn't supported by the interpreter — "
-                "only :only_crashed is; use the BEAM backend (plain `kex`) for :all/:crashed_and_newer."));
+            return Value::error(
+                Value::string(
+                    "Supervisor restart strategy :" + strategy +
+                    " isn't supported by the interpreter — "
+                    "only :only_crashed is; use the BEAM backend (plain "
+                    "`kex`) for :all/:crashed_and_newer."));
         }
         auto* specsList = specsVal ? std::get_if<ListValue>(&specsVal->data) : nullptr;
         if (!specsList) {
-            return Value::error(Value::string(
-                "Supervisor.start needs its children as a do...end block or a list"));
+            return Value::error(
+                Value::string("Supervisor.start needs its children as a do...end block or a list"));
         }
 
         std::vector<ValuePtr> childBlocks;
@@ -771,9 +873,10 @@ auto Evaluator::registerProcessBuiltins() -> void {
             if (tup && tup->elements.size() == 2) {
                 auto* tag = std::get_if<AtomValue>(&tup->elements[0]->data);
                 if (tag && tag->name == "supervisor") {
-                    return Value::error(Value::string(
-                        "Nested supervisors aren't supported by the interpreter — "
-                        "run on the BEAM backend (plain `kex`) instead of --run-walker."));
+                    return Value::error(
+                        Value::string(
+                            "Nested supervisors aren't supported by the interpreter — "
+                            "run on the BEAM backend (plain `kex`) instead of --run-walker."));
                 }
                 childBlocks.push_back(tup->elements[1]);
             }

@@ -10,9 +10,10 @@ namespace kex::semantic {
 // (`name : T -> U`) is written directly above its definition, often with the
 // documentation, so it is a fine target; the placeholder the collector used
 // before — line 0 of the file — sent every jump to the top of the module.
-static auto declaredAt(const SourceLocation& location, std::string_view path)
-    -> SourceLocation {
-    if (location.line > 0) return location;
+static auto declaredAt(const SourceLocation& location, std::string_view path) -> SourceLocation {
+    if (location.line > 0) {
+        return location;
+    }
     return SourceLocation{path, 0, 0};
 }
 namespace {
@@ -21,7 +22,9 @@ auto variantText(const ast::TypeExpr& variant) -> std::string {
     if (const auto* generic = std::get_if<ast::GenericType>(&variant.kind)) {
         std::string result = generic->name.dotted() + "(";
         for (size_t i = 0; i < generic->args.size(); ++i) {
-            if (i) result += ", ";
+            if (i) {
+                result += ", ";
+            }
             result += generic->args[i] ? ast::typeText(*generic->args[i]) : "?";
         }
         return result + ")";
@@ -37,7 +40,9 @@ auto CollectPass::collect(const ast::Program& program, const std::string& path)
     m_symbols = &symbols;
     m_path = path;
     m_currentModule = "";
-    for (const auto& item : program.items) collectTopLevel(item);
+    for (const auto& item : program.items) {
+        collectTopLevel(item);
+    }
     m_symbols = nullptr;
     return symbols;
 }
@@ -48,40 +53,42 @@ auto collectSymbols(const ast::Program& program, const std::string& path)
 }
 
 auto CollectPass::collectTopLevel(const ast::TopLevelItem& item) -> void {
-    std::visit([this](const auto& ptr) {
-        using T = std::decay_t<decltype(*ptr)>;
-        if constexpr (std::is_same_v<T, ast::FunctionDef>) {
-            collectFunction(*ptr, "");
-        } else if constexpr (std::is_same_v<T, ast::TypeDef>) {
-            collectType(*ptr, "");
-        } else if constexpr (std::is_same_v<T, ast::RecordDef>) {
-            collectRecord(*ptr, "");
-        } else if constexpr (std::is_same_v<T, ast::MakeDef>) {
-            collectMake(*ptr, "");
-        } else if constexpr (std::is_same_v<T, ast::ModuleDef>) {
-            collectModule(*ptr);
-        } else if constexpr (std::is_same_v<T, ast::TraitDef>) {
-            SymbolInfo info;
-            info.name = ptr->name;
-            info.kind = SymbolKind::Trait;
-            info.definition = ptr->location;
-            info.module = "";
-            info.type = Type::unknown();
-            m_symbols->push_back(std::move(info));
-        } else if constexpr (std::is_same_v<T, ast::TypeAnnotation>) {
-            // Standalone type signature declaration (e.g. in prelude files):
-            // `describe : (String, Block<Void>) -> Void`
-            SymbolInfo info;
-            info.name = ptr->name;
-            info.kind = SymbolKind::Function;
-            info.definition = declaredAt(ptr->location, m_path);
-            info.module = "";
-            info.isFoul = ptr->isFoul;
-            info.type = Type::unknown();
-            m_symbols->push_back(std::move(info));
-        }
-        // UsingBlock, MainBlock, Pragma, CompiledBlock: skip
-    }, item);
+    std::visit(
+        [this](const auto& ptr) {
+            using T = std::decay_t<decltype(*ptr)>;
+            if constexpr (std::is_same_v<T, ast::FunctionDef>) {
+                collectFunction(*ptr, "");
+            } else if constexpr (std::is_same_v<T, ast::TypeDef>) {
+                collectType(*ptr, "");
+            } else if constexpr (std::is_same_v<T, ast::RecordDef>) {
+                collectRecord(*ptr, "");
+            } else if constexpr (std::is_same_v<T, ast::MakeDef>) {
+                collectMake(*ptr, "");
+            } else if constexpr (std::is_same_v<T, ast::ModuleDef>) {
+                collectModule(*ptr);
+            } else if constexpr (std::is_same_v<T, ast::TraitDef>) {
+                SymbolInfo info;
+                info.name = ptr->name;
+                info.kind = SymbolKind::Trait;
+                info.definition = ptr->location;
+                info.module = "";
+                info.type = Type::unknown();
+                m_symbols->push_back(std::move(info));
+            } else if constexpr (std::is_same_v<T, ast::TypeAnnotation>) {
+                // Standalone type signature declaration (e.g. in prelude files):
+                // `describe : (String, Block<Void>) -> Void`
+                SymbolInfo info;
+                info.name = ptr->name;
+                info.kind = SymbolKind::Function;
+                info.definition = declaredAt(ptr->location, m_path);
+                info.module = "";
+                info.isFoul = ptr->isFoul;
+                info.type = Type::unknown();
+                m_symbols->push_back(std::move(info));
+            }
+            // UsingBlock, MainBlock, Pragma, CompiledBlock: skip
+        },
+        item);
 }
 
 auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
@@ -91,10 +98,9 @@ auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
     // Register the module itself
     SymbolInfo moduleInfo;
     const auto separator = mod.name.rfind('.');
-    moduleInfo.name =
-        parentModule.empty() || separator == std::string::npos
-            ? mod.name
-            : mod.name.substr(separator + 1);
+    moduleInfo.name = parentModule.empty() || separator == std::string::npos
+                          ? mod.name
+                          : mod.name.substr(separator + 1);
     moduleInfo.kind = SymbolKind::Module;
     moduleInfo.isCapability = mod.isCapability;
     moduleInfo.definition = mod.location;
@@ -109,9 +115,10 @@ auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
         // If a FunctionDef with the same name already exists in this module,
         // don't create a duplicate — the def wins.
         for (const auto& sym : *m_symbols) {
-            if (sym.name == ann.name && sym.module == m_currentModule
-                    && sym.kind == SymbolKind::Function)
+            if (sym.name == ann.name && sym.module == m_currentModule &&
+                sym.kind == SymbolKind::Function) {
                 return;
+            }
         }
         SymbolInfo info;
         info.name = ann.name;
@@ -124,58 +131,63 @@ auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
     };
 
     for (const auto& item : mod.body) {
-        std::visit([&](const auto& ptr) {
-            using T = std::decay_t<decltype(*ptr)>;
-            if constexpr (std::is_same_v<T, ast::FunctionDef>) {
-                collectFunction(*ptr, m_currentModule);
-            } else if constexpr (std::is_same_v<T, ast::TypeAnnotation>) {
-                collectAnnotation(*ptr);
-            } else if constexpr (std::is_same_v<T, ast::TypeDef>) {
-                collectType(*ptr, m_currentModule);
-            } else if constexpr (std::is_same_v<T, ast::RecordDef>) {
-                collectRecord(*ptr, m_currentModule);
-            } else if constexpr (std::is_same_v<T, ast::MakeDef>) {
-                collectMake(*ptr, m_currentModule);
-            } else if constexpr (std::is_same_v<T, ast::ModuleDef>) {
-                collectModule(*ptr);
-            } else if constexpr (std::is_same_v<T, ast::TraitDef>) {
-                SymbolInfo info;
-                info.name = ptr->name;
-                info.kind = SymbolKind::Trait;
-                info.definition = ptr->location;
-                info.module = m_currentModule;
-                info.type = Type::unknown();
-                m_symbols->push_back(std::move(info));
-            } else if constexpr (std::is_same_v<T, ast::VisibilityBlock>) {
-                for (const auto& vitem : ptr->items) {
-                    const auto firstNewSymbol = m_symbols->size();
-                    std::visit([&](const auto& vptr) {
-                        using VT = std::decay_t<decltype(*vptr)>;
-                        if constexpr (std::is_same_v<VT, ast::FunctionDef>) {
-                            collectFunction(*vptr, m_currentModule);
-                        } else if constexpr (std::is_same_v<VT, ast::TypeAnnotation>) {
-                            collectAnnotation(*vptr);
-                        } else if constexpr (std::is_same_v<VT, ast::TypeDef>) {
-                            collectType(*vptr, m_currentModule);
-                        } else if constexpr (std::is_same_v<VT, ast::RecordDef>) {
-                            collectRecord(*vptr, m_currentModule);
-                        } else if constexpr (std::is_same_v<VT, ast::MakeDef>) {
-                            collectMake(*vptr, m_currentModule);
+        std::visit(
+            [&](const auto& ptr) {
+                using T = std::decay_t<decltype(*ptr)>;
+                if constexpr (std::is_same_v<T, ast::FunctionDef>) {
+                    collectFunction(*ptr, m_currentModule);
+                } else if constexpr (std::is_same_v<T, ast::TypeAnnotation>) {
+                    collectAnnotation(*ptr);
+                } else if constexpr (std::is_same_v<T, ast::TypeDef>) {
+                    collectType(*ptr, m_currentModule);
+                } else if constexpr (std::is_same_v<T, ast::RecordDef>) {
+                    collectRecord(*ptr, m_currentModule);
+                } else if constexpr (std::is_same_v<T, ast::MakeDef>) {
+                    collectMake(*ptr, m_currentModule);
+                } else if constexpr (std::is_same_v<T, ast::ModuleDef>) {
+                    collectModule(*ptr);
+                } else if constexpr (std::is_same_v<T, ast::TraitDef>) {
+                    SymbolInfo info;
+                    info.name = ptr->name;
+                    info.kind = SymbolKind::Trait;
+                    info.definition = ptr->location;
+                    info.module = m_currentModule;
+                    info.type = Type::unknown();
+                    m_symbols->push_back(std::move(info));
+                } else if constexpr (std::is_same_v<T, ast::VisibilityBlock>) {
+                    for (const auto& vitem : ptr->items) {
+                        const auto firstNewSymbol = m_symbols->size();
+                        std::visit(
+                            [&](const auto& vptr) {
+                                using VT = std::decay_t<decltype(*vptr)>;
+                                if constexpr (std::is_same_v<VT, ast::FunctionDef>) {
+                                    collectFunction(*vptr, m_currentModule);
+                                } else if constexpr (std::is_same_v<VT, ast::TypeAnnotation>) {
+                                    collectAnnotation(*vptr);
+                                } else if constexpr (std::is_same_v<VT, ast::TypeDef>) {
+                                    collectType(*vptr, m_currentModule);
+                                } else if constexpr (std::is_same_v<VT, ast::RecordDef>) {
+                                    collectRecord(*vptr, m_currentModule);
+                                } else if constexpr (std::is_same_v<VT, ast::MakeDef>) {
+                                    collectMake(*vptr, m_currentModule);
+                                }
+                            },
+                            vitem);
+                        for (size_t i = firstNewSymbol; i < m_symbols->size(); ++i) {
+                            (*m_symbols)[i].isExported = ptr->isPublic;
                         }
-                    }, vitem);
-                    for (size_t i = firstNewSymbol; i < m_symbols->size(); ++i)
-                        (*m_symbols)[i].isExported = ptr->isPublic;
+                    }
                 }
-            }
-            // UsingBlock, CompiledBlock: skip
-        }, item);
+                // UsingBlock, CompiledBlock: skip
+            },
+            item);
     }
 
     m_currentModule = savedModule;
 }
 
-auto CollectPass::collectFunction(const ast::FunctionDef& def, const std::string& module,
-                                  const std::string& makeTarget) -> void {
+auto CollectPass::collectFunction(
+    const ast::FunctionDef& def, const std::string& module, const std::string& makeTarget) -> void {
     // The parser already folds an adjacent same-name/arity declaration into
     // ONE FunctionDef's own `clauses` when it safely can (kexhq/kex#262), so
     // a single call here can now represent several clauses at once — a bare
@@ -183,8 +195,7 @@ auto CollectPass::collectFunction(const ast::FunctionDef& def, const std::string
     // that did NOT get folded (a different arity, or one the parser
     // conservatively left separate) still arrives as its own call, so the
     // "already in symbols" merge below is still needed for those.
-    const auto clauseCount = static_cast<int>(
-        def.clauses.empty() ? 1 : def.clauses.size());
+    const auto clauseCount = static_cast<int>(def.clauses.empty() ? 1 : def.clauses.size());
     for (auto& sym : *m_symbols) {
         // The same type's function only: merged by name alone, `Box`'s `render`
         // became `Tag`'s, and navigation to it fell back to the text.
@@ -226,12 +237,13 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
     info.definition = def.location;
     info.module = module;
     info.type = Type::unknown();
-    info.detail = std::string(def.isDistinct ? "distinct type " : "type ") +
-                  def.name;
+    info.detail = std::string(def.isDistinct ? "distinct type " : "type ") + def.name;
     if (!def.typeParams.empty()) {
         info.detail += "<";
         for (size_t i = 0; i < def.typeParams.size(); ++i) {
-            if (i) info.detail += ", ";
+            if (i) {
+                info.detail += ", ";
+            }
             info.detail += def.typeParams[i];
         }
         info.detail += ">";
@@ -240,10 +252,12 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
         info.detail += " =";
         for (size_t i = 0; i < def.variants->size(); ++i) {
             const auto& variant = (*def.variants)[i];
-            if (!variant) continue;
+            if (!variant) {
+                continue;
+            }
             info.detail += i == 0 ? "\n  " : "\n| ";
-            info.detail += kex::isTransparentTypeAlias(def)
-                ? ast::typeText(*variant) : variantText(*variant);
+            info.detail +=
+                kex::isTransparentTypeAlias(def) ? ast::typeText(*variant) : variantText(*variant);
         }
     }
     m_symbols->push_back(std::move(info));
@@ -252,7 +266,9 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
     if (def.variants && !def.isDistinct) {
         for (const auto& variant : *def.variants) {
             // variants are TypeExprPtrs; each top-level TypeName is a constructor
-            if (!variant) continue;
+            if (!variant) {
+                continue;
+            }
             if (const auto* tn = std::get_if<ast::TypeName>(&variant->kind)) {
                 if (!tn->parts.empty() && kex::startsUppercase(tn->parts[0])) {
                     SymbolInfo ctor;
@@ -265,7 +281,9 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
                     if (!def.typeParams.empty()) {
                         ctor.detail += "<";
                         for (size_t i = 0; i < def.typeParams.size(); ++i) {
-                            if (i) ctor.detail += ", ";
+                            if (i) {
+                                ctor.detail += ", ";
+                            }
                             ctor.detail += def.typeParams[i];
                         }
                         ctor.detail += ">";
@@ -281,13 +299,16 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
                     ctor.module = module;
                     ctor.type = Type::unknown();
                     ctor.detail = ctor.name + " : ";
-                    for (const auto& arg : gt->args)
+                    for (const auto& arg : gt->args) {
                         ctor.detail += (arg ? ast::typeText(*arg) : "?") + " -> ";
+                    }
                     ctor.detail += def.name;
                     if (!def.typeParams.empty()) {
                         ctor.detail += "<";
                         for (size_t i = 0; i < def.typeParams.size(); ++i) {
-                            if (i) ctor.detail += ", ";
+                            if (i) {
+                                ctor.detail += ", ";
+                            }
                             ctor.detail += def.typeParams[i];
                         }
                         ctor.detail += ">";
@@ -310,16 +331,20 @@ auto CollectPass::collectRecord(const ast::RecordDef& def, const std::string& mo
     if (!def.typeParams.empty()) {
         info.detail += "<";
         for (size_t i = 0; i < def.typeParams.size(); ++i) {
-            if (i) info.detail += ", ";
+            if (i) {
+                info.detail += ", ";
+            }
             info.detail += def.typeParams[i];
         }
         info.detail += ">";
     }
     info.detail += " do";
-    for (const auto& field : def.fields)
-        info.fields.emplace_back(field.name,
-                                 field.type ? ast::typeText(*field.type) : "?");
-    for (const auto& [name, type] : info.fields) info.detail += "\n  " + name + " : " + type;
+    for (const auto& field : def.fields) {
+        info.fields.emplace_back(field.name, field.type ? ast::typeText(*field.type) : "?");
+    }
+    for (const auto& [name, type] : info.fields) {
+        info.detail += "\n  " + name + " : " + type;
+    }
     info.detail += "\nend";
     m_symbols->push_back(std::move(info));
 
@@ -346,7 +371,9 @@ auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module
     std::string target = makeTargetName(def.target);
 
     auto tagTarget = [&](const std::string& funcName, bool isServingSlot) {
-        if (target.empty()) return;
+        if (target.empty()) {
+            return;
+        }
         for (auto& sym : *m_symbols) {
             if (sym.name == funcName && sym.module == module &&
                 (sym.makeTarget.empty() || sym.makeTarget == target)) {
@@ -359,7 +386,9 @@ auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module
     // Index a TypeAnnotation from a make block as an instance method of `target`.
     auto collectMakeAnnotation = [&](const ast::TypeAnnotation& ann) {
         for (const auto& sym : *m_symbols) {
-            if (sym.name == ann.name && sym.makeTarget == target) return; // dedup
+            if (sym.name == ann.name && sym.makeTarget == target) {
+                return; // dedup
+            }
         }
         SymbolInfo info;
         info.name = ann.name;
@@ -374,38 +403,41 @@ auto CollectPass::collectMake(const ast::MakeDef& def, const std::string& module
     };
 
     for (const auto& item : def.body) {
-        std::visit([&](const auto& ptr) {
-            using T = std::decay_t<decltype(*ptr)>;
-            if constexpr (std::is_same_v<T, ast::FunctionDef>) {
-                collectFunction(*ptr, module, target);
-                tagTarget(ptr->name, def.isServing && ptr->isSlot);
-            } else if constexpr (std::is_same_v<T, ast::TypeAnnotation>) {
-                collectMakeAnnotation(*ptr);
-            } else if constexpr (std::is_same_v<T, ast::VisibilityBlock>) {
-                for (const auto& vitem : ptr->items) {
-                    const auto firstNewSymbol = m_symbols->size();
-                    std::visit([&](const auto& vptr) {
-                        using VT = std::decay_t<decltype(*vptr)>;
-                        if constexpr (std::is_same_v<VT, ast::FunctionDef>) {
-                            collectFunction(*vptr, module, target);
-                            tagTarget(vptr->name,
-                                      def.isServing && vptr->isSlot);
-                        } else if constexpr (std::is_same_v<VT, ast::TypeAnnotation>) {
-                            collectMakeAnnotation(*vptr);
+        std::visit(
+            [&](const auto& ptr) {
+                using T = std::decay_t<decltype(*ptr)>;
+                if constexpr (std::is_same_v<T, ast::FunctionDef>) {
+                    collectFunction(*ptr, module, target);
+                    tagTarget(ptr->name, def.isServing && ptr->isSlot);
+                } else if constexpr (std::is_same_v<T, ast::TypeAnnotation>) {
+                    collectMakeAnnotation(*ptr);
+                } else if constexpr (std::is_same_v<T, ast::VisibilityBlock>) {
+                    for (const auto& vitem : ptr->items) {
+                        const auto firstNewSymbol = m_symbols->size();
+                        std::visit(
+                            [&](const auto& vptr) {
+                                using VT = std::decay_t<decltype(*vptr)>;
+                                if constexpr (std::is_same_v<VT, ast::FunctionDef>) {
+                                    collectFunction(*vptr, module, target);
+                                    tagTarget(vptr->name, def.isServing && vptr->isSlot);
+                                } else if constexpr (std::is_same_v<VT, ast::TypeAnnotation>) {
+                                    collectMakeAnnotation(*vptr);
+                                }
+                            },
+                            vitem);
+                        // `private` in a `make` block means "only callable within
+                        // that make" (docs/modules.md), and nothing recorded it:
+                        // the module-level visibility block set `isExported`, this
+                        // one did not, so a private method travelled with the type
+                        // and any other module could call it
+                        // (rodolfo docs/kex-issues.md #13, kexhq/kex#281).
+                        for (size_t i = firstNewSymbol; i < m_symbols->size(); ++i) {
+                            (*m_symbols)[i].isExported = ptr->isPublic;
                         }
-                    }, vitem);
-                    // `private` in a `make` block means "only callable within
-                    // that make" (docs/modules.md), and nothing recorded it:
-                    // the module-level visibility block set `isExported`, this
-                    // one did not, so a private method travelled with the type
-                    // and any other module could call it
-                    // (rodolfo docs/kex-issues.md #13, kexhq/kex#281).
-                    for (size_t i = firstNewSymbol;
-                         i < m_symbols->size(); ++i)
-                        (*m_symbols)[i].isExported = ptr->isPublic;
+                    }
                 }
-            }
-        }, item);
+            },
+            item);
     }
 }
 

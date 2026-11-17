@@ -99,13 +99,15 @@ public:
     // Evaluator::execute() runs the top-level program — there is no
     // "outside of a process" execution mode, matching BEAM, where even the
     // shell is just a process.
-    auto runToCompletion(std::function<ValuePtr()> body, std::shared_ptr<Environment> env) -> ValuePtr;
+    auto runToCompletion(std::function<ValuePtr()> body, std::shared_ptr<Environment> env)
+        -> ValuePtr;
 
     // Registers a new process running `body` (evaluated via Evaluator's
     // ordinary evalBody) in a fresh child Environment of `closureEnv`, and
     // enqueues it as ready. Returns immediately — the child doesn't run
     // until the scheduler gives it a turn.
-    auto spawn(const std::vector<ast::ExprPtr>& body, std::shared_ptr<Environment> closureEnv) -> ProcessId;
+    auto spawn(const std::vector<ast::ExprPtr>& body, std::shared_ptr<Environment> closureEnv)
+        -> ProcessId;
 
     // Pushes (payload, sender) onto target's mailbox and wakes it if it was
     // blocked in receive. Returns false if target doesn't exist / already
@@ -125,10 +127,14 @@ public:
     // message.
     auto blockingReceive(const ast::ReceiveExpr& expr) -> ValuePtr;
 
-    auto currentProcessId() const -> ProcessId { return m_current; }
+    auto currentProcessId() const -> ProcessId {
+        return m_current;
+    }
     // Whether the running code is one of this scheduler's processes (a
     // spawned process or task), which can yield to the others.
-    auto inProcess() const -> bool { return m_processes.contains(m_current); }
+    auto inProcess() const -> bool {
+        return m_processes.contains(m_current);
+    }
     auto isAlive(ProcessId id) const -> bool;
 
     // `Process.register` / `Process.whereIs`: a name stays with its process
@@ -162,14 +168,16 @@ public:
     // for a specific task's reply rather than arbitrary Kex patterns) until
     // `taskId`'s (:task_done, ...)/(:task_failed, ...) message arrives, or
     // returns nullopt if timeoutMs elapses first. Used by Task::await.
-    auto awaitTaskMessage(ProcessId taskId, std::optional<int64_t> timeoutMs) -> std::optional<ValuePtr>;
+    auto awaitTaskMessage(ProcessId taskId, std::optional<int64_t> timeoutMs)
+        -> std::optional<ValuePtr>;
 
     auto startServer(ValuePtr state) -> ProcessId;
-    auto callServer(ProcessId server, std::string method,
-                    std::vector<ValuePtr> args,
-                    std::optional<int64_t> timeoutMs) -> std::optional<ValuePtr>;
-    auto castServer(ProcessId server, std::string method,
-                    std::vector<ValuePtr> args) -> bool;
+    auto callServer(
+        ProcessId server,
+        std::string method,
+        std::vector<ValuePtr> args,
+        std::optional<int64_t> timeoutMs) -> std::optional<ValuePtr>;
+    auto castServer(ProcessId server, std::string method, std::vector<ValuePtr> args) -> bool;
 
     // A plain cooperative sleep — registers a timeout for the currently-
     // running process and yields until it fires. Used by the supervisor

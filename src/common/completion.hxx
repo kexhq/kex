@@ -11,17 +11,25 @@ namespace kex {
 // "[1,2,3]" -> "List", "42" -> "Integer", "'a'" -> "Char",
 // "\"hi\"" -> "String", "SomeName" -> "SomeName" (identity).
 inline auto qualifierFromBefore(const std::string& before) -> std::string {
-    if (before.empty()) return "";
-    if (before.back() == ']') return "List";
-    if (before.back() == '}') return "Map";
+    if (before.empty()) {
+        return "";
+    }
+    if (before.back() == ']') {
+        return "List";
+    }
+    if (before.back() == '}') {
+        return "Map";
+    }
     if (before[0] == '\'' || before[0] == '"') {
         // char vs string literal
         return (before[0] == '\'' && before.size() <= 3) ? "Char" : "String";
     }
-    bool allDigits = !before.empty()
-        && std::all_of(before.begin(), before.end(),
-                       [](char c){ return std::isdigit((unsigned char)c); });
-    if (allDigits) return "Integer";
+    bool allDigits = !before.empty() && std::all_of(before.begin(), before.end(), [](char c) {
+        return std::isdigit((unsigned char)c);
+    });
+    if (allDigits) {
+        return "Integer";
+    }
     // Plain identifier / module name
     return before;
 }
@@ -52,19 +60,15 @@ struct CompletionQuery {
 //      → completionsFor("List.ma") = ["List.map"]
 //      → rewrite: strip "List.", prepend "[1,2,3]." → "[1,2,3].map"
 //      → readline replaces buffer[0..10] with "[1,2,3].map" ✓
-inline auto resolveCompletionQuery(const char* linebuf, int start,
-                                   const char* text) -> CompletionQuery
-{
+inline auto resolveCompletionQuery(const char* linebuf, int start, const char* text)
+    -> CompletionQuery {
     std::string textStr(text);
 
     // The token before the dot, taken as a type or module name; literals
     // map to their type. Anything an analysis could type better — a
     // variable, a call, a lambda parameter — is `completeAt`'s job.
-    auto resolveQualifier = [](const std::string& before,
-                               const std::string& originalDot,
-                               const std::string& memberSuffix)
-        -> CompletionQuery
-    {
+    auto resolveQualifier = [](const std::string& before, const std::string& originalDot,
+                               const std::string& memberSuffix) -> CompletionQuery {
         std::string qual = qualifierFromBefore(before);
         return {qual + "." + memberSuffix, qual + ".", originalDot};
     };
@@ -76,20 +80,21 @@ inline auto resolveCompletionQuery(const char* linebuf, int start,
             // List literal receiver → "List".
             return {"List." + textStr, "List.", ""};
         }
-        while (i >= 0 && (std::isalnum((unsigned char)linebuf[i])
-                           || linebuf[i] == '_'))
+        while (i >= 0 && (std::isalnum((unsigned char)linebuf[i]) || linebuf[i] == '_')) {
             i--;
+        }
         std::string before(linebuf + i + 1, linebuf + start - 1);
-        if (!before.empty())
+        if (!before.empty()) {
             return resolveQualifier(before, "", textStr);
+        }
         return {textStr, "", ""};
     }
 
     // ── Case B: readline did not split; text may contain '.' ───────────────
     auto dotPos = textStr.rfind('.');
     if (dotPos != std::string::npos) {
-        std::string beforeDot   = textStr.substr(0, dotPos);
-        std::string afterDot    = textStr.substr(dotPos + 1);
+        std::string beforeDot = textStr.substr(0, dotPos);
+        std::string afterDot = textStr.substr(dotPos + 1);
         std::string originalDot = beforeDot + ".";
         return resolveQualifier(beforeDot, originalDot, afterDot);
     }
@@ -100,19 +105,20 @@ inline auto resolveCompletionQuery(const char* linebuf, int start,
 
 // Apply a (rewriteFrom → rewriteTo) substitution on the leading prefix of
 // each string in `raw`.  Used to turn DB results into what readline inserts.
-inline auto rewriteCompletions(std::vector<std::string> raw,
-                                const std::string& rewriteFrom,
-                                const std::string& rewriteTo)
-    -> std::vector<std::string>
-{
-    if (rewriteFrom.empty()) return raw;
+inline auto rewriteCompletions(
+    std::vector<std::string> raw, const std::string& rewriteFrom, const std::string& rewriteTo)
+    -> std::vector<std::string> {
+    if (rewriteFrom.empty()) {
+        return raw;
+    }
     std::vector<std::string> out;
     out.reserve(raw.size());
     for (auto& s : raw) {
-        if (s.rfind(rewriteFrom, 0) == 0)
+        if (s.rfind(rewriteFrom, 0) == 0) {
             out.push_back(rewriteTo + s.substr(rewriteFrom.size()));
-        else
+        } else {
             out.push_back(std::move(s));
+        }
     }
     return out;
 }

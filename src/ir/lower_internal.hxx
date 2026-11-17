@@ -21,30 +21,30 @@ namespace kex::ir::detail {
 // Backend-local symbol construction lives here so every producer and reader
 // changes together. Dots identify qualified/module membership; slash
 // introduces a receiver/argument overload signature.
-inline auto mangleQualifiedMember(const std::string& scope,
-                                  const std::string& member) -> std::string {
+inline auto mangleQualifiedMember(const std::string& scope, const std::string& member)
+    -> std::string {
     return scope + "." + member;
 }
 
-inline auto mangleReceiverImplementation(const std::string& method,
-                                         const std::string& receiverType)
+inline auto mangleReceiverImplementation(const std::string& method, const std::string& receiverType)
     -> std::string {
     return method + "/" + receiverType;
 }
 
-inline auto mangleReceiverSignature(const std::string& method,
-                                    const std::vector<std::string>& dispatchTypes)
+inline auto
+mangleReceiverSignature(const std::string& method, const std::vector<std::string>& dispatchTypes)
     -> std::string {
     std::string out = method + "/";
     for (size_t i = 0; i < dispatchTypes.size(); i++) {
-        if (i) out += ",";
+        if (i) {
+            out += ",";
+        }
         out += dispatchTypes[i];
     }
     return out;
 }
 
-inline auto receiverImplementationPrefix(const std::string& method)
-    -> std::string {
+inline auto receiverImplementationPrefix(const std::string& method) -> std::string {
     return method + "/";
 }
 
@@ -66,8 +66,9 @@ inline auto receiverImplementationPrefix(const std::string& method)
 // plain wrapper, republishing the slot under its own bare name via a local
 // call to the mangled implementation already sitting in the same module,
 // never competes with that shared machinery for the name at all.
-inline auto servingSlotBareAlias(const std::string& bareName, int arity,
-                                 const std::string& targetName) -> FunDef {
+inline auto
+servingSlotBareAlias(const std::string& bareName, int arity, const std::string& targetName)
+    -> FunDef {
     FunDef alias;
     alias.name = bareName;
     alias.arity = arity;
@@ -92,24 +93,23 @@ inline auto mangleModulePath(const std::string& path) -> std::string {
     return path;
 }
 
-inline auto mangleModuleMember(const std::string& path,
-                               const std::string& member) -> std::string {
+inline auto mangleModuleMember(const std::string& path, const std::string& member) -> std::string {
     return mangleQualifiedMember(mangleModulePath(path), member);
 }
 
-inline auto localOverloadKey(const std::string& method,
-                             const std::string& receiverType,
-                             size_t arity) -> std::string {
+inline auto
+localOverloadKey(const std::string& method, const std::string& receiverType, size_t arity)
+    -> std::string {
     return method + "\n" + receiverType + "\n" + std::to_string(arity);
 }
 
 // Does `expr` reference the SSA name `name` anywhere? Names are freshened at
 // binding time, so a plain syntactic scan is exact — nothing shadows.
 inline auto mentionsVar(const Expr& expr, const std::string& name) -> bool {
-    if (const auto* var = std::get_if<Var>(&expr.node)) return var->name == name;
-    return anyChild(expr, [&](const ExprPtr& child) {
-        return mentionsVar(*child, name);
-    });
+    if (const auto* var = std::get_if<Var>(&expr.node)) {
+        return var->name == name;
+    }
+    return anyChild(expr, [&](const ExprPtr& child) { return mentionsVar(*child, name); });
 }
 
 // A pending `let name = value in ...` binding, accumulated while lowering a
@@ -133,41 +133,58 @@ namespace kex::ir {
 // though both have one AST param. Grouping and trait-inheritance both key on
 // this — a method can be overloaded by BEAM arity across those two forms.
 // Every name a pattern binds, in source order.
-inline auto patternBoundNames(const ast::PatternPtr& p,
-                              std::vector<std::string>& out) -> void {
-    if (!p) return;
-    std::visit([&](const auto& pn) {
-        using T = std::decay_t<decltype(pn)>;
-        if constexpr (std::is_same_v<T, ast::VarPattern>) {
-            if (pn.name != "_") out.push_back(pn.name);
-        } else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
-            for (const auto& a : pn.args) patternBoundNames(a, out);
-        } else if constexpr (std::is_same_v<T, ast::TuplePattern>) {
-            for (const auto& a : pn.elements) patternBoundNames(a, out);
-        } else if constexpr (std::is_same_v<T, ast::ListPattern>) {
-            for (const auto& a : pn.elements) patternBoundNames(a, out);
-            if (pn.rest) patternBoundNames(*pn.rest, out);
-        } else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
-            // A field with no sub-pattern is the shorthand binding.
-            for (const auto& f : pn.fields) {
-                if (f.pattern) patternBoundNames(*f.pattern, out);
-                else if (f.name != "_") out.push_back(f.name);
+inline auto patternBoundNames(const ast::PatternPtr& p, std::vector<std::string>& out) -> void {
+    if (!p) {
+        return;
+    }
+    std::visit(
+        [&](const auto& pn) {
+            using T = std::decay_t<decltype(pn)>;
+            if constexpr (std::is_same_v<T, ast::VarPattern>) {
+                if (pn.name != "_") {
+                    out.push_back(pn.name);
+                }
+            } else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
+                for (const auto& a : pn.args) {
+                    patternBoundNames(a, out);
+                }
+            } else if constexpr (std::is_same_v<T, ast::TuplePattern>) {
+                for (const auto& a : pn.elements) {
+                    patternBoundNames(a, out);
+                }
+            } else if constexpr (std::is_same_v<T, ast::ListPattern>) {
+                for (const auto& a : pn.elements) {
+                    patternBoundNames(a, out);
+                }
+                if (pn.rest) {
+                    patternBoundNames(*pn.rest, out);
+                }
+            } else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
+                // A field with no sub-pattern is the shorthand binding.
+                for (const auto& f : pn.fields) {
+                    if (f.pattern) {
+                        patternBoundNames(*f.pattern, out);
+                    } else if (f.name != "_") {
+                        out.push_back(f.name);
+                    }
+                }
+            } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
+                if (pn.inner) {
+                    patternBoundNames(pn.inner, out);
+                }
             }
-        } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
-            if (pn.inner) patternBoundNames(pn.inner, out);
-        }
-    }, p->kind);
+        },
+        p->kind);
 }
-
 
 inline auto beamArity(const ast::FunctionDef* fd) -> size_t {
     return fd ? ast::methodArity(*fd) : 1;
 }
 
 inline auto unguardedCatchAll(const FunClause& c) -> bool {
-    return !c.guard &&
-        std::all_of(c.params.begin(), c.params.end(),
-            [](const PatternPtr& p){ return p->kind == PatKind::Var || p->kind == PatKind::Wild; });
+    return !c.guard && std::all_of(c.params.begin(), c.params.end(), [](const PatternPtr& p) {
+        return p->kind == PatKind::Var || p->kind == PatKind::Wild;
+    });
 }
 
 // Merge duplicate function definitions (same name + arity) by concatenating
@@ -219,16 +236,17 @@ inline auto mergeDuplicateFunctions(
     std::map<std::tuple<std::string, int, std::string>, FunDef> merged;
     for (auto& f : functions) {
         auto key = std::make_tuple(
-            f.name, f.arity,
-            keepDeclaringModulesApart ? f.declaringModule : std::string{});
+            f.name, f.arity, keepDeclaringModulesApart ? f.declaringModule : std::string{});
         auto it = merged.find(key);
         if (it == merged.end()) {
             auto& fnc = f;
             // Truncate clauses shadowed by an earlier catch-all within the
             // same definition as well.
-            for (size_t i = 0; i < fnc.clauses.size(); i++)
-                if (unguardedCatchAll(fnc.clauses[i]) && i + 1 < fnc.clauses.size())
+            for (size_t i = 0; i < fnc.clauses.size(); i++) {
+                if (unguardedCatchAll(fnc.clauses[i]) && i + 1 < fnc.clauses.size()) {
                     fnc.clauses.resize(i + 1);
+                }
+            }
             merged.emplace(key, std::move(fnc));
         } else {
             auto& existing = it->second;
@@ -261,17 +279,17 @@ inline auto mergeDuplicateFunctions(
                 auto misfiled = [](const FunDef& fn) {
                     return fn.isCollisionDispatcher || fn.isFieldAccessor;
                 };
-                if (ejectDispatcherConflicts &&
-                    (misfiled(existing) || misfiled(f))) {
+                if (ejectDispatcherConflicts && (misfiled(existing) || misfiled(f))) {
                     auto& dispatcher = misfiled(existing) ? existing : f;
                     auto& keeper = misfiled(existing) ? f : existing;
                     ejectDispatcherConflicts->push_back(std::move(dispatcher));
-                    if (&keeper != &existing) existing = std::move(keeper);
+                    if (&keeper != &existing) {
+                        existing = std::move(keeper);
+                    }
                     continue;
                 }
                 throw LowerError(
-                    "IR lower: `" + std::get<0>(key) + "/" +
-                    std::to_string(std::get<1>(key)) +
+                    "IR lower: `" + std::get<0>(key) + "/" + std::to_string(std::get<1>(key)) +
                     "` names both a free function and a receiver method "
                     "in this compilation unit — rename one of them");
             }
@@ -279,29 +297,33 @@ inline auto mergeDuplicateFunctions(
             // but the incoming definition has specific patterns (e.g.
             // ADT variant matches), insert the specific clauses BEFORE
             // the catch-all so they get a chance to match first.
-            bool existingHasCatchAll = std::any_of(
-                existing.clauses.begin(), existing.clauses.end(), unguardedCatchAll);
+            bool existingHasCatchAll =
+                std::any_of(existing.clauses.begin(), existing.clauses.end(), unguardedCatchAll);
             if (existingHasCatchAll) {
-                bool incomingHasSpecific = std::any_of(
-                    f.clauses.begin(), f.clauses.end(),
-                    [&](const FunClause& c) { return !unguardedCatchAll(c); });
+                bool incomingHasSpecific =
+                    std::any_of(f.clauses.begin(), f.clauses.end(), [&](const FunClause& c) {
+                        return !unguardedCatchAll(c);
+                    });
                 if (incomingHasSpecific) {
                     auto catchAllIt = std::find_if(
                         existing.clauses.begin(), existing.clauses.end(), unguardedCatchAll);
                     for (auto& c : f.clauses) {
-                        if (!unguardedCatchAll(c))
+                        if (!unguardedCatchAll(c)) {
                             catchAllIt = existing.clauses.insert(catchAllIt, std::move(c)) + 1;
+                        }
                     }
                 }
                 continue;
             }
-            existing.clauses.insert(existing.clauses.end(),
-                std::make_move_iterator(f.clauses.begin()),
+            existing.clauses.insert(
+                existing.clauses.end(), std::make_move_iterator(f.clauses.begin()),
                 std::make_move_iterator(f.clauses.end()));
         }
     }
     functions.clear();
-    for (auto& [_, f] : merged) functions.push_back(std::move(f));
+    for (auto& [_, f] : merged) {
+        functions.push_back(std::move(f));
+    }
 }
 
 } // namespace kex::ir

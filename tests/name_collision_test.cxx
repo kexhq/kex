@@ -32,8 +32,9 @@ auto popenCapture(const std::string& cmd) -> std::string {
     if (pipe) {
         std::array<char, 4096> buf;
         size_t n;
-        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0) {
             result.append(buf.data(), n);
+        }
         pclose(pipe);
     }
     return result;
@@ -49,16 +50,14 @@ auto runProgram(const Files& files, const std::string& mode) -> std::string {
         std::ofstream(root / path) << contents;
     }
     auto output = popenCapture(
-        std::string(KEX_BINARY_PATH) + " " + mode +
-        " --no-colors --source-root " + root.string() + " " +
-        (root / "main.kex").string() + " 2>&1");
+        std::string(KEX_BINARY_PATH) + " " + mode + " --no-colors --source-root " + root.string() +
+        " " + (root / "main.kex").string() + " 2>&1");
     std::error_code ec;
     fs::remove_all(root, ec);
     return output;
 }
 
-auto expectOnBothBackends(const Files& files, const std::string& expected)
-    -> void {
+auto expectOnBothBackends(const Files& files, const std::string& expected) -> void {
     assertEqual(runProgram(files, "--run"), expected, "BEAM");
     assertEqual(runProgram(files, "--run-walker"), expected, "tree-walker");
 }
@@ -87,8 +86,8 @@ end
 int main() {
     describe("records of the same name in different modules (kexhq/kex#476)", []() {
         it("a qualified annotation names that type, not the module's own record", []() {
-            expectOnBothBackends({
-                {"metro/request.kex", R"KEX(module Metro.Request
+            expectOnBothBackends(
+                {{"metro/request.kex", R"KEX(module Metro.Request
 
 using Net.HTTP, as: Web
 
@@ -104,7 +103,7 @@ end
 
 let wrap(incoming: Net.HTTP.Request<Binary>) -> Request = Request { incoming: incoming }
 )KEX"},
-                {"main.kex", R"KEX(using Metro.Request, only: [Request]
+                 {"main.kex", R"KEX(using Metro.Request, only: [Request]
 
 let describe(request: Request) -> String = "${request.verb} ${request.code}"
 
@@ -120,14 +119,14 @@ end
         });
 
         it("an alias is read against its own module's imports", []() {
-            expectOnBothBackends({
-                {"metro/types.kex", R"KEX(module Metro.Types
+            expectOnBothBackends(
+                {{"metro/types.kex", R"KEX(module Metro.Types
 
 using Net.HTTP, only: [Request]
 
 type Incoming = Request<Binary>
 )KEX"},
-                {"metro/request.kex", R"KEX(module Metro.Request
+                 {"metro/request.kex", R"KEX(module Metro.Request
 
 using Metro.Types, only: [Incoming]
 
@@ -142,7 +141,7 @@ end
 
 let wrap(incoming: Incoming) -> Request = Request { incoming: incoming }
 )KEX"},
-                {"main.kex", R"KEX(main do
+                 {"main.kex", R"KEX(main do
   let incoming = Net.HTTP.Request { method: "GET", target: URI.parse("http://example.com/a").try, headers: Net.HTTP.Headers.empty, body: Binary.empty }
   let request = Metro.Request.wrap(incoming)
   IO.printLine("${request.verb} ${request.code}")
@@ -153,9 +152,8 @@ end
 
         it("an imported record outranks the prelude's of the same name", []() {
             // `Reply` is also the prelude's serving record.
-            expectOnBothBackends({
-                {"app/reply.kex", kReply},
-                {"main.kex", R"KEX(using App.Reply, only: [Reply]
+            expectOnBothBackends(
+                {{"app/reply.kex", kReply}, {"main.kex", R"KEX(using App.Reply, only: [Reply]
 
 main do
   IO.printLine(Reply { body: "x" }.text)
@@ -165,14 +163,14 @@ end
         });
 
         it("keeps record identities through aliases and re-exports", []() {
-            expectOnBothBackends({
-                {"app/shapes.kex", R"KEX(module App.Shapes
+            expectOnBothBackends(
+                {{"app/shapes.kex", R"KEX(module App.Shapes
 record Circle do radius : Integer = 2 end
 make Circle do
   let diameter -> Integer = @radius * 2
 end
 )KEX"},
-                {"main.kex", R"KEX(using App.Shapes, as: Geo
+                 {"main.kex", R"KEX(using App.Shapes, as: Geo
 module Public do
   export App.Shapes
 end
@@ -180,7 +178,8 @@ main do
   IO.printLine(Geo.Circle { radius: 3 }.diameter)
   IO.printLine(Public.Shapes.Circle {}.diameter)
 end
-)KEX"}}, "6\n4\n");
+)KEX"}},
+                "6\n4\n");
         });
 
         it("dispatches one function name on two same-named records", []() {
@@ -213,16 +212,14 @@ end
   IO.printLine(Metro.Connection.Connection { id: 3 }.send())
 end
 )KEX"}};
-            expectOnBothBackends(files,
-                "metro 3 got x\nsent y via ws\nmetro 3 got default\n");
+            expectOnBothBackends(files, "metro 3 got x\nsent y via ws\nmetro 3 got default\n");
         });
     });
 
     describe("a method name beside other modules' names (kexhq/kex#476)", []() {
         it("leaves `Headers.empty` and Net.HTTP's own calls alone", []() {
-            expectOnBothBackends({
-                {"app/reply.kex", kReply},
-                {"main.kex", R"KEX(using App.Reply, only: [Reply]
+            expectOnBothBackends(
+                {{"app/reply.kex", kReply}, {"main.kex", R"KEX(using App.Reply, only: [Reply]
 using Net.HTTP
 
 foul go(url: String) -> Bool do
@@ -239,9 +236,8 @@ end
         });
 
         it("does not turn another record's field read into the method", []() {
-            expectOnBothBackends({
-                {"app/reply.kex", kReply},
-                {"main.kex", R"KEX(using App.Reply, only: [Reply]
+            expectOnBothBackends(
+                {{"app/reply.kex", kReply}, {"main.kex", R"KEX(using App.Reply, only: [Reply]
 using Net.HTTP
 
 main do
@@ -254,8 +250,8 @@ end
         });
 
         it("reads a field although a function shares its name (kexhq/kex#448)", []() {
-            expectOnBothBackends({
-                {"main.kex", R"KEX(record Target do
+            expectOnBothBackends(
+                {{"main.kex", R"KEX(record Target do
   string : String = ""
 end
 
@@ -282,8 +278,8 @@ end
 
     describe("field reads in unannotated blocks (kexhq/kex#476)", []() {
         it("does not infer a function's arity for an ambiguous field", []() {
-            expectOnBothBackends({
-                {"main.kex", R"KEX(record First do
+            expectOnBothBackends(
+                {{"main.kex", R"KEX(record First do
   flag : Bool = false
 end
 
@@ -298,11 +294,12 @@ main do
   IO.printLine(handler(First { flag: true }))
   IO.printLine(handler(Second { flag: false }))
 end
-)KEX"}}, "true\nfalse\n");
+)KEX"}},
+                "true\nfalse\n");
         });
         it("reads a field before trying an unrelated function", []() {
-            expectOnBothBackends({
-                {"main.kex", R"KEX(using Net.HTTP
+            expectOnBothBackends(
+                {{"main.kex", R"KEX(using Net.HTTP
 
 let parameters(context: Context) -> {String: String} = { "wrong": "x" }
 
@@ -320,20 +317,21 @@ main do
   IO.printLine(result["id"].or("wrong"))
   IO.printLine(context.parameters["wrong"].or("missing"))
 end
-)KEX"}}, "once\n7\nx\n");
+)KEX"}},
+                "once\n7\nx\n");
         });
     });
 
     describe("a function and a method of one name (kexhq/kex#476)", []() {
         it("keeps a top-level function separate from dependency receiver dispatch", []() {
-            expectOnBothBackends({
-                {"app/service.kex", R"KEX(module App.Service
+            expectOnBothBackends(
+                {{"app/service.kex", R"KEX(module App.Service
 record Service do value : String end
 make Service do
   let served(suffix: String) -> String = "record ${@value} ${suffix}"
 end
 )KEX"},
-                {"main.kex", R"KEX(using App.Service, only: [Service]
+                 {"main.kex", R"KEX(using App.Service, only: [Service]
 let served(value: String, suffix: String) -> String = "free ${value} ${suffix}"
 main do
   IO.printLine(served("a", "b"))
@@ -342,12 +340,13 @@ main do
   IO.printLine(call("e", "f"))
   IO.printLine("g".served("h"))
 end
-)KEX"}}, "free a b\nrecord c d\nfree e f\nfree g h\n");
+)KEX"}},
+                "free a b\nrecord c d\nfree e f\nfree g h\n");
         });
 
         it("keeps a module's free function separate from its make function", []() {
-            expectOnBothBackends({
-                {"app/forms.kex", R"KEX(module App.Forms
+            expectOnBothBackends(
+                {{"app/forms.kex", R"KEX(module App.Forms
 record Env do raw : String end
 make Env do
   let formFields -> [String] = decodeFields(@raw)
@@ -358,14 +357,15 @@ private do
 end
 let fields(text: String) -> [String] = Env { raw: text }.formFields
 )KEX"},
-                {"main.kex", R"KEX(main do
+                 {"main.kex", R"KEX(main do
   IO.printLine(App.Forms.fields("a,b"))
 end
-)KEX"}}, "[a, b]\n");
+)KEX"}},
+                "[a, b]\n");
         });
         it("passes a foul method its context", []() {
-            expectOnBothBackends({
-                {"app/repo.kex", R"KEX(module App.Repo
+            expectOnBothBackends(
+                {{"app/repo.kex", R"KEX(module App.Repo
 
 record Repo do
   db : String
@@ -377,7 +377,7 @@ make Repo do
   end
 end
 )KEX"},
-                {"app/site.kex", R"KEX(module App.Site
+                 {"app/site.kex", R"KEX(module App.Site
 
 using App.Repo, only: [Repo]
 
@@ -390,7 +390,7 @@ foul viaVariable(database: String) -> String do
   return conversations.founded("o", "t", "b")
 end
 )KEX"},
-                {"main.kex", R"KEX(main do
+                 {"main.kex", R"KEX(main do
   IO.printLine(App.Site.founded("db", "u", "t", "T"))
   IO.printLine(App.Site.viaVariable("d2"))
 end
@@ -400,8 +400,8 @@ end
 
         it("keeps a foul method apart from a pure one elsewhere (kexhq/kex#451)", []() {
             // `Net.HTTP.Headers.remove(name)` is pure at the same arity.
-            expectOnBothBackends({
-                {"db/holdings.kex", R"KEX(module DB.Holdings
+            expectOnBothBackends(
+                {{"db/holdings.kex", R"KEX(module DB.Holdings
 
 record HoldingRepository do
   owner : String
@@ -415,7 +415,7 @@ end
 
 let of(owner: String) -> HoldingRepository = HoldingRepository { owner: owner }
 )KEX"},
-                {"config/routes.kex", R"KEX(module Config.Routes
+                 {"config/routes.kex", R"KEX(module Config.Routes
 
 using Net.HTTP
 
@@ -423,7 +423,7 @@ foul home(request: Request<Binary>, context: Context) -> Response<Binary> = Resp
 
 let routes(label: String) -> Router = Router {}.get("/", ~home)
 )KEX"},
-                {"main.kex", R"KEX(main do
+                 {"main.kex", R"KEX(main do
   IO.printLine(DB.Holdings.of("x").remove("nope"))
   IO.printLine(Config.Routes.routes("a").routes.count)
 end
@@ -432,8 +432,8 @@ end
         });
 
         it("does not lend a method's defaults to another receiver (kexhq/kex#475)", []() {
-            expectOnBothBackends({
-                {"main.kex", R"KEX(record Builder do
+            expectOnBothBackends(
+                {{"main.kex", R"KEX(record Builder do
   table : String = ""
 end
 
@@ -455,8 +455,8 @@ end
 
     describe("a field beside another module's function (kexhq/kex#448)", []() {
         it("compiles and reads the field, typed or not, and still calls the function", []() {
-            expectOnBothBackends({
-                {"lib/kind.kex", R"KEX(module Lib.Kind
+            expectOnBothBackends(
+                {{"lib/kind.kex", R"KEX(module Lib.Kind
 
 record Kind do
   label : String
@@ -464,7 +464,7 @@ end
 
 let caption(kind: Kind) -> String = "caption of ${kind.label}"
 )KEX"},
-                {"app/views.kex", R"KEX(module App.Views
+                 {"app/views.kex", R"KEX(module App.Views
 
 record Entry do
   caption : String = "entry"
@@ -472,7 +472,7 @@ end
 
 let shown(entry: Entry) -> String = entry.caption
 )KEX"},
-                {"main.kex", R"KEX(using Lib.Kind, only: [Kind]
+                 {"main.kex", R"KEX(using Lib.Kind, only: [Kind]
 using App.Views, only: [Entry]
 
 record Statement do
@@ -492,8 +492,8 @@ end
         });
 
         it("reads a field in a module's embedded template (kexhq/kex#533)", []() {
-            expectOnBothBackends({
-                {"lib/views.kex", R"KEX(module Lib.Views
+            expectOnBothBackends(
+                {{"lib/views.kex", R"KEX(module Lib.Views
 
 record Card do
   name : String
@@ -505,12 +505,12 @@ let cardPartial = Template.html(Kex.embed("_card.html.ket"))
 shown : Card -> String
 let shown(card) = cardPartial(card)
 )KEX"},
-                {"lib/_card.html.ket", R"KEX(---
+                 {"lib/_card.html.ket", R"KEX(---
 params: [card: Card]
 ---
 <p><%= card.name %> <%= card.link %></p>
 )KEX"},
-                {"main.kex", R"KEX(main do
+                 {"main.kex", R"KEX(main do
   IO.print(Lib.Views.shown(Lib.Views.Card { name: "Ada", link: "/u" }))
 end
 )KEX"}},
@@ -520,8 +520,8 @@ end
 
     describe("an imported name in another module's make signature (kexhq/kex#532)", []() {
         it("types the overloaded || on a value that make function answers", []() {
-            expectOnBothBackends({
-                {"lib/schema.kex", R"KEX(module Lib.Schema
+            expectOnBothBackends(
+                {{"lib/schema.kex", R"KEX(module Lib.Schema
 
 type Cond = EqCond(String, String) | AnyCond([Cond])
 
@@ -548,7 +548,7 @@ let described(cond) do
   end
 end
 )KEX"},
-                {"lib/table.kex", R"KEX(module Lib.Table
+                 {"lib/table.kex", R"KEX(module Lib.Table
 
 using Lib.Schema, only: [TextColumn]
 
@@ -561,7 +561,7 @@ make Definition do
   let textColumn(name) = Lib.Schema.text(name)
 end
 )KEX"},
-                {"main.kex", R"KEX(main do
+                 {"main.kex", R"KEX(main do
   let users = Lib.Table.Definition { label: "users" }
   let owner = users.textColumn("owner")
   IO.print(Lib.Schema.described(owner == "a" || owner == "b"))
@@ -573,8 +573,8 @@ end
 
     describe("a make function overloaded by name with a defaulted parameter (kexhq/kex#531)", []() {
         it("calls the overload that takes nothing, and the other without its default", []() {
-            expectOnBothBackends({
-                {"lib/query.kex", R"KEX(module Lib.Query
+            expectOnBothBackends(
+                {{"lib/query.kex", R"KEX(module Lib.Query
 
 record Query do
   n : Integer = 0
@@ -588,7 +588,7 @@ make Query do
   foul all(as: Type<T>, renamed: {String: String} = {}) -> [T] = this.all.map { |id| as.construct({"id": id}).try }
 end
 )KEX"},
-                {"main.kex", R"KEX(record User do
+                 {"main.kex", R"KEX(record User do
   id : String
 end
 
@@ -603,8 +603,8 @@ end
 
     describe("same-named records with a same-named method (kexhq/kex#476)", []() {
         it("does not lend one type's default to the other's call", []() {
-            expectOnBothBackends({
-                {"first/net.kex", R"KEX(module First.Net
+            expectOnBothBackends(
+                {{"first/net.kex", R"KEX(module First.Net
 
 record Connection do
   label : String = "first"
@@ -620,7 +620,7 @@ make Connection do
   end
 end
 )KEX"},
-                {"second/net.kex", R"KEX(module Second.Net
+                 {"second/net.kex", R"KEX(module Second.Net
 
 record Connection do
   label : String = "second"
@@ -634,7 +634,7 @@ end
 
 let opened(count: Integer) -> Connection = Connection { count: count }
 )KEX"},
-                {"main.kex", R"KEX(main do
+                 {"main.kex", R"KEX(main do
   let first = First.Net.Connection {}
   let second = Second.Net.opened(3)
   IO.printLine(first.send("hi"))
@@ -651,12 +651,12 @@ end
 
     describe("capability stand-ins (kexhq/kex#476)", []() {
         it("reaches the stand-in's own method when two types share its name", []() {
-            expectOnBothBackends({
-                {"lib/connection.kex", R"KEX(capability Lib.Connection do
+            expectOnBothBackends(
+                {{"lib/connection.kex", R"KEX(capability Lib.Connection do
   foul run(statement: String) -> String = "no database: ${statement}"
 end
 )KEX"},
-                {"lib/direct.kex", R"KEX(module Lib.Direct
+                 {"lib/direct.kex", R"KEX(module Lib.Direct
 
 record Connection do
   label : String = "direct"
@@ -670,7 +670,7 @@ end
 
 foul sent(statement: String) -> String = Lib.Connection.run(statement)
 )KEX"},
-                {"app/store.kex", R"KEX(module App.Store
+                 {"app/store.kex", R"KEX(module App.Store
 
 record Connection do
   label : String = "store"
@@ -682,7 +682,7 @@ make Connection, implement: Lib.Connection do
   end
 end
 )KEX"},
-                {"main.kex", R"KEX(main do
+                 {"main.kex", R"KEX(main do
   IO.printLine(Lib.Direct.sent("SELECT 1"))
   with Lib.Connection = Lib.Direct.Connection {} do
     IO.printLine(Lib.Direct.sent("SELECT 2"))
@@ -698,8 +698,8 @@ end
 
     describe("function references (kexhq/kex#476)", []() {
         it("names the function through a qualifier, an alias and an import", []() {
-            expectOnBothBackends({
-                {"app/controllers/chat.kex", R"KEX(module App.Controllers.Chat
+            expectOnBothBackends(
+                {{"app/controllers/chat.kex", R"KEX(module App.Controllers.Chat
 
 record WebRequest do
   path : String = ""
@@ -708,7 +708,7 @@ end
 let show(request: WebRequest) -> WebRequest = WebRequest { path: "shown" }
 let joined(request: WebRequest, socket: String) -> String = "${request.path} ${socket}"
 )KEX"},
-                {"main.kex", R"KEX(using App.Controllers.Chat, as: Chat
+                 {"main.kex", R"KEX(using App.Controllers.Chat, as: Chat
 using App.Controllers.Chat, only: [WebRequest, joined]
 
 record Route do

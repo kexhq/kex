@@ -49,7 +49,8 @@ struct FuseListsPass : pass::PassInfoMixin<FuseListsPass> {
 // flow they become.
 struct GuardsPass : pass::PassInfoMixin<GuardsPass> {
     static constexpr std::string_view kName = "guards";
-    static constexpr std::string_view kDescription = "move `when` guards out of BEAM guard position";
+    static constexpr std::string_view kDescription =
+        "move `when` guards out of BEAM guard position";
     auto run(Module& module, ModuleAnalysisManager& analyses) -> pass::PreservedAnalyses;
 };
 

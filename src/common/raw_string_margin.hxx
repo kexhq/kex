@@ -27,18 +27,21 @@ inline auto rawStringMargin(std::string_view body) -> std::string {
     while (lineStart <= body.size()) {
         auto lineEnd = body.find('\n', lineStart);
         bool hasNewline = lineEnd != std::string_view::npos;
-        if (!hasNewline) lineEnd = body.size();
+        if (!hasNewline) {
+            lineEnd = body.size();
+        }
 
         auto contentEnd = lineEnd;
-        if (contentEnd > lineStart && body[contentEnd - 1] == '\r')
+        if (contentEnd > lineStart && body[contentEnd - 1] == '\r') {
             contentEnd--;
+        }
 
         size_t indent = lineStart;
-        while (indent < contentEnd &&
-               (body[indent] == ' ' || body[indent] == '\t'))
+        while (indent < contentEnd && (body[indent] == ' ' || body[indent] == '\t')) {
             indent++;
+        }
 
-        if (indent < contentEnd) {  // nonblank
+        if (indent < contentEnd) { // nonblank
             auto leading = body.substr(lineStart, indent - lineStart);
             if (!seenLine) {
                 margin = std::string(leading);
@@ -46,14 +49,19 @@ inline auto rawStringMargin(std::string_view body) -> std::string {
             } else {
                 auto shared = std::min(margin.size(), leading.size());
                 size_t common = 0;
-                while (common < shared && margin[common] == leading[common])
+                while (common < shared && margin[common] == leading[common]) {
                     common++;
+                }
                 margin.resize(common);
             }
-            if (margin.empty()) return margin;
+            if (margin.empty()) {
+                return margin;
+            }
         }
 
-        if (!hasNewline) break;
+        if (!hasNewline) {
+            break;
+        }
         lineStart = lineEnd + 1;
     }
 
@@ -64,18 +72,16 @@ inline auto rawStringMargin(std::string_view body) -> std::string {
 // neither is the whitespace before it when it sits alone on its line.
 // Returns where that line begins, so the caller can drop it while
 // keeping the newline that precedes it — block literals end in \n.
-inline auto rawStringClosingLineStart(std::string_view body)
-    -> std::optional<size_t> {
+inline auto rawStringClosingLineStart(std::string_view body) -> std::optional<size_t> {
     auto lastNewline = body.rfind('\n');
-    size_t lineStart = lastNewline == std::string_view::npos
-        ? 0
-        : lastNewline + 1;
+    size_t lineStart = lastNewline == std::string_view::npos ? 0 : lastNewline + 1;
     auto tail = body.substr(lineStart);
     bool onlyWhitespace = std::all_of(
-        tail.begin(), tail.end(),
-        [](char c) { return c == ' ' || c == '\t' || c == '\r'; });
-    if (!onlyWhitespace) return std::nullopt;
+        tail.begin(), tail.end(), [](char c) { return c == ' ' || c == '\t' || c == '\r'; });
+    if (!onlyWhitespace) {
+        return std::nullopt;
+    }
     return lineStart;
 }
 
-}  // namespace kex
+} // namespace kex

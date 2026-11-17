@@ -31,7 +31,8 @@ struct Package {
 greeting : String
 let greeting() = "first"
 )KEX");
-        write("lib/words/build.kex", R"KEX(module Words.Build
+        write(
+            "lib/words/build.kex", R"KEX(module Words.Build
 
 using Words.Text, only: [greeting]
 
@@ -42,7 +43,8 @@ compiled do
 
   # Pure as written, but the intrinsic reads a file the program is not made of.
   let noted(name: String) -> String = "${Kex.Intrinsic.File.read(")KEX" +
-              (root / "note.txt").string() + R"KEX(").or("none")} ${name}"
+                                       (root / "note.txt").string() +
+                                       R"KEX(").or("none")} ${name}"
 end
 )KEX");
         write("note.txt", "one");
@@ -93,20 +95,21 @@ end
             error);
     }
 
-    auto run(const std::string& probe, const std::string& entry = "main.kex",
-             const std::string& flags = "-q") -> std::string {
+    auto
+    run(const std::string& probe,
+        const std::string& entry = "main.kex",
+        const std::string& flags = "-q") -> std::string {
         const auto output = root / "output";
         const auto command = "KEX_CACHE=" + (root / "cache").string() +
-            " KEX_COLLAPSE_PROBE=" + probe + " " + std::string(KEX_BINARY_PATH) +
-            " --no-colors " + flags + " --source-root " + (root / "app").string() +
-            " --source-root " + (root / "lib").string() + " " +
-            (root / "app" / entry).string() + " > " + output.string() + " 2>&1";
+                             " KEX_COLLAPSE_PROBE=" + probe + " " + std::string(KEX_BINARY_PATH) +
+                             " --no-colors " + flags + " --source-root " + (root / "app").string() +
+                             " --source-root " + (root / "lib").string() + " " +
+                             (root / "app" / entry).string() + " > " + output.string() + " 2>&1";
         const int status = std::system(command.c_str());
         std::ifstream file(output);
         std::stringstream buffer;
         buffer << file.rdbuf();
-        assertTrue(WIFEXITED(status) && WEXITSTATUS(status) == 0,
-                   "build failed: " + buffer.str());
+        assertTrue(WIFEXITED(status) && WEXITSTATUS(status) == 0, "build failed: " + buffer.str());
         return buffer.str();
     }
 
@@ -114,9 +117,14 @@ end
         int count = 0;
         std::error_code error;
         const auto kept = root / "cache" / "collapse";
-        if (!std::filesystem::is_directory(kept, error)) return 0;
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(kept, error))
-            if (entry.path().extension() == ".round") count++;
+        if (!std::filesystem::is_directory(kept, error)) {
+            return 0;
+        }
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(kept, error)) {
+            if (entry.path().extension() == ".round") {
+                count++;
+            }
+        }
         return count;
     }
 };
@@ -128,58 +136,63 @@ int main() {
         it("are kept, and decided again when a module the sandbox loaded changes", []() {
             Package package;
             auto text = package.run("one");
-            assertTrue(text.find("first kex\n") != std::string::npos,
-                       "unexpected first build: " + text);
+            assertTrue(
+                text.find("first kex\n") != std::string::npos, "unexpected first build: " + text);
             assertTrue(package.keptRounds() > 0, "the first build kept no collapse");
             text = package.run("one");
-            assertTrue(text.find("first kex\n") != std::string::npos,
-                       "unexpected second build: " + text);
+            assertTrue(
+                text.find("first kex\n") != std::string::npos, "unexpected second build: " + text);
             package.write("lib/words/text.kex", R"KEX(module Words.Text
 
 greeting : String
 let greeting() = "second"
 )KEX");
             text = package.run("one");
-            assertTrue(text.find("second kex\n") != std::string::npos,
-                       "a kept collapse outlived the module it was made from: " + text);
+            assertTrue(
+                text.find("second kex\n") != std::string::npos,
+                "a kept collapse outlived the module it was made from: " + text);
         });
         it("never keep one that read the environment", []() {
             Package package;
             auto text = package.run("one", "stamped.kex");
-            assertTrue(text.find("one kex\n") != std::string::npos,
-                       "unexpected first build: " + text);
+            assertTrue(
+                text.find("one kex\n") != std::string::npos, "unexpected first build: " + text);
             text = package.run("two", "stamped.kex");
-            assertTrue(text.find("two kex\n") != std::string::npos,
-                       "a collapse that read ENV was kept for the next build: " + text);
+            assertTrue(
+                text.find("two kex\n") != std::string::npos,
+                "a collapse that read ENV was kept for the next build: " + text);
         });
         it("never keep one that read a file, even through a pure function", []() {
             Package package;
             auto text = package.run("one", "noted.kex");
-            assertTrue(text.find("one kex\n") != std::string::npos,
-                       "unexpected first build: " + text);
+            assertTrue(
+                text.find("one kex\n") != std::string::npos, "unexpected first build: " + text);
             package.write("note.txt", "two");
             text = package.run("one", "noted.kex");
-            assertTrue(text.find("two kex\n") != std::string::npos,
-                       "a collapse that read a file was kept for the next build: " + text);
+            assertTrue(
+                text.find("two kex\n") != std::string::npos,
+                "a collapse that read a file was kept for the next build: " + text);
         });
     });
     describe("runs kept by their entry", []() {
         it("start from the modules of an unchanged build", []() {
             Package package;
             auto text = package.run("one", "main.kex", "--progress");
-            assertTrue(text.find("Cached build") == std::string::npos,
-                       "the first build was cached: " + text);
+            assertTrue(
+                text.find("Cached build") == std::string::npos,
+                "the first build was cached: " + text);
             text = package.run("one", "main.kex", "--progress");
-            assertTrue(text.find("Cached build") != std::string::npos &&
-                           text.find("first kex\n") != std::string::npos,
-                       "an unchanged build was compiled again: " + text);
+            assertTrue(
+                text.find("Cached build") != std::string::npos &&
+                    text.find("first kex\n") != std::string::npos,
+                "an unchanged build was compiled again: " + text);
         });
         it("build again when a new file takes a module's name", []() {
             Package package;
             package.run("one");
             auto text = package.run("one");
-            assertTrue(text.find("first kex\n") != std::string::npos,
-                       "unexpected second build: " + text);
+            assertTrue(
+                text.find("first kex\n") != std::string::npos, "unexpected second build: " + text);
             // The application's root comes first, so this is Words.Text now.
             package.write("app/words/text.kex", R"KEX(module Words.Text
 
@@ -187,8 +200,9 @@ greeting : String
 let greeting() = "shadowing"
 )KEX");
             text = package.run("one");
-            assertTrue(text.find("shadowing kex\n") != std::string::npos,
-                       "a kept build outlived a module taken over by a new file: " + text);
+            assertTrue(
+                text.find("shadowing kex\n") != std::string::npos,
+                "a kept build outlived a module taken over by a new file: " + text);
         });
     });
     return runAll();

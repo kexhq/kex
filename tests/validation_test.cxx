@@ -26,19 +26,19 @@ constexpr auto issueTypes =
     "end\n";
 
 auto validate(
-    const std::string& source,
-    std::chrono::milliseconds timeout = std::chrono::seconds(1))
+    const std::string& source, std::chrono::milliseconds timeout = std::chrono::seconds(1))
     -> std::vector<semantic::Diagnostic> {
     Lexer lexer(std::string{issueTypes} + source, "validation_test.kex");
     Parser parser(lexer.tokenizeAll(), "validation_test.kex");
     auto program = parser.parseProgram();
     semantic::Analyzer analyzer;
-    if (!analyzer.analyze(program)) return analyzer.diagnostics();
+    if (!analyzer.analyze(program)) {
+        return analyzer.diagnostics();
+    }
     return validation::validateTaggedLiterals(program, analyzer, {}, timeout);
 }
 
-auto validateFile(const std::string& source)
-    -> std::vector<semantic::Diagnostic> {
+auto validateFile(const std::string& source) -> std::vector<semantic::Diagnostic> {
     const std::string filename = "/tmp/kex_validation_position.kex";
     const auto completeSource = std::string{issueTypes} + source;
     {
@@ -50,8 +50,7 @@ auto validateFile(const std::string& source)
     auto program = parser.parseProgram();
     semantic::Analyzer analyzer;
     analyzer.analyze(program);
-    auto diagnostics =
-        validation::validateTaggedLiterals(program, analyzer);
+    auto diagnostics = validation::validateTaggedLiterals(program, analyzer);
     std::filesystem::remove(filename);
     return diagnostics;
 }
@@ -60,10 +59,11 @@ auto contains(
     const std::vector<semantic::Diagnostic>& diagnostics,
     semantic::Diagnostic::Level level,
     const std::string& text) -> bool {
-    for (const auto& diagnostic : diagnostics)
-        if (diagnostic.level == level &&
-            diagnostic.message.find(text) != std::string::npos)
+    for (const auto& diagnostic : diagnostics) {
+        if (diagnostic.level == level && diagnostic.message.find(text) != std::string::npos) {
             return true;
+        }
+    }
     return false;
 }
 
@@ -79,10 +79,8 @@ int main() {
                 "[TaggedValidation.Issue] = "
                 "[TaggedValidation.fatal(\"invalid demo literal\")]\n"
                 "main do demo`bad` end\n");
-            assertTrue(contains(
-                diagnostics,
-                semantic::Diagnostic::Level::Error,
-                "invalid demo literal"));
+            assertTrue(
+                contains(diagnostics, semantic::Diagnostic::Level::Error, "invalid demo literal"));
         });
 
         it("emits Warn issues without failing validation", []() {
@@ -95,9 +93,7 @@ int main() {
                 "1, \"suspicious demo literal\")]\n"
                 "main do demo`okay` end\n");
             assertTrue(contains(
-                diagnostics,
-                semantic::Diagnostic::Level::Warning,
-                "suspicious demo literal"));
+                diagnostics, semantic::Diagnostic::Level::Warning, "suspicious demo literal"));
         });
 
         it("maps cooked byte offsets back to source positions", []() {
@@ -112,7 +108,6 @@ int main() {
             assertEqual(diagnostics[0].location.line, 13);
             assertEqual(diagnostics[0].location.column, 15);
         });
-
 
         it("maps offsets through a block literal's content dedent", []() {
             // The literal dedents by its content's shared margin, so the
@@ -192,9 +187,7 @@ int main() {
                 "[TaggedValidation.warnBetween(3, 1, \"bad range\")]\n"
                 "main do demo`abcde` end\n");
             assertTrue(contains(
-                diagnostics,
-                semantic::Diagnostic::Level::Error,
-                "byte span outside the literal"));
+                diagnostics, semantic::Diagnostic::Level::Error, "byte span outside the literal"));
         });
 
         it("rejects Between ranges past the literal", []() {
@@ -206,9 +199,7 @@ int main() {
                 "[TaggedValidation.warnBetween(1, 6, \"bad range\")]\n"
                 "main do demo`abcde` end\n");
             assertTrue(contains(
-                diagnostics,
-                semantic::Diagnostic::Level::Error,
-                "byte span outside the literal"));
+                diagnostics, semantic::Diagnostic::Level::Error, "byte span outside the literal"));
         });
 
         it("does nothing when the companion is absent", []() {
@@ -250,10 +241,8 @@ int main() {
                 "[TaggedValidation.fatal(\"module validator ran\")]\n"
                 "  let build() = demo`bad`\n"
                 "end\n");
-            assertTrue(contains(
-                diagnostics,
-                semantic::Diagnostic::Level::Error,
-                "module validator ran"));
+            assertTrue(
+                contains(diagnostics, semantic::Diagnostic::Level::Error, "module validator ran"));
         });
 
         it("requires the exact pure companion signature", []() {
@@ -263,8 +252,7 @@ int main() {
                 "let validateDemo(source: String) -> String = source\n"
                 "main do demo`bad` end\n");
             assertTrue(contains(
-                diagnostics,
-                semantic::Diagnostic::Level::Error,
+                diagnostics, semantic::Diagnostic::Level::Error,
                 "String -> [TaggedValidation.Issue]"));
         });
 
@@ -280,15 +268,11 @@ int main() {
                 "end\n"
                 "main do demo`bad` end\n",
                 std::chrono::milliseconds(5));
-            assertTrue(contains(
-                diagnostics,
-                semantic::Diagnostic::Level::Error,
-                "timed out"));
+            assertTrue(contains(diagnostics, semantic::Diagnostic::Level::Error, "timed out"));
             assertEqual(diagnostics.size(), size_t(1));
             assertEqual(diagnostics[0].notes.size(), size_t(1));
             assertTrue(
-                diagnostics[0].notes[0].message.find(
-                    "triggered by tagged literal `demo`") !=
+                diagnostics[0].notes[0].message.find("triggered by tagged literal `demo`") !=
                 std::string::npos);
         });
 
@@ -300,19 +284,13 @@ int main() {
                 "[TaggedValidation.Issue] = "
                 "die(\"validator exploded\")\n"
                 "main do demo`bad` end\n");
-            assertTrue(contains(
-                diagnostics,
-                semantic::Diagnostic::Level::Error,
-                "crashed"));
+            assertTrue(contains(diagnostics, semantic::Diagnostic::Level::Error, "crashed"));
             assertEqual(diagnostics.size(), size_t(1));
             assertEqual(diagnostics[0].notes.size(), size_t(1));
             assertTrue(
-                diagnostics[0].notes[0].message.find(
-                    "triggered by tagged literal `demo`") !=
+                diagnostics[0].notes[0].message.find("triggered by tagged literal `demo`") !=
                 std::string::npos);
-            assertTrue(
-                diagnostics[0].notes[0].location.line >
-                diagnostics[0].location.line);
+            assertTrue(diagnostics[0].notes[0].location.line > diagnostics[0].location.line);
         });
     });
 

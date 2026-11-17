@@ -23,7 +23,7 @@ namespace {
 // design) — named thread_local defensively, in case this ever runs on a
 // worker-thread-per-tab wasm setup later.
 thread_local Fiber* g_currentFiber = nullptr;
-}
+} // namespace
 
 // Stack kept back for whatever runs between two checks: a native function, a
 // deep `inspect`, the error's own unwinding.
@@ -40,7 +40,9 @@ auto Fiber::markStackTop() -> void {
 
 auto Fiber::stackExhausted() -> bool {
     const Fiber* self = g_currentFiber;
-    if (!self || self->m_stackLimit == 0) return false;
+    if (!self || self->m_stackLimit == 0) {
+        return false;
+    }
     char probe = 0;
     return reinterpret_cast<std::uintptr_t>(&probe) < self->m_stackLimit;
 }
@@ -82,7 +84,7 @@ auto g_yieldSlot() -> ctx::fiber*& {
     thread_local ctx::fiber* slot = nullptr;
     return slot;
 }
-}
+} // namespace
 
 Fiber::Fiber(EntryFn entry, std::size_t stackSize)
     : m_entry(std::move(entry)), m_impl(std::make_unique<Impl>()) {
@@ -110,7 +112,9 @@ Fiber::Fiber(EntryFn entry, std::size_t stackSize)
 Fiber::~Fiber() = default;
 
 auto Fiber::resume() -> void {
-    if (m_finished) return;
+    if (m_finished) {
+        return;
+    }
 
     Fiber* prevFiber = g_currentFiber;
     // Restored with the current fiber below: a fiber can be resumed from
@@ -139,9 +143,13 @@ auto Fiber::resume() -> void {
 
 auto Fiber::yieldToScheduler() -> void {
     Fiber* self = g_currentFiber;
-    if (!self) return; // called outside any fiber — harmless no-op
+    if (!self) {
+        return; // called outside any fiber — harmless no-op
+    }
     ctx::fiber* slot = g_yieldSlot();
-    if (!slot) return;
+    if (!slot) {
+        return;
+    }
     *slot = std::move(*slot).resume();
 }
 
@@ -177,12 +185,14 @@ std::vector<char> g_nativeAsyncifyStack(65536);
 bool g_nativeContextInitialized = false;
 
 auto ensureNativeContext() -> void {
-    if (g_nativeContextInitialized) return;
+    if (g_nativeContextInitialized) {
+        return;
+    }
     emscripten_fiber_init_from_current_context(
         &g_nativeContext, g_nativeAsyncifyStack.data(), g_nativeAsyncifyStack.size());
     g_nativeContextInitialized = true;
 }
-}
+} // namespace
 
 struct Fiber::Impl {
     emscripten_fiber_t ctx{};
@@ -197,7 +207,7 @@ namespace {
 auto fiberTrampoline(void* arg) -> void {
     static_cast<Fiber*>(arg)->trampolineBody();
 }
-}
+} // namespace
 
 Fiber::Fiber(EntryFn entry, std::size_t stackSize)
     : m_impl(std::make_unique<Impl>()), m_entry(std::move(entry)) {
@@ -206,15 +216,17 @@ Fiber::Fiber(EntryFn entry, std::size_t stackSize)
     // Emscripten's own asyncify scratch buffer, separate from the C stack —
     // see emscripten_fiber_init's signature.
     m_impl->asyncifyStack.resize(stackSize);
-    emscripten_fiber_init(&m_impl->ctx, &fiberTrampoline, this,
-                           m_impl->stack.data(), m_impl->stack.size(),
-                           m_impl->asyncifyStack.data(), m_impl->asyncifyStack.size());
+    emscripten_fiber_init(
+        &m_impl->ctx, &fiberTrampoline, this, m_impl->stack.data(), m_impl->stack.size(),
+        m_impl->asyncifyStack.data(), m_impl->asyncifyStack.size());
 }
 
 Fiber::~Fiber() = default;
 
 auto Fiber::resume() -> void {
-    if (m_finished) return;
+    if (m_finished) {
+        return;
+    }
     Fiber* prevFiber = g_currentFiber;
     emscripten_fiber_t nestedCaller{};
     std::vector<char> nestedAsyncifyStack;
@@ -224,8 +236,7 @@ auto Fiber::resume() -> void {
         // the parent is suspended in this resume() call.
         nestedAsyncifyStack.resize(65536);
         emscripten_fiber_init_from_current_context(
-            &nestedCaller, nestedAsyncifyStack.data(),
-            nestedAsyncifyStack.size());
+            &nestedCaller, nestedAsyncifyStack.data(), nestedAsyncifyStack.size());
         caller = &nestedCaller;
     } else {
         ensureNativeContext();
@@ -241,9 +252,13 @@ auto Fiber::resume() -> void {
 
 auto Fiber::yieldToScheduler() -> void {
     Fiber* self = g_currentFiber;
-    if (!self) return;
+    if (!self) {
+        return;
+    }
     auto* caller = self->m_impl->callerContext;
-    if (!caller) return;
+    if (!caller) {
+        return;
+    }
     emscripten_fiber_swap(&self->m_impl->ctx, caller);
 }
 
@@ -251,8 +266,9 @@ auto Fiber::trampolineBody() -> void {
     markStackTop();
     m_entry();
     m_finished = true;
-    if (m_impl->callerContext)
+    if (m_impl->callerContext) {
         emscripten_fiber_swap(&m_impl->ctx, m_impl->callerContext);
+    }
 }
 
 #endif

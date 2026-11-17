@@ -19,8 +19,7 @@ namespace kex::cache {
 auto base() -> std::optional<std::filesystem::path>;
 
 // `base() / subdirectory`, or nullopt when caching is off.
-auto directory(std::string_view subdirectory)
-    -> std::optional<std::filesystem::path>;
+auto directory(std::string_view subdirectory) -> std::optional<std::filesystem::path>;
 
 // Identifies the toolchain that would write an entry: version, git revision,
 // the running compiler binary (path, size, mtime — kexhq/kex#372: a rebuild
@@ -38,11 +37,9 @@ auto stagingSuffix() -> std::string;
 // parent directories. Readers see the old entry or the whole new one, never
 // part of one; the staging file never outlives a failed write. False when
 // anything failed — for a cache that only means the next build recomputes.
-auto atomicWrite(const std::filesystem::path& path, std::string_view bytes)
-    -> bool;
+auto atomicWrite(const std::filesystem::path& path, std::string_view bytes) -> bool;
 
 // Copies `source` to `path` the same way.
-auto atomicCopy(const std::filesystem::path& source,
-                const std::filesystem::path& path) -> bool;
+auto atomicCopy(const std::filesystem::path& source, const std::filesystem::path& path) -> bool;
 
 } // namespace kex::cache

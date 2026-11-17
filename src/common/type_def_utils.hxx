@@ -27,11 +27,14 @@ struct TypeConstructorInfo {
 // An applied generic is one too: `type Incoming = Request<Binary>` renames a
 // type, where `type Wrapped = Wrap(Binary)` declares a constructor.
 inline auto isTransparentTypeAlias(const ast::TypeDef& def) -> bool {
-    if (def.isDistinct || def.leadingPipe || !def.variants ||
-        def.variants->size() != 1 || !(*def.variants)[0])
+    if (def.isDistinct || def.leadingPipe || !def.variants || def.variants->size() != 1 ||
+        !(*def.variants)[0]) {
         return false;
+    }
     const auto& only = (*def.variants)[0]->kind;
-    if (std::holds_alternative<ast::TypeName>(only)) return true;
+    if (std::holds_alternative<ast::TypeName>(only)) {
+        return true;
+    }
     const auto* generic = std::get_if<ast::GenericType>(&only);
     return generic && generic->applied;
 }
@@ -43,22 +46,25 @@ inline auto isTransparentTypeAlias(const ast::TypeDef& def) -> bool {
 // sum type and a generic alias or distinct type. `Type.fields` reads a field
 // declared with one as what it stands for (kexhq/kex#530), on either backend.
 inline auto aliasTarget(const ast::TypeDef& def) -> const ast::TypeExpr* {
-    if (def.leadingPipe || !def.variants ||
-        def.variants->size() != 1 || !(*def.variants)[0] || !def.typeParams.empty())
+    if (def.leadingPipe || !def.variants || def.variants->size() != 1 || !(*def.variants)[0] ||
+        !def.typeParams.empty()) {
         return nullptr;
+    }
     const auto* only = (*def.variants)[0].get();
-    if (def.isDistinct || isTransparentTypeAlias(def)) return only;
+    if (def.isDistinct || isTransparentTypeAlias(def)) {
+        return only;
+    }
     if (std::holds_alternative<ast::TypeName>(only->kind) ||
-        std::holds_alternative<ast::GenericType>(only->kind))
+        std::holds_alternative<ast::GenericType>(only->kind)) {
         return nullptr;
+    }
     return only;
 }
 
 // A trait's identity, the rule records follow: its own name at the top level,
 // `Shop.Rules.Pricing` when `module Shop.Rules` declares it. Two modules may
 // then each declare a `Shape` without one replacing the other.
-inline auto traitIdentity(const std::string& modulePath, const std::string& name)
-    -> std::string {
+inline auto traitIdentity(const std::string& modulePath, const std::string& name) -> std::string {
     return modulePath.empty() ? name : modulePath + "." + name;
 }
 
@@ -72,29 +78,41 @@ inline auto traitIdentity(const std::string& modulePath, const std::string& name
 // the reference is ambiguous: it comes back as written, unknown, and their
 // identities land in `ambiguous` for the error to list.
 template <typename Known, typename EachKnown>
-auto resolveTraitName(const std::string& written, const std::string& scope,
-                      const std::vector<std::string>& imported,
-                      const Known& known, const EachKnown& eachKnown,
-                      std::vector<std::string>* ambiguous = nullptr)
-    -> std::string {
+auto resolveTraitName(
+    const std::string& written,
+    const std::string& scope,
+    const std::vector<std::string>& imported,
+    const Known& known,
+    const EachKnown& eachKnown,
+    std::vector<std::string>* ambiguous = nullptr) -> std::string {
     for (auto enclosing = scope; !enclosing.empty();) {
-        if (const auto candidate = enclosing + "." + written; known(candidate))
+        if (const auto candidate = enclosing + "." + written; known(candidate)) {
             return candidate;
+        }
         const auto dot = enclosing.rfind('.');
-        if (dot == std::string::npos) break;
+        if (dot == std::string::npos) {
+            break;
+        }
         enclosing.resize(dot);
     }
-    for (const auto& module : imported)
-        if (const auto candidate = module + "." + written; known(candidate))
+    for (const auto& module : imported) {
+        if (const auto candidate = module + "." + written; known(candidate)) {
             return candidate;
-    if (known(written)) return written;
+        }
+    }
+    if (known(written)) {
+        return written;
+    }
     std::vector<std::string> matches;
     const auto suffix = "." + written;
     eachKnown([&](const std::string& identity) {
-        if (identity.size() > suffix.size() && identity.ends_with(suffix))
+        if (identity.size() > suffix.size() && identity.ends_with(suffix)) {
             matches.push_back(identity);
+        }
     });
-    if (matches.size() == 1) return matches.front();
+    if (matches.size() == 1) {
+        return matches.front();
+    }
     if (ambiguous) {
         std::sort(matches.begin(), matches.end());
         *ambiguous = std::move(matches);
@@ -106,9 +124,10 @@ auto resolveTraitName(const std::string& written, const std::string& scope,
 // for the file). Read from the declarations rather than tracked during a walk,
 // for a phase that resolves names before it has walked to them.
 template <typename Items>
-auto collectScopeUsings(const Items& items,
-                        std::unordered_map<std::string, std::set<std::string>>& out,
-                        const std::string& modulePath = "") -> void {
+auto collectScopeUsings(
+    const Items& items,
+    std::unordered_map<std::string, std::set<std::string>>& out,
+    const std::string& modulePath = "") -> void {
     for (const auto& item : items) {
         if (auto* block = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item);
             block && *block && (*block)->body.empty()) {
@@ -117,11 +136,10 @@ auto collectScopeUsings(const Items& items,
         } else if (auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
                    nested && *nested) {
             const auto& name = (*nested)->name;
-            const bool qualified =
-                !modulePath.empty() && name.rfind(modulePath + ".", 0) == 0;
-            collectScopeUsings((*nested)->body, out,
-                               modulePath.empty() || qualified
-                                   ? name : modulePath + "." + name);
+            const bool qualified = !modulePath.empty() && name.rfind(modulePath + ".", 0) == 0;
+            collectScopeUsings(
+                (*nested)->body, out,
+                modulePath.empty() || qualified ? name : modulePath + "." + name);
         }
     }
 }
@@ -133,14 +151,17 @@ inline auto usingsVisibleIn(
     const std::string& scope) -> std::set<std::string> {
     std::set<std::string> visible;
     auto add = [&](const std::string& path) {
-        if (auto found = scopeUsings.find(path); found != scopeUsings.end())
+        if (auto found = scopeUsings.find(path); found != scopeUsings.end()) {
             visible.insert(found->second.begin(), found->second.end());
+        }
     };
     add("");
     for (auto enclosing = scope; !enclosing.empty();) {
         add(enclosing);
         const auto dot = enclosing.rfind('.');
-        if (dot == std::string::npos) break;
+        if (dot == std::string::npos) {
+            break;
+        }
         enclosing.resize(dot);
     }
     return visible;
@@ -151,21 +172,19 @@ inline auto usingsVisibleIn(
 // that keeps a trait table walks it this way, so one declared inside a module
 // is not known to the checker yet missing from the runtime.
 template <typename Items, typename Visit>
-auto forEachTraitDef(const Items& items, const Visit& visit,
-                     const std::string& modulePath = "") -> void {
+auto forEachTraitDef(const Items& items, const Visit& visit, const std::string& modulePath = "")
+    -> void {
     for (const auto& item : items) {
-        if (auto* trait = std::get_if<std::unique_ptr<ast::TraitDef>>(&item);
-            trait && *trait)
+        if (auto* trait = std::get_if<std::unique_ptr<ast::TraitDef>>(&item); trait && *trait) {
             visit(**trait, modulePath);
-        else if (auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
-                 module && *module) {
+        } else if (auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
+                   module && *module) {
             // A nested module may be written already qualified by its parent.
             const auto& name = (*module)->name;
-            const bool qualified =
-                !modulePath.empty() && name.rfind(modulePath + ".", 0) == 0;
-            forEachTraitDef((*module)->body, visit,
-                            modulePath.empty() || qualified
-                                ? name : modulePath + "." + name);
+            const bool qualified = !modulePath.empty() && name.rfind(modulePath + ".", 0) == 0;
+            forEachTraitDef(
+                (*module)->body, visit,
+                modulePath.empty() || qualified ? name : modulePath + "." + name);
         }
     }
 }
@@ -173,24 +192,34 @@ auto forEachTraitDef(const Items& items, const Visit& visit,
 // Every `type` a program declares, at the top level, inside any module, or
 // in a visibility block, with the path of the module declaring it.
 template <typename Items, typename Visit>
-auto forEachTypeDef(const Items& items, const Visit& visit,
-                    const std::string& modulePath = "") -> void {
-    for (const auto& item : items)
-        std::visit([&](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
-                if (node) visit(*node, modulePath);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
-                if (node) forEachTypeDef(node->items, visit, modulePath);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (!node) return;
-                const auto& name = node->name;
-                const bool qualified =
-                    !modulePath.empty() && name.rfind(modulePath + ".", 0) == 0;
-                forEachTypeDef(node->body, visit,
-                               modulePath.empty() || qualified ? name : modulePath + "." + name);
-            }
-        }, item);
+auto forEachTypeDef(const Items& items, const Visit& visit, const std::string& modulePath = "")
+    -> void {
+    for (const auto& item : items) {
+        std::visit(
+            [&](const auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
+                    if (node) {
+                        visit(*node, modulePath);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                    if (node) {
+                        forEachTypeDef(node->items, visit, modulePath);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                    if (!node) {
+                        return;
+                    }
+                    const auto& name = node->name;
+                    const bool qualified =
+                        !modulePath.empty() && name.rfind(modulePath + ".", 0) == 0;
+                    forEachTypeDef(
+                        node->body, visit,
+                        modulePath.empty() || qualified ? name : modulePath + "." + name);
+                }
+            },
+            item);
+    }
 }
 
 // The dispatch names a `make` target covers. Normally one, but a union target
@@ -205,25 +234,35 @@ auto forEachTypeDef(const Items& items, const Visit& visit,
 // action-at-a-distance `using` has to gate (docs/ufcs-dispatch-plan.md
 // "Follow-up", case 1).
 template <typename Items>
-inline auto collectDeclaredTypeNames(const Items& items,
-                                     std::set<std::string>& out) -> void {
+inline auto collectDeclaredTypeNames(const Items& items, std::set<std::string>& out) -> void {
     for (const auto& item : items) {
-        std::visit([&out](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
-                if (node) out.insert(node->name);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
-                if (node) out.insert(node->name);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (node) collectDeclaredTypeNames(node->body, out);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
-                // `compiled do … end` declares into the surrounding scope.
-                if (node) collectDeclaredTypeNames(node->items, out);
-            } else if constexpr (std::is_same_v<T,
-                                                std::unique_ptr<ast::VisibilityBlock>>) {
-                if (node) collectDeclaredTypeNames(node->items, out);
-            }
-        }, item);
+        std::visit(
+            [&out](const auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                    if (node) {
+                        out.insert(node->name);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
+                    if (node) {
+                        out.insert(node->name);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                    if (node) {
+                        collectDeclaredTypeNames(node->body, out);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
+                    // `compiled do … end` declares into the surrounding scope.
+                    if (node) {
+                        collectDeclaredTypeNames(node->items, out);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                    if (node) {
+                        collectDeclaredTypeNames(node->items, out);
+                    }
+                }
+            },
+            item);
     }
 }
 
@@ -232,35 +271,52 @@ inline auto collectDeclaredTypeNames(const Items& items,
 template <typename Items>
 inline auto collectDeclaredTraitNames(const Items& items, std::set<std::string>& out) -> void {
     for (const auto& item : items) {
-        std::visit([&out](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
-                if (node) out.insert(node->name);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (node) collectDeclaredTraitNames(node->body, out);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
-                if (node) collectDeclaredTraitNames(node->items, out);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
-                if (node) collectDeclaredTraitNames(node->items, out);
-            }
-        }, item);
+        std::visit(
+            [&out](const auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
+                    if (node) {
+                        out.insert(node->name);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                    if (node) {
+                        collectDeclaredTraitNames(node->body, out);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
+                    if (node) {
+                        collectDeclaredTraitNames(node->items, out);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                    if (node) {
+                        collectDeclaredTraitNames(node->items, out);
+                    }
+                }
+            },
+            item);
     }
 }
 
 template <typename Items>
-inline auto collectDeclaredRecordNames(const Items& items,
-                                       std::set<std::string>& out) -> void {
+inline auto collectDeclaredRecordNames(const Items& items, std::set<std::string>& out) -> void {
     for (const auto& item : items) {
-        std::visit([&out](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
-                if (node) out.insert(node->name);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
-                if (node) collectDeclaredRecordNames(node->items, out);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
-                if (node) collectDeclaredRecordNames(node->items, out);
-            }
-        }, item);
+        std::visit(
+            [&out](const auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                    if (node) {
+                        out.insert(node->name);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
+                    if (node) {
+                        collectDeclaredRecordNames(node->items, out);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                    if (node) {
+                        collectDeclaredRecordNames(node->items, out);
+                    }
+                }
+            },
+            item);
     }
 }
 
@@ -273,20 +329,25 @@ enum class StructuralTarget { Excluded, Named };
 // `make [T]` and `Map` for `make {K: V}`. nullopt for any other target. Each
 // caller then takes what it needs — the dotted spelling, the last segment —
 // instead of re-deriving the name from the target's kinds.
-inline auto writtenMakeTarget(const ast::TypeExprPtr& target,
-                              StructuralTarget structural = StructuralTarget::Named)
+inline auto writtenMakeTarget(
+    const ast::TypeExprPtr& target, StructuralTarget structural = StructuralTarget::Named)
     -> std::optional<ast::TypeName> {
-    if (!target) return std::nullopt;
-    if (const auto* name = std::get_if<ast::TypeName>(&target->kind))
+    if (!target) {
+        return std::nullopt;
+    }
+    if (const auto* name = std::get_if<ast::TypeName>(&target->kind)) {
         return name->parts.empty() ? std::nullopt : std::optional(*name);
-    if (const auto* generic = std::get_if<ast::GenericType>(&target->kind))
-        return generic->name.parts.empty() ? std::nullopt
-                                           : std::optional(generic->name);
+    }
+    if (const auto* generic = std::get_if<ast::GenericType>(&target->kind)) {
+        return generic->name.parts.empty() ? std::nullopt : std::optional(generic->name);
+    }
     if (structural == StructuralTarget::Named) {
-        if (std::holds_alternative<ast::ListType>(target->kind))
+        if (std::holds_alternative<ast::ListType>(target->kind)) {
             return ast::TypeName{{"List"}};
-        if (std::holds_alternative<ast::MapType>(target->kind))
+        }
+        if (std::holds_alternative<ast::MapType>(target->kind)) {
             return ast::TypeName{{"Map"}};
+        }
     }
     return std::nullopt;
 }
@@ -298,19 +359,26 @@ inline auto makeTargetLeaf(const ast::TypeExprPtr& target) -> std::string {
     return name ? name->parts.back() : std::string{};
 }
 
-inline auto makeTargetNames(const ast::TypeExprPtr& target,
-                            const std::string& module = "",
-                            const std::set<std::string>& records = {})
-    -> std::vector<std::string> {
+inline auto makeTargetNames(
+    const ast::TypeExprPtr& target,
+    const std::string& module = "",
+    const std::set<std::string>& records = {}) -> std::vector<std::string> {
     std::vector<std::string> names;
     auto add = [&names, &module, &records](std::string n) {
-        if (n.empty()) return;
-        if (!module.empty() && records.count(n)) n = module + "." + n;
-        if (std::find(names.begin(), names.end(), n) == names.end())
+        if (n.empty()) {
+            return;
+        }
+        if (!module.empty() && records.count(n)) {
+            n = module + "." + n;
+        }
+        if (std::find(names.begin(), names.end(), n) == names.end()) {
             names.push_back(std::move(n));
+        }
     };
     auto walk = [&](auto&& self, const ast::TypeExprPtr& t) -> void {
-        if (!t) return;
+        if (!t) {
+            return;
+        }
         if (const auto* un = std::get_if<ast::UnionType>(&t->kind)) {
             self(self, un->left);
             self(self, un->right);
@@ -326,8 +394,14 @@ inline auto makeTargetNames(const ast::TypeExprPtr& target,
             add(std::move(name));
             return;
         }
-        if (std::holds_alternative<ast::ListType>(t->kind)) { add("List"); return; }
-        if (std::holds_alternative<ast::MapType>(t->kind)) { add("Map"); return; }
+        if (std::holds_alternative<ast::ListType>(t->kind)) {
+            add("List");
+            return;
+        }
+        if (std::holds_alternative<ast::MapType>(t->kind)) {
+            add("Map");
+            return;
+        }
     };
     walk(walk, target);
     return names;
@@ -338,42 +412,52 @@ inline auto makeTargetNames(const ast::TypeExprPtr& target,
 template <typename Items>
 inline auto collectMakeTargetNames(const Items& items, std::set<std::string>& out) -> void {
     for (const auto& item : items) {
-        std::visit([&out](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
-                if (node)
-                    for (const auto& name : makeTargetNames(node->target)) out.insert(name);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (node) collectMakeTargetNames(node->body, out);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
-                if (node) collectMakeTargetNames(node->items, out);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
-                if (node) collectMakeTargetNames(node->items, out);
-            }
-        }, item);
+        std::visit(
+            [&out](const auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                    if (node) {
+                        for (const auto& name : makeTargetNames(node->target)) {
+                            out.insert(name);
+                        }
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                    if (node) {
+                        collectMakeTargetNames(node->body, out);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
+                    if (node) {
+                        collectMakeTargetNames(node->items, out);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                    if (node) {
+                        collectMakeTargetNames(node->items, out);
+                    }
+                }
+            },
+            item);
     }
 }
 
-
 inline auto typeConstructors(const ast::TypeDef& def)
     -> std::optional<std::vector<TypeConstructorInfo>> {
-    if (!def.variants || def.isDistinct || isTransparentTypeAlias(def))
+    if (!def.variants || def.isDistinct || isTransparentTypeAlias(def)) {
         return std::vector<TypeConstructorInfo>{};
+    }
 
     std::vector<TypeConstructorInfo> result;
     for (const auto& variant : *def.variants) {
-        if (!variant) return std::nullopt;
-        if (const auto* plain =
-                std::get_if<ast::TypeName>(&variant->kind);
+        if (!variant) {
+            return std::nullopt;
+        }
+        if (const auto* plain = std::get_if<ast::TypeName>(&variant->kind);
             plain && plain->parts.size() == 1) {
             result.push_back({plain->parts.front(), 0});
             continue;
         }
-        if (const auto* generic =
-                std::get_if<ast::GenericType>(&variant->kind);
+        if (const auto* generic = std::get_if<ast::GenericType>(&variant->kind);
             generic && generic->name.parts.size() == 1) {
-            result.push_back(
-                {generic->name.parts.front(), generic->args.size()});
+            result.push_back({generic->name.parts.front(), generic->args.size()});
             continue;
         }
         return std::nullopt;

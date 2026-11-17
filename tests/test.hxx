@@ -47,10 +47,12 @@ inline auto runAll() -> int {
             try {
                 tc.fn();
                 passes++;
-                std::cout << "    " << kex::color::apply(kex::color::green) << "✓" << kex::color::apply(kex::color::reset) << " " << tc.name << "\n";
+                std::cout << "    " << kex::color::apply(kex::color::green) << "✓"
+                          << kex::color::apply(kex::color::reset) << " " << tc.name << "\n";
             } catch (const std::exception& e) {
                 failures++;
-                std::cout << "    " << kex::color::apply(kex::color::red) << "✗" << kex::color::apply(kex::color::reset) << " " << tc.name << "\n";
+                std::cout << "    " << kex::color::apply(kex::color::red) << "✗"
+                          << kex::color::apply(kex::color::reset) << " " << tc.name << "\n";
                 std::cout << "      " << e.what() << "\n";
             }
         }
@@ -65,7 +67,7 @@ public:
     using std::runtime_error::runtime_error;
 };
 
-template<typename T>
+template <typename T>
 auto toString(const T& val) -> std::string {
     if constexpr (std::is_same_v<T, std::string>) {
         return "\"" + val + "\"";
@@ -86,25 +88,27 @@ auto toString(const T& val) -> std::string {
 // Character types and `bool` keep `==` (std::cmp_equal rejects them).
 template <typename T>
 constexpr bool kComparesByValue =
-    std::is_integral_v<T> && !std::is_same_v<T, bool> &&
-    !std::is_same_v<T, char> && !std::is_same_v<T, wchar_t> &&
-    !std::is_same_v<T, char8_t> && !std::is_same_v<T, char16_t> &&
+    std::is_integral_v<T> && !std::is_same_v<T, bool> && !std::is_same_v<T, char> &&
+    !std::is_same_v<T, wchar_t> && !std::is_same_v<T, char8_t> && !std::is_same_v<T, char16_t> &&
     !std::is_same_v<T, char32_t>;
 
 inline auto valuesEqual(const auto& actual, const auto& expected) -> bool {
     using A = std::decay_t<decltype(actual)>;
     using E = std::decay_t<decltype(expected)>;
-    if constexpr (kComparesByValue<A> && kComparesByValue<E>)
+    if constexpr (kComparesByValue<A> && kComparesByValue<E>) {
         return std::cmp_equal(actual, expected);
-    else
+    } else {
         return actual == expected;
+    }
 }
 
-inline auto assertEqual(const auto& actual, const auto& expected,
-                        const std::string& msg = "") -> void {
+inline auto assertEqual(const auto& actual, const auto& expected, const std::string& msg = "")
+    -> void {
     if (!valuesEqual(actual, expected)) {
         std::string message = "Expected: " + toString(expected) + ", got: " + toString(actual);
-        if (!msg.empty()) message += " (" + msg + ")";
+        if (!msg.empty()) {
+            message += " (" + msg + ")";
+        }
         throw AssertionError(message);
     }
 }

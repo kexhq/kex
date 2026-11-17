@@ -57,8 +57,11 @@ static const std::unordered_map<std::string, TokenType> keywords = {
 };
 
 auto isKeywordToken(TokenType type) -> bool {
-    for (const auto& [spelling, keywordType] : keywords)
-        if (keywordType == type) return true;
+    for (const auto& [spelling, keywordType] : keywords) {
+        if (keywordType == type) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -100,10 +103,8 @@ static auto canEndExpression(TokenType type) -> bool {
         case TokenType::True:
         case TokenType::False:
         case TokenType::None:
-        case TokenType::This:
-            return true;
-        default:
-            return false;
+        case TokenType::This: return true;
+        default: return false;
     }
 }
 
@@ -126,11 +127,15 @@ auto Lexer::scanToken() -> Token {
 
     char c = advance();
 
-    if (isLowerAlpha(c) || c == '_') return lexIdentifier();
+    if (isLowerAlpha(c) || c == '_') {
+        return lexIdentifier();
+    }
     if (isUpperAlpha(c)) {
         std::string ident(1, c);
         consumeIdentRest(ident);
-        if (ident == "None") return makeToken(TokenType::None, ident);
+        if (ident == "None") {
+            return makeToken(TokenType::None, ident);
+        }
         return makeToken(TokenType::UpperIdent, ident);
     }
     // A name written in another script. Kex tells values from types by the
@@ -141,30 +146,35 @@ auto Lexer::scanToken() -> Token {
     if (static_cast<unsigned char>(c) >= 0x80) {
         int width = 1;
         const auto codepoint = identCodepointAt(m_pos - 1, width);
-        if (utf8::categories::inRanges(utf8::categories::letterRanges,
-                                       codepoint)) {
+        if (utf8::categories::inRanges(utf8::categories::letterRanges, codepoint)) {
             std::string ident(1, c);
-            for (int i = 1; i < width && !atEnd(); ++i) ident += advance();
+            for (int i = 1; i < width && !atEnd(); ++i) {
+                ident += advance();
+            }
             consumeIdentRest(ident);
-            const bool upper = utf8::categories::inRanges(
-                utf8::categories::upperRanges, codepoint);
-            return makeToken(
-                upper ? TokenType::UpperIdent : TokenType::LowerIdent, ident);
+            const bool upper = utf8::categories::inRanges(utf8::categories::upperRanges, codepoint);
+            return makeToken(upper ? TokenType::UpperIdent : TokenType::LowerIdent, ident);
         }
     }
-    if (isDigit(c)) return lexNumber();
+    if (isDigit(c)) {
+        return lexNumber();
+    }
 
     switch (c) {
         // Inside parens, newlines are insignificant whitespace — this is
         // what lets multiline conditions like `if (a\n && b)` work without
         // a continuation marker.
         case '\n':
-            if (m_parenDepth > 0) return nextToken();
+            if (m_parenDepth > 0) {
+                return nextToken();
+            }
             return makeToken(TokenType::Newline);
 
         case '(': m_parenDepth++; return makeToken(TokenType::LParen);
         case ')':
-            if (m_parenDepth > 0) m_parenDepth--;
+            if (m_parenDepth > 0) {
+                m_parenDepth--;
+            }
             return makeToken(TokenType::RParen);
         case '{': return makeToken(TokenType::LBrace);
         case '}': return makeToken(TokenType::RBrace);
@@ -173,83 +183,116 @@ auto Lexer::scanToken() -> Token {
         case ',': return makeToken(TokenType::Comma);
         case '@': return makeToken(TokenType::At);
         case '`': return lexRawString();
-        case '?':
-            return makeToken(TokenType::Question);
+        case '?': return makeToken(TokenType::Question);
         case '/':
-            if (match('=')) return makeToken(TokenType::SlashEq);
+            if (match('=')) {
+                return makeToken(TokenType::SlashEq);
+            }
             return makeToken(TokenType::Slash);
         case '*':
-            if (match('=')) return makeToken(TokenType::StarEq);
+            if (match('=')) {
+                return makeToken(TokenType::StarEq);
+            }
             return makeToken(TokenType::Star);
         case '+':
-            if (match('=')) return makeToken(TokenType::PlusEq);
+            if (match('=')) {
+                return makeToken(TokenType::PlusEq);
+            }
             return makeToken(TokenType::Plus);
 
         case '-':
-            if (match('>')) return makeToken(TokenType::Arrow);
-            if (match('=')) return makeToken(TokenType::MinusEq);
+            if (match('>')) {
+                return makeToken(TokenType::Arrow);
+            }
+            if (match('=')) {
+                return makeToken(TokenType::MinusEq);
+            }
             return makeToken(TokenType::Minus);
 
         case '.':
             if (match('.')) {
-                if (match('.')) return makeToken(TokenType::DotDotDot);
+                if (match('.')) {
+                    return makeToken(TokenType::DotDotDot);
+                }
                 return makeToken(TokenType::DotDot);
             }
             return makeToken(TokenType::Dot);
 
         case '=':
-            if (match('=')) return makeToken(TokenType::EqEq);
-            if (match('>')) return makeToken(TokenType::FatArrow);
+            if (match('=')) {
+                return makeToken(TokenType::EqEq);
+            }
+            if (match('>')) {
+                return makeToken(TokenType::FatArrow);
+            }
             return makeToken(TokenType::Equals);
 
         case '!':
-            if (match('=')) return makeToken(TokenType::NotEq);
+            if (match('=')) {
+                return makeToken(TokenType::NotEq);
+            }
             return makeToken(TokenType::Bang);
 
         case '<':
-            if (match('=')) return makeToken(TokenType::LessEq);
+            if (match('=')) {
+                return makeToken(TokenType::LessEq);
+            }
             return makeToken(TokenType::LessThan);
 
         case '>':
-            if (match('=')) return makeToken(TokenType::GreaterEq);
+            if (match('=')) {
+                return makeToken(TokenType::GreaterEq);
+            }
             return makeToken(TokenType::GreaterThan);
 
         case '|':
             if (match('|')) {
-                if (match('=')) return makeToken(TokenType::PipePipeEq);
+                if (match('=')) {
+                    return makeToken(TokenType::PipePipeEq);
+                }
                 return makeToken(TokenType::PipePipe);
             }
             return makeToken(TokenType::Pipe);
 
         case '&':
             if (match('&')) {
-                if (match('=')) return makeToken(TokenType::AmpAmpEq);
+                if (match('=')) {
+                    return makeToken(TokenType::AmpAmpEq);
+                }
                 return makeToken(TokenType::AmpAmp);
             }
             return makeToken(TokenType::Amp);
 
         case ':':
             if (match(':')) {
-                if (match('>')) return makeToken(TokenType::SlotAnnotation);
+                if (match('>')) {
+                    return makeToken(TokenType::SlotAnnotation);
+                }
                 return errorToken("Expected '>' after '::'");
             }
-            if (match('>')) return makeToken(TokenType::TypeAnnotation);
-            if (isLowerAlpha(peek())) return lexAtom();
+            if (match('>')) {
+                return makeToken(TokenType::TypeAnnotation);
+            }
+            if (isLowerAlpha(peek())) {
+                return lexAtom();
+            }
             // A letter outside ASCII starts one too, unless it is uppercase
             // (`:Φ` is no more an atom than `:Some`): `:árvíz` as `:arviz`.
             if (static_cast<unsigned char>(peek()) >= 0x80) {
                 int width = 1;
                 if (identContinues(m_pos, width) &&
-                    !utf8::categories::inRanges(utf8::categories::upperRanges,
-                                                identCodepointAt(m_pos, width)))
+                    !utf8::categories::inRanges(
+                        utf8::categories::upperRanges, identCodepointAt(m_pos, width))) {
                     return lexAtom();
+                }
             }
             // `:"a@host.example.com"` — an atom no bare spelling can reach,
             // as in Ruby. Only where an expression can START: after `name`
             // it stays a label colon before a string, so `f(sep:"x")` keeps
             // meaning what it did.
-            if (peek() == '"' && !canEndExpression(m_prevType))
+            if (peek() == '"' && !canEndExpression(m_prevType)) {
                 return lexQuotedAtom(advance());
+            }
             return makeToken(TokenType::Colon);
 
         case '^': return makeToken(TokenType::Caret);
@@ -257,7 +300,9 @@ auto Lexer::scanToken() -> Token {
         case ';': return makeToken(TokenType::Newline);
 
         case '#':
-            if (match('[')) return makeToken(TokenType::HashLBracket);
+            if (match('[')) {
+                return makeToken(TokenType::HashLBracket);
+            }
             skipComment();
             return nextToken();
 
@@ -267,9 +312,12 @@ auto Lexer::scanToken() -> Token {
             // `%name` is a splice only where an expression could START. After
             // something that can end an expression, `%` is modulo — so `x %y`
             // is `x % y`, not `x` followed by a splice.
-            if (isLowerAlpha(peek()) && !canEndExpression(m_prevType))
+            if (isLowerAlpha(peek()) && !canEndExpression(m_prevType)) {
                 return lexSpliceIdent();
-            if (match('=')) return makeToken(TokenType::PercentEq);
+            }
+            if (match('=')) {
+                return makeToken(TokenType::PercentEq);
+            }
             return makeToken(TokenType::Percent);
 
         case '"': return lexString();
@@ -281,8 +329,7 @@ auto Lexer::scanToken() -> Token {
             }
             return errorToken("Unexpected character: $");
 
-        default:
-            return errorToken(std::string("Unexpected character: ") + c);
+        default: return errorToken(std::string("Unexpected character: ") + c);
     }
 }
 
@@ -319,32 +366,41 @@ auto tokenTexts(const std::vector<Token>& tokens, std::string_view source)
         // being recorded, so its offsets are the previous token's. It spans
         // nothing and sits at the end of the source.
         const bool eof = token.type == TokenType::Eof;
-        const auto start = eof ? static_cast<long long>(source.size())
-                               : static_cast<long long>(token.startOffset);
+        const auto start =
+            eof ? static_cast<long long>(source.size()) : static_cast<long long>(token.startOffset);
         const auto end = eof ? start : static_cast<long long>(token.endOffset);
         if (start < static_cast<long long>(previousEnd) || end < start ||
-            end > static_cast<long long>(source.size()))
+            end > static_cast<long long>(source.size())) {
             return std::nullopt;
-        texts.push_back({source.substr(previousEnd, start - previousEnd),
-                         source.substr(start, end - start)});
+        }
+        texts.push_back(
+            {source.substr(previousEnd, start - previousEnd), source.substr(start, end - start)});
         previousEnd = static_cast<size_t>(end);
     }
-    if (previousEnd != source.size()) return std::nullopt;
+    if (previousEnd != source.size()) {
+        return std::nullopt;
+    }
     return texts;
 }
 
 auto Lexer::peek() const -> char {
-    if (atEnd()) return '\0';
+    if (atEnd()) {
+        return '\0';
+    }
     return m_source[m_pos];
 }
 
 auto Lexer::peekNext() const -> char {
-    if (m_pos + 1 >= static_cast<int>(m_source.size())) return '\0';
+    if (m_pos + 1 >= static_cast<int>(m_source.size())) {
+        return '\0';
+    }
     return m_source[m_pos + 1];
 }
 
 auto Lexer::peekAt(int offset) const -> char {
-    if (m_pos + offset >= static_cast<int>(m_source.size())) return '\0';
+    if (m_pos + offset >= static_cast<int>(m_source.size())) {
+        return '\0';
+    }
     return m_source[m_pos + offset];
 }
 
@@ -364,7 +420,9 @@ auto Lexer::atEnd() const -> bool {
 }
 
 auto Lexer::match(char expected) -> bool {
-    if (atEnd() || m_source[m_pos] != expected) return false;
+    if (atEnd() || m_source[m_pos] != expected) {
+        return false;
+    }
     advance();
     return true;
 }
@@ -399,7 +457,9 @@ auto Lexer::lexIdentifier() -> Token {
         ident += advance();
     }
 
-    if (ident == "_") return makeToken(TokenType::Underscore, ident);
+    if (ident == "_") {
+        return makeToken(TokenType::Underscore, ident);
+    }
 
     auto it = keywords.find(ident);
     if (it != keywords.end()) {
@@ -417,13 +477,11 @@ auto Lexer::lexNumber() -> Token {
     // the evaluator, literal patterns, Core Erlang literal emission) already
     // understands base 10 and nothing else. The original text stays
     // recoverable from the token's source offsets.
-    if (first == '0' && (peek() == 'x' || peek() == 'X' ||
-                         peek() == 'b' || peek() == 'B' ||
+    if (first == '0' && (peek() == 'x' || peek() == 'X' || peek() == 'b' || peek() == 'B' ||
                          peek() == 'o' || peek() == 'O')) {
         char marker = static_cast<char>(std::tolower(static_cast<unsigned char>(peek())));
         int base = marker == 'x' ? 16 : marker == 'o' ? 8 : 2;
-        const char* what = marker == 'x' ? "hexadecimal"
-                         : marker == 'o' ? "octal" : "binary";
+        const char* what = marker == 'x' ? "hexadecimal" : marker == 'o' ? "octal" : "binary";
         advance();
         std::string digits;
         while (!atEnd() && (isHexDigit(peek()) || peek() == '_')) {
@@ -471,18 +529,22 @@ auto Lexer::lexNumber() -> Token {
     // actually follows, so `2.each` and a bare `2e` still lex as a number
     // followed by an identifier. An exponent makes the literal a Float even
     // without a fraction part.
-    bool hasExponent = (peek() == 'e' || peek() == 'E') &&
-        (isDigit(peekNext()) ||
-         ((peekNext() == '+' || peekNext() == '-') && isDigit(peekAt(2))));
+    bool hasExponent =
+        (peek() == 'e' || peek() == 'E') &&
+        (isDigit(peekNext()) || ((peekNext() == '+' || peekNext() == '-') && isDigit(peekAt(2))));
     if (hasExponent) {
         isFloat = true;
         // Core Erlang (and Erlang) require a fraction part before the
         // exponent, so `3e22` has to become `3.0e22`. Lowercased for the same
         // reason: `3.0E22` is not a valid Erlang float literal.
-        if (num.find('.') == std::string::npos) num += ".0";
+        if (num.find('.') == std::string::npos) {
+            num += ".0";
+        }
         num += 'e';
         advance();
-        if (peek() == '+' || peek() == '-') num += advance();
+        if (peek() == '+' || peek() == '-') {
+            num += advance();
+        }
         while (!atEnd() && (isDigit(peek()) || peek() == '_')) {
             if (peek() == '_') {
                 advance();
@@ -499,7 +561,9 @@ auto Lexer::lexNumber() -> Token {
 // after a backslash is an error: it used to stand for the character itself,
 // so `"\e"` was an `e` and `"\u{1b}"` the five characters `u{1b}`.
 auto Lexer::lexEscape(std::string& out) -> std::optional<std::string> {
-    if (atEnd()) return "Unterminated escape";
+    if (atEnd()) {
+        return "Unterminated escape";
+    }
     const char escaped = advance();
     switch (escaped) {
         case 'n': out += '\n'; return std::nullopt;
@@ -507,45 +571,54 @@ auto Lexer::lexEscape(std::string& out) -> std::optional<std::string> {
         case 't': out += '\t'; return std::nullopt;
         case 'e': out += '\x1b'; return std::nullopt;
         case '0': out += '\0'; return std::nullopt;
-        case '\\': case '"': case '\'': case '$': case '`':
-            out += escaped;
-            return std::nullopt;
+        case '\\':
+        case '"':
+        case '\'':
+        case '$':
+        case '`': out += escaped; return std::nullopt;
         case 'x': {
             // One ASCII byte. A higher one would be half a UTF-8 sequence
             // in a String, which is always valid UTF-8.
             std::string digits;
-            while (digits.size() < 2 && !atEnd() && isHexDigit(peek()))
+            while (digits.size() < 2 && !atEnd() && isHexDigit(peek())) {
                 digits += advance();
-            if (digits.size() != 2)
+            }
+            if (digits.size() != 2) {
                 return "Expected two hex digits after '\\x'";
+            }
             const auto value = std::stoi(digits, nullptr, 16);
-            if (value > 0x7F)
-                return "'\\x" + digits +
-                       "' is not ASCII; write the character as '\\u{" +
-                       digits + "}'";
+            if (value > 0x7F) {
+                return "'\\x" + digits + "' is not ASCII; write the character as '\\u{" + digits +
+                       "}'";
+            }
             out += static_cast<char>(value);
             return std::nullopt;
         }
         case 'u': {
-            if (atEnd() || peek() != '{')
+            if (atEnd() || peek() != '{') {
                 return "Expected '{' after '\\u'";
+            }
             advance();
             std::string digits;
-            while (!atEnd() && isHexDigit(peek())) digits += advance();
-            if (atEnd() || peek() != '}')
+            while (!atEnd() && isHexDigit(peek())) {
+                digits += advance();
+            }
+            if (atEnd() || peek() != '}') {
                 return "Expected '}' to close '\\u{'";
+            }
             advance();
-            if (digits.empty() || digits.size() > 6)
+            if (digits.empty() || digits.size() > 6) {
                 return "Expected 1 to 6 hex digits in '\\u{...}'";
+            }
             const auto cp = static_cast<char32_t>(std::stoul(digits, nullptr, 16));
-            if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
+            if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
                 return "'\\u{" + digits + "}' is not a Unicode scalar value";
+            }
             out += utf8::encode(cp);
             return std::nullopt;
         }
         default:
-            return std::string("Unknown escape '\\") + escaped +
-                   "'; write '\\\\' for a backslash";
+            return std::string("Unknown escape '\\") + escaped + "'; write '\\\\' for a backslash";
     }
 }
 
@@ -557,15 +630,22 @@ auto Lexer::lexString() -> Token {
             advance();
             // `\$` is a literal dollar even before a `{`; the parser splits
             // interpolations from the unescaped text, so it has to be told.
-            if (!atEnd() && peek() == '$') escapedDollars.push_back(str.size());
-            if (auto error = lexEscape(str)) return errorToken(*error);
+            if (!atEnd() && peek() == '$') {
+                escapedDollars.push_back(str.size());
+            }
+            if (auto error = lexEscape(str)) {
+                return errorToken(*error);
+            }
         } else if (peek() == '$' && peekNext() == '{') {
             str += advance(); // $
             str += advance(); // {
             int depth = 1;
             while (!atEnd() && depth > 0) {
-                if (peek() == '{') depth++;
-                else if (peek() == '}') depth--;
+                if (peek() == '{') {
+                    depth++;
+                } else if (peek() == '}') {
+                    depth--;
+                }
                 if (depth > 0) {
                     str += advance();
                 } else {
@@ -577,7 +657,9 @@ auto Lexer::lexString() -> Token {
         }
     }
 
-    if (atEnd()) return errorToken("Unterminated string");
+    if (atEnd()) {
+        return errorToken("Unterminated string");
+    }
     advance(); // closing "
 
     auto token = makeToken(TokenType::String, str);
@@ -595,44 +677,59 @@ auto Lexer::lexRawString(bool interpolating) -> Token {
             char c = peek();
             if (holeMode == HoleMode::DoubleString) {
                 raw += advance();
-                if (c == '\\' && !atEnd()) raw += advance();
-                else if (c == '"') holeMode = HoleMode::Normal;
+                if (c == '\\' && !atEnd()) {
+                    raw += advance();
+                } else if (c == '"') {
+                    holeMode = HoleMode::Normal;
+                }
                 continue;
             }
             if (holeMode == HoleMode::Char) {
                 raw += advance();
-                if (c == '\\' && !atEnd()) raw += advance();
-                else if (c == '\'') holeMode = HoleMode::Normal;
+                if (c == '\\' && !atEnd()) {
+                    raw += advance();
+                } else if (c == '\'') {
+                    holeMode = HoleMode::Normal;
+                }
                 continue;
             }
             if (holeMode == HoleMode::RawString) {
                 raw += advance();
                 if (c == '`') {
-                    if (!atEnd() && peek() == '`')
+                    if (!atEnd() && peek() == '`') {
                         raw += advance();
-                    else
+                    } else {
                         holeMode = HoleMode::Normal;
+                    }
                 }
                 continue;
             }
             if (holeMode == HoleMode::Comment) {
                 raw += advance();
-                if (c == '\n') holeMode = HoleMode::Normal;
+                if (c == '\n') {
+                    holeMode = HoleMode::Normal;
+                }
                 continue;
             }
 
             raw += advance();
-            if (c == '"') holeMode = HoleMode::DoubleString;
-            else if (c == '\'') holeMode = HoleMode::Char;
-            else if (c == '`') holeMode = HoleMode::RawString;
-            else if (c == '#') holeMode = HoleMode::Comment;
-            else if (c == '{') holeDepth++;
-            else if (c == '}') holeDepth--;
+            if (c == '"') {
+                holeMode = HoleMode::DoubleString;
+            } else if (c == '\'') {
+                holeMode = HoleMode::Char;
+            } else if (c == '`') {
+                holeMode = HoleMode::RawString;
+            } else if (c == '#') {
+                holeMode = HoleMode::Comment;
+            } else if (c == '{') {
+                holeDepth++;
+            } else if (c == '}') {
+                holeDepth--;
+            }
             continue;
         }
 
-        if (interpolating && peek() == '$' &&
-            m_pos + 2 < static_cast<int>(m_source.size()) &&
+        if (interpolating && peek() == '$' && m_pos + 2 < static_cast<int>(m_source.size()) &&
             m_source[m_pos + 1] == '$' && m_source[m_pos + 2] == '{') {
             raw += advance();
             raw += advance();
@@ -669,8 +766,9 @@ auto Lexer::lexRawString(bool interpolating) -> Token {
                 // line goes too when it holds nothing else, keeping the
                 // newline before it so block literals end in '\n'.
                 raw.erase(0, raw.starts_with("\r\n") ? 2 : 1);
-                if (auto closingLine = rawStringClosingLineStart(raw))
+                if (auto closingLine = rawStringClosingLineStart(raw)) {
                     raw.erase(*closingLine);
+                }
 
                 const auto margin = rawStringMargin(raw);
                 std::string dedented;
@@ -678,32 +776,38 @@ auto Lexer::lexRawString(bool interpolating) -> Token {
                 while (lineStart < raw.size()) {
                     auto lineEnd = raw.find('\n', lineStart);
                     bool hasNewline = lineEnd != std::string::npos;
-                    if (!hasNewline) lineEnd = raw.size();
+                    if (!hasNewline) {
+                        lineEnd = raw.size();
+                    }
                     auto line = raw.substr(lineStart, lineEnd - lineStart);
 
                     auto contentEnd = line.size();
-                    if (contentEnd > 0 && line[contentEnd - 1] == '\r')
+                    if (contentEnd > 0 && line[contentEnd - 1] == '\r') {
                         contentEnd--;
-                    bool blank = std::all_of(
-                        line.begin(), line.begin() + contentEnd,
-                        [](char c) { return c == ' ' || c == '\t'; });
+                    }
+                    bool blank = std::all_of(line.begin(), line.begin() + contentEnd, [](char c) {
+                        return c == ' ' || c == '\t';
+                    });
                     if (blank) {
                         // A blank line never participates in the margin, so
                         // it carries no content either: it is emitted empty.
-                        if (contentEnd < line.size()) dedented += '\r';
+                        if (contentEnd < line.size()) {
+                            dedented += '\r';
+                        }
                     } else {
                         dedented += line.substr(margin.size());
                     }
 
-                    if (hasNewline) dedented += '\n';
+                    if (hasNewline) {
+                        dedented += '\n';
+                    }
                     lineStart = lineEnd + (hasNewline ? 1 : 0);
                 }
                 raw = std::move(dedented);
             }
 
             return makeToken(
-                interpolating ? TokenType::InterpolatedRawString
-                              : TokenType::RawString,
+                interpolating ? TokenType::InterpolatedRawString : TokenType::RawString,
                 std::move(raw));
         }
         raw += advance();
@@ -713,7 +817,9 @@ auto Lexer::lexRawString(bool interpolating) -> Token {
 }
 
 auto Lexer::lexChar() -> Token {
-    if (atEnd()) return errorToken("Unterminated char literal");
+    if (atEnd()) {
+        return errorToken("Unterminated char literal");
+    }
 
     // The token carries the character's UTF-8 BYTES; a Char is one codepoint,
     // so a non-ASCII one is several of them. Taking a single byte here made
@@ -722,17 +828,22 @@ auto Lexer::lexChar() -> Token {
     std::string c;
     if (peek() == '\\') {
         advance();
-        if (auto error = lexEscape(c)) return errorToken(*error);
+        if (auto error = lexEscape(c)) {
+            return errorToken(*error);
+        }
     } else if (peek() == '\'') {
         return errorToken("Empty char literal");
     } else {
         c += advance();
         // Continuation bytes (10xxxxxx) belong to the same character.
-        while (!atEnd() && (static_cast<unsigned char>(peek()) & 0xC0) == 0x80)
+        while (!atEnd() && (static_cast<unsigned char>(peek()) & 0xC0) == 0x80) {
             c += advance();
+        }
     }
 
-    if (atEnd() || peek() != '\'') return errorToken("Unterminated char literal");
+    if (atEnd() || peek() != '\'') {
+        return errorToken("Unterminated char literal");
+    }
     advance(); // closing '
 
     return makeToken(TokenType::Char, std::move(c));
@@ -752,7 +863,9 @@ auto Lexer::lexAtom() -> Token {
     int width = 1;
     while (!atEnd()) {
         if (identContinues(m_pos, width)) {
-            for (int i = 0; i < width && !atEnd(); ++i) atom += advance();
+            for (int i = 0; i < width && !atEnd(); ++i) {
+                atom += advance();
+            }
         } else if (peek() == '@' && isIdentChar(peekNext())) {
             atom += advance();
         } else {
@@ -766,12 +879,18 @@ auto Lexer::lexQuotedAtom(char quote) -> Token {
     std::string atom;
     while (!atEnd() && peek() != quote && peek() != '\n') {
         char c = advance();
-        if (c == '\\' && !atEnd()) c = advance();
+        if (c == '\\' && !atEnd()) {
+            c = advance();
+        }
         atom += c;
     }
-    if (atEnd() || peek() != quote) return errorToken("Unterminated quoted atom");
+    if (atEnd() || peek() != quote) {
+        return errorToken("Unterminated quoted atom");
+    }
     advance();
-    if (atom.empty()) return errorToken("Empty quoted atom");
+    if (atom.empty()) {
+        return errorToken("Empty quoted atom");
+    }
     return makeToken(TokenType::Atom, atom);
 }
 
@@ -803,8 +922,7 @@ auto Lexer::errorToken(std::string message) -> Token {
     auto location = currentLocation();
     location.startOffset = m_tokenStartOffset;
     location.endOffset = m_pos;
-    return Token{TokenType::Error, std::move(message), location,
-                 m_tokenStartOffset, m_pos};
+    return Token{TokenType::Error, std::move(message), location, m_tokenStartOffset, m_pos};
 }
 
 auto Lexer::isLowerAlpha(char c) -> bool {
@@ -852,18 +970,24 @@ auto Lexer::identCodepointAt(int index, int& width) const -> char32_t {
 // so `a→b` stays three tokens.
 auto Lexer::identContinues(int index, int& width) const -> bool {
     width = 1;
-    if (index >= static_cast<int>(m_source.size())) return false;
+    if (index >= static_cast<int>(m_source.size())) {
+        return false;
+    }
     const auto byte = static_cast<unsigned char>(m_source[index]);
-    if (byte < 0x80) return isIdentChar(static_cast<char>(byte));
+    if (byte < 0x80) {
+        return isIdentChar(static_cast<char>(byte));
+    }
     const auto codepoint = identCodepointAt(index, width);
-    return utf8::categories::inRanges(utf8::categories::letterRanges,
-                                      codepoint);
+    return utf8::categories::inRanges(utf8::categories::letterRanges, codepoint);
 }
 
 auto Lexer::consumeIdentRest(std::string& ident) -> void {
     int width = 1;
-    while (!atEnd() && identContinues(m_pos, width))
-        for (int i = 0; i < width && !atEnd(); ++i) ident += advance();
+    while (!atEnd() && identContinues(m_pos, width)) {
+        for (int i = 0; i < width && !atEnd(); ++i) {
+            ident += advance();
+        }
+    }
 }
 
 } // namespace kex

@@ -48,9 +48,12 @@ struct CanBeAnswered<IRUnit, std::void_t<decltype(isAnswered(std::declval<const 
 template <typename IRUnit>
 auto unitRef(const IRUnit& unit) -> UnitRef {
     bool answered = false;
-    if constexpr (detail::CanBeAnswered<IRUnit>::value) answered = isAnswered(unit);
-    return {IRUnitLevel<IRUnit>::kName, unitName(unit), answered,
-            [&unit](std::ostream& out) { printUnit(out, unit); }};
+    if constexpr (detail::CanBeAnswered<IRUnit>::value) {
+        answered = isAnswered(unit);
+    }
+    return {IRUnitLevel<IRUnit>::kName, unitName(unit), answered, [&unit](std::ostream& out) {
+                printUnit(out, unit);
+            }};
 }
 
 class PassInstrumentationCallbacks {
@@ -66,18 +69,27 @@ public:
     auto registerBeforePass(BeforePass callback) -> void {
         m_before.push_back(std::move(callback));
     }
-    auto registerAfterPass(AfterPass callback) -> void { m_after.push_back(std::move(callback)); }
+    auto registerAfterPass(AfterPass callback) -> void {
+        m_after.push_back(std::move(callback));
+    }
 
     auto shouldRun(std::string_view pass, const UnitRef& unit) const -> bool {
-        for (const auto& callback : m_shouldRun)
-            if (!callback(pass, unit)) return false;
+        for (const auto& callback : m_shouldRun) {
+            if (!callback(pass, unit)) {
+                return false;
+            }
+        }
         return true;
     }
     auto beforePass(std::string_view pass, const UnitRef& unit) const -> void {
-        for (const auto& callback : m_before) callback(pass, unit);
+        for (const auto& callback : m_before) {
+            callback(pass, unit);
+        }
     }
     auto afterPass(std::string_view pass, const UnitRef& unit) const -> void {
-        for (const auto& callback : m_after) callback(pass, unit);
+        for (const auto& callback : m_after) {
+            callback(pass, unit);
+        }
     }
 
 private:
@@ -96,15 +108,23 @@ public:
     template <typename IRUnit>
     auto runBeforePass(std::string_view pass, bool required, const IRUnit& unit) const -> bool {
         const auto ref = unitRef(unit);
-        if (!required && ref.answered) return false;
-        if (!m_callbacks) return true;
-        if (!required && !m_callbacks->shouldRun(pass, ref)) return false;
+        if (!required && ref.answered) {
+            return false;
+        }
+        if (!m_callbacks) {
+            return true;
+        }
+        if (!required && !m_callbacks->shouldRun(pass, ref)) {
+            return false;
+        }
         m_callbacks->beforePass(pass, ref);
         return true;
     }
     template <typename IRUnit>
     auto runAfterPass(std::string_view pass, const IRUnit& unit) const -> void {
-        if (m_callbacks) m_callbacks->afterPass(pass, unitRef(unit));
+        if (m_callbacks) {
+            m_callbacks->afterPass(pass, unitRef(unit));
+        }
     }
 
 private:

@@ -25,16 +25,20 @@ namespace fs = std::filesystem;
 
 namespace {
 
-auto runKex(const std::string& cacheDir, const std::string& sourcePath,
-            const std::string& binary = KEX_BINARY_PATH) -> std::string {
-    std::string cmd = std::string("KEX_CACHE=") + cacheDir + " " + binary +
-                       " --run --no-colors " + sourcePath + " 2>&1";
+auto runKex(
+    const std::string& cacheDir,
+    const std::string& sourcePath,
+    const std::string& binary = KEX_BINARY_PATH) -> std::string {
+    std::string cmd = std::string("KEX_CACHE=") + cacheDir + " " + binary + " --run --no-colors " +
+                      sourcePath + " 2>&1";
     std::string result;
     FILE* pipe = popen(cmd.c_str(), "r");
     if (pipe) {
         std::array<char, 4096> buf;
         size_t n;
-        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0) result.append(buf.data(), n);
+        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0) {
+            result.append(buf.data(), n);
+        }
         pclose(pipe);
     }
     return result;
@@ -46,7 +50,10 @@ auto writeTempSource(const std::string& source) -> std::string {
     close(fd);
     std::string path = std::string(tmp) + ".kex";
     std::rename(tmp, path.c_str());
-    { std::ofstream f(path); f << source; }
+    {
+        std::ofstream f(path);
+        f << source;
+    }
     return path;
 }
 
@@ -55,12 +62,18 @@ auto writeTempSource(const std::string& source) -> std::string {
 auto runCacheEntryCount(const std::string& cacheDir) -> size_t {
     std::error_code ec;
     const auto runDir = fs::path(cacheDir) / "run";
-    if (!fs::exists(runDir, ec)) return 0;
+    if (!fs::exists(runDir, ec)) {
+        return 0;
+    }
     size_t count = 0;
     for (const auto& shard : fs::directory_iterator(runDir, ec)) {
-        if (!shard.is_directory()) continue;
+        if (!shard.is_directory()) {
+            continue;
+        }
         for (const auto& entry : fs::directory_iterator(shard.path(), ec)) {
-            if (entry.is_directory()) ++count;
+            if (entry.is_directory()) {
+                ++count;
+            }
         }
     }
     return count;
@@ -70,8 +83,11 @@ auto runCacheEntryCount(const std::string& cacheDir) -> size_t {
 auto scanCacheEntry(const std::string& cacheDir) -> fs::path {
     std::error_code ec;
     const auto templates = fs::path(cacheDir) / "templates";
-    for (fs::recursive_directory_iterator walk(templates, ec), end; !ec && walk != end; walk.increment(ec)) {
-        if (walk->path().extension() == ".scan") return walk->path();
+    for (fs::recursive_directory_iterator walk(templates, ec), end; !ec && walk != end;
+         walk.increment(ec)) {
+        if (walk->path().extension() == ".scan") {
+            return walk->path();
+        }
     }
     return {};
 }
@@ -82,7 +98,9 @@ auto scanCacheEntry(const std::string& cacheDir) -> fs::path {
 // resolution or clock skew — the same property an actual rebuild has.
 auto backdateFile(const std::string& path) -> void {
     struct stat st{};
-    if (stat(path.c_str(), &st) != 0) return;
+    if (stat(path.c_str(), &st) != 0) {
+        return;
+    }
     struct utimbuf times{};
     times.actime = st.st_atime;
     times.modtime = st.st_mtime - 3600;
@@ -98,8 +116,7 @@ auto copyBinaryForBackdate() -> std::string {
     const auto dest = fs::path(KEX_BINARY_PATH).parent_path() /
                       ("kex-backdate-probe-" + std::to_string(getpid()));
     std::error_code ec;
-    fs::copy_file(KEX_BINARY_PATH, dest,
-                  fs::copy_options::overwrite_existing, ec);
+    fs::copy_file(KEX_BINARY_PATH, dest, fs::copy_options::overwrite_existing, ec);
     chmod(dest.c_str(), 0755);
     return dest.string();
 }
@@ -108,34 +125,36 @@ auto copyBinaryForBackdate() -> std::string {
 
 int main() {
     describe("Run cache — fingerprint reacts to the compiler binary itself", []() {
-        it("misses the cache when the kex binary's mtime changes under an unchanged git HEAD", []() {
-            char cacheTmp[] = "/tmp/kex_run_cache_test_XXXXXX";
-            std::string cacheDir = mkdtemp(cacheTmp);
-            auto path = writeTempSource(
-                "main do\n"
-                "  IO.printLine(\"cached\")\n"
-                "end\n");
-            const auto binary = copyBinaryForBackdate();
+        it("misses the cache when the kex binary's mtime changes under an unchanged git HEAD",
+           []() {
+               char cacheTmp[] = "/tmp/kex_run_cache_test_XXXXXX";
+               std::string cacheDir = mkdtemp(cacheTmp);
+               auto path = writeTempSource(
+                   "main do\n"
+                   "  IO.printLine(\"cached\")\n"
+                   "end\n");
+               const auto binary = copyBinaryForBackdate();
 
-            auto first = runKex(cacheDir, path, binary);
-            assertEqual(first, std::string("cached\n"));
-            auto afterFirst = runCacheEntryCount(cacheDir);
-            assertTrue(afterFirst >= 1, "expected the first run to populate a cache entry");
+               auto first = runKex(cacheDir, path, binary);
+               assertEqual(first, std::string("cached\n"));
+               auto afterFirst = runCacheEntryCount(cacheDir);
+               assertTrue(afterFirst >= 1, "expected the first run to populate a cache entry");
 
-            backdateFile(binary);
+               backdateFile(binary);
 
-            auto second = runKex(cacheDir, path, binary);
-            assertEqual(second, std::string("cached\n"));
-            auto afterSecond = runCacheEntryCount(cacheDir);
-            assertTrue(afterSecond > afterFirst,
-                       "a changed binary mtime should mint a new cache entry, not reuse "
-                       "the old one (kexhq/kex#372): " +
+               auto second = runKex(cacheDir, path, binary);
+               assertEqual(second, std::string("cached\n"));
+               auto afterSecond = runCacheEntryCount(cacheDir);
+               assertTrue(
+                   afterSecond > afterFirst,
+                   "a changed binary mtime should mint a new cache entry, not reuse "
+                   "the old one (kexhq/kex#372): " +
                        std::to_string(afterFirst) + " -> " + std::to_string(afterSecond));
 
-            std::remove(path.c_str());
-            std::remove(binary.c_str());
-            fs::remove_all(cacheDir);
-        });
+               std::remove(path.c_str());
+               std::remove(binary.c_str());
+               fs::remove_all(cacheDir);
+           });
     });
 
     describe("Run cache — Kex.embed reads outside a `compiled do` block", []() {
@@ -158,17 +177,25 @@ int main() {
             auto dir = fs::path(path).parent_path();
             auto embedPath = dir / "greeting.txt";
 
-            { std::ofstream f(embedPath); f << "version one"; }
+            {
+                std::ofstream f(embedPath);
+                f << "version one";
+            }
             auto first = runKex(cacheDir, path);
             assertEqual(first, std::string("version one"));
-            assertEqual(runCacheEntryCount(cacheDir), size_t{1},
-                        "the run should be kept by its entry, and only so");
+            assertEqual(
+                runCacheEntryCount(cacheDir), size_t{1},
+                "the run should be kept by its entry, and only so");
 
-            { std::ofstream f(embedPath); f << "version two"; }
+            {
+                std::ofstream f(embedPath);
+                f << "version two";
+            }
             auto second = runKex(cacheDir, path);
-            assertEqual(second, std::string("version two"),
-                        "changing the embedded file must not serve the first "
-                        "run's stale text");
+            assertEqual(
+                second, std::string("version two"),
+                "changing the embedded file must not serve the first "
+                "run's stale text");
 
             std::remove(path.c_str());
             std::remove(embedPath.c_str());
@@ -180,11 +207,10 @@ int main() {
         // The source's `run` entry is removed before each later run, so the
         // program is compiled again and only the template scan can come from
         // the cache.
-        const auto source =
-            "main do\n"
-            "  let page = Template.text(\"hello <%= name %>\")\n"
-            "  IO.printLine(page(\"cached\"))\n"
-            "end\n";
+        const auto source = "main do\n"
+                            "  let page = Template.text(\"hello <%= name %>\")\n"
+                            "  IO.printLine(page(\"cached\"))\n"
+                            "end\n";
 
         it("reuses a kept scan instead of scanning the template again", [source]() {
             char cacheTmp[] = "/tmp/kex_scan_cache_test_XXXXXX";
@@ -197,7 +223,10 @@ int main() {
 
             // Same lengths, other text: only a build that read the entry
             // prints it.
-            { std::ofstream f(entry, std::ios::binary); f << "kex-template-scan\n2 0 6\nhowdy  1 4\nname 0"; }
+            {
+                std::ofstream f(entry, std::ios::binary);
+                f << "kex-template-scan\n2 0 6\nhowdy  1 4\nname 0";
+            }
             fs::remove_all(fs::path(cacheDir) / "run");
             assertEqual(runKex(cacheDir, path), std::string("howdy cached\n"));
 
@@ -216,7 +245,10 @@ int main() {
 
             // A length no file holds: it used to be allocated before a byte
             // was read, and the compile died with std::length_error.
-            { std::ofstream f(entry, std::ios::binary); f << "kex-template-scan\n1 0 18446744073709551615\nx"; }
+            {
+                std::ofstream f(entry, std::ios::binary);
+                f << "kex-template-scan\n1 0 18446744073709551615\nx";
+            }
             fs::remove_all(fs::path(cacheDir) / "run");
             assertEqual(runKex(cacheDir, path), std::string("hello cached\n"));
 

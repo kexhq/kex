@@ -20,17 +20,14 @@ namespace {
 // inferred result types, which is what once left every method call on a call
 // result typed `unknown` in the editor.
 auto testRuntimeBeamDir() -> std::string {
-    if (const char* configured = std::getenv("KEX_RUNTIME_DIR");
-        configured && *configured)
+    if (const char* configured = std::getenv("KEX_RUNTIME_DIR"); configured && *configured) {
         return configured;
+    }
     return {};
 }
 
-
-
 auto frame(const std::string& json) -> std::string {
-    return "Content-Length: " + std::to_string(json.size()) +
-           "\r\n\r\n" + json;
+    return "Content-Length: " + std::to_string(json.size()) + "\r\n\r\n" + json;
 }
 
 auto responseForId(const std::string& output, int id) -> std::string {
@@ -39,9 +36,11 @@ auto responseForId(const std::string& output, int id) -> std::string {
     while ((cursor = output.find("\r\n\r\n", cursor)) != std::string::npos) {
         const auto body = cursor + 4;
         const auto next = output.find("Content-Length:", body);
-        auto message = output.substr(body, next == std::string::npos
-            ? std::string::npos : next - body);
-        if (message.find(needle) != std::string::npos) return message;
+        auto message =
+            output.substr(body, next == std::string::npos ? std::string::npos : next - body);
+        if (message.find(needle) != std::string::npos) {
+            return message;
+        }
         cursor = body;
     }
     return {};
@@ -51,8 +50,13 @@ auto responseForId(const std::string& output, int id) -> std::string {
 auto jsonText(const std::string& text) -> std::string {
     std::string out;
     for (const char c : text) {
-        if (c == '"' || c == '\\') out += '\\';
-        if (c == '\n') { out += "\\n"; continue; }
+        if (c == '"' || c == '\\') {
+            out += '\\';
+        }
+        if (c == '\n') {
+            out += "\\n";
+            continue;
+        }
         out += c;
     }
     return out;
@@ -60,19 +64,23 @@ auto jsonText(const std::string& text) -> std::string {
 
 // Opens `text` as `uri` and answers one request (`hover`, `completion`,
 // `definition`) at a 0-based line and character: the server's reply to it.
-auto askAt(const std::string& uri, const std::string& text, const std::string& method,
-           int line, int character) -> std::string {
+auto askAt(
+    const std::string& uri,
+    const std::string& text,
+    const std::string& method,
+    int line,
+    int character) -> std::string {
     std::string messages;
     messages += frame(
         R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
     messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
-    messages += frame(R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":")" +
-                      uri + R"(","languageId":"kex","version":1,"text":")" + jsonText(text) +
-                      R"("}}})");
-    messages += frame(R"({"jsonrpc":"2.0","id":2,"method":"textDocument/)" + method +
-                      R"(","params":{"textDocument":{"uri":")" + uri +
-                      R"("},"position":{"line":)" + std::to_string(line) +
-                      R"(,"character":)" + std::to_string(character) + "}}}");
+    messages += frame(
+        R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":")" +
+        uri + R"(","languageId":"kex","version":1,"text":")" + jsonText(text) + R"("}}})");
+    messages += frame(
+        R"({"jsonrpc":"2.0","id":2,"method":"textDocument/)" + method +
+        R"(","params":{"textDocument":{"uri":")" + uri + R"("},"position":{"line":)" +
+        std::to_string(line) + R"(,"character":)" + std::to_string(character) + "}}}");
     messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
     messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
     std::istringstream input(messages);
@@ -83,19 +91,25 @@ auto askAt(const std::string& uri, const std::string& text, const std::string& m
 
 // `textDocument/rename` at a position of `uri`, opened with `text`, in the
 // workspace `rootUri` ("null" for none).
-auto renameAt(const std::string& rootUri, const std::string& uri, const std::string& text,
-              int line, int character, const std::string& newName) -> std::string {
+auto renameAt(
+    const std::string& rootUri,
+    const std::string& uri,
+    const std::string& text,
+    int line,
+    int character,
+    const std::string& newName) -> std::string {
     std::string messages;
-    messages += frame(R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":)" +
-                      rootUri + R"(,"capabilities":{}}})");
+    messages += frame(
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":)" +
+        rootUri + R"(,"capabilities":{}}})");
     messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
-    messages += frame(R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":")" +
-                      uri + R"(","languageId":"kex","version":1,"text":")" + jsonText(text) +
-                      R"("}}})");
-    messages += frame(R"({"jsonrpc":"2.0","id":2,"method":"textDocument/rename","params":{"textDocument":{"uri":")" +
-                      uri + R"("},"position":{"line":)" + std::to_string(line) +
-                      R"(,"character":)" + std::to_string(character) + R"(},"newName":")" +
-                      newName + R"("}})");
+    messages += frame(
+        R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":")" +
+        uri + R"(","languageId":"kex","version":1,"text":")" + jsonText(text) + R"("}}})");
+    messages += frame(
+        R"({"jsonrpc":"2.0","id":2,"method":"textDocument/rename","params":{"textDocument":{"uri":")" +
+        uri + R"("},"position":{"line":)" + std::to_string(line) + R"(,"character":)" +
+        std::to_string(character) + R"(},"newName":")" + newName + R"("}})");
     messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
     messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
     std::istringstream input(messages);
@@ -122,35 +136,31 @@ int main() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-distinct.kex","languageId":"kex","version":1,"text":"distinct type UserId = Integer\nmain do\n  let id = 1.as(UserId)\n  let wrong : UserId = 1 + 1\n  id\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-distinct.kex"},"position":{"line":0,"character":15}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-distinct.kex"},"position":{"line":4,"character":3}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             const auto declarationHover = responseForId(result, 2);
-            assertTrue(declarationHover.find("distinct type UserId =") !=
-                           std::string::npos &&
-                           declarationHover.find("Integer") != std::string::npos,
-                       "distinct declaration hover lost its modifier or backing type");
-            assertTrue(responseForId(result, 3).find("id : UserId") !=
-                           std::string::npos,
-                       "distinct local binding hover lost its nominal type");
-            assertTrue(result.find(
-                           "Type mismatch: expected UserId, got Integer") !=
-                           std::string::npos,
-                       "distinct nominal mismatch did not reach LSP diagnostics");
+            assertTrue(
+                declarationHover.find("distinct type UserId =") != std::string::npos &&
+                    declarationHover.find("Integer") != std::string::npos,
+                "distinct declaration hover lost its modifier or backing type");
+            assertTrue(
+                responseForId(result, 3).find("id : UserId") != std::string::npos,
+                "distinct local binding hover lost its nominal type");
+            assertTrue(
+                result.find("Type mismatch: expected UserId, got Integer") != std::string::npos,
+                "distinct nominal mismatch did not reach LSP diagnostics");
         });
 
         it("hovers a negated receiver and its field by their own names", []() {
@@ -160,83 +170,82 @@ int main() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-negated.kex","languageId":"kex","version":1,"text":"record FormField do\n  hint : String\nend\n\nlet shown(control: FormField) -> Bool = !control.hint.empty?\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-negated.kex"},"position":{"line":4,"character":43}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-negated.kex"},"position":{"line":4,"character":50}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto receiver = responseForId(output.str(), 2);
-            assertTrue(receiver.find("control : FormField") != std::string::npos,
-                       "negated receiver hovered as something else: " + receiver);
+            assertTrue(
+                receiver.find("control : FormField") != std::string::npos,
+                "negated receiver hovered as something else: " + receiver);
             const auto field = responseForId(output.str(), 3);
-            assertTrue(field.find("hint : String") != std::string::npos,
-                       "field of a negated receiver lost its type: " + field);
+            assertTrue(
+                field.find("hint : String") != std::string::npos,
+                "field of a negated receiver lost its type: " + field);
         });
 
         it("hovers custom DNS resolvers as nominal typed handles", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-dns.kex","languageId":"kex","version":1,"text":"using Net.DNS\nusing Net.IP, only: [Address]\nmain do\n  let server = Nameserver { address: Address.parse(\"127.0.0.1\").try, port: Net.Port.from(53).try }\n  let resolver: Resolver = Resolver.custom(ResolverOptions { nameservers: [server], timeout: 100.millisecond }).try\n  resolver.close\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-dns.kex"},"position":{"line":5,"character":5}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
             messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("resolver : Net.DNS.Resolver") != std::string::npos ||
-                           result.find("resolver : Resolver") != std::string::npos,
-                       "custom DNS resolver hover lost its nominal type: " + result);
-            assertTrue(result.find("Undefined") == std::string::npos,
-                       "typed DNS source produced LSP diagnostics: " + result);
+            assertTrue(
+                result.find("resolver : Net.DNS.Resolver") != std::string::npos ||
+                    result.find("resolver : Resolver") != std::string::npos,
+                "custom DNS resolver hover lost its nominal type: " + result);
+            assertTrue(
+                result.find("Undefined") == std::string::npos,
+                "typed DNS source produced LSP diagnostics: " + result);
         });
 
         it("publishes diagnostics for unknown types in bare declarations", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-bare-type.kex","languageId":"kex","version":1,"text":"value : MissingTopLevel\nlet value = 1\nmodule Example do\n  moduleValue : MissingModuleType\n  let moduleValue = 1\nend\ntrait ExampleTrait do\n  traitValue : MissingTraitType\nend\ntype Box\nmake Box do\n  makeValue :> MissingMakeType\n  let makeValue = 1\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-declaration-defaults.kex","languageId":"kex","version":1,"text":"record Settings do\n  retries : Integer = \"many\"\nend\nlet retry(count: Integer = \"many\") = count\n"}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("publishDiagnostics") != std::string::npos,
-                       "missing diagnostics notification");
-            for (const auto* type : {"MissingTopLevel", "MissingModuleType",
-                                     "MissingTraitType", "MissingMakeType"})
-                assertTrue(result.find("Unknown type `" + std::string(type) + "`") !=
-                               std::string::npos,
-                           std::string("missing LSP diagnostic for ") + type);
-            assertTrue(occurrences(result, "Type mismatch: expected Integer, got String") >= 2,
-                       "declaration-default diagnostics did not reach the LSP");
+            assertTrue(
+                result.find("publishDiagnostics") != std::string::npos,
+                "missing diagnostics notification");
+            for (const auto* type :
+                 {"MissingTopLevel", "MissingModuleType", "MissingTraitType", "MissingMakeType"}) {
+                assertTrue(
+                    result.find("Unknown type `" + std::string(type) + "`") != std::string::npos,
+                    std::string("missing LSP diagnostic for ") + type);
+            }
+            assertTrue(
+                occurrences(result, "Type mismatch: expected Integer, got String") >= 2,
+                "declaration-default diagnostics did not reach the LSP");
         });
 
         it("publishes diagnostics for a .ket template, mapped back to its own lines", []() {
@@ -252,29 +261,31 @@ int main() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-template.html.ket","languageId":"ket-html","version":1,"text":"---\nparams: [count: Integer]\n---\nTotal: <%= count + missingVariable %>\n"}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("publishDiagnostics") != std::string::npos,
-                       "missing diagnostics notification for .ket template");
-            assertTrue(result.find("missingVariable") != std::string::npos,
-                       "undefined name inside a .ket hole never reached the LSP: " + result);
-            assertTrue(result.find("\"line\":3") != std::string::npos,
-                       "diagnostic did not map back to the template's own line: " + result);
-            assertTrue(result.find("\"line\":0") == std::string::npos &&
-                           result.find("\"line\":4") == std::string::npos,
-                       "diagnostic pointed at the frontmatter or the synthetic wrapper "
-                       "instead of the hole: " + result);
+            assertTrue(
+                result.find("publishDiagnostics") != std::string::npos,
+                "missing diagnostics notification for .ket template");
+            assertTrue(
+                result.find("missingVariable") != std::string::npos,
+                "undefined name inside a .ket hole never reached the LSP: " + result);
+            assertTrue(
+                result.find("\"line\":3") != std::string::npos,
+                "diagnostic did not map back to the template's own line: " + result);
+            assertTrue(
+                result.find("\"line\":0") == std::string::npos &&
+                    result.find("\"line\":4") == std::string::npos,
+                "diagnostic pointed at the frontmatter or the synthetic wrapper "
+                "instead of the hole: " +
+                    result);
         });
 
         it("completes a params: receiver's methods inside a .ket hole", []() {
@@ -288,25 +299,24 @@ int main() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-completion.ket","languageId":"ket","version":1,"text":"---\nparams: [items: [Integer]]\n---\n<%= items. %>\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-completion.ket"},"position":{"line":3,"character":10}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto completion = responseForId(output.str(), 2);
-            assertTrue(completion.find(R"("label":"map")") != std::string::npos &&
-                           completion.find(R"("label":"count")") != std::string::npos,
-                       "completion after a params: receiver's dot inside a .ket hole "
-                       "did not offer List methods: " + completion);
+            assertTrue(
+                completion.find(R"("label":"map")") != std::string::npos &&
+                    completion.find(R"("label":"count")") != std::string::npos,
+                "completion after a params: receiver's dot inside a .ket hole "
+                "did not offer List methods: " +
+                    completion);
         });
 
         it("navigates to a local let binding declared in an earlier .ket hole", []() {
@@ -321,26 +331,26 @@ int main() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-definition.ket","languageId":"ket","version":1,"text":"---\nparams: [count: Integer]\n---\n<% let doubled = count * 2 %>\n<%= doubled %>\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-definition.ket"},"position":{"line":4,"character":6}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto definition = responseForId(output.str(), 2);
-            assertTrue(definition.find("kex-lsp-definition.ket") != std::string::npos,
-                       "definition did not resolve to the .ket template itself: " + definition);
-            assertTrue(definition.find("\"line\":3") != std::string::npos,
-                       "definition range did not map back to the declaring hole's own "
-                       "line: " + definition);
+            assertTrue(
+                definition.find("kex-lsp-definition.ket") != std::string::npos,
+                "definition did not resolve to the .ket template itself: " + definition);
+            assertTrue(
+                definition.find("\"line\":3") != std::string::npos,
+                "definition range did not map back to the declaring hole's own "
+                "line: " +
+                    definition);
         });
 
         it("hovers a let-bound name as its binding, without a same-named function's docs", []() {
@@ -352,37 +362,42 @@ int main() {
                 "  IO.printLine(name)\nend\n";
             const auto name = askAt("file:///tmp/kex-lsp-let-hover.kex", text, "hover", 1, 6);
             assertTrue(name.find("name : String") != std::string::npos, name);
-            assertTrue(name.find("Display name") == std::string::npos,
-                       "the binding took Culture's documentation: " + name);
+            assertTrue(
+                name.find("Display name") == std::string::npos,
+                "the binding took Culture's documentation: " + name);
             const auto list = askAt("file:///tmp/kex-lsp-let-hover.kex", text, "hover", 2, 6);
             assertTrue(list.find("list : [Integer]") != std::string::npos, list);
-            assertTrue(list.find("Lists the names") == std::string::npos,
-                       "the binding took FS.Directory.list's documentation: " + list);
+            assertTrue(
+                list.find("Lists the names") == std::string::npos,
+                "the binding took FS.Directory.list's documentation: " + list);
         });
 
         it("navigates from a record pattern and a constructor to the checker's declaration", []() {
             // Two modules declare `Point` and `Shade`. Inside B, the pattern
             // `Point { x }` and the constructor `Tint(3)` are B's.
-            const std::string text =
-                "module A do\n  record Point do\n    x : Integer\n  end\n"
-                "  type Shade = Light | Tint(Integer)\nend\n\n"
-                "module B do\n  record Point do\n    x : Integer\n  end\n"
-                "  type Shade = Light | Tint(Integer)\n\n"
-                "  let read(p: Point) -> Integer do\n    match p do\n      Point { x } => x\n    end\n  end\n\n"
-                "  let shade -> Shade = Tint(3)\nend\n\n"
-                "main do\n  IO.inspect(B.read(B.Point { x: 1 }))\nend\n";
-            const auto pattern = askAt("file:///tmp/kex-lsp-pattern-definition.kex", text,
-                                       "definition", 15, 7);
-            assertTrue(pattern.find("\"line\":8") != std::string::npos,
-                       "the pattern did not lead to B's Point: " + pattern);
-            const auto constructor = askAt("file:///tmp/kex-lsp-pattern-definition.kex", text,
-                                           "definition", 19, 24);
-            assertTrue(constructor.find("\"line\":11") != std::string::npos,
-                       "the constructor did not lead to B's Shade: " + constructor);
-            const auto annotation = askAt("file:///tmp/kex-lsp-pattern-definition.kex", text,
-                                          "definition", 19, 17);
-            assertTrue(annotation.find("\"line\":11") != std::string::npos,
-                       "the annotation did not lead to B's Shade: " + annotation);
+            const std::string text = "module A do\n  record Point do\n    x : Integer\n  end\n"
+                                     "  type Shade = Light | Tint(Integer)\nend\n\n"
+                                     "module B do\n  record Point do\n    x : Integer\n  end\n"
+                                     "  type Shade = Light | Tint(Integer)\n\n"
+                                     "  let read(p: Point) -> Integer do\n    match p do\n      "
+                                     "Point { x } => x\n    end\n  end\n\n"
+                                     "  let shade -> Shade = Tint(3)\nend\n\n"
+                                     "main do\n  IO.inspect(B.read(B.Point { x: 1 }))\nend\n";
+            const auto pattern =
+                askAt("file:///tmp/kex-lsp-pattern-definition.kex", text, "definition", 15, 7);
+            assertTrue(
+                pattern.find("\"line\":8") != std::string::npos,
+                "the pattern did not lead to B's Point: " + pattern);
+            const auto constructor =
+                askAt("file:///tmp/kex-lsp-pattern-definition.kex", text, "definition", 19, 24);
+            assertTrue(
+                constructor.find("\"line\":11") != std::string::npos,
+                "the constructor did not lead to B's Shade: " + constructor);
+            const auto annotation =
+                askAt("file:///tmp/kex-lsp-pattern-definition.kex", text, "definition", 19, 17);
+            assertTrue(
+                annotation.find("\"line\":11") != std::string::npos,
+                "the annotation did not lead to B's Shade: " + annotation);
         });
 
         it("navigates from a constructor's argument to the argument, not the type", []() {
@@ -395,15 +410,17 @@ int main() {
                 "foul ask(name: Atom, build: Process<A> -> X) do\n"
                 "  build(Process.self)\nend\n\n"
                 "foul status do\n  let a = ask(:x) { |me| Orders(me) }\n  a\nend\n";
-            const auto definition = askAt("file:///tmp/kex-lsp-constructor-argument.kex", text,
-                                          "definition", 7, 32);
-            assertTrue(definition.find("\"line\":7") != std::string::npos &&
-                           definition.find("\"character\":21") != std::string::npos,
-                       "`me` did not lead to its block parameter: " + definition);
-            const auto hover = askAt("file:///tmp/kex-lsp-constructor-argument.kex", text,
-                                     "hover", 7, 32);
-            assertTrue(hover.find("me : ") != std::string::npos,
-                       "`me` hovered as something else: " + hover);
+            const auto definition =
+                askAt("file:///tmp/kex-lsp-constructor-argument.kex", text, "definition", 7, 32);
+            assertTrue(
+                definition.find("\"line\":7") != std::string::npos &&
+                    definition.find("\"character\":21") != std::string::npos,
+                "`me` did not lead to its block parameter: " + definition);
+            const auto hover =
+                askAt("file:///tmp/kex-lsp-constructor-argument.kex", text, "hover", 7, 32);
+            assertTrue(
+                hover.find("me : ") != std::string::npos,
+                "`me` hovered as something else: " + hover);
         });
 
         it("completes a name the condition of a `then … else` shares a position with", []() {
@@ -416,10 +433,12 @@ int main() {
                 "  if true\n    a.major < other.major then 1 else 2\n"
                 "  else\n    a.minor < other.minor then 1 else 2\n  end\nend\n";
             for (const auto& [line, field] : {std::pair{7u, "major"}, std::pair{9u, "minor"}}) {
-                const auto reply = askAt("file:///tmp/kex-lsp-then-receiver.kex", text,
-                                         "completion", line, 25);
-                assertTrue(reply.find(std::string("\"filterText\":\"") + field + "\"") != std::string::npos,
-                           "`other.` did not complete Version's fields: " + reply);
+                const auto reply =
+                    askAt("file:///tmp/kex-lsp-then-receiver.kex", text, "completion", line, 25);
+                assertTrue(
+                    reply.find(std::string("\"filterText\":\"") + field + "\"") !=
+                        std::string::npos,
+                    "`other.` did not complete Version's fields: " + reply);
             }
         });
 
@@ -430,11 +449,13 @@ int main() {
                 "let f(a: Integer, b: Integer) -> String do\n"
                 "  let xs = (1..10).map { |x| x }\n  (a + b).to(String)\nend\n";
             const auto range = askAt("file:///tmp/kex-lsp-group.kex", text, "completion", 1, 22);
-            assertTrue(range.find("\"filterText\":\"map\"") != std::string::npos,
-                       "`(1..10).map` completed nothing: " + range);
+            assertTrue(
+                range.find("\"filterText\":\"map\"") != std::string::npos,
+                "`(1..10).map` completed nothing: " + range);
             const auto sum = askAt("file:///tmp/kex-lsp-group.kex", text, "completion", 2, 12);
-            assertTrue(sum.find("\"filterText\":\"to\"") != std::string::npos,
-                       "`(a + b).to` completed nothing: " + sum);
+            assertTrue(
+                sum.find("\"filterText\":\"to\"") != std::string::npos,
+                "`(a + b).to` completed nothing: " + sum);
         });
 
         it("answers a record literal's key as the field the checker resolved", []() {
@@ -442,21 +463,23 @@ int main() {
             // `Shapes.Box { size: 3 }` and `Label { size: 1.5 }` are two
             // records' `size`, and a qualified one was found by its last segment.
             const std::string text =
-                "module Shapes do\n  record Box do\n    size : Integer\n    name : String\n  end\nend\n\n"
+                "module Shapes do\n  record Box do\n    size : Integer\n    name : String\n  "
+                "end\nend\n\n"
                 "record Label do\n  size : Float\nend\n\n"
                 "main do\n  let b = Shapes.Box { size: 3, name: \"b\" }\n"
                 "  let l = Label { size: 1.5 }\n  IO.printLine(b.size + l.size.round)\nend\n";
             const std::string uri = "file:///tmp/kex-lsp-record-keys.kex";
             const auto boxSize = askAt(uri, text, "hover", 12, 24);
-            assertTrue(boxSize.find("size : Integer") != std::string::npos,
-                       "Box's `size`: " + boxSize);
+            assertTrue(
+                boxSize.find("size : Integer") != std::string::npos, "Box's `size`: " + boxSize);
             const auto labelSize = askAt(uri, text, "hover", 13, 18);
-            assertTrue(labelSize.find("size : Float") != std::string::npos,
-                       "Label's `size`: " + labelSize);
+            assertTrue(
+                labelSize.find("size : Float") != std::string::npos,
+                "Label's `size`: " + labelSize);
             const auto definition = askAt(uri, text, "definition", 13, 18);
-            assertTrue(definition.find("\"start\":{\"character\":2,\"line\":8}") !=
-                           std::string::npos,
-                       "Label's `size` declaration: " + definition);
+            assertTrue(
+                definition.find("\"start\":{\"character\":2,\"line\":8}") != std::string::npos,
+                "Label's `size` declaration: " + definition);
         });
 
         it("completes a field shorthand and a `.try` as the value they are", []() {
@@ -470,11 +493,13 @@ int main() {
                 "  IO.printLine(Throttle { timeout: n }.capped.to(String).or(\"\"))\nend\n";
             const std::string uri = "file:///tmp/kex-lsp-shorthand.kex";
             const auto field = askAt(uri, text, "completion", 5, 38);
-            assertTrue(field.find("\"filterText\":\"abs\"") != std::string::npos,
-                       "`@timeout.abs` completed nothing: " + field);
+            assertTrue(
+                field.find("\"filterText\":\"abs\"") != std::string::npos,
+                "`@timeout.abs` completed nothing: " + field);
             const auto tried = askAt(uri, text, "completion", 9, 36);
-            assertTrue(tried.find("\"filterText\":\"abs\"") != std::string::npos,
-                       "`.try.abs` completed nothing: " + tried);
+            assertTrue(
+                tried.find("\"filterText\":\"abs\"") != std::string::npos,
+                "`.try.abs` completed nothing: " + tried);
         });
 
         describe("rename", []() {
@@ -504,8 +529,9 @@ int main() {
 
             it("renames a local where the checker bound it", [=]() {
                 const auto answer = renameAt("null", uri, shapes, 4, 7, "n");
-                assertTrue(starts(answer) == std::vector<std::string>{"4:6", "5:15", "5:2"},
-                           "`count`'s binding and its two uses: " + answer);
+                assertTrue(
+                    starts(answer) == std::vector<std::string>{"4:6", "5:15", "5:2"},
+                    "`count`'s binding and its two uses: " + answer);
             });
 
             it("renames a parameter from its declaration", [=]() {
@@ -513,27 +539,32 @@ int main() {
                 // bound there: no references, no rename, and hover showed
                 // the stdlib's `Bits.width`.
                 const auto answer = renameAt("null", uri, shapes, 0, 11, "w");
-                assertTrue(starts(answer) == std::vector<std::string>{"0:55", "0:9"},
-                           "`width`'s declaration and its use: " + answer);
+                assertTrue(
+                    starts(answer) == std::vector<std::string>{"0:55", "0:9"},
+                    "`width`'s declaration and its use: " + answer);
                 const auto hover = askAt(uri, shapes, "hover", 0, 11);
-                assertTrue(hover.find("width : Integer") != std::string::npos,
-                           "the parameter hovered as something else: " + hover);
+                assertTrue(
+                    hover.find("width : Integer") != std::string::npos,
+                    "the parameter hovered as something else: " + hover);
             });
 
             it("refuses a name the scope already has", [=]() {
                 const auto answer = renameAt("null", uri, shapes, 4, 7, "doubled");
-                assertTrue(answer.find("`doubled` already names something") != std::string::npos,
-                           "renamed `count` over `doubled`: " + answer);
+                assertTrue(
+                    answer.find("`doubled` already names something") != std::string::npos,
+                    "renamed `count` over `doubled`: " + answer);
             });
 
             it("refuses a keyword, and a function declared outside the workspace", [=]() {
                 const auto keyword = renameAt("null", uri, shapes, 4, 7, "end");
-                assertTrue(keyword.find("is not a name") != std::string::npos,
-                           "renamed to a keyword: " + keyword);
+                assertTrue(
+                    keyword.find("is not a name") != std::string::npos,
+                    "renamed to a keyword: " + keyword);
                 const auto stdlib = renameAt("null", uri, shapes, 3, 23, "mapped");
-                assertTrue(stdlib.find("\"error\"") != std::string::npos &&
-                               stdlib.find("\"changes\"") == std::string::npos,
-                           "renamed the standard library's `map`: " + stdlib);
+                assertTrue(
+                    stdlib.find("\"error\"") != std::string::npos &&
+                        stdlib.find("\"changes\"") == std::string::npos,
+                    "renamed the standard library's `map`: " + stdlib);
             });
 
             it("renames a function across the workspace, qualified calls too", [=]() {
@@ -543,18 +574,20 @@ int main() {
                 fs::create_directories(root);
                 std::ofstream(root / "geo.kex")
                     << "module Geo\n\nlet area(side: Integer) -> Integer = side * side\n";
-                const std::string main =
-                    "using Geo\n\nmain do\n  IO.printLine(Geo.area(2))\n  IO.printLine(area(3))\nend\n";
+                const std::string main = "using Geo\n\nmain do\n  IO.printLine(Geo.area(2))\n  "
+                                         "IO.printLine(area(3))\nend\n";
                 std::ofstream(root / "main.kex") << main;
-                const auto answer = renameAt("\"file://" + root.string() + "\"",
-                                             "file://" + (root / "main.kex").string(), main, 3,
-                                             20, "surface");
+                const auto answer = renameAt(
+                    "\"file://" + root.string() + "\"", "file://" + (root / "main.kex").string(),
+                    main, 3, 20, "surface");
                 // `Geo.area(2)` was missed: the index checked main.kex without
                 // geo.kex, so `Geo` was no module there.
-                assertTrue(starts(answer) == std::vector<std::string>{"2:4", "3:19", "4:15"},
-                           "the declaration and both calls: " + answer);
-                assertTrue(answer.find("geo.kex") != std::string::npos,
-                           "the declaration in geo.kex was not renamed: " + answer);
+                assertTrue(
+                    starts(answer) == std::vector<std::string>{"2:4", "3:19", "4:15"},
+                    "the declaration and both calls: " + answer);
+                assertTrue(
+                    answer.find("geo.kex") != std::string::npos,
+                    "the declaration in geo.kex was not renamed: " + answer);
                 fs::remove_all(root);
             });
         });
@@ -563,17 +596,18 @@ int main() {
             // `json` is a Map of Any, so `name` is of a type nothing knows:
             // it is still the binding, not Weekday's `name`
             // (examples/read_package.kex).
-            const std::string text =
-                "let lookup(json: Map<String, Any>) -> String do\n"
-                "  let name = json[\"name\"].or(\"?\")\n  \"${name}\"\nend\n\n"
-                "main do\n  IO.printLine(lookup({}))\nend\n";
+            const std::string text = "let lookup(json: Map<String, Any>) -> String do\n"
+                                     "  let name = json[\"name\"].or(\"?\")\n  \"${name}\"\nend\n\n"
+                                     "main do\n  IO.printLine(lookup({}))\nend\n";
             const auto binding = askAt("file:///tmp/kex-lsp-any-hover.kex", text, "hover", 1, 6);
             assertTrue(binding.find("name : Any") != std::string::npos, binding);
-            assertTrue(binding.find("Weekday") == std::string::npos,
-                       "the binding hovered as Weekday's name: " + binding);
+            assertTrue(
+                binding.find("Weekday") == std::string::npos,
+                "the binding hovered as Weekday's name: " + binding);
             const auto use = askAt("file:///tmp/kex-lsp-any-hover.kex", text, "hover", 2, 6);
-            assertTrue(use.find("Weekday") == std::string::npos,
-                       "the use hovered as Weekday's name: " + use);
+            assertTrue(
+                use.find("Weekday") == std::string::npos,
+                "the use hovered as Weekday's name: " + use);
         });
 
         it("completes the members of a value an opt-in module's function returns", []() {
@@ -581,20 +615,26 @@ int main() {
             // `close` alone.
             const auto reply = askAt(
                 "file:///tmp/kex-lsp-listener.kex",
-                "using Net.Socket\n\nmain do\n  let listener = TCP.bind(\"127.0.0.1:0\").try\n  listener.\nend\n",
+                "using Net.Socket\n\nmain do\n  let listener = "
+                "TCP.bind(\"127.0.0.1:0\").try\n  listener.\nend\n",
                 "completion", 4, 11);
-            for (const auto* member : {"accept", "localAddress", "closed?", "close"})
-                assertTrue(reply.find(std::string("\"filterText\":\"") + member + "\"") != std::string::npos,
-                           std::string("missing ") + member + ": " + reply);
+            for (const auto* member : {"accept", "localAddress", "closed?", "close"}) {
+                assertTrue(
+                    reply.find(std::string("\"filterText\":\"") + member + "\"") !=
+                        std::string::npos,
+                    std::string("missing ") + member + ": " + reply);
+            }
         });
 
         it("completes a range's own functions", []() {
-            const auto reply = askAt("file:///tmp/kex-lsp-range.kex",
-                                     "main do\n  let range = 1..10\n  range.\nend\n",
-                                     "completion", 2, 8);
-            for (const auto* member : {"map", "reduce", "first", "last", "contains?"})
-                assertTrue(reply.find(std::string("\"label\":\"") + member + "\"") != std::string::npos,
-                           std::string("missing ") + member + ": " + reply);
+            const auto reply = askAt(
+                "file:///tmp/kex-lsp-range.kex", "main do\n  let range = 1..10\n  range.\nend\n",
+                "completion", 2, 8);
+            for (const auto* member : {"map", "reduce", "first", "last", "contains?"}) {
+                assertTrue(
+                    reply.find(std::string("\"label\":\"") + member + "\"") != std::string::npos,
+                    std::string("missing ") + member + ": " + reply);
+            }
         });
 
         it("completes a chain against its last link, not its root", []() {
@@ -605,73 +645,96 @@ int main() {
                 "main do\n  let layer = Layer { weights: [[0.1]], biases: [0.5] }\n"
                 "  layer.biases.\nend\n";
             const auto reply = askAt("file:///tmp/kex-lsp-chain.kex", text, "completion", 7, 15);
-            assertTrue(reply.find("\"label\":\"biases\"") == std::string::npos &&
-                           reply.find("\"label\":\"weights\"") == std::string::npos,
-                       "a list offered the record's fields: " + reply);
-            for (const auto* member : {"map", "first", "count"})
-                assertTrue(reply.find(std::string("\"label\":\"") + member + "\"") != std::string::npos,
-                           std::string("missing ") + member + ": " + reply);
+            assertTrue(
+                reply.find("\"label\":\"biases\"") == std::string::npos &&
+                    reply.find("\"label\":\"weights\"") == std::string::npos,
+                "a list offered the record's fields: " + reply);
+            for (const auto* member : {"map", "first", "count"}) {
+                assertTrue(
+                    reply.find(std::string("\"label\":\"") + member + "\"") != std::string::npos,
+                    std::string("missing ") + member + ": " + reply);
+            }
             // And only what the receiver takes: nothing named `read` or
             // `write` accepts a Layer.
-            const auto own = askAt("file:///tmp/kex-lsp-chain.kex",
-                                   "record Layer do\n  biases : [Float]\nend\n\n"
-                                   "main do\n  let layer = Layer { biases: [0.5] }\n  layer.\nend\n",
-                                   "completion", 6, 8);
-            assertTrue(own.find("\"label\":\"biases\"") != std::string::npos, "missing field: " + own);
-            for (const auto* foreign : {"read", "write", "open", "min", "rename"})
-                assertTrue(own.find(std::string("\"label\":\"") + foreign + "\"") == std::string::npos,
-                           std::string("offered ") + foreign + " on a record: " + own);
+            const auto own = askAt(
+                "file:///tmp/kex-lsp-chain.kex",
+                "record Layer do\n  biases : [Float]\nend\n\n"
+                "main do\n  let layer = Layer { biases: [0.5] }\n  layer.\nend\n",
+                "completion", 6, 8);
+            assertTrue(
+                own.find("\"label\":\"biases\"") != std::string::npos, "missing field: " + own);
+            for (const auto* foreign : {"read", "write", "open", "min", "rename"}) {
+                assertTrue(
+                    own.find(std::string("\"label\":\"") + foreign + "\"") == std::string::npos,
+                    std::string("offered ") + foreign + " on a record: " + own);
+            }
         });
 
         it("offers a module's functions only where a `using` brings it in", []() {
             // `"hello".sha256` without `using Digest` is an error; it was
             // offered all the same.
-            const auto without = askAt("file:///tmp/kex-lsp-scope.kex",
-                                       "main do\n  \"hello\".sh\nend\n", "completion", 1, 12);
-            assertTrue(without.find("\"label\":\"sha256\"") == std::string::npos,
-                       "offered Digest's sha256 without `using Digest`: " + without);
-            const auto with = askAt("file:///tmp/kex-lsp-scope.kex",
-                                    "using Digest\n\nmain do\n  \"hello\".sh\nend\n",
-                                    "completion", 3, 12);
-            assertTrue(with.find("\"label\":\"sha256\"") != std::string::npos,
-                       "did not offer sha256 under `using Digest`: " + with);
+            const auto without = askAt(
+                "file:///tmp/kex-lsp-scope.kex", "main do\n  \"hello\".sh\nend\n", "completion", 1,
+                12);
+            assertTrue(
+                without.find("\"label\":\"sha256\"") == std::string::npos,
+                "offered Digest's sha256 without `using Digest`: " + without);
+            const auto with = askAt(
+                "file:///tmp/kex-lsp-scope.kex", "using Digest\n\nmain do\n  \"hello\".sh\nend\n",
+                "completion", 3, 12);
+            assertTrue(
+                with.find("\"label\":\"sha256\"") != std::string::npos,
+                "did not offer sha256 under `using Digest`: " + with);
         });
 
         it("completes a bare name to what a use of it there reaches", []() {
             // Every top-level declaration of every prelude source was
             // offered, private helpers and opt-in modules' functions included.
-            const auto reply = askAt("file:///tmp/kex-lsp-bare.kex",
-                                     "main do\n  let rate = 2\n  IO.inspect(ra)\n  IO.inspect(me)\n"
-                                     "  IO.inspect(sh)\nend\n",
-                                     "completion", 2, 15);
-            assertTrue(reply.find("\"label\":\"rate\"") != std::string::npos,
-                       "the local was not offered: " + reply);
-            const auto helper = askAt("file:///tmp/kex-lsp-bare.kex",
-                                      "main do\n  IO.inspect(me)\nend\n", "completion", 1, 15);
-            assertTrue(helper.find("\"label\":\"measureKind\"") == std::string::npos,
-                       "offered a name a bare use cannot reach: " + helper);
-            const auto optIn = askAt("file:///tmp/kex-lsp-bare.kex",
-                                     "main do\n  IO.inspect(sh)\nend\n", "completion", 1, 15);
-            assertTrue(optIn.find("\"label\":\"sha256\"") == std::string::npos,
-                       "offered Digest's sha256 without `using Digest`: " + optIn);
+            const auto reply = askAt(
+                "file:///tmp/kex-lsp-bare.kex",
+                "main do\n  let rate = 2\n  IO.inspect(ra)\n  IO.inspect(me)\n"
+                "  IO.inspect(sh)\nend\n",
+                "completion", 2, 15);
+            assertTrue(
+                reply.find("\"label\":\"rate\"") != std::string::npos,
+                "the local was not offered: " + reply);
+            const auto helper = askAt(
+                "file:///tmp/kex-lsp-bare.kex", "main do\n  IO.inspect(me)\nend\n", "completion", 1,
+                15);
+            assertTrue(
+                helper.find("\"label\":\"measureKind\"") == std::string::npos,
+                "offered a name a bare use cannot reach: " + helper);
+            const auto optIn = askAt(
+                "file:///tmp/kex-lsp-bare.kex", "main do\n  IO.inspect(sh)\nend\n", "completion", 1,
+                15);
+            assertTrue(
+                optIn.find("\"label\":\"sha256\"") == std::string::npos,
+                "offered Digest's sha256 without `using Digest`: " + optIn);
         });
 
-        it("goes to a local's binding and a field's declaration, as the checker resolved them", []() {
-            // By name, `let offset` led to a stdlib record's `offset` field and
-            // `p.x` to the `record` line.
-            const std::string text =
-                "record Point do\n  x : Float\n  y : Float\nend\n\n"
-                "main do\n  let offset = Point { x: 1.0, y: 2.0 }\n  IO.inspect(offset.x)\nend\n";
-            const auto binding = askAt("file:///tmp/kex-lsp-definition.kex", text, "definition", 6, 7);
-            assertTrue(binding.find(R"("start":{"character":6,"line":6})") != std::string::npos,
-                       "the binding did not lead to itself: " + binding);
-            const auto use = askAt("file:///tmp/kex-lsp-definition.kex", text, "definition", 7, 14);
-            assertTrue(use.find(R"("start":{"character":6,"line":6})") != std::string::npos,
-                       "the use did not lead to its binding: " + use);
-            const auto field = askAt("file:///tmp/kex-lsp-definition.kex", text, "definition", 7, 21);
-            assertTrue(field.find(R"("start":{"character":2,"line":1})") != std::string::npos,
-                       "the field read did not lead to the field: " + field);
-        });
+        it("goes to a local's binding and a field's declaration, as the checker resolved them",
+           []() {
+               // By name, `let offset` led to a stdlib record's `offset` field and
+               // `p.x` to the `record` line.
+               const std::string text = "record Point do\n  x : Float\n  y : Float\nend\n\n"
+                                        "main do\n  let offset = Point { x: 1.0, y: 2.0 }\n  "
+                                        "IO.inspect(offset.x)\nend\n";
+               const auto binding =
+                   askAt("file:///tmp/kex-lsp-definition.kex", text, "definition", 6, 7);
+               assertTrue(
+                   binding.find(R"("start":{"character":6,"line":6})") != std::string::npos,
+                   "the binding did not lead to itself: " + binding);
+               const auto use =
+                   askAt("file:///tmp/kex-lsp-definition.kex", text, "definition", 7, 14);
+               assertTrue(
+                   use.find(R"("start":{"character":6,"line":6})") != std::string::npos,
+                   "the use did not lead to its binding: " + use);
+               const auto field =
+                   askAt("file:///tmp/kex-lsp-definition.kex", text, "definition", 7, 21);
+               assertTrue(
+                   field.find(R"("start":{"character":2,"line":1})") != std::string::npos,
+                   "the field read did not lead to the field: " + field);
+           });
 
         it("goes to an `if … do |x|` binding at its name", []() {
             // The parser's rewrite to a `match` put the binding at the `if`.
@@ -679,8 +742,9 @@ int main() {
                 "main do\n  let limit: Integer? = Just(3)\n  if limit do |lim|\n"
                 "    IO.inspect(lim)\n  end\nend\n";
             const auto use = askAt("file:///tmp/kex-lsp-if-binding.kex", text, "definition", 3, 15);
-            assertTrue(use.find(R"("start":{"character":15,"line":2})") != std::string::npos,
-                       "the use did not lead to `|lim|`: " + use);
+            assertTrue(
+                use.find(R"("start":{"character":15,"line":2})") != std::string::npos,
+                "the use did not lead to `|lim|`: " + use);
         });
 
         it("hovers `This` as the make block's type, inside a body too", []() {
@@ -691,19 +755,22 @@ int main() {
                 "    let copy: This = this\n    copy\n  end\nend\n\nmain do\n"
                 "  IO.inspect(Box { size: 2 }.grown)\nend\n",
                 "hover", 6, 15);
-            assertTrue(reply.find("This : Box") != std::string::npos,
-                       "`This` in a body was not the make target: " + reply);
+            assertTrue(
+                reply.find("This : Box") != std::string::npos,
+                "`This` in a body was not the make target: " + reply);
         });
 
         it("documents a call by name with the function the checker chose", []() {
             // By name, `sqrt` gathered Integer's and Float's `sqrt` prose too.
-            const auto reply = askAt("file:///tmp/kex-lsp-called-docs.kex",
-                                     "using Math\n\nmain do\n  IO.inspect(sqrt(9.0))\nend\n",
-                                     "hover", 3, 14);
-            assertTrue(reply.find("Raises for a negative") != std::string::npos,
-                       "not Math.sqrt's prose: " + reply);
-            assertTrue(reply.find("16.sqrt") == std::string::npos,
-                       "a same-named function's prose came along: " + reply);
+            const auto reply = askAt(
+                "file:///tmp/kex-lsp-called-docs.kex",
+                "using Math\n\nmain do\n  IO.inspect(sqrt(9.0))\nend\n", "hover", 3, 14);
+            assertTrue(
+                reply.find("Raises for a negative") != std::string::npos,
+                "not Math.sqrt's prose: " + reply);
+            assertTrue(
+                reply.find("16.sqrt") == std::string::npos,
+                "a same-named function's prose came along: " + reply);
         });
 
         it("hovers a name after `implement:` as the trait the checker resolved", []() {
@@ -716,8 +783,9 @@ int main() {
                 "make Box, implement: Shop.Pricing do\n  let price = @size\nend\n\n"
                 "main do\n  IO.inspect(Box { size: 2 }.price)\nend\n",
                 "hover", 14, 28);
-            assertTrue(reply.find("trait Shop.Pricing") != std::string::npos,
-                       "not the trait the block implements: " + reply);
+            assertTrue(
+                reply.find("trait Shop.Pricing") != std::string::npos,
+                "not the trait the block implements: " + reply);
         });
 
         it("hovers a field read with the type the checker gave it", []() {
@@ -726,18 +794,21 @@ int main() {
                 "record Box do\n  size : Integer\nend\n\nmain do\n  let box = Box { size: 2 }\n"
                 "  IO.inspect(box.size)\nend\n",
                 "hover", 6, 18);
-            assertTrue(reply.find("size : Integer") != std::string::npos,
-                       "the field read was not typed: " + reply);
+            assertTrue(
+                reply.find("size : Integer") != std::string::npos,
+                "the field read was not typed: " + reply);
         });
 
         it("hovers a local `let` as its binding, without a same-named declaration's prose", []() {
-            const auto reply = askAt("file:///tmp/kex-lsp-let-name.kex",
-                                     "main do\n  let name = \"x\"\n  IO.printLine(name)\nend\n",
-                                     "hover", 1, 7);
-            assertTrue(reply.find("name : String") != std::string::npos, "not the binding: " + reply);
-            assertTrue(reply.find("ISO tag") == std::string::npos &&
-                           reply.find("Display name") == std::string::npos,
-                       "the binding hovered with Culture's prose: " + reply);
+            const auto reply = askAt(
+                "file:///tmp/kex-lsp-let-name.kex",
+                "main do\n  let name = \"x\"\n  IO.printLine(name)\nend\n", "hover", 1, 7);
+            assertTrue(
+                reply.find("name : String") != std::string::npos, "not the binding: " + reply);
+            assertTrue(
+                reply.find("ISO tag") == std::string::npos &&
+                    reply.find("Display name") == std::string::npos,
+                "the binding hovered with Culture's prose: " + reply);
         });
 
         it("completes after the `&.` shorthand from the block's element type", []() {
@@ -745,13 +816,16 @@ int main() {
             // call the block is passed to.
             const auto reply = askAt(
                 "file:///tmp/kex-lsp-shorthand.kex",
-                "record Item do\n  text : String\nend\n\nmain do\n  let items = [Item { text: \"a\" }]\n"
+                "record Item do\n  text : String\nend\n\nmain do\n  let items "
+                "= [Item { text: \"a\" }]\n"
                 "  IO.inspect(items.map(&.))\nend\n",
                 "completion", 6, 25);
-            assertTrue(reply.find("\"label\":\"text\"") != std::string::npos,
-                       "the shorthand did not complete the Item's field: " + reply);
-            assertTrue(reply.find("\"label\":\"Assert\"") == std::string::npos,
-                       "the shorthand completed global names: " + reply);
+            assertTrue(
+                reply.find("\"label\":\"text\"") != std::string::npos,
+                "the shorthand did not complete the Item's field: " + reply);
+            assertTrue(
+                reply.find("\"label\":\"Assert\"") == std::string::npos,
+                "the shorthand completed global names: " + reply);
         });
 
         it("navigates from a method call to the function the checker chose", []() {
@@ -761,23 +835,21 @@ int main() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-method-definition.kex","languageId":"kex","version":1,"text":"record Box do\n  value : Integer\nend\n\nrecord Tag do\n  value : Integer\nend\n\nmake Tag do\n  let render = \"tag\"\nend\n\nmake Box do\n  let render = \"box\"\nend\n\nmain do\n  let box = Box { value: 1 }\n  IO.printLine(box.render)\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-method-definition.kex"},"position":{"line":18,"character":20}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto definition = responseForId(output.str(), 2);
-            assertTrue(definition.find("\"line\":13") != std::string::npos,
-                       "definition did not land on Box's `render`: " + definition);
+            assertTrue(
+                definition.find("\"line\":13") != std::string::npos,
+                "definition did not land on Box's `render`: " + definition);
         });
 
         it("navigates from a record's name to the record the checker resolved", []() {
@@ -786,28 +858,27 @@ int main() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-record-definition.kex","languageId":"kex","version":1,"text":"module A do\n  record Point do\n    x : Integer\n  end\nend\n\nmodule B do\n  record Point do\n    x : Integer\n  end\n  let origin -> Point = Point { x: 0 }\nend\n\nmain do\n  IO.inspect(B.origin)\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-record-definition.kex"},"position":{"line":10,"character":17}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-record-definition.kex"},"position":{"line":10,"character":25}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto annotation = responseForId(output.str(), 2);
-            assertTrue(annotation.find("\"line\":7") != std::string::npos,
-                       "the annotation did not lead to B's Point: " + annotation);
+            assertTrue(
+                annotation.find("\"line\":7") != std::string::npos,
+                "the annotation did not lead to B's Point: " + annotation);
             const auto construction = responseForId(output.str(), 3);
-            assertTrue(construction.find("\"line\":7") != std::string::npos,
-                       "the construction did not lead to B's Point: " + construction);
+            assertTrue(
+                construction.find("\"line\":7") != std::string::npos,
+                "the construction did not lead to B's Point: " + construction);
         });
 
         it("hovers a params: name inside a .ket hole with its declared type", []() {
@@ -820,26 +891,25 @@ int main() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-hover.ket","languageId":"ket","version":1,"text":"---\nparams: [count: Integer]\n---\nTotal: <%= count %>\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-hover.ket"},"position":{"line":3,"character":13}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto hover = responseForId(output.str(), 2);
-            assertTrue(hover.find("count") != std::string::npos &&
-                           hover.find("Integer") != std::string::npos,
-                       "hover inside a .ket hole lost the params: declared type: " + hover);
-            assertTrue(hover.find("\"line\":3") != std::string::npos,
-                       "hover range did not map back to the template's own line: " + hover);
+            assertTrue(
+                hover.find("count") != std::string::npos &&
+                    hover.find("Integer") != std::string::npos,
+                "hover inside a .ket hole lost the params: declared type: " + hover);
+            assertTrue(
+                hover.find("\"line\":3") != std::string::npos,
+                "hover range did not map back to the template's own line: " + hover);
         });
 
         it("returns no hover for a position in a .ket template's literal text", []() {
@@ -850,23 +920,21 @@ int main() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-hover-text.ket","languageId":"ket","version":1,"text":"---\nparams: [count: Integer]\n---\nTotal: <%= count %>\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-hover-text.ket"},"position":{"line":3,"character":0}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto hover = responseForId(output.str(), 2);
-            assertTrue(hover.find("\"contents\"") == std::string::npos,
-                       "hover over the template's own literal text should be empty: " + hover);
+            assertTrue(
+                hover.find("\"contents\"") == std::string::npos,
+                "hover over the template's own literal text should be empty: " + hover);
         });
 
         it("resolves the wrong number type as a real diagnostic in a .ket hole", []() {
@@ -878,22 +946,20 @@ int main() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-template2.ket","languageId":"ket","version":1,"text":"---\nparams: [count: Integer]\n---\n<% let doubled: Integer = count + \"oops\" %>\n"}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("Integer") != std::string::npos &&
-                           result.find("String") != std::string::npos,
-                       "a declared params: type was not honored inside a .ket hole: " + result);
+            assertTrue(
+                result.find("Integer") != std::string::npos &&
+                    result.find("String") != std::string::npos,
+                "a declared params: type was not honored inside a .ket hole: " + result);
         });
 
         it("checks a .ket template inside the module that embeds it", []() {
@@ -914,7 +980,8 @@ int main() {
                 << "package \"kp\" do\n  version(\"0.1.0\")\n  sources([\"app\"])\nend\n";
             std::ofstream(root / "app" / "views" / "page.kex")
                 << "module App.Views.Page\n\n"
-                   "record Card do\n  key : String\n  shown? : Bool\n  note : String = \"\"\nend\n\n"
+                   "record Card do\n  key : String\n  shown? : Bool\n  note : String = "
+                   "\"\"\nend\n\n"
                    "let card = Template.html(Kex.embed(\"parts/_card.html.ket\"))\n";
             const auto templatePath = root / "app" / "views" / "parts" / "_card.html.ket";
             const std::string text =
@@ -927,38 +994,38 @@ int main() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://)" +
-                templatePath.string() +
-                R"(","languageId":"ket-html","version":1,"text":")" + text + R"("}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+                templatePath.string() + R"(","languageId":"ket-html","version":1,"text":")" + text +
+                R"("}}})");
+            messages += frame(R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             fs::remove_all(root);
             const auto result = output.str();
-            assertTrue(result.find("shown?") == std::string::npos,
-                       "the embedding module's record was not in scope: " + result);
-            assertTrue(result.find("Branch type mismatch") == std::string::npos,
-                       "literal text did not count as a branch's output: " + result);
-            assertTrue(result.find("Undefined method `missing`") != std::string::npos,
-                       "an error inside a <%= %> hole was dropped: " + result);
-            assertTrue(result.find("\"line\":5") != std::string::npos,
-                       "the hole's error did not map back to its own line: " + result);
+            assertTrue(
+                result.find("shown?") == std::string::npos,
+                "the embedding module's record was not in scope: " + result);
+            assertTrue(
+                result.find("Branch type mismatch") == std::string::npos,
+                "literal text did not count as a branch's output: " + result);
+            assertTrue(
+                result.find("Undefined method `missing`") != std::string::npos,
+                "an error inside a <%= %> hole was dropped: " + result);
+            assertTrue(
+                result.find("\"line\":5") != std::string::npos,
+                "the hole's error did not map back to its own line: " + result);
         });
 
         it("serves diagnostics and completion for unsaved buffers", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-unsaved.kex","languageId":"kex","version":1,"text":"main do\n  \"😀\" + missingName\nend\n"}}})");
             messages += frame(
@@ -999,79 +1066,98 @@ int main() {
                 R"({"jsonrpc":"2.0","id":14,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-fs.kex"},"position":{"line":3,"character":10}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":15,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-fs.kex"},"position":{"line":4,"character":11}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("publishDiagnostics") != std::string::npos,
-                       "missing diagnostics notification");
-            assertTrue(result.find("Undefined name") != std::string::npos,
-                       "missing compiler diagnostic");
-            assertTrue(result.find(R"("character":9)") != std::string::npos,
-                       "compiler byte column was not converted to LSP UTF-16");
-            assertTrue(result.find(R"("label":"map")") != std::string::npos &&
-                       result.find("map :") != std::string::npos,
-                       "missing compiler-backed completion");
-            assertTrue(result.find(R"("label":"count")") != std::string::npos,
-                       "missing type-aware list-literal completion");
-            assertTrue(result.find("completionProvider") != std::string::npos,
-                       "initialize response did not advertise completion");
-            assertTrue(result.find(R"("hoverProvider":true)") != std::string::npos,
-                       "initialize response did not advertise hover");
-            assertTrue(result.find("1 : Integer") != std::string::npos,
-                       "hover did not expose an inferred expression type");
-            assertTrue(result.find(R"(record Point do\n  x : Int\n  label : String\nend)") !=
-                           std::string::npos,
-                       "record hover did not expose its fields");
-            assertTrue(result.find("A Cartesian point.") != std::string::npos,
-                       "record hover did not expose its documentation comment");
-            assertTrue(result.find("type String") != std::string::npos,
-                       "primitive annotation hover was mistaken for a module");
-            assertTrue(result.find("type Integer") != std::string::npos,
-                       "parameter type hover was mistaken for a module");
-            assertTrue(result.find("add : A -> A -> A") != std::string::npos,
-                       "function hover leaked internal type variables");
-            assertTrue(result.find("~add : Integer -> Integer") != std::string::npos,
-                       "curried function hover lost its specialized signature");
-            assertTrue(result.find("Just : Integer?") != std::string::npos,
-                       "Just constructor hover did not show Optional payload type");
-            assertTrue(result.find("None : A?") != std::string::npos,
-                       "None constructor hover did not show generic Optional type");
-            assertTrue(result.find(R"("label":"File")") != std::string::npos,
-                       "FS completion did not include its nested File module");
-            assertTrue(result.find(R"("label":"foul read")") != std::string::npos &&
-                       result.find("read : String -> Result<String, FS.FileError>") != std::string::npos,
-                       "FS.File completion did not include read");
-            assertTrue(result.find("foul read : String -> Result<String, FS.FileError>") !=
-                           std::string::npos,
-                       "completion did not expose imported module foulness");
-            assertTrue(result.find("(path, content)") != std::string::npos,
-                       "completion did not expose function parameter names");
-            assertTrue(result.find(R"("label":"foul write")") != std::string::npos &&
-                       result.find("(path, content) : String -> String -> Result<Void, FS.FileError>") !=
-                           std::string::npos,
-                       "foul completion did not use declaration order");
-            assertTrue(result.find("read : String -> Result<String, FS.FileError>") != std::string::npos,
-                       "imported built-in function hover omitted its signature");
-            assertTrue(result.find("Reads the KexI interface chunk") ==
-                           std::string::npos,
-                       "FS.File.read used Kex.Interface.read documentation");
-            assertTrue(result.find(
-                           R"(type Optional<X> =\n  Just(X)\n| None)") !=
-                           std::string::npos,
-                       "imported ADT hover omitted constructors or payload types");
+            assertTrue(
+                result.find("publishDiagnostics") != std::string::npos,
+                "missing diagnostics notification");
+            assertTrue(
+                result.find("Undefined name") != std::string::npos, "missing compiler diagnostic");
+            assertTrue(
+                result.find(R"("character":9)") != std::string::npos,
+                "compiler byte column was not converted to LSP UTF-16");
+            assertTrue(
+                result.find(R"("label":"map")") != std::string::npos &&
+                    result.find("map :") != std::string::npos,
+                "missing compiler-backed completion");
+            assertTrue(
+                result.find(R"("label":"count")") != std::string::npos,
+                "missing type-aware list-literal completion");
+            assertTrue(
+                result.find("completionProvider") != std::string::npos,
+                "initialize response did not advertise completion");
+            assertTrue(
+                result.find(R"("hoverProvider":true)") != std::string::npos,
+                "initialize response did not advertise hover");
+            assertTrue(
+                result.find("1 : Integer") != std::string::npos,
+                "hover did not expose an inferred expression type");
+            assertTrue(
+                result.find(R"(record Point do\n  x : Int\n  label : String\nend)") !=
+                    std::string::npos,
+                "record hover did not expose its fields");
+            assertTrue(
+                result.find("A Cartesian point.") != std::string::npos,
+                "record hover did not expose its documentation comment");
+            assertTrue(
+                result.find("type String") != std::string::npos,
+                "primitive annotation hover was mistaken for a module");
+            assertTrue(
+                result.find("type Integer") != std::string::npos,
+                "parameter type hover was mistaken for a module");
+            assertTrue(
+                result.find("add : A -> A -> A") != std::string::npos,
+                "function hover leaked internal type variables");
+            assertTrue(
+                result.find("~add : Integer -> Integer") != std::string::npos,
+                "curried function hover lost its specialized signature");
+            assertTrue(
+                result.find("Just : Integer?") != std::string::npos,
+                "Just constructor hover did not show Optional payload type");
+            assertTrue(
+                result.find("None : A?") != std::string::npos,
+                "None constructor hover did not show generic Optional type");
+            assertTrue(
+                result.find(R"("label":"File")") != std::string::npos,
+                "FS completion did not include its nested File module");
+            assertTrue(
+                result.find(R"("label":"foul read")") != std::string::npos &&
+                    result.find("read : String -> Result<String, FS.FileError>") !=
+                        std::string::npos,
+                "FS.File completion did not include read");
+            assertTrue(
+                result.find("foul read : String -> Result<String, FS.FileError>") !=
+                    std::string::npos,
+                "completion did not expose imported module foulness");
+            assertTrue(
+                result.find("(path, content)") != std::string::npos,
+                "completion did not expose function parameter names");
+            assertTrue(
+                result.find(R"("label":"foul write")") != std::string::npos &&
+                    result.find(
+                        "(path, content) : String -> String -> Result<Void, FS.FileError>") !=
+                        std::string::npos,
+                "foul completion did not use declaration order");
+            assertTrue(
+                result.find("read : String -> Result<String, FS.FileError>") != std::string::npos,
+                "imported built-in function hover omitted its signature");
+            assertTrue(
+                result.find("Reads the KexI interface chunk") == std::string::npos,
+                "FS.File.read used Kex.Interface.read documentation");
+            assertTrue(
+                result.find(R"(type Optional<X> =\n  Just(X)\n| None)") != std::string::npos,
+                "imported ADT hover omitted constructors or payload types");
         });
         it("shows a primitive passed to to(...) as a type value", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-type-value.kex","languageId":"kex","version":1,"text":"main do\n  42.to(String)\n  Type.of(42)\nend\n"}}})");
             messages += frame(
@@ -1080,30 +1166,31 @@ int main() {
                 R"({"jsonrpc":"2.0","id":4,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-type-value.kex"},"position":{"line":2,"character":3}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":5,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-type-value.kex"},"position":{"line":2,"character":8}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("type String") != std::string::npos,
-                       "to(String) hover did not identify String as a type value");
-            assertTrue(result.find("module String") == std::string::npos,
-                       "to(String) hover incorrectly identified String as a module");
-            assertTrue(result.find("record Type do") != std::string::npos,
-                       "Type.of receiver hover did not identify the Type record");
-            assertTrue(result.find("of : Any -> Type") != std::string::npos,
-                       "Type.of hover leaked the checker's internal unknown type");
+            assertTrue(
+                result.find("type String") != std::string::npos,
+                "to(String) hover did not identify String as a type value");
+            assertTrue(
+                result.find("module String") == std::string::npos,
+                "to(String) hover incorrectly identified String as a module");
+            assertTrue(
+                result.find("record Type do") != std::string::npos,
+                "Type.of receiver hover did not identify the Type record");
+            assertTrue(
+                result.find("of : Any -> Type") != std::string::npos,
+                "Type.of hover leaked the checker's internal unknown type");
         });
         it("keeps Type.of result types on local bindings", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-hello.kex","languageId":"kex","version":1,"text":"type Hello = You(String) | World\nmain do\n  let at = Type.of(Hello)\n  IO.inspect(at)\nend\n"}}})");
             messages += frame(
@@ -1114,67 +1201,63 @@ int main() {
                 R"({"jsonrpc":"2.0","id":5,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-hello.kex"},"position":{"line":0,"character":6}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":6,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-hello.kex"},"position":{"line":0,"character":13}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("at : Type") != std::string::npos,
-                       "Type.of result was not retained on its local binding");
-            assertTrue(result.find("function at") == std::string::npos,
-                       "local binding hover fell through to an unrelated global function");
-            assertTrue(result.find(
-                           R"(type Hello =\n  You(String)\n| World)") !=
-                           std::string::npos,
-                       "local ADT hover omitted its constructors");
-            assertTrue(result.find("You : String -> Hello") != std::string::npos,
-                       "ADT constructor hover omitted its full type");
+            assertTrue(
+                result.find("at : Type") != std::string::npos,
+                "Type.of result was not retained on its local binding");
+            assertTrue(
+                result.find("function at") == std::string::npos,
+                "local binding hover fell through to an unrelated global function");
+            assertTrue(
+                result.find(R"(type Hello =\n  You(String)\n| World)") != std::string::npos,
+                "local ADT hover omitted its constructors");
+            assertTrue(
+                result.find("You : String -> Hello") != std::string::npos,
+                "ADT constructor hover omitted its full type");
         });
         it("does not attach same-named stdlib docs to a local binding", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-wc.kex","languageId":"kex","version":1,"text":"main do\n  let lines = [\"one\", \"two\"]\n  let words = lines.map { |line| line }\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-wc.kex"},"position":{"line":2,"character":16}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto hover = responseForId(output.str(), 2);
-            assertTrue(hover.find("lines : [String]") != std::string::npos,
-                       "local lines hover omitted its inferred list type");
-            assertTrue(hover.find("Splits into lines") == std::string::npos &&
-                       hover.find("String.lines") == std::string::npos,
-                       "local lines hover included String.lines documentation");
+            assertTrue(
+                hover.find("lines : [String]") != std::string::npos,
+                "local lines hover omitted its inferred list type");
+            assertTrue(
+                hover.find("Splits into lines") == std::string::npos &&
+                    hover.find("String.lines") == std::string::npos,
+                "local lines hover included String.lines documentation");
         });
         it("keeps value-lambda parameters local on hover", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-closure-name.kex","languageId":"kex","version":1,"text":"let makeGreeter(prefix: String) do\n  return { |name| \"${prefix}, ${name}!\" }\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-closure-name.kex"},"position":{"line":1,"character":13}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-closure-name.kex"},"position":{"line":1,"character":32}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
@@ -1182,20 +1265,19 @@ int main() {
             const auto result = output.str();
             for (const auto id : {2, 3}) {
                 const auto response = responseForId(result, id);
-                assertTrue(response.find("name : A") != std::string::npos,
-                           "lambda parameter hover lost its local generic type: " +
-                               response);
-                assertTrue(response.find("Weekday") == std::string::npos,
-                           "lambda parameter hover leaked Weekday.name: " +
-                               response);
+                assertTrue(
+                    response.find("name : A") != std::string::npos,
+                    "lambda parameter hover lost its local generic type: " + response);
+                assertTrue(
+                    response.find("Weekday") == std::string::npos,
+                    "lambda parameter hover leaked Weekday.name: " + response);
             }
         });
         it("uses imported signatures for standard-library method hovers", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/stream.spec.kex","languageId":"kex","version":1,"text":"# kex: no-check\nmain do\n  let s = Stream.from(0) { |n| n + 1 }\n  s.drop(3).map { |n| n }.filter { |n| n.even? }\nend\n"}}})");
             messages += frame(
@@ -1204,30 +1286,31 @@ int main() {
                 R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/stream.spec.kex"},"position":{"line":3,"character":12}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":4,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/stream.spec.kex"},"position":{"line":3,"character":28}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":5,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":5,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("drop :") != std::string::npos,
-                       "Stream.drop hover omitted its imported signature");
-            assertTrue(result.find("map :") != std::string::npos,
-                       "Stream.map hover omitted its imported signature");
-            assertTrue(result.find("filter :") != std::string::npos,
-                       "Stream.filter hover omitted its imported signature");
-            assertTrue(result.find("function drop") == std::string::npos,
-                       "Stream.drop fell back to a generic function hover");
+            assertTrue(
+                result.find("drop :") != std::string::npos,
+                "Stream.drop hover omitted its imported signature");
+            assertTrue(
+                result.find("map :") != std::string::npos,
+                "Stream.map hover omitted its imported signature");
+            assertTrue(
+                result.find("filter :") != std::string::npos,
+                "Stream.filter hover omitted its imported signature");
+            assertTrue(
+                result.find("function drop") == std::string::npos,
+                "Stream.drop fell back to a generic function hover");
         });
         it("renders standard-library and user RDoc comments", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-docs.kex","languageId":"kex","version":1,"text":"# A documented module.\nmodule Example do\nend\n\n# Returns +value+ unchanged.\n#\n# @param value [Integer]\n# @return [Integer]\n#\n# @example\n#   identity(3) # => 3\nlet identity(value: Integer) -> Integer = value\n\nmain do\n  # A documented local value.\n  let local = [1, 2, 3].sum\n  IO.inspect(local)\nend\n"}}})");
             messages += frame(
@@ -1238,31 +1321,36 @@ int main() {
                 R"({"jsonrpc":"2.0","id":4,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-docs.kex"},"position":{"line":15,"character":27}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":5,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-docs.kex"},"position":{"line":16,"character":14}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":6,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":6,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("A documented module.") != std::string::npos,
-                       "module hover omitted user documentation");
-            assertTrue(result.find("Returns `value` unchanged.") != std::string::npos,
-                       "RDoc inline code was not converted to Markdown");
-            assertTrue(result.find("**Parameter `value`:** `Integer`") != std::string::npos,
-                       "RDoc parameter was not formatted");
-            assertTrue(result.find("**Returns:** `Integer`") != std::string::npos,
-                       "RDoc return type was not formatted");
-            assertTrue(result.find("**Example:**") != std::string::npos &&
-                       result.find("identity(3) # => 3") != std::string::npos,
-                       "RDoc example was not rendered");
-            assertTrue(result.find("Sums all elements. Returns `0`") != std::string::npos &&
-                       result.find("[1, 2, 3].sum") != std::string::npos,
-                       "List.sum hover omitted standard-library documentation");
-            assertTrue(result.find("A documented local value.") != std::string::npos,
-                       "local binding documentation was not available at a reference");
+            assertTrue(
+                result.find("A documented module.") != std::string::npos,
+                "module hover omitted user documentation");
+            assertTrue(
+                result.find("Returns `value` unchanged.") != std::string::npos,
+                "RDoc inline code was not converted to Markdown");
+            assertTrue(
+                result.find("**Parameter `value`:** `Integer`") != std::string::npos,
+                "RDoc parameter was not formatted");
+            assertTrue(
+                result.find("**Returns:** `Integer`") != std::string::npos,
+                "RDoc return type was not formatted");
+            assertTrue(
+                result.find("**Example:**") != std::string::npos &&
+                    result.find("identity(3) # => 3") != std::string::npos,
+                "RDoc example was not rendered");
+            assertTrue(
+                result.find("Sums all elements. Returns `0`") != std::string::npos &&
+                    result.find("[1, 2, 3].sum") != std::string::npos,
+                "List.sum hover omitted standard-library documentation");
+            assertTrue(
+                result.find("A documented local value.") != std::string::npos,
+                "local binding documentation was not available at a reference");
         });
         it("shows the capability a function needs and why", []() {
             // Nothing in `deep`'s source mentions Clock — it is inherited two
@@ -1270,8 +1358,7 @@ int main() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-caps.kex","languageId":"kex","version":1,"text":"capability Clock do\n  foul now() -> Integer do\n    return 1000\n  end\nend\nfoul stamp() -> Integer = Clock.now()\nfoul deep() -> Integer = stamp()\nmain do\n  with Clo\nend\n"}}})");
             messages += frame(
@@ -1280,226 +1367,218 @@ int main() {
                 R"({"jsonrpc":"2.0","id":3,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-caps.kex"},"position":{"line":8,"character":10}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":4,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-caps.kex"},"position":{"line":0,"character":12}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":5,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":5,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("requires Clock") != std::string::npos,
-                       "hover did not report the inherited capability");
-            assertTrue(result.find("deep calls stamp") != std::string::npos,
-                       "hover did not explain where the requirement came from");
-            assertTrue(result.find("stamp uses Clock") != std::string::npos,
-                       "hover did not reach the end of the chain");
-            assertTrue(result.find(R"("detail":"capability Clock","kind":22,"label":"Clock")") !=
-                           std::string::npos,
-                       "with completion did not restrict and identify capabilities");
-            assertTrue(result.find(R"(```kex\ncapability Clock\n```)") !=
-                           std::string::npos,
-                       "capability hover was shown as a normal module");
+            assertTrue(
+                result.find("requires Clock") != std::string::npos,
+                "hover did not report the inherited capability");
+            assertTrue(
+                result.find("deep calls stamp") != std::string::npos,
+                "hover did not explain where the requirement came from");
+            assertTrue(
+                result.find("stamp uses Clock") != std::string::npos,
+                "hover did not reach the end of the chain");
+            assertTrue(
+                result.find(R"("detail":"capability Clock","kind":22,"label":"Clock")") !=
+                    std::string::npos,
+                "with completion did not restrict and identify capabilities");
+            assertTrue(
+                result.find(R"(```kex\ncapability Clock\n```)") != std::string::npos,
+                "capability hover was shown as a normal module");
         });
         it("identifies traits as traits and type constraints", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-traits.kex","languageId":"kex","version":1,"text":"# A local capability.\ntrait LocalCapability do\nend\nlet accept(value: Enumerable) = value\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-traits.kex"},"position":{"line":1,"character":8}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-traits.kex"},"position":{"line":3,"character":22}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find(R"(```kex\ntrait LocalCapability\n```)") !=
-                           std::string::npos,
-                       "local trait hover was shown as a normal type");
-            assertTrue(result.find("A local capability.") != std::string::npos,
-                       "local trait hover omitted documentation");
-            assertTrue(result.find(R"(```kex\ntrait Enumerable\n```)") !=
-                           std::string::npos,
-                       "imported trait hover was shown only as a type");
+            assertTrue(
+                result.find(R"(```kex\ntrait LocalCapability\n```)") != std::string::npos,
+                "local trait hover was shown as a normal type");
+            assertTrue(
+                result.find("A local capability.") != std::string::npos,
+                "local trait hover omitted documentation");
+            assertTrue(
+                result.find(R"(```kex\ntrait Enumerable\n```)") != std::string::npos,
+                "imported trait hover was shown only as a type");
         });
         it("does not confuse Result.Error with JSON.Error", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-error-constructor.kex","languageId":"kex","version":1,"text":"using JSON\nmain do\n  let failed = Error(\"bad\")\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-error-constructor.kex"},"position":{"line":2,"character":17}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("Error : Result<") != std::string::npos,
-                       "Error constructor hover omitted its inferred Result type");
-            assertTrue(result.find("type Error =") == std::string::npos,
-                       "Error constructor hover was confused with JSON.Error");
+            assertTrue(
+                result.find("Error : Result<") != std::string::npos,
+                "Error constructor hover omitted its inferred Result type");
+            assertTrue(
+                result.find("type Error =") == std::string::npos,
+                "Error constructor hover was confused with JSON.Error");
         });
         it("puts the selected overload first", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-selected-overload.kex","languageId":"kex","version":1,"text":"main do\n  [1, 2].at(0)\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-selected-overload.kex"},"position":{"line":1,"character":10}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            const auto selected = result.find(
-                "at : [Integer] -> Integer -> Integer?");
+            const auto selected = result.find("at : [Integer] -> Integer -> Integer?");
             const auto generic = result.find("at : [A] -> Integer -> A?");
-            assertTrue(selected != std::string::npos,
-                       "hover omitted the selected concrete overload");
-            assertTrue(generic == std::string::npos || selected < generic,
-                       "hover did not put the selected overload first");
-            assertTrue(result.find("Selected overload") != std::string::npos,
-                       "selected overload was not visually separated");
+            assertTrue(
+                selected != std::string::npos, "hover omitted the selected concrete overload");
+            assertTrue(
+                generic == std::string::npos || selected < generic,
+                "hover did not put the selected overload first");
+            assertTrue(
+                result.find("Selected overload") != std::string::npos,
+                "selected overload was not visually separated");
         });
         it("uses the selected receiver overload documentation", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/file_modes.kex","languageId":"kex","version":1,"text":"foul readAll(file: FileHandle<CanRead, W>) -> String do\n  file.read().or(\"\")\nend\nmain do\n  let maybe: String? = None\n  IO.printLine(\"value: ${maybe.or(\"\")}\")\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/file_modes.kex"},"position":{"line":1,"character":15}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":4,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/file_modes.kex"},"position":{"line":5,"character":31}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("Returns the wrapped value") != std::string::npos,
-                       "Optional.or hover omitted the selected fallback documentation");
-            assertEqual(occurrences(result, "Selected overload"), size_t{2},
-                        "interpolated Optional.or lost its selected overload");
-            assertTrue(result.find("Bitwise OR") == std::string::npos &&
-                       result.find("Bits.or") == std::string::npos,
-                       "Optional.or hover used Bits.or documentation");
+            assertTrue(
+                result.find("Returns the wrapped value") != std::string::npos,
+                "Optional.or hover omitted the selected fallback documentation");
+            assertEqual(
+                occurrences(result, "Selected overload"), size_t{2},
+                "interpolated Optional.or lost its selected overload");
+            assertTrue(
+                result.find("Bitwise OR") == std::string::npos &&
+                    result.find("Bits.or") == std::string::npos,
+                "Optional.or hover used Bits.or documentation");
         });
         it("infers literal function clause parameters", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-functions.kex","languageId":"kex","version":1,"text":"let factorial(0) = 1\nlet factorial(n: Int) = n * factorial(n - 1)\nlet fib(0) = 0\nlet fib(1) = 1\nlet fib(n: Int) = fib(n - 1) + fib(n - 2)\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-functions.kex"},"position":{"line":0,"character":6}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-functions.kex"},"position":{"line":2,"character":6}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("factorial : Integer -> Integer") !=
-                           std::string::npos &&
-                       result.find("factorial : A -> Integer") ==
-                           std::string::npos,
-                       "factorial literal clause remained unconstrained");
-            assertTrue(result.find("fib : Integer -> Integer") !=
-                           std::string::npos &&
-                       result.find("fib : A -> Integer") == std::string::npos,
-                       "fib literal clauses remained unconstrained");
+            assertTrue(
+                result.find("factorial : Integer -> Integer") != std::string::npos &&
+                    result.find("factorial : A -> Integer") == std::string::npos,
+                "factorial literal clause remained unconstrained");
+            assertTrue(
+                result.find("fib : Integer -> Integer") != std::string::npos &&
+                    result.find("fib : A -> Integer") == std::string::npos,
+                "fib literal clauses remained unconstrained");
         });
         it("shows record fields on record construction hovers", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-record-construction.kex","languageId":"kex","version":1,"text":"record Point do\n  x : Float\n  y : Float\nend\nmain do\n  Point { x: 3.0, y: 4.0 }\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-record-construction.kex"},"position":{"line":5,"character":4}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find(
-                           R"(record Point do\n  x : Float\n  y : Float\nend)") !=
-                           std::string::npos,
-                       "record construction hover omitted record fields");
-            assertTrue(result.find("Point : Point") == std::string::npos,
-                       "record construction hover used a redundant nominal type");
+            assertTrue(
+                result.find(R"(record Point do\n  x : Float\n  y : Float\nend)") !=
+                    std::string::npos,
+                "record construction hover omitted record fields");
+            assertTrue(
+                result.find("Point : Point") == std::string::npos,
+                "record construction hover used a redundant nominal type");
         });
         it("selects the qualified foul filesystem overload and navigates", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-filesystem.kex","languageId":"kex","version":1,"text":"using FS\nmain do\n  FS.File.copy(\"src\", \"utils.kex\")\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-filesystem.kex"},"position":{"line":2,"character":11}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-filesystem.kex"},"position":{"line":2,"character":11}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             const auto selected = result.find(
-                "Selected overload**\\n\\n```kex\\nfoul copy : String -> String -> Result<Void, FS.FileError>");
-            assertTrue(selected != std::string::npos,
-                       "FS.File.copy did not select its foul filesystem overload");
-            assertTrue(result.find("definitionProvider") != std::string::npos,
-                       "server did not advertise definition navigation");
-            assertTrue(result.find("fs.kex") != std::string::npos,
-                       "FS.File.copy navigation did not resolve to its source");
+                "Selected overload**\\n\\n```kex\\nfoul copy : "
+                "String -> String -> Result<Void, FS.FileError>");
+            assertTrue(
+                selected != std::string::npos,
+                "FS.File.copy did not select its foul filesystem overload");
+            assertTrue(
+                result.find("definitionProvider") != std::string::npos,
+                "server did not advertise definition navigation");
+            assertTrue(
+                result.find("fs.kex") != std::string::npos,
+                "FS.File.copy navigation did not resolve to its source");
         });
         it("reads a package.kex manifest instead of flagging its vocabulary", []() {
             // `bundle`, `version` and `tey` are declared by the stdlib but
@@ -1514,58 +1593,58 @@ int main() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-pkg/package.kex","languageId":"kex","version":1,"text":"bundle \"demo\" do\n  version(\"0.1.0\")\n  description(\"A Kex package\")\n  license(\"MIT\")\n  kex(\">= 0.3.0\")\n  otp(\">= 26\")\n  entrypoint(\"src/main.kex\")\n  target(\"demo\")\n  command(\"check\", run: \"make check\", description: \"Type-check\")\n  toolchain(\"demo\", compiler: \"bin/demo\")\n  sources([\"app\", \"db\"])\n  plugin namespace: \"demo\", tey: \">= 0.2\" do\n    capabilities([FS.Write.workspace, FS.Read.package, Process.Run([\"git\"]), Net.Connect([\"example.com\"])])\n    command(\"docs\", run: \"script/docs.kex\")\n    generator(\"page\", entrypoint: \"generators/page.kex\")\n    generator(\"model\", entrypoint: \"generators/model.kex\") do\n      option(\"name\", type: String)\n    end\n  end\n  tey(\"greet\", git: \"https://example.com/g.git\", tag: \"v0.1.0\")\n  group :dev do\n    tey(\"mock\", git: \"https://example.com/m.git\", branch: \"main\")\n  end\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-pkg/package.kex"},"position":{"line":1,"character":4}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-pkg/package.kex"},"position":{"line":8,"character":4}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("Undefined function") == std::string::npos,
-                       "the manifest vocabulary was reported as undefined");
+            assertTrue(
+                result.find("Undefined function") == std::string::npos,
+                "the manifest vocabulary was reported as undefined");
             // `FS.Write.workspace` is `workspace(FS.Write)` by UFCS, and was
             // once held against the `workspace do` that takes a block.
-            assertTrue(result.find("\"severity\":1") == std::string::npos,
-                       "a well-formed manifest was reported with errors: " + result);
-            assertTrue(result.find("version : String -> Void") != std::string::npos,
-                       "hovering a manifest declaration showed no signature");
-            assertTrue(result.find("command : String") != std::string::npos,
-                       "hovering a manifest command declaration showed no signature");
+            assertTrue(
+                result.find("\"severity\":1") == std::string::npos,
+                "a well-formed manifest was reported with errors: " + result);
+            assertTrue(
+                result.find("version : String -> Void") != std::string::npos,
+                "hovering a manifest declaration showed no signature");
+            assertTrue(
+                result.find("command : String") != std::string::npos,
+                "hovering a manifest command declaration showed no signature");
         });
 
         it("prefers an at-field over an unrelated receiver method", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-at-field.kex","languageId":"kex","version":1,"text":"record User do\n  name : String\nend\nmake User do\n  let greet -> String = \"Hi, ${@name}!\"\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-at-field.kex"},"position":{"line":4,"character":33}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("@name : String") != std::string::npos,
-                       "@name did not retain the User.name field type: " + result);
-            assertTrue(result.find("Weekday -> Any") == std::string::npos,
-                       "@name resolved to the unrelated Weekday method");
+            assertTrue(
+                result.find("@name : String") != std::string::npos,
+                "@name did not retain the User.name field type: " + result);
+            assertTrue(
+                result.find("Weekday -> Any") == std::string::npos,
+                "@name resolved to the unrelated Weekday method");
         });
         // Runs one document through the server: open it, then send `requests`
         // (each a complete JSON-RPC request line), then shut down.
@@ -1573,9 +1652,14 @@ int main() {
                           const std::vector<std::string>& requests) {
             auto escaped = std::string{};
             for (char c : text) {
-                if (c == '\n') escaped += "\\n";
-                else if (c == '"' || c == '\\') { escaped += '\\'; escaped += c; }
-                else escaped += c;
+                if (c == '\n') {
+                    escaped += "\\n";
+                } else if (c == '"' || c == '\\') {
+                    escaped += '\\';
+                    escaped += c;
+                } else {
+                    escaped += c;
+                }
             }
             std::string messages;
             messages += frame(
@@ -1584,7 +1668,9 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":")" +
                 uri + R"(","languageId":"kex","version":1,"text":")" + escaped + R"("}}})");
-            for (const auto& request : requests) messages += frame(request);
+            for (const auto& request : requests) {
+                messages += frame(request);
+            }
             messages += frame(R"({"jsonrpc":"2.0","id":99,"method":"shutdown"})");
             messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
             std::istringstream input(messages);
@@ -1601,23 +1687,24 @@ int main() {
                 "  let x: Integer = (:\"a b\", missingName)\n"
                 "end\n",
                 {});
-            assertTrue(result.find("Unexpected token") == std::string::npos,
-                       "the new atom spellings must parse: " + result);
+            assertTrue(
+                result.find("Unexpected token") == std::string::npos,
+                "the new atom spellings must parse: " + result);
             // `missingName` starts at column 28 of its line — right after a
             // quoted atom whose token text is shorter than its source.
-            assertTrue(result.find(R"("start":{"character":28,"line":2})") !=
-                           std::string::npos,
-                       "diagnostic after a quoted atom is misplaced: " + result);
+            assertTrue(
+                result.find(R"("start":{"character":28,"line":2})") != std::string::npos,
+                "diagnostic after a quoted atom is misplaced: " + result);
         });
 
         it("offers no completion inside an atom, even after its @", [session]() {
             const auto result = session(
-                "file:///tmp/kex-lsp-atom-completion.kex",
-                "main do\n  let host = :b@\nend\n",
+                "file:///tmp/kex-lsp-atom-completion.kex", "main do\n  let host = :b@\nend\n",
                 {R"({"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-atom-completion.kex"},"position":{"line":1,"character":17}}})"});
             const auto completion = responseForId(result, 2);
-            assertTrue(completion.find(R"("result":[])") != std::string::npos,
-                       "typing a node name must not pop up completions: " + completion);
+            assertTrue(
+                completion.find(R"("result":[])") != std::string::npos,
+                "typing a node name must not pop up completions: " + completion);
         });
 
         it("completes and documents the Node module", [session]() {
@@ -1627,56 +1714,54 @@ int main() {
                 {R"({"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-node.kex"},"position":{"line":4,"character":7}}})",
                  R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-node.kex"},"position":{"line":3,"character":8}}})"});
             const auto completion = responseForId(result, 2);
-            assertTrue(completion.find("connect") != std::string::npos &&
-                           completion.find("whereIs") != std::string::npos,
-                       "Node members missing from completion: " + completion);
+            assertTrue(
+                completion.find("connect") != std::string::npos &&
+                    completion.find("whereIs") != std::string::npos,
+                "Node members missing from completion: " + completion);
             const auto hover = responseForId(result, 3);
-            assertTrue(hover.find("connect : Atom -> Result<Void, String>") != std::string::npos,
-                       "Node.connect hover lacks its signature: " + hover);
+            assertTrue(
+                hover.find("connect : Atom -> Result<Void, String>") != std::string::npos,
+                "Node.connect hover lacks its signature: " + hover);
         });
 
         it("underlines the retired interop root with its replacement", [session]() {
             const auto result = session(
                 "file:///tmp/kex-lsp-retired.kex",
-                "main do\n  IO.printLine(Erlang.lists.reverse([1]))\nend\n",
-                {});
-            assertTrue(result.find("interop is now `BEAM.`") != std::string::npos,
-                       "retired prefix not reported: " + result);
-            assertTrue(result.find(R"("start":{"character":15,"line":1})") !=
-                           std::string::npos,
-                       "the diagnostic must sit on `Erlang`: " + result);
+                "main do\n  IO.printLine(Erlang.lists.reverse([1]))\nend\n", {});
+            assertTrue(
+                result.find("interop is now `BEAM.`") != std::string::npos,
+                "retired prefix not reported: " + result);
+            assertTrue(
+                result.find(R"("start":{"character":15,"line":1})") != std::string::npos,
+                "the diagnostic must sit on `Erlang`: " + result);
         });
 
         it("completes members after an inferred local receiver dot", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-local-dot.kex","languageId":"kex","version":1,"text":"main do\n  let lines = [\"one\", \"two\"]\n  lines.\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-local-dot.kex"},"position":{"line":2,"character":8}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find(R"("label":"map")") != std::string::npos &&
-                       result.find(R"("label":"count")") != std::string::npos,
-                       "inferred [String] local produced no dot completions: " +
-                           result);
+            assertTrue(
+                result.find(R"("label":"map")") != std::string::npos &&
+                    result.find(R"("label":"count")") != std::string::npos,
+                "inferred [String] local produced no dot completions: " + result);
         });
         it("understands functional updates in make blocks", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex","languageId":"kex","version":1,"text":"record User do\n  age : Integer\nend\nmake User do\n  let birthday -> This do\n    new.age = this.age + 1\n    New { age: new.age }\n  end\nend\n"}}})");
             messages += frame(
@@ -1703,66 +1788,53 @@ int main() {
                 R"({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex","version":4},"contentChanges":[{"text":"record User do\n  age : Integer\nend\nmake User do\n  let birthday -> This = New { age: @ }\nend\n"}]}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":10,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex"},"position":{"line":4,"character":37}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":11,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":11,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(responseForId(result, 2).find("new : User") !=
-                           std::string::npos,
-                       "implicit new hover omitted its make receiver type: " +
-                           result);
-            assertTrue(responseForId(result, 3).find(R"("label":"age")") !=
-                           std::string::npos,
-                       "new receiver produced no record field completions: " +
-                           result);
-            assertTrue(responseForId(result, 4).find("New") != std::string::npos &&
-                           responseForId(result, 4).find("User") !=
-                               std::string::npos,
-                       "New hover omitted its functional-update type: " + result);
-            assertTrue(responseForId(result, 5).find("this : User") !=
-                           std::string::npos,
-                       "implicit this hover omitted its make receiver type: " +
-                           result);
-            assertTrue(responseForId(result, 6).find("User") !=
-                           std::string::npos,
-                       "This hover omitted its concrete make type: " + result);
-            assertTrue(responseForId(result, 7).find(R"("label":"age")") !=
-                           std::string::npos,
-                       "this receiver produced no record field completions: " +
-                           result);
-            assertTrue(responseForId(result, 8).find(R"("label":"age")") !=
-                           std::string::npos &&
-                           responseForId(result, 8).find(R"("label":"assert")") ==
-                               std::string::npos,
-                       "New record completion was not restricted to writable fields: " +
-                           result);
-            assertTrue(responseForId(result, 9).find(R"("label":"age")") !=
-                           std::string::npos &&
-                           responseForId(result, 9).find(R"("label":"assert")") ==
-                               std::string::npos,
-                       "incomplete new record completion exposed global symbols: " +
-                           result);
-            assertTrue(responseForId(result, 10).find(R"("label":"age")") !=
-                           std::string::npos &&
-                           responseForId(result, 10).find(R"("label":"assert")") ==
-                               std::string::npos,
-                       "@ field completion did not use the receiver record: " +
-                           result);
-            assertTrue(result.find("Undefined variable: new") ==
-                           std::string::npos,
-                       "LSP diagnosed the implicit new binding as undefined");
+            assertTrue(
+                responseForId(result, 2).find("new : User") != std::string::npos,
+                "implicit new hover omitted its make receiver type: " + result);
+            assertTrue(
+                responseForId(result, 3).find(R"("label":"age")") != std::string::npos,
+                "new receiver produced no record field completions: " + result);
+            assertTrue(
+                responseForId(result, 4).find("New") != std::string::npos &&
+                    responseForId(result, 4).find("User") != std::string::npos,
+                "New hover omitted its functional-update type: " + result);
+            assertTrue(
+                responseForId(result, 5).find("this : User") != std::string::npos,
+                "implicit this hover omitted its make receiver type: " + result);
+            assertTrue(
+                responseForId(result, 6).find("User") != std::string::npos,
+                "This hover omitted its concrete make type: " + result);
+            assertTrue(
+                responseForId(result, 7).find(R"("label":"age")") != std::string::npos,
+                "this receiver produced no record field completions: " + result);
+            assertTrue(
+                responseForId(result, 8).find(R"("label":"age")") != std::string::npos &&
+                    responseForId(result, 8).find(R"("label":"assert")") == std::string::npos,
+                "New record completion was not restricted to writable fields: " + result);
+            assertTrue(
+                responseForId(result, 9).find(R"("label":"age")") != std::string::npos &&
+                    responseForId(result, 9).find(R"("label":"assert")") == std::string::npos,
+                "incomplete new record completion exposed global symbols: " + result);
+            assertTrue(
+                responseForId(result, 10).find(R"("label":"age")") != std::string::npos &&
+                    responseForId(result, 10).find(R"("label":"assert")") == std::string::npos,
+                "@ field completion did not use the receiver record: " + result);
+            assertTrue(
+                result.find("Undefined variable: new") == std::string::npos,
+                "LSP diagnosed the implicit new binding as undefined");
         });
         it("understands implicit serving bindings and server slots", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex","languageId":"kex","version":1,"text":"record Counter do\n  count : Integer = 0\nend\nserving Counter do\n  slot reset(to: Integer) -> Void = New { count: to }\n  foul slot later(value: Integer) -> Reply<Integer> do\n    new.count = value\n    from.reply(new.count)\n    { new }\n  end\nend\nmain do\n  let counter = Process.spawn(Counter {})\n  counter.later(1)\nend\n"}}})");
             messages += frame(
@@ -1787,78 +1859,62 @@ int main() {
                 R"({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex","version":4},"contentChanges":[{"text":"record Counter do\n  count : Integer = 0\nend\nserving Counter do\n  slot increment(by: Integer) -> Reply<Integer> do\n    return { }\n  end\nend\n"}]}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":8,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":5,"character":13}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":11,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":11,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(responseForId(result, 2).find("new : Counter") !=
-                           std::string::npos,
-                       "serving new hover omitted its state type: " + result);
-            assertTrue(responseForId(result, 3).find("From<Integer>") !=
-                           std::string::npos,
-                       "serving from hover omitted its reply type: " + result);
-            assertTrue(responseForId(result, 4).find("foul slot later") != std::string::npos &&
-                           responseForId(result, 4).find("Reply<Integer>") !=
-                               std::string::npos,
-                       "slot declaration hover omitted its signature: " + result);
-            assertTrue(responseForId(result, 5).find("later") != std::string::npos &&
-                           responseForId(result, 5).find("CallError") !=
-                               std::string::npos,
-                       "remote slot hover omitted its Result/CallError projection: " +
-                           result);
-            assertTrue(responseForId(result, 10).find("record Reply<Integer> do") !=
-                           std::string::npos &&
-                           responseForId(result, 10).find("reply : Integer") !=
-                           std::string::npos &&
-                           responseForId(result, 10).find("new : Counter?") !=
-                               std::string::npos &&
-                           responseForId(result, 10).find(
-                               "stop : ProcessExitReason?") !=
-                               std::string::npos &&
-                           responseForId(result, 10).find("required") !=
-                               std::string::npos,
-                       "Reply hover did not expose its transition contract: " +
-                           result);
-            assertTrue(responseForId(result, 6).find(R"("filterText":"later")") !=
-                           std::string::npos &&
-                           responseForId(result, 6).find(R"("label":"foul slot later")") !=
-                               std::string::npos &&
-                           responseForId(result, 6).find(R"("label":"slot reset")") !=
-                           std::string::npos,
-                       "Server<Counter> produced no slot completion: " + result);
-            assertTrue(responseForId(result, 7).find(R"("label":"reply")") !=
-                           std::string::npos &&
-                           responseForId(result, 7).find(R"("label":"stop")") !=
-                               std::string::npos &&
-                           responseForId(result, 7).find(R"("label":"assert")") ==
-                               std::string::npos,
-                       "serving transition completion exposed global symbols: " +
-                           result);
-            assertTrue(responseForId(result, 8).find(R"("label":"new")") !=
-                           std::string::npos &&
-                           responseForId(result, 8).find(R"("label":"reply")") !=
-                               std::string::npos &&
-                           responseForId(result, 8).find(R"("label":"stop")") !=
-                               std::string::npos &&
-                           responseForId(result, 8).find(R"("label":"assert")") ==
-                               std::string::npos,
-                       "empty serving transition exposed global symbols: " + result);
-            assertTrue(result.find("Undefined variable: new") == std::string::npos &&
-                           result.find("Undefined variable: from") == std::string::npos,
-                       "LSP diagnosed an implicit serving binding as undefined: " +
-                           result);
+            assertTrue(
+                responseForId(result, 2).find("new : Counter") != std::string::npos,
+                "serving new hover omitted its state type: " + result);
+            assertTrue(
+                responseForId(result, 3).find("From<Integer>") != std::string::npos,
+                "serving from hover omitted its reply type: " + result);
+            assertTrue(
+                responseForId(result, 4).find("foul slot later") != std::string::npos &&
+                    responseForId(result, 4).find("Reply<Integer>") != std::string::npos,
+                "slot declaration hover omitted its signature: " + result);
+            assertTrue(
+                responseForId(result, 5).find("later") != std::string::npos &&
+                    responseForId(result, 5).find("CallError") != std::string::npos,
+                "remote slot hover omitted its Result/CallError projection: " + result);
+            assertTrue(
+                responseForId(result, 10).find("record Reply<Integer> do") != std::string::npos &&
+                    responseForId(result, 10).find("reply : Integer") != std::string::npos &&
+                    responseForId(result, 10).find("new : Counter?") != std::string::npos &&
+                    responseForId(result, 10).find("stop : ProcessExitReason?") !=
+                        std::string::npos &&
+                    responseForId(result, 10).find("required") != std::string::npos,
+                "Reply hover did not expose its transition contract: " + result);
+            assertTrue(
+                responseForId(result, 6).find(R"("filterText":"later")") != std::string::npos &&
+                    responseForId(result, 6).find(R"("label":"foul slot later")") !=
+                        std::string::npos &&
+                    responseForId(result, 6).find(R"("label":"slot reset")") != std::string::npos,
+                "Server<Counter> produced no slot completion: " + result);
+            assertTrue(
+                responseForId(result, 7).find(R"("label":"reply")") != std::string::npos &&
+                    responseForId(result, 7).find(R"("label":"stop")") != std::string::npos &&
+                    responseForId(result, 7).find(R"("label":"assert")") == std::string::npos,
+                "serving transition completion exposed global symbols: " + result);
+            assertTrue(
+                responseForId(result, 8).find(R"("label":"new")") != std::string::npos &&
+                    responseForId(result, 8).find(R"("label":"reply")") != std::string::npos &&
+                    responseForId(result, 8).find(R"("label":"stop")") != std::string::npos &&
+                    responseForId(result, 8).find(R"("label":"assert")") == std::string::npos,
+                "empty serving transition exposed global symbols: " + result);
+            assertTrue(
+                result.find("Undefined variable: new") == std::string::npos &&
+                    result.find("Undefined variable: from") == std::string::npos,
+                "LSP diagnosed an implicit serving binding as undefined: " + result);
         });
         it("hovers and completes typed process handles", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-process.kex","languageId":"kex","version":1,"text":"type Message = :hello\nfoul worker -> Process<Message> do\n  spawn do true end\nend\nmain do\n  let process = worker()\n  process.send(:hello)\nend\n"}}})");
             messages += frame(
@@ -1869,58 +1925,52 @@ int main() {
                 R"({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-process.kex","version":2},"contentChanges":[{"text":"type Message = :hello\nfoul worker -> Process<Message> do\n  spawn do true end\nend\nmain do\n  let process = worker()\n  process.\nend\n"}]}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":4,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-process.kex"},"position":{"line":6,"character":10}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":5,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":5,"method":"shutdown"})");
             messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(responseForId(result, 2).find("process : Process<:hello>") !=
-                           std::string::npos,
-                       "typed process binding hover omitted its message type: " + result);
-            assertTrue(responseForId(result, 3).find("send") != std::string::npos &&
-                           responseForId(result, 3).find("Process<A>") !=
-                               std::string::npos,
-                       "typed process method hover omitted its signature: " + result);
-            assertTrue(responseForId(result, 4).find(R"("filterText":"send")") !=
-                           std::string::npos &&
-                           responseForId(result, 4).find(
-                               R"("filterText":"sendFrom")") != std::string::npos,
-                       "Process<Message> produced no message-method completions: " +
-                           result);
+            assertTrue(
+                responseForId(result, 2).find("process : Process<:hello>") != std::string::npos,
+                "typed process binding hover omitted its message type: " + result);
+            assertTrue(
+                responseForId(result, 3).find("send") != std::string::npos &&
+                    responseForId(result, 3).find("Process<A>") != std::string::npos,
+                "typed process method hover omitted its signature: " + result);
+            assertTrue(
+                responseForId(result, 4).find(R"("filterText":"send")") != std::string::npos &&
+                    responseForId(result, 4).find(R"("filterText":"sendFrom")") !=
+                        std::string::npos,
+                "Process<Message> produced no message-method completions: " + result);
         });
         it("provides signature help for methods and serving slots", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-signature.kex","languageId":"kex","version":1,"text":"record Counter do\n  count : Integer = 0\nend\nserving Counter do\n  slot reset(to: Integer) -> Void = New { count: to }\nend\nmain do\n  let hello = \"hello\"\n  hello.at(0)\n  let counter = Process.spawn(Counter {})\n  counter.reset(1)\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-signature.kex"},"position":{"line":8,"character":11}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":3,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-signature.kex"},"position":{"line":10,"character":16}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
             messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(responseForId(result, 2).find("at(") != std::string::npos &&
-                           responseForId(result, 2).find("Integer") !=
-                               std::string::npos,
-                       "ordinary method signature help was empty: " + result);
-            assertTrue(responseForId(result, 3).find("reset(to: Integer") !=
-                           std::string::npos &&
-                           responseForId(result, 3).find("within: Integer?") !=
-                               std::string::npos,
-                       "serving slot signature help omitted parameters/options: " +
-                           result);
+            assertTrue(
+                responseForId(result, 2).find("at(") != std::string::npos &&
+                    responseForId(result, 2).find("Integer") != std::string::npos,
+                "ordinary method signature help was empty: " + result);
+            assertTrue(
+                responseForId(result, 3).find("reset(to: Integer") != std::string::npos &&
+                    responseForId(result, 3).find("within: Integer?") != std::string::npos,
+                "serving slot signature help omitted parameters/options: " + result);
         });
         // A function called on a receiver is the receiver type's, not the
         // first function of that name: `t.text` reached the top-level `text`,
@@ -1931,8 +1981,7 @@ int main() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-block-receiver.kex","languageId":"kex","version":1,"text":")" +
                 text + R"("}}})");
@@ -1940,10 +1989,8 @@ int main() {
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-block-receiver.kex"},"position":{"line":13,"character":41}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-block-receiver.kex"},"position":{"line":14,"character":36}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
@@ -1951,17 +1998,17 @@ int main() {
             const auto result = output.str();
             const std::string makeText =
                 R"("range":{"end":{"character":10,"line":5},"start":{"character":6,"line":5}})";
-            for (const int id : {2, 3})
-                assertTrue(responseForId(result, id).find(makeText) != std::string::npos,
-                           "t.text did not reach TableBuilder's text: " +
-                               responseForId(result, id));
+            for (const int id : {2, 3}) {
+                assertTrue(
+                    responseForId(result, id).find(makeText) != std::string::npos,
+                    "t.text did not reach TableBuilder's text: " + responseForId(result, id));
+            }
         });
         it("keeps local navigation and pattern receiver completion semantic", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-pattern-dot.kex","languageId":"kex","version":1,"text":"main do\n  let lines = [\"one\", \"two\"]\n  lines.count\nend\n"}}})");
             messages += frame(
@@ -1976,41 +2023,36 @@ int main() {
                 R"({"jsonrpc":"2.0","id":5,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-parameter-dot.kex"},"position":{"line":1,"character":8}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":6,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-parameter-dot.kex"},"position":{"line":1,"character":4}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find(
-                           R"("start":{"character":6,"line":1})") !=
-                           std::string::npos &&
-                       result.find(
-                           R"("uri":"file:///tmp/kex-lsp-pattern-dot.kex")") !=
-                           std::string::npos,
-                       "local navigation fell through to an imported symbol");
-            assertTrue(result.find(R"("label":"count")") != std::string::npos,
-                       "member completion lost the last valid local type");
-            assertTrue(result.find(R"("id":5)") != std::string::npos &&
-                       result.find(R"("label":"map")") != std::string::npos,
-                       "a parameter dot in the initially opened buffer had no members");
-            assertTrue(result.find(
-                           R"("start":{"character":9,"line":0})") !=
-                           std::string::npos &&
-                       result.find(
-                           R"("uri":"file:///tmp/kex-lsp-parameter-dot.kex")") !=
-                           std::string::npos,
-                       "parameter navigation did not resolve to its declaration");
+            assertTrue(
+                result.find(R"("start":{"character":6,"line":1})") != std::string::npos &&
+                    result.find(R"("uri":"file:///tmp/kex-lsp-pattern-dot.kex")") !=
+                        std::string::npos,
+                "local navigation fell through to an imported symbol");
+            assertTrue(
+                result.find(R"("label":"count")") != std::string::npos,
+                "member completion lost the last valid local type");
+            assertTrue(
+                result.find(R"("id":5)") != std::string::npos &&
+                    result.find(R"("label":"map")") != std::string::npos,
+                "a parameter dot in the initially opened buffer had no members");
+            assertTrue(
+                result.find(R"("start":{"character":9,"line":0})") != std::string::npos &&
+                    result.find(R"("uri":"file:///tmp/kex-lsp-parameter-dot.kex")") !=
+                        std::string::npos,
+                "parameter navigation did not resolve to its declaration");
         });
         it("finds semantic and shadow-safe local references", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-references.kex","languageId":"kex","version":1,"text":"let double(value: Integer) = value + value\nmain do\n  let value = 2\n  IO.inspect(value)\n  IO.inspect(double(value))\nend\n"}}})");
             messages += frame(
@@ -2019,57 +2061,54 @@ int main() {
                 R"({"jsonrpc":"2.0","id":3,"method":"textDocument/references","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-references.kex"},"position":{"line":4,"character":14},"context":{"includeDeclaration":true}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":4,"method":"textDocument/references","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-references.kex"},"position":{"line":4,"character":14},"context":{"includeDeclaration":false}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":5,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":5,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find(R"("referencesProvider":true)") !=
-                           std::string::npos,
-                       "server did not advertise find-references support");
+            assertTrue(
+                result.find(R"("referencesProvider":true)") != std::string::npos,
+                "server did not advertise find-references support");
             const auto local = responseForId(result, 2);
-            assertEqual(occurrences(local, R"("uri":)"), size_t{3},
-                        "local references crossed into the shadowed parameter");
-            assertTrue(local.find(
-                           R"("start":{"character":6,"line":2})") !=
-                           std::string::npos,
-                       "local references omitted the declaration");
+            assertEqual(
+                occurrences(local, R"("uri":)"), size_t{3},
+                "local references crossed into the shadowed parameter");
+            assertTrue(
+                local.find(R"("start":{"character":6,"line":2})") != std::string::npos,
+                "local references omitted the declaration");
             const auto globalWithDeclaration = responseForId(result, 3);
-            assertEqual(occurrences(globalWithDeclaration, R"("uri":)"),
-                        size_t{2},
-                        "function references omitted its call or declaration");
+            assertEqual(
+                occurrences(globalWithDeclaration, R"("uri":)"), size_t{2},
+                "function references omitted its call or declaration");
             const auto globalWithoutDeclaration = responseForId(result, 4);
-            assertEqual(occurrences(globalWithoutDeclaration, R"("uri":)"),
-                        size_t{1},
-                        "includeDeclaration=false still returned the definition");
+            assertEqual(
+                occurrences(globalWithoutDeclaration, R"("uri":)"), size_t{1},
+                "includeDeclaration=false still returned the definition");
         });
         it("keeps receiver overload references separate", []() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-receiver-references.kex","languageId":"kex","version":1,"text":"main do\n  let first: String? = None\n  let second: String? = None\n  first.or(\"\")\n  second.or(\"\")\n  Bits.or(1, 2)\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/references","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-receiver-references.kex"},"position":{"line":3,"character":9},"context":{"includeDeclaration":false}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto references = responseForId(output.str(), 2);
-            assertEqual(occurrences(references, R"("uri":)"), size_t{2},
-                        "Optional.or references included Bits.or");
-            assertTrue(references.find(R"("line":5)") == std::string::npos,
-                       "receiver references included a different overload owner");
+            assertEqual(
+                occurrences(references, R"("uri":)"), size_t{2},
+                "Optional.or references included Bits.or");
+            assertTrue(
+                references.find(R"("line":5)") == std::string::npos,
+                "receiver references included a different overload owner");
         });
         it("finds references in unopened workspace files", []() {
             namespace fs = std::filesystem;
@@ -2089,25 +2128,24 @@ int main() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":"file:///tmp/kex-lsp-reference-workspace","capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-reference-workspace/tools.kex","languageId":"kex","version":1,"text":"module Tools do\n  let double(value: Integer) = value * 2\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/references","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-reference-workspace/tools.kex"},"position":{"line":1,"character":7},"context":{"includeDeclaration":true}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"exit"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
 
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto references = responseForId(output.str(), 2);
-            assertEqual(occurrences(references, R"("uri":)"), size_t{2},
-                        "unopened workspace reference was not indexed cleanly");
-            assertTrue(references.find("z_consumer.kex") != std::string::npos,
-                       "find references omitted the unopened consumer file");
+            assertEqual(
+                occurrences(references, R"("uri":)"), size_t{2},
+                "unopened workspace reference was not indexed cleanly");
+            assertTrue(
+                references.find("z_consumer.kex") != std::string::npos,
+                "find references omitted the unopened consumer file");
             fs::remove(root / "tools.kex");
             fs::remove(root / "z_consumer.kex");
             fs::remove(root);
@@ -2146,22 +2184,21 @@ int main() {
             }
             // Newlines stay ESCAPED here: this text is embedded in the
             // didOpen JSON, not written to disk.
-            const char* entry =
-                "using Shapes\\n"
-                "let rounder(radius: Float) -> Shapes.Shape do\\n"
-                "  Kinds.Ellipse { major: radius }\\n"
-                "end\\n"
-                "main do\\n"
-                "  let c = Circle { radius: 2.0 }\\n"
-                "  IO.printLine(c.area().to(String))\\n"
-                "end\\n";
+            const char* entry = "using Shapes\\n"
+                                "let rounder(radius: Float) -> Shapes.Shape do\\n"
+                                "  Kinds.Ellipse { major: radius }\\n"
+                                "end\\n"
+                                "main do\\n"
+                                "  let c = Circle { radius: 2.0 }\\n"
+                                "  IO.printLine(c.area().to(String))\\n"
+                                "end\\n";
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":"file:///tmp/kex-lsp-sibling-module","capabilities":{}}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
-            messages += frame(
-                std::string(R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-sibling-module/main.kex","languageId":"kex","version":1,"text":")") +
+                std::string(
+                    R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-sibling-module/main.kex","languageId":"kex","version":1,"text":")") +
                 entry + R"("}}})");
             // Just past the `.` of `c.area()`.
             messages += frame(
@@ -2174,13 +2211,13 @@ int main() {
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto text = output.str();
             // A union member declared one module deeper is still a member.
-            assertTrue(text.find("declared to return") == std::string::npos,
-                       "sibling module's union refused its own member: " +
-                           text.substr(0, 2000));
+            assertTrue(
+                text.find("declared to return") == std::string::npos,
+                "sibling module's union refused its own member: " + text.substr(0, 2000));
             const auto completion = responseForId(text, 2);
-            assertTrue(completion.find(R"("label":"area")") != std::string::npos,
-                       "member completion missed the sibling module's method: " +
-                           completion);
+            assertTrue(
+                completion.find(R"("label":"area")") != std::string::npos,
+                "member completion missed the sibling module's method: " + completion);
             fs::remove_all(root);
         });
         // A sibling module's `compiled do` declarations exist for the editor
@@ -2202,18 +2239,17 @@ int main() {
                            "  end\n"
                            "end\n";
             }
-            const char* entry =
-                "using Gen\\n"
-                "main do\\n"
-                "  IO.printLine(Gen.em(\\\"x\\\"))\\n"
-                "end\\n";
+            const char* entry = "using Gen\\n"
+                                "main do\\n"
+                                "  IO.printLine(Gen.em(\\\"x\\\"))\\n"
+                                "end\\n";
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":"file:///tmp/kex-lsp-sibling-compiled","capabilities":{}}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
-            messages += frame(
-                std::string(R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-sibling-compiled/main.kex","languageId":"kex","version":1,"text":")") +
+                std::string(
+                    R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-sibling-compiled/main.kex","languageId":"kex","version":1,"text":")") +
                 entry + R"("}}})");
             messages += frame(R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
             messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
@@ -2222,11 +2258,12 @@ int main() {
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto text = output.str();
-            assertTrue(text.find("publishDiagnostics") != std::string::npos,
-                       "no diagnostics were published: " + text.substr(0, 2000));
-            assertTrue(text.find("has no function") == std::string::npos,
-                       "a generated function was missing: " +
-                           text.substr(0, 2000));
+            assertTrue(
+                text.find("publishDiagnostics") != std::string::npos,
+                "no diagnostics were published: " + text.substr(0, 2000));
+            assertTrue(
+                text.find("has no function") == std::string::npos,
+                "a generated function was missing: " + text.substr(0, 2000));
             fs::remove_all(root);
         });
         // A package can keep its modules in folders at its top and say which:
@@ -2244,12 +2281,15 @@ int main() {
                 std::ofstream usual(root / "usual" / "package.kex");
                 usual << "package \"lib\" do\n  # sources([\"app\"]) would move them\nend\n";
             }
-            assertTrue(kex::lsp::teyPackageDeclaresSources((root / "declared").string()),
-                       "a `sources([...])` declaration was not seen");
-            assertTrue(!kex::lsp::teyPackageDeclaresSources((root / "usual").string()),
-                       "a comment was taken for a `sources` declaration");
-            assertTrue(!kex::lsp::teyPackageDeclaresSources((root / "missing").string()),
-                       "a directory with no manifest declared sources");
+            assertTrue(
+                kex::lsp::teyPackageDeclaresSources((root / "declared").string()),
+                "a `sources([...])` declaration was not seen");
+            assertTrue(
+                !kex::lsp::teyPackageDeclaresSources((root / "usual").string()),
+                "a comment was taken for a `sources` declaration");
+            assertTrue(
+                !kex::lsp::teyPackageDeclaresSources((root / "missing").string()),
+                "a directory with no manifest declared sources");
             fs::remove_all(root);
         });
         // What `tey build` sees and the editor did not: a dependency's
@@ -2275,25 +2315,23 @@ int main() {
                 std::ofstream lock(root / "app" / "tey.lock");
                 lock << "{\n  \"version\": 1,\n"
                         "  \"kex\": {\"requirement\": \">= 0.1.0\", \"version\": \"0.1.0\"},\n"
-                        "  \"deps\": {\n    \"greeter\": {\"git\": \"" << git
-                     << "\", \"resolved\": \"v1.0.0\", \"commit\": \"" << commit
+                        "  \"deps\": {\n    \"greeter\": {\"git\": \""
+                     << git << "\", \"resolved\": \"v1.0.0\", \"commit\": \"" << commit
                      << "\", \"sha256\": \"\", \"groups\": []}\n  }\n}\n";
             }
-            const std::string source =
-                "using Greeter, only: [hello]\\nmain do\\n  IO.printLine(hello(\\\"world\\\"))\\nend\\n";
-            const std::string uri =
-                "file:///tmp/kex-lsp-tey-package/app/src/main.kex";
+            const std::string source = "using Greeter, only: [hello]\\nmain do\\n  "
+                                       "IO.printLine(hello(\\\"world\\\"))\\nend\\n";
+            const std::string uri = "file:///tmp/kex-lsp-tey-package/app/src/main.kex";
             const auto session = [&](const char* extraInitOptions) {
                 std::string messages;
                 messages += frame(
-                    std::string(R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":"file:///tmp/kex-lsp-tey-package/app",)") +
+                    std::string(
+                        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":"file:///tmp/kex-lsp-tey-package/app",)") +
                     extraInitOptions + R"("capabilities":{}}})");
-                messages += frame(
-                    R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+                messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
                 messages += frame(
                     R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":")" +
-                    uri + R"(","languageId":"kex","version":1,"text":")" +
-                    source + R"("}}})");
+                    uri + R"(","languageId":"kex","version":1,"text":")" + source + R"("}}})");
                 messages += frame(
                     R"({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":")" +
                     uri + R"("},"position":{"line":2,"character":16}}})");
@@ -2306,24 +2344,24 @@ int main() {
             };
 
             const auto resolved = session("");
-            assertTrue(resolved.find("module not found in source roots") ==
-                           std::string::npos,
-                       "a locked dependency's module was still unreachable");
-            assertTrue(resolved.find("Undefined function: `hello`") ==
-                           std::string::npos,
-                       "a locked dependency's function was still undefined");
-            assertTrue(responseForId(resolved, 2).find("greeter.kex") !=
-                           std::string::npos,
-                       "go-to-definition did not reach the dependency source");
+            assertTrue(
+                resolved.find("module not found in source roots") == std::string::npos,
+                "a locked dependency's module was still unreachable");
+            assertTrue(
+                resolved.find("Undefined function: `hello`") == std::string::npos,
+                "a locked dependency's function was still undefined");
+            assertTrue(
+                responseForId(resolved, 2).find("greeter.kex") != std::string::npos,
+                "go-to-definition did not reach the dependency source");
 
             // A dependency the cache does not hold degrades to the old
             // behaviour rather than erroring — `tey install` is the answer,
             // and the resolver's own warning says so.
             fs::remove_all(cache);
             const auto missing = session("");
-            assertTrue(missing.find("module not found in source roots") !=
-                           std::string::npos,
-                       "an unfetched dependency did not fall back to the resolver warning");
+            assertTrue(
+                missing.find("module not found in source roots") != std::string::npos,
+                "an unfetched dependency did not fall back to the resolver warning");
 
             // The escape hatch: roots the editor names directly, for the
             // layouts no lockfile describes.
@@ -2334,11 +2372,11 @@ int main() {
                 greeter << "module Greeter\n\n"
                            "let hello(name: String) -> String = \"hello \" + name\n";
             }
-            const auto configured = session(
-                R"("initializationOptions":{"sourceRoots":["../vendor/greeter/src"]},)");
-            assertTrue(configured.find("Undefined function: `hello`") ==
-                           std::string::npos,
-                       "initializationOptions sourceRoots were ignored");
+            const auto configured =
+                session(R"("initializationOptions":{"sourceRoots":["../vendor/greeter/src"]},)");
+            assertTrue(
+                configured.find("Undefined function: `hello`") == std::string::npos,
+                "initializationOptions sourceRoots were ignored");
 
             unsetenv("TEY_CACHE");
             fs::remove_all(root);
@@ -2360,26 +2398,33 @@ int main() {
                 fs::create_directories(path.parent_path());
                 std::ofstream(path) << text;
             };
-            write(root / "package.kex",
-                  "package \"ws\" do\n  workspace do\n    members([\"apps/*\"])\n  end\nend\n");
-            write(root / "apps" / "app" / "package.kex",
-                  "package \"app\" do\n  tey(\"web\", workspace: true)\n"
-                  "  tey(\"vend\", path: \"vendor/vend\")\nend\n");
+            write(
+                root / "package.kex",
+                "package \"ws\" do\n  workspace do\n    members([\"apps/*\"])\n  end\nend\n");
+            write(
+                root / "apps" / "app" / "package.kex",
+                "package \"app\" do\n  tey(\"web\", workspace: true)\n"
+                "  tey(\"vend\", path: \"vendor/vend\")\nend\n");
             // A workspace package whose submodule names it back.
-            write(root / "lib" / "web" / "src" / "web.kex",
-                  "module Web\n\nusing Web.Markup\n\n"
-                  "greet : String -> String\n"
-                  "let greet(name: String) -> String = \"hi \" + name\n");
-            write(root / "lib" / "web" / "src" / "web" / "markup.kex",
-                  "module Web.Markup\n\nusing Web\n\n"
-                  "let broken -> Integer = \"not a number\"\n");
-            write(root / "vendor" / "vend" / "src" / "vend.kex",
-                  "module Vend\n\nlet vended -> Integer = 1\n");
-            write(fs::path(kex::lsp::teyCachePackagePath(git, commit)) / "pkg" / "src" / "remote.kex",
-                  "module Remote\n\nlet remote -> Integer = 2\n");
+            write(
+                root / "lib" / "web" / "src" / "web.kex",
+                "module Web\n\nusing Web.Markup\n\n"
+                "greet : String -> String\n"
+                "let greet(name: String) -> String = \"hi \" + name\n");
+            write(
+                root / "lib" / "web" / "src" / "web" / "markup.kex",
+                "module Web.Markup\n\nusing Web\n\n"
+                "let broken -> Integer = \"not a number\"\n");
+            write(
+                root / "vendor" / "vend" / "src" / "vend.kex",
+                "module Vend\n\nlet vended -> Integer = 1\n");
+            write(
+                fs::path(kex::lsp::teyCachePackagePath(git, commit)) / "pkg" / "src" / "remote.kex",
+                "module Remote\n\nlet remote -> Integer = 2\n");
             // Locked from git, but overridden locally — and not in the cache.
-            write(root / "over-local" / "src" / "over.kex",
-                  "module Over\n\nlet over -> Integer = 3\n");
+            write(
+                root / "over-local" / "src" / "over.kex",
+                "module Over\n\nlet over -> Integer = 3\n");
             write(root / "package.local.kex", "local(\"over\", path: \"over-local\")\n");
             auto entry = [](const std::string& name, const std::string& source,
                             const std::string& git, const std::string& commit,
@@ -2387,48 +2432,53 @@ int main() {
                 return "\"" + name + "\": {\"version\": \"0.1.0\", \"source\": \"" + source +
                        "\", \"git\": \"" + git + "\", \"resolved\": \"\", \"commit\": \"" + commit +
                        "\", \"subdir\": \"" + subdir + "\", \"path\": \"" + path +
-                       "\", \"sha256\": \"\", \"groups\": [], \"dependencies\": [], \"plugins\": {}, \"workspace\": " +
+                       "\", \"sha256\": \"\", \"groups\": [], \"dependencies\": [], \"plugins\": "
+                       "{}, \"workspace\": " +
                        (source == "workspace" ? "true" : "false") + "}";
             };
-            write(root / "tey.lock",
-                  "{\n  \"version\": 1,\n  \"packages\": {\n    " +
-                  entry("app", "workspace", "", "", "", "apps/app") + ",\n    " +
-                  entry("over", "git", "https://example.invalid/over.git",
-                        "0000000000000000000000000000000000000000", "", "") + ",\n    " +
-                  entry("remote", "git", git, commit, "pkg", "") + ",\n    " +
-                  entry("vend", "path", "", "", "", "vendor/vend") + ",\n    " +
-                  entry("web", "workspace", "", "", "", "lib/web") + "\n  }\n}\n");
+            write(
+                root / "tey.lock",
+                "{\n  \"version\": 1,\n  \"packages\": {\n    " +
+                    entry("app", "workspace", "", "", "", "apps/app") + ",\n    " +
+                    entry(
+                        "over", "git", "https://example.invalid/over.git",
+                        "0000000000000000000000000000000000000000", "", "") +
+                    ",\n    " + entry("remote", "git", git, commit, "pkg", "") + ",\n    " +
+                    entry("vend", "path", "", "", "", "vendor/vend") + ",\n    " +
+                    entry("web", "workspace", "", "", "", "lib/web") + "\n  }\n}\n");
 
             const auto mainPath = (root / "apps" / "app" / "src" / "main.kex").string();
-            const std::string mainText =
-                "using Web\nusing Vend\nusing Remote\nusing Over\n\n"
-                "main do\n  IO.printLine(greet(\"x\"))\n"
-                "  IO.printLine(vended + remote + over)\nend\n";
+            const std::string mainText = "using Web\nusing Vend\nusing Remote\nusing Over\n\n"
+                                         "main do\n  IO.printLine(greet(\"x\"))\n"
+                                         "  IO.printLine(vended + remote + over)\nend\n";
             write(mainPath, mainText);
             const auto app = session(
                 "file://" + mainPath, mainText,
                 {R"({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://)" +
                  mainPath + R"("},"position":{"line":6,"character":16}}})"});
-            assertTrue(app.find("module not found") == std::string::npos &&
-                           app.find("Undefined") == std::string::npos,
-                       "a locked package was unreachable: " + app);
+            assertTrue(
+                app.find("module not found") == std::string::npos &&
+                    app.find("Undefined") == std::string::npos,
+                "a locked package was unreachable: " + app);
             // Web.Markup's own error belongs to markup.kex, not to main.kex.
-            assertTrue(app.find("not a number") == std::string::npos &&
-                           app.find("expected Integer") == std::string::npos,
-                       "an imported module's diagnostic leaked into the document: " + app);
+            assertTrue(
+                app.find("not a number") == std::string::npos &&
+                    app.find("expected Integer") == std::string::npos,
+                "an imported module's diagnostic leaked into the document: " + app);
             const auto definition = responseForId(app, 2);
-            assertTrue(definition.find("web.kex") != std::string::npos &&
-                           definition.find(R"("start":{"character":0,"line":4})") !=
-                               std::string::npos,
-                       "go-to-definition must land on greet's declaration: " + definition);
+            assertTrue(
+                definition.find("web.kex") != std::string::npos &&
+                    definition.find(R"("start":{"character":0,"line":4})") != std::string::npos,
+                "go-to-definition must land on greet's declaration: " + definition);
 
             // The package itself, open while its submodule names it back.
             const auto webPath = (root / "lib" / "web" / "src" / "web.kex").string();
             std::ifstream webFile(webPath);
             const std::string webText((std::istreambuf_iterator<char>(webFile)), {});
             const auto web = session("file://" + webPath, webText, {});
-            assertTrue(web.find("defined twice") == std::string::npos,
-                       "the open module was merged into itself: " + web);
+            assertTrue(
+                web.find("defined twice") == std::string::npos,
+                "the open module was merged into itself: " + web);
 
             // The member's manifest, in today's vocabulary.
             const auto manifestPath = (root / "apps" / "app" / "package.kex").string();
@@ -2437,9 +2487,10 @@ int main() {
                 "package \"app\" do\n  tey(\"web\", workspace: true)\n"
                 "  tey(\"vend\", path: \"vendor/vend\")\nend\n",
                 {});
-            assertTrue(manifest.find("Undefined function") == std::string::npos &&
-                           manifest.find("Unknown named argument") == std::string::npos,
-                       "the manifest vocabulary is out of date: " + manifest);
+            assertTrue(
+                manifest.find("Undefined function") == std::string::npos &&
+                    manifest.find("Unknown named argument") == std::string::npos,
+                "the manifest vocabulary is out of date: " + manifest);
 
             unsetenv("TEY_CACHE");
             fs::remove_all(root);
@@ -2466,26 +2517,24 @@ int main() {
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":"file:///tmp/kex-lsp-tey-nested/app","capabilities":{}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
-            const std::string source =
-                "using Tey.Commands, only: [greet]\\nmain do\\n  IO.printLine(greet(\\\"world\\\"))\\nend\\n";
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            const std::string source = "using Tey.Commands, only: [greet]\\nmain do\\n  "
+                                       "IO.printLine(greet(\\\"world\\\"))\\nend\\n";
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-tey-nested/app/src/tey/cli.kex","languageId":"kex","version":1,"text":")" +
                 source + R"("}}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
             messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
             std::istringstream input(messages);
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find("module not found in source roots") ==
-                           std::string::npos,
-                       "a sibling module in the package's src was not found");
-            assertTrue(result.find("Undefined function: `greet`") ==
-                           std::string::npos,
-                       "a sibling module's function was still undefined");
+            assertTrue(
+                result.find("module not found in source roots") == std::string::npos,
+                "a sibling module in the package's src was not found");
+            assertTrue(
+                result.find("Undefined function: `greet`") == std::string::npos,
+                "a sibling module's function was still undefined");
             fs::remove_all(root);
         });
     });

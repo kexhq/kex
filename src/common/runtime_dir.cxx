@@ -12,8 +12,9 @@ namespace kex {
 auto prebuiltRuntimeBeamDir() -> std::string {
     namespace fs = std::filesystem;
     std::vector<fs::path> roots;
-    if (const char* configured = std::getenv("KEX_RUNTIME_DIR"); configured && *configured)
+    if (const char* configured = std::getenv("KEX_RUNTIME_DIR"); configured && *configured) {
         roots.emplace_back(configured);
+    }
     if (const auto executableDir = executableDirectory(); !executableDir.empty()) {
         roots.push_back((executableDir / "../share/kex/runtime").lexically_normal());
         roots.push_back((executableDir / "runtime/beam").lexically_normal());
@@ -28,7 +29,9 @@ auto prebuiltRuntimeBeamDir() -> std::string {
     roots.emplace_back("/runtime");
     for (const auto& root : roots) {
         std::error_code ec;
-        if (fs::exists(root / "kex_io.beam", ec)) return root.string();
+        if (fs::exists(root / "kex_io.beam", ec)) {
+            return root.string();
+        }
     }
     return {};
 }
@@ -42,14 +45,17 @@ auto isStandardLibrarySource(std::string_view file) -> bool {
         std::vector<std::filesystem::path> paths;
         for (const auto& root : standardLibraryModuleRoots()) {
             std::error_code ec;
-            if (auto canonical = std::filesystem::weakly_canonical(root, ec); !ec)
+            if (auto canonical = std::filesystem::weakly_canonical(root, ec); !ec) {
                 paths.push_back(std::move(canonical));
+            }
         }
         return paths;
     }();
     std::error_code ec;
     const auto canonical = std::filesystem::weakly_canonical(std::filesystem::path(file), ec);
-    if (ec) return false;
+    if (ec) {
+        return false;
+    }
     return std::any_of(roots.begin(), roots.end(), [&](const std::filesystem::path& root) {
         const auto [rootEnd, _] =
             std::mismatch(root.begin(), root.end(), canonical.begin(), canonical.end());

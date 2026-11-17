@@ -65,6 +65,7 @@ make test-wasm    # + runs the interpreter test suite via Node
 
 - Never let Python, JavaScript, TypeScript into the repository.
 - C++20
+- Formatted by clang-format 20 per `.clang-format`: run `make format` after editing C++; CI's `format` job (`make format-check`) fails on unformatted code
 - File extensions: `.hxx` (headers), `.cxx` (source)
 - camelCase for function/method names
 - `m_member` for class members

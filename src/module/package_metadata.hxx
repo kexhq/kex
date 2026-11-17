@@ -24,8 +24,7 @@ struct PackageMetadataError {
 };
 
 auto validatePackageMetadata(
-    const PackageMetadata& package,
-    const std::vector<PackageModuleIdentity>& availableModules)
+    const PackageMetadata& package, const std::vector<PackageModuleIdentity>& availableModules)
     -> std::vector<PackageMetadataError>;
 
 } // namespace kex::module

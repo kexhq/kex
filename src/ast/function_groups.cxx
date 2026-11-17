@@ -9,21 +9,21 @@
 
 namespace kex::ast {
 
-auto methodDispatchTypes(const FunctionClause& clause,
-                         const std::string& receiverType)
+auto methodDispatchTypes(const FunctionClause& clause, const std::string& receiverType)
     -> std::vector<std::string> {
     std::vector<std::string> types{receiverType};
-    for (const auto& param : clause.params)
-        types.push_back(param.type && *param.type
-            ? typeText(**param.type, TypeSpelling::Dispatch)
-            : "Any");
+    for (const auto& param : clause.params) {
+        types.push_back(
+            param.type && *param.type ? typeText(**param.type, TypeSpelling::Dispatch) : "Any");
+    }
     return types;
 }
 
-auto methodDispatchTypes(const FunctionDef& function,
-                         const std::string& receiverType)
+auto methodDispatchTypes(const FunctionDef& function, const std::string& receiverType)
     -> std::vector<std::string> {
-    if (function.clauses.empty()) return {receiverType};
+    if (function.clauses.empty()) {
+        return {receiverType};
+    }
     return methodDispatchTypes(function.clauses.front(), receiverType);
 }
 
@@ -43,31 +43,41 @@ auto methodDispatchTypes(const FunctionDef& function,
 // Those must stay ONE function so the clauses keep their source order; split
 // apart, the receiver dispatcher sees two impls for the same type and neither
 // is reachable. Differing param counts are equally inseparable.
-auto separableOverloadSignatures(
-    const std::map<std::string, std::vector<std::string>>& signatures) -> bool {
+auto separableOverloadSignatures(const std::map<std::string, std::vector<std::string>>& signatures)
+    -> bool {
     const auto width = signatures.begin()->second.size();
     for (const auto& [signature, types] : signatures) {
         (void)signature;
-        if (types.size() != width) return false;
+        if (types.size() != width) {
+            return false;
+        }
     }
     for (size_t i = 0; i < width; i++) {
         bool any = false, concrete = false;
         for (const auto& [signature, types] : signatures) {
             (void)signature;
-            if (types[i] == "Any") any = true; else concrete = true;
+            if (types[i] == "Any") {
+                any = true;
+            } else {
+                concrete = true;
+            }
         }
-        if (any && concrete) return false;
+        if (any && concrete) {
+            return false;
+        }
     }
     return true;
 }
 
 auto takesReceiverPattern(const FunctionClause& clause) -> bool {
-    if (clause.params.empty()) return false;
+    if (clause.params.empty()) {
+        return false;
+    }
     const auto& p0 = clause.params[0];
     return !p0.name && p0.pattern &&
-        (std::holds_alternative<ThisPattern>((*p0.pattern)->kind) ||
-         std::holds_alternative<RecordPattern>((*p0.pattern)->kind) ||
-         std::holds_alternative<RangePattern>((*p0.pattern)->kind));
+           (std::holds_alternative<ThisPattern>((*p0.pattern)->kind) ||
+            std::holds_alternative<RecordPattern>((*p0.pattern)->kind) ||
+            std::holds_alternative<RangePattern>((*p0.pattern)->kind));
 }
 
 auto methodArity(const FunctionClause& clause) -> size_t {
@@ -76,7 +86,9 @@ auto methodArity(const FunctionClause& clause) -> size_t {
 }
 
 auto methodArity(const FunctionDef& function) -> size_t {
-    if (function.clauses.empty()) return 1;
+    if (function.clauses.empty()) {
+        return 1;
+    }
     return methodArity(function.clauses.front());
 }
 
@@ -85,12 +97,13 @@ auto methodArity(const FunctionDef& function) -> size_t {
 // `respond(reply: String, route: String)` and `respond(JSON { status, body },
 // route: String)` look like functions of different arity (kexhq/kex#347).
 auto freeFunctionArity(const FunctionDef& function) -> size_t {
-    if (function.clauses.empty()) return 0;
+    if (function.clauses.empty()) {
+        return 0;
+    }
     return function.clauses.front().params.size();
 }
 
-auto signatureClauses(const FunctionDef& function)
-    -> std::vector<const FunctionClause*> {
+auto signatureClauses(const FunctionDef& function) -> std::vector<const FunctionClause*> {
     const auto declaresTypes = [](const FunctionClause& clause) {
         return (clause.returnAnnotation && *clause.returnAnnotation) ||
                std::ranges::any_of(clause.params, [](const Param& param) {
@@ -108,22 +121,27 @@ auto signatureClauses(const FunctionDef& function)
             std::ranges::any_of(function.clauses, [&](const FunctionClause& sibling) {
                 return &sibling != &clause && declaresTypes(sibling) &&
                        sibling.params.size() == clause.params.size();
-            }))
+            })) {
             continue;
+        }
         std::string key;
         for (const auto& param : clause.params) {
-            if (param.type && *param.type)
+            if (param.type && *param.type) {
                 key += typeText(**param.type, TypeSpelling::Dispatch);
-            else if (param.signatureType)
+            } else if (param.signatureType) {
                 key += typeText(*param.signatureType, TypeSpelling::Dispatch);
-            else
+            } else {
                 key += "_";
+            }
             key += ",";
         }
         key += "->";
-        if (clause.returnAnnotation && *clause.returnAnnotation)
+        if (clause.returnAnnotation && *clause.returnAnnotation) {
             key += typeText(**clause.returnAnnotation, TypeSpelling::Dispatch);
-        if (seen.insert(std::move(key)).second) out.push_back(&clause);
+        }
+        if (seen.insert(std::move(key)).second) {
+            out.push_back(&clause);
+        }
     }
     return out;
 }
@@ -131,24 +149,29 @@ auto signatureClauses(const FunctionDef& function)
 auto parameterNames(const FunctionDef& function) -> std::vector<std::string> {
     std::vector<std::string> names;
     for (const auto& clause : function.clauses) {
-        if (names.size() < clause.params.size())
+        if (names.size() < clause.params.size()) {
             names.resize(clause.params.size());
-        for (size_t i = 0; i < clause.params.size(); ++i)
-            if (names[i].empty() && clause.params[i].name)
+        }
+        for (size_t i = 0; i < clause.params.size(); ++i) {
+            if (names[i].empty() && clause.params[i].name) {
                 names[i] = *clause.params[i].name;
+            }
+        }
     }
     return names;
 }
 
-auto parameterDefaults(const FunctionDef& function)
-    -> std::vector<const ExprPtr*> {
+auto parameterDefaults(const FunctionDef& function) -> std::vector<const ExprPtr*> {
     std::vector<const ExprPtr*> defaults;
     for (const auto& clause : function.clauses) {
-        if (defaults.size() < clause.params.size())
+        if (defaults.size() < clause.params.size()) {
             defaults.resize(clause.params.size(), nullptr);
-        for (size_t i = 0; i < clause.params.size(); ++i)
-            if (!defaults[i] && clause.params[i].defaultValue)
+        }
+        for (size_t i = 0; i < clause.params.size(); ++i) {
+            if (!defaults[i] && clause.params[i].defaultValue) {
                 defaults[i] = &*clause.params[i].defaultValue;
+            }
+        }
     }
     return defaults;
 }
@@ -166,40 +189,49 @@ struct GroupContext {
     std::set<OverloadKey> overloaded;
 };
 
-auto arityIn(const GroupContext& context, const FunctionDef& function)
-    -> size_t {
+auto arityIn(const GroupContext& context, const FunctionDef& function) -> size_t {
     return context.methods ? methodArity(function) : freeFunctionArity(function);
 }
 
-auto continuesGroup(const GroupContext& context, const FunctionDef& open,
-                    const FunctionDef& next) -> bool {
-    if (open.name != next.name) return false;
+auto continuesGroup(const GroupContext& context, const FunctionDef& open, const FunctionDef& next)
+    -> bool {
+    if (open.name != next.name) {
+        return false;
+    }
     // `let %{expr}(...)` computes its name at compile time; two of these are
     // never the same declaration even when they happen to share `name == "%"`.
-    if (open.computedName || next.computedName) return false;
+    if (open.computedName || next.computedName) {
+        return false;
+    }
     // Left apart so the checker can say the purity disagrees, rather than
     // the whole function silently taking the first declaration's.
     if (open.isFoul != next.isFoul || open.isSlot != next.isSlot ||
-        open.isPredicate != next.isPredicate)
+        open.isPredicate != next.isPredicate) {
         return false;
-    if (open.clauses.empty() || next.clauses.empty()) return false;
+    }
+    if (open.clauses.empty() || next.clauses.empty()) {
+        return false;
+    }
     const auto arity = arityIn(context, open);
     // The same parameter count also continues a method: in `factor(@Gram)`,
     // `factor(@Liter)`, `factor(_)` the `_` is the receiver too, although
     // only an `@`/record/range pattern says so on its own.
-    const bool sameParamCount = context.methods &&
-        open.clauses.front().params.size() ==
-            next.clauses.front().params.size();
-    if (arity != arityIn(context, next) && !sameParamCount) return false;
-    if (context.methods && context.overloaded.count({open.name, arity}))
+    const bool sameParamCount =
+        context.methods && open.clauses.front().params.size() == next.clauses.front().params.size();
+    if (arity != arityIn(context, next) && !sameParamCount) {
+        return false;
+    }
+    if (context.methods && context.overloaded.count({open.name, arity})) {
         return methodDispatchTypes(open, "") == methodDispatchTypes(next, "");
+    }
     return true;
 }
 
 template <typename Item>
 auto functionIn(Item& item) -> FunctionDef* {
-    if (auto* function = std::get_if<std::unique_ptr<FunctionDef>>(&item))
+    if (auto* function = std::get_if<std::unique_ptr<FunctionDef>>(&item)) {
         return function->get();
+    }
     return nullptr;
 }
 
@@ -207,20 +239,24 @@ auto functionIn(Item& item) -> FunctionDef* {
 // line written above the next clause, or a `using` in a module body.
 template <typename Item>
 auto transparentBetweenClauses(const Item& item) -> bool {
-    if constexpr (std::is_constructible_v<Item, std::unique_ptr<TypeAnnotation>>)
-        if (std::holds_alternative<std::unique_ptr<TypeAnnotation>>(item))
+    if constexpr (std::is_constructible_v<Item, std::unique_ptr<TypeAnnotation>>) {
+        if (std::holds_alternative<std::unique_ptr<TypeAnnotation>>(item)) {
             return true;
-    if constexpr (std::is_constructible_v<Item, std::unique_ptr<UsingBlock>>)
-        if (std::holds_alternative<std::unique_ptr<UsingBlock>>(item))
+        }
+    }
+    if constexpr (std::is_constructible_v<Item, std::unique_ptr<UsingBlock>>) {
+        if (std::holds_alternative<std::unique_ptr<UsingBlock>>(item)) {
             return true;
+        }
+    }
     return false;
 }
 
 template <typename Item>
-auto collectOverloads(const std::vector<Item>& items,
-                      std::unordered_map<std::string,
-                          std::map<std::string, std::vector<std::string>>>&
-                          signatures) -> void;
+auto collectOverloads(
+    const std::vector<Item>& items,
+    std::unordered_map<std::string, std::map<std::string, std::vector<std::string>>>& signatures)
+    -> void;
 
 template <typename Item>
 auto foldItems(std::vector<Item>& items, const GroupContext& context) -> void;
@@ -228,16 +264,16 @@ auto foldItems(std::vector<Item>& items, const GroupContext& context) -> void;
 auto groupMake(MakeDef& make) -> void {
     // The overload decision looks at the whole block, the methods in its
     // `private do` / `public do` sections included.
-    std::unordered_map<std::string,
-        std::map<std::string, std::vector<std::string>>> signatures;
+    std::unordered_map<std::string, std::map<std::string, std::vector<std::string>>> signatures;
     collectOverloads(make.body, signatures);
     GroupContext context;
     context.methods = true;
     for (const auto& [key, set] : signatures) {
-        if (set.size() < 2 || !separableOverloadSignatures(set)) continue;
+        if (set.size() < 2 || !separableOverloadSignatures(set)) {
+            continue;
+        }
         const auto slash = key.rfind('/');
-        context.overloaded.insert(
-            {key.substr(0, slash), std::stoul(key.substr(slash + 1))});
+        context.overloaded.insert({key.substr(0, slash), std::stoul(key.substr(slash + 1))});
     }
     foldItems(make.body, context);
 }
@@ -257,28 +293,31 @@ auto groupCompiled(CompiledBlock& block) -> void {
 }
 
 template <typename Item>
-auto collectOverloads(const std::vector<Item>& items,
-                      std::unordered_map<std::string,
-                          std::map<std::string, std::vector<std::string>>>&
-                          signatures) -> void {
+auto collectOverloads(
+    const std::vector<Item>& items,
+    std::unordered_map<std::string, std::map<std::string, std::vector<std::string>>>& signatures)
+    -> void {
     for (const auto& item : items) {
-        if (const auto* function =
-                std::get_if<std::unique_ptr<FunctionDef>>(&item)) {
-            if (!*function) continue;
-            const auto key = (*function)->name + "/" +
-                std::to_string(methodArity(**function));
+        if (const auto* function = std::get_if<std::unique_ptr<FunctionDef>>(&item)) {
+            if (!*function) {
+                continue;
+            }
+            const auto key = (*function)->name + "/" + std::to_string(methodArity(**function));
             for (const auto& clause : (*function)->clauses) {
                 auto types = methodDispatchTypes(clause, "");
                 std::string signature;
-                for (const auto& type : types) signature += type + ",";
+                for (const auto& type : types) {
+                    signature += type + ",";
+                }
                 signatures[key].emplace(std::move(signature), std::move(types));
             }
         }
-        if constexpr (std::is_constructible_v<Item, std::unique_ptr<VisibilityBlock>>)
-            if (const auto* block =
-                    std::get_if<std::unique_ptr<VisibilityBlock>>(&item);
-                block && *block)
+        if constexpr (std::is_constructible_v<Item, std::unique_ptr<VisibilityBlock>>) {
+            if (const auto* block = std::get_if<std::unique_ptr<VisibilityBlock>>(&item);
+                block && *block) {
                 collectOverloads((*block)->items, signatures);
+            }
+        }
     }
 }
 
@@ -289,29 +328,45 @@ auto foldItems(std::vector<Item>& items, const GroupContext& context) -> void {
     FunctionDef* open = nullptr;
     for (auto& item : items) {
         // Containers nested here group their own items first.
-        std::visit([&](auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, std::unique_ptr<ModuleDef>>) {
-                if (node) groupModule(*node);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<MakeDef>>) {
-                if (node) groupMake(*node);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<TraitDef>>) {
-                if (node) groupTrait(*node);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<CompiledBlock>>) {
-                if (node) groupCompiled(*node);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<VisibilityBlock>>) {
-                if (node) foldItems(node->items, context);
-            }
-        }, item);
+        std::visit(
+            [&](auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ModuleDef>>) {
+                    if (node) {
+                        groupModule(*node);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<MakeDef>>) {
+                    if (node) {
+                        groupMake(*node);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<TraitDef>>) {
+                    if (node) {
+                        groupTrait(*node);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<CompiledBlock>>) {
+                    if (node) {
+                        groupCompiled(*node);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<VisibilityBlock>>) {
+                    if (node) {
+                        foldItems(node->items, context);
+                    }
+                }
+            },
+            item);
 
         auto* function = functionIn(item);
         if (function && open && continuesGroup(context, *open, *function)) {
-            for (auto& clause : function->clauses)
+            for (auto& clause : function->clauses) {
                 open->clauses.push_back(std::move(clause));
+            }
             continue;
         }
-        if (function) open = function;
-        else if (!transparentBetweenClauses(item)) open = nullptr;
+        if (function) {
+            open = function;
+        } else if (!transparentBetweenClauses(item)) {
+            open = nullptr;
+        }
         kept.push_back(std::move(item));
     }
     items = std::move(kept);

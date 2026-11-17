@@ -18,8 +18,10 @@ auto Lowering::lowerBodyScoped(const std::vector<ast::ExprPtr>& body) -> ExprPtr
 // `if let Pat = scrutinee ... [else ...]`: match Pat, else fall through. The
 // pattern's names are bound while +lowerThen+ lowers the body, so a body
 // lowered with its loop's continuation still sees them.
-auto Lowering::lowerIfLet(const ast::IfExpr& n, const std::function<ExprPtr()>& lowerThen,
-                          const std::function<ExprPtr()>& lowerElse) -> ExprPtr {
+auto Lowering::lowerIfLet(
+    const ast::IfExpr& n,
+    const std::function<ExprPtr()>& lowerThen,
+    const std::function<ExprPtr()>& lowerElse) -> ExprPtr {
     auto subj = lower(n.condition); // condition holds the scrutinee
     auto snap = subst;
     // `if let { a, b } = x`: same structural test as a match arm.
@@ -28,32 +30,42 @@ auto Lowering::lowerIfLet(const ast::IfExpr& n, const std::function<ExprPtr()>& 
         std::string sv = fresh("Anon");
         std::vector<std::string> names;
         collectRecordBindings(*rp, names);
-        for (const auto& name : names) subst[name] = name;
+        for (const auto& name : names) {
+            subst[name] = name;
+        }
         auto thenP = wrapAnonymousRecordPattern(sv, *rp, lowerThen());
         subst = snap;
         auto elseP = lowerElse();
-        return makeLet(sv, std::move(subj),
-                       matchBool(anonymousRecordTest(sv, *rp),
-                                 std::move(thenP), std::move(elseP)));
+        return makeLet(
+            sv, std::move(subj),
+            matchBool(anonymousRecordTest(sv, *rp), std::move(thenP), std::move(elseP)));
     }
     auto pat = lowerPattern(n.letPattern);
     auto thenP = lowerThen();
     subst = snap;
     auto elseP = lowerElse();
-    Match m; m.subjects.push_back(std::move(subj));
-    MatchClause hit; hit.patterns.push_back(std::move(pat)); hit.body = std::move(thenP);
-    MatchClause miss; miss.patterns.push_back(wildPat()); miss.body = std::move(elseP);
-    m.clauses.push_back(std::move(hit)); m.clauses.push_back(std::move(miss));
-    auto e = std::make_unique<Expr>(); e->node = std::move(m); return e;
+    Match m;
+    m.subjects.push_back(std::move(subj));
+    MatchClause hit;
+    hit.patterns.push_back(std::move(pat));
+    hit.body = std::move(thenP);
+    MatchClause miss;
+    miss.patterns.push_back(wildPat());
+    miss.body = std::move(elseP);
+    m.clauses.push_back(std::move(hit));
+    m.clauses.push_back(std::move(miss));
+    auto e = std::make_unique<Expr>();
+    e->node = std::move(m);
+    return e;
 }
 
 auto Lowering::lowerIf(const ast::IfExpr& n) -> ExprPtr {
-    if (n.letPattern)
+    if (n.letPattern) {
         return lowerIfLet(
             n, [&] { return lowerBody(n.thenBody); },
             [&] { return n.elseBody ? lowerBodyScoped(*n.elseBody) : lit(LitKind::Atom, "ok"); });
-    ExprPtr elsePart = n.elseBody ? lowerBodyScoped(*n.elseBody)
-                                  : lit(LitKind::Atom, "ok");
+    }
+    ExprPtr elsePart = n.elseBody ? lowerBodyScoped(*n.elseBody) : lit(LitKind::Atom, "ok");
     for (int i = static_cast<int>(n.elifs.size()) - 1; i >= 0; --i) {
         auto cond = lower(n.elifs[i].first);
         auto thenP = lowerBodyScoped(n.elifs[i].second);
@@ -69,12 +81,13 @@ auto Lowering::lowerMatch(const ast::MatchExpr& n) -> ExprPtr {
     // `(x..y)` / `(-10..-1)` clause can't match structurally. Bind the
     // subject once, then dispatch on its <first, last> bounds as a
     // 2-subject match — each RangePattern becomes <startPat, endPat>.
-    bool rangeMode = std::any_of(n.clauses.begin(), n.clauses.end(),
-        [](const ast::MatchClause& c) {
-            return !c.patterns.empty() &&
-                   std::holds_alternative<ast::RangePattern>(c.patterns[0]->kind);
-        });
-    if (rangeMode) return lowerRangeMatch(n);
+    bool rangeMode = std::any_of(n.clauses.begin(), n.clauses.end(), [](const ast::MatchClause& c) {
+        return !c.patterns.empty() &&
+               std::holds_alternative<ast::RangePattern>(c.patterns[0]->kind);
+    });
+    if (rangeMode) {
+        return lowerRangeMatch(n);
+    }
 
     // `match subj do |x| ... end` binds the subject to `x`, in scope for
     // every clause's guard/body → let-bind it and match the bound var.
@@ -84,7 +97,9 @@ auto Lowering::lowerMatch(const ast::MatchExpr& n) -> ExprPtr {
     std::optional<std::string> subjPrev; // outer mapping to restore on exit
     if (n.subjectBinding) {
         subjVar = *n.subjectBinding;
-        if (auto it = subst.find(subjVar); it != subst.end()) subjPrev = it->second;
+        if (auto it = subst.find(subjVar); it != subst.end()) {
+            subjPrev = it->second;
+        }
         std::string ssa = subjPrev ? fresh(subjVar) : subjVar;
         subst[subjVar] = ssa;
         letWrap = std::move(subjIr);
@@ -107,20 +122,24 @@ auto Lowering::lowerMatch(const ast::MatchExpr& n) -> ExprPtr {
             mc.patterns.push_back(std::move(pv));
             std::vector<std::string> names;
             collectRecordBindings(*anon, names);
-            for (const auto& name : names) subst[name] = name;
+            for (const auto& name : names) {
+                subst[name] = name;
+            }
             auto test = anonymousRecordTest(sv, *anon);
-            if (cl.guard)
+            if (cl.guard) {
                 test = matchBool(
-                    std::move(test),
-                    wrapAnonymousRecordPattern(sv, *anon, lower(*cl.guard)),
+                    std::move(test), wrapAnonymousRecordPattern(sv, *anon, lower(*cl.guard)),
                     litBool(false));
+            }
             mc.guard = std::move(test);
             mc.body = wrapAnonymousRecordPattern(sv, *anon, lower(cl.body));
             subst = snap;
             cls.push_back(std::move(mc));
             continue;
         }
-        for (const auto& p : cl.patterns) mc.patterns.push_back(lowerPattern(p));
+        for (const auto& p : cl.patterns) {
+            mc.patterns.push_back(lowerPattern(p));
+        }
         // `when` guards lower as ordinary expressions; the `guards` pass moves
         // the predicate out of BEAM guard position into a nested match.
         mc.guard = withTypeGuards(cl.guard ? lower(*cl.guard) : nullptr);
@@ -131,7 +150,11 @@ auto Lowering::lowerMatch(const ast::MatchExpr& n) -> ExprPtr {
     auto e = sourceMatch(std::move(subjects), std::move(cls));
     if (letWrap) {
         auto r = makeLet(currentName(subjVar), std::move(letWrap), std::move(e));
-        if (subjPrev) subst[subjVar] = *subjPrev; else subst.erase(subjVar);
+        if (subjPrev) {
+            subst[subjVar] = *subjPrev;
+        } else {
+            subst.erase(subjVar);
+        }
         return r;
     }
     return e;
@@ -139,16 +162,22 @@ auto Lowering::lowerMatch(const ast::MatchExpr& n) -> ExprPtr {
 
 auto Lowering::lowerReceive(const ast::ReceiveExpr& n) -> ExprPtr {
     Receive r;
-    if (n.senderBinding) r.senderVar = *n.senderBinding;
+    if (n.senderBinding) {
+        r.senderVar = *n.senderBinding;
+    }
     for (const auto& cl : n.clauses) {
         auto snap = subst;
-        if (n.senderBinding) subst[*n.senderBinding] = *n.senderBinding;
+        if (n.senderBinding) {
+            subst[*n.senderBinding] = *n.senderBinding;
+        }
         ReceiveClause rc;
         rc.pattern = cl.patterns.empty() ? wildPat() : lowerPattern(cl.patterns[0]);
         // A receive clause has no guard slot to hold the test.
-        if (!pendingTypeGuards.empty())
-            throw LowerError("IR lower: a type pattern (`x : T`) is not "
-                             "supported in a receive clause");
+        if (!pendingTypeGuards.empty()) {
+            throw LowerError(
+                "IR lower: a type pattern (`x : T`) is not "
+                "supported in a receive clause");
+        }
         rc.body = lower(cl.body);
         subst = snap;
         r.clauses.push_back(std::move(rc));
@@ -162,10 +191,10 @@ auto Lowering::lowerReceive(const ast::ReceiveExpr& n) -> ExprPtr {
         // expiring, so it yields None like the walker does
         // (scheduler.hxx:115).
         r.timeout = lower(*n.timeout);
-        r.afterBody = n.afterBody ? lower(*n.afterBody)
-                                  : lit(LitKind::None, "none");
+        r.afterBody = n.afterBody ? lower(*n.afterBody) : lit(LitKind::None, "none");
     }
-    auto e = std::make_unique<Expr>(); e->node = std::move(r);
+    auto e = std::make_unique<Expr>();
+    e->node = std::move(r);
     return e;
 }
 
@@ -205,53 +234,101 @@ auto Lowering::lowerRangeMatch(const ast::MatchExpr& n) -> ExprPtr {
 // threaded state.
 
 void Lowering::collectMutated(const ast::ExprPtr& e, std::unordered_set<std::string>& out) {
-    if (!e) return;
+    if (!e) {
+        return;
+    }
     // A block passed to a call reassigns as its statement does: the
     // statement threads it (lowerThreadedStatement).
     const auto collectPassedBlocks = [&](const auto& call, std::unordered_set<std::string>& into) {
         const auto block = [&](const ast::ExprPtr& passed) {
             const auto* lambda = passed ? std::get_if<ast::Lambda>(&passed->kind) : nullptr;
-            if (!lambda || lambda->collection) return;
+            if (!lambda || lambda->collection) {
+                return;
+            }
             std::unordered_set<std::string> inner;
-            for (const auto& s : lambda->body) collectMutated(s, inner);
-            for (const auto& p : lambda->params) inner.erase(p.name);
+            for (const auto& s : lambda->body) {
+                collectMutated(s, inner);
+            }
+            for (const auto& p : lambda->params) {
+                inner.erase(p.name);
+            }
             into.insert(inner.begin(), inner.end());
         };
-        for (const auto& a : call.args) block(a);
-        if (call.block) block(*call.block);
-    };
-    std::visit([&](const auto& nn) {
-        using T = std::decay_t<decltype(nn)>;
-        if constexpr (std::is_same_v<T, ast::AssignExpr>) out.insert(nn.name);
-        else if constexpr (std::is_same_v<T, ast::MethodCall>) {
-            if (nn.mutating && nn.receiver)
-                if (auto* id = std::get_if<ast::Identifier>(&nn.receiver->kind)) out.insert(id->name);
-            collectPassedBlocks(nn, out);
-        } else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
-            collectPassedBlocks(nn, out);
-        } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
-            for (auto& s : nn.thenBody) collectMutated(s, out);
-            if (nn.elseBody) for (auto& s : *nn.elseBody) collectMutated(s, out);
-            for (auto& [c, b] : nn.elifs) for (auto& s : b) collectMutated(s, out);
-        } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
-            for (auto& cl : nn.clauses) collectMutated(cl.body, out);
-        } else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
-            for (auto& cl : nn.clauses) collectMutated(cl.body, out);
-            if (nn.afterBody) collectMutated(*nn.afterBody, out);
-        } else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
-            for (auto& s : nn.body) collectMutated(s, out);
-        } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
-            for (auto& s : nn.body) collectMutated(s, out);
-        } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
-            for (auto& s : nn.body) collectMutated(s, out);
-        } else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
-            for (auto& s : nn.body) collectMutated(s, out);
-            for (auto& cl : nn.rescue.clauses) collectMutated(cl.body, out);
-            for (auto& s : nn.rescue.catchAllBody) collectMutated(s, out);
-        } else if constexpr (std::is_same_v<T, ast::WithExpr>) {
-            for (auto& s : nn.body) collectMutated(s, out);
+        for (const auto& a : call.args) {
+            block(a);
         }
-    }, e->kind);
+        if (call.block) {
+            block(*call.block);
+        }
+    };
+    std::visit(
+        [&](const auto& nn) {
+            using T = std::decay_t<decltype(nn)>;
+            if constexpr (std::is_same_v<T, ast::AssignExpr>) {
+                out.insert(nn.name);
+            } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
+                if (nn.mutating && nn.receiver) {
+                    if (auto* id = std::get_if<ast::Identifier>(&nn.receiver->kind)) {
+                        out.insert(id->name);
+                    }
+                }
+                collectPassedBlocks(nn, out);
+            } else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
+                collectPassedBlocks(nn, out);
+            } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
+                for (auto& s : nn.thenBody) {
+                    collectMutated(s, out);
+                }
+                if (nn.elseBody) {
+                    for (auto& s : *nn.elseBody) {
+                        collectMutated(s, out);
+                    }
+                }
+                for (auto& [c, b] : nn.elifs) {
+                    for (auto& s : b) {
+                        collectMutated(s, out);
+                    }
+                }
+            } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
+                for (auto& cl : nn.clauses) {
+                    collectMutated(cl.body, out);
+                }
+            } else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
+                for (auto& cl : nn.clauses) {
+                    collectMutated(cl.body, out);
+                }
+                if (nn.afterBody) {
+                    collectMutated(*nn.afterBody, out);
+                }
+            } else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
+                for (auto& s : nn.body) {
+                    collectMutated(s, out);
+                }
+            } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
+                for (auto& s : nn.body) {
+                    collectMutated(s, out);
+                }
+            } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
+                for (auto& s : nn.body) {
+                    collectMutated(s, out);
+                }
+            } else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
+                for (auto& s : nn.body) {
+                    collectMutated(s, out);
+                }
+                for (auto& cl : nn.rescue.clauses) {
+                    collectMutated(cl.body, out);
+                }
+                for (auto& s : nn.rescue.catchAllBody) {
+                    collectMutated(s, out);
+                }
+            } else if constexpr (std::is_same_v<T, ast::WithExpr>) {
+                for (auto& s : nn.body) {
+                    collectMutated(s, out);
+                }
+            }
+        },
+        e->kind);
     // An assignment nested in an argument or operand (`f(x = 1)`) is
     // hoisted ahead of its statement, and reassigns as one does.
     ast::forEachOperand(*e, [&](const ast::ExprPtr& child) { collectMutated(child, out); });
@@ -261,28 +338,41 @@ void Lowering::collectMutated(const ast::ExprPtr& e, std::unordered_set<std::str
 // into: the rebound names would only be in scope inside the expression
 // itself, so mutations could not escape it. Reject that up front rather
 // than emitting Core that references them afterwards.
-auto Lowering::requireNoOuterMutation(const std::vector<ast::ExprPtr>& body,
-                            const char* what) -> void {
+auto Lowering::requireNoOuterMutation(const std::vector<ast::ExprPtr>& body, const char* what)
+    -> void {
     std::unordered_set<std::string> mset;
-    for (const auto& s : body) collectMutated(s, mset);
-    for (const auto& v : mset)
-        if (subst.count(v))
-            throw LowerError(std::string("IR lower: `") + what +
-                             "` used as an expression cannot assign to `" + v +
-                             "` — put it in statement position instead");
+    for (const auto& s : body) {
+        collectMutated(s, mset);
+    }
+    for (const auto& v : mset) {
+        if (subst.count(v)) {
+            throw LowerError(
+                std::string("IR lower: `") + what + "` used as an expression cannot assign to `" +
+                v + "` — put it in statement position instead");
+        }
+    }
 }
 
 // The loop's current threaded-state value: bare var for one, tuple for
 // several, 'ok' for none.
 auto Lowering::stateExpr(const std::vector<std::string>& mutVars) -> ExprPtr {
-    if (mutVars.empty()) return lit(LitKind::Atom, "ok");
-    if (mutVars.size() == 1) return var(currentName(mutVars[0]));
+    if (mutVars.empty()) {
+        return lit(LitKind::Atom, "ok");
+    }
+    if (mutVars.size() == 1) {
+        return var(currentName(mutVars[0]));
+    }
     std::vector<ExprPtr> els;
-    for (const auto& v : mutVars) els.push_back(var(currentName(v)));
-    auto e = std::make_unique<Expr>(); e->node = MakeTuple{std::move(els)}; return e;
+    for (const auto& v : mutVars) {
+        els.push_back(var(currentName(v)));
+    }
+    auto e = std::make_unique<Expr>();
+    e->node = MakeTuple{std::move(els)};
+    return e;
 }
 
-auto Lowering::tailCall(const std::string& loopFn, const std::vector<std::string>& mutVars) -> ExprPtr {
+auto Lowering::tailCall(const std::string& loopFn, const std::vector<std::string>& mutVars)
+    -> ExprPtr {
     auto ctrIt = loopCounters.find(loopFn);
     const std::string ctr = ctrIt == loopCounters.end() ? "" : ctrIt->second;
     std::vector<ExprPtr> args;
@@ -298,9 +388,10 @@ auto Lowering::tailCall(const std::string& loopFn, const std::vector<std::string
     }
     auto e = std::make_unique<Expr>();
     e->node = Call{"", loopFn, (int)mutVars.size(), std::move(args), false};
-    if (bumped.empty()) return e;
-    return makeLet(bumped, intrin(Op::Add, two(var(currentName(ctr)), litInt(1))),
-                   std::move(e));
+    if (bumped.empty()) {
+        return e;
+    }
+    return makeLet(bumped, intrin(Op::Add, two(var(currentName(ctr)), litInt(1))), std::move(e));
 }
 
 // A `let` binding's value: a local `let UPPER = ...` binds the body's
@@ -309,8 +400,9 @@ auto Lowering::tailCall(const std::string& loopFn, const std::vector<std::string
 // `return` inside the body from escaping, matching the walker's eager
 // call; anything else lowers as written.
 auto Lowering::lowerBindingValue(const ast::LetExpr& le) -> ExprPtr {
-    if (!ast::isLocalConstantBind(le.pattern, le.value))
+    if (!ast::isLocalConstantBind(le.pattern, le.value)) {
         return lower(le.value);
+    }
     std::vector<Binding> binds;
     auto fun = atomize(le.value, binds);
     auto call = std::make_unique<Expr>();
@@ -319,12 +411,19 @@ auto Lowering::lowerBindingValue(const ast::LetExpr& le) -> ExprPtr {
 }
 
 // If `e` is a break/next/return, its loop-control IR; else nullptr.
-auto Lowering::loopControl(const ast::ExprPtr& e, const std::string& loopFn,
-                 const std::vector<std::string>& mutVars) -> ExprPtr {
-    if (std::holds_alternative<ast::BreakExpr>(e->kind)) return stateExpr(mutVars);
-    if (std::holds_alternative<ast::NextExpr>(e->kind)) return tailCall(loopFn, mutVars);
+auto Lowering::loopControl(
+    const ast::ExprPtr& e, const std::string& loopFn, const std::vector<std::string>& mutVars)
+    -> ExprPtr {
+    if (std::holds_alternative<ast::BreakExpr>(e->kind)) {
+        return stateExpr(mutVars);
+    }
+    if (std::holds_alternative<ast::NextExpr>(e->kind)) {
+        return tailCall(loopFn, mutVars);
+    }
     if (auto* re = std::get_if<ast::ReturnExpr>(&e->kind)) {
-        auto ex = std::make_unique<Expr>(); ex->node = Return{lower(re->value)}; return ex;
+        auto ex = std::make_unique<Expr>();
+        ex->node = Return{lower(re->value)};
+        return ex;
     }
     return nullptr;
 }
@@ -337,14 +436,20 @@ auto Lowering::loopControl(const ast::ExprPtr& e, const std::string& loopFn,
 // if/match/nested-loop recurse with the appropriate continuation. This one
 // callback-driven pass replaces what the string emitter did with three
 // separate, partly-overlapping loop-body walkers.
-auto Lowering::lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i,
-                       const std::string& loopFn,
-                       const std::vector<std::string>& mutVars,
-                       const std::function<ExprPtr()>& onEnd,
-                       size_t end) -> ExprPtr {
-    if (i >= std::min(end, body.size())) return onEnd();
+auto Lowering::lowerLoopBodyFrom(
+    const std::vector<ast::ExprPtr>& body,
+    size_t i,
+    const std::string& loopFn,
+    const std::vector<std::string>& mutVars,
+    const std::function<ExprPtr()>& onEnd,
+    size_t end) -> ExprPtr {
+    if (i >= std::min(end, body.size())) {
+        return onEnd();
+    }
     const auto& e = body[i];
-    auto cont = [&]() -> ExprPtr { return lowerLoopBodyFrom(body, i + 1, loopFn, mutVars, onEnd, end); };
+    auto cont = [&]() -> ExprPtr {
+        return lowerLoopBodyFrom(body, i + 1, loopFn, mutVars, onEnd, end);
+    };
     // A statement passing a block that reassigns variables around it.
     if (auto threaded = lowerThreadedStatement(e, [&](ExprPtr value) -> ExprPtr {
             std::string name;
@@ -357,16 +462,23 @@ auto Lowering::lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i
             } else if (const auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
                 name = ae->name;
             }
-            if (name.empty()) return makeLet(fresh("Statement"), std::move(value), cont());
+            if (name.empty()) {
+                return makeLet(fresh("Statement"), std::move(value), cont());
+            }
             curryOrigin.erase(name);
             const auto ssa = fresh(name);
             subst[name] = ssa;
             return makeLet(ssa, std::move(value), cont());
-        }))
+        })) {
         return threaded;
-    if (std::holds_alternative<ast::BreakExpr>(e->kind)) return stateExpr(mutVars);
-    if (std::holds_alternative<ast::NextExpr>(e->kind)) return tailCall(loopFn, mutVars);
-    if (auto* ti = std::get_if<ast::TrailingIf>(&e->kind))
+    }
+    if (std::holds_alternative<ast::BreakExpr>(e->kind)) {
+        return stateExpr(mutVars);
+    }
+    if (std::holds_alternative<ast::NextExpr>(e->kind)) {
+        return tailCall(loopFn, mutVars);
+    }
+    if (auto* ti = std::get_if<ast::TrailingIf>(&e->kind)) {
         if (auto ctrl = loopControl(ti->expr, loopFn, mutVars)) {
             // The condition must be lowered against the subst in effect
             // HERE: cont() lowers the rest of the loop body, which
@@ -379,90 +491,109 @@ auto Lowering::lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i
             auto rest = cont();
             return matchBool(std::move(c), std::move(ctrl), std::move(rest));
         }
+    }
     if (auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
         auto val = lowerAssignmentValue(*ae);
-        std::string nv = fresh(ae->name); subst[ae->name] = nv;
+        std::string nv = fresh(ae->name);
+        subst[ae->name] = nv;
         return makeLet(nv, std::move(val), cont());
     }
     if (auto* ve = std::get_if<ast::VarExpr>(&e->kind)) {
-        if (auto* vp = ve->pattern
-                ? std::get_if<ast::VarPattern>(&ve->pattern->kind)
-                : nullptr) {
+        if (auto* vp = ve->pattern ? std::get_if<ast::VarPattern>(&ve->pattern->kind) : nullptr) {
             auto val = lower(ve->value);
-            std::string nv = fresh(vp->name); subst[vp->name] = nv;
+            std::string nv = fresh(vp->name);
+            subst[vp->name] = nv;
             immutableBindings.erase(vp->name);
             if (const auto* curry = std::get_if<ast::CurryExpr>(&ve->value->kind);
-                curry && curry->argGroups.empty() && !curry->isOperator &&
-                curry->module.empty())
+                curry && curry->argGroups.empty() && !curry->isOperator && curry->module.empty()) {
                 curryOrigin[vp->name] = curry->name;
-            else
+            } else {
                 curryOrigin.erase(vp->name);
+            }
             return makeLet(nv, std::move(val), cont());
         }
-        auto val = lower(ve->value); auto pat = lowerPattern(ve->pattern);
+        auto val = lower(ve->value);
+        auto pat = lowerPattern(ve->pattern);
         // Destructured names are mutable: reassignment and `!` rebind
         // them, so they must not linger in immutableBindings.
         if (ve->pattern) {
             std::vector<std::string> names;
             patternBoundNames(ve->pattern, names);
-            for (const auto& name : names) immutableBindings.erase(name);
+            for (const auto& name : names) {
+                immutableBindings.erase(name);
+            }
         }
         return makeMatch1(std::move(val), std::move(pat), cont());
     }
     if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
         if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
             auto val = lowerBindingValue(*le);
-            std::string nv = fresh(vp->name); subst[vp->name] = nv;
+            std::string nv = fresh(vp->name);
+            subst[vp->name] = nv;
             immutableBindings.insert(vp->name);
             if (const auto* curry = std::get_if<ast::CurryExpr>(&le->value->kind);
-                curry && curry->argGroups.empty() && !curry->isOperator &&
-                curry->module.empty())
+                curry && curry->argGroups.empty() && !curry->isOperator && curry->module.empty()) {
                 curryOrigin[vp->name] = curry->name;
-            else
+            } else {
                 curryOrigin.erase(vp->name);
+            }
             return makeLet(nv, std::move(val), cont());
         }
-        auto val = lower(le->value); auto pat = lowerPattern(le->pattern);
+        auto val = lower(le->value);
+        auto pat = lowerPattern(le->pattern);
         // Collect destructured names as immutable.
-        if (le->pattern)
-            if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind))
+        if (le->pattern) {
+            if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
                 immutableBindings.insert(vp->name);
+            }
+        }
         return makeMatch1(std::move(val), std::move(pat), cont());
     }
-    if (auto* mc = std::get_if<ast::MethodCall>(&e->kind); mc && mc->mutating && mc->receiver)
+    if (auto* mc = std::get_if<ast::MethodCall>(&e->kind); mc && mc->mutating && mc->receiver) {
         if (auto* id = std::get_if<ast::Identifier>(&mc->receiver->kind)) {
             if (immutableBindings.count(id->name)) {
                 std::string loc;
-                if (currentLoc) loc = std::string(currentLoc->file) + ":"
-                    + std::to_string(currentLoc->line) + ":"
-                    + std::to_string(currentLoc->column) + ": ";
+                if (currentLoc) {
+                    loc = std::string(currentLoc->file) + ":" + std::to_string(currentLoc->line) +
+                          ":" + std::to_string(currentLoc->column) + ": ";
+                }
                 auto ex = std::make_unique<Expr>();
-                ex->node = Call{"erlang", "error", 1,
-                    one(lit(LitKind::String, loc + "runtime error: Cannot use '!' on immutable binding: " + id->name)), false};
+                ex->node = Call{
+                    "erlang", "error", 1,
+                    one(lit(
+                        LitKind::String,
+                        loc + "runtime error: Cannot use '!' on immutable binding: " + id->name)),
+                    false};
                 return ex;
             }
             auto val = lowerMutatingAsValue(*mc);
-            std::string nv = fresh(id->name); subst[id->name] = nv;
+            std::string nv = fresh(id->name);
+            subst[id->name] = nv;
             return makeLet(nv, std::move(val), cont());
         }
+    }
     if (auto* re = std::get_if<ast::ReturnExpr>(&e->kind)) {
         // `return X if cond` (ReturnExpr wrapping a TrailingIf): return
         // only when cond holds, otherwise fall through to the rest.
         if (auto* ti = std::get_if<ast::TrailingIf>(&re->value->kind)) {
             // Sequenced for the same reason as the TrailingIf case above.
             auto c = lower(ti->condition);
-            auto retX = std::make_unique<Expr>(); retX->node = Return{lower(ti->expr)};
+            auto retX = std::make_unique<Expr>();
+            retX->node = Return{lower(ti->expr)};
             auto rest = cont();
             return matchBool(std::move(c), std::move(retX), std::move(rest));
         }
-        auto ex = std::make_unique<Expr>(); ex->node = Return{lower(re->value)}; return ex;
+        auto ex = std::make_unique<Expr>();
+        ex->node = Return{lower(re->value)};
+        return ex;
     }
     if (auto* ie = std::get_if<ast::IfExpr>(&e->kind)) {
         std::function<ExprPtr()> branchEnd = [&]() -> ExprPtr { return cont(); };
         auto branch = [&](const std::vector<ast::ExprPtr>& bb) {
             auto snap = subst;
             auto r = lowerLoopBodyFrom(bb, 0, loopFn, mutVars, branchEnd);
-            subst = snap; return r;
+            subst = snap;
+            return r;
         };
         auto fallthrough = [&]() {
             auto snap = subst;
@@ -472,26 +603,25 @@ auto Lowering::lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i
         };
         // In a loop, the bound names must stay visible through the body
         // and the rest of the iteration it continues with.
-        if (ie->letPattern)
+        if (ie->letPattern) {
             return lowerIfLet(
                 *ie, [&] { return lowerLoopBodyFrom(ie->thenBody, 0, loopFn, mutVars, branchEnd); },
                 [&] { return ie->elseBody ? branch(*ie->elseBody) : fallthrough(); });
-        ExprPtr elseP = ie->elseBody ? branch(*ie->elseBody)
-                                     : fallthrough();
+        }
+        ExprPtr elseP = ie->elseBody ? branch(*ie->elseBody) : fallthrough();
         for (auto it = ie->elifs.rbegin(); it != ie->elifs.rend(); ++it) {
             auto c = lower(it->first);
             auto body = branch(it->second);
-            elseP = matchBool(std::move(c), std::move(body),
-                              std::move(elseP));
+            elseP = matchBool(std::move(c), std::move(body), std::move(elseP));
         }
         auto c = lower(ie->condition);
         auto thenP = branch(ie->thenBody);
-        return matchBool(std::move(c), std::move(thenP),
-                         std::move(elseP));
+        return matchBool(std::move(c), std::move(thenP), std::move(elseP));
     }
     if (auto* me = std::get_if<ast::MatchExpr>(&e->kind)) {
-        if (me->subjectBinding)
+        if (me->subjectBinding) {
             throw LowerError("IR lower: match |binder| in loop not yet ported");
+        }
         std::function<ExprPtr()> armEnd = [&]() -> ExprPtr { return cont(); };
         std::vector<ExprPtr> subjects;
         subjects.push_back(lower(me->subject));
@@ -499,7 +629,9 @@ auto Lowering::lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i
         for (const auto& cl : me->clauses) {
             auto snap = subst;
             MatchClause mcx;
-            for (const auto& p : cl.patterns) mcx.patterns.push_back(lowerPattern(p));
+            for (const auto& p : cl.patterns) {
+                mcx.patterns.push_back(lowerPattern(p));
+            }
             mcx.guard = withTypeGuards(cl.guard ? lower(*cl.guard) : nullptr);
             mcx.body = lowerLoopArmU(cl.body, loopFn, mutVars, armEnd);
             subst = snap;
@@ -515,15 +647,21 @@ auto Lowering::lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i
     if (auto* re = std::get_if<ast::ReceiveExpr>(&e->kind)) {
         std::function<ExprPtr()> armEnd = [&]() -> ExprPtr { return cont(); };
         Receive r;
-        if (re->senderBinding) r.senderVar = *re->senderBinding;
+        if (re->senderBinding) {
+            r.senderVar = *re->senderBinding;
+        }
         for (const auto& cl : re->clauses) {
             auto snap = subst;
-            if (re->senderBinding) subst[*re->senderBinding] = *re->senderBinding;
+            if (re->senderBinding) {
+                subst[*re->senderBinding] = *re->senderBinding;
+            }
             ReceiveClause rc;
             rc.pattern = cl.patterns.empty() ? wildPat() : lowerPattern(cl.patterns[0]);
-            if (!pendingTypeGuards.empty())
-                throw LowerError("IR lower: a type pattern (`x : T`) is not "
-                                 "supported in a receive clause");
+            if (!pendingTypeGuards.empty()) {
+                throw LowerError(
+                    "IR lower: a type pattern (`x : T`) is not "
+                    "supported in a receive clause");
+            }
             rc.body = lowerLoopArmU(cl.body, loopFn, mutVars, armEnd);
             subst = snap;
             r.clauses.push_back(std::move(rc));
@@ -531,18 +669,20 @@ auto Lowering::lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i
         if (re->timeout) {
             r.timeout = lower(*re->timeout);
             auto snap = subst;
-            r.afterBody = re->afterBody
-                ? lowerLoopArmU(*re->afterBody, loopFn, mutVars, armEnd)
-                : armEnd();
+            r.afterBody =
+                re->afterBody ? lowerLoopArmU(*re->afterBody, loopFn, mutVars, armEnd) : armEnd();
             subst = snap;
         }
-        auto ex = std::make_unique<Expr>(); ex->node = std::move(r);
+        auto ex = std::make_unique<Expr>();
+        ex->node = std::move(r);
         return ex;
     }
-    if (auto* le2 = std::get_if<ast::LoopExpr>(&e->kind))
-        return lowerLoopCore(le2->body, nullptr, false, [&]{ return cont(); }, &le2->counter);
-    if (auto* we2 = std::get_if<ast::WhileExpr>(&e->kind))
-        return lowerLoopCore(we2->body, &we2->condition, false, [&]{ return cont(); });
+    if (auto* le2 = std::get_if<ast::LoopExpr>(&e->kind)) {
+        return lowerLoopCore(le2->body, nullptr, false, [&] { return cont(); }, &le2->counter);
+    }
+    if (auto* we2 = std::get_if<ast::WhileExpr>(&e->kind)) {
+        return lowerLoopCore(we2->body, &we2->condition, false, [&] { return cont(); });
+    }
     if (auto* te = std::get_if<ast::TryingExpr>(&e->kind)) {
         TryCatch tc;
         auto snapBeforeTry = subst;
@@ -574,15 +714,15 @@ auto Lowering::lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i
             std::vector<MatchClause> rclauses;
             for (const auto& clause : rescue.clauses) {
                 MatchClause mc;
-                if (!clause.patterns.empty())
+                if (!clause.patterns.empty()) {
                     mc.patterns.push_back(lowerPattern(clause.patterns[0]));
-                else
+                } else {
                     mc.patterns.push_back(wildPat());
-                mc.guard = withTypeGuards(
-                    clause.guard ? lower(*clause.guard) : nullptr);
+                }
+                mc.guard = withTypeGuards(clause.guard ? lower(*clause.guard) : nullptr);
                 mc.body = clause.body
-                    ? lowerLoopArmU(clause.body, loopFn, mutVars, [&]{ return cont(); })
-                    : cont();
+                              ? lowerLoopArmU(clause.body, loopFn, mutVars, [&] { return cont(); })
+                              : cont();
                 // Each arm is an independent scope: without the reset the
                 // next arm's continuation references this arm's loop-var
                 // rebindings (`unbound variable` from erlc). Mirrors the
@@ -601,40 +741,54 @@ auto Lowering::lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i
 
 // A single match-arm body in loop context (a `do` block is a statement
 // list; a bare expr is one statement), continuing with `armEnd`.
-auto Lowering::lowerLoopArmU(const ast::ExprPtr& arm, const std::string& loopFn,
-                   const std::vector<std::string>& mutVars,
-                   const std::function<ExprPtr()>& armEnd) -> ExprPtr {
-    if (auto* be = std::get_if<ast::BlockExpr>(&arm->kind))
+auto Lowering::lowerLoopArmU(
+    const ast::ExprPtr& arm,
+    const std::string& loopFn,
+    const std::vector<std::string>& mutVars,
+    const std::function<ExprPtr()>& armEnd) -> ExprPtr {
+    if (auto* be = std::get_if<ast::BlockExpr>(&arm->kind)) {
         return lowerLoopBodyFrom(be->body, 0, loopFn, mutVars, armEnd);
-    if (std::holds_alternative<ast::BreakExpr>(arm->kind)) return stateExpr(mutVars);
-    if (std::holds_alternative<ast::NextExpr>(arm->kind)) return tailCall(loopFn, mutVars);
-    if (auto* ti = std::get_if<ast::TrailingIf>(&arm->kind))
+    }
+    if (std::holds_alternative<ast::BreakExpr>(arm->kind)) {
+        return stateExpr(mutVars);
+    }
+    if (std::holds_alternative<ast::NextExpr>(arm->kind)) {
+        return tailCall(loopFn, mutVars);
+    }
+    if (auto* ti = std::get_if<ast::TrailingIf>(&arm->kind)) {
         if (auto ctrl = loopControl(ti->expr, loopFn, mutVars)) {
             // armEnd() rebinds mutated vars — lower the condition first.
             auto c = lower(ti->condition);
             auto rest = armEnd();
             return matchBool(std::move(c), std::move(ctrl), std::move(rest));
         }
+    }
     if (auto* re = std::get_if<ast::ReturnExpr>(&arm->kind)) {
         if (auto* ti = std::get_if<ast::TrailingIf>(&re->value->kind)) {
             auto c = lower(ti->condition);
-            auto retX = std::make_unique<Expr>(); retX->node = Return{lower(ti->expr)};
+            auto retX = std::make_unique<Expr>();
+            retX->node = Return{lower(ti->expr)};
             auto rest = armEnd();
             return matchBool(std::move(c), std::move(retX), std::move(rest));
         }
-        auto ex = std::make_unique<Expr>(); ex->node = Return{lower(re->value)}; return ex;
+        auto ex = std::make_unique<Expr>();
+        ex->node = Return{lower(re->value)};
+        return ex;
     }
     if (auto* ae = std::get_if<ast::AssignExpr>(&arm->kind)) {
         auto val = lowerAssignmentValue(*ae);
-        std::string nv = fresh(ae->name); subst[ae->name] = nv;
+        std::string nv = fresh(ae->name);
+        subst[ae->name] = nv;
         return makeLet(nv, std::move(val), armEnd());
     }
-    if (auto* mc = std::get_if<ast::MethodCall>(&arm->kind); mc && mc->mutating && mc->receiver)
+    if (auto* mc = std::get_if<ast::MethodCall>(&arm->kind); mc && mc->mutating && mc->receiver) {
         if (auto* id = std::get_if<ast::Identifier>(&mc->receiver->kind)) {
             auto val = lowerMutatingAsValue(*mc);
-            std::string nv = fresh(id->name); subst[id->name] = nv;
+            std::string nv = fresh(id->name);
+            subst[id->name] = nv;
             return makeLet(nv, std::move(val), armEnd());
         }
+    }
     return lowerStatementThen(arm, armEnd);
 }
 
@@ -648,17 +802,19 @@ auto Lowering::lowerMutatingAsValue(const ast::MethodCall& mc) -> ExprPtr {
 }
 
 auto Lowering::lowerAssignmentValue(const ast::AssignExpr& assignment) -> ExprPtr {
-    if (assignment.path.empty()) return lower(assignment.value);
-    if (assignment.path.size() != 1)
-        throw LowerError(
-            "IR lower: nested record-field assignment is not supported");
+    if (assignment.path.empty()) {
+        return lower(assignment.value);
+    }
+    if (assignment.path.size() != 1) {
+        throw LowerError("IR lower: nested record-field assignment is not supported");
+    }
     std::vector<Binding> binds;
     auto value = atomize(assignment.value, binds);
     auto updated = callE(
         "kex_intrinsic_type", "updateRecord", 3,
-        three(var(currentName(assignment.name)),
-              lit(LitKind::Atom, assignment.path.front()),
-              std::move(value)));
+        three(
+            var(currentName(assignment.name)), lit(LitKind::Atom, assignment.path.front()),
+            std::move(value)));
     return wrapLets(binds, std::move(updated));
 }
 
@@ -678,14 +834,17 @@ auto Lowering::hoistNestedAssignments(const ast::ExprPtr& statement, std::vector
     std::vector<const ast::AssignExpr*> found;
     std::function<void(const ast::ExprPtr&)> visit = [&](const ast::ExprPtr& e) {
         ast::forEachOperand(*e, visit, /*shortCircuit=*/false);
-        if (const auto* assignment = std::get_if<ast::AssignExpr>(&e->kind))
+        if (const auto* assignment = std::get_if<ast::AssignExpr>(&e->kind)) {
             found.push_back(assignment);
+        }
     };
     // The statement's own children: a statement that IS an assignment is
     // lowered as one before it gets here.
     ast::forEachOperand(*statement, visit, /*shortCircuit=*/false);
     std::vector<std::pair<std::string, std::string>> assigned;
-    if (found.empty()) return assigned;
+    if (found.empty()) {
+        return assigned;
+    }
     const auto before = subst;
     for (const auto* assignment : found) {
         auto value = lowerAssignmentValue(*assignment);
@@ -699,13 +858,17 @@ auto Lowering::hoistNestedAssignments(const ast::ExprPtr& statement, std::vector
     return assigned;
 }
 
-auto Lowering::lowerStatementThen(const ast::ExprPtr& statement,
-                                  const std::function<ExprPtr()>& rest) -> ExprPtr {
+auto Lowering::lowerStatementThen(
+    const ast::ExprPtr& statement, const std::function<ExprPtr()>& rest) -> ExprPtr {
     std::vector<Binding> hoisted;
     const auto assigned = hoistNestedAssignments(statement, hoisted);
     auto value = lower(statement);
-    for (const auto& [name, ssa] : assigned) subst[name] = ssa;
-    if (!rest) return wrapLets(hoisted, std::move(value));
+    for (const auto& [name, ssa] : assigned) {
+        subst[name] = ssa;
+    }
+    if (!rest) {
+        return wrapLets(hoisted, std::move(value));
+    }
     auto after = rest();
     return wrapLets(hoisted, makeLet(fresh("S"), std::move(value), std::move(after)));
 }
@@ -716,13 +879,22 @@ auto Lowering::lowerStatementThen(const ast::ExprPtr& statement,
 // state already in subst) — for a top-level loop this is the rest of the
 // enclosing body; for a NESTED loop it's the rest of the OUTER loop body
 // (so it tail-calls the outer loop).
-auto Lowering::lowerLoopCore(const std::vector<ast::ExprPtr>& loopBody, const ast::ExprPtr* cond,
-                   bool restIsLast, const std::function<ExprPtr()>& mkRest,
-                   const std::optional<std::string>* counterVar ) -> ExprPtr {
+auto Lowering::lowerLoopCore(
+    const std::vector<ast::ExprPtr>& loopBody,
+    const ast::ExprPtr* cond,
+    bool restIsLast,
+    const std::function<ExprPtr()>& mkRest,
+    const std::optional<std::string>* counterVar) -> ExprPtr {
     std::unordered_set<std::string> mset;
-    for (const auto& s : loopBody) collectMutated(s, mset);
+    for (const auto& s : loopBody) {
+        collectMutated(s, mset);
+    }
     std::vector<std::string> mutVars;
-    for (const auto& v : mset) if (subst.count(v)) mutVars.push_back(v);
+    for (const auto& v : mset) {
+        if (subst.count(v)) {
+            mutVars.push_back(v);
+        }
+    }
     std::sort(mutVars.begin(), mutVars.end());
 
     std::string loopFn = "__loop" + std::to_string(counter++);
@@ -737,27 +909,34 @@ auto Lowering::lowerLoopCore(const std::vector<ast::ExprPtr>& loopBody, const as
         loopCounters[loopFn] = ctr;
     }
     std::vector<ExprPtr> initArgs;
-    for (const auto& v : mutVars)
+    for (const auto& v : mutVars) {
         initArgs.push_back(v == ctr && !ctr.empty() ? litInt(0) : var(currentName(v)));
+    }
 
     auto snap = subst;
-    for (const auto& v : mutVars) subst[v] = v;
+    for (const auto& v : mutVars) {
+        subst[v] = v;
+    }
     // Condition and false-exit state use the ENTRY bindings.
     ExprPtr condExpr = cond ? lower(*cond) : nullptr;
     ExprPtr falseState = cond ? stateExpr(mutVars) : nullptr;
-    ExprPtr inner = lowerLoopBodyFrom(loopBody, 0, loopFn, mutVars,
-        [&]() -> ExprPtr { return tailCall(loopFn, mutVars); });
-    if (cond)
+    ExprPtr inner = lowerLoopBodyFrom(
+        loopBody, 0, loopFn, mutVars, [&]() -> ExprPtr { return tailCall(loopFn, mutVars); });
+    if (cond) {
         inner = matchBool(std::move(condExpr), std::move(inner), std::move(falseState));
+    }
     subst = snap;
 
-    LetRec lr; lr.name = loopFn; lr.params = mutVars; lr.funBody = std::move(inner);
+    LetRec lr;
+    lr.name = loopFn;
+    lr.params = mutVars;
+    lr.funBody = std::move(inner);
     auto callLoop = std::make_unique<Expr>();
     callLoop->node = Call{"", loopFn, (int)mutVars.size(), std::move(initArgs), false};
 
     if (mutVars.empty()) {
-        lr.contBody = restIsLast ? std::move(callLoop)
-            : makeLet(fresh("S"), std::move(callLoop), mkRest());
+        lr.contBody =
+            restIsLast ? std::move(callLoop) : makeLet(fresh("S"), std::move(callLoop), mkRest());
     } else {
         std::string resVar = fresh("LR");
         // Capture extracted names BEFORE mkRest() (which may itself lower a
@@ -766,46 +945,62 @@ auto Lowering::lowerLoopCore(const std::vector<ast::ExprPtr>& loopBody, const as
         for (size_t k = 0; k < mutVars.size(); k++) {
             // The counter slot is loop-local: leave it out of subst so it
             // is not visible (or bound) after the loop.
-            if (!ctr.empty() && mutVars[k] == ctr) { boundNames.emplace_back(); continue; }
-            std::string nv = fresh(mutVars[k]); subst[mutVars[k]] = nv; boundNames.push_back(nv);
+            if (!ctr.empty() && mutVars[k] == ctr) {
+                boundNames.emplace_back();
+                continue;
+            }
+            std::string nv = fresh(mutVars[k]);
+            subst[mutVars[k]] = nv;
+            boundNames.push_back(nv);
         }
         auto rest = restIsLast ? (ctr.empty() ? stateExpr(mutVars) : var(resVar)) : mkRest();
         ExprPtr chained = std::move(rest);
         if (mutVars.size() == 1) {
-            if (!boundNames[0].empty())
+            if (!boundNames[0].empty()) {
                 chained = makeLet(boundNames[0], var(resVar), std::move(chained));
+            }
         } else {
             // Only unpack the loop-carried slots the continuation actually
             // reads: an `element/2` bound to a dead name makes erlc warn
             // that the call's result is ignored (loop counters hit this
             // constantly, since they're live only inside the loop).
-            for (size_t k = mutVars.size(); k-- > 0; ) {
-                if (boundNames[k].empty()) continue;
-                if (!mentionsVar(*chained, boundNames[k])) continue;
-                chained = makeLet(boundNames[k],
+            for (size_t k = mutVars.size(); k-- > 0;) {
+                if (boundNames[k].empty()) {
+                    continue;
+                }
+                if (!mentionsVar(*chained, boundNames[k])) {
+                    continue;
+                }
+                chained = makeLet(
+                    boundNames[k],
                     callE("erlang", "element", 2, two(litInt((long)k + 1), var(resVar))),
                     std::move(chained));
             }
         }
         lr.contBody = makeLet(resVar, std::move(callLoop), std::move(chained));
     }
-    auto e = std::make_unique<Expr>(); e->node = std::move(lr);
+    auto e = std::make_unique<Expr>();
+    e->node = std::move(lr);
     return e;
 }
 
 // Top-level loop statement: continuation is the rest of the enclosing body.
-auto Lowering::lowerLoopStmt(const std::vector<ast::ExprPtr>& loopBody, const ast::ExprPtr* cond,
-                   const std::vector<ast::ExprPtr>& outer, size_t outerStart,
-                   const std::optional<std::string>* counterVar ) -> ExprPtr {
+auto Lowering::lowerLoopStmt(
+    const std::vector<ast::ExprPtr>& loopBody,
+    const ast::ExprPtr* cond,
+    const std::vector<ast::ExprPtr>& outer,
+    size_t outerStart,
+    const std::optional<std::string>* counterVar) -> ExprPtr {
     bool restIsLast = (outerStart + 1 >= outer.size());
-    return lowerLoopCore(loopBody, cond, restIsLast,
-        [&]{ return lowerBodyFrom(outer, outerStart + 1); }, counterVar);
+    return lowerLoopCore(
+        loopBody, cond, restIsLast, [&] { return lowerBodyFrom(outer, outerStart + 1); },
+        counterVar);
 }
 
 // A bare call to a name `using` imported from a separately compiled
 // module, lowered exactly as its qualified spelling `M.name(...)` is.
-auto Lowering::lowerExternalImportCall(const ast::FunctionCall& n,
-                             const std::string& qualKey) -> ExprPtr {
+auto Lowering::lowerExternalImportCall(const ast::FunctionCall& n, const std::string& qualKey)
+    -> ExprPtr {
     const auto owner = qualKey.substr(0, qualKey.rfind('.'));
     const auto atom = externalModules->nameToAtom.at(owner);
     const auto beamFn = externalModules->exportToBeamFn.at(qualKey);
@@ -813,29 +1008,53 @@ auto Lowering::lowerExternalImportCall(const ast::FunctionCall& n,
     std::vector<ExprPtr> args;
     if (!n.namedArgs.empty()) {
         auto pit = externalModules->exportParamNames.find(qualKey);
-        if (pit == externalModules->exportParamNames.end())
-            throw LowerError("IR lower: named args to external function with unknown params: " + qualKey);
+        if (pit == externalModules->exportParamNames.end()) {
+            throw LowerError(
+                "IR lower: named args to external function with unknown params: " + qualKey);
+        }
         const auto& pnames = pit->second;
         args.resize(pnames.size());
-        for (const auto& [an, av] : n.namedArgs)
-            for (size_t i = 0; i < pnames.size(); i++)
-                if (pnames[i] == an) { args[i] = atomize(av, binds); break; }
+        for (const auto& [an, av] : n.namedArgs) {
+            for (size_t i = 0; i < pnames.size(); i++) {
+                if (pnames[i] == an) {
+                    args[i] = atomize(av, binds);
+                    break;
+                }
+            }
+        }
         std::vector<ExprPtr> positional;
-        for (const auto& a : n.args) positional.push_back(atomize(a, binds));
-        if (n.block) positional.push_back(atomize(*n.block, binds));
+        for (const auto& a : n.args) {
+            positional.push_back(atomize(a, binds));
+        }
+        if (n.block) {
+            positional.push_back(atomize(*n.block, binds));
+        }
         size_t next = 0;
         for (auto& p : positional) {
-            while (next < args.size() && args[next]) next++;
-            if (next >= args.size()) break;
+            while (next < args.size() && args[next]) {
+                next++;
+            }
+            if (next >= args.size()) {
+                break;
+            }
             args[next] = std::move(p);
         }
         if (auto defaults = externalModules->exportDefaults.find(qualKey);
-            defaults != externalModules->exportDefaults.end())
+            defaults != externalModules->exportDefaults.end()) {
             fillOmittedArguments(defaults->second, args);
-        for (auto& a : args) if (!a) a = lit(LitKind::None, "none");
+        }
+        for (auto& a : args) {
+            if (!a) {
+                a = lit(LitKind::None, "none");
+            }
+        }
     } else {
-        for (const auto& a : n.args) args.push_back(atomize(a, binds));
-        if (n.block) args.push_back(atomize(*n.block, binds));
+        for (const auto& a : n.args) {
+            args.push_back(atomize(a, binds));
+        }
+        if (n.block) {
+            args.push_back(atomize(*n.block, binds));
+        }
         // Fewer arguments than parameters: the rest are the callee's
         // defaults, which only its interface knows.
         const auto defaults = externalModules->exportDefaults.find(qualKey);
@@ -848,8 +1067,7 @@ auto Lowering::lowerExternalImportCall(const ast::FunctionCall& n,
         }
     }
     const int ar = static_cast<int>(args.size());
-    return wrapLets(binds, externalCallExpr(qualKey, atom, beamFn, ar,
-                                            std::move(args)));
+    return wrapLets(binds, externalCallExpr(qualKey, atom, beamFn, ar, std::move(args)));
 }
 
 } // namespace kex::ir

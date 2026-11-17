@@ -15,23 +15,23 @@ namespace kex {
 // answers a Feed, `toStream` answers a Stream), so they have to resolve
 // together rather than one before the other.
 inline constexpr std::array<std::string_view, 15> kPreludeTier0 = {
-    "algebra.kex", "comparable.kex", "console.kex", "errorable.kex",
-    "io.kex", "kex.kex", "math.kex", "optional.kex", "process.kex",
-    "range.kex", "stream.kex", "feed.kex", "system.kex", "test.kex",
-    "tagged_validation.kex",
+    "algebra.kex", "comparable.kex", "console.kex",  "errorable.kex", "io.kex",
+    "kex.kex",     "math.kex",       "optional.kex", "process.kex",   "range.kex",
+    "stream.kex",  "feed.kex",       "system.kex",   "test.kex",      "tagged_validation.kex",
 };
 inline constexpr std::array<std::string_view, 7> kPreludeTier1 = {
-    "atom.kex", "binary.kex", "blankable.kex", "env.kex",
+    "atom.kex",   "binary.kex", "blankable.kex",  "env.kex",
     "number.kex", "string.kex", "truthyable.kex",
 };
 inline constexpr std::array<std::string_view, 2> kPreludeTier2 = {
-    "enumerable.kex", "file_handle.kex",
+    "enumerable.kex",
+    "file_handle.kex",
 };
 // The time files come after units.kex: Date/Time/DateTime are built on the
 // Duration measure the unit system declares. They name each other, so they
 // resolve together in one tier.
 inline constexpr std::array<std::string_view, 10> kPreludeTier3 = {
-    "list.kex", "map.kex", "units.kex", "time.kex", "date.kex",
+    "list.kex",      "map.kex",    "units.kex",    "time.kex",        "date.kex",
     "date_time.kex", "period.kex", "duration.kex", "date_format.kex", "type.kex",
 };
 
@@ -40,8 +40,9 @@ inline auto orderPreludeSourcesByTier(const std::vector<std::string>& files)
     std::unordered_map<std::string, std::string> discovered;
     for (const auto& file : files) {
         auto name = std::filesystem::path(file).filename().string();
-        if (!discovered.emplace(name, file).second)
+        if (!discovered.emplace(name, file).second) {
             throw std::runtime_error("duplicate stdlib source filename: " + name);
+        }
     }
 
     std::vector<std::string> ordered;
@@ -49,12 +50,13 @@ inline auto orderPreludeSourcesByTier(const std::vector<std::string>& files)
     auto append = [&](const auto& tier) {
         for (const auto nameView : tier) {
             std::string name{nameView};
-            if (!declared.insert(name).second)
-                throw std::runtime_error("stdlib source is declared in multiple tiers: " +
-                                         name);
+            if (!declared.insert(name).second) {
+                throw std::runtime_error("stdlib source is declared in multiple tiers: " + name);
+            }
             auto found = discovered.find(name);
-            if (found == discovered.end())
+            if (found == discovered.end()) {
                 throw std::runtime_error("declared stdlib source is missing: " + name);
+            }
             ordered.push_back(found->second);
         }
     };
@@ -63,9 +65,11 @@ inline auto orderPreludeSourcesByTier(const std::vector<std::string>& files)
     append(kPreludeTier2);
     append(kPreludeTier3);
 
-    for (const auto& [name, _] : discovered)
-        if (!declared.contains(name))
+    for (const auto& [name, _] : discovered) {
+        if (!declared.contains(name)) {
             throw std::runtime_error("stdlib source has no compilation tier: " + name);
+        }
+    }
     return ordered;
 }
 
@@ -75,8 +79,8 @@ inline auto groupPreludeSourcesByTier(const std::vector<std::string>& files)
     std::array<std::vector<std::string>, 4> groups;
     size_t offset = 0;
     auto take = [&](size_t tier, size_t count) {
-        groups[tier].insert(groups[tier].end(), ordered.begin() + offset,
-                            ordered.begin() + offset + count);
+        groups[tier].insert(
+            groups[tier].end(), ordered.begin() + offset, ordered.begin() + offset + count);
         offset += count;
     };
     take(0, kPreludeTier0.size());

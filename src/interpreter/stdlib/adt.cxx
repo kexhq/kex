@@ -12,8 +12,8 @@ auto Evaluator::registerAdtConstructors() -> void {
     auto regGenericCtor1 = [this](const std::string& name, ValuePtr (*make)(ValuePtr)) {
         auto val = std::make_shared<Value>();
         val->data = FunctionValue{name, [make](std::vector<ValuePtr> args) -> ValuePtr {
-            return make(args.empty() ? Value::none() : args[0]);
-        }};
+                                      return make(args.empty() ? Value::none() : args[0]);
+                                  }};
         m_globalEnv->define(name, val);
     };
     regGenericCtor1("Just", &Value::just);
@@ -22,10 +22,9 @@ auto Evaluator::registerAdtConstructors() -> void {
 
     // Comparison — the result type of Comparable.compare.
     // Less/Equal/Greater are zero-arg variant constructors.
-    m_globalEnv->define("Less",    Value::variant("Less",    "Ordering"));
-    m_globalEnv->define("Equal",   Value::variant("Equal",   "Ordering"));
+    m_globalEnv->define("Less", Value::variant("Less", "Ordering"));
+    m_globalEnv->define("Equal", Value::variant("Equal", "Ordering"));
     m_globalEnv->define("Greater", Value::variant("Greater", "Ordering"));
-
 }
 
 } // namespace kex::interpreter
