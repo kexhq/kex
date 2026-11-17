@@ -1,0 +1,37 @@
+# The server side of `make bench-net` (kexhq/kex#670): a 13-byte GET and a
+# WebSocket echo, served on PORT (default 8080) until killed.
+
+using Net.HTTP.WebSocket
+using Net.HTTP, except: [ClientOptions]
+using Net.Socket
+
+foul echo(socket: Connection) -> Void do
+  match socket.receiveMessage.try do
+    Text(text) => do
+      socket.send(Text(text)).try
+      echo(socket)
+    end
+    BinaryMessage(bytes) => do
+      socket.send(BinaryMessage(bytes)).try
+      echo(socket)
+    end
+    _ => Void
+  end
+rescue return Void
+end
+
+foul hello(_request: Request<Binary>, _context: Context) -> Response<Binary> = Response.text(200, "Hello, world!")
+
+foul socketRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |_handshake|
+  let handler : Connection -> Void = { |socket| echo(socket) }
+  Accept(handler, Headers.empty, None)
+end
+
+main do
+  let port = ENV.get("PORT").flatMap { |text| text.to(Integer) }.or(8080)
+  let router = Router.build.get("/hello", ~hello).get("/ws", ~socketRoute)
+  let options = ServerOptions { maximumHandlers: 10000 }
+  let endpoint = TCP.Endpoint.loopback(Net.Port.from(port).try)
+  IO.printLine("listening on ${port}")
+  Server.serve(endpoint, router, options).try
+end
