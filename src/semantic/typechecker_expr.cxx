@@ -2040,14 +2040,18 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     // whose receiver is that type. A function of the name on any
                     // other type is not it: `Culture.named` checked clean on
                     // `Type.named`, and was undefined on both backends.
-                    // An imported one counts only from the module itself: a
-                    // same-named type in another unit is not this module's.
+                    // The type is the module's by its full name, the module's
+                    // path or a type declared inside it: a same-named type of
+                    // another module (`Billing.User` for `Accounts.User`) is not
+                    // it. Not by the function's module: `Map.get` is declared
+                    // outside `module Map`.
                     const auto typeAnswers = [&](const std::string& name) {
-                        const auto typeName = kex::mangle::memberOf(*importedPath);
+                        const auto inner = kex::mangle::qualify(
+                            *importedPath, kex::mangle::memberOf(*importedPath));
                         const auto headOf = [&](const TypePtr& written) -> std::string {
                             const auto type = resolve(written);
                             if (const auto* named = std::get_if<NamedType>(&type->kind)) {
-                                return kex::mangle::memberOf(named->name);
+                                return resolveRecordName(named->name);
                             }
                             if (std::holds_alternative<MapType>(type->kind)) {
                                 return "Map";
@@ -2058,8 +2062,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                             return typeToString(type);
                         };
                         const auto takes = [&](const Signature& signature) {
-                            return !signature.params.empty() &&
-                                   headOf(signature.params.front()) == typeName;
+                            if (signature.params.empty()) {
+                                return false;
+                            }
+                            const auto head = headOf(signature.params.front());
+                            return head == *importedPath || head == inner;
                         };
                         if (const auto own = m_methodSignatures.find(name);
                             own != m_methodSignatures.end() &&
@@ -2071,8 +2078,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                std::any_of(
                                    imported->second.begin(), imported->second.end(),
                                    [&](const ImportedFunction& function) {
-                                       return function.sourceModule == *importedPath &&
-                                              takes(function.signature);
+                                       return takes(function.signature);
                                    });
                     };
                     if (module.sourceModule == *importedPath && !compileTimeForm &&
