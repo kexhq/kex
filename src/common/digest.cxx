@@ -15,13 +15,12 @@ namespace kex {
 // Returns false when the host has no synchronous digest to offer, rather than
 // producing a wrong answer — a bad digest would surface far away, as an
 // unexplained "implementation digest mismatch" on a perfectly good artifact.
+// clang-format off: the body is JavaScript, which clang-format would mangle
 EM_JS(bool, hostSha256, (const uint8_t* data, size_t len, uint8_t* out), {
     try {
         // `require` is absent when this module is loaded as an ES module, so
         // its absence is a normal answer here, not an error.
-        if (typeof require != = "function") {
-            return false;
-        }
+        if (typeof require !== "function") return false;
         var digest = require("crypto")
                          .createHash("sha256")
                          .update(Buffer.from(HEAPU8.buffer, data, len))
@@ -32,6 +31,7 @@ EM_JS(bool, hostSha256, (const uint8_t* data, size_t len, uint8_t* out), {
         return false;
     }
 });
+// clang-format on
 #endif
 
 auto sha256(std::span<const uint8_t> bytes) -> Sha256 {
