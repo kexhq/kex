@@ -1,0 +1,23 @@
+# kex: check-only
+# A range pattern takes a Range apart into its bounds. Arms of literal ranges
+# alone do not cover every range, so they still owe a fallback: with one
+# dropped from a match the rest checked clean, and the value it no longer
+# took ran into "no matching clause" (found by CI's metamorphic search). A
+# range of variables covers every range, as `(x..y)` does here.
+
+main do
+  let az = 'a'..'z'
+  match az do
+    ('b'..'f') => IO.printLine("b to f")
+    ('A'..'Z') => IO.printLine("upper case")
+  end
+  match az do
+    ('b'..'f') => IO.printLine("b to f")
+    (low..high) => IO.printLine("${low} to ${high}")
+  end
+  # A guarded arm takes only what its guard lets through.
+  match 1..10 do
+    (-10..-1) => IO.printLine("negative")
+    (x..y) when x > 0 => IO.printLine("positive")
+  end
+end

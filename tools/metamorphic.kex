@@ -433,7 +433,9 @@ end
 let indicesOf(items: [String]) -> [Integer] = items.empty? then [] else (0..items.count - 1).items
 
 # Spec programs that run and check clean on their own: a golden beside
-# them, no `# kex:` mode line, not an error fixture, not a spec suite.
+# them that records no crash, no `# kex:` mode line, not an error fixture,
+# not a spec suite. A program meant to fail (`mock_gate_standin`, whose
+# golden IS the refusal) still fails once mutated, which says nothing.
 foul corpus -> [String] do
   FS.Directory.list("spec").or([]).sort.filter(~runnableSpec?).map { |name| "spec/${name}" }
 end
@@ -441,8 +443,9 @@ end
 foul runnableSpec?(name: String) -> Bool do
   return false if !name.endsWith?(".kex") || name.endsWith?(".spec.kex")
   return false if name.startsWith?("error_")
-  let golden = FS.File.file?("spec/${name.take(name.count - 4)}.expected")
-  golden && !FS.File.read("spec/${name}").or("# kex:").contains?("# kex:")
+  let golden = FS.File.read("spec/${name.take(name.count - 4)}.expected")
+  return false if !golden.ok? || crashText?(golden.or(""))
+  !FS.File.read("spec/${name}").or("# kex:").contains?("# kex:")
 end
 
 record MutationCase do

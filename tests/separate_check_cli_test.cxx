@@ -213,14 +213,25 @@ end
         // A module named like the record it declares, whose `make` functions
         // another unit calls through the module (`Team.handle?(text)`): they
         // are the interface's receiver functions, not its exports. Its
-        // constant gives it exports, so the alias is read as the module.
+        // constant gives it exports, so the alias is read as the module. Its
+        // `make` for another type, with a function of the same name, is not
+        // what the alias reaches.
         write("lib/teams/team.kex", R"KEX(module Teams.Team
+
+using Boxes, only: [Box]
 
 record Team do
   handle : String
 end
 
 let LONGEST_HANDLE = 30
+
+# Another type's function of the same name, first in the interface: the
+# alias still names Team.
+make Box do
+  handled : String -> String
+  let handled(name) = "box ${name}"
+end
 
 make Team do
   handle? : String -> Bool

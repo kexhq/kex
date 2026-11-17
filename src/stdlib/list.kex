@@ -700,7 +700,7 @@ make [X], implement: Enumerable, Foldable do
   slices :> Integer -> [[X]]
   let slices(n) do
     return [] if n < 1 || this.empty?
-    [this.take(n)] + this.drop(n).slices(n)
+    [this.take(n) | this.drop(n).slices(n)]
   end
 
   # Every run of +n+ consecutive elements, each overlapping the next by all

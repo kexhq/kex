@@ -262,7 +262,7 @@ module Kex.AST do
     while scanning && position >= 0 do
       match parent.children.at(position) do
         Just(TokenElement(token)) when token.kind == "Newline" => do
-          lines = [token.trivia] + lines
+          lines = [token.trivia | lines]
           position = position - 1
         end
         _ => scanning = false
