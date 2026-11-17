@@ -2040,6 +2040,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     // whose receiver is that type. A function of the name on any
                     // other type is not it: `Culture.named` checked clean on
                     // `Type.named`, and was undefined on both backends.
+                    // An imported one counts only from the module itself: a
+                    // same-named type in another unit is not this module's.
                     const auto typeAnswers = [&](const std::string& name) {
                         const auto typeName = kex::mangle::memberOf(*importedPath);
                         const auto headOf = [&](const TypePtr& written) -> std::string {
@@ -2069,7 +2071,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                std::any_of(
                                    imported->second.begin(), imported->second.end(),
                                    [&](const ImportedFunction& function) {
-                                       return takes(function.signature);
+                                       return function.sourceModule == *importedPath &&
+                                              takes(function.signature);
                                    });
                     };
                     if (module.sourceModule == *importedPath && !compileTimeForm &&
