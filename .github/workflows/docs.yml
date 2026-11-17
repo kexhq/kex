@@ -58,7 +58,7 @@ jobs:
             libssl-dev libboost-context-dev
 
       - name: Build kex
-        run: cmake -B build -G "Unix Makefiles" -DKEX_BOOST_STATIC=ON && cmake --build build --parallel
+        run: cmake -B build -G "Unix Makefiles" -DKEX_BOOST_STATIC=ON && cmake --build build --parallel "$(getconf _NPROCESSORS_ONLN)"
 
       - name: Build Tey
         run: make build-tey
