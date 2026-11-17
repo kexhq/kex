@@ -506,10 +506,13 @@ auto Value::toString() const -> std::string {
                     first = false;
                 }
                 return result + " }";
-            } else if constexpr (std::is_same_v<T, FunctionValue>) {
-                return "<function:" + v.name + ">";
-            } else if constexpr (std::is_same_v<T, LambdaValue>) {
-                return "<lambda>";
+            } else if constexpr (
+                std::is_same_v<T, FunctionValue> || std::is_same_v<T, LambdaValue>) {
+                // As BEAM shows one: neither backend can show a name the other
+                // has (`<function:<lambda>>` against `#Fun<...>`). The walker's
+                // `inspect` (the REPL's, `IO.inspect` under `kex`) still shows
+                // `<function:NAME>`; BEAM's `IO.inspect` falls back to this.
+                return "<function>";
             } else {
                 return "?";
             }

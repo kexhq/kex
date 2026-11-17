@@ -880,10 +880,10 @@ private do
       let capped = k < sizes.count then k else sizes.count - 1
       let size = sizes.at(capped).or(3)
       if pos <= size
-        parts = [digits.take(pos)] + parts
+        parts = [digits.take(pos) | parts]
         pos = 0
       else
-        parts = [digits.drop(pos - size).take(size)] + parts
+        parts = [digits.drop(pos - size).take(size) | parts]
         pos = pos - size
       end
       k = k + 1

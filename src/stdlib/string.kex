@@ -708,7 +708,7 @@ make String, implement: Enumerable, Foldable do
     let rest = all.drop(1).map do |line|
       line.empty? then line else prefix + line
     end
-    ([all.first.or("")] + rest).join("\n")
+    [all.first.or("") | rest].join("\n")
   end
 
   # Replaces every literal occurrence of +pattern+ with +replacement+.

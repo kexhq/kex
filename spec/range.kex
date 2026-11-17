@@ -14,10 +14,12 @@ main do
     ('b'..'f') => IO.printLine("Lowercase letters, only b to f")
     ('a'..'z') => IO.printLine("All lowercase letters")
     ('A'..'Z') => IO.printLine("All uppercase letters")
+    _ => IO.printLine("Another range")
   end
 
   match r do
     (-10..-1) => IO.printLine("Negative range")
     (x..y) when x > 0 && y > 0 => IO.printLine("Positive range")
+    _ => IO.printLine("Another range")
   end
 end

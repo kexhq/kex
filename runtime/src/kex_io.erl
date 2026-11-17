@@ -847,6 +847,9 @@ to_string(X) when is_tuple(X), tuple_size(X) >= 1 ->
 to_string(X) when is_tuple(X)   ->
     Parts = [to_string(E) || E <- tuple_to_list(X)],
     "(" ++ lists:flatten(lists:join(", ", Parts)) ++ ")";
+% A function shows as the walker shows one: nothing a program could read in
+% its Erlang form (`#Fun<Kex.Factory.0.50542265>`) is the same on both.
+to_string(F) when is_function(F) -> "<function>";
 to_string(X)                    -> lists:flatten(io_lib:format("~p", [X])).
 
 %% See map_key_string/1 — the same rule for the quote-free `show` rendering.

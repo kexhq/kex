@@ -1,0 +1,16 @@
+# A function value shows the same on both backends. The walker wrote
+# `<function:<lambda>>` and BEAM `#Fun<Kex.Factory.0.50542265>` for the
+# same value (found by CI's metamorphic search, dropping an argument from
+# spec/module_nullary_overload).
+
+module Factory do
+  let render = { |value| "render ${value}" }
+end
+
+let twice(x: Integer) -> Integer = x * 2
+
+main do
+  IO.printLine(Factory.render)
+  IO.printLine("${~twice}")
+  IO.printLine([{ |x| x + 1 }])
+end

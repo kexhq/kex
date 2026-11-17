@@ -1996,18 +1996,33 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     }
                     return true;
                 };
-                // A function of a `make` block the imported module declares (`make
-                // Team do let handle?(text)`, called `Team.handle?(text)` from a
-                // unit compiled apart) is filed with the receiver functions, not
-                // the exports.
-                const auto declaredInMake = [&](const std::string& name) {
+                // A function of the `make` block for the type the imported module
+                // is named like (`make Team do let handle?(text)` in
+                // `App.Models.Team`, called `Team.handle?(text)` from a unit
+                // compiled apart), which the interface files with the receiver
+                // functions, not the exports: its receiver type, or null. Only
+                // that type's: the module's `make` for another type is that
+                // type's, not reached through the module.
+                const auto ownMakeReceiver = [&](const std::string& name) -> TypePtr {
                     const auto functions = m_importedInterfaces->receiverFunctions.find(name);
-                    return functions != m_importedInterfaces->receiverFunctions.end() &&
-                           std::any_of(
-                               functions->second.begin(), functions->second.end(),
-                               [&](const ImportedFunction& function) {
-                                   return function.sourceModule == *importedPath;
-                               });
+                    if (functions == m_importedInterfaces->receiverFunctions.end()) {
+                        return nullptr;
+                    }
+                    const auto own =
+                        kex::mangle::qualify(*importedPath, kex::mangle::memberOf(*importedPath));
+                    for (const auto& function : functions->second) {
+                        if (function.sourceModule != *importedPath ||
+                            function.signature.params.empty()) {
+                            continue;
+                        }
+                        const auto& receiver = function.signature.params.front();
+                        const auto* named = std::get_if<NamedType>(&resolve(receiver)->kind);
+                        if (named &&
+                            (named->name == own || resolveRecordName(named->name) == own)) {
+                            return receiver;
+                        }
+                    }
+                    return nullptr;
                 };
                 if (isImportedNamespace && !isLocalNamespace && unambiguousImport()) {
                     const auto& module = m_importedInterfaces->modules.at(*importedPath);
@@ -2021,26 +2036,54 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                                  node.method == names::kEmbedFunction;
                     // A module named like a type (`Map`, beside `type Map<K, V>`)
                     // also answers that type's static functions (`Map.get(m, k)`),
-                    // which its interface does not list.
-                    // Such a module is still wrong about a name no function has,
-                    // anywhere: `Time.monotonic` checked clean and was undefined
-                    // on both backends.
-                    const auto namedAnywhere = [&](const std::string& name) {
-                        if (m_methodSignatures.contains(name) || m_userSignatures.contains(name)) {
+                    // which its interface does not list: a function of the name
+                    // whose receiver is that type. A function of the name on any
+                    // other type is not it: `Culture.named` checked clean on
+                    // `Type.named`, and was undefined on both backends.
+                    // The type is the module's by its full name, the module's
+                    // path or a type declared inside it: a same-named type of
+                    // another module (`Billing.User` for `Accounts.User`) is not
+                    // it. Not by the function's module: `Map.get` is declared
+                    // outside `module Map`.
+                    const auto typeAnswers = [&](const std::string& name) {
+                        const auto inner = kex::mangle::qualify(
+                            *importedPath, kex::mangle::memberOf(*importedPath));
+                        const auto headOf = [&](const TypePtr& written) -> std::string {
+                            const auto type = resolve(written);
+                            if (const auto* named = std::get_if<NamedType>(&type->kind)) {
+                                return resolveRecordName(named->name);
+                            }
+                            if (std::holds_alternative<MapType>(type->kind)) {
+                                return "Map";
+                            }
+                            if (std::holds_alternative<ListType>(type->kind)) {
+                                return "List";
+                            }
+                            return typeToString(type);
+                        };
+                        const auto takes = [&](const Signature& signature) {
+                            if (signature.params.empty()) {
+                                return false;
+                            }
+                            const auto head = headOf(signature.params.front());
+                            return head == *importedPath || head == inner;
+                        };
+                        if (const auto own = m_methodSignatures.find(name);
+                            own != m_methodSignatures.end() &&
+                            std::any_of(own->second.begin(), own->second.end(), takes)) {
                             return true;
                         }
-                        for (const auto& [_, other] : m_importedInterfaces->modules) {
-                            if (other.exports.contains(name)) {
-                                return true;
-                            }
-                        }
-                        return std::any_of(
-                            m_userSignatures.begin(), m_userSignatures.end(),
-                            [&](const auto& entry) { return entry.first.ends_with("." + name); });
+                        const auto imported = m_importedInterfaces->receiverFunctions.find(name);
+                        return imported != m_importedInterfaces->receiverFunctions.end() &&
+                               std::any_of(
+                                   imported->second.begin(), imported->second.end(),
+                                   [&](const ImportedFunction& function) {
+                                       return takes(function.signature);
+                                   });
                     };
                     if (module.sourceModule == *importedPath && !compileTimeForm &&
                         (!moduleNamesType(*importedPath) ||
-                         !(namedAnywhere(node.method) || declaredInMake(node.method))) &&
+                         !(typeAnswers(node.method) || ownMakeReceiver(node.method))) &&
                         !module.exports.count(node.method)) {
                         std::vector<std::string> exported;
                         for (const auto& [name, _] : module.exports) {
@@ -2077,25 +2120,19 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // The same through an alias read as the module (`Team.handle?(text)`
                 // under `using App.Models.Team, as: Team`): a module named like its
                 // type, the function its `make` block's, not an export.
+                // The alias names the module, so its type: never a constructor
+                // the same name also reaches (`Command` of another module's
+                // `EventKind`).
                 if (isNamespaceCall && isImportedNamespace && !isLocalNamespace &&
                     std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind) &&
                     moduleNamesType(*importedPath) &&
                     !m_importedInterfaces->modules.at(*importedPath).exports.count(node.method) &&
-                    declaredInMake(node.method) &&
                     namesType(std::get<ast::UpperIdentifier>(node.receiver->kind).name)) {
-                    isImportedNamespace = false;
-                    isNamespaceCall = false;
-                    throughTypeName = true;
-                    // The alias names the module, so its type: never a
-                    // constructor the same name also reaches (`Command` of
-                    // another module's `EventKind`).
-                    for (const auto& function :
-                         m_importedInterfaces->receiverFunctions.at(node.method)) {
-                        if (function.sourceModule == *importedPath &&
-                            !function.signature.params.empty()) {
-                            aliasedType = function.signature.params.front();
-                            break;
-                        }
+                    aliasedType = ownMakeReceiver(node.method);
+                    if (aliasedType) {
+                        isImportedNamespace = false;
+                        isNamespaceCall = false;
+                        throughTypeName = true;
                     }
                 }
                 if (isNamespaceCall && !isImportedNamespace && !isLocalNamespace &&

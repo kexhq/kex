@@ -3716,6 +3716,7 @@ auto TypeChecker::checkPatternMatrix(
     const std::string cons = "::";
     const std::string record = "rec:";
     const std::string literal = "lit:";
+    const std::string range = "..";
     const std::string yes = "true";
     const std::string no = "false";
     // A named record's fields, in one order for every pattern of it.
@@ -3828,6 +3829,21 @@ auto TypeChecker::checkPatternMatrix(
                             std::move(*inner);
                     }
                     return space;
+                } else if constexpr (std::is_same_v<T, ast::RangePattern>) {
+                    // A range pattern takes a Range apart into its bounds, as a
+                    // constructor of two arguments: `(x..y)` covers every
+                    // range, `('a'..'z')` that one only, so arms of literal
+                    // ranges alone still owe a fallback (one dropped ran into
+                    // "no matching clause").
+                    Space space{range, {}};
+                    for (const auto* side : {&kind.start, &kind.end}) {
+                        auto inner = *side ? spaceOf(**side) : std::optional<Space>{Space{}};
+                        if (!inner) {
+                            return std::nullopt;
+                        }
+                        space.arguments.push_back(std::move(*inner));
+                    }
+                    return space;
                 } else {
                     return std::nullopt;
                 }
@@ -3876,6 +3892,9 @@ auto TypeChecker::checkPatternMatrix(
             return std::vector<std::pair<std::string, std::size_t>>{
                 {constructor, std::stoul(constructor.substr(tuple.size()))}};
         }
+        if (constructor == range) {
+            return std::vector<std::pair<std::string, std::size_t>>{{range, 2}};
+        }
         if (constructor.starts_with(record)) {
             const auto fields = fieldsOf(constructor.substr(record.size()));
             if (!fields) {
@@ -3919,6 +3938,9 @@ auto TypeChecker::checkPatternMatrix(
         }
         if (space.constructor.starts_with(tuple)) {
             return "(" + joined(space.arguments) + ")";
+        }
+        if (space.constructor == range && space.arguments.size() == 2) {
+            return "(" + shown(space.arguments[0]) + ".." + shown(space.arguments[1]) + ")";
         }
         if (space.constructor == empty) {
             return "[]";

@@ -1,10 +1,15 @@
 # kex: check-only
-# A module named like a type (`Time`) also answers that type's own functions,
-# which its interface does not list, so its members went unchecked:
-# `Time.monotonic`, which nothing declares, checked clean and was undefined on
-# both backends. A name no function has anywhere is refused.
+# A module named like a type (`Time`, `Map`, `Culture`) also answers that
+# type's own functions, which its interface does not list (`Map.get(m, k)`),
+# so its members went unchecked: `Time.monotonic`, which nothing declares,
+# checked clean and was undefined on both backends. Nor does it answer a
+# function only some other type has: `Culture.named(...)` checked clean
+# because `Type.named` exists. Both are refused.
 
 main do
   IO.inspect(Time.now)
   IO.inspect(Time.monotonic)
+  let m = {"a": 1}
+  IO.printLine(Map.get(m, "a"))
+  IO.printLine(Culture.named("x"))
 end
