@@ -263,17 +263,49 @@ auto overlayOnView(const semantic::ImportedInterfaces& view, semantic::ImportedI
     return mergeSemanticInterfaces(std::move(given), std::move(below));
 }
 
+// Which units below a unit reaches, as their digests: what the analyses
+// below are computed from, beside the prelude, which is the build's.
+auto belowKey(Unit& unit, UnitAnalysisManager& analyses) -> std::string {
+    std::string key;
+    for (const auto& digest : analyses.result<BelowAnalysis>(unit).digests) {
+        key += digest;
+        key += '\n';
+    }
+    return key;
+}
+
 auto BelowInterfacesAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
-    return analyses.result<BelowAnalysis>(unit).registry.buildSemanticInterfaces();
+    auto& recent = unit.program().recentBelowInterfaces;
+    const auto key = belowKey(unit, analyses);
+    if (auto found = recent.find(key)) {
+        return found;
+    }
+    return recent.add(
+        key, std::make_shared<const semantic::ImportedInterfaces>(
+                 analyses.result<BelowAnalysis>(unit).registry.buildSemanticInterfaces()));
 }
 
 auto UnitExternalsAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
-    return unitExternalModules(analyses.result<BelowAnalysis>(unit).registry);
+    auto& recent = unit.program().recentUnitExternals;
+    const auto key = belowKey(unit, analyses);
+    if (auto found = recent.find(key)) {
+        return found;
+    }
+    return recent.add(
+        key, std::make_shared<const ir::ExternalModules>(
+                 unitExternalModules(analyses.result<BelowAnalysis>(unit).registry)));
 }
 
 auto AvailableInterfacesAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
-    return overlayDescribedInterfaces(
-        unit.program().settings().interfaces, analyses.result<BelowInterfacesAnalysis>(unit), true);
+    auto& recent = unit.program().recentAvailableInterfaces;
+    const auto key = belowKey(unit, analyses);
+    if (auto found = recent.find(key)) {
+        return found;
+    }
+    return recent.add(
+        key, std::make_shared<const semantic::ImportedInterfaces>(overlayDescribedInterfaces(
+                 unit.program().settings().interfaces,
+                 *analyses.result<BelowInterfacesAnalysis>(unit), true)));
 }
 
 auto unitExternalModules(const beam::KexiRegistry& registry) -> ir::ExternalModules {
@@ -334,7 +366,7 @@ auto unitExternalModules(const beam::KexiRegistry& registry) -> ir::ExternalModu
 auto LinkAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
     const auto& registry = analyses.result<BelowAnalysis>(unit).registry;
     Result link{
-        analyses.result<UnitExternalsAnalysis>(unit), preludeRecordLayouts(), preludeVariantTags()};
+        *analyses.result<UnitExternalsAnalysis>(unit), preludeRecordLayouts(), preludeVariantTags()};
     // Where each type's `make` functions are, for the runtime's dispatch on a
     // value: its declaring module may have none, and another unit may. A
     // `make` over a union (`make TypeRef | PatternRef`) owns each member.
@@ -373,7 +405,7 @@ auto LinkAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
         return defaults;
     }();
     auto traitDefaults = preludeTraitDefaults;
-    for (const auto& trait : analyses.result<BelowInterfacesAnalysis>(unit).traits) {
+    for (const auto& trait : analyses.result<BelowInterfacesAnalysis>(unit)->traits) {
         traitDefaults[trait.name] = trait.defaultMethods;
     }
     for (const auto* module : registry.allLoadedModules()) {
@@ -479,7 +511,9 @@ auto UnitCacheKeyAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Res
 
 auto HirAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
     auto& program = unit.program();
-    const auto& available = analyses.result<AvailableInterfacesAnalysis>(unit);
+    // Shared with other units reaching the same ones; kept alive by the
+    // analysis result until this unit is done with it.
+    const auto& available = *analyses.result<AvailableInterfacesAnalysis>(unit);
     Result checked;
     checked.analyzer = std::make_unique<semantic::Analyzer>(&available);
     // The full check, as the merged program gets it; names are reported for
@@ -488,7 +522,7 @@ auto HirAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
         *checked.analyzer, unit.isEntry() ? program.nameCheckFiles() : std::vector<std::string>{},
         program.settings().entryPath);
     // The providers lowering will see, so the check counts a call's the same.
-    checked.analyzer->setLinkedModules(providerModules(analyses.result<UnitExternalsAnalysis>(unit)));
+    checked.analyzer->setLinkedModules(providerModules(*analyses.result<UnitExternalsAnalysis>(unit)));
     checked.clean = checked.analyzer->analyze(unit.ast);
     checked.diagnostics = checked.analyzer->diagnostics();
     if (checked.clean) {
@@ -888,7 +922,7 @@ auto EmitCorePass::run(Unit& unit, UnitAnalysisManager&) -> pass::PreservedAnaly
 
 auto DescribePass::run(Unit& unit, UnitAnalysisManager& analyses) -> pass::PreservedAnalyses {
     const auto& checked = analyses.result<HirAnalysis>(unit);
-    const auto& available = analyses.result<AvailableInterfacesAnalysis>(unit);
+    const auto& available = *analyses.result<AvailableInterfacesAnalysis>(unit);
     const auto& program = unit.ast;
     if (!unit.isEntry()) {
         // What the unit's modules would say of themselves once compiled.
