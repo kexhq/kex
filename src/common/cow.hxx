@@ -16,7 +16,8 @@ namespace kex {
 //
 // It offers the container's own interface for the calls made on these tables.
 // `get()` is the container, read-only, and `mut()` the container to change.
-template <typename Container> class Cow {
+template <typename Container>
+class Cow {
 public:
     using value_type = typename Container::value_type;
     using size_type = typename Container::size_type;
@@ -25,8 +26,7 @@ public:
 
     Cow() : m_shared(std::make_shared<Container>()) {}
     Cow(Container container) : m_shared(std::make_shared<Container>(std::move(container))) {}
-    Cow(std::initializer_list<value_type> values)
-        : m_shared(std::make_shared<Container>(values)) {}
+    Cow(std::initializer_list<value_type> values) : m_shared(std::make_shared<Container>(values)) {}
     // A moved-from Cow still holds its container, shared: code that moves a
     // table out and goes on reading the source finds what it held.
     Cow(const Cow&) = default;
@@ -41,8 +41,12 @@ public:
         return *this;
     }
 
-    auto get() const -> const Container& { return *m_shared; }
-    operator const Container&() const { return *m_shared; }
+    auto get() const -> const Container& {
+        return *m_shared;
+    }
+    operator const Container&() const {
+        return *m_shared;
+    }
     auto mut() -> Container& {
         if (m_shared.use_count() > 1) {
             m_shared = std::make_shared<Container>(*m_shared);
@@ -50,59 +54,112 @@ public:
         return *m_shared;
     }
 
-    auto begin() const { return m_shared->cbegin(); }
-    auto end() const { return m_shared->cend(); }
-    auto cbegin() const { return m_shared->cbegin(); }
-    auto cend() const { return m_shared->cend(); }
-    auto begin() { return mut().begin(); }
-    auto end() { return mut().end(); }
-    auto size() const { return m_shared->size(); }
-    auto empty() const { return m_shared->empty(); }
+    auto begin() const {
+        return m_shared->cbegin();
+    }
+    auto end() const {
+        return m_shared->cend();
+    }
+    auto cbegin() const {
+        return m_shared->cbegin();
+    }
+    auto cend() const {
+        return m_shared->cend();
+    }
+    auto begin() {
+        return mut().begin();
+    }
+    auto end() {
+        return mut().end();
+    }
+    auto size() const {
+        return m_shared->size();
+    }
+    auto empty() const {
+        return m_shared->empty();
+    }
 
-    template <typename Key> auto find(const Key& key) const { return m_shared->find(key); }
-    template <typename Key> auto find(const Key& key) { return mut().find(key); }
-    template <typename Key> auto count(const Key& key) const { return m_shared->count(key); }
-    template <typename Key> auto contains(const Key& key) const {
+    template <typename Key>
+    auto find(const Key& key) const {
+        return m_shared->find(key);
+    }
+    template <typename Key>
+    auto find(const Key& key) {
+        return mut().find(key);
+    }
+    template <typename Key>
+    auto count(const Key& key) const {
+        return m_shared->count(key);
+    }
+    template <typename Key>
+    auto contains(const Key& key) const {
         return m_shared->contains(key);
     }
-    template <typename Key> decltype(auto) at(const Key& key) const { return m_shared->at(key); }
-    template <typename Key> decltype(auto) at(const Key& key) { return mut().at(key); }
-    template <typename Key> decltype(auto) operator[](Key&& key) {
+    template <typename Key>
+    decltype(auto) at(const Key& key) const {
+        return m_shared->at(key);
+    }
+    template <typename Key>
+    decltype(auto) at(const Key& key) {
+        return mut().at(key);
+    }
+    template <typename Key>
+    decltype(auto) operator[](Key&& key) {
         return mut()[std::forward<Key>(key)];
     }
-    template <typename Key> decltype(auto) operator[](const Key& key) const
+    template <typename Key>
+    decltype(auto) operator[](const Key& key) const
         requires requires(const Container& c, const Key& k) { c[k]; }
     {
         return (*m_shared)[key];
     }
-    decltype(auto) front() const { return m_shared->front(); }
-    decltype(auto) back() const { return m_shared->back(); }
-    decltype(auto) front() { return mut().front(); }
-    decltype(auto) back() { return mut().back(); }
+    decltype(auto) front() const {
+        return m_shared->front();
+    }
+    decltype(auto) back() const {
+        return m_shared->back();
+    }
+    decltype(auto) front() {
+        return mut().front();
+    }
+    decltype(auto) back() {
+        return mut().back();
+    }
 
-    template <typename... Args> decltype(auto) emplace(Args&&... args) {
+    template <typename... Args>
+    decltype(auto) emplace(Args&&... args) {
         return mut().emplace(std::forward<Args>(args)...);
     }
-    template <typename... Args> decltype(auto) try_emplace(Args&&... args) {
+    template <typename... Args>
+    decltype(auto) try_emplace(Args&&... args) {
         return mut().try_emplace(std::forward<Args>(args)...);
     }
-    template <typename... Args> decltype(auto) insert(Args&&... args) {
+    template <typename... Args>
+    decltype(auto) insert(Args&&... args) {
         return mut().insert(std::forward<Args>(args)...);
     }
-    template <typename... Args> decltype(auto) insert_or_assign(Args&&... args) {
+    template <typename... Args>
+    decltype(auto) insert_or_assign(Args&&... args) {
         return mut().insert_or_assign(std::forward<Args>(args)...);
     }
-    template <typename... Args> decltype(auto) erase(Args&&... args) {
+    template <typename... Args>
+    decltype(auto) erase(Args&&... args) {
         return mut().erase(std::forward<Args>(args)...);
     }
-    template <typename Value> void push_back(Value&& value) {
+    template <typename Value>
+    void push_back(Value&& value) {
         mut().push_back(std::forward<Value>(value));
     }
-    template <typename... Args> decltype(auto) emplace_back(Args&&... args) {
+    template <typename... Args>
+    decltype(auto) emplace_back(Args&&... args) {
         return mut().emplace_back(std::forward<Args>(args)...);
     }
-    void reserve(size_type size) { mut().reserve(size); }
-    void clear() { mut().clear(); }
+    void reserve(size_type size) {
+        mut().reserve(size);
+    }
+    void clear() {
+        mut().clear();
+    }
 
     friend auto operator==(const Cow& a, const Cow& b) -> bool {
         return a.m_shared == b.m_shared || a.get() == b.get();

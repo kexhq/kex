@@ -465,7 +465,8 @@ auto loadDependencies(
                     // What the expansion reads, for the unit cache's key
                     // (kexhq/kex#672). An outer recorder still sees it all.
                     kex::compiled::DependencyRecorder recorder;
-                    expanded = kex::compiled::expand(*depProg, depExpandDiagnostics, depExpandOptions);
+                    expanded =
+                        kex::compiled::expand(*depProg, depExpandDiagnostics, depExpandOptions);
                     // An expansion that reached outside the program depends on
                     // more than the files it read.
                     if (!recorder.reachedOutside()) {

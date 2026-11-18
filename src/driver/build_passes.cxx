@@ -369,7 +369,8 @@ auto unitExternalModules(const beam::KexiRegistry& registry) -> ir::ExternalModu
 auto LinkAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
     const auto& registry = analyses.result<BelowAnalysis>(unit).registry;
     Result link{
-        *analyses.result<UnitExternalsAnalysis>(unit), preludeRecordLayouts(), preludeVariantTags()};
+        *analyses.result<UnitExternalsAnalysis>(unit), preludeRecordLayouts(),
+        preludeVariantTags()};
     // Where each type's `make` functions are, for the runtime's dispatch on a
     // value: its declaring module may have none, and another unit may. A
     // `make` over a union (`make TypeRef | PatternRef`) owns each member.
@@ -525,7 +526,8 @@ auto HirAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
         *checked.analyzer, unit.isEntry() ? program.nameCheckFiles() : std::vector<std::string>{},
         program.settings().entryPath);
     // The providers lowering will see, so the check counts a call's the same.
-    checked.analyzer->setLinkedModules(providerModules(*analyses.result<UnitExternalsAnalysis>(unit)));
+    checked.analyzer->setLinkedModules(
+        providerModules(*analyses.result<UnitExternalsAnalysis>(unit)));
     checked.clean = checked.analyzer->analyze(unit.ast);
     checked.diagnostics = checked.analyzer->diagnostics();
     if (checked.clean) {

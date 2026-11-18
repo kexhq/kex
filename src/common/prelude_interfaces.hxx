@@ -470,8 +470,7 @@ inline auto resolveSharedNullaryConstructors(kex::semantic::ImportedInterfaces& 
             return false;
         }
         const auto& result = function.signature.result;
-        const auto* named =
-            result ? std::get_if<kex::semantic::NamedType>(&result->kind) : nullptr;
+        const auto* named = result ? std::get_if<kex::semantic::NamedType>(&result->kind) : nullptr;
         return !named || named->name != function.constructorOwner || !named->typeArgs.empty();
     };
     for (auto& [_, module] : interfaces.modules) {

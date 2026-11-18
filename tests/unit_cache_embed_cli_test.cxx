@@ -70,8 +70,9 @@ struct Package {
     }
 
     auto pageHit(const std::string& report) const -> bool {
-        return report.find("unit cache hit: " +
-                           std::filesystem::weakly_canonical(root / "lib" / "page.kex").string()) !=
+        return report.find(
+                   "unit cache hit: " +
+                   std::filesystem::weakly_canonical(root / "lib" / "page.kex").string()) !=
                std::string::npos;
     }
 };

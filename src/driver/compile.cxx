@@ -800,7 +800,8 @@ auto compileToBeam(
                 remainingPaths.push_back(corePaths[i]);
             }
         }
-        if (!compileCoreModules(remaining, remainingPaths, options.outputDir, !output.temporary.empty())) {
+        if (!compileCoreModules(
+                remaining, remainingPaths, options.outputDir, !output.temporary.empty())) {
             return output.abandon();
         }
         if (early && !early->moveInto(options.outputDir)) {
