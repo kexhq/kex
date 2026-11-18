@@ -521,8 +521,8 @@ auto Lowering::makeTraitDictionaryFor(const std::string& trait, const std::strin
             reference.push_back(lit(LitKind::Atom, module));
             reference.push_back(lit(LitKind::Atom, function));
             reference.push_back(litInt(method.arity));
-            slots.push_back(
-                atomize_ir(callE("erlang", "make_fun", 3, std::move(reference)), dictionaryBindings));
+            slots.push_back(atomize_ir(
+                callE("erlang", "make_fun", 3, std::move(reference)), dictionaryBindings));
             continue;
         }
         Lambda lambda;
