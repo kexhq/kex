@@ -187,6 +187,12 @@ auto Lowering::makeAccessors(
         def.name = field;
         def.arity = 1;
         def.isFieldAccessor = true;
+        def.externalOnlyAccessor =
+            g_keepDeclaringModulesApart &&
+            std::all_of(entries.begin(), entries.end(), [&](const FieldSlot& slot) {
+                return externalRecordNames.count(slot.record) &&
+                       !localTypeModules.count(slot.record);
+            });
         FunClause fc;
         auto rp = std::make_unique<Pattern>();
         rp->kind = PatKind::Var;

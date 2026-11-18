@@ -1881,6 +1881,44 @@ auto rewriteModuleCalls(
     });
 }
 
+// A unit compiled apart lowers every record of the units below it, so each of
+// its modules got an accessor for every field of every one of them: about a
+// hundred functions per unit in Slick, compiled by erlc again and again. Such
+// an accessor (`externalOnlyAccessor`) is only needed where this unit reads
+// the field itself; elsewhere the declaring unit's own accessor serves, and
+// runtime dispatch goes there too (the declaring unit registers its records'
+// owner, which this one no longer claims). So one nothing here calls, from
+// any of this unit's modules, is dropped (kexhq/kex#672).
+auto dropUncalledExternalAccessors(std::vector<Module>& modules) -> void {
+    std::unordered_set<std::string> unitModules;
+    for (const auto& module : modules) {
+        unitModules.insert(module.name);
+    }
+    std::unordered_set<std::string> called;
+    std::function<void(const ExprPtr&)> visit = [&](const ExprPtr& expr) {
+        if (const auto* call = std::get_if<Call>(&expr->node);
+            call && call->arity == 1 && (call->module.empty() || unitModules.count(call->module))) {
+            called.insert(call->name);
+        }
+        forEachChild(*expr, [&](const ExprPtr& child) { visit(child); });
+    };
+    for (const auto& module : modules) {
+        for (const auto& fn : module.functions) {
+            for (const auto& clause : fn.clauses) {
+                if (clause.guard) {
+                    visit(*clause.guard);
+                }
+                visit(clause.body);
+            }
+        }
+    }
+    for (auto& module : modules) {
+        std::erase_if(module.functions, [&](const FunDef& fn) {
+            return fn.externalOnlyAccessor && !called.count(fn.name);
+        });
+    }
+}
+
 } // namespace
 
 auto lowerModules(
@@ -2398,6 +2436,7 @@ auto lowerModules(
             }
         }
     }
+    dropUncalledExternalAccessors(result);
     return result;
 }
 
