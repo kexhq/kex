@@ -249,7 +249,7 @@ auto overlayOnView(const semantic::ImportedInterfaces& view, semantic::ImportedI
         return named && named->name.find('.') != std::string::npos && builtHere(named->name);
     };
     for (auto& [__, functions] : given.receiverFunctions) {
-        std::erase_if(functions, [&](const auto& function) {
+        kex::erase_if(functions, [&](const auto& function) {
             return builtHere(function.sourceModule) || onBuiltType(function);
         });
     }
@@ -280,9 +280,11 @@ auto BelowInterfacesAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> 
     if (auto found = recent.find(key)) {
         return found;
     }
-    return recent.add(
-        key, std::make_shared<const semantic::ImportedInterfaces>(
-                 analyses.result<BelowAnalysis>(unit).registry.buildSemanticInterfaces()));
+    // Marked reached here, once, rather than in each copy the units above
+    // make of it: a copy shares its tables until it changes one.
+    auto below = analyses.result<BelowAnalysis>(unit).registry.buildSemanticInterfaces();
+    markReachedUnits(below);
+    return recent.add(key, std::make_shared<const semantic::ImportedInterfaces>(std::move(below)));
 }
 
 auto UnitExternalsAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
@@ -302,10 +304,11 @@ auto AvailableInterfacesAnalysis::run(Unit& unit, UnitAnalysisManager& analyses)
     if (auto found = recent.find(key)) {
         return found;
     }
+    // BelowInterfacesAnalysis marked its units reached already.
     return recent.add(
         key, std::make_shared<const semantic::ImportedInterfaces>(overlayDescribedInterfaces(
                  unit.program().settings().interfaces,
-                 *analyses.result<BelowInterfacesAnalysis>(unit), true)));
+                 *analyses.result<BelowInterfacesAnalysis>(unit), /*reached=*/false)));
 }
 
 auto unitExternalModules(const beam::KexiRegistry& registry) -> ir::ExternalModules {

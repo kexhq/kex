@@ -461,14 +461,31 @@ inline auto resolveSharedNullaryConstructors(kex::semantic::ImportedInterfaces& 
             owners[constructor].insert(adt.name);
         }
     }
+    // A constructor to give its owner, and not given it already: a module's
+    // exports are shared with the interfaces they were copied from, and are
+    // copied only for one that changes.
+    const auto unresolved = [](const kex::semantic::ImportedFunction& function) {
+        if (!function.isConstructor || !function.signature.params.empty() ||
+            function.constructorOwner.empty()) {
+            return false;
+        }
+        const auto& result = function.signature.result;
+        const auto* named =
+            result ? std::get_if<kex::semantic::NamedType>(&result->kind) : nullptr;
+        return !named || named->name != function.constructorOwner || !named->typeArgs.empty();
+    };
     for (auto& [_, module] : interfaces.modules) {
-        for (auto& [name, functions] : module.exports) {
-            if (owners[name].size() < 2) {
-                continue;
+        std::vector<std::string> shared;
+        for (const auto& [name, functions] : module.exports.get()) {
+            const auto owned = owners.find(name);
+            if (owned != owners.end() && owned->second.size() >= 2 &&
+                std::any_of(functions.begin(), functions.end(), unresolved)) {
+                shared.push_back(name);
             }
-            for (auto& function : functions) {
-                if (function.isConstructor && function.signature.params.empty() &&
-                    !function.constructorOwner.empty()) {
+        }
+        for (const auto& name : shared) {
+            for (auto& function : module.exports[name]) {
+                if (unresolved(function)) {
                     function.signature.result =
                         kex::semantic::Type::named(function.constructorOwner);
                 }
@@ -1562,30 +1579,51 @@ inline auto mergeSemanticInterfaces(
             }
         }
     }
-    for (auto& [name, functions] : extra.receiverFunctions) {
+    // Both sides can describe the SAME function: a module compiled into an
+    // entry unit is covered by that unit's interface AND by its own companion
+    // interface. That is one function with two backend spellings, not two
+    // providers — left as two, a call to it is reported ambiguous against
+    // itself. The description that owns the function wins: it routes to the
+    // module the function is actually written in, and it carries that module
+    // as its source, which is what `using` visibility is decided on.
+    const auto sameFunction = [](const kex::semantic::ImportedFunction& existing,
+                                 const kex::semantic::ImportedFunction& function) {
+        // A type's `make` function and another module's function of the
+        // same shape are two (`Team.create(by)` and `Teams.create(team, by)`).
+        return existing.sourceName == function.sourceName &&
+               existing.isReceiverMethod == function.isReceiverMethod &&
+               sameSignature(existing.signature, function.signature);
+    };
+    for (const auto& [name, functions] : extra.receiverFunctions) {
+        const auto& incoming = functions.get();
         auto& destination = base.receiverFunctions[name];
-        for (auto& function : functions) {
-            // Both sides can describe the SAME function: a module compiled
-            // into an entry unit is covered by that unit's interface AND by
-            // its own companion interface. That is one function with two
-            // backend spellings, not two providers — left as two, a call to
-            // it is reported ambiguous against itself. The description that
-            // owns the function wins: it routes to the module the function is
-            // actually written in, and it carries that module as its source,
-            // which is what `using` visibility is decided on.
-            auto duplicate = std::find_if(
-                destination.begin(), destination.end(),
-                [&](const kex::semantic::ImportedFunction& existing) {
-                    // A type's `make` function and another module's function
-                    // of the same shape are two (`Team.create(by)` and
-                    // `Teams.create(team, by)`).
-                    return existing.sourceName == function.sourceName &&
-                           existing.isReceiverMethod == function.isReceiverMethod &&
-                           sameSignature(existing.signature, function.signature);
+        // A name `base` has none of takes `extra`'s functions as they are,
+        // shared, unless two of them are one function.
+        if (destination.empty()) {
+            bool distinct = true;
+            for (size_t i = 0; distinct && i < incoming.size(); ++i) {
+                for (size_t j = 0; j < i; ++j) {
+                    if (sameFunction(incoming[j], incoming[i])) {
+                        distinct = false;
+                        break;
+                    }
+                }
+            }
+            if (distinct) {
+                destination = functions;
+                continue;
+            }
+        }
+        for (const auto& function : incoming) {
+            const auto& current = destination.get();
+            const auto duplicate =
+                std::find_if(current.begin(), current.end(), [&](const auto& existing) {
+                    return sameFunction(existing, function);
                 });
-            if (duplicate == destination.end()) {
-                destination.push_back(std::move(function));
+            if (duplicate == current.end()) {
+                destination.push_back(function);
             } else if (!function.backendModule.empty()) {
+                const auto at = static_cast<size_t>(duplicate - current.begin());
                 // An opt-in provider must not hide the prelude's method on
                 // a shared receiver type (for example Measure.kind).
                 const auto provider = base.modules.find(duplicate->sourceModule);
@@ -1593,9 +1631,9 @@ inline auto mergeSemanticInterfaces(
                                                  provider != base.modules.end() &&
                                                  provider->second.automaticImport;
                 if (!ownsAutomaticMethod || duplicate->sourceModule == function.sourceModule) {
-                    *duplicate = std::move(function);
-                } else if (duplicate->defaultSources.empty()) {
-                    duplicate->defaultSources = std::move(function.defaultSources);
+                    destination.mut()[at] = function;
+                } else if (duplicate->defaultSources.empty() && !function.defaultSources.empty()) {
+                    destination.mut()[at].defaultSources = function.defaultSources;
                 }
             }
         }
