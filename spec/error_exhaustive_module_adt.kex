@@ -1,0 +1,30 @@
+# kex: check-only
+# A match on a sum type declared in a module must cover every constructor,
+# whether they are written through the module or brought in by `using`.
+#
+# A module's constructors stay out of the checker's bare-name table, so both
+# matches below were accepted and failed at run time with no matching clause
+# for `Light` (found by `make metamorphic-search` on
+# spec/using_type_brings_constructors.kex).
+module Shades do
+  type Shade = Light | Tint(Integer)
+end
+
+let qualified(shade: Shades.Shade) -> String do
+  match shade do
+    Shades.Tint(n) => "tint ${n}"
+  end
+end
+
+using Shades, only: [Shade]
+
+let imported(shade: Shade) -> String do
+  match shade do
+    Tint(n) => "tint ${n}"
+  end
+end
+
+main do
+  IO.printLine(qualified(Tint(2)))
+  IO.printLine(imported(Light))
+end

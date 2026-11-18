@@ -3523,11 +3523,38 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
     m_declarationImports = previousImports;
 }
 
-auto TypeChecker::checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLocation loc) -> bool {
+auto TypeChecker::checkMatchExhaustiveness(
+    const ast::MatchExpr& node, const TypePtr& subject, SourceLocation loc) -> bool {
     bool hasUnguardedCatchAll = false;
     std::set<std::string> covered;
     std::string adtName;
     bool inconclusive = false;
+
+    // A sum type declared in a module (`Shades.Shade`) keeps its constructors
+    // out of the bare-name owner map, so they are found through the type
+    // being matched: `Tint(n)` against a `Shades.Shade` is its `Tint`,
+    // however it is written. Dropping the `Light` arm of such a match was
+    // accepted, and failed at run time with no matching clause (found by
+    // `make metamorphic-search`).
+    std::string subjectAdt;
+    if (subject) {
+        if (const auto* named = std::get_if<NamedType>(&resolve(subject)->kind);
+            named && m_adtVariants.contains(named->name)) {
+            subjectAdt = named->name;
+        }
+    }
+    const auto ownerOf = [&](const std::string& ctorName) -> std::optional<std::string> {
+        if (!subjectAdt.empty()) {
+            const auto& variants = m_adtVariants[subjectAdt];
+            if (std::find(variants.begin(), variants.end(), ctorName) != variants.end()) {
+                return subjectAdt;
+            }
+        }
+        if (const auto it = m_adtOfConstructor.find(ctorName); it != m_adtOfConstructor.end()) {
+            return it->second;
+        }
+        return std::nullopt;
+    };
 
     for (const auto& clause : node.clauses) {
         bool guarded = clause.guard && *clause.guard;
@@ -3555,14 +3582,14 @@ auto TypeChecker::checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLoc
                 continue; // literal/list/tuple/record/range patterns don't drive ADT exhaustiveness
             }
 
-            auto it = m_adtOfConstructor.find(ctorName);
-            if (it == m_adtOfConstructor.end()) {
+            const auto owner = ownerOf(ctorName);
+            if (!owner) {
                 inconclusive = true; // unregistered constructor — can't prove the closed set
                 continue;
             }
             if (adtName.empty()) {
-                adtName = it->second;
-            } else if (adtName != it->second) {
+                adtName = *owner;
+            } else if (adtName != *owner) {
                 inconclusive = true; // patterns span more than one ADT
             }
             if (!guarded) {

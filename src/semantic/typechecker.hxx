@@ -552,7 +552,9 @@ private:
     auto preRegisterFunctionDef(const ast::FunctionDef& def) -> void;
     // Each answers whether it reached a verdict on the match (reported, or
     // proved it whole); what neither decides is the pattern matrix's.
-    auto checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLocation loc) -> bool;
+    auto
+    checkMatchExhaustiveness(const ast::MatchExpr& node, const TypePtr& subject, SourceLocation loc)
+        -> bool;
     auto checkUnionCoverage(const ast::MatchExpr& node, const TypePtr& subject, SourceLocation loc)
         -> bool;
     auto checkPatternMatrix(const ast::MatchExpr& node, const TypePtr& subject, SourceLocation loc)

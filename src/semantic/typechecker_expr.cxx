@@ -2807,7 +2807,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     }
                     popScope();
                 }
-                if (!checkMatchExhaustiveness(node, expr.location) &&
+                if (!checkMatchExhaustiveness(node, subjectType, expr.location) &&
                     !checkUnionCoverage(node, subjectType, expr.location)) {
                     checkPatternMatrix(node, subjectType, expr.location);
                 }
