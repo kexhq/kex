@@ -27,6 +27,10 @@ struct LoadedDep {
     std::unique_ptr<std::string> source;
     std::unique_ptr<std::string> path;
     std::unique_ptr<ast::Program> program;
+    // The files its expansion read (a template, an embedded file, a module a
+    // sandbox loaded), so a cache keyed by them knows when its answer no
+    // longer holds; unset when they were not recorded.
+    std::optional<std::set<std::string>> reads;
 };
 
 // Whether a dependency that cannot be loaded ends the process (a build) or is

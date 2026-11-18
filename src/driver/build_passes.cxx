@@ -17,6 +17,7 @@
 #include "../pass/options.hxx"
 
 #include <algorithm>
+#include <deque>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -426,25 +427,48 @@ auto LinkAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
     return link;
 }
 
+// A file whose expansion reads others: a template or an embed.
+auto readsWhileExpanding(const std::string& source) -> bool {
+    return sourceMentionsEmbed(source) || source.find("Template") != std::string::npos;
+}
+
 auto UnitCacheKeyAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
     auto& program = unit.program();
     if (unit.isEntry() || !program.unitCache) {
         return std::nullopt;
     }
     std::vector<cache::SeparateUnitCache::Source> sources;
+    // A Source views its text, so the stamps of what an expansion read are
+    // kept here until the key is made.
+    std::deque<std::string> stamps;
     for (const auto& path : unit.files()) {
         const auto* file = program.dependencyFile(path);
         if (!file) {
             return std::nullopt;
         }
         // A file that reads others while it compiles is not keyed by its own
-        // bytes alone.
+        // bytes alone. What a template or an embed reads is recorded as the
+        // file expands, so those files join the key, each by its stamp. A
+        // compiled block's sandbox can do more than read files, so it is not
+        // cached, nor a file whose expansion reached outside the program (the
+        // clock, the environment).
         const auto& source = *file->source;
-        if (sourceMentionsCompiledBlock(source) || sourceMentionsEmbed(source) ||
-            source.find("Template") != std::string::npos) {
+        if (sourceMentionsCompiledBlock(source)) {
             return std::nullopt;
         }
         sources.push_back({path, source});
+        if (readsWhileExpanding(source)) {
+            // Recorded, and only when its expansion stayed inside the program.
+            if (!file->reads) {
+                return std::nullopt;
+            }
+            for (const auto& read : *file->reads) {
+                stamps.push_back("read:" + read);
+                const auto& label = stamps.back();
+                stamps.push_back(compiled::fileStamp(read));
+                sources.push_back({label, stamps.back()});
+            }
+        }
     }
     const auto runtime = prebuiltRuntimeBeamDir();
     return program.unitCache->keyFor(

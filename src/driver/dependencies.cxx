@@ -270,6 +270,7 @@ struct ExpandedDependency {
     std::string source;
     std::vector<std::string> roots; // effective (kex::compiled::effectiveModuleRoots)
     kex::ast::Program program;
+    std::optional<std::set<std::string>> reads;
 };
 bool g_memoizeDependencyExpansion = false;
 static std::unordered_map<std::string, ExpandedDependency> g_expandedDependencies;
@@ -406,6 +407,10 @@ auto loadDependencies(
                     }
                 }
                 const bool memoized = depProg != nullptr;
+                std::optional<std::set<std::string>> reads;
+                if (memoized) {
+                    reads = g_expandedDependencies.find(*path)->second.reads;
+                }
                 std::optional<kex::Parser> parser;
                 if (!memoized) {
                     kex::Lexer lexer(std::string(*src), *path);
@@ -455,9 +460,18 @@ auto loadDependencies(
                     buildProgress.expanding(shownPath(*path));
                 }
                 const auto expandStart = std::chrono::steady_clock::now();
-                const bool expanded =
-                    memoized ||
-                    kex::compiled::expand(*depProg, depExpandDiagnostics, depExpandOptions);
+                bool expanded = memoized;
+                if (!memoized) {
+                    // What the expansion reads, for the unit cache's key
+                    // (kexhq/kex#672). An outer recorder still sees it all.
+                    kex::compiled::DependencyRecorder recorder;
+                    expanded = kex::compiled::expand(*depProg, depExpandDiagnostics, depExpandOptions);
+                    // An expansion that reached outside the program depends on
+                    // more than the files it read.
+                    if (!recorder.reachedOutside()) {
+                        reads = recorder.files();
+                    }
+                }
                 const auto expandSpent = std::chrono::steady_clock::now() - expandStart;
                 expandTime += expandSpent;
                 // The total alone says expansion is slow, not where: Slick spent 930s
@@ -532,11 +546,13 @@ auto loadDependencies(
                 if (g_memoizeDependencyExpansion && !memoized) {
                     if (auto copy = kex::ast::clone(*depProg)) {
                         g_expandedDependencies[*path] = {
-                            *src, kex::compiled::effectiveModuleRoots(roots), std::move(*copy)};
+                            *src, kex::compiled::effectiveModuleRoots(roots), std::move(*copy),
+                            reads};
                     }
                 }
                 resolve(*depProg, std::nullopt, src.get(), *path);
-                deps.push_back({std::move(src), std::move(path), std::move(depProg)});
+                deps.push_back(
+                    {std::move(src), std::move(path), std::move(depProg), std::move(reads)});
             }
         };
     resolve(program, qualifiedModules, nullptr, std::string{});

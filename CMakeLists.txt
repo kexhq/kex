@@ -941,6 +941,15 @@ if(TARGET kex_prelude_beam)
     add_dependencies(separate_check_cli_test kex_prelude_beam)
 endif()
 add_test(NAME separate_check_cli_test COMMAND separate_check_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+add_executable(unit_cache_embed_cli_test tests/unit_cache_embed_cli_test.cxx)
+target_link_libraries(unit_cache_embed_cli_test PRIVATE kex_lib)
+target_include_directories(unit_cache_embed_cli_test PRIVATE tests)
+target_compile_definitions(unit_cache_embed_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(unit_cache_embed_cli_test kex)
+if(TARGET kex_prelude_beam)
+    add_dependencies(unit_cache_embed_cli_test kex_prelude_beam)
+endif()
+add_test(NAME unit_cache_embed_cli_test COMMAND unit_cache_embed_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # Names resolved against the whole program instead of the module's own
 # declarations and imports (kexhq/kex#476). Several modules in separate files,
