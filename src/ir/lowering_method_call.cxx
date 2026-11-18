@@ -203,8 +203,8 @@ auto Lowering::lowerValueReceiverCall(const ast::MethodCall& n) -> ExprPtr {
         externalModules->receiverFunctions.count(m)) {
         throw LowerError(
             "IR lower: the checker left `" + m + "/" +
-            std::to_string(static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
-                           (n.block ? 1 : 0)) +
+            std::to_string(
+                static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 + (n.block ? 1 : 0)) +
             "` undecided in a checked program");
     }
     if (externalModules && (!localMethods.count(m) || !localArityExists)) {
@@ -242,10 +242,11 @@ auto Lowering::lowerValueReceiverCall(const ast::MethodCall& n) -> ExprPtr {
                 // instead (kexhq/kex#667).
                 static const bool audit = std::getenv("KEX_SEARCH_AUDIT") != nullptr;
                 if (audit) {
-                    std::fprintf(stderr, "search: %s/%d -> %s:%s (%zu module%s, decided %d %s)\n",
-                                 m.c_str(), arity, chosen->first.c_str(), function.c_str(),
-                                 byModule.size(), byModule.size() == 1 ? "" : "s",
-                                 static_cast<int>(hir->targetOf(n).kind), hir->targetOf(n).owner.c_str());
+                    std::fprintf(
+                        stderr, "search: %s/%d -> %s:%s (%zu module%s, decided %d %s)\n", m.c_str(),
+                        arity, chosen->first.c_str(), function.c_str(), byModule.size(),
+                        byModule.size() == 1 ? "" : "s", static_cast<int>(hir->targetOf(n).kind),
+                        hir->targetOf(n).owner.c_str());
                 }
                 return ret(callE(chosen->first, function, arity, std::move(args)));
             }

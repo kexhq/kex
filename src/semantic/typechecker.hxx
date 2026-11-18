@@ -258,7 +258,8 @@ public:
     // expected), decided as the call it stands for: `__capture.digit?` on
     // the expected parameter type, checked like any call so lowering reads
     // its target (kexhq/kex#667). The call is the checker's own.
-    auto captureCalls() const -> const std::unordered_map<const ast::Expr*, const ast::MethodCall*>& {
+    auto captureCalls() const
+        -> const std::unordered_map<const ast::Expr*, const ast::MethodCall*>& {
         return m_captureCalls;
     }
     auto resolvedTraits() const
@@ -1006,8 +1007,8 @@ private:
         TypePtr receiver;
     };
     std::vector<PendingCaptureCall> m_pendingCaptureCalls;
-    auto decideCaptureAsCall(const ast::Expr& value, const ast::CurryExpr& capture, const TypePtr& receiver)
-        -> void;
+    auto decideCaptureAsCall(
+        const ast::Expr& value, const ast::CurryExpr& capture, const TypePtr& receiver) -> void;
     // A call by name (`sqrt(x)`) that runs an imported function: its module.
     std::unordered_map<const ast::Expr*, std::string> m_calledModules;
     // `implement:` identities per make block, in written order — the

@@ -478,8 +478,9 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr, const std::vector<TypeP
                 spreadAcross = across;
                 spreadHints = tuple->elements;
                 spreadHints.insert(spreadHints.end(), hintParams.begin() + 1, hintParams.end());
-            } else if (std::holds_alternative<UnknownType>(element->kind) ||
-                       std::holds_alternative<TypeVar>(element->kind)) {
+            } else if (
+                std::holds_alternative<UnknownType>(element->kind) ||
+                std::holds_alternative<TypeVar>(element->kind)) {
                 // The element is not known yet (a Map's, through Enumerable):
                 // the leading parameters stay untyped, as they were, but the
                 // block keeps the shape it was expected to have.
@@ -5076,7 +5077,8 @@ auto TypeChecker::decideCaptureAsCall(
     // A capture qualified by its module (`~String.upperCase`) is that call
     // only when the module is the receiver's own type: another module names a
     // function the receiver's method may not be.
-    if (!capture.module.empty() && typeToString(expandTypeAliases(receiverType)) != capture.module) {
+    if (!capture.module.empty() &&
+        typeToString(expandTypeAliases(receiverType)) != capture.module) {
         return;
     }
     constexpr const char* kReceiver = "__capture";
