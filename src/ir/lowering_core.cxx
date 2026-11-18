@@ -144,6 +144,14 @@ auto Lowering::capabilityDispatchLowered(
         }
         return out;
     };
+    // With no context in scope there is nothing a `with` could have put in
+    // it: the lookup would be in the empty map, and always answer
+    // `undefined`. So the capability's own implementation is called straight
+    // away (kexhq/kex#675). A function given a context, or the body of a
+    // `with`, keeps the lookup.
+    if (currentContextVar.empty()) {
+        return wrapLets(binds, directCall(varsOf()));
+    }
     std::vector<ExprPtr> getArgs;
     getArgs.push_back(lit(LitKind::String, capability));
     getArgs.push_back(currentContext());
@@ -235,7 +243,7 @@ auto Lowering::currentContext() -> ExprPtr {
     if (!currentContextVar.empty()) {
         return var(currentContextVar);
     }
-    return callE("maps", "new", 0, {});
+    return lit(LitKind::EmptyMap, "");
 }
 
 // Does a call to this name, at this arity, need the context appended?

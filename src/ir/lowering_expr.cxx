@@ -768,7 +768,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 return lower(n.lambda);
             } else if constexpr (std::is_same_v<T, ast::MapExpr>) {
                 if (n.entries.empty()) {
-                    return callE("maps", "new", 0, {});
+                    return lit(LitKind::EmptyMap, "");
                 }
                 std::vector<Binding> binds;
                 // Runs of literal pairs become one `maps:from_list`; each
