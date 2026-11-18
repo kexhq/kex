@@ -219,6 +219,15 @@ auto Program::resolvedTargetOf(const ast::MethodCall& call) const
     return found == resolved.end() ? nullptr : &found->second;
 }
 
+auto Program::captureCallOf(const ast::Expr& capture) const -> const ast::MethodCall* {
+    if (!m_analysis) {
+        return nullptr;
+    }
+    const auto& calls = m_analysis->captureCalls();
+    const auto found = calls.find(&capture);
+    return found == calls.end() ? nullptr : found->second;
+}
+
 auto Program::dictionaryTypeOf(const ast::Expr& value) const -> std::string {
     return m_analysis ? m_analysis->dictionaryTypeOf(value) : std::string{};
 }

@@ -5015,9 +5015,14 @@ auto TypeChecker::noteCaptureFlow(const ast::Expr* value, const TypePtr& expecte
         return;
     }
     const auto type = expandTypeAliases(resolve(expected));
-    if (std::holds_alternative<ast::CurryExpr>(value->kind)) {
+    if (const auto* curry = std::get_if<ast::CurryExpr>(&value->kind)) {
         if (const auto* function = std::get_if<FuncType>(&type->kind); function && function->foul) {
             m_capturesIntoFoul.insert(value);
+        }
+        if (const auto* function = std::get_if<FuncType>(&type->kind);
+            function && function->params.size() == 1 && !curry->isOperator &&
+            curry->module.empty() && curry->argGroups.empty() && !lookupVar(curry->name)) {
+            m_pendingCaptureCalls.push_back({value, curry, function->params.front()});
         }
         return;
     }
@@ -5028,6 +5033,51 @@ auto TypeChecker::noteCaptureFlow(const ast::Expr* value, const TypePtr& expecte
             }
         }
     }
+}
+
+auto TypeChecker::decideCaptureAsCall(
+    const ast::Expr& value, const ast::CurryExpr& capture, const TypePtr& receiver) -> void {
+    // Only on a receiver type already known in full: checking the call must
+    // not bind a type variable of the program it is checked inside.
+    const auto receiverType = resolve(receiver);
+    if (m_captureCalls.count(&value) || !isFullyConcrete(receiverType)) {
+        return;
+    }
+    constexpr const char* kReceiver = "__capture";
+    auto receiverExpr = std::make_unique<ast::Expr>();
+    receiverExpr->location = value.location;
+    receiverExpr->kind = ast::Identifier{kReceiver};
+    auto call = std::make_unique<ast::Expr>();
+    call->location = value.location;
+    ast::MethodCall method;
+    method.receiver = std::move(receiverExpr);
+    method.method = capture.name;
+    call->kind = std::move(method);
+    // Checked aside: what it would report is not the program's to hear, and
+    // a call that does not check is simply not decided.
+    std::vector<Diagnostic> aside;
+    auto* reported = m_diagnostics;
+    m_diagnostics = &aside;
+    // Unknown methods are reported at the end of the check; one this call
+    // met is not the program's either.
+    const auto unresolved = m_unresolvedMethods;
+    const auto unresolvedImports = m_unresolvedMethodImports;
+    pushScope();
+    defineVar(kReceiver, receiverType);
+    inferExpr(*call);
+    popScope();
+    m_diagnostics = reported;
+    m_unresolvedMethods = unresolved;
+    m_unresolvedMethodImports = unresolvedImports;
+    const auto* decided = &std::get<ast::MethodCall>(call->kind);
+    const bool clean = std::none_of(aside.begin(), aside.end(), [](const Diagnostic& diagnostic) {
+        return diagnostic.level == Diagnostic::Level::Error;
+    });
+    if (clean && m_resolvedCalls.count(decided)) {
+        m_captureCalls[&value] = decided;
+    }
+    // Kept either way: the checker's tables may point into it.
+    m_captureCallNodes.push_back(std::move(call));
 }
 
 auto TypeChecker::decideCapture(const ast::Expr& expr, const ast::CurryExpr& capture) -> void {
@@ -7729,7 +7779,9 @@ auto TypeChecker::checkCall(
             };
             for (std::size_t i = 0; i < argExprs.size() && i < matched.params.size(); ++i) {
                 if (!isNamed(argExprs[i])) {
-                    noteCaptureFlow(argExprs[i], matched.params[i]);
+                    // Instantiated: a generic parameter (`A -> Bool`) is what
+                    // this call made it (`Integer -> Bool`).
+                    noteCaptureFlow(argExprs[i], applyGenerics(resolve(matched.params[i])));
                 }
             }
             if (namedArgs) {
@@ -7742,7 +7794,8 @@ auto TypeChecker::checkCall(
                             static_cast<std::size_t>(at - matched.paramNames.begin()) +
                             (matched.params.size() - matched.paramNames.size());
                         if (index < matched.params.size()) {
-                            noteCaptureFlow(arg.get(), matched.params[index]);
+                            noteCaptureFlow(
+                                arg.get(), applyGenerics(resolve(matched.params[index])));
                         }
                     }
                 }

@@ -118,6 +118,9 @@ public:
     // arguments, defaults and trait dictionaries; null for any other call,
     // and for a loaded program.
     auto resolvedTargetOf(const ast::MethodCall& call) const -> const semantic::ResolvedCallTarget*;
+    // The call a bare method capture stands for, as the checker decided it
+    // (`~digit?` is `__capture.digit?`), or null.
+    auto captureCallOf(const ast::Expr& capture) const -> const ast::MethodCall*;
     // The type whose implementation answers a trait dictionary for `value`
     // (TypeChecker::dictionaryTypeOf); "" for a loaded program.
     auto dictionaryTypeOf(const ast::Expr& value) const -> std::string;

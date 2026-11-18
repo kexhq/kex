@@ -1230,6 +1230,25 @@ auto Lowering::lowerCurry(const ast::Expr& e, const ast::CurryExpr& n) -> ExprPt
     // Emitting Call{name, 0} would be wrong; defer to the UFCS path, where
     // `String.upperCase(s)` and `s.upperCase` are the same call anyway.
     if (!n.isOperator && slots.empty() && arity < 0 && !qualifiedKnown) {
+        // The checker decided the call a method capture stands for
+        // (`~digit?` as `__capture.digit?`, kexhq/kex#667): lower that call,
+        // with its receiver the fun's parameter, rather than one made up here
+        // that nothing decided.
+        if (!subst.count(n.name)) {
+            if (const auto* decided = hir->captureCallOf(e)) {
+                const auto param = fresh("Sx");
+                auto saved = subst;
+                subst["__capture"] = param;
+                auto body = lowerMethodCall(*decided);
+                subst = std::move(saved);
+                Lambda lam;
+                lam.params = {param};
+                lam.body = std::move(body);
+                auto fun = std::make_unique<Expr>();
+                fun->node = std::move(lam);
+                return fun;
+            }
+        }
         return lowerNameAsUfcsFun(n.name, {});
     }
 

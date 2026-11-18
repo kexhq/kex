@@ -147,6 +147,10 @@ public:
         -> const std::unordered_map<const ast::MakeDef*, std::vector<std::string>>& {
         return m_checker.resolvedTraits();
     }
+    auto captureCalls() const
+        -> const std::unordered_map<const ast::Expr*, const ast::MethodCall*>& {
+        return m_checker.captureCalls();
+    }
     auto selectedCallSignatures() const -> const std::unordered_map<const ast::Expr*, Signature>& {
         return m_checker.selectedCallSignatures();
     }
