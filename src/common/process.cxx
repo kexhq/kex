@@ -1,5 +1,8 @@
 #include "process.hxx"
 
+#include <chrono>
+#include <thread>
+
 #include <cstdlib>
 #include <sys/wait.h>
 #include <unordered_map>
@@ -142,23 +145,26 @@ auto runShellCommandsTogether(
         }
         running.emplace(pid, i);
     }
+    // Only these children are waited for, never any child (`waitpid(-1)`): a
+    // build can compile on a thread of its own while the rest of the build
+    // runs its own subprocesses, and each must reap only its own.
     while (!running.empty()) {
-        int status = 0;
-        const pid_t pid = waitpid(-1, &status, 0);
-        if (pid < 0) {
-            if (errno == EINTR) {
+        bool reaped = false;
+        for (auto it = running.begin(); it != running.end();) {
+            int status = 0;
+            const pid_t pid = waitpid(it->first, &status, WNOHANG);
+            if (pid == 0 || (pid < 0 && errno == EINTR)) {
+                ++it;
                 continue;
             }
-            // Nothing left to wait for that we know of; report the rest failed.
-            for (const auto& [_, index] : running) {
-                finished(index, -1);
-            }
-            return;
+            const auto index = it->second;
+            it = running.erase(it);
+            reaped = true;
+            // Gone without a status we can read: report it failed.
+            finished(index, pid < 0 ? -1 : status);
         }
-        if (const auto found = running.find(pid); found != running.end()) {
-            const auto index = found->second;
-            running.erase(found);
-            finished(index, status);
+        if (!reaped && !running.empty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
     }
 #endif

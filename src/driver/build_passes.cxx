@@ -856,6 +856,9 @@ auto EmitCorePass::run(Unit& unit, UnitAnalysisManager&) -> pass::PreservedAnaly
         unit.emitted.push_back(ir::emitCore(module));
     }
     writeSeparateCore(unit.emitted);
+    if (unit.program().onEmitted) {
+        unit.program().onEmitted(unit.emitted);
+    }
     return preservesAll();
 }
 

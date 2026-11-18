@@ -141,6 +141,9 @@ public:
     // The driver's run cache, asked by `run-cache`: whether it answered the
     // whole build.
     std::function<bool(Program&)> answerFromRunCache;
+    // `emit-core`: told each unit's modules as soon as they are emitted, so
+    // erlc can start on them while later units are still being checked.
+    std::function<void(const std::vector<ir::EmitResult>&)> onEmitted;
     bool answered = false;
 
     // The unit cache, when caching is on (`load-dependencies` opens it).
