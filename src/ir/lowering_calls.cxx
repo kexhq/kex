@@ -413,6 +413,10 @@ auto Lowering::makeTraitDictionaryFor(const std::string& trait, const std::strin
     for (const auto& method : contract->second) {
         std::string module;
         std::string function = method.name;
+        // Whether the provider was chosen from the external receiver
+        // functions and takes no capability context: then its function is
+        // exactly `module:function/arity`.
+        bool plainProvider = false;
         const auto owners = methodOwners.find(method.name);
         const bool localOwnsType =
             owners != methodOwners.end() &&
@@ -481,6 +485,7 @@ auto Lowering::makeTraitDictionaryFor(const std::string& trait, const std::strin
                 if (selected != candidates->second.end()) {
                     module = selected->moduleAtom;
                     function = selected->beamFunction;
+                    plainProvider = !selected->isFoul && selected->beamArity == method.arity;
                 }
             }
         }
@@ -500,6 +505,25 @@ auto Lowering::makeTraitDictionaryFor(const std::string& trait, const std::strin
             throw LowerError(
                 "IR lower: no implementation for " + trait + "." + method.name + " on " +
                 concreteType);
+        }
+        // A method of another module is a reference to its function, not a
+        // fun forwarding to it: `erlang:make_fun` with constant arguments is
+        // a literal to erlc, so a dictionary of them is one constant tuple
+        // instead of a fun and a tuple built at every call (kexhq/kex#663).
+        // Both call the module's current code, as an external call does.
+        // Only the prelude's, and only one taking no capability context
+        // (`printLine` does, appended later): it exports each such function
+        // under the name given here. A call into another module may still be rerouted to its
+        // real provider (lowerModules), which a reference by name would miss:
+        // `'Kex.Net.Socket':close/1` is answered by a dispatcher elsewhere.
+        if (module == names::kPreludeModule && plainProvider) {
+            std::vector<ExprPtr> reference;
+            reference.push_back(lit(LitKind::Atom, module));
+            reference.push_back(lit(LitKind::Atom, function));
+            reference.push_back(litInt(method.arity));
+            slots.push_back(
+                atomize_ir(callE("erlang", "make_fun", 3, std::move(reference)), dictionaryBindings));
+            continue;
         }
         Lambda lambda;
         std::vector<ExprPtr> callArgs;
