@@ -45,6 +45,7 @@ auto receiverModuleName(const ast::Expr& receiver) -> std::string {
 } // namespace
 
 auto Analyzer::analyze(const ast::Program& program) -> bool {
+    m_analyzed = true;
     // Which names one module may take from another (`using`, `export`).
     for (auto& violation : findModuleRuleViolations(
              program, m_importedInterfaces, m_moduleLocator ? &m_moduleLocator : nullptr,

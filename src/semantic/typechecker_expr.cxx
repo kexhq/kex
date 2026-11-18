@@ -465,6 +465,29 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr, const std::vector<TypeP
                 spreadHints = tuple->elements;
             }
         }
+        // The same with more parameters after the element: Map's
+        // `mapIndexed { |k, v, i| … }` spreads the entry across `k, v` and
+        // takes the index last (kexhq/kex#667). Typed only by count, the
+        // block matched nothing and its call went undecided.
+        std::size_t spreadAcross = 0;
+        if (hintParams.size() > 1 && lam->params.size() > hintParams.size()) {
+            const auto element = resolve(hintParams[0]);
+            const auto across = lam->params.size() - hintParams.size() + 1;
+            if (auto* tuple = std::get_if<TupleType>(&element->kind);
+                tuple && tuple->elements.size() == across) {
+                spreadAcross = across;
+                spreadHints = tuple->elements;
+                spreadHints.insert(spreadHints.end(), hintParams.begin() + 1, hintParams.end());
+            } else if (std::holds_alternative<UnknownType>(element->kind) ||
+                       std::holds_alternative<TypeVar>(element->kind)) {
+                // The element is not known yet (a Map's, through Enumerable):
+                // the leading parameters stay untyped, as they were, but the
+                // block keeps the shape it was expected to have.
+                spreadAcross = across;
+                spreadHints.assign(across, element);
+                spreadHints.insert(spreadHints.end(), hintParams.begin() + 1, hintParams.end());
+            }
+        }
         pushScope();
         std::vector<TypePtr> paramTypes;
         std::unordered_map<std::string, TypePtr> genericVars;
@@ -566,6 +589,13 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr, const std::vector<TypeP
         }
         resultType = blockFailingResult(*lam, blockTries.tries, resultType);
         popScope();
+        // Outwardly a block spreading the element before more parameters
+        // takes what it was expected to: the element whole, then the rest.
+        if (spreadAcross > 0) {
+            std::vector<TypePtr> outward{hintParams[0]};
+            outward.insert(outward.end(), paramTypes.begin() + spreadAcross, paramTypes.end());
+            return Type::func(std::move(outward), resultType);
+        }
         // Outwardly a spreading block still takes the whole element first,
         // the shape argMatchesParam recognises as destructuring.
         if (spreadHints.size() != hintParams.size() && !lam->params[0].type) {
@@ -5021,7 +5051,7 @@ auto TypeChecker::noteCaptureFlow(const ast::Expr* value, const TypePtr& expecte
         }
         if (const auto* function = std::get_if<FuncType>(&type->kind);
             function && function->params.size() == 1 && !curry->isOperator &&
-            curry->module.empty() && curry->argGroups.empty() && !lookupVar(curry->name)) {
+            curry->argGroups.empty() && !lookupVar(curry->name)) {
             m_pendingCaptureCalls.push_back({value, curry, function->params.front()});
         }
         return;
@@ -5041,6 +5071,12 @@ auto TypeChecker::decideCaptureAsCall(
     // not bind a type variable of the program it is checked inside.
     const auto receiverType = resolve(receiver);
     if (m_captureCalls.count(&value) || !isFullyConcrete(receiverType)) {
+        return;
+    }
+    // A capture qualified by its module (`~String.upperCase`) is that call
+    // only when the module is the receiver's own type: another module names a
+    // function the receiver's method may not be.
+    if (!capture.module.empty() && typeToString(expandTypeAliases(receiverType)) != capture.module) {
         return;
     }
     constexpr const char* kReceiver = "__capture";

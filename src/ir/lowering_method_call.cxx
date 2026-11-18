@@ -192,6 +192,21 @@ auto Lowering::lowerValueReceiverCall(const ast::MethodCall& n) -> ExprPtr {
     // which looks the method up on the value as the walker does. Several
     // modules' providers are the checker's choice (its alternatives), never
     // made here.
+    //
+    // Only for a program the checker did not decide in full: one built with
+    // `--no-check`, or whose check failed and is lowered all the same. In a
+    // checked program every call is decided, and lowering makes no choice of
+    // its own (kexhq/kex#667); one reaching here is a checker bug, reported
+    // as one rather than answered by a search by name.
+    if (externalModules && (!localMethods.count(m) || !localArityExists) && hir &&
+        hir->targetOf(n).kind == hir::TargetKind::Undecided && hir->decidesEveryCall() &&
+        externalModules->receiverFunctions.count(m)) {
+        throw LowerError(
+            "IR lower: the checker left `" + m + "/" +
+            std::to_string(static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
+                           (n.block ? 1 : 0)) +
+            "` undecided in a checked program");
+    }
     if (externalModules && (!localMethods.count(m) || !localArityExists)) {
         if (const auto found = externalModules->receiverFunctions.find(m);
             found != externalModules->receiverFunctions.end()) {

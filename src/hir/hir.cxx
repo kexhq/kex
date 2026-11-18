@@ -219,6 +219,16 @@ auto Program::resolvedTargetOf(const ast::MethodCall& call) const
     return found == resolved.end() ? nullptr : &found->second;
 }
 
+auto Program::decidesEveryCall() const -> bool {
+    if (!m_analysis || !m_analysis->analyzed()) {
+        return false;
+    }
+    const auto& diagnostics = m_analysis->diagnostics();
+    return std::none_of(diagnostics.begin(), diagnostics.end(), [](const auto& diagnostic) {
+        return diagnostic.level == semantic::Diagnostic::Level::Error;
+    });
+}
+
 auto Program::captureCallOf(const ast::Expr& capture) const -> const ast::MethodCall* {
     if (!m_analysis) {
         return nullptr;

@@ -121,6 +121,10 @@ public:
     // The call a bare method capture stands for, as the checker decided it
     // (`~digit?` is `__capture.digit?`), or null.
     auto captureCallOf(const ast::Expr& capture) const -> const ast::MethodCall*;
+    // Whether the checker ran over this program and found no error, so that
+    // it decided every call: lowering then reads each decision and makes none
+    // of its own (kexhq/kex#667).
+    auto decidesEveryCall() const -> bool;
     // The type whose implementation answers a trait dictionary for `value`
     // (TypeChecker::dictionaryTypeOf); "" for a loaded program.
     auto dictionaryTypeOf(const ast::Expr& value) const -> std::string;
