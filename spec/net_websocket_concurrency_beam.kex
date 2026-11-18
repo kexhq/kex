@@ -1,0 +1,99 @@
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
+#
+# Server WebSockets under concurrency (kexhq/kex#670):
+#
+# - a push from another process reaches the client while the connection's
+#   handler is busy elsewhere, since any process now writes frames itself;
+# - 200 clients echoing at once all get their own message back;
+# - stopping the server with live WebSockets past a short grace period
+#   reports each of them as forced, within that grace period.
+
+using Net.HTTP.WebSocket
+using Net.HTTP, except: [ClientOptions]
+using Net.Socket
+
+# Pushes from another task, then stays busy for longer than the client
+# waits for the push.
+foul pushWhileBusy(socket: Connection) -> Void do
+  let pusher = Task.start do socket.send(Text("pushed")) end
+  let _ = pusher.await(1000)
+  Task.sleep(600.millisecond)
+rescue return Void
+end
+
+foul echo(socket: Connection) -> Void do
+  loop do
+    match socket.receiveMessage do
+      Ok(Text(text)) => socket.send(Text(text)).try
+      Ok(CloseMessage(_, _)) => break
+      Ok(_) => Void
+      Error(_) => break
+    end
+  end
+rescue return Void
+end
+
+foul pushRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |_handshake|
+  let handler : Connection -> Void = { |socket| pushWhileBusy(socket) }
+  Accept(handler, Headers.empty, None)
+end
+
+foul echoRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |_handshake|
+  let handler : Connection -> Void = { |socket| echo(socket) }
+  Accept(handler, Headers.empty, None)
+end
+
+# Connects, echoes its own text once, closes; true if the echo matched.
+foul echoOnce(port: Integer, i: Integer) -> Bool do
+  let client = WebSocket.connect("ws://127.0.0.1:${port}/echo").try
+  client.send(Text("m${i}")).try
+  let matched = match client.receiveMessage(timeout: Just(5.second)) do
+    Ok(Text(text)) => text == "m${i}"
+    _ => false
+  end
+  client.close
+  matched
+rescue return false
+end
+
+main do
+  let router = Router.build.get("/push", ~pushRoute).get("/echo", ~echoRoute)
+  let server = Server.start(TCP.Endpoint.loopback(Net.Port.from(0).try), router).try
+  let port = server.localAddress.port.value
+
+  let pushed = WebSocket.connect("ws://127.0.0.1:${port}/push").try
+  let started = DateTime.epochNanos()
+  let got = match pushed.receiveMessage(timeout: Just(500.millisecond)) do
+    Ok(Text(text)) => text
+    _ => "nothing"
+  end
+  let quick = (DateTime.epochNanos() - started) < 500000000
+  IO.printLine("push while the handler is busy: ${got}, quick: ${quick}")
+  pushed.close
+  # Its handler ends, so it isn't among those forced below.
+  Task.sleep(300.millisecond)
+
+  let tasks = (1..200).map do |i| Task.start do echoOnce(port, i) end end
+  let echoed = tasks.filter { |task| task.await(10000) == Ok(true) }.count
+  IO.printLine("concurrent echoes: ${echoed}/200")
+
+  # Five live WebSockets, each with its handler running (one echo proves it).
+  # The block's `.try`s make each a Result.
+  let live = (1..5).map do |i|
+    let client = WebSocket.connect("ws://127.0.0.1:${port}/echo").try
+    client.send(Text("live${i}")).try
+    let _ = client.receiveMessage(timeout: Just(2.second))
+    client
+  end
+  let report = server.stop(300.millisecond).try
+  IO.printLine("forced: ${report.forced}")
+  IO.printLine("within the grace period: ${report.elapsedMilliseconds < 2000}")
+  IO.printLine("running: ${server.running?}")
+  live.each do |opened|
+    match opened do
+      Ok(client) => client.close
+      Error(_) => Void
+    end
+  end
+  IO.printLine("done")
+end
