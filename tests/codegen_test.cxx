@@ -1502,7 +1502,8 @@ int main() {
                 "capability Clock do\n  foul now() -> Integer = 1\nend\n"
                 "record Fixed do\n  at : Integer\nend\n"
                 "make Fixed, implement: Clock do\n  foul now() -> Integer = @at\nend\n"
-                "main do\n  with Clock = Fixed { at: 2 } do\n    IO.printLine(Clock.now())\n  end\nend\n");
+                "main do\n  with Clock = Fixed { at: 2 } do\n    IO.printLine(Clock.now())\n  "
+                "end\nend\n");
             assertTrue(contains(out, "dispatch_method"), out);
         });
 
