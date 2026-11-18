@@ -8083,6 +8083,14 @@ auto TypeChecker::bareNameDeclared(const std::string& name) const -> bool {
     if (namesKnownType(name) || namesDeclaredType(name, name) || ownerVisible) {
         return true;
     }
+    // A module the program declares, named by its first segment (`Net` of
+    // `Net.HTTP`), as an imported one is below: completion offered `Math`
+    // but not the file's own `Haversine`.
+    if (std::any_of(m_localModules.begin(), m_localModules.end(), [&](const std::string& module) {
+            return module.substr(0, module.find('.')) == name;
+        })) {
+        return true;
+    }
     // A module's constructor, inside the module or under a `using` of it.
     for (const auto& [module, constructors] : m_moduleConstructors) {
         if (constructors.count(name) &&
