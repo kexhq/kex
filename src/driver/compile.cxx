@@ -35,8 +35,8 @@
 #ifndef __EMSCRIPTEN__
 #include <cerrno>
 #include <csignal>
-#include <unistd.h>
 #endif
+#include <unistd.h>
 #include "../common/diagnostics.hxx"
 #include "../common/process.hxx"
 #include "../common/well_known.hxx"
