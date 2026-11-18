@@ -1,0 +1,5 @@
+# A range's step cannot be 0: it would never reach the end (kexhq/kex#655).
+main do
+  IO.printLine("before")
+  IO.printLine((1..5).by(0).items)
+end

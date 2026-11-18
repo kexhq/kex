@@ -151,6 +151,22 @@ make Integer do
     end
   end
 
+  # Returns the range from this integer down to +last+, both included,
+  # counting by -1: +(this..last).by(-1)+. It is empty when +last+ is larger.
+  # Nothing is enumerated until the range is traversed.
+  #
+  # @param last [Integer] the last element
+  # @return [Range<Integer>] the descending range
+  #
+  # @example
+  #   10.downTo(7).items   # => [10, 9, 8, 7]
+  #   1.downTo(3).items    # => []
+  #
+  # @example Counting down
+  #   3.downTo(1).each { |n| IO.printLine(n) }   # prints 3, 2, 1
+  downTo :> Integer -> Range<Integer>
+  let downTo(last) = (this..last).by(-1)
+
   # Returns the integer unchanged. Present so that code written against
   # +Number+ works whichever half of the tower it is handed.
   #

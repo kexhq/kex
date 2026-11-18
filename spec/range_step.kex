@@ -1,0 +1,72 @@
+# Counting down, and by another step, without building a list
+# (kexhq/kex#655): Integer.downTo, Range.by, and a Range.reverse that answers
+# a range. `a..b` itself still enumerates upward only.
+
+foul show(label: String, items: [Integer]) do
+  IO.printLine("${label}: ${items}")
+end
+
+main do
+  # A range whose start exceeds its end is still empty.
+  show("10..1", (10..1).items)
+  (1..0).each { |n| IO.printLine("never ${n}") }
+
+  # Integer.downTo
+  show("10.downTo(7)", 10.downTo(7).items)
+  show("1.downTo(3)", 1.downTo(3).items)
+  show("2.downTo(-2)", 2.downTo(-2).items)
+  show("5.downTo(5)", 5.downTo(5).items)
+
+  # by: a positive step counts up, a negative one down.
+  show("(1..10).by(2)", (1..10).by(2).items)
+  show("(1..10).by(3)", (1..10).by(3).items)
+  show("(1..10).by(20)", (1..10).by(20).items)
+  show("(10..1).by(-1)", (10..1).by(-1).items)
+  show("(10..1).by(-4)", (10..1).by(-4).items)
+  show("(1..10).by(-1)", (1..10).by(-1).items)
+  show("(10..1).by(2)", (10..1).by(2).items)
+  show("(-5..5).by(5)", (-5..5).by(5).items)
+  show("(-1..-9).by(-3)", (-1..-9).by(-3).items)
+  show("by replaces the step", (1..10).by(2).by(4).items)
+  show("by(1) is the plain range", (1..3).by(1).items)
+
+  # reverse starts at the last element the step reaches.
+  show("(1..4).reverse", (1..4).reverse.items)
+  show("(1..10).by(3).reverse", (1..10).by(3).reverse.items)
+  show("(1..9).by(3).reverse", (1..9).by(3).reverse.items)
+  show("10.downTo(1).reverse", 10.downTo(1).reverse.items)
+  show("(5..1).reverse", (5..1).reverse.items)
+  show("reverse twice", (1..9).by(4).reverse.reverse.items)
+
+  # Shown as written.
+  IO.printLine((1..5).reverse)
+  IO.printLine((1..10).by(2))
+  IO.printLine(3.downTo(0))
+  IO.printLine((1..3).by(1))
+
+  # Equal ranges are equal whichever way they were made.
+  IO.printLine((1..3).by(1) == (1..3))
+  IO.printLine(3.downTo(1) == (1..3).reverse)
+  IO.printLine(3.downTo(1) == (3..1))
+
+  # Traversal walks the step on both backends.
+  let squares = (1..7).by(2).map { |n| n * n }
+  IO.printLine("odd squares: ${squares}")
+  IO.printLine("sum of 10.downTo(1): ${10.downTo(1).sum}")
+  IO.printLine("reduce: ${(10..0).by(-5).reduce(0) { |acc, n| acc * 10 + n }}")
+  5.downTo(1).by(-2).each { |n| IO.printLine("each ${n}") }
+  IO.printLine("count: ${(0..100).by(7).count}")
+  IO.printLine("first/last: ${(1..10).by(4).first} ${(1..10).by(4).last}")
+  IO.printLine("join: ${10.downTo(6).join(",")}")
+
+  # contains? only answers the values the step reaches.
+  IO.printLine("contains: ${(1..10).by(3).contains?(7)} ${(1..10).by(3).contains?(8)} ${(1..10).by(3).contains?(13)}")
+  IO.printLine("contains down: ${10.downTo(1).contains?(1)} ${10.downTo(1).contains?(0)} ${(10..1).by(-4).contains?(6)}")
+
+  # Char ranges step through their code points.
+  IO.printLine(('a'..'g').by(3).items)
+  IO.printLine(('e'..'a').by(-1).items)
+  IO.printLine(('a'..'e').reverse.items)
+  IO.printLine(('a'..'e').by(2))
+  IO.printLine(('a'..'z').by(5).contains?('k'))
+end

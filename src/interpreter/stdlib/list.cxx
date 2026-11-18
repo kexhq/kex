@@ -19,15 +19,7 @@ auto Evaluator::registerListBuiltins() -> void {
     // are local stack variables that vanish when registerListBuiltins returns.
     // All lambdas that need them must capture by value, not by reference.
     auto rangeToList = [](const RangeValue& r) -> std::vector<ValuePtr> {
-        std::vector<ValuePtr> elems;
-        if (r.lower || r.upper) {
-            throw std::runtime_error("This range cannot be enumerated");
-        }
-        for (int64_t i = r.start; i <= r.end; i++) {
-            elems.push_back(
-                r.isChar ? Value::character(static_cast<char32_t>(i)) : Value::integer(i));
-        }
-        return elems;
+        return rangeElements(r);
     };
 
     auto getElements = [rangeToList](const ValuePtr& val) -> std::vector<ValuePtr> {
@@ -241,6 +233,63 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::list({});
     });
 
+    // Kex.Intrinsic.Range.step: 1 for `a..b`, otherwise what `by` set.
+    defineIntrinsic("Range.step", [](std::vector<ValuePtr> args) -> ValuePtr {
+        return Value::integer(std::get<RangeValue>(args.at(0)->data).step);
+    });
+
+    // Kex.Intrinsic.Range.by: the range with its step replaced. The step's
+    // sign is the direction.
+    defineIntrinsic("Range.by", [](std::vector<ValuePtr> args) -> ValuePtr {
+        auto range = std::get<RangeValue>(args.at(0)->data);
+        const auto step = std::get<IntValue>(args.at(1)->data).value;
+        if (step == 0) {
+            throw std::runtime_error("A range's step cannot be 0");
+        }
+        if (range.lower) {
+            throw std::runtime_error("Float ranges cannot be stepped");
+        }
+        range.step = step;
+        auto result = std::make_shared<Value>();
+        result->data = std::move(range);
+        return result;
+    });
+
+    // Kex.Intrinsic.Range.reverse: the same elements in the opposite order,
+    // as a range starting at the last element the step reaches.
+    defineIntrinsic("Range.reverse", [](std::vector<ValuePtr> args) -> ValuePtr {
+        auto range = std::get<RangeValue>(args.at(0)->data);
+        if (range.lower) {
+            throw std::runtime_error("Float ranges cannot be enumerated");
+        }
+        if (const auto n = rangeLength(range); n > 0) {
+            const auto last = range.start + (n - 1) * range.step;
+            range.end = range.start;
+            range.start = last;
+            range.step = -range.step;
+        }
+        auto result = std::make_shared<Value>();
+        result->data = std::move(range);
+        return result;
+    });
+
+    // Kex.Intrinsic.Range.member: whether a value is one of the elements.
+    defineIntrinsic("Range.member", [](std::vector<ValuePtr> args) -> ValuePtr {
+        const auto& range = std::get<RangeValue>(args.at(0)->data);
+        int64_t code = 0;
+        if (auto* i = std::get_if<IntValue>(&args.at(1)->data); i && !range.isChar) {
+            code = i->value;
+        } else if (auto* c = std::get_if<CharValue>(&args.at(1)->data); c && range.isChar) {
+            code = static_cast<int64_t>(c->value);
+        } else {
+            return Value::boolean(false);
+        }
+        const auto offset = code - range.start;
+        return Value::boolean(
+            !range.lower && offset % range.step == 0 && offset / range.step >= 0 &&
+            offset / range.step < rangeLength(range));
+    });
+
     reg("each", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) {
             return Value::tuple({});
@@ -311,7 +360,8 @@ auto Evaluator::registerListBuiltins() -> void {
             return Value::just(list->elements[0]);
         }
         if (auto* range = std::get_if<RangeValue>(&args[0]->data)) {
-            return Value::just(Value::integer(range->start));
+            const auto elems = rangeElements(*range);
+            return elems.empty() ? Value::none() : Value::just(elems.front());
         }
         return Value::none();
     });
@@ -327,7 +377,8 @@ auto Evaluator::registerListBuiltins() -> void {
             return Value::just(list->elements.back());
         }
         if (auto* range = std::get_if<RangeValue>(&args[0]->data)) {
-            return Value::just(Value::integer(range->end));
+            const auto elems = rangeElements(*range);
+            return elems.empty() ? Value::none() : Value::just(elems.back());
         }
         return Value::none();
     });
@@ -343,8 +394,8 @@ auto Evaluator::registerListBuiltins() -> void {
         if (auto* map = std::get_if<MapValue>(&args[0]->data)) {
             return Value::integer(static_cast<int64_t>(map->entries.size()));
         }
-        if (auto* range = std::get_if<RangeValue>(&args[0]->data)) {
-            return Value::integer(range->end - range->start + 1);
+        if (auto* range = std::get_if<RangeValue>(&args[0]->data); range && !range->lower) {
+            return Value::integer(rangeLength(*range));
         }
         auto elems = getElements(args[0]);
         if (args.size() < 2) {

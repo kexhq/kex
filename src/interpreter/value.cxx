@@ -457,11 +457,15 @@ auto Value::toString() const -> std::string {
                 if (v.lower) {
                     return v.lower->toString() + ".." + v.upper->toString();
                 }
-                if (v.isChar) {
-                    return std::string("'") + static_cast<char>(v.start) + "'.." + "'" +
-                           static_cast<char>(v.end) + "'";
+                std::string bounds = v.isChar
+                                         ? std::string("'") + static_cast<char>(v.start) + "'.." +
+                                               "'" + static_cast<char>(v.end) + "'"
+                                         : std::to_string(v.start) + ".." + std::to_string(v.end);
+                // A stepped range shows as it is written: `(1..10).by(2)`.
+                if (v.step != 1) {
+                    return "(" + bounds + ").by(" + std::to_string(v.step) + ")";
                 }
-                return std::to_string(v.start) + ".." + std::to_string(v.end);
+                return bounds;
             } else if constexpr (std::is_same_v<T, StreamValue>) {
                 return "<Stream>";
             } else if constexpr (std::is_same_v<T, FeedValue>) {
@@ -563,11 +567,15 @@ auto Value::toRepr() const -> std::string {
                 if (v.lower) {
                     return v.lower->toString() + ".." + v.upper->toString();
                 }
-                if (v.isChar) {
-                    return std::string("'") + static_cast<char>(v.start) + "'.." + "'" +
-                           static_cast<char>(v.end) + "'";
+                std::string bounds = v.isChar
+                                         ? std::string("'") + static_cast<char>(v.start) + "'.." +
+                                               "'" + static_cast<char>(v.end) + "'"
+                                         : std::to_string(v.start) + ".." + std::to_string(v.end);
+                // A stepped range shows as it is written: `(1..10).by(2)`.
+                if (v.step != 1) {
+                    return "(" + bounds + ").by(" + std::to_string(v.step) + ")";
                 }
-                return std::to_string(v.start) + ".." + std::to_string(v.end);
+                return bounds;
             } else if constexpr (std::is_same_v<T, VariantValue>) {
                 if (v.args.empty()) {
                     return v.tag;
@@ -732,6 +740,28 @@ auto textContent(const ValuePtr& v) -> std::optional<std::string> {
     return stringText(v);
 }
 
+auto rangeLength(const RangeValue& range) -> int64_t {
+    if (range.step > 0) {
+        return range.start <= range.end ? (range.end - range.start) / range.step + 1 : 0;
+    }
+    return range.start >= range.end ? (range.start - range.end) / -range.step + 1 : 0;
+}
+
+auto rangeElements(const RangeValue& range) -> std::vector<ValuePtr> {
+    if (range.lower || range.upper) {
+        throw std::runtime_error("Float ranges cannot be enumerated");
+    }
+    std::vector<ValuePtr> elements;
+    const auto n = rangeLength(range);
+    elements.reserve(static_cast<size_t>(n));
+    for (int64_t k = 0; k < n; k++) {
+        const auto code = range.start + k * range.step;
+        elements.push_back(
+            range.isChar ? Value::character(static_cast<char32_t>(code)) : Value::integer(code));
+    }
+    return elements;
+}
+
 auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
     if (!a && !b) {
         return true;
@@ -870,7 +900,8 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
                     return av.lower && bv->lower && valuesEqual(av.lower, bv->lower) &&
                            valuesEqual(av.upper, bv->upper);
                 }
-                return av.isChar == bv->isChar && av.start == bv->start && av.end == bv->end;
+                return av.isChar == bv->isChar && av.start == bv->start && av.end == bv->end &&
+                       av.step == bv->step;
             } else if constexpr (std::is_same_v<AT, MapValue>) {
                 if (av.entries.size() != bv->entries.size()) {
                     return false;
@@ -1019,13 +1050,18 @@ auto Value::inspect() const -> std::string {
                     if (node.lower) {
                         return rec(*node.lower) + ".." + rec(*node.upper);
                     }
-                    if (node.isChar) {
-                        return std::string(c(green)) + "'" + static_cast<char>(node.start) + "'" +
-                               c(reset) + ".." + std::string(c(green)) + "'" +
-                               static_cast<char>(node.end) + "'" + c(reset);
+                    std::string bounds =
+                        node.isChar ? std::string(c(green)) + "'" + static_cast<char>(node.start) +
+                                          "'" + c(reset) + ".." + std::string(c(green)) + "'" +
+                                          static_cast<char>(node.end) + "'" + c(reset)
+                                    : std::string(c(yellow)) + std::to_string(node.start) +
+                                          c(reset) + ".." + std::string(c(yellow)) +
+                                          std::to_string(node.end) + c(reset);
+                    if (node.step != 1) {
+                        return "(" + bounds + ").by(" + std::string(c(yellow)) +
+                               std::to_string(node.step) + c(reset) + ")";
                     }
-                    return std::string(c(yellow)) + std::to_string(node.start) + c(reset) + ".." +
-                           std::string(c(yellow)) + std::to_string(node.end) + c(reset);
+                    return bounds;
                 } else if constexpr (std::is_same_v<T, StreamValue>) {
                     return std::string(c(gray)) + "<Stream>" + c(reset);
                 } else if constexpr (std::is_same_v<T, FeedValue>) {

@@ -69,6 +69,7 @@ convertTo(_, 'Byte') -> 'None';
 convertTo(V, 'Binary') when is_binary(V) -> {'Just', {'Binary', V}};
 convertTo({'Binary', V}, 'Binary') -> {'Just', {'Binary', V}};
 convertTo({'Range', _, _} = Range, 'List') -> {'Just', kex_intrinsic_range:items(Range)};
+convertTo({'Range', _, _, _} = Range, 'List') -> {'Just', kex_intrinsic_range:items(Range)};
 convertTo(V, 'List') when is_list(V) -> {'Just', V};
 %% Runtime-tagged values are not tuples, even though they are tuples here —
 %% the walker keeps them as separate types and answers None. They are never

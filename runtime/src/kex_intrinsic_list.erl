@@ -17,6 +17,7 @@
 %% as_list/1 — a Range receiver as its list of items; a list as it is. A
 %% String is not a list: its functions take its `chars` (src/stdlib/string.kex).
 as_list({'Range', _, _} = R) -> kex_intrinsic_range:items(R);
+as_list({'Range', _, _, _} = R) -> kex_intrinsic_range:items(R);
 as_list(L) -> L.
 
 %% Receiver is always the first argument (Kex UFCS convention).
