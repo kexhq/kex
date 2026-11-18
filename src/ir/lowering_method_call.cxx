@@ -1,5 +1,7 @@
 // Method-call lowering methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include <cstdlib>
+#include <cstdio>
 #include "../common/named_arguments.hxx"
 #include "../common/mangle.hxx"
 #include <algorithm>
@@ -220,6 +222,15 @@ auto Lowering::lowerValueReceiverCall(const ast::MethodCall& n) -> ExprPtr {
                 }
                 const auto& providers = chosen->second;
                 const auto function = providers.size() == 1 ? providers.front()->beamFunction : m;
+                // KEX_SEARCH_AUDIT=1: each call this name-based search still
+                // decides, so the checker can be taught to decide it
+                // instead (kexhq/kex#667).
+                static const bool audit = std::getenv("KEX_SEARCH_AUDIT") != nullptr;
+                if (audit) {
+                    std::fprintf(stderr, "search: %s/%d -> %s:%s (%zu module%s)\n", m.c_str(),
+                                 arity, chosen->first.c_str(), function.c_str(), byModule.size(),
+                                 byModule.size() == 1 ? "" : "s");
+                }
                 return ret(callE(chosen->first, function, arity, std::move(args)));
             }
             if (!byModule.empty()) {
