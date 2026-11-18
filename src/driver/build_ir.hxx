@@ -232,11 +232,31 @@ struct BelowAnalysis : pass::AnalysisInfoMixin<BelowAnalysis> {
     auto run(Unit& unit, UnitAnalysisManager& analyses) -> Result;
 };
 
+// The units below as the checker describes them, built once from their
+// registry: the available interfaces start from it, and lowering reads its
+// traits.
+struct BelowInterfacesAnalysis : pass::AnalysisInfoMixin<BelowInterfacesAnalysis> {
+    static constexpr std::string_view kName = "below-interfaces";
+    using Dependencies = std::tuple<BelowAnalysis>;
+    using Result = semantic::ImportedInterfaces;
+    auto run(Unit& unit, UnitAnalysisManager& analyses) -> Result;
+};
+
+// What lowering knows of the functions of the prelude and the units below,
+// as `unitExternalModules` makes it. The check counts calls against the same
+// providers, so both read this one.
+struct UnitExternalsAnalysis : pass::AnalysisInfoMixin<UnitExternalsAnalysis> {
+    static constexpr std::string_view kName = "unit-externals";
+    using Dependencies = std::tuple<BelowAnalysis>;
+    using Result = ir::ExternalModules;
+    auto run(Unit& unit, UnitAnalysisManager& analyses) -> Result;
+};
+
 // The interfaces a unit is checked against: the prelude's, less what this
 // build compiles itself, merged with the units' below it.
 struct AvailableInterfacesAnalysis : pass::AnalysisInfoMixin<AvailableInterfacesAnalysis> {
     static constexpr std::string_view kName = "available-interfaces";
-    using Dependencies = std::tuple<BelowAnalysis>;
+    using Dependencies = std::tuple<BelowInterfacesAnalysis>;
     using Result = semantic::ImportedInterfaces;
     auto run(Unit& unit, UnitAnalysisManager& analyses) -> Result;
 };
@@ -245,7 +265,7 @@ struct AvailableInterfacesAnalysis : pass::AnalysisInfoMixin<AvailableInterfaces
 // and variant tags, beside the prelude's.
 struct LinkAnalysis : pass::AnalysisInfoMixin<LinkAnalysis> {
     static constexpr std::string_view kName = "link";
-    using Dependencies = std::tuple<BelowAnalysis>;
+    using Dependencies = std::tuple<BelowAnalysis, BelowInterfacesAnalysis, UnitExternalsAnalysis>;
     struct Result {
         ir::ExternalModules externals;
         std::vector<ir::ExternalRecordLayout> layouts;
@@ -267,7 +287,7 @@ struct UnitCacheKeyAnalysis : pass::AnalysisInfoMixin<UnitCacheKeyAnalysis> {
 // checker's answers, that lowering and the description read.
 struct HirAnalysis : pass::AnalysisInfoMixin<HirAnalysis> {
     static constexpr std::string_view kName = "hir";
-    using Dependencies = std::tuple<AvailableInterfacesAnalysis, BelowAnalysis>;
+    using Dependencies = std::tuple<AvailableInterfacesAnalysis, UnitExternalsAnalysis>;
     struct Result {
         std::unique_ptr<semantic::Analyzer> analyzer;
         std::vector<semantic::Diagnostic> diagnostics;

@@ -262,10 +262,17 @@ auto overlayOnView(const semantic::ImportedInterfaces& view, semantic::ImportedI
     return mergeSemanticInterfaces(std::move(given), std::move(below));
 }
 
+auto BelowInterfacesAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
+    return analyses.result<BelowAnalysis>(unit).registry.buildSemanticInterfaces();
+}
+
+auto UnitExternalsAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
+    return unitExternalModules(analyses.result<BelowAnalysis>(unit).registry);
+}
+
 auto AvailableInterfacesAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
     return overlayDescribedInterfaces(
-        unit.program().settings().interfaces,
-        analyses.result<BelowAnalysis>(unit).registry.buildSemanticInterfaces(), true);
+        unit.program().settings().interfaces, analyses.result<BelowInterfacesAnalysis>(unit), true);
 }
 
 auto unitExternalModules(const beam::KexiRegistry& registry) -> ir::ExternalModules {
@@ -326,7 +333,7 @@ auto unitExternalModules(const beam::KexiRegistry& registry) -> ir::ExternalModu
 auto LinkAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
     const auto& registry = analyses.result<BelowAnalysis>(unit).registry;
     Result link{
-        unitExternalModules(registry), loadPreludeRecordLayouts(), loadPreludeVariantTags()};
+        analyses.result<UnitExternalsAnalysis>(unit), preludeRecordLayouts(), preludeVariantTags()};
     // Where each type's `make` functions are, for the runtime's dispatch on a
     // value: its declaring module may have none, and another unit may. A
     // `make` over a union (`make TypeRef | PatternRef`) owns each member.
@@ -356,11 +363,16 @@ auto LinkAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
     // (`Foldable`'s `any?` on `Data.Set`) in the module holding its `make`
     // functions, which forwards them to where its unit emitted them: receiver
     // functions for that type, at the arities of the prelude's generic ones.
-    std::map<std::string, std::vector<std::string>> traitDefaults;
-    for (const auto& trait : ::preludeSemanticInterfaces().traits) {
-        traitDefaults[trait.name] = trait.defaultMethods;
-    }
-    for (const auto& trait : registry.buildSemanticInterfaces().traits) {
+    // The prelude's never change, so they are read once.
+    static const auto preludeTraitDefaults = [] {
+        std::map<std::string, std::vector<std::string>> defaults;
+        for (const auto& trait : ::preludeSemanticInterfaces().traits) {
+            defaults[trait.name] = trait.defaultMethods;
+        }
+        return defaults;
+    }();
+    auto traitDefaults = preludeTraitDefaults;
+    for (const auto& trait : analyses.result<BelowInterfacesAnalysis>(unit).traits) {
         traitDefaults[trait.name] = trait.defaultMethods;
     }
     for (const auto* module : registry.allLoadedModules()) {
@@ -452,8 +464,7 @@ auto HirAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
         *checked.analyzer, unit.isEntry() ? program.nameCheckFiles() : std::vector<std::string>{},
         program.settings().entryPath);
     // The providers lowering will see, so the check counts a call's the same.
-    checked.analyzer->setLinkedModules(
-        providerModules(unitExternalModules(analyses.result<BelowAnalysis>(unit).registry)));
+    checked.analyzer->setLinkedModules(providerModules(analyses.result<UnitExternalsAnalysis>(unit)));
     checked.clean = checked.analyzer->analyze(unit.ast);
     checked.diagnostics = checked.analyzer->diagnostics();
     if (checked.clean) {
@@ -590,6 +601,8 @@ auto AssemblePass::run(Unit& unit, UnitAnalysisManager& analyses) -> pass::Prese
     return pass::PreservedAnalyses::none()
         .preserve<ReachAnalysis>()
         .preserve<BelowAnalysis>()
+        .preserve<BelowInterfacesAnalysis>()
+        .preserve<UnitExternalsAnalysis>()
         .preserve<AvailableInterfacesAnalysis>()
         .preserve<LinkAnalysis>()
         .preserve<UnitCacheKeyAnalysis>();
@@ -1126,6 +1139,8 @@ auto runBuild(
     pass::crossRegisterProxies(unitAnalyses, moduleAnalyses);
     unitAnalyses.registerAnalysis<ReachAnalysis>();
     unitAnalyses.registerAnalysis<BelowAnalysis>();
+    unitAnalyses.registerAnalysis<BelowInterfacesAnalysis>();
+    unitAnalyses.registerAnalysis<UnitExternalsAnalysis>();
     unitAnalyses.registerAnalysis<AvailableInterfacesAnalysis>();
     unitAnalyses.registerAnalysis<LinkAnalysis>();
     unitAnalyses.registerAnalysis<UnitCacheKeyAnalysis>();

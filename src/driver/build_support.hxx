@@ -28,6 +28,8 @@ auto preludeSemanticInterfaces() -> const kex::semantic::ImportedInterfaces&;
 auto preludeExternalModules() -> const kex::ir::ExternalModules&;
 auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout>;
 auto loadPreludeVariantTags() -> std::vector<kex::ir::ExternalVariantTag>;
+auto preludeRecordLayouts() -> const std::vector<kex::ir::ExternalRecordLayout>&;
+auto preludeVariantTags() -> const std::vector<kex::ir::ExternalVariantTag>&;
 // The prelude's functions a caller may copy with its block in place
 // (ir/passes/specialize), read from the prebuilt runtime when first needed.
 auto useStandardLibrarySpecializations() -> void;
