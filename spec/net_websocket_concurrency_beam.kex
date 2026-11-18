@@ -77,18 +77,24 @@ main do
   let echoed = tasks.filter { |task| task.await(10000) == Ok(true) }.count
   IO.printLine("concurrent echoes: ${echoed}/200")
 
+  # A server of their own for the five live WebSockets below, so a handler
+  # above that is still finishing is not counted among the forced ones.
+  let _ = server.stop(2.second)
+  let fresh = Server.start(TCP.Endpoint.loopback(Net.Port.from(0).try), router).try
+  let freshPort = fresh.localAddress.port.value
+
   # Five live WebSockets, each with its handler running (one echo proves it).
   # The block's `.try`s make each a Result.
   let live = (1..5).map do |i|
-    let client = WebSocket.connect("ws://127.0.0.1:${port}/echo").try
+    let client = WebSocket.connect("ws://127.0.0.1:${freshPort}/echo").try
     client.send(Text("live${i}")).try
     let _ = client.receiveMessage(timeout: Just(2.second))
     client
   end
-  let report = server.stop(300.millisecond).try
+  let report = fresh.stop(300.millisecond).try
   IO.printLine("forced: ${report.forced}")
   IO.printLine("within the grace period: ${report.elapsedMilliseconds < 2000}")
-  IO.printLine("running: ${server.running?}")
+  IO.printLine("running: ${fresh.running?}")
   live.each do |opened|
     match opened do
       Ok(client) => client.close
