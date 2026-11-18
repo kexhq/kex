@@ -1486,15 +1486,17 @@ int main() {
             assertTrue(contains(out, "#<104>"), out);
         });
 
-        it("interpolated string uses kex_io:to_string for embedded expr", []() {
+        it("interpolated string joins its pieces in one kex_io:interpolate", []() {
             auto out = emit("main do\n  let n = 42\n  \"value: ${n}\"\nend\n");
-            assertTrue(contains(out, "kex_io':'to_string'"), out);
-            assertTrue(contains(out, "unicode':'characters_to_binary'"), out);
+            assertTrue(contains(out, "kex_io':'interpolate'"), out);
+            // Each hole's showValue is already a binary: it is not taken
+            // through to_string, a list of characters, on its way in.
+            assertFalse(contains(out, "kex_io':'to_string'"), out);
         });
 
-        it("interpolated string assembles through Unicode conversion", []() {
+        it("interpolated string ending in a hole is joined the same way", []() {
             auto out = emit("main do\n  let n = 42\n  \"${n}!\"\nend\n");
-            assertTrue(contains(out, "unicode':'characters_to_binary'"), out);
+            assertTrue(contains(out, "kex_io':'interpolate'"), out);
         });
 
         it("raw backtick strings bypass interpolation lowering", []() {
@@ -1504,7 +1506,7 @@ int main() {
                 "  `value: ${n}`\n"
                 "end\n");
             assertFalse(contains(out, "kex_io':'to_string'"), out);
-            assertFalse(contains(out, "unicode':'characters_to_binary'"), out);
+            assertFalse(contains(out, "kex_io':'interpolate'"), out);
         });
 
         it("lowers a raw tag to the uniform two-list ABI", []() {
@@ -1523,8 +1525,7 @@ int main() {
                 "main do\n"
                 "  $`answer: ${40 + 2}`\n"
                 "end\n");
-            assertTrue(contains(out, "kex_io':'to_string'"), out);
-            assertTrue(contains(out, "unicode':'characters_to_binary'"), out);
+            assertTrue(contains(out, "kex_io':'interpolate'"), out);
         });
 
         it("passes raw values through an interpolating tag ABI", []() {

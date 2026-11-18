@@ -2,7 +2,7 @@
 -export([print_line/1, print/1, print_error/1, print_error_raw/1,
            print_binary/1, print_error_binary/1, read_line/0, read_char/0,
            inspect/1, inspect_rendered/2, inspect_repl/1, inspect_value/1, inspect_plain/1, inspect_typed/2, to_string/1, to_string_optional/1,
-           to_string_bin/1, env_map/0, register_display/2,
+           to_string_bin/1, interpolate/1, env_map/0, register_display/2,
            mock_start/0, mock_input/1, mock_output/0, mock_clear/0,
            mock_stop/0, value_type_name/1, call_field_or_fail/4,
            register_method_owners/1, dispatch_method/3, dispatch_method/4,
@@ -767,6 +767,31 @@ to_string_optional(X) -> {'Just', to_string_bin(X)}.
 % A Kex String is a UTF-8 binary and a Char is {'Char', N}, so [] is
 % unambiguously an empty LIST ("[]") and an [Int] is unambiguously a list of
 % numbers. A [Char] is a LIST too — it is not a String — so it prints as one.
+%% interpolate/1 — an interpolated string from its pieces: the literal text
+%% and each hole's `showValue`, both binaries, joined in one pass (kexhq/kex#671).
+%% It used to take every piece through to_string/1 first, which turns a binary
+%% back into a list of characters only for characters_to_binary to encode it
+%% again. A piece that is not a binary (a `showValue` an unchecked build let
+%% answer something else) still goes through to_string/1, as before.
+%% Pieces that are all binaries, as they are once checked, are Kex strings and
+%% so valid UTF-8 already: concatenating them needs no decoding.
+interpolate(Pieces) ->
+    case all_binaries(Pieces) of
+        true -> iolist_to_binary(Pieces);
+        false ->
+            case unicode:characters_to_binary([interpolation_piece(Piece) || Piece <- Pieces]) of
+                Text when is_binary(Text) -> Text;
+                _ -> erlang:error(badarg, [Pieces])
+            end
+    end.
+
+all_binaries([Piece | Rest]) when is_binary(Piece) -> all_binaries(Rest);
+all_binaries([]) -> true;
+all_binaries(_) -> false.
+
+interpolation_piece(Piece) when is_binary(Piece) -> Piece;
+interpolation_piece(Piece) -> to_string(Piece).
+
 to_string({'Range', {'Char', A}, {'Char', B}}) -> [$', A, $', $., $., $', B, $'];
 to_string({'Range', A, B}) -> to_string(A) ++ ".." ++ to_string(B);
 %% A stepped range shows as it is written: `(1..10).by(2)`.
