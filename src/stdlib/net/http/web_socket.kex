@@ -180,6 +180,10 @@ make Connection do
   #
   # @return [Void]
   foul close() -> Void = Kex.Intrinsic.NetWebSocket.close(this)
-  # @return [Bool] whether the connection owner has stopped
+  # Whether the connection is closed. A server's connection is closed as soon
+  # as either side closes it or the transport fails; a client's once its
+  # connection process has stopped.
+  #
+  # @return [Bool] whether the connection is closed
   foul closed?() -> Bool = Kex.Intrinsic.NetWebSocket.closed?(this)
 end

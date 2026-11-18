@@ -1,0 +1,104 @@
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
+#
+# A server connection keeps reading while its handler is busy elsewhere
+# (kexhq/kex#670): a peer's ping is answered and its close echoed straight
+# away, not once the handler next calls receiveMessage. The close is then
+# returned once, as a CloseMessage, and the connection reads closed after.
+#
+# It also answers two processes receiving on one connection at the same
+# time. Each gets one of the two messages; before, the second receive
+# replaced the first, which then waited for good.
+
+using Net.HTTP.WebSocket
+using Net.HTTP, except: [ClientOptions]
+using Net.Socket
+
+foul readLine(connection: TCP.TCPConnection) -> String do
+  connection.receiveLine(8192).try.to(String).try
+rescue return "\r\n"
+end
+
+foul skipHeaders(connection: TCP.TCPConnection) -> Void do
+  if readLine(connection) != "\r\n"
+    skipHeaders(connection)
+  end
+end
+
+foul describe(result: Result<Message, NetError>) -> String = match result do
+  Ok(Text(text)) => "Text(${text})"
+  Ok(CloseMessage(code, reason)) => "CloseMessage(${code}, \"${reason}\")"
+  Ok(_) => "another message"
+  Error(error) => "${error.kind}"
+end
+
+# Busy for 700 ms, then reads what the peer left: its close, then nothing.
+foul busyThenReceive(socket: Connection) -> Void do
+  Task.sleep(700.millisecond)
+  IO.printLine("first receive: ${describe(socket.receiveMessage)}")
+  IO.printLine("second receive: ${describe(socket.receiveMessage)}")
+  let sent = match socket.send(Text("late")) do
+    Ok(_) => "sent"
+    Error(error) => "${error.kind}"
+  end
+  IO.printLine("send after the peer closed: ${sent}")
+  IO.printLine("closed?: ${socket.closed?}")
+end
+
+# Two receives at once, from this process and another.
+foul receiveTwice(socket: Connection) -> Void do
+  let other = Task.start do describe(socket.receiveMessage) end
+  let mine = describe(socket.receiveMessage)
+  let theirs = match other.await(2000) do
+    Ok(text) => text
+    Error(_) => "no answer"
+  end
+  IO.printLine("two receivers got: ${[mine, theirs].sort.join(", ")}")
+end
+
+foul idleRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |_handshake|
+  let handler : Connection -> Void = { |socket| busyThenReceive(socket) }
+  Accept(handler, Headers.empty, None)
+end
+
+foul twiceRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |_handshake|
+  let handler : Connection -> Void = { |socket| receiveTwice(socket) }
+  Accept(handler, Headers.empty, None)
+end
+
+main do
+  let router = Router.build.get("/idle", ~idleRoute).get("/twice", ~twiceRoute)
+  let endpoint = TCP.Endpoint.loopback(Net.Port.from(0).try)
+  let server = Server.start(endpoint, router).try
+  let port = server.localAddress.port.value
+
+  let raw = TCP.connect(TCP.Endpoint.loopback(Net.Port.from(port).try)).try
+  let handshake = "GET /idle HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+  raw.sendAll(handshake.to(Binary).try).try
+  IO.printLine(readLine(raw).trim)
+  skipHeaders(raw)
+
+  # An empty, masked ping (opcode 9). The pong (opcode 10) is due well inside
+  # the 700 ms the handler spends away.
+  raw.sendAll(Binary.fromBytes([137, 128, 1, 2, 3, 4])).try
+  let pong = raw.receiveExactly(2, 500.millisecond)
+  IO.printLine("pong while the handler is busy: ${pong == Ok(Binary.fromBytes([138, 0]))}")
+
+  # A close (opcode 8) with code 1000, masked with a zero key so the payload
+  # reads as it is. Its echo is due straight away too.
+  raw.sendAll(Binary.fromBytes([136, 130, 0, 0, 0, 0, 3, 232])).try
+  let echo = raw.receiveExactly(4, 500.millisecond)
+  IO.printLine("close echoed while the handler is busy: ${echo == Ok(Binary.fromBytes([136, 2, 3, 232]))}")
+
+  # The handler wakes at 700 ms and reports.
+  Task.sleep(1.second)
+  raw.close
+
+  let client = WebSocket.connect("ws://127.0.0.1:${port}/twice").try
+  client.send(Text("a")).try
+  client.send(Text("b")).try
+  Task.sleep(500.millisecond)
+  client.close
+
+  server.stop.try
+  IO.printLine("done")
+end
