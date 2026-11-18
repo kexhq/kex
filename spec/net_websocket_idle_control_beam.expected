@@ -1,0 +1,9 @@
+HTTP/1.1 101 Switching Protocols
+pong while the handler is busy: true
+close echoed while the handler is busy: true
+first receive: CloseMessage(1000, "")
+second receive: Closed
+send after the peer closed: Closed
+closed?: true
+two receivers got: Text(a), Text(b)
+done

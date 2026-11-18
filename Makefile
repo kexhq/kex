@@ -1,5 +1,5 @@
 .PHONY: docs
-.PHONY: build-tey spec-tey build format format-check test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-examples spec-examples-beam check-examples spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz
+.PHONY: build-tey spec-tey build format format-check test spec spec-orphans spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-examples spec-examples-beam check-examples spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo fuzz bench-net
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
@@ -165,6 +165,12 @@ test-spec-beam-runner: build
 test-fuzz: build
 	@KEX="$(KEX)" "$(KEX)" --run-walker --no-colors tools/fuzz.spec.kex
 	@KEX="$(KEX)" "$(KEX)" --run-walker --no-colors tools/fuzz_cli.spec.kex
+
+# Net.HTTP.Server throughput against a local load generator (kexhq/kex#670).
+# Not part of test-all: it takes a few minutes and its numbers depend on the
+# machine. See tools/bench/net/run.sh.
+bench-net: build
+	@bash tools/bench/net/run.sh $(KEX)
 
 test-devirt: build
 	@tools/devirt-correspondence.sh "$(KEX)" $(BEAM_SPEC_FILES)

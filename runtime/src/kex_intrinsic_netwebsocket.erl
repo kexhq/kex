@@ -15,6 +15,15 @@ connect(URL, {'Net.HTTP.WebSocket.ClientOptions', Protocols, Maximum})
     end;
 connect(_, _) -> error_value('Parse', <<"invalid WebSocket client options">>).
 
+% A server connection carries its socket (`Direct`), so any process holding it
+% writes a frame straight to the socket: one gen_tcp:send, which the port
+% never interleaves with another, rather than a round trip through the
+% connection process (kexhq/kex#670). Only a connection on another node, where
+% the port isn't reachable, goes through the process, as a client's always
+% does.
+send({'Net.HTTP.WebSocket.Connection', Pid, Direct = {Socket, _, _}}, Message)
+  when node(Socket) =:= node() -> direct_send(Pid, Direct, Message);
+send({'Net.HTTP.WebSocket.Connection', Pid, _}, Message) -> call(Pid, {send, Message});
 send({'Net.HTTP.WebSocket.Connection', Pid}, Message) -> call(Pid, {send, Message});
 send(_, _) -> error_value('Parse', <<"invalid WebSocket connection">>).
 % Unlike send/session/close, there is nothing to bound here: `receiveMessage`
@@ -30,6 +39,7 @@ send(_, _) -> error_value('Parse', <<"invalid WebSocket connection">>).
 % so `server_loop` can enforce it too, not just the caller's own `call/3`
 % wait — see that clause's own comment for why the caller alone is not
 % enough once a receive can be bounded at all.
+receiveMessage({'Net.HTTP.WebSocket.Connection', Pid, _}) -> call(Pid, {receive_message, infinity}, infinity);
 receiveMessage({'Net.HTTP.WebSocket.Connection', Pid}) -> call(Pid, {receive_message, infinity}, infinity);
 receiveMessage(_) -> error_value('Parse', <<"invalid WebSocket connection">>).
 % An explicit, caller-chosen deadline (kexhq/kex#381) — `None` asks for the
@@ -43,23 +53,47 @@ receiveMessage(_) -> error_value('Parse', <<"invalid WebSocket connection">>).
 % its timer only once the request reaches it), and a message landing in
 % between went to a request nobody was waiting on any more — lost, and the
 % handler's next receive never saw it.
+receiveMessageWithin({'Net.HTTP.WebSocket.Connection', Pid, _}, Timeout) ->
+    receiveMessageWithin({'Net.HTTP.WebSocket.Connection', Pid}, Timeout);
 receiveMessageWithin({'Net.HTTP.WebSocket.Connection', Pid}, 'None') ->
     call(Pid, {receive_message, infinity}, infinity);
 receiveMessageWithin({'Net.HTTP.WebSocket.Connection', Pid}, {'Just', {'Measure', Seconds, _, _}})
   when is_number(Seconds), Seconds >= 0 ->
     call(Pid, {receive_message, timeout_ms(Seconds)}, infinity);
 receiveMessageWithin(_, _) -> error_value('Parse', <<"invalid WebSocket receive timeout">>).
+session({'Net.HTTP.WebSocket.Connection', _, {_, _, Selected}}) ->
+    {'Net.HTTP.WebSocket.Session', option(Selected)};
 session({'Net.HTTP.WebSocket.Connection', Pid}) ->
     case call(Pid, session) of
         {'Error', _} -> {'Net.HTTP.WebSocket.Session', 'None'};
         Value -> Value
     end.
+close({'Net.HTTP.WebSocket.Connection', Pid, _}) -> close({'Net.HTTP.WebSocket.Connection', Pid});
 close({'Net.HTTP.WebSocket.Connection', Pid}) ->
     case is_process_alive(Pid) of
         true -> _ = call(Pid, close), 'Kex.Unit';
         false -> 'Kex.Unit'
     end.
+% A server connection is closed once either side has closed it, which its
+% flag says without asking the process; it used to read open until the
+% handler returned.
+'closed?'({'Net.HTTP.WebSocket.Connection', Pid, {_, Flags, _}}) ->
+    atomics:get(Flags, 1) =:= 1 orelse not is_process_alive(Pid);
 'closed?'({'Net.HTTP.WebSocket.Connection', Pid}) -> not is_process_alive(Pid).
+
+direct_send(Pid, {Socket, Flags, _}, Message) ->
+    case atomics:get(Flags, 1) of
+        1 -> error_value('Closed', <<"WebSocket is closed">>);
+        _ ->
+            case send_message({tcp, Socket}, server, Message, ?DEFAULT_MAX_MESSAGE) of
+                Error = {'Error', {'Net.NetError', 'Closed', _, _, _, _}} ->
+                    %% The socket failed under us: the connection process
+                    %% closes it and answers its waiting receivers.
+                    Pid ! send_failed,
+                    Error;
+                Reply -> Reply
+            end
+    end.
 
 % Server-side upgrade. Called synchronously from the route handler, before
 % `Net.HTTP.Server` has sent any bytes: it only decides what the response
@@ -151,169 +185,215 @@ http_response(Status, Body) ->
      {'Binary', Body}}.
 
 % Called by `kex_intrinsic_nethttpserver` right after the 101 response bytes
-% are on the wire. This process — already the raw socket's reader/writer in
-% the HTTP server's per-connection worker — becomes the connection's message
-% loop, exactly as `loop/5` is for a client; a fresh process runs the
-% application's handler function so it can call back into this same loop via
-% `send`/`receiveMessage` without deadlocking on itself. Blocks until the
-% handler returns (or crashes), which is what lets the HTTP server's own
-% handler bookkeeping and graceful shutdown keep working unchanged.
-accept(Socket, Buffered, HandlerFun, Selected) ->
-    Transport = {tcp, Socket},
-    ConnPid = self(),
-    HandlerPid = spawn(fun() -> run_handler(HandlerFun, ConnPid) end),
-    Monitor = erlang:monitor(process, HandlerPid),
-    server_loop(Transport, Buffered, none, ?DEFAULT_MAX_MESSAGE, Selected, HandlerPid, Monitor, false, none).
-
-run_handler(HandlerFun, ConnPid) ->
-    _ = HandlerFun({'Net.HTTP.WebSocket.Connection', ConnPid}),
-    ok.
-
-% `Pending` is `none` or the `{From, Ref}` of a `receive_message` request
-% that couldn't be answered from `Buffer` alone. Rather than blocking this
-% process inside `gen_tcp:recv` while it waits for more bytes — which
-% would leave it unable to service a `{send, _}` (or any other) request
-% queued in its own mailbox by some other process holding the same
-% connection (kexhq/kex#370) — it arms the socket with `{active, once}`
-% and folds the resulting `{tcp, ...}` / `{tcp_closed, ...}` /
-% `{tcp_error, ...}` messages into this same `receive`, alongside the
-% existing `{call, ...}` clauses. A `receive_message` request is always
-% tried against the already-buffered bytes first (`server_try_receive`),
-% so a connection that already has a full frame buffered — or ever will,
-% from the fixed `Buffered` handed in by `accept/4` — never touches the
-% socket at all.
+% are on the wire. This process, already the socket's owner as the server's
+% per-connection worker, becomes the connection process, and a fresh process
+% runs the application's handler, so the handler can wait on this one without
+% deadlocking on itself. Returns once the handler has returned (or crashed),
+% which is what lets the server's bookkeeping and graceful shutdown keep
+% working unchanged.
 %
-% A bounded request (kexhq/kex#381's `receiveMessage(timeout: Just(_))`)
-% arms its deadline here (`arm_receive_deadline`/the `{receive_timeout,
-% Ref}` clause below), and this process is the only one that enforces it:
-% the caller waits for this process's answer, data or `Timeout`, instead
-% of giving up on its own clock. When both sides timed out independently,
-% the caller's clock always fired first, and a message arriving in between
-% went to the request it had just abandoned. A handler polling on a short
-% timeout lost it for good (observed as a flaky client-side hang in
-% spec/net_websocket_receive_timeout_beam.kex). With one clock, `Pending`
-% is always a request someone is still waiting on, and data arriving after
-% a `Timeout` is buffered (the `none` branch below) for the next receive.
-server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending) ->
+% The handler and anyone it hands the connection to get `{Socket, Flags,
+% Selected}` with it: `send` writes frames straight to the socket, and
+% `session` and `closed?` read it, without a round trip through here. `Flags`
+% is set to 1 once the connection is closed, before any close frame is
+% written, so a send after it is refused rather than following the close.
+accept(Socket, Buffered, HandlerFun, Selected) ->
+    %% A send blocked on a peer that stopped reading gives up after 30 s and
+    %% closes the socket, as the 31 s call that used to carry it did.
+    _ = inet:setopts(Socket, [{send_timeout, 30000}, {send_timeout_close, true}]),
+    Flags = atomics:new(1, []),
+    Connection = {'Net.HTTP.WebSocket.Connection', self(), {Socket, Flags, Selected}},
+    HandlerPid = spawn(fun() -> _ = HandlerFun(Connection), ok end),
+    Monitor = erlang:monitor(process, HandlerPid),
+    State = #{transport => {tcp, Socket}, buffer => Buffered, fragment => none,
+              maximum => ?DEFAULT_MAX_MESSAGE, selected => Selected, flags => Flags,
+              handler => HandlerPid, monitor => Monitor, closed => false,
+              reading => true, armed => false,
+              inbox => queue:new(), inbox_bytes => 0, receivers => queue:new()},
+    server_loop(arm(drain(State))).
+
+% The connection process reads the socket whenever its inbox has room, not
+% only while somebody is receiving, so a ping is answered and a peer's close
+% noticed while the handler is busy elsewhere. Frames are parsed as they
+% arrive: control frames are handled here, and complete messages (or the error
+% that ended reading) queue in `inbox` until a `receive_message` takes them.
+%
+% Receivers queue too, so two processes receiving at once are both answered
+% in turn. A bounded receive's deadline is kept by this process alone
+% (`{receive_timeout, Ref}`), never by the caller's own clock: with two clocks
+% the caller's fired first, and a message arriving in between went to a
+% request nobody was waiting on any more (kexhq/kex#381, #414). Data that
+% arrives after a `Timeout` simply waits in the inbox for the next receive.
+server_loop(State) ->
     receive
-        {call, From, Ref, {send, _}} when Closed ->
+        {call, From, Ref, {receive_message, Wait}} ->
+            server_loop(take_receiver(From, Ref, Wait, State));
+        {receive_timeout, Ref} ->
+            server_loop(expire_receiver(Ref, State));
+        {tcp, _Socket, Data} ->
+            #{buffer := Buffer} = State,
+            server_loop(arm(deliver(drain(State#{armed := false, buffer := <<Buffer/binary, Data/binary>>}))));
+        {tcp_closed, _Socket} ->
+            server_loop(lost(native_error('Closed', closed), State#{armed := false}));
+        {tcp_error, _Socket, Reason} ->
+            transport_close(maps:get(transport, State)),
+            server_loop(lost(native_error('Closed', Reason), State#{armed := false}));
+        send_failed ->
+            case State of
+                #{closed := true} -> server_loop(State);
+                #{transport := Transport} ->
+                    transport_close(Transport),
+                    server_loop(lost(error_value('Closed', <<"WebSocket is closed">>), State))
+            end;
+        {call, From, Ref, {send, _}} when map_get(closed, State) ->
             From ! {Ref, error_value('Closed', <<"WebSocket is closed">>)},
-            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending);
+            server_loop(State);
         {call, From, Ref, {send, Message}} ->
+            #{transport := Transport, maximum := Maximum} = State,
             Reply = send_message(Transport, server, Message, Maximum),
             From ! {Ref, Reply},
             case Reply of
                 {'Error', _} ->
                     transport_close(Transport),
-                    reply_pending_closed(Pending),
-                    server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, true, none);
-                _ -> server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending)
-            end;
-        {call, From, Ref, {receive_message, _Wait}} when Closed ->
-            From ! {Ref, error_value('Closed', <<"WebSocket is closed">>)},
-            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending);
-        {call, From, Ref, {receive_message, Wait}} ->
-            case server_try_receive(Transport, Buffer, Fragment, Maximum) of
-                {done, {Reply, NextBuffer, NextFragment, continue}} ->
-                    From ! {Ref, Reply},
-                    server_loop(Transport, NextBuffer, NextFragment, Maximum, Selected, HandlerPid, Monitor, Closed, none);
-                {done, {Reply, NextBuffer, _, stop}} ->
-                    From ! {Ref, Reply},
-                    server_loop(Transport, NextBuffer, none, Maximum, Selected, HandlerPid, Monitor, true, none);
-                {need_more, NextBuffer, NextFragment} ->
-                    ok = inet:setopts(element(2, Transport), [{active, once}]),
-                    arm_receive_deadline(Wait, Ref),
-                    server_loop(Transport, NextBuffer, NextFragment, Maximum, Selected, HandlerPid, Monitor, Closed, {From, Ref})
-            end;
-        {receive_timeout, Ref} ->
-            case Pending of
-                {From, Ref} ->
-                    From ! {Ref, error_value('Timeout', <<"WebSocket operation timed out">>)},
-                    server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, none);
-                _ ->
-                    % Superseded by a later request, or already answered —
-                    % this timer's own request is no longer the one
-                    % `Pending` refers to, so it has nothing to do.
-                    server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending)
+                    server_loop(lost(error_value('Closed', <<"WebSocket is closed">>), State));
+                _ -> server_loop(State)
             end;
         {call, From, Ref, session} ->
-            From ! {Ref, {'Net.HTTP.WebSocket.Session', option(Selected)}},
-            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending);
+            From ! {Ref, {'Net.HTTP.WebSocket.Session', option(maps:get(selected, State))}},
+            server_loop(State);
         {call, From, Ref, close} ->
-            case Closed of
-                false -> _ = send_frame(Transport, server, 8, <<1000:16/big>>), transport_close(Transport);
-                true -> ok
-            end,
+            State1 = close_once(State),
             From ! {Ref, 'Kex.Unit'},
-            reply_pending_closed(Pending),
-            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, true, none);
-        {tcp, _Socket, Data} ->
-            NextBuffer = <<Buffer/binary, Data/binary>>,
-            case Pending of
-                none ->
-                    % No request is waiting on this data (the socket
-                    % should only be armed while one is), but handle it
-                    % defensively rather than assume the invariant holds:
-                    % buffer it for whenever the next receive_message
-                    % request comes in.
-                    server_loop(Transport, NextBuffer, Fragment, Maximum, Selected, HandlerPid, Monitor, Closed, Pending);
-                {From, Ref} ->
-                    case server_try_receive(Transport, NextBuffer, Fragment, Maximum) of
-                        {done, {Reply, RestBuffer, NextFragment, continue}} ->
-                            From ! {Ref, Reply},
-                            server_loop(Transport, RestBuffer, NextFragment, Maximum, Selected, HandlerPid, Monitor, Closed, none);
-                        {done, {Reply, RestBuffer, _, stop}} ->
-                            From ! {Ref, Reply},
-                            server_loop(Transport, RestBuffer, none, Maximum, Selected, HandlerPid, Monitor, true, none);
-                        {need_more, RestBuffer, NextFragment} ->
-                            ok = inet:setopts(element(2, Transport), [{active, once}]),
-                            server_loop(Transport, RestBuffer, NextFragment, Maximum, Selected, HandlerPid, Monitor, Closed, {From, Ref})
-                    end
-            end;
-        {tcp_closed, _Socket} ->
-            reply_pending_error(Pending, native_error('Closed', closed)),
-            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, true, none);
-        {tcp_error, _Socket, Reason} ->
-            reply_pending_error(Pending, native_error('Closed', Reason)),
-            transport_close(Transport),
-            server_loop(Transport, Buffer, Fragment, Maximum, Selected, HandlerPid, Monitor, true, none);
-        {'DOWN', Monitor, process, HandlerPid, Reason} ->
-            case Closed of
-                false -> _ = send_frame(Transport, server, 8, <<1000:16/big>>), transport_close(Transport);
-                true -> ok
-            end,
-            reply_pending_closed(Pending),
+            %% What the peer sent before the close is not read any more.
+            server_loop(lost(error_value('Closed', <<"WebSocket is closed">>),
+                             State1#{inbox := queue:new(), inbox_bytes := 0}));
+        {'DOWN', Monitor, process, HandlerPid, Reason}
+          when Monitor =:= map_get(monitor, State), HandlerPid =:= map_get(handler, State) ->
+            _ = close_once(State),
+            answer_receivers(error_value('Closed', <<"WebSocket is closed">>), maps:get(receivers, State)),
             case Reason of normal -> ok; _ -> error end
     end.
 
-reply_pending_closed(none) -> ok;
-reply_pending_closed({From, Ref}) -> From ! {Ref, error_value('Closed', <<"WebSocket is closed">>)}.
+%% A receive is answered from the inbox if it can be, refused if the
+%% connection is closed and nothing is left to read, and otherwise waits.
+take_receiver(From, Ref, Wait, State = #{receivers := Receivers}) ->
+    case answer_one(From, Ref, State) of
+        {answered, State1} -> arm(State1);
+        waiting ->
+            arm_receive_deadline(Wait, Ref),
+            State#{receivers := queue:in({From, Ref}, Receivers)}
+    end.
 
-reply_pending_error(none, _Error) -> ok;
-reply_pending_error({From, Ref}, Error) -> From ! {Ref, Error}.
+answer_one(From, Ref, State = #{inbox := Inbox, inbox_bytes := Bytes, closed := Closed}) ->
+    case queue:out(Inbox) of
+        {{value, {Reply, Size}}, Inbox1} ->
+            From ! {Ref, Reply},
+            {answered, State#{inbox := Inbox1, inbox_bytes := Bytes - Size}};
+        {empty, _} when Closed ->
+            From ! {Ref, error_value('Closed', <<"WebSocket is closed">>)},
+            {answered, State};
+        {empty, _} -> waiting
+    end.
 
-% No deadline at all needs no timer; a real one schedules this process's own
-% `{receive_timeout, Ref}` to itself, so a caller-given bound is enforced
-% here too and `Pending` can never outlive it (see `server_loop`'s own
-% comment on why the caller's `call/3` wait alone is not enough).
-arm_receive_deadline(infinity, _Ref) -> ok;
-arm_receive_deadline(Wait, Ref) -> erlang:send_after(Wait, self(), {receive_timeout, Ref}), ok.
+expire_receiver(Ref, State = #{receivers := Receivers}) ->
+    case lists:keytake(Ref, 2, queue:to_list(Receivers)) of
+        {value, {From, Ref}, Rest} ->
+            From ! {Ref, error_value('Timeout', <<"WebSocket operation timed out">>)},
+            State#{receivers := queue:from_list(Rest)};
+        %% Already answered: the timer outlived its request.
+        false -> State
+    end.
 
-% Non-blocking counterpart to `receive_message`/`read_frame`, used only by
-% `server_loop`: reports `{need_more, Buffer, Fragment}` instead of
-% reading more bytes off the socket itself, so the caller can arm
-% `{active, once}` and keep servicing its mailbox while it waits.
-server_try_receive(Transport, Buffer, Fragment, Maximum) ->
+%% Hands queued messages to waiting receivers, oldest to oldest; once the
+%% connection is closed and nothing is left, the rest are told `Closed`.
+deliver(State) ->
+    State1 = hand_out(State),
+    case State1 of
+        #{closed := true, inbox_bytes := 0, receivers := Receivers} ->
+            case queue:is_empty(maps:get(inbox, State1)) of
+                true ->
+                    answer_receivers(error_value('Closed', <<"WebSocket is closed">>), Receivers),
+                    State1#{receivers := queue:new()};
+                false -> State1
+            end;
+        _ -> State1
+    end.
+
+hand_out(State = #{receivers := Receivers, inbox := Inbox, inbox_bytes := Bytes}) ->
+    case {queue:out(Receivers), queue:out(Inbox)} of
+        {{{value, {From, Ref}}, Rest}, {{value, {Reply, Size}}, Inbox1}} ->
+            From ! {Ref, Reply},
+            hand_out(State#{receivers := Rest, inbox := Inbox1, inbox_bytes := Bytes - Size});
+        _ -> State
+    end.
+
+%% Parses every complete frame in the buffer. A ping is answered and a pong
+%% dropped (handle_frame); a message or the error that ends reading is queued.
+drain(State = #{reading := false}) -> State;
+drain(State = #{transport := Transport, buffer := Buffer, fragment := Fragment, maximum := Maximum}) ->
     case read_frame_buffered(server, Buffer, Maximum) of
-        need_more -> {need_more, Buffer, Fragment};
-        {error, Error} -> {done, {Error, <<>>, none, stop}};
+        need_more -> State;
+        {error, Error} -> stop_reading(Error, State#{buffer := <<>>});
         {ok, Fin, Opcode, Payload, Rest} ->
             case handle_frame(Transport, server, Fin, Opcode, Payload, Rest, Fragment, Maximum) of
-                {continue_receive, NextBuffer, NextFragment, continue} ->
-                    server_try_receive(Transport, NextBuffer, NextFragment, Maximum);
-                Result -> {done, Result}
+                {continue_receive, Rest1, Fragment1, continue} ->
+                    drain(State#{buffer := Rest1, fragment := Fragment1});
+                {Reply, Rest1, Fragment1, continue} ->
+                    drain(queue_reply(Reply, State#{buffer := Rest1, fragment := Fragment1}));
+                {Reply, Rest1, _, stop} ->
+                    stop_reading(Reply, State#{buffer := Rest1, fragment := none})
             end
     end.
+
+queue_reply(Reply, State = #{inbox := Inbox, inbox_bytes := Bytes}) ->
+    Size = reply_size(Reply),
+    State#{inbox := queue:in({Reply, Size}, Inbox), inbox_bytes := Bytes + Size}.
+
+reply_size({'Ok', {'Text', Text}}) -> byte_size(Text);
+reply_size({'Ok', {'BinaryMessage', {'Binary', Data}}}) -> byte_size(Data);
+reply_size(_) -> 0.
+
+%% The peer's close (returned once, as a CloseMessage) or a protocol error
+%% ends reading: it is the last thing a receive gets before `Closed`.
+stop_reading(Reply, State) ->
+    set_closed(queue_reply(Reply, State#{reading := false})).
+
+%% The transport is gone (or failing): queued messages are still handed out,
+%% receivers left waiting get `Error`, and later receives `Closed`.
+lost(Error, State) ->
+    State1 = hand_out(set_closed(State#{reading := false})),
+    answer_receivers(Error, maps:get(receivers, State1)),
+    State1#{receivers := queue:new()}.
+
+answer_receivers(Error, Receivers) ->
+    lists:foreach(fun({From, Ref}) -> From ! {Ref, Error} end, queue:to_list(Receivers)).
+
+%% Sends this side's normal close frame, unless the connection already closed.
+close_once(State = #{closed := true}) -> State;
+close_once(State = #{transport := Transport}) ->
+    State1 = set_closed(State),
+    _ = send_frame(Transport, server, 8, <<1000:16/big>>),
+    transport_close(Transport),
+    State1#{reading := false}.
+
+set_closed(State = #{flags := Flags}) ->
+    atomics:put(Flags, 1, 1),
+    State#{closed := true}.
+
+%% Asks for the next chunk of the socket while reading goes on and the inbox
+%% has room: past `maximum` bytes queued and unread, the peer waits.
+arm(State = #{armed := false, reading := true, inbox_bytes := Bytes, maximum := Maximum,
+              transport := {tcp, Socket}}) when Bytes < Maximum ->
+    case inet:setopts(Socket, [{active, once}]) of
+        ok -> State#{armed := true};
+        {error, _} -> State
+    end;
+arm(State) -> State.
+
+% No deadline at all needs no timer; a real one schedules this process's own
+% `{receive_timeout, Ref}` to itself (see `server_loop`).
+arm_receive_deadline(infinity, _Ref) -> ok;
+arm_receive_deadline(Wait, Ref) -> erlang:send_after(Wait, self(), {receive_timeout, Ref}), ok.
 
 read_frame_buffered(Role, Buffer0, Maximum) ->
     ExpectedMask = mask_bit(Role),
@@ -578,12 +658,13 @@ frame_header(Opcode, MaskBit, Length) when Length < 126 -> <<1:1, 0:3, Opcode:4,
 frame_header(Opcode, MaskBit, Length) when Length =< 65535 -> <<1:1, 0:3, Opcode:4, MaskBit:1, 126:7, Length:16/big>>;
 frame_header(Opcode, MaskBit, Length) -> <<1:1, 0:3, Opcode:4, MaskBit:1, 127:7, 0:1, Length:63/big>>.
 
-mask(Data, <<A, B, C, D>>) ->
-    list_to_binary(mask_bytes(binary:bin_to_list(Data), [A,B,C,D], 0, [])).
-mask_bytes([], _, _, Acc) -> lists:reverse(Acc);
-mask_bytes([Byte | Rest], Key, Index, Acc) ->
-    mask_bytes(Rest, Key, Index + 1,
-               [Byte bxor lists:nth((Index rem 4) + 1, Key) | Acc]).
+%% XOR with the 4-byte key repeated over the payload (RFC 6455 §5.3), as one
+%% crypto:exor of two binaries rather than a list walk per byte: it runs on
+%% every frame a server receives.
+mask(<<>>, _Key) -> <<>>;
+mask(Data, Key) ->
+    Size = byte_size(Data),
+    crypto:exor(Data, binary:part(binary:copy(Key, (Size + 3) div 4), 0, Size)).
 
 handshake(Transport, Target, Host, Protocols) ->
     Key = base64:encode(crypto:strong_rand_bytes(16)),
@@ -696,7 +777,9 @@ valid_protocol(_) -> false.
 valid_header(Name, Value) -> valid_protocol(Name) andalso
     lists:all(fun(C) -> C =:= 9 orelse C >= 32 andalso C =/= 127 end,
               binary:bin_to_list(Value)).
-valid_utf8(Text) -> case unicode:characters_to_list(Text) of Value when is_list(Value) -> true; _ -> false end.
+%% characters_to_binary answers the binary itself for valid UTF-8 and an
+%% error or incomplete tuple otherwise, without building a list of it.
+valid_utf8(Text) -> is_binary(unicode:characters_to_binary(Text)).
 valid_close_code(Code) -> Code >= 1000 andalso Code < 5000 andalso not lists:member(Code, [1004,1005,1006,1015]).
 headers_have_token(Name, Headers, Token) ->
     lists:member(Token, [string:trim(Part) || Value <- header_values(Name, Headers),
@@ -722,15 +805,18 @@ transport_close({tcp, S}) -> gen_tcp:close(S); transport_close({tls, S}) -> ssl:
 % The monitor is what makes that safe: a connection that dies instead of
 % answering is `Closed`, never a caller blocked for good.
 call(Pid, Message) -> call(Pid, Message, 31000).
+%% The monitor's alias is both the reply address and the tag, as gen:call
+%% does: one reference instead of two, and once the call is over the alias is
+%% gone, so a reply that comes too late is dropped instead of left in the
+%% caller's mailbox.
 call(Pid, Message, Wait) ->
-    Monitor = erlang:monitor(process, Pid),
-    Ref = make_ref(),
-    Pid ! {call, self(), Ref, Message},
+    Alias = erlang:monitor(process, Pid, [{alias, demonitor}]),
+    Pid ! {call, Alias, Alias, Message},
     receive
-        {Ref, Value} -> erlang:demonitor(Monitor, [flush]), Value;
-        {'DOWN', Monitor, process, Pid, _} -> error_value('Closed', <<"WebSocket is closed">>)
+        {Alias, Value} -> erlang:demonitor(Alias, [flush]), Value;
+        {'DOWN', Alias, process, Pid, _} -> error_value('Closed', <<"WebSocket is closed">>)
     after Wait ->
-        erlang:demonitor(Monitor, [flush]),
+        erlang:demonitor(Alias, [flush]),
         error_value('Timeout', <<"WebSocket operation timed out">>)
     end.
 native_error(timeout, _) -> error_value('Timeout', <<"WebSocket operation timed out">>);

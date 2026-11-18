@@ -1,0 +1,59 @@
+# kex: run-beam — the walker has no sockets (UnsupportedBackend)
+#
+# The server accepts through a pool of acceptors (kexhq/kex#670). The
+# handler limit must still hold exactly, every connection still be counted,
+# and a graceful stop still wait for and then force the WebSockets left open.
+#
+# 24 clients at once send 2 requests each to a route that takes 20 ms, through
+# a server allowing 4 HTTP handlers. Then three WebSockets sit in
+# receiveMessage until a 200 ms graceful stop forces them.
+
+using Net.HTTP.WebSocket
+using Net.HTTP, except: [ClientOptions]
+using Net.Socket
+
+foul slow(_request: Request<Binary>, _context: Context) -> Response<Binary> do
+  Task.sleep(20.millisecond)
+  Response.text(200, "done")
+end
+
+foul waitForever(socket: Connection) -> Void do
+  socket.receiveMessage
+  Void
+end
+
+foul socketRoute(request: Request<Binary>, _context: Context) -> Response<Binary> = WebSocket.upgrade(request) do |_handshake|
+  let handler : Connection -> Void = { |socket| waitForever(socket) }
+  Accept(handler, Headers.empty, None)
+end
+
+foul twoRequests(port: Integer) -> Integer do
+  let client = Client.open().try
+  let first = client.request("GET", "http://127.0.0.1:${port}/slow", Headers.empty, Binary.empty).try
+  let second = client.request("GET", "http://127.0.0.1:${port}/slow", Headers.empty, Binary.empty).try
+  client.close.try
+  [first, second].count { |response| response.status.code == 200 }
+rescue return 0
+end
+
+main do
+  let router = Router.build.get("/slow", ~slow).get("/socket", ~socketRoute)
+  let endpoint = TCP.Endpoint.loopback(Net.Port.from(0).try)
+  let server = Server.start(endpoint, router, ServerOptions {
+    maximumHandlers: 4,
+    gracefulShutdown: 200.millisecond
+  }).try
+  let port = server.localAddress.port.value
+
+  let tasks = (1..24).map { |_| Task.start do twoRequests(port) end }
+  let answered = Task.awaitAll(tasks).map { |result| result.or(0) }.sum
+  IO.printLine("answered: ${answered}")
+
+  let sockets = (1..3).map { |_| WebSocket.connect("ws://127.0.0.1:${port}/socket").try }
+  IO.printLine("open sockets: ${sockets.count}")
+
+  let report = server.stop.try
+  IO.printLine("completed: ${report.completed}")
+  IO.printLine("forced: ${report.forced}")
+  IO.printLine("running: ${server.running?}")
+end
