@@ -410,6 +410,27 @@ jobs:
           echo "::error::Could not pull Alpine 3.22 from any registry"
           exit 1
 
+      # The images compile through ccache into a BuildKit cache mount (see
+      # docker/Dockerfile.alpine). The mount lives in this runner's Docker,
+      # which is gone after the job, so its contents go into the Actions
+      # cache and are put back into the next run's mount. The slim image
+      # shares the mount and reuses this build's objects.
+      - name: Cache the image builds' compiled objects
+        uses: actions/cache@v4
+        with:
+          # Outside the checkout, which is the image's build context.
+          path: ${{ runner.temp }}/docker-ccache
+          key: alpine-ccache-${{ github.run_id }}
+          restore-keys: alpine-ccache-
+
+      - name: Put the cached objects into the build's cache mount
+        uses: reproducible-containers/buildkit-cache-dance@v3.4.0
+        with:
+          cache-map: '{"${{ runner.temp }}/docker-ccache": "/root/.cache/ccache"}'
+          scratch-dir: ${{ runner.temp }}/cache-dance-scratch
+          # The base image pulled above, so this pulls nothing more.
+          utility-image: ${{ env.BASE_IMAGE }}
+
       - name: Build the Alpine image (runs the suites on musl)
         run: docker build -f docker/Dockerfile.alpine --build-arg BUILD_JOBS=4 --build-arg BASE_IMAGE="$BASE_IMAGE" -t kex:alpine .
 
