@@ -22,7 +22,7 @@ FROM ${BASE_IMAGE} AS build
 # the same /usr/lib/erlang.
 
 RUN apk add --no-cache \
-        build-base cmake git bash coreutils \
+        build-base cmake git bash coreutils ccache \
         gmp-dev pcre2-dev readline-dev boost-dev openssl-dev \
         erlang27 erlang27-dev erlang27-odbc unixodbc-dev
 
@@ -38,7 +38,13 @@ ARG BUILD_JOBS=2
 # The build context has no .git (see .dockerignore), so the commit is passed
 # in rather than discovered.
 ARG KEX_GIT_REVISION
-RUN cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
+# Compiled objects go through ccache into a BuildKit cache mount, so a
+# rebuild compiles only what changed. CI carries the mount between runs (see
+# the alpine job in ci.yml); elsewhere it starts empty and builds as before.
+ENV CCACHE_DIR=/root/.cache/ccache CCACHE_MAXSIZE=500M
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
         ${KEX_BUILD_DATE:+-DKEX_BUILD_DATE="$KEX_BUILD_DATE"} \
         ${KEX_GIT_REVISION:+-DKEX_GIT_REVISION="$KEX_GIT_REVISION"} \
     && cmake --build build --parallel "$BUILD_JOBS"
