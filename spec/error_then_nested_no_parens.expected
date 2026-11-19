@@ -1,2 +1,2 @@
-spec/error_then_nested_no_parens.kex:3:23: error: Expected 'else' after 'then', got then [then]
-Aborted: 1 syntax error — fix before running.
+spec/error_then_nested_no_parens.kex:3:23: [KEXEP-0063]: Expected 'else' after 'then', got then [then]
+Aborted: 1 syntax error. Fix them before running.

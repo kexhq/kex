@@ -33,8 +33,8 @@ auto Type::unknown() -> TypePtr {
     return std::make_shared<Type>(Type{UnknownType{}});
 }
 
-auto Type::voidType(std::string reason) -> TypePtr {
-    return std::make_shared<Type>(Type{VoidType{std::move(reason)}});
+auto Type::voidType(std::string leftRecord, std::string rightRecord) -> TypePtr {
+    return std::make_shared<Type>(Type{VoidType{std::move(leftRecord), std::move(rightRecord)}});
 }
 
 auto Type::named(const std::string& name, std::vector<TypePtr> args) -> TypePtr {

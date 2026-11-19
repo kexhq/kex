@@ -174,9 +174,7 @@ auto Lowering::lowerReceive(const ast::ReceiveExpr& n) -> ExprPtr {
         rc.pattern = cl.patterns.empty() ? wildPat() : lowerPattern(cl.patterns[0]);
         // A receive clause has no guard slot to hold the test.
         if (!pendingTypeGuards.empty()) {
-            throw LowerError(
-                "IR lower: a type pattern (`x : T`) is not "
-                "supported in a receive clause");
+            throw LowerError(diag::Code::TypePatternInReceive);
         }
         rc.body = lower(cl.body);
         subst = snap;
@@ -346,9 +344,7 @@ auto Lowering::requireNoOuterMutation(const std::vector<ast::ExprPtr>& body, con
     }
     for (const auto& v : mset) {
         if (subst.count(v)) {
-            throw LowerError(
-                std::string("IR lower: `") + what + "` used as an expression cannot assign to `" +
-                v + "` — put it in statement position instead");
+            throw LowerError(diag::Code::ExpressionCannotAssign, {{"keyword", what}, {"name", v}});
         }
     }
 }
@@ -620,7 +616,7 @@ auto Lowering::lowerLoopBodyFrom(
     }
     if (auto* me = std::get_if<ast::MatchExpr>(&e->kind)) {
         if (me->subjectBinding) {
-            throw LowerError("IR lower: match |binder| in loop not yet ported");
+            throw LowerError(diag::Code::MatchBinderInLoop);
         }
         std::function<ExprPtr()> armEnd = [&]() -> ExprPtr { return cont(); };
         std::vector<ExprPtr> subjects;
@@ -658,9 +654,7 @@ auto Lowering::lowerLoopBodyFrom(
             ReceiveClause rc;
             rc.pattern = cl.patterns.empty() ? wildPat() : lowerPattern(cl.patterns[0]);
             if (!pendingTypeGuards.empty()) {
-                throw LowerError(
-                    "IR lower: a type pattern (`x : T`) is not "
-                    "supported in a receive clause");
+                throw LowerError(diag::Code::TypePatternInReceive);
             }
             rc.body = lowerLoopArmU(cl.body, loopFn, mutVars, armEnd);
             subst = snap;
@@ -806,7 +800,7 @@ auto Lowering::lowerAssignmentValue(const ast::AssignExpr& assignment) -> ExprPt
         return lower(assignment.value);
     }
     if (assignment.path.size() != 1) {
-        throw LowerError("IR lower: nested record-field assignment is not supported");
+        throw LowerError(diag::Code::NestedRecordFieldAssignment);
     }
     std::vector<Binding> binds;
     auto value = atomize(assignment.value, binds);
@@ -1009,8 +1003,7 @@ auto Lowering::lowerExternalImportCall(const ast::FunctionCall& n, const std::st
     if (!n.namedArgs.empty()) {
         auto pit = externalModules->exportParamNames.find(qualKey);
         if (pit == externalModules->exportParamNames.end()) {
-            throw LowerError(
-                "IR lower: named args to external function with unknown params: " + qualKey);
+            throw LowerError(diag::Code::NamedArgsUnknownExternalParams, {{"function", qualKey}});
         }
         const auto& pnames = pit->second;
         args.resize(pnames.size());

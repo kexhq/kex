@@ -406,10 +406,13 @@ auto appendIssues(
     auto* list = result ? std::get_if<interpreter::ListValue>(&result->data) : nullptr;
     if (!list) {
         diagnostics.push_back(
-            {semantic::Diagnostic::Level::Error, use.expr->location,
-             "Compile-time validator `" + validator +
-                 "` must return [TaggedValidation.Issue], got " +
-                 (result ? result->typeName() : std::string{"nothing"})});
+            result
+                ? semantic::makeDiagnostic(
+                      semantic::Diagnostic::Level::Error, diag::Code::ValidatorWrongReturn,
+                      use.expr->location, {{"validator", validator}, {"type", result->typeName()}})
+                : semantic::makeDiagnostic(
+                      semantic::Diagnostic::Level::Error, diag::Code::ValidatorReturnedNothing,
+                      use.expr->location, {{"validator", validator}}));
         return;
     }
 
@@ -425,8 +428,9 @@ auto appendIssues(
             issueValue ? std::get_if<interpreter::VariantValue>(&issueValue->data) : nullptr;
         if (!issue || (issue->tag != "Fatal" && issue->tag != "Warn") || issue->args.size() != 2) {
             diagnostics.push_back(
-                {semantic::Diagnostic::Level::Error, use.expr->location,
-                 "Compile-time validator `" + validator + "` returned a malformed Issue"});
+                semantic::makeDiagnostic(
+                    semantic::Diagnostic::Level::Error, diag::Code::ValidatorMalformedIssue,
+                    use.expr->location, {{"validator", validator}}));
             continue;
         }
 
@@ -443,9 +447,9 @@ auto appendIssues(
                 offset = integerValue(span->args[0]);
                 if (!offset) {
                     diagnostics.push_back(
-                        {semantic::Diagnostic::Level::Error, use.expr->location,
-                         "Compile-time validator `" + validator +
-                             "` returned an invalid Issue byte span"});
+                        semantic::makeDiagnostic(
+                            semantic::Diagnostic::Level::Error, diag::Code::ValidatorInvalidSpan,
+                            use.expr->location, {{"validator", validator}}));
                     continue;
                 }
             } else if (span && span->tag == "Between" && span->args.size() == 2) {
@@ -453,16 +457,16 @@ auto appendIssues(
                 endOffset = integerValue(span->args[1]);
                 if (!offset || !endOffset) {
                     diagnostics.push_back(
-                        {semantic::Diagnostic::Level::Error, use.expr->location,
-                         "Compile-time validator `" + validator +
-                             "` returned an invalid Issue byte span"});
+                        semantic::makeDiagnostic(
+                            semantic::Diagnostic::Level::Error, diag::Code::ValidatorInvalidSpan,
+                            use.expr->location, {{"validator", validator}}));
                     continue;
                 }
             } else {
                 diagnostics.push_back(
-                    {semantic::Diagnostic::Level::Error, use.expr->location,
-                     "Compile-time validator `" + validator +
-                         "` returned an invalid Issue byte span"});
+                    semantic::makeDiagnostic(
+                        semantic::Diagnostic::Level::Error, diag::Code::ValidatorInvalidSpan,
+                        use.expr->location, {{"validator", validator}}));
                 continue;
             }
         }
@@ -474,24 +478,28 @@ auto appendIssues(
         if ((offset && (*offset < 0 || *offset > bodySize)) ||
             (endOffset && (*endOffset < *offset || *endOffset > bodySize))) {
             diagnostics.push_back(
-                {semantic::Diagnostic::Level::Error, use.expr->location,
-                 "Compile-time validator `" + validator +
-                     "` returned an Issue byte span outside the literal"});
+                semantic::makeDiagnostic(
+                    semantic::Diagnostic::Level::Error, diag::Code::ValidatorSpanOutsideLiteral,
+                    use.expr->location, {{"validator", validator}}));
             continue;
         }
 
         auto* message = std::get_if<interpreter::StringValue>(&issue->args[1]->data);
         if (!message) {
             diagnostics.push_back(
-                {semantic::Diagnostic::Level::Error, use.expr->location,
-                 "Compile-time validator `" + validator +
-                     "` returned an Issue with a non-String message"});
+                semantic::makeDiagnostic(
+                    semantic::Diagnostic::Level::Error, diag::Code::ValidatorNonStringMessage,
+                    use.expr->location, {{"validator", validator}}));
             continue;
         }
-        semantic::Diagnostic diagnostic{
-            issue->tag == "Fatal" ? semantic::Diagnostic::Level::Error
-                                  : semantic::Diagnostic::Level::Warning,
-            sourceLocationForOffset(use, offset), message->value};
+        auto diagnostic =
+            issue->tag == "Fatal"
+                ? semantic::makeDiagnostic(
+                      semantic::Diagnostic::Level::Error, diag::Code::TagValidatorError,
+                      sourceLocationForOffset(use, offset), {{"message", message->value}})
+                : semantic::makeDiagnostic(
+                      semantic::Diagnostic::Level::Warning, diag::Code::TagValidatorWarning,
+                      sourceLocationForOffset(use, offset), {{"message", message->value}});
         if (endOffset) {
             diagnostic.endLocation = sourceLocationForOffset(use, endOffset);
         }
@@ -635,10 +643,9 @@ auto validateTaggedLiterals(
         const auto& signatureSource = matchedModule ? matchedModule->analyzed() : analyzer;
         if (!exactValidatorSignature(found->second, signatureSource)) {
             diagnostics.push_back(
-                {semantic::Diagnostic::Level::Error, found->second.front()->location,
-                 "Companion validator `" + companion +
-                     "` must be pure with signature "
-                     "String -> [TaggedValidation.Issue]"});
+                semantic::makeDiagnostic(
+                    semantic::Diagnostic::Level::Error, diag::Code::CompanionValidatorSignature,
+                    found->second.front()->location, {{"validator", companion}}));
             continue;
         }
 
@@ -671,18 +678,19 @@ auto validateTaggedLiterals(
             appendIssues(result, use, companion, diagnostics);
         } catch (const interpreter::EvaluationTimeout&) {
             sandboxes.erase(home);
-            semantic::Diagnostic diagnostic{
-                semantic::Diagnostic::Level::Error, found->second.front()->location,
-                "Compile-time validator `" + companionKey + "` timed out after " +
-                    std::to_string(timeout.count()) + " ms"};
+            auto diagnostic = semantic::makeDiagnostic(
+                semantic::Diagnostic::Level::Error, diag::Code::ValidatorTimedOut,
+                found->second.front()->location,
+                {{"validator", companionKey}, {"ms", std::to_string(timeout.count())}});
             diagnostic.notes.push_back(
                 {use.expr->location, "triggered by tagged literal `" + use.literal->tag + "`"});
             diagnostics.push_back(std::move(diagnostic));
         } catch (const std::exception& error) {
             sandboxes.erase(home);
-            semantic::Diagnostic diagnostic{
-                semantic::Diagnostic::Level::Error, found->second.front()->location,
-                "Compile-time validator `" + companionKey + "` crashed: " + error.what()};
+            auto diagnostic = semantic::makeDiagnostic(
+                semantic::Diagnostic::Level::Error, diag::Code::ValidatorCrashed,
+                found->second.front()->location,
+                {{"validator", companionKey}, {"error", error.what()}});
             diagnostic.notes.push_back(
                 {use.expr->location, "triggered by tagged literal `" + use.literal->tag + "`"});
             diagnostics.push_back(std::move(diagnostic));

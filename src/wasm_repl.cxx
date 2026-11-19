@@ -9,6 +9,8 @@
 // reachable from a later call" test — a `let`/`spawn` on one call stays
 // visible/alive on the next, matching what a real REPL user expects.
 #include "common/color.hxx"
+#include "common/diagnostics.hxx"
+#include "semantic/analyzer.hxx"
 #include "semantic/completion_at.hxx"
 #include "common/prelude_interfaces.hxx"
 #include "common/prelude_loader.hxx"
@@ -270,8 +272,7 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
         // Matches main.cxx's real REPL error formatting exactly (see its
         // `catch (const std::exception &e)` blocks) so the two look
         // identical once rendered through a real terminal.
-        result = std::string("  ") + color::apply(color::red) +
-                 "error:" + color::apply(color::reset) + " " + e.what() + "\n";
+        result = "  " + kex::diagnostics::formatBriefException(e, "  ") + "\n";
     } catch (...) {
         result = std::string("  ") + color::apply(color::red) +
                  "error:" + color::apply(color::reset) + " unknown failure\n";

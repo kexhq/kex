@@ -1,2 +1,2 @@
-spec/error_using_only_and_except.kex:7:42: error: 'only' and 'except' using options are mutually exclusive
-Aborted: 1 syntax error — fix before running.
+spec/error_using_only_and_except.kex:7:42: [KEXEP-0140]: 'only' and 'except' using options are mutually exclusive
+Aborted: 1 syntax error. Fix them before running.

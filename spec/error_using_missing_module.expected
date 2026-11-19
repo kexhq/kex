@@ -1,2 +1,2 @@
-spec/error_using_missing_module.kex:4:1: error: module not found in source roots: Nonexistent
-Aborted: 1 type error — fix before running (use --no-check to skip).
+spec/error_using_missing_module.kex:4:1: [KEXEM-0009]: module not found in source roots: Nonexistent
+Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

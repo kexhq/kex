@@ -1,2 +1,2 @@
-spec/error_record_module_bare_ctor.kex:15:3: error: Undefined function: `Fahrenheit` — `Temperature.Fahrenheit` is not imported here
-Aborted: 1 type error — fix before running (use --no-check to skip).
+spec/error_record_module_bare_ctor.kex:15:3: [KEXET-0165]: Undefined function: `Fahrenheit`. `Temperature.Fahrenheit` is not imported here
+Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

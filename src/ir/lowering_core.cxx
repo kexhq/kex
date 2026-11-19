@@ -523,7 +523,7 @@ auto Lowering::snap(const ExprPtr& e) -> AtomicRef {
 
 auto Lowering::clone(const ExprPtr& e, const char* site) -> ExprPtr {
     if (!e) {
-        throw LowerError(std::string("IR lower: clone of null expr [") + site + "]");
+        throw LowerError(diag::Code::CloneOfNullExpr, {{"site", site}});
     }
     if (auto* v = std::get_if<Var>(&e->node)) {
         return var(v->name);
@@ -541,8 +541,8 @@ auto Lowering::clone(const ExprPtr& e, const char* site) -> ExprPtr {
         }
     }
     throw LowerError(
-        std::string("IR lower: clone of non-atomic expr (index ") +
-        std::to_string(e->node.index()) + ") [" + site + "]");
+        diag::Code::CloneOfNonAtomicExpr,
+        {{"index", std::to_string(e->node.index())}, {"site", site}});
 }
 
 // Wrap `body` in the accumulated let-bindings, evaluated left-to-right
@@ -589,7 +589,7 @@ auto Lowering::opOf(TokenType t) -> Op {
         case TokenType::GreaterEq: return Op::Gte;
         case TokenType::AmpAmp: return Op::And;
         case TokenType::PipePipe: return Op::Or;
-        default: throw LowerError("IR lower: unsupported binary operator");
+        default: throw LowerError(diag::Code::UnsupportedBinaryOperator);
     }
 }
 

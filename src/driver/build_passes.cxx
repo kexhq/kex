@@ -6,6 +6,7 @@
 #include "build_support.hxx"
 #include "../beam/collect_metadata.hxx"
 #include "../cache/cache.hxx"
+#include "../common/diagnostics.hxx"
 #include "../common/digest.hxx"
 #include "../common/prelude_interfaces.hxx"
 #include "../common/runtime_dir.hxx"
@@ -13,8 +14,10 @@
 #include "../common/timings.hxx"
 #include "../common/well_known.hxx"
 #include "../compiled/expand.hxx"
+#include "../ir/lower.hxx"
 #include "../module/discovery.hxx"
 #include "../pass/options.hxx"
+#include "../semantic/analyzer.hxx"
 
 #include <algorithm>
 #include <deque>
@@ -23,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iostream>
 #include <map>
 #include <stdexcept>
 #include <tuple>
@@ -708,6 +712,11 @@ auto LowerPass::run(Unit& unit, UnitAnalysisManager& analyses) -> pass::Preserve
              .hir = checked.hir.get()});
         unit.fileModule = "kex_" + stem;
         unit.lowered = true;
+    } catch (const ir::LowerError& error) {
+        std::cerr << diagnostics::formatFileDiagnostic(
+            module::shownPath(path),
+            semantic::makeDiagnostic(
+                semantic::Diagnostic::Level::Error, error.code, {}, error.args));
     } catch (const std::exception& error) {
         std::fprintf(stderr, "error: %s: %s\n", module::shownPath(path).c_str(), error.what());
     }

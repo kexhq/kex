@@ -88,7 +88,7 @@ auto lowerProgram(
     // Lowering translates what the checker decided: there is nothing to
     // lower without the checked program.
     if (!context.hir) {
-        throw LowerError("IR lower: " + fileStem + " was not checked");
+        throw LowerError(diag::Code::FileNotChecked, {{"file", fileStem}});
     }
     // The checker's answers, all read from the checked program (`L.hir`).
     Lowering L;
@@ -1133,7 +1133,7 @@ auto lowerProgram(
                     L.subst = std::move(savedSubst);
                 } else {
                     throw LowerError(
-                        std::string("IR lower: unimplemented top-level item ") + typeid(T).name());
+                        diag::Code::UnimplementedTopLevelItem, {{"item", typeid(T).name()}});
                 }
             },
             item);
@@ -1793,11 +1793,11 @@ auto lowerProgramTiered(
     // receiver calls must route through imported interfaces.
     for (size_t t = 0; t < 4; t++) {
         if (tierBounds[t] > tierBounds[t + 1]) {
-            throw LowerError("IR lower: non-monotonic prelude tier bounds");
+            throw LowerError(diag::Code::NonMonotonicTierBounds);
         }
     }
     if (tierBounds[4] != prog.items.size()) {
-        throw LowerError("IR lower: tier bounds do not cover the full prelude AST");
+        throw LowerError(diag::Code::TierBoundsIncomplete);
     }
     return lowerProgram(prog, fileStem, context);
 }

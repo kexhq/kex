@@ -268,7 +268,7 @@ auto Lexer::scanToken() -> Token {
                 if (match('>')) {
                     return makeToken(TokenType::SlotAnnotation);
                 }
-                return errorToken("Expected '>' after '::'");
+                return errorToken(diag::Code::ExpectedSlotAnnotationClose);
             }
             if (match('>')) {
                 return makeToken(TokenType::TypeAnnotation);
@@ -327,9 +327,9 @@ auto Lexer::scanToken() -> Token {
                 advance();
                 return lexRawString(true);
             }
-            return errorToken("Unexpected character: $");
+            return errorToken(diag::Code::UnexpectedCharacter, {{"char", "$"}});
 
-        default: return errorToken(std::string("Unexpected character: ") + c);
+        default: return errorToken(diag::Code::UnexpectedCharacter, {{"char", std::string(1, c)}});
     }
 }
 
@@ -481,7 +481,6 @@ auto Lexer::lexNumber() -> Token {
                          peek() == 'o' || peek() == 'O')) {
         char marker = static_cast<char>(std::tolower(static_cast<unsigned char>(peek())));
         int base = marker == 'x' ? 16 : marker == 'o' ? 8 : 2;
-        const char* what = marker == 'x' ? "hexadecimal" : marker == 'o' ? "octal" : "binary";
         advance();
         std::string digits;
         while (!atEnd() && (isHexDigit(peek()) || peek() == '_')) {
@@ -492,13 +491,20 @@ auto Lexer::lexNumber() -> Token {
             digits += advance();
         }
         if (digits.empty()) {
-            return errorToken(std::string("Expected ") + what + " digits after '0" + marker + "'");
+            return errorToken(
+                marker == 'x'   ? diag::Code::MissingHexadecimalDigits
+                : marker == 'o' ? diag::Code::MissingOctalDigits
+                                : diag::Code::MissingBinaryDigits);
         }
         // mpz_class rejects out-of-range digits (`0b12`, `0o88`) by throwing.
         try {
             return makeToken(TokenType::Integer, mpz_class(digits, base).get_str());
         } catch (const std::invalid_argument&) {
-            return errorToken("'" + digits + "' is not a valid " + what + " literal");
+            return errorToken(
+                marker == 'x'   ? diag::Code::InvalidHexadecimalLiteral
+                : marker == 'o' ? diag::Code::InvalidOctalLiteral
+                                : diag::Code::InvalidBinaryLiteral,
+                {{"digits", digits}});
         }
     }
 
@@ -560,9 +566,9 @@ auto Lexer::lexNumber() -> Token {
 // Strings and chars share one escape set (kexhq/kex#498). Anything else
 // after a backslash is an error: it used to stand for the character itself,
 // so `"\e"` was an `e` and `"\u{1b}"` the five characters `u{1b}`.
-auto Lexer::lexEscape(std::string& out) -> std::optional<std::string> {
+auto Lexer::lexEscape(std::string& out) -> std::optional<EscapeError> {
     if (atEnd()) {
-        return "Unterminated escape";
+        return EscapeError{diag::Code::UnterminatedEscape};
     }
     const char escaped = advance();
     switch (escaped) {
@@ -584,19 +590,20 @@ auto Lexer::lexEscape(std::string& out) -> std::optional<std::string> {
                 digits += advance();
             }
             if (digits.size() != 2) {
-                return "Expected two hex digits after '\\x'";
+                return EscapeError{diag::Code::ExpectedHexEscapeDigits};
             }
             const auto value = std::stoi(digits, nullptr, 16);
             if (value > 0x7F) {
-                return "'\\x" + digits + "' is not ASCII; write the character as '\\u{" + digits +
-                       "}'";
+                return EscapeError{
+                    diag::Code::NonAsciiHexEscape,
+                    {{"digits", digits}, {"escape", "\\u{" + digits + "}"}}};
             }
             out += static_cast<char>(value);
             return std::nullopt;
         }
         case 'u': {
             if (atEnd() || peek() != '{') {
-                return "Expected '{' after '\\u'";
+                return EscapeError{diag::Code::ExpectedUnicodeEscapeBrace, {{"expected", "'{'"}}};
             }
             advance();
             std::string digits;
@@ -604,21 +611,22 @@ auto Lexer::lexEscape(std::string& out) -> std::optional<std::string> {
                 digits += advance();
             }
             if (atEnd() || peek() != '}') {
-                return "Expected '}' to close '\\u{'";
+                return EscapeError{
+                    diag::Code::UnclosedUnicodeEscape, {{"expected", "'}'"}, {"escape", "'\\u{'"}}};
             }
             advance();
             if (digits.empty() || digits.size() > 6) {
-                return "Expected 1 to 6 hex digits in '\\u{...}'";
+                return EscapeError{diag::Code::UnicodeEscapeDigitCount, {{"escape", "'\\u{...}'"}}};
             }
             const auto cp = static_cast<char32_t>(std::stoul(digits, nullptr, 16));
             if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
-                return "'\\u{" + digits + "}' is not a Unicode scalar value";
+                return EscapeError{
+                    diag::Code::InvalidUnicodeScalar, {{"escape", "\\u{" + digits + "}"}}};
             }
             out += utf8::encode(cp);
             return std::nullopt;
         }
-        default:
-            return std::string("Unknown escape '\\") + escaped + "'; write '\\\\' for a backslash";
+        default: return EscapeError{diag::Code::UnknownEscape, {{"char", std::string(1, escaped)}}};
     }
 }
 
@@ -634,7 +642,7 @@ auto Lexer::lexString() -> Token {
                 escapedDollars.push_back(str.size());
             }
             if (auto error = lexEscape(str)) {
-                return errorToken(*error);
+                return errorToken(error->code, std::move(error->args));
             }
         } else if (peek() == '$' && peekNext() == '{') {
             str += advance(); // $
@@ -658,7 +666,7 @@ auto Lexer::lexString() -> Token {
     }
 
     if (atEnd()) {
-        return errorToken("Unterminated string");
+        return errorToken(diag::Code::UnterminatedString);
     }
     advance(); // closing "
 
@@ -813,12 +821,12 @@ auto Lexer::lexRawString(bool interpolating) -> Token {
         raw += advance();
     }
 
-    return errorToken("Unterminated backtick literal");
+    return errorToken(diag::Code::UnterminatedBacktickLiteral);
 }
 
 auto Lexer::lexChar() -> Token {
     if (atEnd()) {
-        return errorToken("Unterminated char literal");
+        return errorToken(diag::Code::UnterminatedCharLiteral);
     }
 
     // The token carries the character's UTF-8 BYTES; a Char is one codepoint,
@@ -829,10 +837,10 @@ auto Lexer::lexChar() -> Token {
     if (peek() == '\\') {
         advance();
         if (auto error = lexEscape(c)) {
-            return errorToken(*error);
+            return errorToken(error->code, std::move(error->args));
         }
     } else if (peek() == '\'') {
-        return errorToken("Empty char literal");
+        return errorToken(diag::Code::EmptyCharLiteral);
     } else {
         c += advance();
         // Continuation bytes (10xxxxxx) belong to the same character.
@@ -842,7 +850,7 @@ auto Lexer::lexChar() -> Token {
     }
 
     if (atEnd() || peek() != '\'') {
-        return errorToken("Unterminated char literal");
+        return errorToken(diag::Code::UnterminatedCharLiteral);
     }
     advance(); // closing '
 
@@ -885,11 +893,11 @@ auto Lexer::lexQuotedAtom(char quote) -> Token {
         atom += c;
     }
     if (atEnd() || peek() != quote) {
-        return errorToken("Unterminated quoted atom");
+        return errorToken(diag::Code::UnterminatedQuotedAtom);
     }
     advance();
     if (atom.empty()) {
-        return errorToken("Empty quoted atom");
+        return errorToken(diag::Code::EmptyQuotedAtom);
     }
     return makeToken(TokenType::Atom, atom);
 }
@@ -918,11 +926,14 @@ auto Lexer::makeToken(TokenType type, std::string value) -> Token {
     return Token{type, std::move(value), location, m_tokenStartOffset, m_pos};
 }
 
-auto Lexer::errorToken(std::string message) -> Token {
+auto Lexer::errorToken(diag::Code code, diag::Args args) -> Token {
     auto location = currentLocation();
     location.startOffset = m_tokenStartOffset;
     location.endOffset = m_pos;
-    return Token{TokenType::Error, std::move(message), location, m_tokenStartOffset, m_pos};
+    Token token{TokenType::Error, diag::render(code, args), location, m_tokenStartOffset, m_pos};
+    token.errorCode = code;
+    token.errorArgs = std::move(args);
+    return token;
 }
 
 auto Lexer::isLowerAlpha(char c) -> bool {

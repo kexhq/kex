@@ -289,9 +289,8 @@ inline auto mergeDuplicateFunctions(
                     continue;
                 }
                 throw LowerError(
-                    "IR lower: `" + std::get<0>(key) + "/" + std::to_string(std::get<1>(key)) +
-                    "` names both a free function and a receiver method "
-                    "in this compilation unit — rename one of them");
+                    diag::Code::FreeFunctionAndReceiverMethod,
+                    {{"name", std::get<0>(key)}, {"arity", std::to_string(std::get<1>(key))}});
             }
             // If the existing definition already ends with a catch-all
             // but the incoming definition has specific patterns (e.g.

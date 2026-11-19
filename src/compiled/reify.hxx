@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ast/ast.hxx"
+#include "../common/diagnostic_codes.hxx"
 #include "../interpreter/value.hxx"
 #include <string>
 #include <unordered_map>
@@ -51,6 +52,23 @@ struct ReifyContext {
     const std::unordered_map<std::string, std::string>* modules = nullptr;
 };
 
+// Why a value has no literal form. `code` is the diagnostic that reports it
+// for a compile-time constant, one of the ConstantNotInlinable entries, and
+// `args` its values apart from `{name}`, the constant, which the caller adds.
+struct ReifyFailure {
+    diag::Code code = diag::Code::None;
+    diag::Args args;
+    // The reason alone, in words, as a collapse report gives it ("kept: ...").
+    auto reason() const -> std::string;
+};
+
+auto valueToLiteral(
+    const interpreter::ValuePtr& value,
+    const SourceLocation& location,
+    ReifyFailure& failure,
+    const ReifyContext& context = {}) -> ast::ExprPtr;
+
+// The same, with the reason in words (ReifyFailure::reason) in `error`.
 auto valueToLiteral(
     const interpreter::ValuePtr& value,
     const SourceLocation& location,

@@ -53,16 +53,15 @@ auto TypeChecker::checkTypeReturnedBy(const ast::Expr& expr, const ast::MethodCa
         }
     }
     if (candidates.empty()) {
-        error(
-            expr.location, "`Type.returnedBy` needs the NAME of a function; "
-                           "a lambda or a function value carries no signature");
+        error(diag::Code::ReturnedByNeedsName, expr.location);
     } else if (candidates.size() > 1) {
-        std::string message = "`Type.returnedBy` cannot choose between the overloads of `" +
-                              sourceName(functionName) + "`";
+        std::string signatures;
         for (const auto& candidate : candidates) {
-            message += "\n\n" + displaySignature(functionName, candidate);
+            signatures += "\n\n" + displaySignature(functionName, candidate);
         }
-        error(expr.location, message);
+        error(
+            diag::Code::ReturnedByOverloaded, expr.location,
+            {{"name", sourceName(functionName)}, {"signatures", signatures}});
     } else if (auto structured = structuredTypeOf(candidates.front().result)) {
         if (std::holds_alternative<ast::MethodCall>(node.args[0]->kind)) {
             m_decidedCalls[node.args[0].get()] = {CallKind::FunctionReference, functionName};
@@ -70,8 +69,7 @@ auto TypeChecker::checkTypeReturnedBy(const ast::Expr& expr, const ast::MethodCa
         m_staticTypeOfCalls[&node] = {std::move(*structured), /*evaluateArgument=*/false};
     } else {
         error(
-            expr.location, "`Type.returnedBy` cannot answer for `" + sourceName(functionName) +
-                               "`: its return type is not concrete");
+            diag::Code::ReturnedByNotConcrete, expr.location, {{"name", sourceName(functionName)}});
     }
     return Type::named(kex::names::kTypeRecord);
 }
@@ -190,10 +188,8 @@ auto TypeChecker::checkProcessSpawn(const ast::Expr& expr, const ast::MethodCall
     if (arg && !lookupVar(arg->name) && !m_nullaryConstructors.contains(arg->name) &&
         m_recordFields.count(resolveRecordName(arg->name))) {
         error(
-            call.args.front()->location, "`Process.spawn(" + arg->name +
-                                             ")` passes the type, not a value; spawn a "
-                                             "server with its initial state: `Process.spawn(" +
-                                             arg->name + " {})`");
+            diag::Code::SpawnPassesType, call.args.front()->location,
+            {{"name", arg->name}, {"value", arg->name + " {}"}});
     }
     return nullptr;
 }
@@ -233,7 +229,7 @@ auto TypeChecker::checkAs(const ast::Expr& expr, const ast::MethodCall& node) ->
     auto target = node.targetType ? resolveTypeExpr(*node.targetType, targetGenerics)
                                   : typeNameReference(*node.args[0]);
     if (!target) {
-        error(expr.location, "`.as` needs a type name as its target");
+        error(diag::Code::AsNeedsTypeName, expr.location);
         return Type::unknown();
     }
     m_decidedCalls[&expr] = {CallKind::Conversion, typeToString(target)};
@@ -245,10 +241,7 @@ auto TypeChecker::checkAs(const ast::Expr& expr, const ast::MethodCall& node) ->
         const auto* literal =
             node.receiver ? std::get_if<ast::StringLiteral>(&node.receiver->kind) : nullptr;
         if (!literal || !literal->values.empty()) {
-            error(
-                expr.location, "`.as(Atom)` needs a string literal; for text known "
-                               "only at run time use `Atom.from(text)`, or "
-                               "`text.to(Atom)` to find an existing atom");
+            error(diag::Code::AsAtomNeedsLiteral, expr.location);
         }
         return target;
     }
@@ -259,12 +252,12 @@ auto TypeChecker::checkAs(const ast::Expr& expr, const ast::MethodCall& node) ->
     };
     if (!targetIsString(target) && !representationsCompatible(source, target)) {
         error(
-            expr.location, "Cannot convert " + typeToString(source) + " to " +
-                               typeToString(target) + " with `.as`");
+            diag::Code::AsCannotConvert, expr.location,
+            {{"source", typeToString(source)}, {"target", typeToString(target)}});
     }
     if (auto* sized = std::get_if<SizedIntType>(&target->kind);
         sized && sized->bits == 8 && !sized->isSigned && !typesEqual(resolve(source), target)) {
-        error(expr.location, "Unchecked narrowing to Byte is not allowed; use `.to(Byte)`");
+        error(diag::Code::AsNarrowsToByte, expr.location);
     }
     return target;
 }

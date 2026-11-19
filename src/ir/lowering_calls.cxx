@@ -156,7 +156,7 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
             }
         }
         if (it == fnParamNames.end()) {
-            throw LowerError("IR lower: named args to unknown function " + n.name);
+            throw LowerError(diag::Code::NamedArgsUnknownFunction, {{"function", n.name}});
         }
         if (auto declared = fnAllParamNames.find(n.name); declared != fnAllParamNames.end()) {
             for (const auto& [label, _] : n.namedArgs) {
@@ -270,7 +270,7 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
                 }
             }
             if (!source) {
-                throw LowerError("IR lower: missing source argument for " + trait + " dictionary");
+                throw LowerError(diag::Code::MissingDictionarySource, {{"trait", trait}});
             }
             args.push_back(atomize_ir(makeTraitDictionary(trait, *source), binds));
         }
@@ -406,7 +406,7 @@ auto Lowering::makeTraitDictionaryFor(const std::string& trait, const std::strin
     -> ExprPtr {
     auto contract = traitMethods.find(trait);
     if (contract == traitMethods.end()) {
-        throw LowerError("IR lower: unknown trait dictionary " + trait);
+        throw LowerError(diag::Code::UnknownTraitDictionary, {{"trait", trait}});
     }
     std::vector<ExprPtr> slots;
     std::vector<Binding> dictionaryBindings;
@@ -503,8 +503,8 @@ auto Lowering::makeTraitDictionaryFor(const std::string& trait, const std::strin
             localMethodArities.count(method.name + "/" + std::to_string(method.arity)) > 0;
         if (module.empty() && !localAnswers) {
             throw LowerError(
-                "IR lower: no implementation for " + trait + "." + method.name + " on " +
-                concreteType);
+                diag::Code::NoTraitImplementation,
+                {{"trait", trait}, {"method", method.name}, {"type", concreteType}});
         }
         // A method of another module is a reference to its function, not a
         // fun forwarding to it: `erlang:make_fun` with constant arguments is

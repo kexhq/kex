@@ -1,2 +1,2 @@
-spec/error_undefined_function.kex:4:16: error: Undefined function: `doesNotExist`
-Aborted: 1 type error — fix before running (use --no-check to skip).
+spec/error_undefined_function.kex:4:16: [KEXET-0163]: Undefined function: `doesNotExist`
+Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

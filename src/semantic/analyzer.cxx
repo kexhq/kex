@@ -168,7 +168,7 @@ auto Analyzer::reportDuplicateRecords(const Items& items) -> void {
                     declared.insert(node->name);
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
                     if (!declared.insert(node->name).second) {
-                        error(node->location, "Duplicate record definition: " + node->name);
+                        error(diag::Code::DuplicateRecord, node->location, {{"name", node->name}});
                     }
                 }
             },
@@ -267,23 +267,23 @@ auto Analyzer::analyzeBody(const std::vector<ast::ExprPtr>& body) -> void {
 }
 
 auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
-    auto foulCall = [&](const std::string& what, const std::string& name) {
+    auto foulCall = [&](diag::Code code, const std::string& name) {
         if (!m_inFoulContext) {
-            error(expr.location, "Cannot call foul " + what + " '" + name + "' from pure context");
+            error(code, expr.location, {{"name", name}});
         }
     };
     if (const auto* ident = std::get_if<ast::Identifier>(&expr.kind)) {
         // A zero-parameter function named bare is called.
         if (callsFoul(expr)) {
-            foulCall("function", ident->name);
+            foulCall(diag::Code::FoulCallFromPure, ident->name);
         }
     } else if (const auto* call = std::get_if<ast::FunctionCall>(&expr.kind)) {
         if (callsFoul(expr)) {
-            foulCall("function", call->name);
+            foulCall(diag::Code::FoulCallFromPure, call->name);
         }
     } else if (const auto* tagged = std::get_if<ast::TaggedLiteral>(&expr.kind)) {
         if (callsFoul(expr)) {
-            foulCall("tag", tagged->tag);
+            foulCall(diag::Code::FoulTagFromPure, tagged->tag);
         }
     } else if (const auto* method = std::get_if<ast::MethodCall>(&expr.kind)) {
         // `IO.inspect` is the documented purity-exempt escape hatch.
@@ -291,7 +291,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             method->receiver ? receiverModuleName(*method->receiver) : std::string{};
         if (method->method != "inspect" && !module.empty() &&
             isQualifiedCallFoul(module, method->method)) {
-            foulCall("function", module + "." + method->method);
+            foulCall(diag::Code::FoulCallFromPure, module + "." + method->method);
         }
     } else if (const auto* capture = std::get_if<ast::CurryExpr>(&expr.kind)) {
         // `~shout` names a foul function as a call of it would: pure code may
@@ -302,21 +302,18 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             captured != m_checker.captureSignatures().end() && captured->second.isFoul &&
             !m_inFoulContext && !m_checker.capturesIntoFoul().contains(&expr)) {
             error(
-                expr.location,
-                "Cannot capture foul function '" +
-                    (capture->module.empty() ? capture->name
-                                             : capture->module + "." + capture->name) +
-                    "' from pure context");
+                diag::Code::FoulCaptureFromPure, expr.location,
+                {{"name", capture->module.empty() ? capture->name
+                                                  : capture->module + "." + capture->name}});
         }
     } else if (
         std::holds_alternative<ast::SpawnExpr>(expr.kind) ||
         std::holds_alternative<ast::ReceiveExpr>(expr.kind)) {
         if (!m_inFoulContext) {
             error(
-                expr.location,
-                std::string("Cannot use '") +
-                    (std::holds_alternative<ast::SpawnExpr>(expr.kind) ? "spawn" : "receive") +
-                    "' in pure context");
+                diag::Code::FoulKeywordInPure, expr.location,
+                {{"keyword",
+                  std::holds_alternative<ast::SpawnExpr>(expr.kind) ? "spawn" : "receive"}});
         }
     } else if (std::holds_alternative<ast::BreakExpr>(expr.kind)) {
         checkLoopControl(expr.location, "break");
@@ -673,11 +670,11 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                 using T = std::decay_t<decltype(n)>;
                 if constexpr (std::is_same_v<T, ast::FunctionCall>) {
                     if (callsFoul(e)) {
-                        error(e.location, "Cannot call foul function '" + n.name + "' in a guard");
+                        error(diag::Code::FoulCallInGuard, e.location, {{"name", n.name}});
                     } else if (m_transitivelyFoul.count(n.name)) {
                         error(
-                            e.location, "Cannot call function '" + n.name +
-                                            "' in a guard: it transitively calls foul operations");
+                            diag::Code::TransitivelyFoulCallInGuard, e.location,
+                            {{"name", n.name}});
                     }
                     for (const auto& a : n.args) {
                         if (a) {
@@ -697,11 +694,10 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                     }
                 } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
                     if (callsFoul(e)) {
-                        error(e.location, "Cannot call foul tag '" + n.tag + "' in a guard");
+                        error(diag::Code::FoulTagInGuard, e.location, {{"name", n.tag}});
                     } else if (m_transitivelyFoul.count(n.tag)) {
                         error(
-                            e.location, "Cannot call tag '" + n.tag +
-                                            "' in a guard: it transitively calls foul operations");
+                            diag::Code::TransitivelyFoulTagInGuard, e.location, {{"name", n.tag}});
                     }
                     for (const auto& value : n.values) {
                         if (value) {
@@ -715,18 +711,17 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                         if (!isInspect && !receiverName.empty() &&
                             isQualifiedCallFoul(receiverName, n.method)) {
                             error(
-                                e.location, "Cannot call foul function '" + receiverName + "." +
-                                                n.method + "' in a guard");
+                                diag::Code::FoulCallInGuard, e.location,
+                                {{"name", receiverName + "." + n.method}});
                         }
                         checkGuard(*n.receiver);
                     }
                     if (m_topLevelFoul.contains(n.method)) {
-                        error(
-                            e.location, "Cannot call foul function '" + n.method + "' in a guard");
+                        error(diag::Code::FoulCallInGuard, e.location, {{"name", n.method}});
                     } else if (m_transitivelyFoul.count(n.method)) {
                         error(
-                            e.location, "Cannot call function '" + n.method +
-                                            "' in a guard: it transitively calls foul operations");
+                            diag::Code::TransitivelyFoulCallInGuard, e.location,
+                            {{"name", n.method}});
                     }
                     for (const auto& a : n.args) {
                         if (a) {
@@ -926,8 +921,7 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
         }
         if (!def.isFoul && foulValueCall) {
             error(
-                foulValueCall->location,
-                "Cannot call foul function '" + foulValueMethod + "' from pure context");
+                diag::Code::FoulCallFromPure, foulValueCall->location, {{"name", foulValueMethod}});
         }
     };
 
@@ -995,8 +989,8 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
                     bool newlyFoul = m_transitivelyFoul.count(n.name) && !priorFoul.count(n.name);
                     if (newlyFoul && !symbolFoul) {
                         error(
-                            e.location, "Cannot call function '" + n.name +
-                                            "' in a guard: it transitively calls foul operations");
+                            diag::Code::TransitivelyFoulCallInGuard, e.location,
+                            {{"name", n.name}});
                     }
                     for (const auto& a : n.args) {
                         if (a) {
@@ -1019,8 +1013,7 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
                     bool newlyFoul = m_transitivelyFoul.count(n.tag) && !priorFoul.count(n.tag);
                     if (newlyFoul && !symbolFoul) {
                         error(
-                            e.location, "Cannot call tag '" + n.tag +
-                                            "' in a guard: it transitively calls foul operations");
+                            diag::Code::TransitivelyFoulTagInGuard, e.location, {{"name", n.tag}});
                     }
                     for (const auto& value : n.values) {
                         if (value) {
@@ -1030,16 +1023,15 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
                 } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
                     auto it = resolved.find(&n);
                     if (it != resolved.end() && it->second.isFoul) {
-                        error(
-                            e.location, "Cannot call foul function '" + n.method + "' in a guard");
+                        error(diag::Code::FoulCallInGuard, e.location, {{"name", n.method}});
                     }
                     bool symbolFoul = m_topLevelFoul.contains(n.method);
                     bool newlyFoulMethod =
                         m_transitivelyFoul.count(n.method) && !priorFoul.count(n.method);
                     if (newlyFoulMethod && !symbolFoul) {
                         error(
-                            e.location, "Cannot call function '" + n.method +
-                                            "' in a guard: it transitively calls foul operations");
+                            diag::Code::TransitivelyFoulCallInGuard, e.location,
+                            {{"name", n.method}});
                     }
                     if (n.receiver) {
                         checkGuard(*n.receiver);
@@ -1078,18 +1070,18 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
 auto Analyzer::checkLoopControl(SourceLocation loc, const std::string& keyword) -> void {
     for (auto it = m_loopScopes.rbegin(); it != m_loopScopes.rend(); ++it) {
         if (*it == LoopScope::Closure) {
-            error(loc, "'" + keyword + "' cannot be used inside a closure");
+            error(diag::Code::LoopControlInClosure, loc, {{"keyword", keyword}});
             return;
         }
         if (*it == LoopScope::Loop) {
             return;
         }
     }
-    error(loc, "'" + keyword + "' used outside a loop");
+    error(diag::Code::LoopControlOutsideLoop, loc, {{"keyword", keyword}});
 }
 
-auto Analyzer::error(SourceLocation loc, const std::string& msg) -> void {
-    m_diagnostics.push_back({Diagnostic::Level::Error, loc, msg});
+auto Analyzer::error(diag::Code code, SourceLocation loc, diag::Args args) -> void {
+    m_diagnostics.push_back(makeDiagnostic(Diagnostic::Level::Error, code, loc, std::move(args)));
 }
 
 } // namespace kex::semantic

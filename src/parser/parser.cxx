@@ -98,13 +98,17 @@ auto Parser::match(TokenType type) -> bool {
     return false;
 }
 
-auto Parser::expect(TokenType type, const std::string& message) -> const Token& {
+auto Parser::foundText() const -> std::string {
+    return std::string(tokenTypeName(peek().type)) +
+           (peek().value.empty() ? "" : " [" + peek().value + "]");
+}
+
+auto Parser::expect(TokenType type, diag::Code code, diag::Args args) -> const Token& {
     if (check(type)) {
         return advance();
     }
-    error(
-        message + ", got " + std::string(tokenTypeName(peek().type)) +
-        (peek().value.empty() ? "" : " [" + peek().value + "]"));
+    args.emplace_back("found", foundText());
+    error(code, std::move(args));
 }
 
 auto Parser::skipNewlines() -> void {
@@ -133,23 +137,19 @@ auto Parser::currentLocation() const -> SourceLocation {
 // `trait T` or `make T` would put a concrete type and a type variable behind
 // the same spelling, and a reader looking at `x: T` could no longer tell which
 // they were being shown.
-auto Parser::rejectSingleLetterTypeName(const std::string& name, const char* what) -> void {
+auto Parser::rejectSingleLetterTypeName(const std::string& name, diag::Code code) -> void {
     if (name.size() != 1) {
         return;
     }
-    error(
-        std::string("`") + name + "` is a type parameter, so it cannot name a " + what +
-        ", give it a longer name");
+    error(code, {{"name", name}});
 }
 
-auto Parser::rejectReservedName(const char* what) -> void {
+auto Parser::rejectReservedName(diag::Code code) -> void {
     if (!isKeywordToken(peek().type)) {
         return;
     }
     const auto loc = currentLocation();
-    const auto message = "`" + std::string(tokenTypeName(peek().type)) +
-                         "` is a reserved keyword in Kex, so it cannot name a " +
-                         std::string(what) + " — rename it";
+    const auto keyword = std::string(tokenTypeName(peek().type));
     // The keyword is consumed BEFORE reporting, for the same reason `foul
     // module` consumes its `foul`: error() throws, and syncToTopLevel resumes on
     // exactly these tokens, so leaving it in place put the recovery loop back on
@@ -157,8 +157,8 @@ auto Parser::rejectReservedName(const char* what) -> void {
     // followed by a second, meaningless one — `let compiled = 1` said what was
     // wrong and then added "Expected 'do' after 'compiled', got =".
     advance();
-    m_diagnostics.push_back({loc, message});
-    throw ParseError{loc, message};
+    report(code, loc, {{"keyword", keyword}});
+    throw ParseError{loc, m_diagnostics.back().message};
 }
 
 // `let compiled = 1` / `let compiled(x) = x` — the name is a keyword, so
@@ -185,7 +185,7 @@ auto Parser::rejectReservedBindingName() -> void {
         return;
     }
     advance(); // let
-    rejectReservedName("function");
+    rejectReservedName(diag::Code::ReservedWordAsFunctionName);
 }
 
 // At `if` right after `return`: is this the if EXPRESSION (a returned value)
@@ -238,14 +238,20 @@ auto Parser::syntaxKindName(const std::type_info& type) -> std::string {
     return name;
 }
 
-auto Parser::error(const std::string& message) -> void {
+auto Parser::error(diag::Code code, diag::Args args) -> void {
     auto loc = currentLocation();
-    std::string msg = message;
     if (peek().type == TokenType::Error && !peek().value.empty()) {
-        msg = peek().value;
+        code = peek().errorCode;
+        args = peek().errorArgs;
     }
-    m_diagnostics.push_back({loc, msg});
+    auto msg = diag::render(code, args);
+    m_diagnostics.push_back({loc, msg, code, std::move(args)});
     throw ParseError{loc, msg};
+}
+
+auto Parser::report(diag::Code code, SourceLocation location, diag::Args args) -> void {
+    auto msg = diag::render(code, args);
+    m_diagnostics.push_back({location, std::move(msg), code, std::move(args)});
 }
 
 auto Parser::syncToTopLevel() -> void {
@@ -378,10 +384,7 @@ auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
         return parseTypeAnnotation();
     }
     if (check(TokenType::LowerIdent) && peekNext().type == TokenType::TypeAnnotation) {
-        error(
-            "':>' (implicit-This signature) is only valid inside 'make T do ... "
-            "end' — "
-            "use ':' at top level instead");
+        error(diag::Code::ImplicitThisSignatureOutsideMake);
     }
 
     // Top-level expression (e.g. describe blocks in tests, bare function calls)
@@ -392,7 +395,9 @@ auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
         return complete(std::move(mainBlock));
     }
 
-    error("Unexpected token at top level: " + std::string(tokenTypeName(peek().type)));
+    error(
+        diag::Code::UnexpectedTokenAtTopLevel,
+        {{"token", std::string(tokenTypeName(peek().type))}});
 }
 
 // ===== Module =====
@@ -410,9 +415,7 @@ auto Parser::parseModuleDef(bool allowStandalone, const std::string& parentModul
         // treats `foul` as a resume point, so leaving it in place would put the
         // recovery loop straight back on this token and spin forever.
         advance();
-        error(
-            "'foul module' is no longer supported — mark each effectful "
-            "function 'foul' at its own definition instead");
+        error(diag::Code::FoulModuleUnsupported);
     }
 
     // `capability Name do ... end` is a module that may be substituted; it
@@ -422,7 +425,7 @@ auto Parser::parseModuleDef(bool allowStandalone, const std::string& parentModul
         advance();
         mod->isCapability = true;
     } else {
-        expect(TokenType::Module, "Expected 'module'");
+        expect(TokenType::Module, diag::Code::ExpectedToken, {{"expected", "'module'"}});
     }
     auto moduleName = parseTypeName();
     mod->name += moduleName.dotted();
@@ -435,7 +438,7 @@ auto Parser::parseModuleDef(bool allowStandalone, const std::string& parentModul
     // source-level shorthand.
     const bool standalone = !match(TokenType::Do);
     if (standalone && !allowStandalone) {
-        error("standalone 'module' must be the first statement in a file");
+        error(diag::Code::StandaloneModuleNotFirst);
     }
     skipNewlines();
 
@@ -465,7 +468,7 @@ auto Parser::parseModuleDef(bool allowStandalone, const std::string& parentModul
             mod->body.push_back(parseVisibilityBlock());
         } else if (check(TokenType::Main)) {
             if (!standalone) {
-                error("'main' blocks are not allowed inside block modules");
+                error(diag::Code::MainBlockInBlockModule);
             }
             m_deferredTopLevelItems.push_back(parseMainBlock());
         } else if (check(TokenType::Foul)) {
@@ -477,13 +480,15 @@ auto Parser::parseModuleDef(bool allowStandalone, const std::string& parentModul
             check(TokenType::Spawn) || check(TokenType::After)) {
             mod->body.push_back(parseTypeAnnotation());
         } else {
-            error("Unexpected token in module body: " + std::string(tokenTypeName(peek().type)));
+            error(
+                diag::Code::UnexpectedTokenInModuleBody,
+                {{"token", std::string(tokenTypeName(peek().type))}});
         }
         skipNewlines();
     }
 
     if (!standalone) {
-        expect(TokenType::End, "Expected 'end' to close module");
+        expect(TokenType::End, diag::Code::ExpectedEndToCloseModule);
     }
     return complete(std::move(mod));
 }
@@ -497,10 +502,10 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
         advance();
         def->isDistinct = true;
     }
-    expect(TokenType::Type, "Expected 'type'");
+    expect(TokenType::Type, diag::Code::ExpectedToken, {{"expected", "'type'"}});
 
-    def->name = expect(TokenType::UpperIdent, "Expected type name").value;
-    rejectSingleLetterTypeName(def->name, "type");
+    def->name = expect(TokenType::UpperIdent, diag::Code::ExpectedTypeName).value;
+    rejectSingleLetterTypeName(def->name, diag::Code::SingleLetterTypeNameForType);
 
     // Type params: <A, B> — only if followed by single-letter uppercase params
     // and > Inheritance: < Parent1, Parent2 — followed by multi-letter names
@@ -522,9 +527,9 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
             advance(); // <
             do {
                 def->typeParams.push_back(
-                    expect(TokenType::UpperIdent, "Expected type parameter").value);
+                    expect(TokenType::UpperIdent, diag::Code::ExpectedTypeParameter).value);
             } while (match(TokenType::Comma));
-            expect(TokenType::GreaterThan, "Expected '>' after type parameters");
+            expect(TokenType::GreaterThan, diag::Code::ExpectedGreaterThanAfterTypeParameters);
 
             // Could still have inheritance after type params
             if (match(TokenType::LessThan)) {
@@ -570,7 +575,7 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
                             args.push_back(parseTypeExpr());
                         }
                     }
-                    expect(TokenType::RParen, "Expected ')' after variant args");
+                    expect(TokenType::RParen, diag::Code::ExpectedRParenAfterVariantArgs);
                     variant->kind = ast::GenericType{std::move(name), std::move(args), false};
                 } else if (match(TokenType::LessThan)) {
                     std::vector<ast::TypeExprPtr> args;
@@ -578,7 +583,8 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
                     while (match(TokenType::Comma)) {
                         args.push_back(parseTypeExpr());
                     }
-                    expect(TokenType::GreaterThan, "Expected '>'");
+                    expect(
+                        TokenType::GreaterThan, diag::Code::ExpectedToken, {{"expected", "'>'"}});
                     variant->kind = ast::GenericType{std::move(name), std::move(args)};
                 } else {
                     variant->kind = std::move(name);
@@ -675,22 +681,23 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
         def->abstractFunctions = std::vector<ast::AbstractFunction>{};
         while (!check(TokenType::End) && !atEnd()) {
             ast::AbstractFunction func;
-            func.name = expect(TokenType::LowerIdent, "Expected function name").value;
+            func.name = expect(TokenType::LowerIdent, diag::Code::ExpectedFunctionName).value;
             if (match(TokenType::TypeAnnotation)) {
                 func.implicitThis = true;
             } else {
-                expect(TokenType::Colon, "Expected ':' or ':>' after function name");
+                expect(
+                    TokenType::Colon, diag::Code::ExpectedColonOrSignatureColonAfterFunctionName);
                 func.implicitThis = false;
             }
             func.type = parseTypeExpr();
             def->abstractFunctions->push_back(std::move(func));
             skipNewlines();
         }
-        expect(TokenType::End, "Expected 'end' to close type");
+        expect(TokenType::End, diag::Code::ExpectedEndToCloseType);
     }
 
     if (def->isDistinct && (!def->variants || def->variants->size() != 1 || def->leadingPipe)) {
-        error("A distinct type needs exactly one backing type after '='");
+        error(diag::Code::DistinctTypeBackingCount);
     }
 
     return complete(std::move(def));
@@ -701,10 +708,10 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
 auto Parser::parseRecordDef() -> std::unique_ptr<ast::RecordDef> {
     auto def = std::make_unique<ast::RecordDef>();
     def->location = currentLocation();
-    expect(TokenType::Record, "Expected 'record'");
+    expect(TokenType::Record, diag::Code::ExpectedToken, {{"expected", "'record'"}});
 
-    def->name = expect(TokenType::UpperIdent, "Expected record name").value;
-    rejectSingleLetterTypeName(def->name, "record");
+    def->name = expect(TokenType::UpperIdent, diag::Code::ExpectedRecordName).value;
+    rejectSingleLetterTypeName(def->name, diag::Code::SingleLetterTypeNameForRecord);
 
     parseRecordBody(*def);
     return complete(std::move(def));
@@ -717,12 +724,12 @@ auto Parser::parseRecordBody(ast::RecordDef& into) -> void {
     if (match(TokenType::LessThan)) {
         do {
             def->typeParams.push_back(
-                expect(TokenType::UpperIdent, "Expected type parameter").value);
+                expect(TokenType::UpperIdent, diag::Code::ExpectedTypeParameter).value);
         } while (match(TokenType::Comma));
-        expect(TokenType::GreaterThan, "Expected '>' after type parameters");
+        expect(TokenType::GreaterThan, diag::Code::ExpectedGreaterThanAfterTypeParameters);
     }
 
-    expect(TokenType::Do, "Expected 'do' after record name");
+    expect(TokenType::Do, diag::Code::ExpectedDoAfterRecordName);
     skipNewlines();
 
     while (!atEnd()) {
@@ -738,9 +745,9 @@ auto Parser::parseRecordBody(ast::RecordDef& into) -> void {
             check(TokenType::After) || check(TokenType::Next)) {
             field.name = advance().value;
         } else {
-            error("Expected field name");
+            error(diag::Code::ExpectedFieldName);
         }
-        expect(TokenType::Colon, "Expected ':' after field name");
+        expect(TokenType::Colon, diag::Code::ExpectedColonAfterFieldName);
         field.type = parseTypeExpr();
         if (match(TokenType::Equals)) {
             field.defaultValue = parseExpr();
@@ -749,7 +756,7 @@ auto Parser::parseRecordBody(ast::RecordDef& into) -> void {
         skipNewlines();
     }
 
-    expect(TokenType::End, "Expected 'end' to close record");
+    expect(TokenType::End, diag::Code::ExpectedTokenToCloseRecord, {{"expected", "'end'"}});
 }
 
 // ===== Make =====
@@ -757,23 +764,24 @@ auto Parser::parseRecordBody(ast::RecordDef& into) -> void {
 auto Parser::parseTraitDef() -> std::unique_ptr<ast::TraitDef> {
     auto def = std::make_unique<ast::TraitDef>();
     def->location = currentLocation();
-    expect(TokenType::Trait, "Expected 'trait'");
+    expect(TokenType::Trait, diag::Code::ExpectedToken, {{"expected", "'trait'"}});
     {
-        auto tok = expect(TokenType::UpperIdent, "Expected trait name");
-        rejectSingleLetterTypeName(tok.value, "trait");
+        auto tok = expect(TokenType::UpperIdent, diag::Code::ExpectedTraitName);
+        rejectSingleLetterTypeName(tok.value, diag::Code::SingleLetterTypeNameForTrait);
         def->name = tok.value;
     }
     // Optional type params: `trait Functor<F> do ...`
     if (match(TokenType::LessThan)) {
         while (!check(TokenType::GreaterThan) && !atEnd()) {
-            def->typeParams.push_back(expect(TokenType::UpperIdent, "Expected type param").value);
+            def->typeParams.push_back(
+                expect(TokenType::UpperIdent, diag::Code::ExpectedTypeParam).value);
             if (!check(TokenType::GreaterThan)) {
-                expect(TokenType::Comma, "Expected ','");
+                expect(TokenType::Comma, diag::Code::ExpectedToken, {{"expected", "','"}});
             }
         }
-        expect(TokenType::GreaterThan, "Expected '>'");
+        expect(TokenType::GreaterThan, diag::Code::ExpectedToken, {{"expected", "'>'"}});
     }
-    expect(TokenType::Do, "Expected 'do' after trait name");
+    expect(TokenType::Do, diag::Code::ExpectedDoAfterTraitName);
     skipNewlines();
 
     while (!check(TokenType::End) && !atEnd()) {
@@ -800,22 +808,22 @@ auto Parser::parseTraitDef() -> std::unique_ptr<ast::TraitDef> {
             // `+ :> This -> This`, as a make block declares one.
             def->body.push_back(parseTypeAnnotation());
         } else {
-            error("Unexpected token in trait body");
+            error(diag::Code::UnexpectedTokenInTraitBody);
         }
         skipNewlines();
     }
 
-    expect(TokenType::End, "Expected 'end' to close trait");
+    expect(TokenType::End, diag::Code::ExpectedEndToCloseTrait);
     return complete(std::move(def));
 }
 
 auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
     auto def = std::make_unique<ast::MakeDef>();
     def->location = currentLocation();
-    expect(TokenType::Make, "Expected 'make'");
+    expect(TokenType::Make, diag::Code::ExpectedToken, {{"expected", "'make'"}});
 
     if (match(TokenType::Final)) {
-        expect(TokenType::Colon, "Expected ':' after 'final'");
+        expect(TokenType::Colon, diag::Code::ExpectedColonAfterFinal);
         def->isFinal = true;
     }
 
@@ -826,7 +834,8 @@ auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
     if (def->target) {
         if (auto* named = std::get_if<ast::TypeName>(&def->target->kind);
             named && named->parts.size() == 1) {
-            rejectSingleLetterTypeName(named->parts[0], "make target");
+            rejectSingleLetterTypeName(
+                named->parts[0], diag::Code::SingleLetterTypeNameForMakeTarget);
         }
     }
     parseMakeImplements(*def);
@@ -838,12 +847,13 @@ auto Parser::parseServingDef() -> std::unique_ptr<ast::MakeDef> {
     auto def = std::make_unique<ast::MakeDef>();
     def->location = currentLocation();
     def->isServing = true;
-    expect(TokenType::Serving, "Expected 'serving'");
+    expect(TokenType::Serving, diag::Code::ExpectedToken, {{"expected", "'serving'"}});
     def->target = parseTypeExpr();
     if (def->target) {
         if (auto* named = std::get_if<ast::TypeName>(&def->target->kind);
             named && named->parts.size() == 1) {
-            rejectSingleLetterTypeName(named->parts[0], "serving target");
+            rejectSingleLetterTypeName(
+                named->parts[0], diag::Code::SingleLetterTypeNameForServingTarget);
         }
     }
     parseMakeBody(*def);
@@ -867,23 +877,20 @@ auto Parser::parseMakeImplements(ast::MakeDef& into) -> void {
             // qualified path (`FS.File`), which is how a nested ModuleDef is
             // registered — so `implement:` has to consume one (kexhq/kex#179).
             auto implementName = [&]() -> std::string {
-                auto tok = expect(TokenType::UpperIdent, "Expected trait name");
+                auto tok = expect(TokenType::UpperIdent, diag::Code::ExpectedTraitName);
                 std::string name = tok.value;
                 def->implementLocations.push_back(tok.location);
                 while (check(TokenType::Dot) && peekNext().type == TokenType::UpperIdent) {
                     advance(); // "."
                     const auto& segment =
-                        expect(TokenType::UpperIdent, "Expected trait name after '.'");
+                        expect(TokenType::UpperIdent, diag::Code::ExpectedTraitNameAfterDot);
                     name += "." + segment.value;
                     def->implementLocations.back() = segment.location;
                 }
                 // The reserved-letter rule is about a bare name; a qualified path
                 // whose last segment is one letter is not a type parameter.
                 if (name.size() == 1) {
-                    error(
-                        "Trait name '" + name +
-                        "' is a single uppercase letter — those are reserved for type "
-                        "parameters");
+                    error(diag::Code::SingleLetterTraitName, {{"name", name}});
                 }
                 return name;
             };
@@ -902,8 +909,8 @@ auto Parser::parseMakeImplements(ast::MakeDef& into) -> void {
 auto Parser::parseMakeBody(ast::MakeDef& into, bool allowDrivers) -> void {
     auto* def = &into;
     expect(
-        TokenType::Do,
-        def->isServing ? "Expected 'do' after serving target" : "Expected 'do' after make target");
+        TokenType::Do, def->isServing ? diag::Code::ExpectedDoAfterServingTarget
+                                      : diag::Code::ExpectedDoAfterMakeTarget);
     skipNewlines();
 
     while (!check(TokenType::End) && !atEnd()) {
@@ -939,8 +946,10 @@ auto Parser::parseMakeBody(ast::MakeDef& into, bool allowDrivers) -> void {
                 // reports "Unexpected token in make body" as before.
                 def->body.push_back(parseExpr());
             } else {
-                rejectReservedName("method");
-                error("Unexpected token in make body: " + std::string(tokenTypeName(peek().type)));
+                rejectReservedName(diag::Code::ReservedWordAsMethodName);
+                error(
+                    diag::Code::UnexpectedTokenInMakeBody,
+                    {{"token", std::string(tokenTypeName(peek().type))}});
             }
         } catch (const ParseError&) {
             // Diagnostic already recorded. Recover inside the make body: unwinding
@@ -956,8 +965,8 @@ auto Parser::parseMakeBody(ast::MakeDef& into, bool allowDrivers) -> void {
     }
 
     expect(
-        TokenType::End,
-        def->isServing ? "Expected 'end' to close serving" : "Expected 'end' to close make");
+        TokenType::End, def->isServing ? diag::Code::ExpectedEndToCloseServing
+                                       : diag::Code::ExpectedEndToCloseMake);
 }
 
 // ===== Functions =====
@@ -972,14 +981,14 @@ auto Parser::parseFunctionDef(bool isFoul) -> std::unique_ptr<ast::FunctionDef> 
     m_makeMemberName = false;
 
     if (isFoul) {
-        expect(TokenType::Foul, "Expected 'foul'");
+        expect(TokenType::Foul, diag::Code::ExpectedToken, {{"expected", "'foul'"}});
         if (match(TokenType::Slot)) {
             def->isSlot = true;
         }
     } else if (match(TokenType::Slot)) {
         def->isSlot = true;
     } else {
-        expect(TokenType::Let, "Expected 'let'");
+        expect(TokenType::Let, diag::Code::ExpectedToken, {{"expected", "'let'"}});
     }
 
     // `let %{expr}(...)` — the name is whatever `expr` evaluates to at compile
@@ -989,7 +998,9 @@ auto Parser::parseFunctionDef(bool isFoul) -> std::unique_ptr<ast::FunctionDef> 
         advance(); // %
         advance(); // {
         def->computedName = parseExpr();
-        expect(TokenType::RBrace, "Expected '}' to close %{...} name");
+        expect(
+            TokenType::RBrace, diag::Code::UnclosedSpliceName,
+            {{"expected", "'}'"}, {"splice", "%{...}"}});
         def->name = "%";
     }
     // Function name can be a lower ident, upper ident (static constructors),
@@ -1014,8 +1025,8 @@ auto Parser::parseFunctionDef(bool isFoul) -> std::unique_ptr<ast::FunctionDef> 
         def->nameLocation = peek().location;
         def->name = std::string(tokenTypeName(advance().type));
     } else {
-        rejectReservedName("function");
-        error("Expected function name");
+        rejectReservedName(diag::Code::ReservedWordAsFunctionName);
+        error(diag::Code::MissingFunctionName);
     }
 
     if (match(TokenType::Question)) {
@@ -1043,7 +1054,7 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
         if (!check(TokenType::RParen)) {
             clause.params = parseParams();
         }
-        expect(TokenType::RParen, "Expected ')' after parameters");
+        expect(TokenType::RParen, diag::Code::ExpectedRParenAfterParameters);
     }
     clause.hasParamList = hasParamList;
 
@@ -1113,7 +1124,7 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
             skipNewlines();
         }
 
-        expect(TokenType::End, "Expected 'end' to close function");
+        expect(TokenType::End, diag::Code::ExpectedEndToCloseFunction);
     }
 
     return clause;
@@ -1199,7 +1210,7 @@ auto Parser::parseParam() -> ast::Param {
         return param;
     }
 
-    error("Expected parameter");
+    error(diag::Code::ExpectedParameter);
 }
 
 // The operator set `let`/`foul` function definitions accept as a name
@@ -1235,7 +1246,7 @@ auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
     } else if (isOverloadableOperator(peek().type)) {
         ann->name = std::string(tokenTypeName(advance().type));
     } else {
-        error("Expected name");
+        error(diag::Code::ExpectedName);
     }
 
     if (match(TokenType::SlotAnnotation)) {
@@ -1244,7 +1255,7 @@ auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
     } else if (match(TokenType::TypeAnnotation)) {
         ann->implicitThis = true;
     } else {
-        expect(TokenType::Colon, "Expected ':' or ':>'");
+        expect(TokenType::Colon, diag::Code::ExpectedColonOrSignatureColon);
         ann->implicitThis = false;
     }
 
@@ -1376,7 +1387,7 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
     // List type: [A]
     if (match(TokenType::LBracket)) {
         auto elem = parseTypeExpr();
-        expect(TokenType::RBracket, "Expected ']' in list type");
+        expect(TokenType::RBracket, diag::Code::ExpectedRBracketInListType);
         type->kind = ast::ListType{std::move(elem)};
         return complete(std::move(type));
     }
@@ -1389,25 +1400,25 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
             std::vector<std::pair<std::string, ast::TypeExprPtr>> fields;
             do {
                 auto name =
-                    expect(TokenType::LowerIdent, "Expected field name in record type").value;
+                    expect(TokenType::LowerIdent, diag::Code::ExpectedFieldNameInRecordType).value;
                 if (std::any_of(fields.begin(), fields.end(), [&](const auto& field) {
                         return field.first == name;
                     })) {
-                    error("Duplicate field `" + name + "` in record type");
+                    error(diag::Code::DuplicateRecordTypeField, {{"name", name}});
                 }
-                expect(TokenType::Colon, "Expected ':' after record type field");
+                expect(TokenType::Colon, diag::Code::ExpectedColonAfterRecordTypeField);
                 fields.emplace_back(std::move(name), parseTypeExpr());
             } while (match(TokenType::Comma));
-            expect(TokenType::RBrace, "Expected '}' in record type");
+            expect(TokenType::RBrace, diag::Code::ExpectedTokenInRecordType, {{"expected", "'}'"}});
             type->kind = ast::RecordType{std::move(fields)};
             return complete(std::move(type));
         }
 
         // Map type: { K: V }
         auto key = parseTypeExpr();
-        expect(TokenType::Colon, "Expected ':' in map type");
+        expect(TokenType::Colon, diag::Code::ExpectedTokenInMapType, {{"expected", "':'"}});
         auto val = parseTypeExpr();
-        expect(TokenType::RBrace, "Expected '}' in map type");
+        expect(TokenType::RBrace, diag::Code::ExpectedTokenInMapType, {{"expected", "'}'"}});
         type->kind = ast::MapType{std::move(key), std::move(val)};
         return complete(std::move(type));
     }
@@ -1424,7 +1435,7 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
         while (match(TokenType::Comma)) {
             elements.push_back(parseTypeExpr());
         }
-        expect(TokenType::RParen, "Expected ')' in tuple type");
+        expect(TokenType::RParen, diag::Code::ExpectedRParenInTupleType);
         if (elements.size() == 1) {
             auto grouped = std::move(elements[0]);
             grouped->location.startOffset = type->location.startOffset;
@@ -1438,7 +1449,7 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
     // Block type
     if (check(TokenType::UpperIdent) && peek().value == "Block") {
         advance();
-        expect(TokenType::LessThan, "Expected '<' after Block");
+        expect(TokenType::LessThan, diag::Code::ExpectedLessThanAfterBlock);
         // `Block<R>` takes nothing; `Block<A, B, R>` is handed an `A` and a `B`.
         // The result is always written last.
         std::vector<ast::TypeExprPtr> arguments;
@@ -1446,7 +1457,7 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
         while (match(TokenType::Comma)) {
             arguments.push_back(parseTypeExpr());
         }
-        expect(TokenType::GreaterThan, "Expected '>' to close Block type");
+        expect(TokenType::GreaterThan, diag::Code::ExpectedGreaterThanToCloseBlockType);
         auto inner = std::move(arguments.back());
         arguments.pop_back();
         type->kind = ast::BlockType{std::move(inner), std::move(arguments)};
@@ -1468,7 +1479,7 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
         const auto name = peek().value;
         std::string upper = name;
         upper[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(upper[0])));
-        error("type parameters are uppercase: write `" + upper + "` rather than `" + name + "`");
+        error(diag::Code::LowercaseTypeParameter, {{"upper", upper}, {"name", name}});
     }
 
     // A compiler-computed type: `Type.returnedBy(f)` / `Type.of(expr)`.
@@ -1479,9 +1490,11 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
         advance(); // Type
         advance(); // .
         auto query = advance().value;
-        expect(TokenType::LParen, "Expected '(' after Type." + query);
+        expect(TokenType::LParen, diag::Code::ExpectedLParenAfterTypeQuery, {{"query", query}});
         auto argument = parseExpr();
-        expect(TokenType::RParen, "Expected ')' after Type." + query + " argument");
+        expect(
+            TokenType::RParen, diag::Code::ExpectedRParenAfterTypeQueryArgument,
+            {{"query", query}});
         type->kind = ast::TypeQuery{std::move(query), std::move(argument)};
         return complete(std::move(type));
     }
@@ -1496,7 +1509,7 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
             while (match(TokenType::Comma)) {
                 args.push_back(parseTypeExpr());
             }
-            expect(TokenType::GreaterThan, "Expected '>' after type arguments");
+            expect(TokenType::GreaterThan, diag::Code::ExpectedGreaterThanAfterTypeArguments);
             type->kind = ast::GenericType{std::move(name), std::move(args)};
         } else {
             type->kind = std::move(name);
@@ -1504,12 +1517,12 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
         return complete(std::move(type));
     }
 
-    error("Expected type expression");
+    error(diag::Code::ExpectedTypeExpression);
 }
 
 auto Parser::parseTypeName() -> ast::TypeName {
     ast::TypeName name;
-    name.parts.push_back(expect(TokenType::UpperIdent, "Expected type name").value);
+    name.parts.push_back(expect(TokenType::UpperIdent, diag::Code::ExpectedTypeName).value);
     while (check(TokenType::Dot) && peekNext().type == TokenType::UpperIdent) {
         advance(); // consume .
         name.parts.push_back(advance().value);
@@ -1590,7 +1603,7 @@ auto Parser::parseExprWithoutGuard() -> ast::ExprPtr {
                 m_pos = branchEnd;
             }
         }
-        expect(TokenType::Else, "Expected 'else' after 'then'");
+        expect(TokenType::Else, diag::Code::ExpectedElseAfterThen);
         skipNewlines();
         auto elseExpr = parseAssignment();
         thenElse->kind =
@@ -1644,7 +1657,7 @@ auto Parser::parseAssignment() -> ast::ExprPtr {
         std::vector<std::string> path;
         while (match(TokenType::Dot)) {
             if (!isFieldName(peek().type)) {
-                error("Expected field name");
+                error(diag::Code::ExpectedFieldName);
             }
             path.push_back(advance().value);
         }
@@ -1815,7 +1828,7 @@ auto Parser::parseUnary() -> ast::ExprPtr {
     // collection is being built. Parsing it as a general unary expression made
     // `let y = ...xs` legal, and it quietly evaluated to None.
     if (check(TokenType::DotDotDot)) {
-        error("`...` only spreads into a list, a map, or a `do` block body");
+        error(diag::Code::SpreadOutsideCollection);
     }
 
     return parsePower();
@@ -1895,7 +1908,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
             // `insert.record(row)` is unambiguous (kexhq/kex#508).
             if (!check(TokenType::LowerIdent) && !check(TokenType::UpperIdent) &&
                 !isKeywordToken(peek().type)) {
-                error("Expected method or module name after '.'");
+                error(diag::Code::ExpectedMethodOrModuleNameAfterDot);
             }
             auto methodTok = advance();
             auto method = methodTok.value;
@@ -2016,7 +2029,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
                         }
                     } while (match(TokenType::Comma));
                 }
-                expect(TokenType::RParen, "Expected ')' after arguments");
+                expect(TokenType::RParen, diag::Code::ExpectedRParenAfterArguments);
             } else if (
                 methodTok.type == TokenType::LowerIdent && !m_noDoBlocks && isAtExprStart() &&
                 !check(TokenType::Do) && !check(TokenType::LBrace) && hasDoBeforeNewline()) {
@@ -2058,7 +2071,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
         // Bracket access: expr[key]
         if (match(TokenType::LBracket)) {
             auto key = parseExpr();
-            expect(TokenType::RBracket, "Expected ']' after index");
+            expect(TokenType::RBracket, diag::Code::ExpectedRBracketAfterIndex);
 
             auto call = std::make_unique<ast::Expr>();
             call->location = currentLocation();
@@ -2116,7 +2129,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
                     }
                 } while (match(TokenType::Comma));
             }
-            expect(TokenType::RParen, "Expected ')'");
+            expect(TokenType::RParen, diag::Code::ExpectedToken, {{"expected", "')'"}});
 
             auto startOffset = expr->location.startOffset;
             auto calleeName = "_chain" + std::to_string(callParenOffset);
@@ -2246,9 +2259,11 @@ auto Parser::parseInterpolatedBody(
     std::string part;
     size_t i = 0;
 
-    auto interpolationError = [&](const std::string& message) -> void {
-        m_diagnostics.push_back({token.location, message});
-        throw ParseError{token.location, message};
+    // A problem inside an interpolation is reported at the string literal.
+    // One found by the nested lexer or parser keeps its own code and values.
+    auto interpolationError = [&](diag::Code code, diag::Args args = {}) -> void {
+        report(code, token.location, std::move(args));
+        throw ParseError{token.location, m_diagnostics.back().message};
     };
 
     while (i < body.size()) {
@@ -2343,7 +2358,7 @@ auto Parser::parseInterpolatedBody(
         }
 
         if (close == std::string::npos) {
-            interpolationError("Unterminated interpolation in string literal");
+            interpolationError(diag::Code::UnterminatedInterpolation);
         }
 
         auto inner = body.substr(i + 2, close - i - 2);
@@ -2384,7 +2399,7 @@ auto Parser::parseInterpolatedBody(
             }
         }
         if (!tokens.empty() && tokens.front().type == TokenType::Error) {
-            interpolationError("Invalid interpolation: " + tokens.front().value);
+            interpolationError(tokens.front().errorCode, tokens.front().errorArgs);
         }
 
         Parser parser(std::move(tokens), m_filename);
@@ -2394,10 +2409,11 @@ auto Parser::parseInterpolatedBody(
             value = parser.parseExpr();
             parser.skipNewlines();
         } catch (const ParseError& e) {
-            interpolationError("Invalid interpolation: " + e.message);
+            const auto& nested = parser.m_diagnostics.back();
+            interpolationError(nested.code, nested.args);
         }
         if (!value || !parser.atEnd()) {
-            interpolationError("Interpolation must contain exactly one expression");
+            interpolationError(diag::Code::InterpolationNotOneExpression);
         }
         values.push_back(std::move(value));
         i = close + 1;
@@ -2512,7 +2528,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
                     }
                 } while (match(TokenType::Comma));
             }
-            expect(TokenType::RParen, "Expected ')' after arguments");
+            expect(TokenType::RParen, diag::Code::ExpectedRParenAfterArguments);
         }
 
         expr->kind = ast::MethodCall{std::move(thisExpr),  name,         std::move(args),
@@ -2625,7 +2641,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         if (pathOffset > 0 && peekAt(pathOffset).type == TokenType::LBrace) {
             while (match(TokenType::Dot)) {
                 name += ".";
-                name += expect(TokenType::UpperIdent, "Expected record type name").value;
+                name += expect(TokenType::UpperIdent, diag::Code::ExpectedRecordTypeName).value;
             }
         }
 
@@ -2650,7 +2666,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
                         check(TokenType::After)) {
                         fieldName = advance().value;
                     } else {
-                        error("Expected field name");
+                        error(diag::Code::ExpectedFieldName);
                     }
                     ast::ExprPtr value;
                     if (match(TokenType::Colon)) {
@@ -2669,7 +2685,8 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
                 } while (match(TokenType::Comma));
             }
             skipNewlines();
-            expect(TokenType::RBrace, "Expected '}' to close record");
+            expect(
+                TokenType::RBrace, diag::Code::ExpectedTokenToCloseRecord, {{"expected", "'}'"}});
 
             expr->kind = ast::RecordConstruction{name, std::move(fields)};
             return expr;
@@ -2693,7 +2710,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
                     }
                 } while (match(TokenType::Comma));
             }
-            expect(TokenType::RParen, "Expected ')'");
+            expect(TokenType::RParen, diag::Code::ExpectedToken, {{"expected", "')'"}});
 
             // Trailing block as last arg
             std::optional<ast::ExprPtr> block;
@@ -2723,7 +2740,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
                     args.push_back(parseExpr());
                 } while (match(TokenType::Comma));
             }
-            expect(TokenType::RParen, "Expected ')' after after arguments");
+            expect(TokenType::RParen, diag::Code::ExpectedRParenAfterAfterArguments);
         }
         if (check(TokenType::LBrace) || (check(TokenType::Do) && !m_noDoBlocks)) {
             auto block = parsePrimary();
@@ -2759,7 +2776,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
                     }
                 } while (match(TokenType::Comma));
             }
-            expect(TokenType::RParen, "Expected ')'");
+            expect(TokenType::RParen, diag::Code::ExpectedToken, {{"expected", "')'"}});
             expr->kind =
                 ast::FunctionCall{name, std::move(args), std::move(namedArgs), std::nullopt};
             return expr;
@@ -2812,7 +2829,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
                     }
                 } while (match(TokenType::Comma));
             }
-            expect(TokenType::RParen, "Expected ')'");
+            expect(TokenType::RParen, diag::Code::ExpectedToken, {{"expected", "')'"}});
 
             std::optional<ast::ExprPtr> block;
             if (check(TokenType::LBrace) || (check(TokenType::Do) && !m_noDoBlocks)) {
@@ -2908,7 +2925,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         auto nameExpr = parseSpliceName();
         auto def = std::make_unique<ast::TypeDef>();
         def->location = loc;
-        expect(TokenType::Equals, "Expected '=' in generated type");
+        expect(TokenType::Equals, diag::Code::ExpectedEqualsInGeneratedType);
         std::vector<ast::TypeExprPtr> variants;
         variants.push_back(parseTypeExpr());
         while (match(TokenType::Pipe)) {
@@ -2966,12 +2983,9 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
     // construct gives exactly one diagnostic, in the right place. The program
     // still aborts, because a recorded diagnostic is enough.
     if (check(TokenType::Type) || check(TokenType::Record) || check(TokenType::Make)) {
-        m_diagnostics.push_back(
-            {currentLocation(), "generating a `" + std::string(tokenTypeName(peek().type)) +
-                                    "` inside `compiled do` needs a spliced name — "
-                                    "`let %name(...)`, `type %name = ...`, "
-                                    "`record %name do ... end` and `make %name do ... end` are the "
-                                    "generation forms"});
+        report(
+            diag::Code::UnsplicedGenerationForm, currentLocation(),
+            {{"keyword", std::string(tokenTypeName(peek().type))}});
         advance(); // the keyword
         int depth = 0;
         while (!atEnd()) {
@@ -3010,13 +3024,13 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
                 usingExpr.body.push_back(parseExpr());
                 skipNewlines();
             }
-            expect(TokenType::End, "Expected 'end' to close using block");
+            expect(TokenType::End, diag::Code::ExpectedEndToCloseUsingBlock);
         }
         expr->kind = std::move(usingExpr);
         return expr;
     }
 
-    error("Unexpected token: " + std::string(tokenTypeName(peek().type)));
+    error(diag::Code::UnexpectedToken, {{"token", std::string(tokenTypeName(peek().type))}});
 }
 
 // ===== Specific Expression Parsers =====
@@ -3024,13 +3038,13 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
 auto Parser::parseIfExpr() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
-    expect(TokenType::If, "Expected 'if'");
+    expect(TokenType::If, diag::Code::ExpectedToken, {{"expected", "'if'"}});
 
     // `if let Pattern = expr` — pattern-binding conditional
     ast::PatternPtr letPattern;
     if (match(TokenType::Let)) {
         letPattern = parsePattern();
-        expect(TokenType::Equals, "Expected '=' after pattern in 'if let'");
+        expect(TokenType::Equals, diag::Code::ExpectedEqualsAfterPatternInIfLet);
     }
 
     m_noDoBlocks = true;
@@ -3064,7 +3078,7 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
                         body.push_back(parseExpr());
                         skipNewlines();
                     }
-                    expect(TokenType::End, "Expected 'end' to close if block");
+                    expect(TokenType::End, diag::Code::ExpectedEndToCloseIfBlock);
 
                     // Desugars to: match condition do None -> (); binding -> body end
                     // This handles both explicit Optional (None / Just(x)) and
@@ -3123,9 +3137,7 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
     // unrelated errors further down (kexhq/kex#165).
     bool inlineThen;
     if (check(TokenType::Do)) {
-        m_diagnostics.push_back(
-            {currentLocation(),
-             "use 'then' instead of 'do' in if expression: `if cond then body end`"});
+        report(diag::Code::DoAfterIfCondition, currentLocation());
         advance();
         inlineThen = !check(TokenType::Newline);
     } else {
@@ -3192,7 +3204,7 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
     }
 
     skipNewlines();
-    expect(TokenType::End, "Expected 'end' to close if");
+    expect(TokenType::End, diag::Code::ExpectedEndToCloseIf);
 
     ast::IfExpr ifNode{
         std::move(condition), std::move(thenBody), std::move(elifs), std::move(elseBody)};
@@ -3204,18 +3216,18 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
 auto Parser::parseMatchExpr() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
-    expect(TokenType::Match, "Expected 'match'");
+    expect(TokenType::Match, diag::Code::ExpectedToken, {{"expected", "'match'"}});
 
     m_noDoBlocks = true;
     auto subject = parseExpr();
     m_noDoBlocks = false;
-    expect(TokenType::Do, "Expected 'do' after match subject");
+    expect(TokenType::Do, diag::Code::ExpectedDoAfterMatchSubject);
 
     std::optional<std::string> subjectBinding;
     if (match(TokenType::Pipe)) {
         subjectBinding =
-            expect(TokenType::LowerIdent, "Expected name in match subject binding").value;
-        expect(TokenType::Pipe, "Expected '|' after match subject binding");
+            expect(TokenType::LowerIdent, diag::Code::ExpectedNameInMatchSubjectBinding).value;
+        expect(TokenType::Pipe, diag::Code::ExpectedPipeAfterMatchSubjectBinding);
     }
 
     skipNewlines();
@@ -3226,7 +3238,7 @@ auto Parser::parseMatchExpr() -> ast::ExprPtr {
         skipNewlines();
     }
 
-    expect(TokenType::End, "Expected 'end' to close match");
+    expect(TokenType::End, diag::Code::ExpectedEndToCloseMatch);
 
     expr->kind = ast::MatchExpr{std::move(subject), std::move(subjectBinding), std::move(clauses)};
     return expr;
@@ -3244,7 +3256,7 @@ auto Parser::parseMatchClause() -> ast::MatchClause {
         advance(); // when
         clause.guard = parseExpr();
 
-        expect(TokenType::FatArrow, "Expected '=>' in match clause");
+        expect(TokenType::FatArrow, diag::Code::ExpectedFatArrowInMatchClause);
         clause.body = parseMatchClauseBody();
         return clause;
     }
@@ -3261,7 +3273,7 @@ auto Parser::parseMatchClause() -> ast::MatchClause {
         if (const auto* variable = std::get_if<ast::VarPattern>(&pattern->kind)) {
             bound = variable->name;
         } else if (!std::holds_alternative<ast::WildcardPattern>(pattern->kind)) {
-            error("a type alternative binds a name or `_`, as in `s : String =>`");
+            error(diag::Code::TypeAlternativeBindsNameOnly);
         }
         advance(); // ":"
         auto typed = std::make_unique<ast::Pattern>();
@@ -3279,7 +3291,7 @@ auto Parser::parseMatchClause() -> ast::MatchClause {
         clause.guard = parseExpr();
     }
 
-    expect(TokenType::FatArrow, "Expected '=>' in match clause");
+    expect(TokenType::FatArrow, diag::Code::ExpectedFatArrowInMatchClause);
     clause.body = parseMatchClauseBody();
 
     return clause;
@@ -3296,7 +3308,7 @@ auto Parser::parseMatchClauseBody() -> ast::ExprPtr {
             body.push_back(parseExpr());
             skipNewlines();
         }
-        expect(TokenType::End, "Expected 'end' to close match clause body");
+        expect(TokenType::End, diag::Code::ExpectedEndToCloseMatchClauseBody);
         auto blockExpr = std::make_unique<ast::Expr>();
         blockExpr->location = currentLocation();
         blockExpr->location.startOffset = startOffset;
@@ -3314,25 +3326,23 @@ auto Parser::parseMatchClauseBody() -> ast::ExprPtr {
 auto Parser::parseReceiveExpr() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
-    expect(TokenType::Receive, "Expected 'receive'");
+    expect(TokenType::Receive, diag::Code::ExpectedToken, {{"expected", "'receive'"}});
 
     if (check(TokenType::Timeout)) {
-        error(
-            "the timeout belongs to the `after` clause: "
-            "`receive do ... after timeout: 1000 ... end`");
+        error(diag::Code::TimeoutOutsideAfterClause);
         advance();
         if (match(TokenType::Colon)) {
             parseExpr();
         }
     }
 
-    expect(TokenType::Do, "Expected 'do' after receive");
+    expect(TokenType::Do, diag::Code::ExpectedDoAfterReceive);
 
     std::optional<std::string> senderBinding;
     if (match(TokenType::Pipe)) {
         senderBinding =
-            expect(TokenType::LowerIdent, "Expected name in receive sender binding").value;
-        expect(TokenType::Pipe, "Expected '|' after receive sender binding");
+            expect(TokenType::LowerIdent, diag::Code::ExpectedNameInReceiveSenderBinding).value;
+        expect(TokenType::Pipe, diag::Code::ExpectedPipeAfterReceiveSenderBinding);
     }
 
     skipNewlines();
@@ -3341,9 +3351,7 @@ auto Parser::parseReceiveExpr() -> ast::ExprPtr {
     while (!check(TokenType::End) && !check(TokenType::After) && !atEnd()) {
         auto clause = parseMatchClause();
         if (clause.guard) {
-            error(
-                "'when' guards are not supported on receive clauses; "
-                "check the condition inside the clause body instead");
+            error(diag::Code::GuardOnReceiveClause);
         }
         clause.guard.reset();
         clauses.push_back(std::move(clause));
@@ -3359,8 +3367,8 @@ auto Parser::parseReceiveExpr() -> ast::ExprPtr {
     std::optional<ast::ExprPtr> afterBody;
     if (match(TokenType::After)) {
         auto afterLocation = currentLocation();
-        expect(TokenType::Timeout, "Expected 'timeout:' after 'after'");
-        expect(TokenType::Colon, "Expected ':' after 'timeout'");
+        expect(TokenType::Timeout, diag::Code::ExpectedTimeoutAfterAfter);
+        expect(TokenType::Colon, diag::Code::ExpectedColonAfterTimeout);
         // The body starts on the next line, so the timeout expression must not
         // swallow a trailing `do` block — the same guard `while` puts around its
         // condition.
@@ -3379,7 +3387,7 @@ auto Parser::parseReceiveExpr() -> ast::ExprPtr {
         afterBody = std::move(block);
     }
 
-    expect(TokenType::End, "Expected 'end' to close receive");
+    expect(TokenType::End, diag::Code::ExpectedEndToCloseReceive);
 
     expr->kind = ast::ReceiveExpr{
         std::move(clauses), std::move(timeout), std::move(afterBody), std::move(senderBinding)};
@@ -3389,20 +3397,20 @@ auto Parser::parseReceiveExpr() -> ast::ExprPtr {
 auto Parser::parseLoopExpr() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
-    expect(TokenType::Loop, "Expected 'loop'");
+    expect(TokenType::Loop, diag::Code::ExpectedToken, {{"expected", "'loop'"}});
 
     // `loop do ... end`, optionally binding a 0-based iteration counter:
     // `loop do |i| ... end`.
-    expect(TokenType::Do, "Expected 'do' after 'loop'");
+    expect(TokenType::Do, diag::Code::ExpectedDoAfterLoop);
     std::optional<std::string> counter;
     if (match(TokenType::Pipe)) {
         if (check(TokenType::Underscore)) {
             advance();
             counter = "_";
         } else {
-            counter = expect(TokenType::LowerIdent, "Expected loop counter name").value;
+            counter = expect(TokenType::LowerIdent, diag::Code::ExpectedLoopCounterName).value;
         }
-        expect(TokenType::Pipe, "Expected '|' to close loop counter");
+        expect(TokenType::Pipe, diag::Code::ExpectedPipeToCloseLoopCounter);
     }
     skipNewlines();
 
@@ -3412,7 +3420,7 @@ auto Parser::parseLoopExpr() -> ast::ExprPtr {
         skipNewlines();
     }
 
-    expect(TokenType::End, "Expected 'end' to close loop");
+    expect(TokenType::End, diag::Code::ExpectedEndToCloseLoop);
 
     expr->kind = ast::LoopExpr{std::move(body), std::move(counter)};
     return expr;
@@ -3421,12 +3429,12 @@ auto Parser::parseLoopExpr() -> ast::ExprPtr {
 auto Parser::parseWhileExpr() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
-    expect(TokenType::While, "Expected 'while'");
+    expect(TokenType::While, diag::Code::ExpectedToken, {{"expected", "'while'"}});
 
     m_noDoBlocks = true;
     auto condition = parseExpr();
     m_noDoBlocks = false;
-    expect(TokenType::Do, "Expected 'do' after 'while' condition");
+    expect(TokenType::Do, diag::Code::ExpectedDoAfterWhileCondition);
     skipNewlines();
 
     std::vector<ast::ExprPtr> body;
@@ -3435,7 +3443,7 @@ auto Parser::parseWhileExpr() -> ast::ExprPtr {
         skipNewlines();
     }
 
-    expect(TokenType::End, "Expected 'end' to close while");
+    expect(TokenType::End, diag::Code::ExpectedEndToCloseWhile);
 
     expr->kind = ast::WhileExpr{std::move(condition), std::move(body)};
     return expr;
@@ -3460,10 +3468,12 @@ auto Parser::parseSpliceName() -> ast::ExprPtr {
         name->kind = ast::Identifier{advance().value};
         return name;
     }
-    expect(TokenType::Percent, "Expected a spliced name");
-    expect(TokenType::LBrace, "Expected '{' after '%'");
+    expect(TokenType::Percent, diag::Code::ExpectedASplicedName);
+    expect(TokenType::LBrace, diag::Code::ExpectedTokenAfterPercent, {{"expected", "'{'"}});
     auto computed = parseExpr();
-    expect(TokenType::RBrace, "Expected '}' to close %{...} name");
+    expect(
+        TokenType::RBrace, diag::Code::UnclosedSpliceName,
+        {{"expected", "'}'"}, {"splice", "%{...}"}});
     return computed;
 }
 
@@ -3544,10 +3554,7 @@ auto Parser::parseLetExpr() -> ast::ExprPtr {
             // The report then points at the offending name itself.
             auto name = peekNext().value;
             advance(); // let
-            error(
-                "Cannot bind '" + name +
-                "': single-letter uppercase names are reserved for type "
-                "parameters");
+            error(diag::Code::SingleLetterBindingName, {{"name", name}});
         }
         auto funcDef = parseFunctionDef();
         auto expr = std::make_unique<ast::Expr>();
@@ -3609,7 +3616,7 @@ auto Parser::parseLetExpr() -> ast::ExprPtr {
     rejectReservedBindingName();
     auto expr = std::make_unique<ast::Expr>();
     expr->location = loc;
-    expect(TokenType::Let, "Expected 'let'");
+    expect(TokenType::Let, diag::Code::ExpectedToken, {{"expected", "'let'"}});
 
     auto pattern = parsePattern();
     // `let x: Type = value` — documented in docs/types.md and parsed here;
@@ -3619,7 +3626,7 @@ auto Parser::parseLetExpr() -> ast::ExprPtr {
     if (match(TokenType::Colon)) {
         declaredType = parseTypeExpr();
     }
-    expect(TokenType::Equals, "Expected '=' in let binding");
+    expect(TokenType::Equals, diag::Code::ExpectedEqualsInLetBinding);
     auto value = parseExpr();
 
     expr->kind = ast::LetExpr{std::move(pattern), std::move(value), std::move(declaredType)};
@@ -3629,7 +3636,7 @@ auto Parser::parseLetExpr() -> ast::ExprPtr {
 auto Parser::parseVarExpr() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
-    expect(TokenType::Var, "Expected 'var'");
+    expect(TokenType::Var, diag::Code::ExpectedToken, {{"expected", "'var'"}});
 
     // A bare `var Name = ...` binds nothing: an uppercase name in pattern
     // position is a constructor match, not a binding — `var Just(x) = ...`
@@ -3638,7 +3645,7 @@ auto Parser::parseVarExpr() -> ast::ExprPtr {
     // at the name, so the report points at it with nothing to consume.
     if (peek().type == TokenType::UpperIdent &&
         (peekNext().type == TokenType::Equals || peekNext().type == TokenType::Colon)) {
-        error("Cannot bind '" + peek().value + "' with 'var': patterns only bind lowercase names");
+        error(diag::Code::UppercaseVarBinding, {{"name", peek().value}});
     }
 
     // Same patterns `let` accepts (`var (i, j) = pair`, `var { x } = rec`):
@@ -3651,7 +3658,7 @@ auto Parser::parseVarExpr() -> ast::ExprPtr {
         declaredType = parseTypeExpr();
     }
 
-    expect(TokenType::Equals, "Expected '=' in var binding");
+    expect(TokenType::Equals, diag::Code::ExpectedEqualsInVarBinding);
     auto value = parseExpr();
 
     expr->kind = ast::VarExpr{std::move(pattern), std::move(value), std::move(declaredType)};
@@ -3661,7 +3668,7 @@ auto Parser::parseVarExpr() -> ast::ExprPtr {
 auto Parser::parseReturnExpr() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
-    expect(TokenType::Return, "Expected 'return'");
+    expect(TokenType::Return, diag::Code::ExpectedToken, {{"expected", "'return'"}});
 
     // `return if COND` — value-less guard-clause early return (returns
     // None when COND is true, does nothing when false). Must be handled
@@ -3704,8 +3711,8 @@ auto Parser::parseReturnExpr() -> ast::ExprPtr {
 auto Parser::parseSpawnExpr() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
-    expect(TokenType::Spawn, "Expected 'spawn'");
-    expect(TokenType::Do, "Expected 'do' after 'spawn'");
+    expect(TokenType::Spawn, diag::Code::ExpectedToken, {{"expected", "'spawn'"}});
+    expect(TokenType::Do, diag::Code::ExpectedDoAfterSpawn);
     skipNewlines();
 
     std::vector<ast::ExprPtr> body;
@@ -3714,7 +3721,7 @@ auto Parser::parseSpawnExpr() -> ast::ExprPtr {
         skipNewlines();
     }
 
-    expect(TokenType::End, "Expected 'end' to close spawn");
+    expect(TokenType::End, diag::Code::ExpectedEndToCloseSpawn);
 
     expr->kind = ast::SpawnExpr{std::move(body)};
     return expr;
@@ -3725,11 +3732,11 @@ auto Parser::parseSpawnExpr() -> ast::ExprPtr {
 auto Parser::parseWithExpr() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
-    expect(TokenType::With, "Expected 'with'");
+    expect(TokenType::With, diag::Code::ExpectedToken, {{"expected", "'with'"}});
 
     ast::WithExpr node;
     node.capability = parseTypeName();
-    expect(TokenType::Equals, "Expected '=' after the capability name in 'with'");
+    expect(TokenType::Equals, diag::Code::ExpectedEqualsAfterTheCapabilityNameInWith);
     // The replacement is followed by `do`, which a trailing-block expression
     // would otherwise swallow: `with FS.File = fake do` parsed `do ... end` as a
     // block argument to `fake` and then complained about the `end`. Same
@@ -3738,14 +3745,14 @@ auto Parser::parseWithExpr() -> ast::ExprPtr {
     m_noDoBlocks = true;
     node.value = parseExpr();
     m_noDoBlocks = savedNoDoBlocks;
-    expect(TokenType::Do, "Expected 'do' after the 'with' replacement");
+    expect(TokenType::Do, diag::Code::ExpectedDoAfterTheWithReplacement);
     skipNewlines();
 
     while (!check(TokenType::End) && !atEnd()) {
         node.body.push_back(parseExpr());
         skipNewlines();
     }
-    expect(TokenType::End, "Expected 'end' to close with");
+    expect(TokenType::End, diag::Code::ExpectedEndToCloseWith);
 
     expr->kind = std::move(node);
     return expr;
@@ -3778,15 +3785,15 @@ auto Parser::parseLambda() -> ast::ExprPtr {
                             combined += advance().value;
                         }
                     }
-                    expect(TokenType::RParen, "Expected ')' in tuple param");
+                    expect(TokenType::RParen, diag::Code::ExpectedRParenInTupleParam);
                     param.name = "(" + combined + ")";
                 } else {
-                    param.name = expect(TokenType::LowerIdent, "Expected param name").value;
+                    param.name = expect(TokenType::LowerIdent, diag::Code::ExpectedParamName).value;
                 }
                 params.push_back(std::move(param));
                 match(TokenType::Comma);
             }
-            expect(TokenType::Pipe, "Expected '|' to close params");
+            expect(TokenType::Pipe, diag::Code::ExpectedPipeToCloseParams);
         }
 
         std::vector<ast::ExprPtr> body;
@@ -3795,7 +3802,7 @@ auto Parser::parseLambda() -> ast::ExprPtr {
             body.push_back(parseExpr());
             skipNewlines();
         }
-        expect(TokenType::RBrace, "Expected '}' to close lambda");
+        expect(TokenType::RBrace, diag::Code::ExpectedTokenToCloseLambda, {{"expected", "'}'"}});
 
         expr->kind = ast::Lambda{std::move(params), std::move(body), std::nullopt, std::nullopt};
         return expr;
@@ -3814,12 +3821,12 @@ auto Parser::parseLambda() -> ast::ExprPtr {
                     param.name = "_";
                     advance();
                 } else {
-                    param.name = expect(TokenType::LowerIdent, "Expected param name").value;
+                    param.name = expect(TokenType::LowerIdent, diag::Code::ExpectedParamName).value;
                 }
                 params.push_back(std::move(param));
                 match(TokenType::Comma);
             }
-            expect(TokenType::Pipe, "Expected '|' to close params");
+            expect(TokenType::Pipe, diag::Code::ExpectedPipeToCloseParams);
         }
 
         skipNewlines();
@@ -3840,14 +3847,14 @@ auto Parser::parseLambda() -> ast::ExprPtr {
             rescue = parseRescueBlock();
             skipNewlines();
         }
-        expect(TokenType::End, "Expected 'end' to close do block");
+        expect(TokenType::End, diag::Code::ExpectedEndToCloseDoBlock);
 
         expr->kind =
             ast::Lambda{std::move(params), std::move(body), std::nullopt, std::move(rescue)};
         return expr;
     }
 
-    error("Expected lambda");
+    error(diag::Code::ExpectedLambda);
 }
 
 // Every binary operator that can be named as a value — `~(op)` curries any of
@@ -3875,7 +3882,7 @@ static auto isOperatorToken(TokenType t) -> bool {
 auto Parser::parseShorthandLambda() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
-    expect(TokenType::Amp, "Expected '&'");
+    expect(TokenType::Amp, diag::Code::ExpectedToken, {{"expected", "'&'"}});
 
     if (match(TokenType::Dot)) {
         std::string name;
@@ -3885,11 +3892,9 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
             // `&.` names a method; operators are captured with `~(op)`, which
             // covers both spellings: `&.+ 1` → `~(+)(1)`, `&.+` → `~(+)`.
             auto opName = std::string(tokenTypeName(peek().type));
-            error(
-                "`&." + opName + "` is not valid — write `~(" + opName +
-                ")` to capture an operator");
+            error(diag::Code::OperatorAfterAmpDot, {{"op", opName}});
         } else {
-            error("Expected method name after '&.'");
+            error(diag::Code::ExpectedMethodNameAfterAmpDot);
         }
         std::vector<ast::ExprPtr> args;
 
@@ -3900,7 +3905,7 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
                     args.push_back(parseExpr());
                 } while (match(TokenType::Comma));
             }
-            expect(TokenType::RParen, "Expected ')'");
+            expect(TokenType::RParen, diag::Code::ExpectedToken, {{"expected", "')'"}});
             kind = ast::ShorthandLambda::Kind::MethodWithArgs;
         } else if (isAtExprStart()) {
             // Operator with inline arg: &.+ 1 or &.+ "hello"
@@ -3942,20 +3947,13 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
     // `&` is receiver shorthand only — `&.method`. Capturing a named function
     // or an operator is spelled with `~`, which also curries.
     if (check(TokenType::LowerIdent)) {
-        error(
-            "`&" + std::string(peek().value) + "` is no longer valid — write `~" +
-            std::string(peek().value) +
-            "` to capture a named function ('&' is "
-            "receiver shorthand only, as in `&.method`)");
+        error(diag::Code::AmpFunctionCapture, {{"name", std::string(peek().value)}});
     }
     if (isOperatorToken(peek().type)) {
         auto opName = std::string(tokenTypeName(peek().type));
-        error(
-            "`&" + opName + "` is no longer valid — write `~(" + opName +
-            ")` to capture an operator ('&' is receiver shorthand only, as "
-            "in `&.method`)");
+        error(diag::Code::AmpOperatorCapture, {{"op", opName}});
     }
-    error("Expected '.' after '&' — '&' is receiver shorthand, as in `&.method`");
+    error(diag::Code::ExpectedDotAfterAmp);
     return expr;
 }
 
@@ -3976,7 +3974,7 @@ auto Parser::parseSpreadableExpr() -> ast::ExprPtr {
 auto Parser::parseListExpr() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
-    expect(TokenType::LBracket, "Expected '['");
+    expect(TokenType::LBracket, diag::Code::ExpectedToken, {{"expected", "'['"}});
 
     std::vector<ast::ExprPtr> elements;
     std::optional<ast::ExprPtr> rest;
@@ -3998,7 +3996,7 @@ auto Parser::parseListExpr() -> ast::ExprPtr {
         }
     }
     skipNewlines();
-    expect(TokenType::RBracket, "Expected ']'");
+    expect(TokenType::RBracket, diag::Code::ExpectedToken, {{"expected", "']'"}});
 
     expr->kind = ast::ListExpr{std::move(elements), std::move(rest)};
     return expr;
@@ -4042,15 +4040,15 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
                         combined += advance().value;
                     }
                 }
-                expect(TokenType::RParen, "Expected ')' in tuple param");
+                expect(TokenType::RParen, diag::Code::ExpectedRParenInTupleParam);
                 param.name = "(" + combined + ")";
             } else {
-                param.name = expect(TokenType::LowerIdent, "Expected param name").value;
+                param.name = expect(TokenType::LowerIdent, diag::Code::ExpectedParamName).value;
             }
             params.push_back(std::move(param));
             match(TokenType::Comma);
         }
-        expect(TokenType::Pipe, "Expected '|'");
+        expect(TokenType::Pipe, diag::Code::ExpectedToken, {{"expected", "'|'"}});
 
         std::vector<ast::ExprPtr> body;
         skipNewlines();
@@ -4058,7 +4056,7 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
             body.push_back(parseExpr());
             skipNewlines();
         }
-        expect(TokenType::RBrace, "Expected '}'");
+        expect(TokenType::RBrace, diag::Code::ExpectedToken, {{"expected", "'}'"}});
 
         expr->kind = ast::Lambda{std::move(params), std::move(body), std::nullopt, std::nullopt};
         return expr;
@@ -4120,14 +4118,14 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
             } else {
                 key = parseExpr();
             }
-            expect(TokenType::Colon, "Expected ':' in map entry");
+            expect(TokenType::Colon, diag::Code::ExpectedColonInMapEntry);
             auto value = parseExpr();
             entries.push_back(ast::MapEntry{std::move(key), std::move(value)});
             skipNewlines();
         } while (match(TokenType::Comma) && !check(TokenType::RBrace));
 
         skipNewlines();
-        expect(TokenType::RBrace, "Expected '}' to close map");
+        expect(TokenType::RBrace, diag::Code::ExpectedTokenToCloseMap, {{"expected", "'}'"}});
 
         expr->kind = ast::MapExpr{std::move(entries)};
         return expr;
@@ -4143,7 +4141,7 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
         body.push_back(parseExpr());
         skipNewlines();
     }
-    expect(TokenType::RBrace, "Expected '}'");
+    expect(TokenType::RBrace, diag::Code::ExpectedToken, {{"expected", "'}'"}});
 
     expr->kind = ast::Lambda{{}, std::move(body), std::nullopt, std::nullopt};
     return expr;
@@ -4151,7 +4149,7 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
 
 auto Parser::parseTupleOrGrouped() -> ast::ExprPtr {
     auto loc = currentLocation();
-    expect(TokenType::LParen, "Expected '('");
+    expect(TokenType::LParen, diag::Code::ExpectedToken, {{"expected", "'('"}});
 
     // Void value: ()
     if (match(TokenType::RParen)) {
@@ -4171,7 +4169,7 @@ auto Parser::parseTupleOrGrouped() -> ast::ExprPtr {
         while (match(TokenType::Comma)) {
             elements.push_back(parseExpr());
         }
-        expect(TokenType::RParen, "Expected ')'");
+        expect(TokenType::RParen, diag::Code::ExpectedToken, {{"expected", "')'"}});
 
         auto expr = std::make_unique<ast::Expr>();
         expr->location = loc;
@@ -4180,7 +4178,7 @@ auto Parser::parseTupleOrGrouped() -> ast::ExprPtr {
     }
 
     // Grouped expression: (expr)
-    expect(TokenType::RParen, "Expected ')'");
+    expect(TokenType::RParen, diag::Code::ExpectedToken, {{"expected", "')'"}});
     first->location.startOffset = loc.startOffset;
     return complete(std::move(first));
 }
@@ -4228,7 +4226,7 @@ auto Parser::parseRecordPatternFields() -> std::vector<ast::FieldPattern> {
                 check(TokenType::After)) {
                 field.name = advance().value;
             } else {
-                error("Expected field name");
+                error(diag::Code::ExpectedFieldName);
             }
 
             if (match(TokenType::Colon)) {
@@ -4240,7 +4238,7 @@ auto Parser::parseRecordPatternFields() -> std::vector<ast::FieldPattern> {
         } while (match(TokenType::Comma));
     }
 
-    expect(TokenType::RBrace, "Expected '}'");
+    expect(TokenType::RBrace, diag::Code::ExpectedToken, {{"expected", "'}'"}});
     return fields;
 }
 
@@ -4302,7 +4300,7 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
             }
         }
 
-        expect(TokenType::RBracket, "Expected ']'");
+        expect(TokenType::RBracket, diag::Code::ExpectedToken, {{"expected", "']'"}});
         pattern->kind = ast::ListPattern{std::move(elements), std::move(rest)};
         return complete(std::move(pattern));
     }
@@ -4317,7 +4315,7 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
                 elements.push_back(parsePattern());
             }
         }
-        expect(TokenType::RParen, "Expected ')'");
+        expect(TokenType::RParen, diag::Code::ExpectedToken, {{"expected", "')'"}});
         if (elements.size() == 1) {
             auto grouped = std::move(elements[0]);
             grouped->location.startOffset = loc.startOffset;
@@ -4341,7 +4339,7 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
         if (pathOffset > 0) {
             while (match(TokenType::Dot)) {
                 module += (module.empty() ? "" : ".") + name;
-                name = expect(TokenType::UpperIdent, "Expected a name").value;
+                name = expect(TokenType::UpperIdent, diag::Code::ExpectedAName).value;
             }
             if (check(TokenType::LBrace)) {
                 name = module + "." + name;
@@ -4365,7 +4363,7 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
                     args.push_back(parsePattern());
                 }
             }
-            expect(TokenType::RParen, "Expected ')'");
+            expect(TokenType::RParen, diag::Code::ExpectedToken, {{"expected", "')'"}});
             pattern->kind = ast::ConstructorPattern{name, std::move(args), module};
         } else {
             pattern->kind = ast::ConstructorPattern{name, {}, module};
@@ -4382,10 +4380,10 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
     // `let next = 1`, `let (previous, next) = pair` — a keyword where a binding
     // name belongs. Name the keyword instead of the bare "Expected pattern".
     if (isKeywordToken(peek().type)) {
-        rejectReservedName("variable");
+        rejectReservedName(diag::Code::ReservedWordAsVariableName);
     }
 
-    error("Expected pattern");
+    error(diag::Code::ExpectedPattern);
 }
 
 // ===== Remaining Top-Level =====
@@ -4393,8 +4391,8 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
 auto Parser::parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock> {
     auto block = std::make_unique<ast::CompiledBlock>();
     block->location = currentLocation();
-    expect(TokenType::Compiled, "Expected 'compiled'");
-    expect(TokenType::Do, "Expected 'do' after 'compiled'");
+    expect(TokenType::Compiled, diag::Code::ExpectedToken, {{"expected", "'compiled'"}});
+    expect(TokenType::Do, diag::Code::ExpectedDoAfterCompiled);
     skipNewlines();
 
     while (!check(TokenType::End) && !atEnd()) {
@@ -4404,7 +4402,7 @@ auto Parser::parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock> {
         // declaration had no keyword. It is a binding, not a function; it just
         // shares the AST encoding of a top-level `let NAME = expr`.
         if (check(TokenType::UpperIdent) && peekNext().type == TokenType::Equals) {
-            error("Compile-time constants need `let`: write `let " + peek().value + " = ...`");
+            error(diag::Code::ConstantWithoutLet, {{"name", peek().value}});
         }
         // Function definition (possibly splice: let %name(...) = ...)
         if (check(TokenType::Let) || check(TokenType::Foul)) {
@@ -4443,14 +4441,14 @@ auto Parser::parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock> {
         skipNewlines();
     }
 
-    expect(TokenType::End, "Expected 'end' to close compiled block");
+    expect(TokenType::End, diag::Code::ExpectedEndToCloseCompiledBlock);
     return complete(std::move(block));
 }
 
 auto Parser::parseUsingBlock() -> std::unique_ptr<ast::UsingBlock> {
     auto block = std::make_unique<ast::UsingBlock>();
     block->location = currentLocation();
-    expect(TokenType::Using, "Expected 'using'");
+    expect(TokenType::Using, diag::Code::ExpectedToken, {{"expected", "'using'"}});
 
     block->module = parseTypeName();
     if (match(TokenType::Comma)) {
@@ -4465,7 +4463,7 @@ auto Parser::parseUsingBlock() -> std::unique_ptr<ast::UsingBlock> {
             block->body.push_back(parseExpr());
             skipNewlines();
         }
-        expect(TokenType::End, "Expected 'end' to close using block");
+        expect(TokenType::End, diag::Code::ExpectedEndToCloseUsingBlock);
     }
     // Bare using — no body (applies to enclosing scope)
 
@@ -4475,7 +4473,7 @@ auto Parser::parseUsingBlock() -> std::unique_ptr<ast::UsingBlock> {
 auto Parser::parseExportDecl() -> std::unique_ptr<ast::ExportDecl> {
     auto decl = std::make_unique<ast::ExportDecl>();
     decl->location = currentLocation();
-    expect(TokenType::Export, "Expected 'export'");
+    expect(TokenType::Export, diag::Code::ExpectedToken, {{"expected", "'export'"}});
     decl->module = parseTypeName();
     if (match(TokenType::Comma)) {
         parseUsingOptions(decl->alias, decl->onlyNames, decl->exceptNames);
@@ -4502,35 +4500,37 @@ auto Parser::parseUsingOptions(
         if (match(TokenType::LParen)) {
             if (atOperator()) {
                 auto name = std::string(tokenTypeName(advance().type));
-                expect(TokenType::RParen, "Expected ')' after operator");
+                expect(TokenType::RParen, diag::Code::ExpectedRParenAfterOperator);
                 return name;
             }
-            error("Expected name or operator in using option list");
+            error(diag::Code::ExpectedNameOrOperatorInUsingOptionList);
         }
         // `only: [||]` — the operator is named in parentheses, as it is
         // everywhere else it is referred to (kexhq/kex#532).
         if (atOperator()) {
             const auto op = std::string(tokenTypeName(peek().type));
-            error("An operator in a using option list is written in parentheses: `(" + op + ")`");
+            error(diag::Code::UnparenthesizedUsingOperator, {{"op", op}});
         }
-        error("Expected name in using option list");
+        error(diag::Code::ExpectedNameInUsingOptionList);
     };
 
     do {
-        const auto key = expect(TokenType::LowerIdent, "Expected using option").value;
-        expect(TokenType::Colon, "Expected ':' after using option");
+        const auto key = expect(TokenType::LowerIdent, diag::Code::ExpectedUsingOption).value;
+        expect(TokenType::Colon, diag::Code::ExpectedTokenAfterUsingOption, {{"expected", "':'"}});
         if (key == "as") {
             if (alias) {
-                error("Duplicate 'as' using option");
+                error(diag::Code::DuplicateUsingOption, {{"option", "as"}});
             }
-            alias = expect(TokenType::UpperIdent, "Expected alias name after 'as:'").value;
-            rejectSingleLetterTypeName(*alias, "module");
+            alias = expect(TokenType::UpperIdent, diag::Code::ExpectedAliasNameAfterAs).value;
+            rejectSingleLetterTypeName(*alias, diag::Code::SingleLetterTypeNameForModule);
         } else if (key == "only" || key == "except") {
             auto& names = key == "only" ? onlyNames : exceptNames;
             if (!names.empty()) {
-                error("Duplicate '" + key + "' using option");
+                error(diag::Code::DuplicateUsingOption, {{"option", key}});
             }
-            expect(TokenType::LBracket, "Expected '[' after using option");
+            expect(
+                TokenType::LBracket, diag::Code::ExpectedTokenAfterUsingOption,
+                {{"expected", "'['"}});
             // The list may span lines inside its brackets, one name per line,
             // with a trailing comma before `]` (kexhq/kex#497).
             skipNewlines();
@@ -4542,14 +4542,14 @@ auto Parser::parseUsingOptions(
                 }
                 skipNewlines();
             }
-            expect(TokenType::RBracket, "Expected ']' after using option list");
+            expect(TokenType::RBracket, diag::Code::ExpectedRBracketAfterUsingOptionList);
         } else {
-            error("Unknown using option '" + key + "'");
+            error(diag::Code::UnknownUsingOption, {{"option", key}});
         }
     } while (match(TokenType::Comma));
 
     if (!onlyNames.empty() && !exceptNames.empty()) {
-        error("'only' and 'except' using options are mutually exclusive");
+        error(diag::Code::OnlyAndExceptUsingOptions);
     }
 }
 
@@ -4557,7 +4557,7 @@ auto Parser::parseMainBlock() -> std::unique_ptr<ast::MainBlock> {
     auto block = std::make_unique<ast::MainBlock>();
     block->location = currentLocation();
     block->isExplicitMain = true;
-    expect(TokenType::Main, "Expected 'main'");
+    expect(TokenType::Main, diag::Code::ExpectedToken, {{"expected", "'main'"}});
 
     // Optional params: main(args) do ... end — bound to the script's
     // command-line arguments ([String]) when the body runs.
@@ -4565,10 +4565,10 @@ auto Parser::parseMainBlock() -> std::unique_ptr<ast::MainBlock> {
         if (!check(TokenType::RParen)) {
             block->params = parseParams();
         }
-        expect(TokenType::RParen, "Expected ')' after main parameters");
+        expect(TokenType::RParen, diag::Code::ExpectedRParenAfterMainParameters);
     }
 
-    expect(TokenType::Do, "Expected 'do' after 'main'");
+    expect(TokenType::Do, diag::Code::ExpectedDoAfterMain);
     skipNewlines();
 
     while (!check(TokenType::End) && !check(TokenType::Rescue) && !atEnd()) {
@@ -4582,21 +4582,21 @@ auto Parser::parseMainBlock() -> std::unique_ptr<ast::MainBlock> {
         skipNewlines();
     }
 
-    expect(TokenType::End, "Expected 'end' to close main block");
+    expect(TokenType::End, diag::Code::ExpectedEndToCloseMainBlock);
     return complete(std::move(block));
 }
 
 auto Parser::parsePragma() -> std::unique_ptr<ast::Pragma> {
     auto pragma = std::make_unique<ast::Pragma>();
     pragma->location = currentLocation();
-    expect(TokenType::HashLBracket, "Expected '#['");
+    expect(TokenType::HashLBracket, diag::Code::ExpectedToken, {{"expected", "'#['"}});
 
     while (check(TokenType::UpperIdent)) {
         pragma->requirements.push_back(advance().value);
         match(TokenType::Comma); // optional comma
     }
 
-    expect(TokenType::RBracket, "Expected ']' to close pragma");
+    expect(TokenType::RBracket, diag::Code::ExpectedRBracketToClosePragma);
     return complete(std::move(pragma));
 }
 
@@ -4606,7 +4606,7 @@ auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
     block->isPublic = check(TokenType::Public);
     advance(); // consume public/private
 
-    expect(TokenType::Do, "Expected 'do' after visibility keyword");
+    expect(TokenType::Do, diag::Code::ExpectedDoAfterVisibilityKeyword);
     skipNewlines();
 
     while (!check(TokenType::End) && !atEnd()) {
@@ -4630,12 +4630,13 @@ auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
             block->items.push_back(parseUsingBlock());
         } else {
             error(
-                "Unexpected token in visibility block: " + std::string(tokenTypeName(peek().type)));
+                diag::Code::UnexpectedTokenInVisibilityBlock,
+                {{"token", std::string(tokenTypeName(peek().type))}});
         }
         skipNewlines();
     }
 
-    expect(TokenType::End, "Expected 'end' to close visibility block");
+    expect(TokenType::End, diag::Code::ExpectedEndToCloseVisibilityBlock);
     return complete(std::move(block));
 }
 
@@ -4722,7 +4723,7 @@ auto Parser::isAtExprStart() const -> bool {
 
 auto Parser::parseCurryExpr() -> ast::ExprPtr {
     auto loc = currentLocation();
-    expect(TokenType::Tilde, "Expected '~'");
+    expect(TokenType::Tilde, diag::Code::ExpectedToken, {{"expected", "'~'"}});
 
     auto expr = std::make_unique<ast::Expr>();
     expr->location = loc;
@@ -4740,12 +4741,14 @@ auto Parser::parseCurryExpr() -> ast::ExprPtr {
                 module += "." + advance().value;
                 continue;
             }
-            name = expect(TokenType::LowerIdent, "Expected function name after '~" + module + ".'")
+            name = expect(
+                       TokenType::LowerIdent, diag::Code::ExpectedQualifiedCaptureName,
+                       {{"module", module}})
                        .value;
             break;
         }
         if (name.empty()) {
-            error("Expected function name after '~" + module + ".'");
+            error(diag::Code::MissingQualifiedCaptureName, {{"module", module}});
         }
     } else if (check(TokenType::LParen)) {
         // ~(op) form
@@ -4760,20 +4763,20 @@ auto Parser::parseCurryExpr() -> ast::ExprPtr {
             name = std::string(tokenTypeName(advance().type));
             isOperator = true;
         } else {
-            error("Expected operator inside '~(...)'");
+            error(diag::Code::ExpectedOperatorInCapture);
         }
-        expect(TokenType::RParen, "Expected ')' after operator");
+        expect(TokenType::RParen, diag::Code::ExpectedRParenAfterOperator);
     } else if (check(TokenType::LowerIdent)) {
         name = advance().value;
         isOperator = false;
     } else {
-        error("Expected function name or operator after '~'");
+        error(diag::Code::ExpectedFunctionNameOrOperatorAfterTilde);
     }
 
     // Parse all trailing (args) groups greedily
     auto parseCurryArgGroup = [&]() -> std::vector<ast::ExprPtr> {
         std::vector<ast::ExprPtr> args;
-        expect(TokenType::LParen, "Expected '('");
+        expect(TokenType::LParen, diag::Code::ExpectedToken, {{"expected", "'('"}});
         if (!check(TokenType::RParen)) {
             do {
                 auto argExpr = std::make_unique<ast::Expr>();
@@ -4787,7 +4790,7 @@ auto Parser::parseCurryExpr() -> ast::ExprPtr {
                 args.push_back(std::move(argExpr));
             } while (match(TokenType::Comma));
         }
-        expect(TokenType::RParen, "Expected ')'");
+        expect(TokenType::RParen, diag::Code::ExpectedToken, {{"expected", "')'"}});
         return args;
     };
 
@@ -4819,9 +4822,9 @@ auto Parser::parseRescueBlock() -> ast::RescueBlock {
         if (check(TokenType::LowerIdent)) {
             rescue.catchAllParam = advance().value;
         } else {
-            error("Expected parameter name after '|' in rescue");
+            error(diag::Code::ExpectedParameterNameAfterPipeInRescue);
         }
-        expect(TokenType::Pipe, "Expected '|' after rescue parameter");
+        expect(TokenType::Pipe, diag::Code::ExpectedPipeAfterRescueParameter);
         skipNewlines();
         while (!check(TokenType::End) && !atEnd()) {
             rescue.catchAllBody.push_back(parseExpr());
@@ -4844,8 +4847,8 @@ auto Parser::parseTryingExpr() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
 
-    expect(TokenType::Trying, "Expected 'trying'");
-    expect(TokenType::Do, "Expected 'do' after 'trying'");
+    expect(TokenType::Trying, diag::Code::ExpectedToken, {{"expected", "'trying'"}});
+    expect(TokenType::Do, diag::Code::ExpectedDoAfterTrying);
     skipNewlines();
 
     std::vector<ast::ExprPtr> body;
@@ -4855,14 +4858,14 @@ auto Parser::parseTryingExpr() -> ast::ExprPtr {
     }
 
     if (!match(TokenType::Rescue)) {
-        error("'trying' block requires 'rescue'");
+        error(diag::Code::TryingBlockRequiresRescue);
     }
     skipNewlines();
 
     auto rescue = parseRescueBlock();
     skipNewlines();
 
-    expect(TokenType::End, "Expected 'end' to close trying block");
+    expect(TokenType::End, diag::Code::ExpectedEndToCloseTryingBlock);
 
     expr->kind = ast::TryingExpr{std::move(body), std::move(rescue)};
     return expr;

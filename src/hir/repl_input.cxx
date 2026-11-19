@@ -91,7 +91,7 @@ auto checkReplInput(
         } else {
             for (const auto& diagnostic : checked.analysis->diagnostics()) {
                 if (diagnostic.level == semantic::Diagnostic::Level::Error) {
-                    checked.error = diagnostic.message;
+                    checked.error = diagnostic;
                     break;
                 }
             }

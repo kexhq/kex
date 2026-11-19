@@ -1,4 +1,4 @@
-spec/error_interpolation_checked.kex:10:21: error: `length` expects argument 1 to be Binary, but got Integer
+spec/error_interpolation_checked.kex:10:21: [KEXET-0491]: `length` expects argument 1 to be Binary, but got Integer
 
 length : Binary -> Integer
 

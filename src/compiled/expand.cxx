@@ -183,9 +183,44 @@ auto isValueBinding(const ast::FunctionDef& fn) -> bool {
 auto addError(
     std::vector<semantic::Diagnostic>& diagnostics,
     const SourceLocation& location,
-    std::string message) -> void {
-    diagnostics.push_back({semantic::Diagnostic::Level::Error, location, std::move(message)});
+    diag::Code code,
+    diag::Args args = {}) -> void {
+    diagnostics.push_back(
+        semantic::makeDiagnostic(
+            semantic::Diagnostic::Level::Error, code, location, std::move(args)));
 }
+
+// A piece of a template that did not parse. The parser's diagnostic is
+// reported with its own code, at the template's place, and a note says which
+// piece of the template it was.
+auto addTemplateParseError(
+    std::vector<semantic::Diagnostic>& diagnostics,
+    const SourceLocation& blame,
+    const ParseDiagnostic& parsed,
+    const std::string& context) -> void {
+    auto diagnostic = semantic::makeDiagnostic(
+        semantic::Diagnostic::Level::Error, parsed.code, blame, parsed.args);
+    diagnostic.notes.push_back({blame, context});
+    diagnostics.push_back(std::move(diagnostic));
+}
+
+// A compile-time constant left in the program with no literal form.
+auto addNotInlinable(
+    std::vector<semantic::Diagnostic>& diagnostics, const std::string& name, ReifyFailure why)
+    -> void {
+    if (why.code == diag::Code::None) {
+        addError(diagnostics, SourceLocation{}, diag::Code::ConstantNotInlinable, {{"name", name}});
+        return;
+    }
+    why.args.insert(why.args.begin(), {"name", name});
+    addError(diagnostics, SourceLocation{}, why.code, std::move(why.args));
+}
+
+// Why a template's scan failed: the diagnostic that reports it.
+struct ScanFailure {
+    diag::Code code = diag::Code::None;
+    diag::Args args;
+};
 
 using Constants = std::unordered_map<std::string, interpreter::ValuePtr>;
 using ScopedConstants = std::unordered_map<std::string, Constants>;
@@ -720,16 +755,12 @@ auto spliceNestedMethods(
             // `make Foo do type Q = Int end` is "Unexpected token in make
             // body" in ordinary source too. Generation is held to the same
             // grammar as what you could write by hand.
-            addError(
-                diagnostics, nested.location,
-                "a `make` body holds methods, so only `let %name(...)` "
-                "can be generated inside one — the same rule an ordinary "
-                "`make` follows");
+            addError(diagnostics, nested.location, diag::Code::MakeBodyGeneratesNonMethod);
             ok = false;
             continue;
         }
         if (nested.name.empty()) {
-            addError(diagnostics, nested.location, "generated method has an empty name");
+            addError(diagnostics, nested.location, diag::Code::GeneratedMethodEmptyName);
             ok = false;
             continue;
         }
@@ -1040,8 +1071,8 @@ struct EmbedFolder {
         return upper && upper->name == names::kRuntimeRoot;
     }
 
-    auto fail(const SourceLocation& location, std::string message) -> bool {
-        addError(diagnostics, location, std::move(message));
+    auto fail(const SourceLocation& location, diag::Code code, diag::Args args = {}) -> bool {
+        addError(diagnostics, location, code, std::move(args));
         ok = false;
         return true; // claimed: still stop the walk here either way.
     }
@@ -1056,33 +1087,20 @@ struct EmbedFolder {
             return false;
         }
         if (call->args.size() != 1 || !call->namedArgs.empty() || call->block) {
-            return fail(
-                slot->location, "Kex.embed takes exactly one argument: the path of "
-                                "the file to embed");
+            return fail(slot->location, diag::Code::EmbedArity);
         }
         if (!std::holds_alternative<ast::StringLiteral>(call->args[0]->kind)) {
-            return fail(
-                slot->location, "Kex.embed's argument must be a plain string "
-                                "literal naming the file to embed — the path has to "
-                                "be knowable to the compiler, not just to the "
-                                "running program");
+            return fail(slot->location, diag::Code::EmbedArgumentNotLiteral);
         }
         auto path = knownText(*call->args[0]);
         if (!path) {
-            return fail(
-                slot->location, "Kex.embed's argument must be a plain string "
-                                "literal naming the file to embed, not an "
-                                "interpolated one — the path has to be knowable to "
-                                "the compiler, not just to the running program. A "
-                                "hole may name a `compiled do` loop variable, or a "
-                                "String parameter of the enclosing function, which "
-                                "then gets one clause per matching file");
+            return fail(slot->location, diag::Code::EmbedArgumentInterpolated);
         }
         std::filesystem::path target = sourceDir / *path;
         noteDependency(target.string());
         std::ifstream file(target, std::ios::binary);
         if (!file) {
-            return fail(slot->location, "Kex.embed: cannot read '" + target.string() + "'");
+            return fail(slot->location, diag::Code::EmbedCannotRead, {{"path", target.string()}});
         }
         std::ostringstream contents;
         contents << file.rdbuf();
@@ -1308,9 +1326,8 @@ auto expandEmbedDispatch(
                     shown += "${" + pattern->holes[i] + "}" + pattern->parts[i + 1];
                 }
                 addError(
-                    diagnostics, pattern->location,
-                    "Kex.embed(\"" + shown + "\") matches no file, so `" + fn.name +
-                        "` would have no clause for it");
+                    diagnostics, pattern->location, diag::Code::EmbedPatternMatchesNoFile,
+                    {{"pattern", shown}, {"function", fn.name}});
                 ok = false;
                 clauses.push_back(std::move(clause));
                 continue;
@@ -1632,7 +1649,7 @@ auto scanTemplateSourceUncached(
     std::chrono::milliseconds timeout,
     std::vector<TemplateNode>& nodes,
     std::vector<ExplicitParam>& explicitParams,
-    std::string& error) -> bool;
+    ScanFailure& error) -> bool;
 
 // A template's scan: this process's own, then the cache's, then a real one
 // (written back to both). Only a scan that succeeded is kept — a failing one
@@ -1642,7 +1659,7 @@ auto scanTemplateSource(
     std::chrono::milliseconds timeout,
     std::vector<TemplateNode>& nodes,
     std::vector<ExplicitParam>& explicitParams,
-    std::string& error) -> bool {
+    ScanFailure& error) -> bool {
     static std::unordered_map<std::string, ScannedTemplate> scannedHere;
     // An expansion without settings of its own uses the process's
     // (setDefaultScanCache): a module the semantic pass or a sandbox expands
@@ -1695,7 +1712,7 @@ auto scanTemplateSourceUncached(
     std::chrono::milliseconds timeout,
     std::vector<TemplateNode>& nodes,
     std::vector<ExplicitParam>& explicitParams,
-    std::string& error) -> bool {
+    ScanFailure& error) -> bool {
     ast::Expr sourceLit;
     sourceLit.kind = ast::StringLiteral{source, false};
     ast::Expr receiver;
@@ -1721,48 +1738,49 @@ auto scanTemplateSourceUncached(
         interpreter::Evaluator::ExpressionRequest request{&callExpr, {}};
         results = evaluator.evaluateExpressions(empty, {request}, timeout, &reasons);
     } catch (const interpreter::EvaluationTimeout&) {
-        error = "template scan timed out after " + std::to_string(timeout.count()) + " ms";
+        error = {diag::Code::TemplateScanTimedOut, {{"ms", std::to_string(timeout.count())}}};
         return false;
     } catch (const std::exception& crash) {
-        error = std::string("compile-time evaluation failed: ") + crash.what();
+        error = {diag::Code::CompileTimeEvaluationFailed, {{"error", crash.what()}}};
         return false;
     }
     if (results.empty() || !results[0]) {
         error = (reasons.empty() || reasons[0].empty())
-                    ? "Template.scan could not be evaluated at compile time"
-                    : reasons[0];
+                    ? ScanFailure{diag::Code::TemplateScanNotEvaluated, {}}
+                    : ScanFailure{diag::Code::TemplateScanEvaluationError, {{"error", reasons[0]}}};
         return false;
     }
     auto* outcome = std::get_if<interpreter::VariantValue>(&results[0]->data);
     if (!outcome) {
-        error = "Template.scan did not return a Result";
+        error = {diag::Code::TemplateScanNotResult, {}};
         return false;
     }
     if (outcome->tag != "Ok") {
-        std::string message = (outcome->args.empty() || !outcome->args[0])
-                                  ? "scan failed"
-                                  : outcome->args[0]->inspect();
-        error = "template does not scan: " + message;
+        error =
+            (outcome->args.empty() || !outcome->args[0])
+                ? ScanFailure{diag::Code::TemplateScanFailed, {}}
+                : ScanFailure{
+                      diag::Code::TemplateDoesNotScan, {{"message", outcome->args[0]->inspect()}}};
         return false;
     }
     if (outcome->args.empty() || !outcome->args[0]) {
-        error = "Template.scan returned an unexpected Ok value";
+        error = {diag::Code::TemplateScanUnexpectedOk, {}};
         return false;
     }
     auto* parsed = std::get_if<interpreter::RecordValue>(&outcome->args[0]->data);
     if (!parsed) {
-        error = "Template.scan's Ok value is not a Parsed record";
+        error = {diag::Code::TemplateScanOkNotParsed, {}};
         return false;
     }
 
     auto nodesField = parsed->fields.find("nodes");
     if (nodesField == parsed->fields.end() || !nodesField->second) {
-        error = "Parsed has no `nodes` field";
+        error = {diag::Code::ParsedHasNoNodes, {}};
         return false;
     }
     auto* list = std::get_if<interpreter::ListValue>(&nodesField->second->data);
     if (!list) {
-        error = "Parsed.nodes is not a list";
+        error = {diag::Code::ParsedNodesNotList, {}};
         return false;
     }
     for (const auto& elem : list->elements) {
@@ -1771,17 +1789,17 @@ auto scanTemplateSourceUncached(
         }
         auto* variant = std::get_if<interpreter::VariantValue>(&elem->data);
         if (!variant || variant->args.size() != 1 || !variant->args[0]) {
-            error = "Parsed.nodes holds something other than a Node";
+            error = {diag::Code::ParsedNodesNotNode, {}};
             return false;
         }
         auto kind = templateNodeKind(variant->tag);
         if (!kind) {
-            error = "unknown template node: " + variant->tag;
+            error = {diag::Code::UnknownTemplateNode, {{"tag", variant->tag}}};
             return false;
         }
         auto* text = std::get_if<interpreter::StringValue>(&variant->args[0]->data);
         if (!text) {
-            error = "a template Node's payload is not a String";
+            error = {diag::Code::TemplateNodePayloadNotString, {}};
             return false;
         }
         nodes.push_back({*kind, text->value});
@@ -1938,6 +1956,7 @@ struct Lowerer {
         std::size_t from,
         std::size_t to,
         const Token& eof,
+        diag::Code noExpression,
         const char* what) -> ast::ExprPtr {
         std::vector<Token> slice(
             toks.begin() + static_cast<std::ptrdiff_t>(from),
@@ -1947,11 +1966,13 @@ struct Lowerer {
         auto expr = parseOrDiagnose([&] { return parser.parseExpr(); });
         if (!expr || !parser.diagnostics().empty()) {
             ok = false;
-            addError(
-                diagnostics, blame,
-                std::string("in a template ") + what + ": " +
-                    (parser.diagnostics().empty() ? std::string("expected an expression")
-                                                  : parser.diagnostics().front().message));
+            if (parser.diagnostics().empty()) {
+                addError(diagnostics, blame, noExpression);
+            } else {
+                addTemplateParseError(
+                    diagnostics, blame, parser.diagnostics().front(),
+                    std::string("in a template ") + what);
+            }
             return nullptr;
         }
         return expr;
@@ -1963,11 +1984,14 @@ struct Lowerer {
         auto expr = parseOrDiagnose([&] { return parser.parseExpr(); });
         if (!expr || !parser.diagnostics().empty()) {
             ok = false;
-            addError(
-                diagnostics, blame,
-                "in a template hole `" + text + "`: " +
-                    (parser.diagnostics().empty() ? std::string("expected an expression")
-                                                  : parser.diagnostics().front().message));
+            if (parser.diagnostics().empty()) {
+                addError(
+                    diagnostics, blame, diag::Code::TemplateHoleNotExpression, {{"text", text}});
+            } else {
+                addTemplateParseError(
+                    diagnostics, blame, parser.diagnostics().front(),
+                    "in a template hole `" + text + "`");
+            }
             return nullptr;
         }
         return expr;
@@ -2189,14 +2213,15 @@ struct Lowerer {
                     statements.push_back(finalValue());
                     auto cond = parseSlice(
                         shape.tokens, shape.keywordEnd, shape.tokens.size(), shape.eof,
-                        "elif condition");
+                        diag::Code::TemplateElifConditionNotExpression, "elif condition");
                     return {std::move(statements), Stop::Elif, std::move(cond), i + 1};
                 }
 
                 case ControlKind::LetVar: {
                     flushRun();
                     auto stmt = parseSlice(
-                        shape.tokens, 0, shape.tokens.size(), shape.eof, "let/var region");
+                        shape.tokens, 0, shape.tokens.size(), shape.eof,
+                        diag::Code::TemplateLetVarRegionNotExpression, "let/var region");
                     if (stmt) {
                         statements.push_back(std::move(stmt));
                     }
@@ -2208,7 +2233,7 @@ struct Lowerer {
                     flushRun();
                     auto cond = parseSlice(
                         shape.tokens, shape.keywordEnd, shape.tokens.size(), shape.eof,
-                        "if condition");
+                        diag::Code::TemplateIfConditionNotExpression, "if condition");
                     auto thenResult = lowerScope(i + 1, false);
                     ast::IfExpr ifExpr;
                     ifExpr.condition = cond ? std::move(cond) : stringLiteral("");
@@ -2235,7 +2260,7 @@ struct Lowerer {
                     }
                     if (stop != Stop::End) {
                         ok = false;
-                        addError(diagnostics, blame, "template `if` has no matching `end`");
+                        addError(diagnostics, blame, diag::Code::TemplateIfNoEnd);
                     }
                     // No else written: an if used as a value needs one on every
                     // arm, so an empty string stands in for "nothing here".
@@ -2255,12 +2280,13 @@ struct Lowerer {
 
                 case ControlKind::BlockOpener: {
                     flushRun();
-                    auto prefix =
-                        parseSlice(shape.tokens, 0, shape.blockOpenAt, shape.eof, "block call");
+                    auto prefix = parseSlice(
+                        shape.tokens, 0, shape.blockOpenAt, shape.eof,
+                        diag::Code::TemplateBlockCallNotExpression, "block call");
                     auto bodyResult = lowerScope(i + 1, false);
                     if (bodyResult.stop != Stop::End) {
                         ok = false;
-                        addError(diagnostics, blame, "template block has no matching `end`");
+                        addError(diagnostics, blame, diag::Code::TemplateBlockNoEnd);
                     }
                     ast::Lambda lambda;
                     for (const auto& p : shape.blockParams) {
@@ -2284,9 +2310,8 @@ struct Lowerer {
                     if (!attached) {
                         ok = false;
                         addError(
-                            diagnostics, blame,
-                            "template block `" + node.text +
-                                "` is not a call that can take a block");
+                            diagnostics, blame, diag::Code::TemplateBlockNotCall,
+                            {{"text", node.text}});
                         i = bodyResult.next;
                         break;
                     }
@@ -2309,7 +2334,8 @@ struct Lowerer {
                     flushRun();
                     if (!shape.tokens.empty()) {
                         auto stmt = parseSlice(
-                            shape.tokens, 0, shape.tokens.size(), shape.eof, "control region");
+                            shape.tokens, 0, shape.tokens.size(), shape.eof,
+                            diag::Code::TemplateControlRegionNotExpression, "control region");
                         if (stmt) {
                             statements.push_back(std::move(stmt));
                         }
@@ -2362,11 +2388,13 @@ auto parseParamType(
     Parser parser(lexer.tokenizeAll(), "<template>");
     auto type = parseOrDiagnose([&] { return parser.parseTypeExpr(); });
     if (!type || !parser.diagnostics().empty()) {
-        addError(
-            diagnostics, blame,
-            "in a template's `params:` frontmatter, `" + text + "` is not a type: " +
-                (parser.diagnostics().empty() ? std::string("expected a type")
-                                              : parser.diagnostics().front().message));
+        if (parser.diagnostics().empty()) {
+            addError(diagnostics, blame, diag::Code::TemplateParamNotType, {{"text", text}});
+        } else {
+            addTemplateParseError(
+                diagnostics, blame, parser.diagnostics().front(),
+                "in a template's `params:` frontmatter, `" + text + "` is not a type");
+        }
         return nullptr;
     }
     return type;
@@ -2387,9 +2415,9 @@ auto lowerTemplateFunction(
     std::vector<semantic::Diagnostic>& diagnostics) -> std::optional<LoweredTemplate> {
     std::vector<TemplateNode> nodes;
     std::vector<ExplicitParam> explicitParams;
-    std::string error;
+    ScanFailure error;
     if (!scanTemplateSource(source, timeout, nodes, explicitParams, error)) {
-        addError(diagnostics, blame, error);
+        addError(diagnostics, blame, error.code, std::move(error.args));
         return std::nullopt;
     }
 
@@ -2404,10 +2432,7 @@ auto lowerTemplateFunction(
         // their own "end" above — so reaching here means a stray
         // "end"/"else"/"elif" the pass never opened, i.e. the template's
         // control regions do not balance.
-        addError(
-            diagnostics, blame,
-            "template's control regions do not balance — an `end`, "
-            "`else` or `elif` with no opener");
+        addError(diagnostics, blame, diag::Code::TemplateUnbalanced);
         return std::nullopt;
     }
 
@@ -2489,20 +2514,15 @@ struct TemplateCallFolder {
 
         if (call->args.size() != 1 || !call->namedArgs.empty() || call->block) {
             addError(
-                diagnostics, slot->location,
-                "Template." + call->method +
-                    " takes exactly one argument: the template's source text");
+                diagnostics, slot->location, diag::Code::TemplateArity, {{"method", call->method}});
             ok = false;
             return true;
         }
         auto known = knownText(*call->args[0]);
         if (!known) {
             addError(
-                diagnostics, slot->location,
-                "Template." + call->method +
-                    "'s argument must be a compile-time-known string (a plain literal, "
-                    "or Kex.embed(...)) — the template's text has to be knowable to the "
-                    "compiler, not just to the running program");
+                diagnostics, slot->location, diag::Code::TemplateSourceNotKnown,
+                {{"method", call->method}});
             ok = false;
             return true;
         }
@@ -4431,7 +4451,7 @@ auto importConstants(
             if (!reported.insert(qualifiedName(scope, reference)).second) {
                 continue;
             }
-            std::string why;
+            ReifyFailure why;
             if (kex::mangle::hasScope(reference)) {
                 if (const auto found = visible.find(kex::mangle::scopeOf(reference));
                     found != visible.end()) {
@@ -4442,9 +4462,7 @@ auto importConstants(
                     }
                 }
             }
-            addError(
-                diagnostics, SourceLocation{},
-                "compile-time constant `" + reference + "` cannot be inlined: " + why);
+            addNotInlinable(diagnostics, reference, std::move(why));
             ok = false;
         }
         for (auto& item : items) {
@@ -4630,13 +4648,13 @@ auto expand(
             typeModules = evaluator.typeModules();
         } catch (const interpreter::EvaluationTimeout&) {
             addError(
-                diagnostics, blame,
-                "compile-time evaluation timed out after " +
-                    std::to_string(options.timeout.count()) + " ms");
+                diagnostics, blame, diag::Code::CompileTimeEvaluationTimedOut,
+                {{"ms", std::to_string(options.timeout.count())}});
             return false;
         } catch (const std::exception& crash) {
             addError(
-                diagnostics, blame, std::string("compile-time evaluation failed: ") + crash.what());
+                diagnostics, blame, diag::Code::CompileTimeEvaluationFailed,
+                {{"error", crash.what()}});
             return false;
         }
         for (std::size_t i = 0; i < names.size() && i < values.size(); i++) {
@@ -4686,11 +4704,9 @@ auto expand(
             if (!reportedFailures.insert(identity).second) {
                 continue;
             }
-            std::string why;
+            ReifyFailure why;
             (void)valueToLiteral(constants[owner].at(name), SourceLocation{}, why, {&layouts});
-            addError(
-                diagnostics, SourceLocation{},
-                "compile-time constant `" + identity + "` cannot be inlined: " + why);
+            addNotInlinable(diagnostics, identity, std::move(why));
             ok = false;
         }
         for (auto& item : items) {
@@ -4714,7 +4730,7 @@ auto expand(
     // Each entry is appended to the scope that declared its template.
     for (const auto& decl : generated) {
         if (decl.name.empty()) {
-            addError(diagnostics, decl.location, "generated declaration has an empty name");
+            addError(diagnostics, decl.location, diag::Code::GeneratedDeclarationEmptyName);
             ok = false;
             continue;
         }
@@ -4733,24 +4749,32 @@ auto expand(
             const bool isUpper = lead >= 'A' && lead <= 'Z';
             const bool isLower = (lead >= 'a' && lead <= 'z') || lead == '_';
             if (wantsUpper && !isUpper) {
-                addError(
-                    diagnostics, decl.location,
-                    std::string("generated ") +
-                        (std::holds_alternative<std::shared_ptr<ast::MakeDef>>(decl.function)
-                             ? "make target"
-                         : std::holds_alternative<std::shared_ptr<ast::RecordDef>>(decl.function)
-                             ? "record"
-                             : "type") +
-                        " name `" + decl.name + "` must start with an upper-case letter" +
-                        (isLower ? " — try `%{name.capitalize}`" : ""));
+                const bool make =
+                    std::holds_alternative<std::shared_ptr<ast::MakeDef>>(decl.function);
+                const bool record =
+                    std::holds_alternative<std::shared_ptr<ast::RecordDef>>(decl.function);
+                if (isLower) {
+                    addError(
+                        diagnostics, decl.location,
+                        make     ? diag::Code::GeneratedMakeTargetNotUpperTry
+                        : record ? diag::Code::GeneratedRecordNameNotUpperTry
+                                 : diag::Code::GeneratedTypeNameNotUpperTry,
+                        {{"name", decl.name}, {"fix", "%{name.capitalize}"}});
+                } else {
+                    addError(
+                        diagnostics, decl.location,
+                        make     ? diag::Code::GeneratedMakeTargetNotUpper
+                        : record ? diag::Code::GeneratedRecordNameNotUpper
+                                 : diag::Code::GeneratedTypeNameNotUpper,
+                        {{"name", decl.name}});
+                }
                 ok = false;
                 continue;
             }
             if (!wantsUpper && !isLower) {
                 addError(
-                    diagnostics, decl.location,
-                    "generated function name `" + decl.name +
-                        "` must start with a lower-case letter");
+                    diagnostics, decl.location, diag::Code::GeneratedFunctionNameNotLower,
+                    {{"name", decl.name}});
                 ok = false;
                 continue;
             }

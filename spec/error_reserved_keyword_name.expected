@@ -1,1 +1,1 @@
-spec/error_reserved_keyword_name.kex:12:5: error: `compiled` is a reserved keyword in Kex, so it cannot name a function — rename it
+spec/error_reserved_keyword_name.kex:12:5: [KEXEP-0001]: `compiled` is a reserved keyword in Kex, so it cannot name a function. Rename it

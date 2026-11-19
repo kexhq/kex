@@ -99,10 +99,11 @@ struct UnknownType {};
 // Unifies with any type as a universal subtype: a Never-typed branch is compatible
 // with any other branch type because it never actually produces a value at runtime.
 struct VoidType {
-    // Empty for ordinary non-returning expressions. Populated when Never is
-    // the normalization of an explicitly uninhabited type, so diagnostics can
-    // retain the reason after normalization.
-    std::string reason;
+    // Empty for ordinary non-returning expressions. Set when Never is the
+    // normalization of an intersection of two different nominal records, so
+    // a diagnostic can still name them.
+    std::string leftRecord;
+    std::string rightRecord;
 };
 
 // A signature-table placeholder meaning "any type satisfying `traitName`"
@@ -145,7 +146,7 @@ struct Type {
     static auto atom(std::string atomName = "") -> TypePtr;
     static auto unit() -> TypePtr;
     static auto unknown() -> TypePtr;
-    static auto voidType(std::string reason = {}) -> TypePtr;
+    static auto voidType(std::string leftRecord = {}, std::string rightRecord = {}) -> TypePtr;
     static auto named(const std::string& name, std::vector<TypePtr> args = {}) -> TypePtr;
     // The type of the nullary variant `variant` of the ADT `adt` (NamedType::variant).
     static auto variantOf(const std::string& adt, const std::string& variant) -> TypePtr;

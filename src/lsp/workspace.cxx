@@ -1,4 +1,5 @@
 #include "workspace.hxx"
+#include "../common/diagnostics.hxx"
 #include "../semantic/collect_pass.hxx"
 #include "../semantic/module_rules.hxx"
 #include "../semantic/name_index.hxx"
@@ -41,8 +42,7 @@ auto Workspace::updateFile(
         Parser parser(std::move(tokens), state.path);
         state.ast = parser.parseProgram();
         for (const auto& pd : parser.diagnostics()) {
-            state.diagnostics.push_back(
-                Diagnostic{Diagnostic::Level::Error, pd.location, pd.message});
+            state.diagnostics.push_back(kex::diagnostics::fromParseDiagnostic(pd));
         }
         // Empty token stream (e.g. lexer completely failed) means the AST
         // is also empty — no point running passes.

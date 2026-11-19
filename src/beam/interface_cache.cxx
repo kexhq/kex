@@ -120,7 +120,7 @@ constexpr TypeShape kTypeShapes[] = {
     {TypeTag::Intersection, "intersection", 2},
     {TypeTag::Record, "record", 2},
     {TypeTag::TypeVar, "typevar", 2},
-    {TypeTag::Void, "void", 2},
+    {TypeTag::Void, "void", 3},
     {TypeTag::Constrained, "constrained", 4},
 };
 
@@ -211,7 +211,8 @@ auto typeToTerm(const TypePtr& t) -> TermPtr {
             } else if constexpr (std::is_same_v<K, UnknownType>) {
                 return Term::atom("unknown");
             } else if constexpr (std::is_same_v<K, VoidType>) {
-                return typeTuple(TypeTag::Void, {Term::binary(node.reason)});
+                return typeTuple(
+                    TypeTag::Void, {Term::binary(node.leftRecord), Term::binary(node.rightRecord)});
             } else if constexpr (std::is_same_v<K, ConstrainedType>) {
                 return typeTuple(
                     TypeTag::Constrained, {Term::binary(node.varName), Term::binary(node.traitName),
@@ -316,7 +317,11 @@ auto typeFromSax(SaxReader& sax) -> TypePtr {
             return make(std::move(record));
         }
         case TypeTag::TypeVar: return make(TypeVar{static_cast<int>(sax.readInt())});
-        case TypeTag::Void: return make(VoidType{sax.readBinary()});
+        case TypeTag::Void: {
+            auto leftRecord = sax.readBinary();
+            auto rightRecord = sax.readBinary();
+            return make(VoidType{std::move(leftRecord), std::move(rightRecord)});
+        }
         case TypeTag::Constrained: {
             auto varName = sax.readBinary();
             auto traitName = sax.readBinary();

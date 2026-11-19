@@ -22,10 +22,10 @@ auto make(const SourceLocation& location) -> ast::ExprPtr {
 auto valueToLiteral(
     const ValuePtr& value,
     const SourceLocation& location,
-    std::string& error,
+    ReifyFailure& failure,
     const ReifyContext& context) -> ast::ExprPtr {
     if (!value) {
-        error = "no value";
+        failure = {diag::Code::ConstantNotInlinableNoValue, {}};
         return nullptr;
     }
     return std::visit(
@@ -39,9 +39,8 @@ auto valueToLiteral(
                 // result.
                 if (!context.placeholders || node.index >= context.placeholders->size() ||
                     !(*context.placeholders)[node.index]) {
-                    error = "`" + node.name +
-                            "` is not known at compile time and has no "
-                            "expression to fall back on";
+                    failure = {
+                        diag::Code::ConstantNotInlinablePlaceholder, {{"placeholder", node.name}}};
                     return nullptr;
                 }
                 // `clone` takes the owning pointer; borrow the node into one and
@@ -116,7 +115,7 @@ auto valueToLiteral(
                     }
                 }
                 for (const auto& element : node.elements) {
-                    auto lowered = valueToLiteral(element, location, error, context);
+                    auto lowered = valueToLiteral(element, location, failure, context);
                     if (!lowered) {
                         return nullptr;
                     }
@@ -126,7 +125,7 @@ auto valueToLiteral(
             } else if constexpr (std::is_same_v<T, interpreter::TupleValue>) {
                 ast::TupleExpr tuple;
                 for (const auto& element : node.elements) {
-                    auto lowered = valueToLiteral(element, location, error, context);
+                    auto lowered = valueToLiteral(element, location, failure, context);
                     if (!lowered) {
                         return nullptr;
                     }
@@ -136,11 +135,11 @@ auto valueToLiteral(
             } else if constexpr (std::is_same_v<T, interpreter::MapValue>) {
                 ast::MapExpr map;
                 for (const auto& [key, mapped] : node.entries) {
-                    auto loweredKey = valueToLiteral(key, location, error, context);
+                    auto loweredKey = valueToLiteral(key, location, failure, context);
                     if (!loweredKey) {
                         return nullptr;
                     }
-                    auto loweredValue = valueToLiteral(mapped, location, error, context);
+                    auto loweredValue = valueToLiteral(mapped, location, failure, context);
                     if (!loweredValue) {
                         return nullptr;
                     }
@@ -208,7 +207,8 @@ auto valueToLiteral(
                     [](const std::string* a, const std::string* b) { return *a < *b; });
                 names.insert(names.end(), extra.begin(), extra.end());
                 for (const auto* field : names) {
-                    auto lowered = valueToLiteral(node.fields.at(*field), location, error, context);
+                    auto lowered =
+                        valueToLiteral(node.fields.at(*field), location, failure, context);
                     if (!lowered) {
                         return nullptr;
                     }
@@ -256,7 +256,7 @@ auto valueToLiteral(
                     constructor.method = node.tag;
                     constructor.parenthesized = !node.args.empty();
                     for (const auto& arg : node.args) {
-                        auto lowered = valueToLiteral(arg, location, error, context);
+                        auto lowered = valueToLiteral(arg, location, failure, context);
                         if (!lowered) {
                             return nullptr;
                         }
@@ -270,7 +270,7 @@ auto valueToLiteral(
                     call.name = node.tag;
                     call.reifiedConstructor = true;
                     for (const auto& arg : node.args) {
-                        auto lowered = valueToLiteral(arg, location, error, context);
+                        auto lowered = valueToLiteral(arg, location, failure, context);
                         if (!lowered) {
                             return nullptr;
                         }
@@ -279,12 +279,46 @@ auto valueToLiteral(
                     out->kind = std::move(call);
                 }
             } else {
-                error = "a " + value->typeName() + " has no literal form";
+                failure = {
+                    diag::Code::ConstantNotInlinableNoLiteral, {{"type", value->typeName()}}};
                 return nullptr;
             }
             return out;
         },
         value->data);
+}
+
+auto valueToLiteral(
+    const ValuePtr& value,
+    const SourceLocation& location,
+    std::string& error,
+    const ReifyContext& context) -> ast::ExprPtr {
+    ReifyFailure failure;
+    auto literal = valueToLiteral(value, location, failure, context);
+    if (!literal) {
+        error = failure.reason();
+    }
+    return literal;
+}
+
+auto ReifyFailure::reason() const -> std::string {
+    const auto value = [&](const char* slot) {
+        for (const auto& [name, text] : args) {
+            if (name == slot) {
+                return text;
+            }
+        }
+        return std::string{};
+    };
+    switch (code) {
+        case diag::Code::ConstantNotInlinableNoValue: return "no value";
+        case diag::Code::ConstantNotInlinablePlaceholder:
+            return "`" + value("placeholder") +
+                   "` is not known at compile time and has no expression to fall back on";
+        case diag::Code::ConstantNotInlinableNoLiteral:
+            return "a " + value("type") + " has no literal form";
+        default: return {};
+    }
 }
 
 } // namespace kex::compiled

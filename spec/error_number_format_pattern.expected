@@ -1,1 +1,1 @@
-spec/error_number_format_pattern.kex:6:46: error: a required decimal cannot follow an optional one; write `.0#`
+spec/error_number_format_pattern.kex:6:46: [KEXEC-0054]: a required decimal cannot follow an optional one; write `.0#`

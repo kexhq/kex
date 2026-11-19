@@ -1,12 +1,14 @@
 #pragma once
 
 #include "../ast/ast.hxx"
+#include "../common/diagnostic_codes.hxx"
 #include "name_index.hxx"
 #include "typechecker.hxx"
 #include <functional>
 #include <optional>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -27,7 +29,38 @@ struct Diagnostic {
     // this empty, preserving the existing line/column behavior.
     std::optional<SourceLocation> endLocation = std::nullopt;
     std::vector<DiagnosticNote> notes;
+    // The kind of problem (kexhq/kex#656), and the values its template was
+    // filled with: `message` is the English rendering of the two, kept so a
+    // translation can render them again.
+    diag::Code code = diag::Code::None;
+    diag::Args args = {};
 };
+
+// A check that failed, thrown where the caller reports problems as an
+// exception (the REPL). what() is the first message; the diagnostics keep
+// their codes.
+struct DiagnosticError : std::runtime_error {
+    explicit DiagnosticError(Diagnostic diagnostic)
+        : DiagnosticError(std::vector<Diagnostic>{std::move(diagnostic)}) {}
+    explicit DiagnosticError(std::vector<Diagnostic> all)
+        : std::runtime_error(all.empty() ? std::string{} : all.front().message),
+          diagnostics(std::move(all)) {}
+    std::vector<Diagnostic> diagnostics;
+};
+
+// A diagnostic of a registered kind, its message rendered from the template.
+inline auto makeDiagnostic(
+    Diagnostic::Level level, diag::Code code, SourceLocation location, diag::Args args = {})
+    -> Diagnostic {
+    auto message = diag::render(code, args);
+    return Diagnostic{
+        .level = level,
+        .location = location,
+        .message = std::move(message),
+        .code = code,
+        .args = std::move(args),
+    };
+}
 
 class Analyzer {
 public:
@@ -291,7 +324,7 @@ private:
     auto checkLoopControl(SourceLocation loc, const std::string& keyword) -> void;
 
     // Helpers
-    auto error(SourceLocation loc, const std::string& msg) -> void;
+    auto error(diag::Code code, SourceLocation loc, diag::Args args = {}) -> void;
 
     std::vector<Diagnostic> m_diagnostics;
     TypeChecker m_checker;

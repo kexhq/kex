@@ -110,7 +110,7 @@ void Lowering::destructureRecordPattern(
             prefix.push_back({sub, std::move(acc)});
             destructureRecordPattern(sub, *nrp, prefix);
         } else {
-            throw LowerError("IR lower: unsupported record-field sub-pattern");
+            throw LowerError(diag::Code::UnsupportedRecordFieldSubPattern);
         }
     }
 }
@@ -436,7 +436,7 @@ auto Lowering::lowerPattern(const ast::PatternPtr& p) -> PatternPtr {
                         out->litKind = LitKind::None;
                         out->litText = "none";
                         break;
-                    default: throw LowerError("IR lower: unsupported literal pattern");
+                    default: throw LowerError(diag::Code::UnsupportedLiteralPattern);
                 }
             } else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
                 out->kind = PatKind::Construct;
@@ -468,15 +468,11 @@ auto Lowering::lowerPattern(const ast::PatternPtr& p) -> PatternPtr {
                     };
                     for (const auto& element : out->args) {
                         if (!isA(element, LitKind::Char)) {
-                            throw LowerError(
-                                "IR lower: a String's character can only "
-                                "be bound or matched against a Char literal");
+                            throw LowerError(diag::Code::StringCharPatternNotChar);
                         }
                     }
                     if (out->rest && !isA(out->rest, LitKind::String)) {
-                        throw LowerError(
-                            "IR lower: the rest of a String can only be "
-                            "bound or matched against a String literal");
+                        throw LowerError(diag::Code::StringRestPatternNotString);
                     }
                 }
             } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
@@ -493,14 +489,13 @@ auto Lowering::lowerPattern(const ast::PatternPtr& p) -> PatternPtr {
                 // what `Foo { x }` means — no extra guard required.
                 if (pn.typeName.empty()) {
                     throw LowerError(
-                        "IR lower: anonymous record pattern `{ ... }` is not "
-                        "supported in match/if-let; name the record "
-                        "(`Foo { ... }`) so its field layout is known");
+                        diag::Code::AnonymousRecordPattern,
+                        {{"pattern", "{ ... }"}, {"example", "Foo { ... }"}});
                 }
                 const auto recordName = hir->recordOfPattern(pn);
                 auto rec = records.find(recordName);
                 if (rec == records.end()) {
-                    throw LowerError("IR lower: unknown record `" + pn.typeName + "` in pattern");
+                    throw LowerError(diag::Code::UnknownRecordInPattern, {{"name", pn.typeName}});
                 }
                 out->kind = PatKind::Construct;
                 out->tag = recordName;
@@ -528,7 +523,7 @@ auto Lowering::lowerPattern(const ast::PatternPtr& p) -> PatternPtr {
                     }
                 }
             } else {
-                throw LowerError("IR lower: unsupported pattern kind");
+                throw LowerError(diag::Code::UnsupportedPatternKind);
             }
             return out;
         },

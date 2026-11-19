@@ -58,14 +58,18 @@ private:
     auto lexChar() -> Token;
     // After a backslash in a string or char literal: appends the escaped
     // character's UTF-8 bytes to `out`, or returns the error to report.
-    auto lexEscape(std::string& out) -> std::optional<std::string>;
+    struct EscapeError {
+        diag::Code code;
+        diag::Args args = {};
+    };
+    auto lexEscape(std::string& out) -> std::optional<EscapeError>;
     auto lexAtom() -> Token;
     auto lexQuotedAtom(char quote) -> Token;
     auto lexSpliceIdent() -> Token;
 
     auto makeToken(TokenType type) -> Token;
     auto makeToken(TokenType type, std::string value) -> Token;
-    auto errorToken(std::string message) -> Token;
+    auto errorToken(diag::Code code, diag::Args args = {}) -> Token;
 
     static auto isLowerAlpha(char c) -> bool;
     static auto isUpperAlpha(char c) -> bool;

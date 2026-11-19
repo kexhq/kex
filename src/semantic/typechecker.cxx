@@ -981,12 +981,13 @@ auto TypeChecker::reportUnknownMethods() -> void {
                 unresolved.fieldMayExist || m_guessedReceiverTypes.count(unresolved.receiver))) {
             continue;
         }
-        error(
-            unresolved.location,
-            "Undefined method `" + unresolved.name + "`" +
-                (unresolved.receiver.empty() || unresolved.receiver == "Unknown"
-                     ? std::string{}
-                     : " for `" + unresolved.receiver + "`"));
+        if (unresolved.receiver.empty() || unresolved.receiver == "Unknown") {
+            error(diag::Code::UndefinedMethod, unresolved.location, {{"name", unresolved.name}});
+        } else {
+            error(
+                diag::Code::UndefinedMethodFor, unresolved.location,
+                {{"name", unresolved.name}, {"receiver", unresolved.receiver}});
+        }
     }
     m_unresolvedMethods.clear();
     m_unresolvedMethodImports.clear();
@@ -1934,10 +1935,17 @@ auto TypeChecker::checkConstructorPayloads(
             });
     };
     if (argTypes.size() != arity && !anySameNamedTakes(argTypes.size())) {
-        error(
-            loc, "`" + name + "` takes " + std::to_string(arity) +
-                     (arity == 1 ? " value" : " values") + ", but got " +
-                     std::to_string(argTypes.size()));
+        if (arity == 1) {
+            error(
+                diag::Code::ConstructorArityOne, loc,
+                {{"name", name}, {"given", std::to_string(argTypes.size())}});
+        } else {
+            error(
+                diag::Code::ConstructorArity, loc,
+                {{"name", name},
+                 {"count", std::to_string(arity)},
+                 {"given", std::to_string(argTypes.size())}});
+        }
         return;
     }
     if (!info->declaredHere) {
@@ -1960,13 +1968,17 @@ auto TypeChecker::checkConstructorPayloads(
             continue;
         }
         // Once, however often the call is inferred.
-        auto message = "`" + name + "` expects " +
-                       (arity == 1 ? "a value" : "value " + std::to_string(i + 1)) + " of type " +
-                       typeToString(expected) + ", but got " + typeToString(actual);
+        const auto code =
+            arity == 1 ? diag::Code::ConstructorValueType : diag::Code::ConstructorValueTypeAt;
+        diag::Args args = {
+            {"name", name}, {"expected", typeToString(expected)}, {"actual", typeToString(actual)}};
+        if (arity != 1) {
+            args.emplace_back("index", std::to_string(i + 1));
+        }
         const auto key = std::string(loc.file) + ':' + std::to_string(loc.line) + ':' +
-                         std::to_string(loc.column) + ':' + message;
+                         std::to_string(loc.column) + ':' + diag::render(code, args);
         if (m_reportedOnce.insert(key).second) {
-            error(loc, message);
+            error(code, loc, std::move(args));
         }
     }
 }
@@ -2962,9 +2974,7 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def, const std::stri
                 return named && named->name == "Reply" && named->typeArgs.size() == 1;
             }();
             if (def.isServing && slotNames.count(ann->name) && ann->implicitFrom && !replyResult) {
-                error(
-                    ann->location,
-                    "`::>` is not valid on a cast slot — casts have no `from`; use `:>`");
+                error(diag::Code::CastSlotImplicitFrom, ann->location);
             }
             sig->params.insert(sig->params.begin(), receiver);
             // The target's `X` is one inference variable for the whole block.
@@ -3648,7 +3658,7 @@ auto TypeChecker::checkMatchExhaustiveness(
         }
         list += missing[i];
     }
-    error(loc, "Non-exhaustive match on " + adtName + ": missing case(s) " + list);
+    error(diag::Code::NonExhaustiveMatchOn, loc, {{"type", adtName}, {"cases", list}});
     return true;
 }
 
@@ -3736,8 +3746,8 @@ auto TypeChecker::checkUnionCoverage(
     }
     if (!missing.empty()) {
         error(
-            loc,
-            "Non-exhaustive match on " + typeToString(subject) + ": missing case(s) " + missing);
+            diag::Code::NonExhaustiveMatchOn, loc,
+            {{"type", typeToString(subject)}, {"cases", missing}});
     }
     return true;
 }
@@ -4032,7 +4042,7 @@ auto TypeChecker::checkPatternMatrix(
     for (const auto& row : missing) {
         list += (list.empty() ? "" : ", ") + shown(row.front());
     }
-    error(loc, "Non-exhaustive match: missing case(s) " + list);
+    error(diag::Code::NonExhaustiveMatch, loc, {{"cases", list}});
 }
 
 auto TypeChecker::expandTypeAliases(const TypePtr& type, int depth) const -> TypePtr {
@@ -4117,8 +4127,7 @@ auto TypeChecker::normalizeIntersection(TypePtr type) const -> TypePtr {
         if (concreteRecord && !typesEqual(concreteRecord, member)) {
             const auto& left = std::get<NamedType>(concreteRecord->kind).name;
             const auto& right = named->name;
-            return Type::voidType(
-                "incompatible nominal record tags `" + left + "` and `" + right + "`");
+            return Type::voidType(left, right);
         }
         concreteRecord = member;
     }
@@ -4335,11 +4344,14 @@ auto TypeChecker::resolveTypeExprNode(
                     // `Type<T>` names a type as a value; the record carries no T.
                     if (declared && *declared != args.size() && name != kex::names::kTypeRecord &&
                         m_diagnostics) {
-                        const auto message = "`" + node.name.dotted() + "` takes " +
-                                             std::to_string(*declared) + " type argument" +
-                                             (*declared == 1 ? "" : "s") + ", but " +
-                                             std::to_string(args.size()) + " " +
-                                             (args.size() == 1 ? "is" : "are") + " given";
+                        const auto code = *declared == 1     ? diag::Code::TypeArgumentCountOne
+                                          : args.size() == 1 ? diag::Code::TypeArgumentCountOneGiven
+                                                             : diag::Code::TypeArgumentCount;
+                        diag::Args slots = {
+                            {"name", node.name.dotted()},
+                            {"count", std::to_string(*declared)},
+                            {"given", std::to_string(args.size())}};
+                        const auto message = diag::render(code, slots);
                         // Once, though an annotation is resolved by several passes.
                         const bool reported = std::any_of(
                             m_diagnostics->begin(), m_diagnostics->end(), [&](const Diagnostic& d) {
@@ -4349,7 +4361,7 @@ auto TypeChecker::resolveTypeExprNode(
                                        d.location.file == typeExpr.location.file;
                             });
                         if (!reported) {
-                            error(typeExpr.location, message);
+                            error(code, typeExpr.location, std::move(slots));
                         }
                     }
                 }
@@ -4538,8 +4550,8 @@ auto TypeChecker::checkPatternConstructorOwner(const ast::Pattern& pattern, cons
                      }));
             if (!declared) {
                 error(
-                    pattern.location,
-                    "`" + ctor->module + "` has no constructor `" + ctor->name + "`");
+                    diag::Code::ModuleHasNoConstructor, pattern.location,
+                    {{"module", ctor->module}, {"name", ctor->name}});
                 return;
             }
         } else if (const auto declaring = moduleOfUnreachableConstructor(ctor->name);
@@ -4583,9 +4595,8 @@ auto TypeChecker::checkPatternConstructorOwner(const ast::Pattern& pattern, cons
             return;
         }
         error(
-            pattern.location, "`" + ctorName + "` is a constructor of `" + owner->second +
-                                  "`, but the value being matched has type `" +
-                                  typeToString(expected) + "` — this pattern can never match");
+            diag::Code::PatternConstructorOfOtherType, pattern.location,
+            {{"name", ctorName}, {"owner", owner->second}, {"type", typeToString(expected)}});
         return;
     }
 
@@ -4605,10 +4616,10 @@ auto TypeChecker::checkPatternConstructorOwner(const ast::Pattern& pattern, cons
                 for (const auto& owner : owners->second) {
                     if (owner.adt == adt && owner.arity != ctor->args.size()) {
                         error(
-                            pattern.location, "`" + ctorName + "` constructor takes " +
-                                                  std::to_string(owner.arity) +
-                                                  " value(s), but the pattern destructures " +
-                                                  std::to_string(ctor->args.size()));
+                            diag::Code::ConstructorPatternArity, pattern.location,
+                            {{"name", ctorName},
+                             {"count", std::to_string(owner.arity)},
+                             {"given", std::to_string(ctor->args.size())}});
                     }
                 }
             }
@@ -4630,8 +4641,8 @@ auto TypeChecker::checkPatternConstructorOwner(const ast::Pattern& pattern, cons
             known += (known.empty() ? "`" : ", `") + variant + "`";
         }
         error(
-            pattern.location, "`" + ctorName + "` is not a constructor of `" + adt + "` (it has " +
-                                  known + ") — this pattern can never match");
+            diag::Code::PatternNotAConstructorOf, pattern.location,
+            {{"name", ctorName}, {"type", adt}, {"constructors", known}});
         return;
     }
     if (owner->second == adt) {
@@ -4639,9 +4650,8 @@ auto TypeChecker::checkPatternConstructorOwner(const ast::Pattern& pattern, cons
     }
 
     error(
-        pattern.location, "`" + ctorName + "` is a constructor of `" + owner->second +
-                              "`, but the value being matched has type `" + adt +
-                              "` — this pattern can never match");
+        diag::Code::PatternConstructorOfOtherType, pattern.location,
+        {{"name", ctorName}, {"owner", owner->second}, {"type", adt}});
 }
 
 auto TypeChecker::checkPatternArity(const ast::Pattern& pattern) -> void {
@@ -4650,18 +4660,18 @@ auto TypeChecker::checkPatternArity(const ast::Pattern& pattern) -> void {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
                 std::optional<size_t> expected;
-                std::string kind = "constructor";
+                bool isRecord = false;
                 if (auto it = m_constructorArity.find(node.name); it != m_constructorArity.end()) {
                     expected = it->second;
                 } else if (auto record = m_recordFields.find(node.name);
                            record != m_recordFields.end()) {
                     expected = record->second.size();
-                    kind = "record";
+                    isRecord = true;
                 } else if (m_importedInterfaces) {
                     auto imported = m_importedInterfaces->recordArities.find(node.name);
                     if (imported != m_importedInterfaces->recordArities.end()) {
                         expected = imported->second;
-                        kind = "record";
+                        isRecord = true;
                     }
                 }
                 // An unregistered name (imported/opaque) carries no arity to check,
@@ -4670,11 +4680,12 @@ auto TypeChecker::checkPatternArity(const ast::Pattern& pattern) -> void {
                 if (expected && *expected != node.args.size() &&
                     !spellingHasSeveralArities(node.name)) {
                     error(
-                        pattern.location, "`" + node.name + "` " + kind + " takes " +
-                                              std::to_string(*expected) +
-                                              " value(s), but the "
-                                              "pattern destructures " +
-                                              std::to_string(node.args.size()));
+                        isRecord ? diag::Code::RecordPatternArity
+                                 : diag::Code::ConstructorPatternArity,
+                        pattern.location,
+                        {{"name", node.name},
+                         {"count", std::to_string(*expected)},
+                         {"given", std::to_string(node.args.size())}});
                 }
                 for (const auto& arg : node.args) {
                     if (arg) {
@@ -4699,13 +4710,15 @@ auto TypeChecker::checkPatternArity(const ast::Pattern& pattern) -> void {
                         known = true;
                     }
                     if (!known) {
-                        error(pattern.location, "`" + node.typeName + "` is not a record type");
+                        error(
+                            diag::Code::NotARecordType, pattern.location,
+                            {{"name", node.typeName}});
                     } else if (local != m_recordFields.end()) {
                         for (const auto& field : node.fields) {
                             if (!field.isStringKey && !local->second.count(field.name)) {
                                 error(
-                                    pattern.location, "record `" + node.typeName +
-                                                          "` has no field `" + field.name + "`");
+                                    diag::Code::RecordPatternUnknownField, pattern.location,
+                                    {{"record", node.typeName}, {"field", field.name}});
                             }
                         }
                     }
@@ -4960,21 +4973,25 @@ auto TypeChecker::bindDestructuredPattern(const ast::Pattern& pat, const TypePtr
             ; // permissive — can't determine the type at compile time
         else if (cp->name == "Just" && !std::holds_alternative<OptionalType>(resolved->kind)) {
             error(
-                pat.location,
-                "cannot match `Just` — expected Optional, got " + typeToString(resolved));
+                diag::Code::DestructureConstructorMismatch, pat.location,
+                {{"name", "Just"}, {"expected", "Optional"}, {"actual", typeToString(resolved)}});
             mismatchReported = true;
         } else if (cp->name == "Ok" || cp->name == "Error") {
             if (auto* nt = std::get_if<NamedType>(&resolved->kind)) {
                 if (nt->name != "Result") {
                     error(
-                        pat.location, "cannot match `" + cp->name + "` — expected Result, got " +
-                                          typeToString(resolved));
+                        diag::Code::DestructureConstructorMismatch, pat.location,
+                        {{"name", cp->name},
+                         {"expected", "Result"},
+                         {"actual", typeToString(resolved)}});
                     mismatchReported = true;
                 }
             } else {
                 error(
-                    pat.location, "cannot match `" + cp->name + "` — expected Result, got " +
-                                      typeToString(resolved));
+                    diag::Code::DestructureConstructorMismatch, pat.location,
+                    {{"name", cp->name},
+                     {"expected", "Result"},
+                     {"actual", typeToString(resolved)}});
                 mismatchReported = true;
             }
         }
@@ -5145,7 +5162,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         if (def.isFoul) {
             location.column += 5; // point after `foul `, at the function name
         }
-        error(location, "Overloads of `" + def.name + "` must all have the same purity");
+        error(diag::Code::OverloadPurityMismatch, location, {{"name", def.name}});
     }
     // The rule lowering's arity follows (ast::takesReceiverPattern): a literal
     // first parameter (`repeat(0)`) is an argument, not the receiver.
@@ -5240,11 +5257,10 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             !containsOpenType(inlineReturnType) &&
             !typesEqual(resolve(declared->result), resolve(inlineReturnType))) {
             error(
-                (*def.clauses[0].returnAnnotation)->location,
-                "inline return type for `" + def.name +
-                    "` disagrees with its separate annotation: " +
-                    typeToString(resolve(inlineReturnType)) + " versus " +
-                    typeToString(resolve(declared->result)));
+                diag::Code::InlineReturnTypeDisagrees, (*def.clauses[0].returnAnnotation)->location,
+                {{"name", def.name},
+                 {"inline", typeToString(resolve(inlineReturnType))},
+                 {"declared", typeToString(resolve(declared->result))}});
         }
     }
 
@@ -5464,10 +5480,11 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                         !isUndetermined(resolve(paramType)) &&
                         !argMatchesParam(passed, paramType)) {
                         error(
-                            (*param.type)->location, "`" + def.name + "` is required to take " +
-                                                         typeToString(passed) + " for `" +
-                                                         param.name.value_or("_") +
-                                                         "`, but takes " + typeToString(paramType));
+                            diag::Code::RequiredParamType, (*param.type)->location,
+                            {{"name", def.name},
+                             {"expected", typeToString(passed)},
+                             {"param", param.name.value_or("_")},
+                             {"actual", typeToString(paramType)}});
                     }
                 }
             } else if (auto selector = typeSelectorParameter(param)) {
@@ -5515,12 +5532,11 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 hasMatchingAnnotation = it->second.count(clause.params.size()) > 0;
             }
             if (!hasMatchingAnnotation && m_diagnostics) {
-                m_diagnostics->push_back(
-                    {Diagnostic::Level::Warning, def.location,
-                     "type annotation for '" + def.name + "' declares " +
-                         std::to_string(declared->params.size()) +
-                         " parameter(s) but definition has " +
-                         std::to_string(clause.params.size())});
+                warning(
+                    diag::Code::AnnotationArityMismatch, def.location,
+                    {{"name", def.name},
+                     {"declared", std::to_string(declared->params.size())},
+                     {"actual", std::to_string(clause.params.size())}});
             }
         }
         // The `.try`s of this clause's own body (not a block's, not a
@@ -5567,9 +5583,10 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             if ((isConcreteValue(declared) && !containsTypeVariable(declared)) ||
                 (declaredVar && *declaredVar != *produced && m_rigidVars.contains(*declaredVar))) {
                 error(
-                    def.location, "`" + def.name + "` declared to return " +
-                                      typeToString(effectiveReturnType) + " but body returns `" +
-                                      m_rigidVars.at(*produced) + "`, which stands for any type");
+                    diag::Code::ReturnsRigidTypeVariable, def.location,
+                    {{"name", def.name},
+                     {"expected", typeToString(effectiveReturnType)},
+                     {"variable", m_rigidVars.at(*produced)}});
             }
         }
         m_rigidVars = outerRigid;
@@ -5587,7 +5604,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         // Integer (inferred from literal arithmetic) isn't a mismatch.
         // Unless the clause rescues what its `.try`s fail with.
         if (effectiveReturnType && !clause.rescue) {
-            refuseUnheldTries("`" + def.name + "`", effectiveReturnType, clauseTries);
+            refuseUnheldTries(def.name, effectiveReturnType, clauseTries);
         }
         // A `return` leaves with its value as the result, so the value must be
         // what the clause declares, as the body's last value must (below).
@@ -5624,9 +5641,10 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                     !argMatchesParam(actual, effectiveReturnType) &&
                     !(value && literalCoercesTo(*value, effectiveReturnType))) {
                     error(
-                        returned->location, "`" + def.name + "` declared to return " +
-                                                typeToString(effectiveReturnType) +
-                                                " but returns " + typeToString(actual) + " here");
+                        diag::Code::ReturnsOtherTypeHere, returned->location,
+                        {{"name", def.name},
+                         {"expected", typeToString(effectiveReturnType)},
+                         {"actual", typeToString(actual)}});
                 }
             }
         }
@@ -5772,9 +5790,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                     return item && mentionsFrom(*item);
                 });
             if (!deferred) {
-                error(
-                    def.location, "call slot returns without `reply:` but never uses `from` for "
-                                  "a deferred reply");
+                error(diag::Code::CallSlotNoReply, def.location);
             }
             return true;
         }();
@@ -5829,10 +5845,12 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             }()) {
             const bool required = effectiveReturnType == requiredResult;
             error(
+                required ? diag::Code::RequiredReturnTypeMismatch
+                         : diag::Code::DeclaredReturnTypeMismatch,
                 def.location,
-                "`" + def.name + (required ? "` is required to return " : "` declared to return ") +
-                    typeToString(effectiveReturnType) + " but body returns " +
-                    typeToString(bodyType));
+                {{"name", def.name},
+                 {"expected", typeToString(effectiveReturnType)},
+                 {"actual", typeToString(bodyType)}});
         }
         // A result written as a type variable promises any type the caller
         // asks for: a body that answers one concrete type, which the
@@ -5846,9 +5864,10 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             const auto produced = resolve(bodyType);
             if (isConcreteValue(produced)) {
                 error(
-                    def.location, "`" + def.name + "` declared to return " +
-                                      typeToString(effectiveReturnType) + " but body returns " +
-                                      typeToString(produced));
+                    diag::Code::DeclaredReturnTypeMismatch, def.location,
+                    {{"name", def.name},
+                     {"expected", typeToString(effectiveReturnType)},
+                     {"actual", typeToString(produced)}});
             }
         }
         // Resolve TypeVars — body inference may have constrained unannotated
@@ -5866,8 +5885,8 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                               : resolve(bodyType);
         if (!effectiveReturnType && !clause.rescue && !clauseTries.empty() &&
             !clause.body.empty()) {
-            resultType = inferredFailingResult(
-                "`" + def.name + "`", clause.body, clauseTries, resultType, true);
+            resultType =
+                inferredFailingResult(def.name, clause.body, clauseTries, resultType, true);
         }
         // Trailing parameters with a default are optional at the call site.
         std::size_t required = clause.params.size();
@@ -6342,8 +6361,8 @@ auto TypeChecker::rejectRedefinedImports(const ast::MakeDef& def) -> void {
                 continue;
             }
             error(
-                function.location, "`" + function.name + "` is defined twice for receiver `" +
-                                       head + "`: here and in the prelude");
+                diag::Code::RedefinesPreludeMethod, function.location,
+                {{"name", function.name}, {"receiver", head}});
             return;
         }
     };
@@ -6492,10 +6511,10 @@ auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
                     listed += (listed.empty() ? "`" : ", `") + candidate + "`";
                 }
                 error(
-                    def.location, "Ambiguous trait: `" + written + "` could be " + listed +
-                                      " — write the one you mean");
+                    diag::Code::AmbiguousTrait, def.location,
+                    {{"name", written}, {"candidates", listed}});
             } else {
-                error(def.location, "Unknown trait: " + written);
+                error(diag::Code::UnknownTrait, def.location, {{"name", written}});
             }
             // Unresolved stays empty so the recorded list aligns with
             // `def.implements` by index; the lowerer skips it as a miss.
@@ -6503,16 +6522,17 @@ auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
             continue;
         }
         m_resolvedTraits[&def].push_back(traitName);
-        std::string prefix =
-            "make " + (typeName.empty() ? "?" : typeName) + ", implement: " + written + " — ";
+        const auto shownType = typeName.empty() ? std::string{"?"} : typeName;
         for (const auto& req : trait->requiredMethods) {
             auto it = provided.find(req.name);
             if (it == provided.end()) {
-                error(def.location, prefix + "missing required method '" + req.name + "'");
+                error(
+                    diag::Code::MissingRequiredMethod, def.location,
+                    {{"type", shownType}, {"trait", written}, {"method", req.name}});
             } else if (req.isFoul && !it->second) {
                 error(
-                    def.location,
-                    prefix + "method '" + req.name + "' must be declared foul (trait requires it)");
+                    diag::Code::RequiredMethodNotFoul, def.location,
+                    {{"type", shownType}, {"trait", written}, {"method", req.name}});
             }
         }
         // Register so satisfies() / argMatchesParam can verify trait usage.
@@ -6814,10 +6834,10 @@ auto TypeChecker::declareVar(
     if (const auto* existing = env.binding(name); existing && !existing->implicit) {
         const auto first = *existing;
         error(
-            where, first.isVar
-                       ? "Cannot redeclare '" + name + "': " +
-                             (isVar ? "already declared with 'var'" : "was declared with 'var'")
-                       : "Cannot redeclare immutable binding: " + name);
+            !first.isVar ? diag::Code::RedeclareImmutable
+            : isVar      ? diag::Code::RedeclareVarAgain
+                         : diag::Code::RedeclareVarAsLet,
+            where, {{"name", name}});
         defineVar(name, std::move(type), first);
         return;
     }
@@ -6995,23 +7015,56 @@ auto nameInferenceVariables(const std::string& message) -> std::string {
     }
     return renamed;
 }
+
+// The inference variables in a diagnostic's values named across all of
+// them, the way nameInferenceVariables names them across one message: the
+// same variable gets the same letter in every value, two different ones never
+// share a letter. The values are named as one text, joined by a separator no
+// type ever prints.
+auto nameInferenceVariablesIn(diag::Args& args) -> void {
+    constexpr char separator = '\x1f';
+    std::string joined;
+    for (const auto& [_, value] : args) {
+        joined += value;
+        joined += separator;
+    }
+    const auto named = nameInferenceVariables(joined);
+    std::size_t start = 0;
+    for (auto& [_, value] : args) {
+        const auto end = named.find(separator, start);
+        value = named.substr(start, end - start);
+        start = end + 1;
+    }
+}
 } // namespace
 
-auto TypeChecker::error(SourceLocation loc, const std::string& msg) -> void {
+auto TypeChecker::error(diag::Code code, SourceLocation loc, diag::Args args) -> void {
     if (m_diagnostics) {
-        m_diagnostics->push_back({Diagnostic::Level::Error, loc, nameInferenceVariables(msg)});
+        nameInferenceVariablesIn(args);
+        m_diagnostics->push_back(
+            makeDiagnostic(Diagnostic::Level::Error, code, loc, std::move(args)));
+    }
+}
+
+auto TypeChecker::warning(diag::Code code, SourceLocation loc, diag::Args args) -> void {
+    if (m_diagnostics) {
+        nameInferenceVariablesIn(args);
+        m_diagnostics->push_back(
+            makeDiagnostic(Diagnostic::Level::Warning, code, loc, std::move(args)));
     }
 }
 
 auto TypeChecker::typeMismatch(SourceLocation loc, const TypePtr& expected, const TypePtr& actual)
     -> void {
-    std::string message =
-        "Type mismatch: expected " + typeToString(expected) + ", got " + typeToString(actual);
+    diag::Args args = {{"expected", typeToString(expected)}, {"actual", typeToString(actual)}};
     if (const auto* never = std::get_if<VoidType>(&expected->kind);
-        never && !never->reason.empty()) {
-        message += " (" + never->reason + ")";
+        never && !never->leftRecord.empty()) {
+        args.emplace_back("left", never->leftRecord);
+        args.emplace_back("right", never->rightRecord);
+        error(diag::Code::TypeMismatchIncompatibleRecords, loc, std::move(args));
+        return;
     }
-    error(loc, std::move(message));
+    error(diag::Code::TypeMismatch, loc, std::move(args));
 }
 
 } // namespace kex::semantic
@@ -7263,11 +7316,12 @@ auto TypeChecker::bareMethodCall(
             }
             std::string expected;
             for (const auto arity : arities) {
-                expected += (expected.empty() ? "" : " or ") + std::to_string(arity);
+                expected += (expected.empty() ? "" : ", ") + std::to_string(arity);
             }
             error(
-                expr.location, "`" + name + "` expects " + expected + " argument(s), got " +
-                                   std::to_string(argTypes.size()));
+                arities.size() > 1 ? diag::Code::MethodArityChoice : diag::Code::MethodArity,
+                expr.location,
+                {{"name", name}, {"count", expected}, {"given", std::to_string(argTypes.size())}});
             return Type::unknown();
         }
     }
@@ -7503,9 +7557,8 @@ auto TypeChecker::reportConstructorOutOfScope(const std::string& name, const Sou
     for (const auto& owner : owners->second) {
         if (!owner.module.empty()) {
             error(
-                at, "`" + name + "` is a constructor of " + owner.adt + ", declared in module " +
-                        owner.module + ": write `" + owner.module + "." + name +
-                        "`, or bring it in with `using " + owner.module + "`");
+                diag::Code::ConstructorOutOfScope, at,
+                {{"name", name}, {"type", owner.adt}, {"module", owner.module}});
             return true;
         }
     }
@@ -7534,9 +7587,7 @@ auto TypeChecker::moduleOfUnreachableConstructor(const std::string& name) const 
 auto TypeChecker::reportUnreachableConstructor(
     const std::string& name, const std::string& declaring, const SourceLocation& at) -> void {
     if (!reportConstructorOutOfScope(name, at)) {
-        error(
-            at, "`" + name + "` is `" + declaring + "." + name +
-                    "` here: name it so, or bring it in with `using " + declaring + "`");
+        error(diag::Code::UnreachableConstructor, at, {{"name", name}, {"module", declaring}});
     }
 }
 
@@ -7560,7 +7611,9 @@ auto TypeChecker::reportAmbiguousImports(
                                  std::to_string(import.location.line) + ':' +
                                  std::to_string(import.location.column) + ':' + name;
                 if (m_reportedOnce.insert(key).second) {
-                    error(import.location, *merged.ambiguity);
+                    error(
+                        diag::Code::AmbiguousImportedName, import.location,
+                        {{"name", name}, {"first", merged.ambiguousWith}, {"second", module}});
                 }
             });
     }
@@ -7910,19 +7963,74 @@ auto TypeChecker::recordNames(const ast::Expr& expr) -> void {
     m_nameUses[&expr] = context;
 }
 
+namespace {
+// The codes of an undefined name, one set per kind of name a caller says
+// it looked for ("function", "variable", ...).
+struct UndefinedCodes {
+    diag::Code plain;
+    diag::Code hint;
+    diag::Code notImported;
+    diag::Code privateTo;
+    diag::Code notVisible;
+    diag::Code fileLocal;
+};
+
+auto undefinedCodes(const std::string& what) -> const UndefinedCodes& {
+    using C = diag::Code;
+    static const UndefinedCodes name{
+        C::UndefinedName,        C::UndefinedNameHint,       C::UndefinedNameNotImported,
+        C::UndefinedNamePrivate, C::UndefinedNameNotVisible, C::UndefinedNameFileLocal};
+    static const UndefinedCodes constructorOrType{
+        C::UndefinedConstructorOrType,
+        C::UndefinedConstructorOrTypeHint,
+        C::UndefinedConstructorOrTypeNotImported,
+        C::UndefinedConstructorOrTypePrivate,
+        C::UndefinedConstructorOrTypeNotVisible,
+        C::UndefinedConstructorOrTypeFileLocal};
+    static const UndefinedCodes variable{C::UndefinedVariable,
+                                         C::UndefinedVariableHint,
+                                         C::UndefinedVariableNotImported,
+                                         C::UndefinedVariablePrivate,
+                                         C::UndefinedVariableNotVisible,
+                                         C::UndefinedNameFileLocal};
+    static const UndefinedCodes function{C::UndefinedFunction,
+                                         C::UndefinedFunctionHint,
+                                         C::UndefinedFunctionNotImported,
+                                         C::UndefinedFunctionPrivate,
+                                         C::UndefinedFunctionNotVisible,
+                                         C::UndefinedFunctionFileLocal};
+    static const UndefinedCodes tag{
+        C::UndefinedTag,        C::UndefinedTagHint,       C::UndefinedTagNotImported,
+        C::UndefinedTagPrivate, C::UndefinedTagNotVisible, C::UndefinedNameFileLocal};
+    if (what == "constructor or type") {
+        return constructorOrType;
+    }
+    if (what == "variable") {
+        return variable;
+    }
+    if (what == "function") {
+        return function;
+    }
+    if (what == "tag") {
+        return tag;
+    }
+    return name;
+}
+} // namespace
+
 auto TypeChecker::reportOtherFilesTopLevel(
     const std::string& what, const std::string& name, const SourceLocation& at) -> bool {
     const auto found = m_fileLocalTopLevel.find(name);
     if (found == m_fileLocalTopLevel.end() || found->second == at.file || lookupVar(name)) {
         return false;
     }
-    const auto message = "Undefined " + what + ": `" + name + "` — " +
-                         std::filesystem::path(found->second).filename().string() +
-                         " declares it outside its module, for itself";
+    const auto code = undefinedCodes(what).fileLocal;
+    diag::Args args = {
+        {"name", name}, {"file", std::filesystem::path(found->second).filename().string()}};
     const auto key = std::string(at.file) + ':' + std::to_string(at.line) + ':' +
-                     std::to_string(at.column) + ':' + message;
+                     std::to_string(at.column) + ':' + diag::render(code, args);
     if (m_reportedOnce.insert(key).second) {
-        error(at, message);
+        error(code, at, std::move(args));
     }
     return true;
 }
@@ -7971,22 +8079,20 @@ auto TypeChecker::inferredFailingResult(
                        return std::holds_alternative<ast::ReturnExpr>(node.kind);
                    });
         });
-    const auto refuse = [&](const std::string& why) {
+    // Only a function refuses: a block keeps its body's result.
+    const auto refuse = [&](diag::Code code) {
         const auto shown = isUndetermined(body) ? std::string{"T"} : typeToString(body);
-        error(
-            first, "`.try` can fail, and " + who + " declares no result " + why +
-                       ": declare it, as `" + shown + "?` or `" + shown +
-                       " or! E`, or handle the failure with `trying` or a `rescue`");
+        error(code, first, {{"name", who}, {"type", shown}});
         return body;
     };
     // No one result holds both failures. A function must say which it
     // means; a block (an `it`, a `Task.start`, most often unread) keeps
     // its body's result, as before.
     if (optional && result) {
-        return isFunction ? refuse("and mixes an Optional's `.try` with a Result's") : body;
+        return isFunction ? refuse(diag::Code::TryMixedFailuresUndeclared) : body;
     }
     if (returns) {
-        return refuse("and `return`s");
+        return refuse(diag::Code::TryReturnsUndeclared);
     }
     if (isUndetermined(body)) {
         return body;
@@ -8009,10 +8115,13 @@ auto TypeChecker::refuseUnheldTries(
         return;
     }
     for (const auto& [at, _] : tries) {
-        error(
-            at, "`.try` can fail, and " + who + " returns " + typeToString(promised) +
-                    ", which cannot hold the failure: return a Result or an Optional, or "
-                    "handle it with `trying` or a `rescue`");
+        if (who.empty()) {
+            error(diag::Code::TryFailureNotHeldBlock, at, {{"type", typeToString(promised)}});
+        } else {
+            error(
+                diag::Code::TryFailureNotHeld, at,
+                {{"name", who}, {"type", typeToString(promised)}});
+        }
     }
 }
 
@@ -8031,10 +8140,10 @@ auto TypeChecker::blockFailingResult(
         return type;
     }
     if (block.returnAnnotation) {
-        refuseUnheldTries("this block", type, tries);
+        refuseUnheldTries({}, type, tries);
         return type;
     }
-    return inferredFailingResult("this block", block.body, tries, type, false);
+    return inferredFailingResult({}, block.body, tries, type, false);
 }
 
 auto TypeChecker::bareFunctionReachable(const std::string& name) const -> bool {
@@ -8137,26 +8246,31 @@ auto TypeChecker::reportUndefined(
     std::sort(declared.begin(), declared.end());
     candidates.insert(candidates.end(), declared.begin(), declared.end());
     std::erase(candidates, name);
-    auto message = "Undefined " + what + ": `" + name + "`";
+    const auto& codes = undefinedCodes(what);
     // A module declares it, but not where this can see: name that module
     // rather than guess at a spelling.
     std::vector<Signature> visible;
     std::set<std::string> hidden;
     reachableFreeFunctions(name, false, visible, hidden);
     hidden.erase("");
-    std::string owners;
-    for (const auto& module : hidden) {
-        owners += (owners.empty() ? "" : ", ") + std::string("`") + module + "." + name + "`" +
-                  (m_privateFreeFunctions.contains(module + "\n" + name)
-                       ? " is private to `" + module + "`"
-                       : " is not imported here");
-    }
-    if (!owners.empty()) {
-        message += " — " + owners;
+    if (hidden.size() == 1) {
+        const auto& module = *hidden.begin();
+        if (m_privateFreeFunctions.contains(module + "\n" + name)) {
+            error(codes.privateTo, at, {{"name", name}, {"module", module}});
+        } else {
+            error(codes.notImported, at, {{"name", name}, {"module", module}});
+        }
+    } else if (!hidden.empty()) {
+        std::string owners;
+        for (const auto& module : hidden) {
+            owners += (owners.empty() ? "`" : ", `") + module + "." + name + "`";
+        }
+        error(codes.notVisible, at, {{"name", name}, {"owners", owners}});
     } else if (const auto hint = closestName(name, candidates); !hint.empty()) {
-        message += " — did you mean `" + hint + "`?";
+        error(codes.hint, at, {{"name", name}, {"hint", hint}});
+    } else {
+        error(codes.plain, at, {{"name", name}});
     }
-    error(at, message);
 }
 
 } // namespace kex::semantic
@@ -8198,14 +8312,14 @@ auto TypeChecker::reportUnknownType(const ast::TypeName& name, const SourceLocat
         m_pendingUnknownTypes.push_back({&name, at});
         return;
     }
-    error(at, "Unknown type `" + name.dotted() + "`");
+    error(diag::Code::UnknownType, at, {{"name", name.dotted()}});
 }
 
 auto TypeChecker::reportPendingUnknownTypes() -> void {
     m_declarationsRegistered = true;
     for (const auto& [name, at] : m_pendingUnknownTypes) {
         if (!namesDeclaredType(name->dotted(), name->parts.empty() ? "" : name->parts.back())) {
-            error(at, "Unknown type `" + name->dotted() + "`");
+            error(diag::Code::UnknownType, at, {{"name", name->dotted()}});
         }
     }
     m_pendingUnknownTypes.clear();

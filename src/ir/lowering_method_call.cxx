@@ -202,10 +202,11 @@ auto Lowering::lowerValueReceiverCall(const ast::MethodCall& n) -> ExprPtr {
         hir->targetOf(n).kind == hir::TargetKind::Undecided && hir->decidesEveryCall() &&
         externalModules->receiverFunctions.count(m)) {
         throw LowerError(
-            "IR lower: the checker left `" + m + "/" +
-            std::to_string(
-                static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 + (n.block ? 1 : 0)) +
-            "` undecided in a checked program");
+            diag::Code::UndecidedCallInCheckedProgram,
+            {{"name", m},
+             {"arity",
+              std::to_string(
+                  static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 + (n.block ? 1 : 0))}});
     }
     if (externalModules && (!localMethods.count(m) || !localArityExists)) {
         if (const auto found = externalModules->receiverFunctions.find(m);
@@ -224,8 +225,7 @@ auto Lowering::lowerValueReceiverCall(const ast::MethodCall& n) -> ExprPtr {
                 byModule.size() == 1 ? byModule.begin() : byModule.find(names::kPreludeModule);
             if (chosen != byModule.end()) {
                 if (!n.namedArgs.empty()) {
-                    throw LowerError(
-                        "IR lower: named arguments to `" + m + "` reached lowering undecided");
+                    throw LowerError(diag::Code::NamedArgumentsUndecided, {{"function", m}});
                 }
                 std::vector<ExprPtr> args;
                 args.push_back(rv());
@@ -538,8 +538,7 @@ auto Lowering::lowerModuleFunctionCall(
         if (!n.namedArgs.empty()) {
             auto pit = fnParamNames.find(qualKey);
             if (pit == fnParamNames.end()) {
-                throw LowerError(
-                    "IR lower: named args to module function with unknown params: " + qualKey);
+                throw LowerError(diag::Code::NamedArgsUnknownModuleParams, {{"function", qualKey}});
             }
             // The clause the checker chose for these labels.
             const auto* signature = hir->selectedSignatureOf(n);
@@ -627,8 +626,7 @@ auto Lowering::lowerModuleFunctionCall(
         if (ait != externalModules->nameToAtom.end()) {
             std::vector<Binding> binds;
             if (!n.namedArgs.empty()) {
-                throw LowerError(
-                    "IR lower: named arguments to `" + qualKey + "` reached lowering unplaced");
+                throw LowerError(diag::Code::NamedArgumentsUnplaced, {{"function", qualKey}});
             }
             std::vector<ExprPtr> args;
             for (const auto& a : n.args) {
@@ -904,8 +902,7 @@ auto Lowering::lowerResolvedCall(
             threadsCapabilities() && target.isFoul && pnames.size() + 1 == expected;
         if (pnames.size() != expected && !contextCounted) {
             throw LowerError(
-                "IR lower: named args to imported function with unknown params: " +
-                target.backendFunction);
+                diag::Code::NamedArgsUnknownImportedParams, {{"function", target.backendFunction}});
         }
         std::vector<std::string> labels;
         for (const auto& [label, _] : n.namedArgs) {
@@ -916,8 +913,8 @@ auto Lowering::lowerResolvedCall(
         for (size_t i = 0; i < n.namedArgs.size(); ++i) {
             if (placed.labelSlots[i] == PlacedArguments::npos) {
                 throw LowerError(
-                    "IR lower: unknown named arg " + n.namedArgs[i].first + " for " +
-                    target.backendFunction);
+                    diag::Code::UnknownNamedArg,
+                    {{"label", n.namedArgs[i].first}, {"function", target.backendFunction}});
             }
             slots[placed.labelSlots[i]] = atomize(n.namedArgs[i].second, binds);
         }
@@ -1027,7 +1024,7 @@ auto Lowering::lowerResolvedCall(
             }
         }
         if (!source) {
-            throw LowerError("IR lower: missing source argument for " + trait + " dictionary");
+            throw LowerError(diag::Code::MissingDictionarySource, {{"trait", trait}});
         }
         args.push_back(atomize_ir(makeTraitDictionary(trait, *source), binds));
     }
@@ -1178,9 +1175,7 @@ auto Lowering::lowerRecordConstruction(const ast::Expr& e, const ast::RecordCons
     // The record the checker typed the construction as.
     const auto recordName = recordTypeOf(e);
     if (recordName.empty()) {
-        throw LowerError(
-            "IR lower: record construction `" + n.typeName +
-            "` the checker did not type as a known record");
+        throw LowerError(diag::Code::RecordConstructionUntyped, {{"name", n.typeName}});
     }
     struct LoweredEntry {
         const ast::RecordEntry* source;

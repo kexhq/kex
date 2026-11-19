@@ -51,6 +51,7 @@
 // Homebrew.
 #include "common/completion.hxx"
 #include "common/diagnostics.hxx"
+#include "common/diagnostic_codes.hxx"
 #include "common/file_io.hxx"
 #ifdef KEX_HAS_LSP
 #include "lsp/server.hxx"
@@ -69,7 +70,9 @@ using kex::diagnostics::colorizeMessage;
 using kex::diagnostics::errorCountPhrase;
 using kex::diagnostics::extractHint;
 using kex::diagnostics::jsonEscape;
+using kex::diagnostics::printAborted;
 using kex::diagnostics::printCollapseReport;
+using kex::diagnostics::printParseDiagnostic;
 using kex::diagnostics::printSemanticDiagnostic;
 using kex::driver::buildProgress;
 using kex::driver::g_memoizeDependencyExpansion;
@@ -127,6 +130,7 @@ auto printUsage(const char* progName) -> void {
               << "  -l, --lex         Print token stream\n"
               << "  -p, --parse       Print AST\n"
               << "  -j, --json        With --check: output diagnostics as JSON\n"
+              << "      --explain CODE  What a diagnostic code means (KEXET-0001)\n"
               << "      --lsp         Run the Kex language server over stdio\n"
               << "  -s, --summary     Print public API signatures (Kex syntax). With a name\n"
                  "                    instead of a file, the standard library's help:\n"
@@ -256,6 +260,7 @@ enum Value {
     Expand,
     CollapseReport,
     Skill,
+    Explain,
     Lsp,
     SourceRoot,
     Info,
@@ -342,6 +347,7 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
         // The guide to writing Kex, for a model that has just met the
         // language. Long-only, and named for what such a reader looks for.
         {"skill", no_argument, nullptr, Option::Skill},
+        {"explain", required_argument, nullptr, Option::Explain},
         {"no-colors", no_argument, nullptr, 'N'},
         {"colors", no_argument, nullptr, Option::Colors},
         {"no-prelude", no_argument, nullptr, Option::NoPrelude},
@@ -515,6 +521,7 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
                 options.mode = Mode::Check;
                 break;
             case Option::Skill: options.skillMode = true; break;
+            case Option::Explain: options.explainCode = optarg; break;
             case 't': options.dumpTypes = true; break;
             case 'E': options.mode = Mode::EmitCore; break;
             case 'e': {
@@ -635,8 +642,7 @@ auto checkEntry(
     // still checked, so one run reports both.
     std::vector<kex::semantic::Diagnostic> allDiags;
     for (const auto& parsed : parseDiagnostics) {
-        allDiags.push_back(
-            {kex::semantic::Diagnostic::Level::Error, parsed.location, parsed.message});
+        allDiags.push_back(kex::diagnostics::fromParseDiagnostic(parsed));
     }
     bool ok = analyzer.analyze(program) && parseDiagnostics.empty();
     allDiags.insert(allDiags.end(), analyzer.diagnostics().begin(), analyzer.diagnostics().end());
@@ -664,8 +670,12 @@ auto checkEntry(
                       << "    \"file\": \"" << jsonEscape(std::string(d.location.file)) << "\",\n"
                       << "    \"line\": " << d.location.line << ",\n"
                       << "    \"column\": " << d.location.column << ",\n"
-                      << "    \"severity\": \"" << (isErr ? "error" : "warning") << "\",\n"
-                      << "    \"message\": \"" << jsonEscape(d.message) << "\"";
+                      << "    \"severity\": \"" << (isErr ? "error" : "warning") << "\",\n";
+            if (const auto id = kex::diag::idOf(d.code); !id.empty()) {
+                std::cout << "    \"code\": \"" << id << "\",\n"
+                          << "    \"url\": \"" << jsonEscape(kex::diag::urlOf(d.code)) << "\",\n";
+            }
+            std::cout << "    \"message\": \"" << jsonEscape(d.message) << "\"";
             if (d.endLocation) {
                 std::cout << ",\n"
                           << "    \"end_line\": " << d.endLocation->line << ",\n"
@@ -876,11 +886,9 @@ auto runOnWalker(
     } else {
         int typeErrors = 0;
         if (!runSemanticCheck(program, filepath, &runAnalyzer, specBaseFile, &typeErrors)) {
-            std::cerr << kex::color::apply(kex::color::bold)
-                      << kex::color::apply(kex::color::magenta)
-                      << "Aborted:" << kex::color::apply(kex::color::reset) << " "
-                      << errorCountPhrase(typeErrors, "type")
-                      << " — fix before running (use --no-check to skip).\n";
+            printAborted(
+                errorCountPhrase(typeErrors, "type") +
+                ". Fix them before running, or skip the check with --no-check.");
             return 1;
         }
     }
@@ -1010,6 +1018,19 @@ int main(int argc, char* argv[]) {
 
     if (mode == Mode::Complete) {
         return printCompletions(completePrefix, optind < argc ? argv[optind] : nullptr);
+    }
+
+    // `--explain KEXET-0001`: the registry's entry for a diagnostic code.
+    if (options.explainCode) {
+        const auto* found = kex::diag::find(*options.explainCode);
+        if (!found) {
+            std::cerr << "kex: no diagnostic has the code `" << *options.explainCode << "`\n";
+            return 1;
+        }
+        std::cout << found->id << ": " << found->name << "\n\n"
+                  << "  " << found->english << "\n\n"
+                  << kex::diag::urlOf(found->code) << "\n";
+        return 0;
     }
 
     // `--skill` prints the guide, `--skill <topic>` one part of it. Neither
@@ -1210,24 +1231,15 @@ int main(int argc, char* argv[]) {
                 return 0;
             }
             for (const auto& pd : parser.diagnostics()) {
-                std::cerr << kex::color::apply(kex::color::gray) << pd.location.file << ":"
-                          << pd.location.line << ":" << pd.location.column << ":"
-                          << kex::color::apply(kex::color::reset) << " "
-                          << kex::color::apply(kex::color::bold)
-                          << kex::color::apply(kex::color::red)
-                          << "error:" << kex::color::apply(kex::color::reset) << " "
-                          << colorizeMessage(pd.message) << "\n";
+                printParseDiagnostic(pd);
             }
-            std::cerr << kex::color::apply(kex::color::bold)
-                      << kex::color::apply(kex::color::magenta)
-                      << "Aborted:" << kex::color::apply(kex::color::reset) << " "
-                      << errorCountPhrase(static_cast<int>(parser.diagnostics().size()), "syntax")
-                      << " — fix before "
-                      << (mode == Mode::Run || compileRun
-                              ? "running"
-                              : (mode == Mode::Parse || mode == Mode::Expand ? "parsing"
-                                                                             : "compiling"))
-                      << ".\n";
+            printAborted(
+                errorCountPhrase(static_cast<int>(parser.diagnostics().size()), "syntax") +
+                ". Fix them before " +
+                (mode == Mode::Run || compileRun
+                     ? "running"
+                     : (mode == Mode::Parse || mode == Mode::Expand ? "parsing" : "compiling")) +
+                ".");
             return 1;
         }
 
@@ -1309,10 +1321,7 @@ int main(int argc, char* argv[]) {
                 printSemanticDiagnostic(diagnostic);
             }
             if (!expanded) {
-                std::cerr << kex::color::apply(kex::color::bold)
-                          << kex::color::apply(kex::color::magenta)
-                          << "Aborted:" << kex::color::apply(kex::color::reset)
-                          << " compile-time expansion failed.\n";
+                printAborted("compile-time expansion failed.");
                 return false;
             }
             return true;

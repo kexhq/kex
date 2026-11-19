@@ -205,12 +205,9 @@ auto findReceiverConflicts(const ast::Program& program, const TypeChecker& check
             if (other.location.file != first.location.file) {
                 continue;
             }
-            Diagnostic diagnostic;
-            diagnostic.level = Diagnostic::Level::Error;
-            diagnostic.location = other.location;
-            diagnostic.message = "`" + method + "` is defined twice for receiver `" + type +
-                                 "` — declaration form carries no dispatch priority, so " +
-                                 "neither definition can claim the call";
+            auto diagnostic = makeDiagnostic(
+                Diagnostic::Level::Error, diag::Code::AmbiguousReceiverDefinition, other.location,
+                {{"method", method}, {"type", type}});
             diagnostic.notes.push_back({first.location, "the other definition is here"});
             diagnostics.push_back(std::move(diagnostic));
             break; // one report per (type, method, arity)

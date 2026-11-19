@@ -161,23 +161,18 @@ private:
             if (!contract.plainColon) {
                 continue;
             }
-            std::string message = "`" + contract.name +
-                                  "` is declared in this `make` block but "
-                                  "nothing defines it";
             auto fields = recordFieldNames.find(contract.target);
-            if (contract.fieldTyped) {
-                message += " — inside a `make` block `" + contract.name +
-                           " : …` declares a METHOD, not a record field" +
-                           (fields != recordFieldNames.end() && fields->second.count(contract.name)
-                                ? "; the field is already declared by `record " + contract.target +
-                                      "`, so drop this line"
-                                : "; declare fields in `record " + contract.target + "`");
-            } else {
-                message += " — a method the runtime provides is declared with `:>`, "
-                           "which makes the receiver implicit";
+            const auto code =
+                !contract.fieldTyped ? diag::Code::MakeContractUndefined
+                : fields != recordFieldNames.end() && fields->second.count(contract.name)
+                    ? diag::Code::MakeContractRepeatsField
+                    : diag::Code::MakeContractFieldTyped;
+            diag::Args args = {{"name", contract.name}};
+            if (code != diag::Code::MakeContractUndefined) {
+                args.emplace_back("record", contract.target);
             }
             diagnostics.push_back(
-                {Diagnostic::Level::Error, contract.location, std::move(message)});
+                makeDiagnostic(Diagnostic::Level::Error, code, contract.location, std::move(args)));
         }
     }
 
@@ -186,9 +181,7 @@ private:
     auto function(const ast::FunctionDef& def) -> void {
         if (def.name == "new" && !def.isFoul) {
             diagnostics.push_back(
-                {Diagnostic::Level::Error, def.location,
-                 "`new` is reserved for the next-state binding; use a name "
-                 "such as `build` for constructor functions"});
+                makeDiagnostic(Diagnostic::Level::Error, diag::Code::NewIsReserved, def.location));
         }
     }
 
