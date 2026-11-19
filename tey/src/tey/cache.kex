@@ -48,7 +48,15 @@ foul fetch(dep: Tey.Lockfile.Dependency) -> String or! String do
   let staging = stagingPath(dep)
   FS.Directory.deleteAll(staging) if FS.Directory.directory?(staging)
 
-  match Tey.Git.execute(["clone", "--filter=blob:none", "--no-checkout", Tey.Lockfile.dependencyGit(dep), staging]) do
+  # A partial clone (`--filter=blob:none`) only saves anything over the
+  # network. From a repository on this machine it can hang instead: when the
+  # source is shallow, as a CI checkout is, each blob the checkout fetches
+  # lazily starts another lazy fetch, and the clone took half an hour. A
+  # local clone copies or links the objects directly, so it needs no filter.
+  let source = Tey.Lockfile.dependencyGit(dep)
+  let local = source.startsWith?("file://") || FS.Directory.directory?(source)
+  let filter = if local then [] else ["--filter=blob:none"] end
+  match Tey.Git.execute(["clone", ...filter, "--no-checkout", source, staging]) do
     Error(error) => do
       FS.Directory.deleteAll(staging)
       return Error(error)
