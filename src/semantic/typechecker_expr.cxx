@@ -7869,7 +7869,18 @@ auto TypeChecker::checkCall(
                     return own && given && own->name == given->name &&
                            argMatchesParam(receiverArg, candidate);
                 });
-            if (!receiverAlreadyCandidate) {
+            // The block's method must also take this many arguments:
+            // `this.sum()` against `let sum(books)` is no call to it, and
+            // waving it through let the backends pick different methods.
+            bool arityFits = true;
+            if (auto arities = m_makeMethodArities.find(name);
+                arities != m_makeMethodArities.end() && !arities->second.empty()) {
+                arityFits = std::any_of(
+                    arities->second.begin(), arities->second.end(), [&](const auto& range) {
+                        return argTypes.size() >= range.first && argTypes.size() <= range.second;
+                    });
+            }
+            if (!receiverAlreadyCandidate && arityFits) {
                 for (const auto& owner : owners->second) {
                     if (argMatchesParam(receiverArg, resolve(owner))) {
                         return Type::unknown();

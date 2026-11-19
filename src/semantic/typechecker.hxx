@@ -542,6 +542,11 @@ private:
     // sites inside the block reach siblings defined lower in it through this
     // (kexhq/kex#292).
     std::unordered_map<std::string, std::vector<TypePtr>> m_makeMethodReceivers;
+    // How many arguments, the receiver included, each of those names takes:
+    // one [fewest, most] range per clause, since defaulted parameters may be
+    // left out. A call with any other count reaches none of them.
+    std::unordered_map<std::string, std::vector<std::pair<std::size_t, std::size_t>>>
+        m_makeMethodArities;
 
     // Pre-register provisional signatures (param types from inline annotations,
     // TypeVar result) for all non-annotation-declared FunctionDefs before any

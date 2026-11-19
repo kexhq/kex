@@ -1,0 +1,27 @@
+# kex: check-only
+# A call inside a `make` block reaches a sibling method defined lower in the
+# block only when it passes as many arguments as that method takes.
+#
+# `this.sum()` below takes no argument, and the block's `sum` takes one. The
+# checker let it through because the receiver fit, and the backends then
+# disagreed: the walker ran the block's method, and BEAM ran the prelude's
+# `sum` on a list of records and crashed (found by `make metamorphic-search`
+# on spec/make_block_sibling_name_collision.kex).
+module Shelf do
+  record Book do
+    id : Integer
+  end
+
+  make [Book] do
+    tally :> Integer
+    let tally = this.sum()
+
+    private do
+      let sum(books: [Book]) = books.reduce(0) { |acc, book| acc + book.id }
+    end
+  end
+end
+
+main do
+  IO.printLine("${[Shelf.Book { id: 1 }].tally}")
+end
