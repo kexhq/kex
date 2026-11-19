@@ -440,3 +440,15 @@ auto buildPrelude(const std::string& dir, bool verifyHir) -> int {
     }
     return 0;
 }
+
+// The prebuilt runtime's record layouts and variant tags, read once: a build
+// lowering many units asked for them once per unit.
+auto preludeRecordLayouts() -> const std::vector<kex::ir::ExternalRecordLayout>& {
+    static const auto layouts = loadPreludeRecordLayouts();
+    return layouts;
+}
+
+auto preludeVariantTags() -> const std::vector<kex::ir::ExternalVariantTag>& {
+    static const auto tags = loadPreludeVariantTags();
+    return tags;
+}

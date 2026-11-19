@@ -1,6 +1,7 @@
 #pragma once
 
 #include "traits.hxx"
+#include "../common/cow.hxx"
 #include <functional>
 #include <memory>
 #include <string>
@@ -79,7 +80,8 @@ struct ImportedModuleInterface {
     // of the program would, bare and by UFCS. The prelude's are reached
     // through its receiver functions instead.
     bool compiledApart = false;
-    std::unordered_map<std::string, std::vector<ImportedFunction>> exports;
+    // Shared by the copies every unit's interfaces make of the prelude's.
+    Cow<std::unordered_map<std::string, std::vector<ImportedFunction>>> exports;
 };
 
 // Exact backend ownership selected by semantic analysis for an imported call.
@@ -167,7 +169,8 @@ struct ImportedDistinctType {
 // package policy has approved their provider module.
 struct ImportedInterfaces {
     std::unordered_map<std::string, ImportedModuleInterface> modules;
-    std::unordered_map<std::string, std::vector<ImportedFunction>> receiverFunctions;
+    // Each name's functions shared between copies, as a module's exports are.
+    std::unordered_map<std::string, Cow<std::vector<ImportedFunction>>> receiverFunctions;
     std::vector<ImportedTraitConformance> traitConformances;
     std::vector<ImportedADT> adts;
     // Field count per imported record, so a pattern that destructures the

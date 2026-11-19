@@ -159,8 +159,16 @@ public:
     }
     // The innermost live recorder, or null.
     static auto current() -> DependencyRecorder*;
+    // Whether what it recorded reached outside the program (the clock, the
+    // environment) while it was live: then its files do not say all a result
+    // was made from.
+    auto reachedOutside() const -> bool {
+        return m_reachedOutside;
+    }
 
 private:
+    friend auto noteReachedOutside() -> void;
+    bool m_reachedOutside = false;
     friend auto noteDependency(const std::string& path) -> void;
     friend auto noteDependencies(const std::set<std::string>& paths) -> void;
     std::set<std::string> m_files;

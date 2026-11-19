@@ -25,7 +25,9 @@ auto standardCallbacks() -> const PassInstrumentationCallbacks& {
         const auto& options = passOptions();
         if (options.timePasses || timings::enabled()) {
             // Constructed before the handler is registered, so it outlives it.
-            static TimePasses timer;
+            // KEX_TIMINGS=units adds the costliest units to the report.
+            const char* timings = std::getenv("KEX_TIMINGS");
+            static TimePasses timer(timings && std::string_view(timings) == "units");
             timer.registerCallbacks(registered);
             std::atexit([] {
                 std::cerr << "pass timings:\n";

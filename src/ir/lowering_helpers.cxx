@@ -213,6 +213,16 @@ auto Lowering::withDisplayInfo(ExprPtr body, const std::string& moduleName) -> E
         std::vector<ExprPtr> ownerPairs;
         for (const auto& [name, info] : records) {
             (void)info;
+            // A unit compiled apart knows the records of the units below it
+            // too. One it neither declares nor has `make` functions for, with
+            // no owner named below, is its declaring unit's to register: this
+            // unit claiming it made the owner whichever such unit loaded last,
+            // and a runtime dispatch then went to a module that only had a
+            // copy of its accessors.
+            if (g_keepDeclaringModulesApart && externalRecordNames.count(name) &&
+                !localTypeModules.count(name) && !externalMethodOwners.count(name)) {
+                continue;
+            }
             auto t = std::make_unique<Expr>();
             t->node = MakeTuple{two(atomLit(name), atomLit(ownerModuleFor(name)))};
             ownerPairs.push_back(std::move(t));

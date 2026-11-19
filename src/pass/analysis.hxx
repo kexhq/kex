@@ -16,6 +16,8 @@
 // The manager computes it once per unit and keeps it until a pass reports
 // that it did not preserve it. An analysis that reads others names them in
 // `Dependencies`, so dropping one drops everything computed from it.
+#include "instrumentation.hxx"
+
 #include <cstddef>
 #include <functional>
 #include <map>
@@ -30,8 +32,6 @@
 #include <vector>
 
 namespace kex::pass {
-
-class PassInstrumentationCallbacks;
 
 // An analysis's identity: the address of its own key.
 struct AnalysisKey {};
@@ -159,7 +159,14 @@ public:
         if (registered == m_analyses.end()) {
             throw std::logic_error("analysis not registered: " + std::string(Analysis::name()));
         }
+        const bool instrumented = m_callbacks && m_callbacks->analysesInstrumented();
+        if (instrumented) {
+            m_callbacks->beforeAnalysis(Analysis::name(), unitRef(unit));
+        }
         auto computed = registered->second->run(unit, *this);
+        if (instrumented) {
+            m_callbacks->afterAnalysis(Analysis::name(), unitRef(unit));
+        }
         auto& value = static_cast<ResultModel<Analysis>&>(*computed).value;
         m_results.emplace(entry, std::move(computed));
         return value;

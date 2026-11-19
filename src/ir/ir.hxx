@@ -323,6 +323,11 @@ struct FunDef {
     // field anywhere in the program, and a `caption(kind)` in some module
     // (kexhq/kex#448). `mergeDuplicateFunctions` ejects it the same way.
     bool isFieldAccessor = false;
+    // A field accessor serving only records declared in other units that this
+    // one has no `make` functions for (set in unit builds alone). Their own
+    // units keep the accessor; this copy is dropped unless this unit calls it
+    // (lowerModules). Not serialized: it lives only while a unit is lowered.
+    bool externalOnlyAccessor = false;
     // A copy specialize-blocks made with a pure block in place, of a callee that
     // calls nothing but itself and Erlang's BIFs: no effect a fused loop
     // could reorder (passes/fuse). A block that reassigns variables of its

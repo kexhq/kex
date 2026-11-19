@@ -73,6 +73,9 @@ bool anyReachedOutside = false;
 
 auto noteReachedOutside() -> void {
     anyReachedOutside = true;
+    for (auto* recorder = DependencyRecorder::current(); recorder; recorder = recorder->m_outer) {
+        recorder->m_reachedOutside = true;
+    }
 }
 auto reachedOutside() -> bool {
     return anyReachedOutside;

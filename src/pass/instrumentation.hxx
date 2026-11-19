@@ -62,6 +62,11 @@ public:
     using ShouldRun = std::function<bool(std::string_view pass, const UnitRef& unit)>;
     using BeforePass = std::function<void(std::string_view pass, const UnitRef& unit)>;
     using AfterPass = std::function<void(std::string_view pass, const UnitRef& unit)>;
+    // Around an analysis the analysis manager actually computes, not one it
+    // answers from a still-valid result. Analyses nest when one asks for
+    // another, so these come in properly nested pairs.
+    using BeforeAnalysis = std::function<void(std::string_view analysis, const UnitRef& unit)>;
+    using AfterAnalysis = std::function<void(std::string_view analysis, const UnitRef& unit)>;
 
     auto registerShouldRun(ShouldRun callback) -> void {
         m_shouldRun.push_back(std::move(callback));
@@ -71,6 +76,15 @@ public:
     }
     auto registerAfterPass(AfterPass callback) -> void {
         m_after.push_back(std::move(callback));
+    }
+    auto registerBeforeAnalysis(BeforeAnalysis callback) -> void {
+        m_beforeAnalysis.push_back(std::move(callback));
+    }
+    auto registerAfterAnalysis(AfterAnalysis callback) -> void {
+        m_afterAnalysis.push_back(std::move(callback));
+    }
+    auto analysesInstrumented() const -> bool {
+        return !m_beforeAnalysis.empty() || !m_afterAnalysis.empty();
     }
 
     auto shouldRun(std::string_view pass, const UnitRef& unit) const -> bool {
@@ -91,11 +105,23 @@ public:
             callback(pass, unit);
         }
     }
+    auto beforeAnalysis(std::string_view analysis, const UnitRef& unit) const -> void {
+        for (const auto& callback : m_beforeAnalysis) {
+            callback(analysis, unit);
+        }
+    }
+    auto afterAnalysis(std::string_view analysis, const UnitRef& unit) const -> void {
+        for (const auto& callback : m_afterAnalysis) {
+            callback(analysis, unit);
+        }
+    }
 
 private:
     std::vector<ShouldRun> m_shouldRun;
     std::vector<BeforePass> m_before;
     std::vector<AfterPass> m_after;
+    std::vector<BeforeAnalysis> m_beforeAnalysis;
+    std::vector<AfterAnalysis> m_afterAnalysis;
 };
 
 // What a pass manager calls around one pass, through its analysis manager's

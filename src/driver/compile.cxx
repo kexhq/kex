@@ -18,6 +18,9 @@
 #include "dependencies.hxx"
 #include "build_support.hxx"
 #include "compile.hxx"
+#include <memory>
+#include <set>
+#include <future>
 #include "options.hxx"
 #include <algorithm>
 #include <cctype>
@@ -32,8 +35,8 @@
 #ifndef __EMSCRIPTEN__
 #include <cerrno>
 #include <csignal>
-#include <unistd.h>
 #endif
+#include <unistd.h>
 #include "../common/diagnostics.hxx"
 #include "../common/process.hxx"
 #include "../common/well_known.hxx"
@@ -505,6 +508,106 @@ struct OutputDirectory {
 // The build of one entry: the program pipeline (build_ir.hxx), or a cache
 // that answers for it. The modules it emitted, or nullopt when it stopped,
 // having said why.
+// erlc started on the units' modules while later units are still being
+// checked (kexhq/kex#672): the front end is one thread and erlc runs in
+// processes of its own, so the two overlap instead of following each other.
+// Modules gather until there are enough for a batch and the previous batch is
+// done; a batch compiles into a staging directory, whose beams go to the
+// output only once the whole build has succeeded, so a build that fails late
+// leaves nothing new behind. Whatever was not compiled here (the last
+// modules, a failed batch) is compiled with the rest at the end.
+// KEX_EARLY_ERLC=0 turns it off.
+class EarlyErlc {
+public:
+    explicit EarlyErlc(const std::string& outputDir)
+        : m_staging(outputDir + "/.kex-early-" + std::to_string(::getpid())) {}
+    EarlyErlc(const EarlyErlc&) = delete;
+    auto operator=(const EarlyErlc&) -> EarlyErlc& = delete;
+    ~EarlyErlc() {
+        collect();
+        std::error_code ec;
+        std::filesystem::remove_all(m_staging, ec);
+    }
+
+    static auto enabled() -> bool {
+        const char* value = std::getenv("KEX_EARLY_ERLC");
+        return !value || std::string_view(value) != "0";
+    }
+
+    auto add(const std::vector<kex::ir::EmitResult>& emitted) -> void {
+        m_pending.insert(m_pending.end(), emitted.begin(), emitted.end());
+        constexpr std::size_t kBatch = 24;
+        if (m_pending.size() >= kBatch && !busy()) {
+            launch();
+        }
+    }
+
+    // Waits for the batch still running; the modules compiled into staging.
+    auto finish() -> const std::set<std::string>& {
+        collect();
+        return m_compiled;
+    }
+
+    // Puts the staged beams beside the rest of the output.
+    auto moveInto(const std::string& outputDir) -> bool {
+        collect();
+        for (const auto& name : m_compiled) {
+            std::error_code ec;
+            std::filesystem::rename(
+                std::filesystem::path{m_staging} / (name + ".beam"),
+                std::filesystem::path{outputDir} / (name + ".beam"), ec);
+            if (ec) {
+                std::cerr << "error: cannot move " << name << ".beam into " << outputDir << "\n";
+                return false;
+            }
+        }
+        return true;
+    }
+
+private:
+    auto busy() const -> bool {
+        return m_running.valid() &&
+               m_running.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
+    }
+
+    auto launch() -> void {
+        collect();
+        std::error_code ec;
+        std::filesystem::create_directories(m_staging, ec);
+        std::vector<std::string> paths;
+        for (const auto& module : m_pending) {
+            auto path = m_staging + "/" + module.moduleName + ".core";
+            std::ofstream out(path);
+            out << module.source;
+            paths.push_back(std::move(path));
+        }
+        m_batch = std::move(m_pending);
+        m_pending.clear();
+        m_running = std::async(
+            std::launch::async, [batch = &m_batch, paths = std::move(paths), staging = m_staging] {
+                return compileCoreModules(*batch, paths, staging, true);
+            });
+    }
+
+    auto collect() -> void {
+        if (!m_running.valid()) {
+            return;
+        }
+        if (m_running.get()) {
+            for (const auto& module : m_batch) {
+                m_compiled.insert(module.moduleName);
+            }
+        }
+        m_batch.clear();
+    }
+
+    std::string m_staging;
+    std::vector<kex::ir::EmitResult> m_pending;
+    std::vector<kex::ir::EmitResult> m_batch;
+    std::future<bool> m_running;
+    std::set<std::string> m_compiled;
+};
+
 auto buildModules(
     Options& options,
     const std::string& filepath,
@@ -514,11 +617,17 @@ auto buildModules(
     std::map<std::string, kex::beam::KexiChunk>& chunks,
     std::vector<LoadedDep>& dependencies,
     std::string& specBaseFile,
-    bool& cached) -> std::optional<std::vector<kex::ir::EmitResult>> {
+    bool& cached,
+    EarlyErlc* early) -> std::optional<std::vector<kex::ir::EmitResult>> {
     const bool compileRun = options.compileRun;
     const bool gates = options.mode == Mode::Compile && !options.skipCheck;
     kex::build::Program build(
         program, {filepath, moduleRootsFor(filepath), &preludeSemanticInterfaces(), gates});
+    if (early) {
+        build.onEmitted = [early](const std::vector<kex::ir::EmitResult>& emitted) {
+            early->add(emitted);
+        };
+    }
     std::vector<kex::ir::EmitResult> fromRunCache;
     // `-c --run`: a run cache keyed by the whole closure's content answers for
     // the build once its files are loaded.
@@ -630,6 +739,7 @@ auto compileToBeam(
     }
 
     std::vector<kex::ir::EmitResult> modules;
+    std::unique_ptr<EarlyErlc> early;
     std::optional<std::string> runCacheKey;
     std::map<std::string, kex::beam::KexiChunk> chunks;
     std::vector<LoadedDep> dependencies;
@@ -645,9 +755,12 @@ auto compileToBeam(
         modules = std::move(*hit);
         cached = true;
     } else {
+        if (options.mode == Mode::Compile && EarlyErlc::enabled()) {
+            early = std::make_unique<EarlyErlc>(options.outputDir);
+        }
         auto built = buildModules(
             options, filepath, program, entryRawSourceForCache, runCacheKey, chunks, dependencies,
-            specBaseFile, cached);
+            specBaseFile, cached, early.get());
         if (!built) {
             return output.abandon();
         }
@@ -677,7 +790,21 @@ auto compileToBeam(
             return 0;
         }
         // The runtime and prelude beams were copied before the run-cache lookup.
-        if (!compileCoreModules(modules, corePaths, options.outputDir, !output.temporary.empty())) {
+        // Modules erlc already took while the build ran are not compiled again.
+        std::vector<kex::ir::EmitResult> remaining;
+        std::vector<std::string> remainingPaths;
+        const auto* compiledEarly = early ? &early->finish() : nullptr;
+        for (std::size_t i = 0; i < modules.size(); ++i) {
+            if (!compiledEarly || !compiledEarly->count(modules[i].moduleName)) {
+                remaining.push_back(modules[i]);
+                remainingPaths.push_back(corePaths[i]);
+            }
+        }
+        if (!compileCoreModules(
+                remaining, remainingPaths, options.outputDir, !output.temporary.empty())) {
+            return output.abandon();
+        }
+        if (early && !early->moveInto(options.outputDir)) {
             return output.abandon();
         }
         // What the next matching invocation reuses (kexhq/kex#323).

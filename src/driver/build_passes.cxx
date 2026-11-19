@@ -17,6 +17,7 @@
 #include "../pass/options.hxx"
 
 #include <algorithm>
+#include <deque>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -248,7 +249,7 @@ auto overlayOnView(const semantic::ImportedInterfaces& view, semantic::ImportedI
         return named && named->name.find('.') != std::string::npos && builtHere(named->name);
     };
     for (auto& [__, functions] : given.receiverFunctions) {
-        std::erase_if(functions, [&](const auto& function) {
+        kex::erase_if(functions, [&](const auto& function) {
             return builtHere(function.sourceModule) || onBuiltType(function);
         });
     }
@@ -262,10 +263,52 @@ auto overlayOnView(const semantic::ImportedInterfaces& view, semantic::ImportedI
     return mergeSemanticInterfaces(std::move(given), std::move(below));
 }
 
+// Which units below a unit reaches, as their digests: what the analyses
+// below are computed from, beside the prelude, which is the build's.
+auto belowKey(Unit& unit, UnitAnalysisManager& analyses) -> std::string {
+    std::string key;
+    for (const auto& digest : analyses.result<BelowAnalysis>(unit).digests) {
+        key += digest;
+        key += '\n';
+    }
+    return key;
+}
+
+auto BelowInterfacesAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
+    auto& recent = unit.program().recentBelowInterfaces;
+    const auto key = belowKey(unit, analyses);
+    if (auto found = recent.find(key)) {
+        return found;
+    }
+    // Marked reached here, once, rather than in each copy the units above
+    // make of it: a copy shares its tables until it changes one.
+    auto below = analyses.result<BelowAnalysis>(unit).registry.buildSemanticInterfaces();
+    markReachedUnits(below);
+    return recent.add(key, std::make_shared<const semantic::ImportedInterfaces>(std::move(below)));
+}
+
+auto UnitExternalsAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
+    auto& recent = unit.program().recentUnitExternals;
+    const auto key = belowKey(unit, analyses);
+    if (auto found = recent.find(key)) {
+        return found;
+    }
+    return recent.add(
+        key, std::make_shared<const ir::ExternalModules>(
+                 unitExternalModules(analyses.result<BelowAnalysis>(unit).registry)));
+}
+
 auto AvailableInterfacesAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
-    return overlayDescribedInterfaces(
-        unit.program().settings().interfaces,
-        analyses.result<BelowAnalysis>(unit).registry.buildSemanticInterfaces(), true);
+    auto& recent = unit.program().recentAvailableInterfaces;
+    const auto key = belowKey(unit, analyses);
+    if (auto found = recent.find(key)) {
+        return found;
+    }
+    // BelowInterfacesAnalysis marked its units reached already.
+    return recent.add(
+        key, std::make_shared<const semantic::ImportedInterfaces>(overlayDescribedInterfaces(
+                 unit.program().settings().interfaces,
+                 *analyses.result<BelowInterfacesAnalysis>(unit), /*reached=*/false)));
 }
 
 auto unitExternalModules(const beam::KexiRegistry& registry) -> ir::ExternalModules {
@@ -326,7 +369,8 @@ auto unitExternalModules(const beam::KexiRegistry& registry) -> ir::ExternalModu
 auto LinkAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
     const auto& registry = analyses.result<BelowAnalysis>(unit).registry;
     Result link{
-        unitExternalModules(registry), loadPreludeRecordLayouts(), loadPreludeVariantTags()};
+        *analyses.result<UnitExternalsAnalysis>(unit), preludeRecordLayouts(),
+        preludeVariantTags()};
     // Where each type's `make` functions are, for the runtime's dispatch on a
     // value: its declaring module may have none, and another unit may. A
     // `make` over a union (`make TypeRef | PatternRef`) owns each member.
@@ -356,11 +400,16 @@ auto LinkAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
     // (`Foldable`'s `any?` on `Data.Set`) in the module holding its `make`
     // functions, which forwards them to where its unit emitted them: receiver
     // functions for that type, at the arities of the prelude's generic ones.
-    std::map<std::string, std::vector<std::string>> traitDefaults;
-    for (const auto& trait : ::preludeSemanticInterfaces().traits) {
-        traitDefaults[trait.name] = trait.defaultMethods;
-    }
-    for (const auto& trait : registry.buildSemanticInterfaces().traits) {
+    // The prelude's never change, so they are read once.
+    static const auto preludeTraitDefaults = [] {
+        std::map<std::string, std::vector<std::string>> defaults;
+        for (const auto& trait : ::preludeSemanticInterfaces().traits) {
+            defaults[trait.name] = trait.defaultMethods;
+        }
+        return defaults;
+    }();
+    auto traitDefaults = preludeTraitDefaults;
+    for (const auto& trait : analyses.result<BelowInterfacesAnalysis>(unit)->traits) {
         traitDefaults[trait.name] = trait.defaultMethods;
     }
     for (const auto* module : registry.allLoadedModules()) {
@@ -414,25 +463,48 @@ auto LinkAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
     return link;
 }
 
+// A file whose expansion reads others: a template or an embed.
+auto readsWhileExpanding(const std::string& source) -> bool {
+    return sourceMentionsEmbed(source) || source.find("Template") != std::string::npos;
+}
+
 auto UnitCacheKeyAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
     auto& program = unit.program();
     if (unit.isEntry() || !program.unitCache) {
         return std::nullopt;
     }
     std::vector<cache::SeparateUnitCache::Source> sources;
+    // A Source views its text, so the stamps of what an expansion read are
+    // kept here until the key is made.
+    std::deque<std::string> stamps;
     for (const auto& path : unit.files()) {
         const auto* file = program.dependencyFile(path);
         if (!file) {
             return std::nullopt;
         }
         // A file that reads others while it compiles is not keyed by its own
-        // bytes alone.
+        // bytes alone. What a template or an embed reads is recorded as the
+        // file expands, so those files join the key, each by its stamp. A
+        // compiled block's sandbox can do more than read files, so it is not
+        // cached, nor a file whose expansion reached outside the program (the
+        // clock, the environment).
         const auto& source = *file->source;
-        if (sourceMentionsCompiledBlock(source) || sourceMentionsEmbed(source) ||
-            source.find("Template") != std::string::npos) {
+        if (sourceMentionsCompiledBlock(source)) {
             return std::nullopt;
         }
         sources.push_back({path, source});
+        if (readsWhileExpanding(source)) {
+            // Recorded, and only when its expansion stayed inside the program.
+            if (!file->reads) {
+                return std::nullopt;
+            }
+            for (const auto& read : *file->reads) {
+                stamps.push_back("read:" + read);
+                const auto& label = stamps.back();
+                stamps.push_back(compiled::fileStamp(read));
+                sources.push_back({label, stamps.back()});
+            }
+        }
     }
     const auto runtime = prebuiltRuntimeBeamDir();
     return program.unitCache->keyFor(
@@ -443,7 +515,9 @@ auto UnitCacheKeyAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Res
 
 auto HirAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
     auto& program = unit.program();
-    const auto& available = analyses.result<AvailableInterfacesAnalysis>(unit);
+    // Shared with other units reaching the same ones; kept alive by the
+    // analysis result until this unit is done with it.
+    const auto& available = *analyses.result<AvailableInterfacesAnalysis>(unit);
     Result checked;
     checked.analyzer = std::make_unique<semantic::Analyzer>(&available);
     // The full check, as the merged program gets it; names are reported for
@@ -453,7 +527,7 @@ auto HirAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
         program.settings().entryPath);
     // The providers lowering will see, so the check counts a call's the same.
     checked.analyzer->setLinkedModules(
-        providerModules(unitExternalModules(analyses.result<BelowAnalysis>(unit).registry)));
+        providerModules(*analyses.result<UnitExternalsAnalysis>(unit)));
     checked.clean = checked.analyzer->analyze(unit.ast);
     checked.diagnostics = checked.analyzer->diagnostics();
     if (checked.clean) {
@@ -590,6 +664,8 @@ auto AssemblePass::run(Unit& unit, UnitAnalysisManager& analyses) -> pass::Prese
     return pass::PreservedAnalyses::none()
         .preserve<ReachAnalysis>()
         .preserve<BelowAnalysis>()
+        .preserve<BelowInterfacesAnalysis>()
+        .preserve<UnitExternalsAnalysis>()
         .preserve<AvailableInterfacesAnalysis>()
         .preserve<LinkAnalysis>()
         .preserve<UnitCacheKeyAnalysis>();
@@ -843,12 +919,15 @@ auto EmitCorePass::run(Unit& unit, UnitAnalysisManager&) -> pass::PreservedAnaly
         unit.emitted.push_back(ir::emitCore(module));
     }
     writeSeparateCore(unit.emitted);
+    if (unit.program().onEmitted) {
+        unit.program().onEmitted(unit.emitted);
+    }
     return preservesAll();
 }
 
 auto DescribePass::run(Unit& unit, UnitAnalysisManager& analyses) -> pass::PreservedAnalyses {
     const auto& checked = analyses.result<HirAnalysis>(unit);
-    const auto& available = analyses.result<AvailableInterfacesAnalysis>(unit);
+    const auto& available = *analyses.result<AvailableInterfacesAnalysis>(unit);
     const auto& program = unit.ast;
     if (!unit.isEntry()) {
         // What the unit's modules would say of themselves once compiled.
@@ -1126,6 +1205,8 @@ auto runBuild(
     pass::crossRegisterProxies(unitAnalyses, moduleAnalyses);
     unitAnalyses.registerAnalysis<ReachAnalysis>();
     unitAnalyses.registerAnalysis<BelowAnalysis>();
+    unitAnalyses.registerAnalysis<BelowInterfacesAnalysis>();
+    unitAnalyses.registerAnalysis<UnitExternalsAnalysis>();
     unitAnalyses.registerAnalysis<AvailableInterfacesAnalysis>();
     unitAnalyses.registerAnalysis<LinkAnalysis>();
     unitAnalyses.registerAnalysis<UnitCacheKeyAnalysis>();
