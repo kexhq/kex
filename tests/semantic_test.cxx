@@ -2680,6 +2680,32 @@ int main() {
     });
 
     describe("Semantic — type aliases", []() {
+        it("passes an optional to a union that names it", []() {
+            assertTrue(noErrors(
+                "type Reply = String | Integer\n"
+                "type Outcome = Reply | Result<Reply, Any> | Reply?\n"
+                "take : Outcome -> Integer\n"
+                "let take(outcome) = 1\n"
+                "handle : (Integer -> Outcome) -> Integer\n"
+                "let handle(action) = 1\n"
+                "let found(names: [String]) -> String? = names.first\n"
+                "let lookup(n: Integer) -> String? = None\n"
+                "main do\n"
+                "  IO.printLine(take(found([\"a\"])))\n"
+                "  IO.printLine(handle(~lookup))\n"
+                "end\n"));
+        });
+
+        it("still refuses an optional where its union names no optional", []() {
+            assertTrue(hasError(
+                "type Reply = String | Integer\n"
+                "take : Reply -> Integer\n"
+                "let take(reply) = 1\n"
+                "let found(names: [String]) -> String? = names.first\n"
+                "main do IO.printLine(take(found([\"a\"]))) end\n",
+                "`take` expects argument 1 to be"));
+        });
+
         it("preserves typed local function params and returns through ~capture", []() {
             auto diagnostics = check(
                 "type Handler = Integer -> Integer\n"
