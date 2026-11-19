@@ -1049,6 +1049,15 @@ auto KexiRegistry::buildSemanticInterfaces() const -> kex::semantic::ImportedInt
         signature.result = expand(signature.result, 0);
     };
     if (!interfaces.typeAliases.empty()) {
+        // An alias body names other aliases too (`type Plug = Handler ->
+        // Handler`, `type Handler = Context -> Reply`). Left names, a
+        // signature written against the alias in an importing unit
+        // (`marked : String -> Lib.Plug`) held `Lib.Handler` where every
+        // imported signature, expanded below, holds its body, and the two
+        // never matched.
+        for (auto& [_, body] : interfaces.typeAliases) {
+            body = expand(body, 0);
+        }
         for (auto& [_, module] : interfaces.modules) {
             for (auto& [__, functions] : module.exports) {
                 for (auto& function : functions) {

@@ -85,9 +85,22 @@ end
 
 type Step = Request -> Request
 type Pair = (Integer, Bool)
+type Wrap = Step -> Step
+type Reached = String | Web.Plugs.Request
+type Reach = Request -> Reached
+type Relay = Reach -> Reach
 
 step : Step -> Step
 let step(body) = body
+
+around : Wrap -> Step
+let around(wrap) = wrap(do |request| request end)
+
+relayed : Relay -> String
+let relayed(relay) = match relay(do |request| request end)(Request { path: "/" }) do
+  Request { path } => path
+  text => text
+end
 )KEX");
         write("lib/tally.kex", R"KEX(module Tally
 
@@ -466,7 +479,7 @@ let join(first, second) = "${first}:${second}"
 
 const auto program = R"KEX(using Shapes
 using Columns, only: [define, change]
-using Web.Plugs, only: [Request, Step, Pair, step]
+using Web.Plugs, only: [Request, Step, Pair, Wrap, step, around, relayed]
 using Web.Html, as: Html
 using Tally, only: [Counter]
 using Store, only: [Blob]
@@ -503,6 +516,20 @@ end
 
 let flagged() -> Pair = (1, true)
 
+# An alias of another unit whose body names another of its aliases: the
+# closure is read as a `Wrap`, and `around` takes it as one.
+prefixed : String -> Wrap
+let prefixed(tag) = do |inner|
+  do |request| inner(Request { path: "${tag}${request.path}" }) end
+end
+
+# The same, through a union naming a qualified type, which is an alias and
+# not an ADT whose constructors are `String` and `Request`.
+relaying : String -> Web.Plugs.Relay
+let relaying(tag) = do |inner|
+  do |request| inner(Request { path: "${tag}${request.path}" }) end
+end
+
 # Which `showValue` runs is known only from the value: each unit's for its
 # own type, the prelude's for an Integer.
 let presented(value: Showable) -> String = "${value}"
@@ -529,6 +556,8 @@ main do
   IO.printLine(Html.text("x").words)
   IO.printLine(passed()(Request { path: "/" }).path)
   IO.printLine(flagged())
+  IO.printLine(around(prefixed("/wrapped"))(Request { path: "/" }).path)
+  IO.printLine(relayed(relaying("/relayed")))
   IO.printLine(shapes().length)
   IO.printLine({"a": 1}.get("a"))
   IO.printLine(Web.Route.get("ab", 2))
@@ -615,6 +644,9 @@ foul timed(server: Server<Counter>) = server.reset(within: 10)
             assertTrue(
                 ran.find("\nroute /maybe\n") != std::string::npos,
                 "a block giving an Optional did not reach the union naming it: " + ran);
+            assertTrue(
+                ran.find("\n/wrapped/\n/relayed/\n") != std::string::npos,
+                "a closure declared as another unit's nested alias did not run: " + ran);
             assertTrue(
                 ran.find("\nbag true\n") != std::string::npos,
                 "a trait default another unit's type inherits did not run: " + ran);
