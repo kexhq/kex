@@ -4591,8 +4591,27 @@ auto TypeChecker::argMatchesParam(const TypePtr& writtenArg, const TypePtr& writ
         auto* argOpt = std::get_if<OptionalType>(&argType->kind);
         return argOpt && argMatchesParam(argOpt->inner, paramOpt->inner);
     }
-    // An optional never stands for its payload: `Just(0)` is no Integer.
+    // An optional never stands for its payload: `Just(0)` is no Integer. It
+    // is a member of a union that names it, though: `String?` is a
+    // `String | String?`. Refused here before the union rule below could ask
+    // the members, a block ending in a `.try` on an Optional fit no
+    // `Context -> Reply | Reply?` parameter it was not already typed from.
     if (std::holds_alternative<OptionalType>(argType->kind)) {
+        const auto* paramUnion = std::get_if<UnionType>(&paramType->kind);
+        if (!paramUnion) {
+            return false;
+        }
+        for (const auto& member : paramUnion->members) {
+            // Only an optional member, or a union nesting one (`Reply |
+            // Outcome`): a bare `String` member still refuses it.
+            const auto expanded = member ? resolve(expandTypeAliases(member)) : nullptr;
+            if (expanded &&
+                (std::holds_alternative<OptionalType>(expanded->kind) ||
+                 std::holds_alternative<UnionType>(expanded->kind)) &&
+                argMatchesParam(argType, member)) {
+                return true;
+            }
+        }
         return false;
     }
     auto isUnitLike = [](const TypePtr& t) -> bool {

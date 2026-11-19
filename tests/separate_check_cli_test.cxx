@@ -348,6 +348,21 @@ make Marks.Mark do
   let loud -> String = Marks.exclaimed(@text)
 end
 )KEX");
+        write("lib/web/routes.kex", R"KEX(module Web.Routes
+
+record Context do
+  path : String
+end
+
+type Reply = String | Web.Routes.Context
+type Outcome = Reply | Result<Reply, Any> | Reply?
+type Action = Context -> Outcome
+
+get : String -> Action -> String
+let get(path, action) = "route ${path}"
+get : String -> Block<Outcome> -> String
+let get(path, block) = "block ${path}"
+)KEX");
     }
 
     ~Package() {
@@ -475,6 +490,7 @@ using Tokens, only: [Token]
 using FS
 using ThingIds, only: [ThingId]
 using Conditions, only: [Cond]
+using Web.Routes
 
 foul read(server: Server<Counter>) -> Result<Integer, CallError> = server.get()
 foul readSoon(server: Server<Counter>) -> Result<Integer, CallError> = server.get(within: 100)
@@ -546,6 +562,9 @@ main do
   IO.printLine("x".as(ThingId).empty?)
   IO.printLine(either(Conditions.One(1), Conditions.One(2)))
   IO.printLine(both(Conditions.One(1), Conditions.One(2)))
+  # A block ending in a `.try` on an Optional is an `Outcome`'s `Reply?`,
+  # through the bare `get` the prelude's own overloads share a name with.
+  IO.printLine(get("/maybe", do |_| "${[1].first.try}" end))
 end
 )KEX";
 
@@ -593,6 +612,9 @@ foul timed(server: Server<Counter>) = server.reset(within: 10)
             assertTrue(
                 ran.find("\nhandle true ab\n") != std::string::npos,
                 "a make function of a module named like its type did not run: " + ran);
+            assertTrue(
+                ran.find("\nroute /maybe\n") != std::string::npos,
+                "a block giving an Optional did not reach the union naming it: " + ran);
             assertTrue(
                 ran.find("\nbag true\n") != std::string::npos,
                 "a trait default another unit's type inherits did not run: " + ran);
