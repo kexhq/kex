@@ -70,7 +70,7 @@ main do
   IO.printLine((1..5).last)
   IO.printLine((1..5).length)
   IO.printLine((1..5).count)
-  IO.printLine((1..5).reverse)
+  IO.printLine((1..5).reverse.items)
   IO.printLine((1..5).join(","))
   IO.printLine((1..5).take(2))
   IO.printLine((1..5).max)

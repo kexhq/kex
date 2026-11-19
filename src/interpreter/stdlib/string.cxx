@@ -415,6 +415,21 @@ auto Evaluator::registerStringBuiltins() -> void {
         }
         // Range.contains?(n)
         if (auto* range = std::get_if<RangeValue>(&args[0]->data)) {
+            if (range->step != 1) {
+                // Stepped or descending: one of the values the step reaches.
+                int64_t code = 0;
+                if (auto* i = std::get_if<IntValue>(&args[1]->data); i && !range->isChar) {
+                    code = i->value;
+                } else if (auto* c = std::get_if<CharValue>(&args[1]->data); c && range->isChar) {
+                    code = static_cast<int64_t>(c->value);
+                } else {
+                    return Value::boolean(false);
+                }
+                const auto offset = code - range->start;
+                const auto towardsEnd = range->step > 0 ? code <= range->end : code >= range->end;
+                return Value::boolean(
+                    offset % range->step == 0 && offset / range->step >= 0 && towardsEnd);
+            }
             if (auto* i = std::get_if<IntValue>(&args[1]->data)) {
                 return Value::boolean(i->value >= range->start && i->value <= range->end);
             }

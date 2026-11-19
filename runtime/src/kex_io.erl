@@ -598,6 +598,8 @@ inspect_string(X) when is_atom(X) ->
 %% generic tuple clauses below printed its representation, `(:Range, 1, 10)`.
 inspect_string({'Range', _, _} = R) ->
     to_string(R);
+inspect_string({'Range', _, _, _} = R) ->
+    to_string(R);
 inspect_string({'FileHandle', _Device, Path}) ->
     "<FileHandle: " ++ inspect_string(Path) ++ ">";
 inspect_string({'Binary', Bin}) when is_binary(Bin) ->
@@ -706,6 +708,7 @@ value_type_name(X) when is_float(X) -> "Float";
 value_type_name(true) -> "Bool";
 value_type_name(false) -> "Bool";
 value_type_name({'Range', _, _}) -> "Range";
+value_type_name({'Range', _, _, _}) -> "Range";
 value_type_name({'Char', _}) -> "Char";
 value_type_name({'Binary', Bin}) when is_binary(Bin) -> "Binary";
 value_type_name(X) when is_list(X) -> list_type_name(X);
@@ -766,6 +769,9 @@ to_string_optional(X) -> {'Just', to_string_bin(X)}.
 % numbers. A [Char] is a LIST too — it is not a String — so it prints as one.
 to_string({'Range', {'Char', A}, {'Char', B}}) -> [$', A, $', $., $., $', B, $'];
 to_string({'Range', A, B}) -> to_string(A) ++ ".." ++ to_string(B);
+%% A stepped range shows as it is written: `(1..10).by(2)`.
+to_string({'Range', A, B, Step}) ->
+    "(" ++ to_string({'Range', A, B}) ++ ").by(" ++ integer_to_list(Step) ++ ")";
 to_string(X) when is_binary(X)  -> unicode:characters_to_list(X);
 to_string({'Char', C})          -> [C];
 to_string(X) when is_list(X) ->

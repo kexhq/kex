@@ -151,6 +151,9 @@ struct RangeValue {
     // Preserve non-machine-integer bounds without narrowing or materialization.
     ValuePtr lower;
     ValuePtr upper;
+    // Enumerated from start towards end by this much: `(1..10).by(2)` is 2,
+    // `10.downTo(1)` is -1. Never 0.
+    int64_t step = 1;
 };
 
 // A stream is a chain of cells. Forcing one answers the element there and the
@@ -359,6 +362,12 @@ struct Value {
 };
 
 auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool;
+
+// How many elements an Integer or Char range enumerates, from its start
+// towards its end by its step.
+auto rangeLength(const RangeValue& range) -> int64_t;
+// Its elements, in order. A Float range is not enumerable and throws.
+auto rangeElements(const RangeValue& range) -> std::vector<ValuePtr>;
 
 // The method-dispatch type name for a value — the name used for UFCS resolution
 // (e.g. "Integer" for both IntValue/BigIntValue, "Process" for ProcessValue).
