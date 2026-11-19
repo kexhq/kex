@@ -1,0 +1,29 @@
+# Every kind of value an interpolated string holds, shown the same way on
+# both backends. On BEAM a hole's showValue is joined as the binary it is
+# (kexhq/kex#671), and integers and strings take a shorter way through
+# Kex.show; this pins what each one prints.
+
+record Point do
+  x : Integer
+  y : Integer
+end
+
+record Money do
+  cents : Integer
+end
+
+make Money do
+  let showValue -> String = "€${@cents / 100} and ${@cents % 100} cents"
+end
+
+main do
+  IO.printLine("integers: ${0} ${42} ${-7} ${12345678901234567890123}")
+  IO.printLine("floats: ${1.5} ${1.0} ${-0.25} ${1.0e20} ${0.1 + 0.2} ${-0.0}")
+  IO.printLine("strings: ${"plain"} ${""} ${"héllo ✓ 𝄞"}")
+  IO.printLine("others: ${'k'} ${true} ${false} ${Just(3)} ${None} ${[1, 2]} ${{a: 1}}")
+  IO.printLine("record: ${Point { x: 1, y: 2 }}")
+  IO.printLine("own showValue: ${Money { cents: 1205 }}")
+  let name = "Ada"
+  IO.printLine("nested: ${"<${name}>"}, then ${name.count} letters")
+  IO.printLine("${42}")
+end

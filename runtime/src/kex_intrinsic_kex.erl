@@ -55,6 +55,16 @@ inspect(Value) ->
 inspect(Value, true) -> kex_io:inspect_value(Value);
 inspect(Value, false) -> inspect(Value).
 
+%% The common cases first (kexhq/kex#671): an integer is written straight to
+%% a binary, and a string is its own text once it is known to be valid UTF-8.
+%% Everything else goes through kex_io:to_string/1, whose clauses test ranges,
+%% characters, lists and atoms before numbers.
+show(Value) when is_integer(Value) -> integer_to_binary(Value);
+show(Value) when is_binary(Value) ->
+    case unicode:characters_to_binary(Value) of
+        Text when is_binary(Text) -> Text;
+        _ -> unicode:characters_to_binary(kex_io:to_string(Value))
+    end;
 show(Value) -> unicode:characters_to_binary(kex_io:to_string(Value)).
 
 %% Kex.hash (kexhq/kex#403): non-negative and below 2^32, like the

@@ -1229,8 +1229,11 @@ auto Lowering::lowerParsedInterpolatedString(
         if (!stringParts[i].empty()) {
             parts.push_back(lit(LitKind::String, stringParts[i]));
         }
+        // Each hole is already a `showValue` call (the parser wraps it), so
+        // its value is a String, a binary: kex_io:interpolate joins them as
+        // they are, rather than turning each back into a list first.
         if (i < values.size() && values[i]) {
-            parts.push_back(callE("kex_io", "to_string", 1, one(lower(values[i]))));
+            parts.push_back(lower(values[i]));
         }
     }
     if (parts.empty()) {
@@ -1241,7 +1244,7 @@ auto Lowering::lowerParsedInterpolatedString(
     }
     auto list = std::make_unique<Expr>();
     list->node = MakeList{std::move(parts), std::nullopt};
-    return callE("unicode", "characters_to_binary", 1, one(std::move(list)));
+    return callE("kex_io", "interpolate", 1, one(std::move(list)));
 }
 
 } // namespace kex::ir
