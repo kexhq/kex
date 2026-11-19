@@ -109,6 +109,9 @@ extern bool g_replScriptFailed;
 
 // Tab completion: what it checks and lists names from, set by the session.
 auto printReplCompletions(const std::string& prefix) -> void;
+// Starts finding the modules under the session's source roots, on its own
+// thread, so the first Tab does not wait for it. Once a session.
+auto startReplRootModuleScan() -> void;
 extern std::function<ReplCompletionContext()> g_replCompletionContext;
 extern ReplCompletionBase* g_replCompletionBase;
 extern std::string g_replPendingInput;
