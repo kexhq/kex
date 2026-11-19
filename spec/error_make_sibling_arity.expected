@@ -1,0 +1,9 @@
+spec/error_make_sibling_arity.kex:17:25: error: `sum` expects argument 1 to be Range<A>, but got [Shelf.Book]
+
+sum : Range<A> -> Integer
+
+sum : [Number] -> Number
+
+sum : [A] -> (A -> Number) -> Number
+
+sum : [Shelf.Book] -> [Shelf.Book] -> A

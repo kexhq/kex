@@ -98,6 +98,7 @@ auto TypeChecker::check(
     m_slotMethodNames.clear();
     m_makeMethodNames.clear();
     m_makeMethodReceivers.clear();
+    m_makeMethodArities.clear();
     m_qualifiedPublished.clear();
     m_overloadPurity.clear();
     m_scopedDeclaredSignatures.clear();
@@ -2843,6 +2844,13 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def, const std::stri
                     return typesEqual(existing, resolvedReceiver);
                 })) {
                 owners.push_back(std::move(resolvedReceiver));
+            }
+            auto& arities = m_makeMethodArities[fn.name];
+            for (const auto& clause : fn.clauses) {
+                const auto required = static_cast<std::size_t>(std::count_if(
+                    clause.params.begin(), clause.params.end(),
+                    [](const ast::Param& param) { return !param.defaultValue; }));
+                arities.emplace_back(required + 1, clause.params.size() + 1);
             }
         };
         for (const auto& item : def.body) {
