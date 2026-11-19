@@ -285,6 +285,7 @@ struct Emitter {
             case LitKind::String: return erlBinary(l.text);
             case LitKind::Bool: return l.boolValue ? "'true'" : "'false'";
             case LitKind::None: return "'None'";
+            case LitKind::EmptyMap: return "~{}~";
             case LitKind::Atom: {
                 // A quoted Kex atom (`:"it's"`) can hold quote and backslash.
                 std::string quoted = "'";

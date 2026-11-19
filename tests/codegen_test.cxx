@@ -1486,6 +1486,35 @@ int main() {
             assertTrue(contains(out, "#<104>"), out);
         });
 
+        it("calls a capability directly where no context is in scope", []() {
+            auto out = emit(
+                "capability Clock do\n  foul now() -> Integer = 1\nend\n"
+                "main do\n  IO.printLine(Clock.now())\nend\n");
+            // Nothing can have replaced Clock here: no lookup, no dispatch,
+            // and no empty map built for the context (kexhq/kex#675, #665).
+            assertFalse(contains(out, "dispatch_method"), out);
+            assertFalse(contains(out, "maps':'new'"), out);
+            assertTrue(contains(out, "~{}~"), out);
+        });
+
+        it("keeps the capability lookup inside a with", []() {
+            auto out = emit(
+                "capability Clock do\n  foul now() -> Integer = 1\nend\n"
+                "record Fixed do\n  at : Integer\nend\n"
+                "make Fixed, implement: Clock do\n  foul now() -> Integer = @at\nend\n"
+                "main do\n  with Clock = Fixed { at: 2 } do\n    IO.printLine(Clock.now())\n  "
+                "end\nend\n");
+            assertTrue(contains(out, "dispatch_method"), out);
+        });
+
+        it("keeps the capability lookup in a function given a context", []() {
+            auto out = emit(
+                "capability Clock do\n  foul now() -> Integer = 1\nend\n"
+                "foul stamp() -> Integer = Clock.now()\n"
+                "main do\n  IO.printLine(stamp())\nend\n");
+            assertTrue(contains(out, "dispatch_method"), out);
+        });
+
         it("interpolated string joins its pieces in one kex_io:interpolate", []() {
             auto out = emit("main do\n  let n = 42\n  \"value: ${n}\"\nend\n");
             assertTrue(contains(out, "kex_io':'interpolate'"), out);

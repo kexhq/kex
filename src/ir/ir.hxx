@@ -37,7 +37,10 @@ struct Expr;
 using ExprPtr = std::unique_ptr<Expr>;
 
 // ---- Literals -------------------------------------------------------------
-enum class LitKind { Int, Float, String, Char, Bool, None, Atom };
+// `EmptyMap` is the literal `#{}` (Core Erlang's `~{}~`): the empty
+// capability context, built with no call (kexhq/kex#665). Kinds are
+// serialized by number, so a new one goes at the end.
+enum class LitKind { Int, Float, String, Char, Bool, None, Atom, EmptyMap };
 struct Lit {
     LitKind kind;
     std::string text; // canonical source text of the value (e.g. "42", "hi")

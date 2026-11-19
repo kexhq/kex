@@ -453,6 +453,13 @@ auto Lowering::lowerModuleFunctionCall(
             }
             return out;
         };
+        // No context in scope: nothing can have replaced the capability, so
+        // the lookup is skipped (see capabilityDispatchLowered).
+        if (currentContextVar.empty()) {
+            auto direct = std::make_unique<Expr>();
+            direct->node = localCall(it->second, argsFrom(""));
+            return wrapLets(binds, std::move(direct));
+        }
         std::vector<ExprPtr> getArgs;
         getArgs.push_back(lit(LitKind::String, module));
         getArgs.push_back(currentContext());
