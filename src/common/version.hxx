@@ -46,11 +46,11 @@ constexpr auto kVersionPreRelease = "";
 // The git commit this build came from, injected by CMake at configure time.
 // Empty when built from a source archive rather than a checkout — which is a
 // normal state, not an error, and is why the Kex-facing form is an Optional.
-#ifdef KEX_GIT_REVISION
-constexpr auto kGitRevision = KEX_GIT_REVISION;
-#else
-constexpr auto kGitRevision = "";
-#endif
+//
+// It and kBuildDate are defined in build_info.cxx, the only file compiled
+// with them. As definitions on every file, a new commit or a new day changed
+// every compile command, so no build could reuse a cached object.
+extern const char* const kGitRevision;
 
 // "0.3.0", or "0.4.0-rc.1" on a pre-release build.
 inline auto versionNumber() -> const std::string& {
@@ -72,11 +72,7 @@ inline auto versionNumber() -> const std::string& {
 // release workflow pins it from the tag's commit): two builds of the same
 // source on the same day stay byte-identical, which a clock-precise stamp
 // would break for no gain — "when was this built" is a question about days.
-#ifdef KEX_BUILD_DATE
-constexpr auto kBuildDate = KEX_BUILD_DATE;
-#else
-constexpr auto kBuildDate = "";
-#endif
+extern const char* const kBuildDate;
 
 // "0.3.0 (a1b2c3d)", or just "0.3.0" when the revision is unknown. This is
 // what a human sees.

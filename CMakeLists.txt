@@ -268,6 +268,7 @@ add_library(kex_lib
     src/common/runtime_dir.cxx
     src/common/process.cxx
     src/common/diagnostics.cxx
+    src/common/build_info.cxx
 )
 
 target_include_directories(kex_lib PUBLIC src)
@@ -278,9 +279,12 @@ target_compile_definitions(kex_lib PUBLIC
     KEX_VERSION_PATCH=${KEX_VERSION_PATCH}
     KEX_VERSION_PRERELEASE="${KEX_VERSION_PRERELEASE}")
 
+# The revision and the date below go to build_info.cxx only. On every file
+# they would change each compile command with each commit and each day, and a
+# compiler cache (CI uses ccache) could then reuse nothing.
 if(KEX_GIT_REVISION)
-    target_compile_definitions(kex_lib PUBLIC
-        KEX_GIT_REVISION="${KEX_GIT_REVISION}")
+    set_property(SOURCE src/common/build_info.cxx APPEND PROPERTY
+        COMPILE_DEFINITIONS KEX_GIT_REVISION="${KEX_GIT_REVISION}")
 endif()
 
 # The build date, shown by `kex --version`. A DATE, not a timestamp, so two
@@ -290,7 +294,8 @@ endif()
 if(NOT DEFINED KEX_BUILD_DATE)
     string(TIMESTAMP KEX_BUILD_DATE "%Y-%m-%d" UTC)
 endif()
-target_compile_definitions(kex_lib PUBLIC KEX_BUILD_DATE="${KEX_BUILD_DATE}")
+set_property(SOURCE src/common/build_info.cxx APPEND PROPERTY
+    COMPILE_DEFINITIONS KEX_BUILD_DATE="${KEX_BUILD_DATE}")
 
 # Wasm can't discover the prelude via executableDirectory() (no /proc/self/exe,
 # no _NSGetExecutablePath) so bake the source path in at compile time.
