@@ -162,7 +162,6 @@ auto Fiber::trampolineBody() -> void {
 #else // __EMSCRIPTEN__
 
 namespace {
-thread_local Fiber* g_startingFiber = nullptr;
 
 // The "native" context — wherever execution is when it's not inside any
 // Fiber (i.e. the scheduler's own flat driving loop). Every Fiber::resume()
