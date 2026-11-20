@@ -20,7 +20,7 @@ step({'Range', _, _}) -> 1;
 step({'Range', _, _, Step}) -> Step.
 
 %% The range with its step replaced by Step: its sign is the direction.
-by(_, 0) -> erlang:error(<<"A range's step cannot be 0">>);
+by(_, 0) -> erlang:error(<<"a range's step cannot be 0">>);
 by(R, Step) when is_integer(Step) ->
     {A, B} = bounds(R),
     case enumerable(A, B) of

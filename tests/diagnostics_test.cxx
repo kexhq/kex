@@ -19,10 +19,10 @@ int main() {
 
     describe("diagnostics::extractHint", []() {
         it("extracts the did-you-mean suggestion", []() {
-            assertEqual(extractHint("Undefined `foo`; did you mean `bar`?"), std::string("bar"));
+            assertEqual(extractHint("undefined `foo`; did you mean `bar`?"), std::string("bar"));
         });
         it("returns empty when there is no hint",
-           []() { assertEqual(extractHint("Undefined `foo`"), std::string("")); });
+           []() { assertEqual(extractHint("undefined `foo`"), std::string("")); });
     });
 
     describe("diagnostics::errorCountPhrase", []() {

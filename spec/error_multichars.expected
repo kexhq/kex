@@ -1,2 +1,2 @@
-spec/error_multichars.kex:3:16: [KEXEL-0019]: Error, Unterminated char literal
+spec/error_multichars.kex:3:16: [KEXEL-0019]: Error, unterminated char literal
 Aborted: 1 syntax error. Fix them before running.

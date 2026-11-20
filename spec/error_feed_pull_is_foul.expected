@@ -1,1 +1,1 @@
-spec/error_feed_pull_is_foul.kex:4:57: [KEXEF-0001]: Error, Cannot call foul function 'pull' from pure context
+spec/error_feed_pull_is_foul.kex:4:57: [KEXEF-0001]: Error, cannot call foul function 'pull' from pure context

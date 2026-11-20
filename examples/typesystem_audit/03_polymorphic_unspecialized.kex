@@ -2,7 +2,7 @@
 #
 # This file is kept as the regression it became. `kex -C` REJECTS it now:
 #
-#   error: Cannot add Integer and String
+#   error: cannot add Integer and String
 #
 # What the audit found, and what it was:
 #

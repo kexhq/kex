@@ -9,6 +9,6 @@ spec/error_record_operator_undefined.kex:54:46: [KEXET-0417]: Error, `-` is not 
 spec/error_record_operator_undefined.kex:28:20: [KEXET-0416]: Error, `-` is not defined for Point and Point; declare it in a `make Point` block
 spec/error_record_operator_undefined.kex:29:20: [KEXET-0416]: Error, `<` is not defined for Point and Point; declare it in a `make Point` block
 spec/error_record_operator_undefined.kex:30:20: [KEXET-0415]: Error, `*` is not defined for Integer and Point
-spec/error_record_operator_undefined.kex:31:16: [KEXET-0420]: Error, Unary '-' requires a number, got Point
+spec/error_record_operator_undefined.kex:31:16: [KEXET-0420]: Error, unary '-' requires a number, got Point
 spec/error_record_operator_undefined.kex:33:27: [KEXET-0416]: Error, `+` is not defined for Money and Money; declare it in a `make Money` block
-spec/error_record_operator_undefined.kex:34:16: [KEXET-0420]: Error, Unary '-' requires a number, got Money
+spec/error_record_operator_undefined.kex:34:16: [KEXET-0420]: Error, unary '-' requires a number, got Money

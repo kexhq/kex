@@ -605,7 +605,7 @@ int main() {
             const std::string beam = runBeamFile(source, "", /*noCheck=*/true);
             for (const auto& out : {walker, beam}) {
                 assertTrue(
-                    out.find("Undefined method: iso for Result<Date, ?>") != std::string::npos,
+                    out.find("undefined method: iso for Result<Date, ?>") != std::string::npos,
                     out);
                 assertTrue(out.find("if_clause") == std::string::npos, out);
             }
@@ -645,7 +645,7 @@ int main() {
             const std::string walker = runWalkerFile(source, /*noCheck=*/true);
             const std::string beam = runBeamFile(source, "", /*noCheck=*/true);
             for (const auto& out : {walker, beam}) {
-                assertTrue(out.find("Undefined function: Missing.thing") != std::string::npos, out);
+                assertTrue(out.find("undefined function: Missing.thing") != std::string::npos, out);
             }
         });
     });
@@ -676,7 +676,7 @@ int main() {
                 "end\n"
                 "stash(\"kept\")\n");
             assertTrue(out.find("=> \"kept\" : String") != std::string::npos, out);
-            assertTrue(out.find("Undefined method") == std::string::npos, out);
+            assertTrue(out.find("undefined method") == std::string::npos, out);
         });
 
         it("runs an input on the checker's decisions", []() {
@@ -685,7 +685,7 @@ int main() {
                 "site.put(\"hi\")\n"
                 "site.get\n");
             assertTrue(out.find("=> Just(\"hi\") : Optional<String>") != std::string::npos, out);
-            assertTrue(out.find("Undefined method") == std::string::npos, out);
+            assertTrue(out.find("undefined method") == std::string::npos, out);
         });
 
         it("persists var bindings, reassignment, and ! mutation", []() {
@@ -696,7 +696,7 @@ int main() {
                                       "n = n + 5\n"
                                       "n\n";
             for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
-                assertTrue(out.find("Undefined identifier: s") == std::string::npos, out);
+                assertTrue(out.find("undefined identifier: s") == std::string::npos, out);
                 assertTrue(out.find("unimplemented expr node") == std::string::npos, out);
                 assertTrue(out.find("=> \"hela\" : String") != std::string::npos, out);
                 assertTrue(out.find("=> 6 : Int") != std::string::npos, out);
@@ -742,7 +742,7 @@ int main() {
             };
             for (const auto& input : inputs) {
                 for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
-                    assertTrue(out.find("Cannot rebind '") != std::string::npos, out);
+                    assertTrue(out.find("cannot rebind '") != std::string::npos, out);
                     assertTrue(out.find("re-enter the whole pattern") != std::string::npos, out);
                 }
             }
@@ -776,7 +776,7 @@ int main() {
                                       "UP + 1\n";
             for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
                 assertTrue(out.find("function:") == std::string::npos, out);
-                assertTrue(out.find("Expected ')'") == std::string::npos, out);
+                assertTrue(out.find("expected ')'") == std::string::npos, out);
                 assertTrue(out.find("=> 42 : Integer") != std::string::npos, out);
                 assertTrue(out.find("=> 43 : Int") != std::string::npos, out);
             }
@@ -903,7 +903,7 @@ int main() {
         it("rejects plain assignment to a let binding with a runtime error", []() {
             auto out = runRepl("let kx = \"a\"\nkx = \"b\"\nkx\n");
             assertTrue(
-                out.find("Cannot assign to immutable binding: kx") != std::string::npos, out);
+                out.find("cannot assign to immutable binding: kx") != std::string::npos, out);
             assertTrue(out.find("=> \"a\" : String") != std::string::npos, out);
         });
     });
@@ -929,7 +929,7 @@ int main() {
             auto out = runRepl(std::string("/load ") + sourcePath + "\nstash(\"loaded\")\n");
             std::remove(sourcePath);
             assertTrue(out.find("=> \"loaded\" : String") != std::string::npos, out);
-            assertTrue(out.find("Undefined method") == std::string::npos, out);
+            assertTrue(out.find("undefined method") == std::string::npos, out);
         });
 
         it("keeps a loaded module's AST alive for later bindings", []() {
@@ -1066,7 +1066,7 @@ int main() {
             assertTrue(
                 out.find("Ok(Just(\"kex\")) : Result<String?, CallError>") != std::string::npos,
                 out);
-            assertTrue(out.find("Undefined method") == std::string::npos, out);
+            assertTrue(out.find("undefined method") == std::string::npos, out);
         });
 
         // Both REPLs complete through the editor's analysis: the receiver is
@@ -1277,7 +1277,7 @@ int main() {
                     "cd " + root + " && " + std::string(KEX_BINARY_PATH) + flags +
                     " < input.txt 2>&1");
                 assertTrue(out.find("\"select 1\" : String") != std::string::npos, out);
-                assertTrue(out.find("Unknown type") == std::string::npos, out);
+                assertTrue(out.find("unknown type") == std::string::npos, out);
                 assertTrue(out.find("lib/broken.kex was not loaded") != std::string::npos, out);
                 assertTrue(
                     out.find(
@@ -1503,7 +1503,7 @@ int main() {
             // roots, so `using Regex` failed with "Unknown module" while the
             // same input worked in a script and in the BEAM REPL.
             auto out = runRepl("using Regex\nregex(\"\\\\d+\")\n");
-            assertTrue(out.find("Unknown module") == std::string::npos, out);
+            assertTrue(out.find("unknown module") == std::string::npos, out);
             assertTrue(out.find("Ok(Regex.Regex { source:") != std::string::npos, out);
         });
 
@@ -1533,7 +1533,7 @@ int main() {
                 "let Just(x) = opt\n"
                 "x\n");
             assertTrue(out.find("defined Just") == std::string::npos, out);
-            assertTrue(out.find("Undefined identifier") == std::string::npos, out);
+            assertTrue(out.find("undefined identifier") == std::string::npos, out);
             assertTrue(out.find("42") != std::string::npos, out);
         });
 
@@ -1543,7 +1543,7 @@ int main() {
                 "let Just(x) = opt\n"
                 "x\n");
             assertTrue(out.find("defined Just") == std::string::npos, out);
-            assertTrue(out.find("Undefined identifier") == std::string::npos, out);
+            assertTrue(out.find("undefined identifier") == std::string::npos, out);
             assertTrue(out.find("42") != std::string::npos, out);
         });
 
@@ -1611,7 +1611,7 @@ int main() {
 
         it("binds every name of a tuple pattern let", []() {
             auto out = runRepl("let (a, b) = (1, 2)\na\nb\n");
-            assertTrue(out.find("Undefined identifier") == std::string::npos, out);
+            assertTrue(out.find("undefined identifier") == std::string::npos, out);
         });
     });
 
@@ -1716,7 +1716,7 @@ int main() {
             // >= 2 params, so the no-argument postfix form `x.inspect` failed
             // with "Undefined method: inspect" on BEAM only.
             auto beam = runBeamRepl("[1, 2].inspect\n");
-            assertTrue(beam.find("Undefined method") == std::string::npos, beam);
+            assertTrue(beam.find("undefined method") == std::string::npos, beam);
             assertTrue(beam.find("[1, 2]") != std::string::npos, beam);
         });
 

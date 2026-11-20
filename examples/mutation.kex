@@ -6,5 +6,5 @@ main do
   IO.printLine(list.to(String).or(""))  # list is [20, 40, 60]
 
   # frozen.push!(4)
-  # runtime error: Cannot use '!' on immutable binding: frozen
+  # runtime error: cannot use '!' on immutable binding: frozen
 end

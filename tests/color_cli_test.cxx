@@ -288,7 +288,7 @@ int main() {
             std::remove(path.c_str());
             assertTrue(
                 contains(
-                    out, ":2:1: [KEXEC-0057]: Error, Compile-time validator "
+                    out, ":2:1: [KEXEC-0057]: Error, compile-time validator "
                          "`validateDemo` crashed:"),
                 "missing primary validator diagnostic: " + out);
             assertTrue(

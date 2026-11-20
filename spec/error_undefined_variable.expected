@@ -1,2 +1,2 @@
-spec/error_undefined_variable.kex:4:16: [KEXET-0146]: Error, Undefined name: `doesNotExist`
+spec/error_undefined_variable.kex:4:16: [KEXET-0146]: Error, undefined name: `doesNotExist`
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

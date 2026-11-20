@@ -1,2 +1,2 @@
 before
-Internal error: spec/error_unknown_namespace.kex:10:24: runtime error: Undefined function: Maths.sqrt
+Internal error: spec/error_unknown_namespace.kex:10:24: runtime error: undefined function: Maths.sqrt

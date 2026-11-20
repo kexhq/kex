@@ -390,7 +390,7 @@ auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n)
         // function: map" on BEAM.
         ex->node = Call{external, n.name, arity, std::move(args), false};
     } else {
-        return wrapLets(binds, runtimeError("Undefined function: " + n.name));
+        return wrapLets(binds, runtimeError("undefined function: " + n.name));
     }
     return wrapLets(binds, std::move(ex));
 }

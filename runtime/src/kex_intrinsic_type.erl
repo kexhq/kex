@@ -220,19 +220,19 @@ field_layouts(Fields) ->
 %% each an error naming the field.
 'construct'(Name, Values) when is_map(Values) ->
     case layout_entry(persistent_term:get(kex_record_layouts, #{}), Name) of
-        none -> {'Error', <<"Not a record type: ", Name/binary>>};
+        none -> {'Error', <<"not a record type: ", Name/binary>>};
         {Tag, Layout} ->
             Fields = field_layouts(Layout),
             Known = [FieldName || {FieldName, _, _, _, _} <- Fields],
             case [K || K <- maps:keys(Values), not lists:member(K, Known)] of
                 [Unknown | _] ->
-                    {'Error', <<"Unknown field ", (quoted(Unknown))/binary,
+                    {'Error', <<"unknown field ", (quoted(Unknown))/binary,
                                 " for ", Name/binary>>};
                 [] -> construct_fields(Tag, Name, Fields, Values, [])
             end
     end;
 'construct'(_Name, _Values) ->
-    {'Error', <<"Expected a map of field values">>}.
+    {'Error', <<"expected a map of field values">>}.
 
 construct_fields(Tag, _Name, [], _Values, []) -> {'Ok', Tag};
 construct_fields(Tag, _Name, [], _Values, Acc) ->
@@ -259,12 +259,12 @@ construct_fields(Tag, Name, [{Field, Type, Optional, _HasDefault, Default} | Res
         error when Optional ->
             construct_fields(Tag, Name, Rest, Values, ['None' | Acc]);
         error ->
-            {'Error', <<"Missing field ", (quoted(Field))/binary, " for ",
+            {'Error', <<"missing field ", (quoted(Field))/binary, " for ",
                         Name/binary>>}
     end.
 
 field_mismatch(Field, Name, Type, Value) ->
-    {'Error', <<"Field ", (quoted(Field))/binary, " of ", Name/binary,
+    {'Error', <<"field ", (quoted(Field))/binary, " of ", Name/binary,
                 " expects ", (type_name(Type))/binary, ", got ",
                 (type_name(type_of(Value)))/binary>>}.
 
@@ -272,7 +272,7 @@ field_mismatch(Field, Name, Type, Value) ->
 %% applied to Args (kexhq/kex#509). Variant tags are bare at run time.
 'constructVariant'(Name, Ctor, Args) when is_list(Args) ->
     case layout_entry(persistent_term:get(kex_adt_layouts, #{}), Name) of
-        none -> {'Error', <<"Not a sum type: ", Name/binary>>};
+        none -> {'Error', <<"not a sum type: ", Name/binary>>};
         {_Owner, Variants} ->
             case lists:keyfind(Ctor, 1, Variants) of
                 false ->

@@ -359,7 +359,7 @@ auto Lowering::undefinedMethod(const std::string& method, ExprPtr receiver, cons
     }
     std::vector<ExprPtr> parts;
     parts.push_back(
-        lit(LitKind::String, loc + "runtime error: Undefined method: " + method + " for "));
+        lit(LitKind::String, loc + "runtime error: undefined method: " + method + " for "));
     parts.push_back(callE("kex_io", "value_type_name", 1, one(std::move(receiver))));
     if (!hint.empty()) {
         parts.push_back(lit(LitKind::String, hint));

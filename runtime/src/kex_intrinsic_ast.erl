@@ -36,7 +36,7 @@ parse(_, _) -> parse_error(<<"parse requires a source string">>).
     case filelib:is_regular(Path) of
         true -> run_kex(Path, none);
         false -> parse_error(iolist_to_binary(
-            [<<"File not found: ">>, unicode:characters_to_binary(Path)]))
+            [<<"file not found: ">>, unicode:characters_to_binary(Path)]))
     end;
 'parseFile'(_) -> parse_error(<<"parseFile requires a file path">>).
 

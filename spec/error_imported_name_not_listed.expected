@@ -1,1 +1,1 @@
-spec/error_imported_name_not_listed.kex:13:16: [KEXET-0148]: Error, Undefined name: `vended`. `Vend.vended` is not imported here
+spec/error_imported_name_not_listed.kex:13:16: [KEXET-0148]: Error, undefined name: `vended`. `Vend.vended` is not imported here

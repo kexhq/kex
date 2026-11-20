@@ -48,7 +48,7 @@ pow(A, B, Loc) -> pow_at(A, B, Loc).
 checked(Fun, Op, A, B, Loc, FloatWhat, Verb) ->
     case is_number(A) andalso is_number(B) of
         false ->
-            erlang:error(iolist_to_binary([Loc, "runtime error: Cannot ", Verb,
+            erlang:error(iolist_to_binary([Loc, "runtime error: cannot ", Verb,
                                            " ", kex_io:value_type_name(A),
                                            " and ", kex_io:value_type_name(B)]));
         true ->
@@ -96,7 +96,7 @@ ordering(A, B, _Loc, Op) when is_number(A), is_number(B) -> Op(A, B);
 ordering(A, B, _Loc, Op) when is_binary(A), is_binary(B) -> Op(A, B);
 ordering({'Char', A}, {'Char', B}, _Loc, Op) -> Op(A, B);
 ordering(A, B, Loc, _Op) ->
-    erlang:error(iolist_to_binary([Loc, "runtime error: Cannot compare ",
+    erlang:error(iolist_to_binary([Loc, "runtime error: cannot compare ",
                                    kex_io:value_type_name(A), " and ",
                                    kex_io:value_type_name(B)])).
 
@@ -139,12 +139,12 @@ neq(A, B) -> not eq(A, B).
 divide(A, B) -> divide_at(A, B, <<>>).
 
 divide_at(A, B, Loc) when is_integer(A), is_integer(B), B =:= 0 ->
-    erlang:error(iolist_to_binary([Loc, "runtime error: Division by zero"]));
+    erlang:error(iolist_to_binary([Loc, "runtime error: division by zero"]));
 divide_at(A, B, _Loc) when is_integer(A), is_integer(B) -> A div B;
 %% A float zero divisor is the same error as an integer one — `badarith` said
 %% nothing about which, while the walker names it.
 divide_at(_A, B, Loc) when B == 0 ->
-    erlang:error(iolist_to_binary([Loc, "runtime error: Division by zero"]));
+    erlang:error(iolist_to_binary([Loc, "runtime error: division by zero"]));
 divide_at(A, B, Loc) -> checked(fun() -> A / B end, divide, A, B, Loc,
                                 <<"Float division">>, <<"divide">>).
 
@@ -155,7 +155,7 @@ pow(A, B) -> pow_at(A, B, <<>>).
 
 pow_at(A, B, _Loc) when is_integer(A), is_integer(B), B >= 0 -> int_pow(A, B, 1);
 pow_at(A, B, Loc) -> checked(fun() -> math:pow(A, B) end, pow, A, B, Loc,
-                             <<"Exponentiation">>, <<"raise">>).
+                             <<"exponentiation">>, <<"raise">>).
 
 int_pow(_, 0, Acc) -> Acc;
 int_pow(Base, Exponent, Acc) when Exponent rem 2 =:= 1 ->

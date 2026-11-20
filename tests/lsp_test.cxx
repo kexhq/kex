@@ -159,7 +159,7 @@ int main() {
                 responseForId(result, 3).find("id : UserId") != std::string::npos,
                 "distinct local binding hover lost its nominal type");
             assertTrue(
-                result.find("Type mismatch: expected UserId, got Integer") != std::string::npos,
+                result.find("type mismatch: expected UserId, got Integer") != std::string::npos,
                 "distinct nominal mismatch did not reach LSP diagnostics");
         });
 
@@ -214,7 +214,7 @@ int main() {
                     result.find("resolver : Resolver") != std::string::npos,
                 "custom DNS resolver hover lost its nominal type: " + result);
             assertTrue(
-                result.find("Undefined") == std::string::npos,
+                result.find("undefined") == std::string::npos,
                 "typed DNS source produced LSP diagnostics: " + result);
         });
 
@@ -240,11 +240,11 @@ int main() {
             for (const auto* type :
                  {"MissingTopLevel", "MissingModuleType", "MissingTraitType", "MissingMakeType"}) {
                 assertTrue(
-                    result.find("Unknown type `" + std::string(type) + "`") != std::string::npos,
+                    result.find("unknown type `" + std::string(type) + "`") != std::string::npos,
                     std::string("missing LSP diagnostic for ") + type);
             }
             assertTrue(
-                occurrences(result, "Type mismatch: expected Integer, got String") >= 2,
+                occurrences(result, "type mismatch: expected Integer, got String") >= 2,
                 "declaration-default diagnostics did not reach the LSP");
         });
 
@@ -1011,10 +1011,10 @@ int main() {
                 result.find("shown?") == std::string::npos,
                 "the embedding module's record was not in scope: " + result);
             assertTrue(
-                result.find("Branch type mismatch") == std::string::npos,
+                result.find("branch type mismatch") == std::string::npos,
                 "literal text did not count as a branch's output: " + result);
             assertTrue(
-                result.find("Undefined method `missing`") != std::string::npos,
+                result.find("undefined method `missing`") != std::string::npos,
                 "an error inside a <%= %> hole was dropped: " + result);
             assertTrue(
                 result.find("\"line\":5") != std::string::npos,
@@ -1107,7 +1107,7 @@ int main() {
                 result.find("publishDiagnostics") != std::string::npos,
                 "missing diagnostics notification");
             assertTrue(
-                result.find("Undefined name") != std::string::npos, "missing compiler diagnostic");
+                result.find("undefined name") != std::string::npos, "missing compiler diagnostic");
             assertTrue(
                 result.find(R"("character":9)") != std::string::npos,
                 "compiler byte column was not converted to LSP UTF-16");
@@ -1638,7 +1638,7 @@ int main() {
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             assertTrue(
-                result.find("Undefined function") == std::string::npos,
+                result.find("undefined function") == std::string::npos,
                 "the manifest vocabulary was reported as undefined");
             // `FS.Write.workspace` is `workspace(FS.Write)` by UFCS, and was
             // once held against the `workspace do` that takes a block.
@@ -1718,7 +1718,7 @@ int main() {
                 "end\n",
                 {});
             assertTrue(
-                result.find("Unexpected token") == std::string::npos,
+                result.find("unexpected token") == std::string::npos,
                 "the new atom spellings must parse: " + result);
             // `missingName` starts at column 28 of its line — right after a
             // quoted atom whose token text is shorter than its source.
@@ -1857,7 +1857,7 @@ int main() {
                     responseForId(result, 10).find(R"("label":"assert")") == std::string::npos,
                 "@ field completion did not use the receiver record: " + result);
             assertTrue(
-                result.find("Undefined variable: new") == std::string::npos,
+                result.find("undefined variable: new") == std::string::npos,
                 "LSP diagnosed the implicit new binding as undefined");
         });
         it("understands implicit serving bindings and server slots", []() {
@@ -1936,8 +1936,8 @@ int main() {
                     responseForId(result, 8).find(R"("label":"assert")") == std::string::npos,
                 "empty serving transition exposed global symbols: " + result);
             assertTrue(
-                result.find("Undefined variable: new") == std::string::npos &&
-                    result.find("Undefined variable: from") == std::string::npos,
+                result.find("undefined variable: new") == std::string::npos &&
+                    result.find("undefined variable: from") == std::string::npos,
                 "LSP diagnosed an implicit serving binding as undefined: " + result);
         });
         it("hovers and completes typed process handles", []() {
@@ -2378,7 +2378,7 @@ int main() {
                 resolved.find("module not found in source roots") == std::string::npos,
                 "a locked dependency's module was still unreachable");
             assertTrue(
-                resolved.find("Undefined function: `hello`") == std::string::npos,
+                resolved.find("undefined function: `hello`") == std::string::npos,
                 "a locked dependency's function was still undefined");
             assertTrue(
                 responseForId(resolved, 2).find("greeter.kex") != std::string::npos,
@@ -2405,7 +2405,7 @@ int main() {
             const auto configured =
                 session(R"("initializationOptions":{"sourceRoots":["../vendor/greeter/src"]},)");
             assertTrue(
-                configured.find("Undefined function: `hello`") == std::string::npos,
+                configured.find("undefined function: `hello`") == std::string::npos,
                 "initializationOptions sourceRoots were ignored");
 
             unsetenv("TEY_CACHE");
@@ -2488,7 +2488,7 @@ int main() {
                  mainPath + R"("},"position":{"line":6,"character":16}}})"});
             assertTrue(
                 app.find("module not found") == std::string::npos &&
-                    app.find("Undefined") == std::string::npos,
+                    app.find("undefined") == std::string::npos,
                 "a locked package was unreachable: " + app);
             // Web.Markup's own error belongs to markup.kex, not to main.kex.
             assertTrue(
@@ -2518,8 +2518,8 @@ int main() {
                 "  tey(\"vend\", path: \"vendor/vend\")\nend\n",
                 {});
             assertTrue(
-                manifest.find("Undefined function") == std::string::npos &&
-                    manifest.find("Unknown named argument") == std::string::npos,
+                manifest.find("undefined function") == std::string::npos &&
+                    manifest.find("unknown named argument") == std::string::npos,
                 "the manifest vocabulary is out of date: " + manifest);
 
             unsetenv("TEY_CACHE");
@@ -2563,7 +2563,7 @@ int main() {
                 result.find("module not found in source roots") == std::string::npos,
                 "a sibling module in the package's src was not found");
             assertTrue(
-                result.find("Undefined function: `greet`") == std::string::npos,
+                result.find("undefined function: `greet`") == std::string::npos,
                 "a sibling module's function was still undefined");
             fs::remove_all(root);
         });

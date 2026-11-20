@@ -1,2 +1,2 @@
-spec/error_match_range_exhaustive.kex:10:3: [KEXET-0108]: Error, Non-exhaustive match: missing case(s) (_.._)
-spec/error_match_range_exhaustive.kex:19:3: [KEXET-0108]: Error, Non-exhaustive match: missing case(s) (_.._)
+spec/error_match_range_exhaustive.kex:10:3: [KEXET-0108]: Error, non-exhaustive match: missing case(s) (_.._)
+spec/error_match_range_exhaustive.kex:19:3: [KEXET-0108]: Error, non-exhaustive match: missing case(s) (_.._)

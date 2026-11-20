@@ -1079,7 +1079,7 @@ auto throwIfPartialPatternRebind(
         }
         if (!first.empty() && !all) {
             throw std::runtime_error(
-                "Cannot rebind '" + first +
+                "cannot rebind '" + first +
                 "' alone: re-enter the whole pattern to rebind a destructured name");
         }
     }
