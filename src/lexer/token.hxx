@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../common/diagnostic_codes.hxx"
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -138,6 +139,10 @@ struct Token {
     // String tokens: offsets in `value` of a `$` written `\$`, which never
     // opens an interpolation even when a `{` follows it.
     std::vector<std::size_t> escapedDollars;
+    // An Error token's kind of problem and its template's values; `value`
+    // is the rendered message (kexhq/kex#656).
+    diag::Code errorCode = diag::Code::None;
+    diag::Args errorArgs = {};
 };
 
 auto tokenTypeName(TokenType type) -> std::string_view;

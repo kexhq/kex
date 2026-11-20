@@ -1,7 +1,7 @@
-spec/error_optional_for_payload.kex:8:1: error: `firstOf` declared to return Integer but body returns Integer?
-spec/error_optional_for_payload.kex:11:3: error: Type mismatch: expected Integer, got Integer?
-spec/error_optional_for_payload.kex:12:3: error: Type mismatch: expected Integer, got A?
-spec/error_optional_for_payload.kex:13:16: error: `pick` expects argument 1 to be Integer, but got Integer?
+spec/error_optional_for_payload.kex:8:1: [KEXET-0127]: Error, `firstOf` declared to return Integer but body returns Integer?
+spec/error_optional_for_payload.kex:11:3: [KEXET-0001]: Error, Type mismatch: expected Integer, got Integer?
+spec/error_optional_for_payload.kex:12:3: [KEXET-0001]: Error, Type mismatch: expected Integer, got A?
+spec/error_optional_for_payload.kex:13:16: [KEXET-0491]: Error, `pick` expects argument 1 to be Integer, but got Integer?
 
 pick : Integer -> Integer
-spec/error_optional_for_payload.kex:15:3: error: Type mismatch: expected Integer, got Integer?
+spec/error_optional_for_payload.kex:15:3: [KEXET-0001]: Error, Type mismatch: expected Integer, got Integer?

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ast/ast.hxx"
+#include "../common/diagnostic_codes.hxx"
 #include "decided_call.hxx"
 #include "declared_type.hxx"
 #include "intrinsics.hxx"
@@ -746,7 +747,7 @@ private:
     // unknown module, or a local module without that member.
     auto namespaceCallProblem(
         const std::string& written, const std::string& resolved, const std::string& method)
-        -> std::optional<std::string>;
+        -> std::optional<std::pair<diag::Code, diag::Args>>;
     // Whether module `path` shares its name with a type (`DateTime`,
     // `Map`): its calls then also reach that type's static functions, which
     // `make` blocks declare, so its own members are not all it answers.
@@ -885,7 +886,10 @@ private:
     auto functionValueType(const std::string& name) -> TypePtr;
 
     // Error reporting
-    auto error(SourceLocation loc, const std::string& msg) -> void;
+    // A diagnostic of a registered kind (kexhq/kex#656). Inference variables
+    // in the values are named the way error(loc, msg) names them.
+    auto error(diag::Code code, SourceLocation loc, diag::Args args = {}) -> void;
+    auto warning(diag::Code code, SourceLocation loc, diag::Args args = {}) -> void;
     auto typeMismatch(SourceLocation loc, const TypePtr& expected, const TypePtr& actual) -> void;
     // True, and the check is left until the body answers, when `actual` is a
     // make-block method's result its body has not decided yet

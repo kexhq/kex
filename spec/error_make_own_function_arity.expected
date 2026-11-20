@@ -1,3 +1,3 @@
-spec/error_make_own_function_arity.kex:16:53: error: `countdown` expects 1 argument(s), got 0
-spec/error_make_own_function_arity.kex:17:27: error: `countdown` expects 1 argument(s), got 2
-spec/error_make_own_function_arity.kex:18:43: error: `countdown` expects 2 argument(s), got 1
+spec/error_make_own_function_arity.kex:16:53: [KEXET-0136]: Error, `countdown` expects 1 argument(s), got 0
+spec/error_make_own_function_arity.kex:17:27: [KEXET-0136]: Error, `countdown` expects 1 argument(s), got 2
+spec/error_make_own_function_arity.kex:18:43: [KEXET-0472]: Error, `countdown` expects 2 argument(s), got 1

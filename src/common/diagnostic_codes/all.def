@@ -1,0 +1,14 @@
+// The diagnostic registry, one file per stage (see ../diagnostic_codes.hxx).
+// Append new entries at the end of their stage's file with the next unused
+// number; never renumber or reuse one. A retired code moves to
+// KEX_RETIRED_DIAGNOSTIC in the same file.
+#include "lexical.def"
+#include "parse.def"
+#include "module.def"
+#include "purity.def"
+#include "scope.def"
+#include "type.def"
+#include "type_core.def"
+#include "type_expr.def"
+#include "compiled.def"
+#include "lowering.def"

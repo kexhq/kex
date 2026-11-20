@@ -60,7 +60,8 @@ auto mergeImportOrigin(
             return {
                 .proceed = false,
                 .ambiguity = "ambiguous name `" + name + "`, imported from both `" +
-                             previous->module + "` and `" + origin.module + "`"};
+                             previous->module + "` and `" + origin.module + "`",
+                .ambiguousWith = previous->module};
         }
     } else if (!previous) {
         scopes.back()[name] = std::move(origin);

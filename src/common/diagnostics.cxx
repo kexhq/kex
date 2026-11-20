@@ -4,10 +4,12 @@
 #include "file_io.hxx"
 
 #include "../compiled/expand.hxx"
+#include "../parser/parser.hxx"
 #include "../semantic/analyzer.hxx"
 
 #include <algorithm>
 #include <cctype>
+#include <iostream>
 #include <sstream>
 
 namespace kex::diagnostics {
@@ -208,19 +210,33 @@ auto printCollapseReport(const std::vector<kex::compiled::CollapseNote>& notes) 
     }
 }
 
-auto printSemanticDiagnostic(const kex::semantic::Diagnostic& diag) -> void {
-    bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
-    std::cerr << kex::color::apply(kex::color::gray) << diag.location.file << ":"
-              << diag.location.line << ":" << diag.location.column;
-    if (diag.endLocation) {
-        std::cerr << "-" << diag.endLocation->line << ":" << diag.endLocation->column;
+// `[KEXET-0001]: Error,`: the code naming the kind of problem, then whether
+// it is an error or a warning, spelled out rather than left to the code's E or
+// W. A diagnostic with no code says `error:` or `warning:` instead.
+static auto severityLabel(const kex::semantic::Diagnostic& diag) -> std::string {
+    using namespace kex::color;
+    const bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
+    std::string out = std::string(apply(bold)) + apply(isError ? red : yellow);
+    if (const auto id = kex::diag::idOf(diag.code); !id.empty()) {
+        out += "[" + std::string(id) + "]: " + (isError ? "Error," : "Warning,");
+    } else {
+        out += isError ? "error:" : "warning:";
     }
-    std::cerr << ":" << kex::color::apply(kex::color::reset) << " "
-              << kex::color::apply(kex::color::bold)
-              << (isError ? kex::color::apply(kex::color::red)
-                          : kex::color::apply(kex::color::magenta))
-              << (isError ? "error" : "warning") << ":" << kex::color::apply(kex::color::reset)
-              << " " << colorizeMessage(diag.message) << "\n";
+    return out + apply(reset);
+}
+
+auto formatDiagnostic(const kex::semantic::Diagnostic& diag) -> std::string {
+    using namespace kex::color;
+    const bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
+    const auto* tone = isError ? red : yellow;
+    std::ostringstream out;
+    out << apply(gray) << diag.location.file << ":" << diag.location.line << ":"
+        << diag.location.column;
+    if (diag.endLocation) {
+        out << "-" << diag.endLocation->line << ":" << diag.endLocation->column;
+    }
+    out << ":" << apply(reset) << " " << severityLabel(diag) << " " << colorizeMessage(diag.message)
+        << "\n";
 
     if (diag.endLocation) {
         auto source = readFile(std::string(diag.location.file));
@@ -238,26 +254,88 @@ auto printSemanticDiagnostic(const kex::semantic::Diagnostic& diag) -> void {
                     finish = std::max(start + 1, diag.endLocation->column);
                 }
                 const auto width = std::max(1, finish - start);
-                std::cerr << "  " << current << " | " << line << "\n"
-                          << "    | " << std::string(static_cast<size_t>(start - 1), ' ')
-                          << kex::color::apply(isError ? kex::color::red : kex::color::magenta)
-                          << "^" << std::string(static_cast<size_t>(width - 1), '~')
-                          << kex::color::apply(kex::color::reset) << "\n";
+                out << "  " << current << " | " << line << "\n"
+                    << "    | " << std::string(static_cast<size_t>(start - 1), ' ') << apply(tone)
+                    << "^" << std::string(static_cast<size_t>(width - 1), '~') << apply(reset)
+                    << "\n";
                 if (diag.endLocation->line != diag.location.line) {
-                    std::cerr << "    | ... through line " << diag.endLocation->line << ", column "
-                              << diag.endLocation->column << "\n";
+                    out << "    | ... through line " << diag.endLocation->line << ", column "
+                        << diag.endLocation->column << "\n";
                 }
             }
         }
     }
 
     for (const auto& note : diag.notes) {
-        std::cerr << kex::color::apply(kex::color::gray) << note.location.file << ":"
-                  << note.location.line << ":" << note.location.column << ":"
-                  << kex::color::apply(kex::color::reset) << " "
-                  << kex::color::apply(kex::color::bold) << kex::color::apply(kex::color::cyan)
-                  << "note:" << kex::color::apply(kex::color::reset) << " " << note.message << "\n";
+        out << apply(gray) << note.location.file << ":" << note.location.line << ":"
+            << note.location.column << ":" << apply(reset) << " " << apply(bold) << apply(cyan)
+            << "note:" << apply(reset) << " " << colorizeMessage(note.message) << "\n";
     }
+    return out.str();
+}
+
+auto formatBriefDiagnostic(const kex::semantic::Diagnostic& diag) -> std::string {
+    return severityLabel(diag) + " " + colorizeMessage(diag.message);
+}
+
+auto formatFileDiagnostic(const std::string& path, const kex::semantic::Diagnostic& diag)
+    -> std::string {
+    using namespace kex::color;
+    return std::string(apply(gray)) + path + ":" + apply(reset) + " " +
+           formatBriefDiagnostic(diag) + "\n";
+}
+
+auto formatBriefException(const std::exception& e, const std::string& indent) -> std::string {
+    if (const auto* coded = dynamic_cast<const kex::diag::CodedError*>(&e)) {
+        kex::semantic::Diagnostic diag{
+            .level = kex::semantic::Diagnostic::Level::Error,
+            .message = coded->what(),
+            .code = coded->code,
+            .args = coded->args,
+        };
+        return formatBriefDiagnostic(diag);
+    }
+    const auto* failed = dynamic_cast<const kex::semantic::DiagnosticError*>(&e);
+    if (!failed || failed->diagnostics.empty()) {
+        return formatBriefError(e.what());
+    }
+    std::string out;
+    for (const auto& diag : failed->diagnostics) {
+        if (!out.empty()) {
+            out += "\n" + indent;
+        }
+        out += formatBriefDiagnostic(diag);
+    }
+    return out;
+}
+
+auto formatBriefError(const std::string& message) -> std::string {
+    using namespace kex::color;
+    return std::string(apply(bold)) + apply(red) + "error:" + apply(reset) + " " +
+           colorizeMessage(message);
+}
+
+auto printSemanticDiagnostic(const kex::semantic::Diagnostic& diag) -> void {
+    std::cerr << formatDiagnostic(diag);
+}
+
+auto fromParseDiagnostic(const kex::ParseDiagnostic& diag) -> kex::semantic::Diagnostic {
+    return kex::semantic::Diagnostic{
+        .level = kex::semantic::Diagnostic::Level::Error,
+        .location = diag.location,
+        .message = diag.message,
+        .code = diag.code,
+        .args = diag.args,
+    };
+}
+
+auto printParseDiagnostic(const kex::ParseDiagnostic& diag) -> void {
+    printSemanticDiagnostic(fromParseDiagnostic(diag));
+}
+
+auto printAborted(const std::string& what) -> void {
+    using namespace kex::color;
+    std::cerr << apply(bold) << apply(magenta) << "Aborted:" << apply(reset) << " " << what << "\n";
 }
 
 auto errorCountPhrase(int count, const char* kind) -> std::string {

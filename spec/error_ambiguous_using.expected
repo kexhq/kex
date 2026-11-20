@@ -1,1 +1,1 @@
-spec/error_ambiguous_using.kex:24:1: error: ambiguous name `pick`, imported from both `Left` and `Right`
+spec/error_ambiguous_using.kex:24:1: [KEXET-0140]: Error, ambiguous name `pick`, imported from both `Left` and `Right`

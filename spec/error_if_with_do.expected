@@ -1,2 +1,2 @@
-spec/error_if_with_do.kex:3:11: error: use 'then' instead of 'do' in if expression: `if cond then body end`
-Aborted: 1 syntax error — fix before running.
+spec/error_if_with_do.kex:3:11: [KEXEP-0158]: Error, use 'then' instead of 'do' in if expression: `if cond then body end`
+Aborted: 1 syntax error. Fix them before running.

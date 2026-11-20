@@ -3699,6 +3699,12 @@ private:
                                 : ::lsp::DiagnosticSeverity::Warning,
                 .source = "kex",
             };
+            // The kind of problem, linked to its explanation (kexhq/kex#656).
+            if (const auto id = diag::idOf(diagnostic.code); !id.empty()) {
+                item.code = ::lsp::OneOf<int, ::lsp::String>{::lsp::String{id}};
+                item.codeDescription =
+                    ::lsp::CodeDescription{.href = ::lsp::Uri::parse(diag::urlOf(diagnostic.code))};
+            }
             if (!diagnostic.notes.empty()) {
                 ::lsp::Array<::lsp::DiagnosticRelatedInformation> related;
                 for (const auto& note : diagnostic.notes) {

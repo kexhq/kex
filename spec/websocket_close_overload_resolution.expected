@@ -1,1 +1,1 @@
-spec/websocket_close_overload_resolution.kex:12:45: error: Cannot call foul function 'close' from pure context
+spec/websocket_close_overload_resolution.kex:12:45: [KEXEF-0001]: Error, Cannot call foul function 'close' from pure context

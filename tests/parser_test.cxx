@@ -1814,7 +1814,7 @@ int main() {
                 assertEqual(
                     parser.diagnostics()[0].message, std::string(
                                                          "`T` is a type parameter, so it cannot "
-                                                         "name a module, give it a longer name"));
+                                                         "name a module. Give it a longer name"));
             }
         });
 

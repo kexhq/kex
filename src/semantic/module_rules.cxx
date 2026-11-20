@@ -54,29 +54,29 @@ auto checkExport(
     const std::vector<std::string>& exceptNames,
     const RuleViolation& report) -> void {
     if (target == current) {
-        return report("module cannot export itself");
+        return report(diag::Code::ModuleExportsItself, {});
     }
     if (!modules.hasModule(target)) {
-        return report("exported module not found: " + target);
+        return report(diag::Code::ExportedModuleNotFound, {{"module", target}});
     }
     for (const auto& name : onlyNames) {
         const auto* symbol = modules.member(target, name);
         if (!symbol) {
-            report("module " + target + " has no name `" + name + "`");
+            report(diag::Code::ModuleHasNoName, {{"module", target}, {"name", name}});
         } else if (!symbol->isExported) {
-            report("cannot export private name `" + name + "` from " + target);
+            report(diag::Code::ExportPrivateName, {{"name", name}, {"module", target}});
         }
     }
     for (const auto& name : exceptNames) {
         const auto* symbol = modules.member(target, name);
         if (!symbol) {
-            report("module " + target + " has no name `" + name + "`");
+            report(diag::Code::ModuleHasNoName, {{"module", target}, {"name", name}});
         } else if (!symbol->isExported) {
-            report("cannot reference private name `" + name + "` in except list");
+            report(diag::Code::PrivateNameInExceptList, {{"name", name}});
         }
     }
     if (onlyNames.empty() && !modules.hasExports(target)) {
-        report("module " + target + " has no public names to export");
+        report(diag::Code::ModuleHasNoPublicNames, {{"module", target}});
     }
 }
 
@@ -89,14 +89,14 @@ auto checkUsing(
     for (const auto& name : onlyNames) {
         const auto* symbol = modules.member(module, name);
         if (!symbol) {
-            report("module " + module + " has no name `" + name + "`");
+            report(diag::Code::ModuleHasNoName, {{"module", module}, {"name", name}});
         } else if (!symbol->isExported) {
-            report("cannot import private name `" + name + "` from " + module);
+            report(diag::Code::ImportPrivateName, {{"name", name}, {"module", module}});
         }
     }
     for (const auto& name : exceptNames) {
         if (const auto* symbol = modules.member(module, name); symbol && !symbol->isExported) {
-            report("cannot reference private name `" + name + "` from " + module);
+            report(diag::Code::ReferencePrivateName, {{"name", name}, {"module", module}});
         }
     }
 }
@@ -125,7 +125,7 @@ auto checkUsing(
     };
     for (const auto& name : onlyNames) {
         if (!declares(name)) {
-            report("module " + requested + " has no name `" + name + "`");
+            report(diag::Code::ModuleHasNoName, {{"module", requested}, {"name", name}});
         }
     }
 }
@@ -251,8 +251,9 @@ auto findModuleRuleViolations(
     };
     // Each `using` against what its module declares.
     forEachUsing(program, [&](const WrittenUsing& written) {
-        const auto report = [&](const std::string& message) {
-            found.push_back({Diagnostic::Level::Error, written.location, message});
+        const auto report = [&](diag::Code code, diag::Args args) {
+            found.push_back(
+                makeDiagnostic(Diagnostic::Level::Error, code, written.location, std::move(args)));
         };
         const auto requested = written.module.dotted();
         const auto module = resolved(written.within, requested);
@@ -269,8 +270,14 @@ auto findModuleRuleViolations(
             std::find(warnedFiles.begin(), warnedFiles.end(), written.location.file) !=
             warnedFiles.end()) {
             found.push_back(
-                {missingModuleIsError ? Diagnostic::Level::Error : Diagnostic::Level::Warning,
-                 written.location, "module not found in source roots: " + requested});
+                missingModuleIsError
+                    ? makeDiagnostic(
+                          Diagnostic::Level::Error, diag::Code::ModuleNotFoundInSourceRoots,
+                          written.location, {{"module", requested}})
+                    : makeDiagnostic(
+                          Diagnostic::Level::Warning,
+                          diag::Code::ModuleNotFoundInSourceRootsWarning, written.location,
+                          {{"module", requested}}));
         }
     });
     const auto export_ = [&](const ast::ExportDecl& decl, const std::string& current) {
@@ -284,8 +291,9 @@ auto findModuleRuleViolations(
         }
         checkExport(
             modules, current, target, decl.onlyNames, decl.exceptNames,
-            [&](const std::string& message) {
-                found.push_back({Diagnostic::Level::Error, decl.location, message});
+            [&](diag::Code code, diag::Args args) {
+                found.push_back(
+                    makeDiagnostic(Diagnostic::Level::Error, code, decl.location, std::move(args)));
             });
     };
     const auto module = [&](const auto& self, const ast::ModuleDef& def,

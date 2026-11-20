@@ -1,6 +1,6 @@
-spec/error_annotation_arity_mismatch.kex:4:1: warning: type annotation for 'add' declares 1 parameter(s) but definition has 2
-spec/error_annotation_arity_mismatch.kex:4:21: error: `+` is not defined for (Integer, Integer) and A
-spec/error_annotation_arity_mismatch.kex:7:16: error: `add` expects argument 1 to be (Integer, Integer), but got Integer
+spec/error_annotation_arity_mismatch.kex:4:1: [KEXWT-0001]: Warning, type annotation for 'add' declares 1 parameter(s) but definition has 2
+spec/error_annotation_arity_mismatch.kex:4:21: [KEXET-0415]: Error, `+` is not defined for (Integer, Integer) and A
+spec/error_annotation_arity_mismatch.kex:7:16: [KEXET-0491]: Error, `add` expects argument 1 to be (Integer, Integer), but got Integer
 
 add : (Integer, Integer) -> A -> Integer
-Aborted: 2 type errors — fix before running (use --no-check to skip).
+Aborted: 2 type errors. Fix them before running, or skip the check with --no-check.

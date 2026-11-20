@@ -281,7 +281,7 @@ auto Lowering::lowerFunctionGroup(
                     continue;
                 }
                 if (!p.name) {
-                    throw LowerError("IR lower: trait-typed dictionary parameter must be named");
+                    throw LowerError(diag::Code::UnnamedDictionaryParameter);
                 }
                 auto dictionary = fresh("Dict_" + *p.name + "_" + trait);
                 auto pat = std::make_unique<Pattern>();

@@ -1,2 +1,2 @@
-spec/error_record_construction_unknown_type.kex:5:14: error: Unknown record type `Crew`
-Aborted: 1 type error — fix before running (use --no-check to skip).
+spec/error_record_construction_unknown_type.kex:5:14: [KEXET-0457]: Error, Unknown record type `Crew`
+Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

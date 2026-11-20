@@ -18,7 +18,7 @@ auto Lowering::lowerMakeGroup(
     const auto& first = *group[0];
     bool isStaticCtor = !first.name.empty() && kex::startsUppercase(first.name);
     if (isStaticCtor) {
-        throw LowerError("IR lower: static constructor '" + first.name + "' not yet ported");
+        throw LowerError(diag::Code::StaticConstructorNotPorted, {{"name", first.name}});
     }
     // A receiver pattern is specifically the `@` sigil (ThisPattern), a
     // record destructure (RecordPattern), or a range (RangePattern) —

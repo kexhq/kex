@@ -485,12 +485,11 @@ auto copyRuntimeBeams(const std::string& outputDir, bool needsPrelude) -> bool {
     return true;
 }
 
-// "Aborted: N type errors — fix before running/compiling".
+// "Aborted: N type errors. Fix them before running, ...".
 auto reportAborted(bool compileRun, int errors) -> void {
-    std::cerr << kex::color::apply(kex::color::bold) << kex::color::apply(kex::color::magenta)
-              << "Aborted:" << kex::color::apply(kex::color::reset) << " "
-              << errorCountPhrase(errors, "type") << " — fix before "
-              << (compileRun ? "running" : "compiling") << " (use --no-check to skip).\n";
+    kex::diagnostics::printAborted(
+        errorCountPhrase(errors, "type") + ". Fix them before " +
+        (compileRun ? "running" : "compiling") + ", or skip the check with --no-check.");
 }
 
 // The temporary output directory of a run without `-o`, removed when the

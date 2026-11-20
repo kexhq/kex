@@ -1,2 +1,2 @@
-spec/error_exhaustive_module_adt.kex:14:3: error: Non-exhaustive match on Shades.Shade: missing case(s) Light
-spec/error_exhaustive_module_adt.kex:22:3: error: Non-exhaustive match on Shades.Shade: missing case(s) Light
+spec/error_exhaustive_module_adt.kex:14:3: [KEXET-0107]: Error, Non-exhaustive match on Shades.Shade: missing case(s) Light
+spec/error_exhaustive_module_adt.kex:22:3: [KEXET-0107]: Error, Non-exhaustive match on Shades.Shade: missing case(s) Light

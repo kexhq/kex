@@ -23,10 +23,11 @@ void Lowering::addFieldAccessor(
         }
         if (entry.record == record && entry.tupleSize == tupleSize && entry.position != position) {
             throw LowerError(
-                "ambiguous record layout for field `" + field + "` on `" + record +
-                "`: indistinguishable " + std::to_string(tupleSize) + "-element layouts place it " +
-                "at positions " + std::to_string(entry.position) + " and " +
-                std::to_string(position));
+                diag::Code::AmbiguousRecordLayout, {{"field", field},
+                                                    {"record", record},
+                                                    {"size", std::to_string(tupleSize)},
+                                                    {"first", std::to_string(entry.position)},
+                                                    {"second", std::to_string(position)}});
         }
     }
     // A local layout goes FIRST, so it wins wherever a tag is all the

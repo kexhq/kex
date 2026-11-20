@@ -820,7 +820,7 @@ int main() {
             assertTrue(out.find("FileHandle<CannotRead, CanWrite>") != std::string::npos, out);
             assertTrue(out.find("=> None : Optional") == std::string::npos, out);
             assertTrue(out.find("=> \"\" : String") == std::string::npos, out);
-            assertTrue(out.find("error:") != std::string::npos, out);
+            assertTrue(out.find("[KEXET-") != std::string::npos, out);
         });
 
         it("renders filesystem read Results and EOF Optionals", []() {
@@ -1211,7 +1211,7 @@ int main() {
                 "let writer = FS.File.open(\"typed.txt\", FS.Write).try\n"
                 "writer.getLine\n"
                 "writer.print(\"ok\")\n");
-            assertTrue(out.find("error:") != std::string::npos, out);
+            assertTrue(out.find("[KEXET-") != std::string::npos, out);
             assertTrue(out.find("=> None : Option") == std::string::npos, out);
             // The write SUCCEEDS, and answers Void rather than the Bool it
             // used to (kexhq/kex#139) — so the REPL suppresses its result the

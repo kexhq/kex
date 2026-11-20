@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ast/ast.hxx"
+#include "../common/diagnostic_codes.hxx"
 #include <string>
 #include <typeinfo>
 #include <variant>
@@ -11,6 +12,9 @@ namespace kex {
 struct ParseDiagnostic {
     SourceLocation location;
     std::string message;
+    // The kind of problem and its template's values (kexhq/kex#656).
+    diag::Code code = diag::Code::None;
+    diag::Args args = {};
 };
 
 class Parser {
@@ -60,7 +64,9 @@ private:
     auto atEnd() const -> bool;
     auto check(TokenType type) const -> bool;
     auto match(TokenType type) -> bool;
-    auto expect(TokenType type, const std::string& message) -> const Token&;
+    // The next token if it is `type`; otherwise the diagnostic `code`, its
+    // `{found}` slot filled with the token there (kexhq/kex#656).
+    auto expect(TokenType type, diag::Code code, diag::Args args = {}) -> const Token&;
     auto skipNewlines() -> void;
     auto currentLocation() const -> SourceLocation;
     template <typename T>
@@ -201,12 +207,13 @@ private:
     auto hasDoBeforeNewline() const -> bool;
     // Error handling and recovery
     // Rejects a single uppercase letter as a declaration name: those are
-    // type parameters. `what` names the construct for the message.
-    auto rejectSingleLetterTypeName(const std::string& name, const char* what) -> void;
+    // type parameters. `code` is the diagnostic for the construct being named.
+    auto rejectSingleLetterTypeName(const std::string& name, diag::Code code) -> void;
     // A keyword where a name belongs: says which word is reserved instead of
     // reporting an unexpected token, which sends the reader hunting the line
     // for a syntax slip that is not there.
-    auto rejectReservedName(const char* what) -> void;
+    // `code` is the diagnostic for the construct being named.
+    auto rejectReservedName(diag::Code code) -> void;
     // Same, for a `let` whose binding name is a keyword — the pattern parser
     // would otherwise report only "Expected pattern". No-op unless the token
     // after `let` is a keyword in an unambiguous name position.
@@ -214,7 +221,13 @@ private:
     // At `if` after `return`: the if expression (`then`, or a deeper-indented
     // body) rather than the value-less `return if COND` guard (#332).
     auto isReturnIfExpressionAhead(int returnColumn) const -> bool;
-    [[noreturn]] auto error(const std::string& message) -> void;
+    // A diagnostic of a registered kind at the current token. When that token
+    // is a lexer error, the lexer's diagnostic is reported instead.
+    [[noreturn]] auto error(diag::Code code, diag::Args args = {}) -> void;
+    // The same, recorded without abandoning the parse.
+    auto report(diag::Code code, SourceLocation location, diag::Args args = {}) -> void;
+    // The token at the cursor as a diagnostic shows it: `identifier [foo]`.
+    auto foundText() const -> std::string;
     auto syncToTopLevel() -> void;
     auto syncToStatement() -> void;
 

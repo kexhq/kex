@@ -28,7 +28,7 @@ struct CheckedInput {
     // Null when the check found an error.
     std::unique_ptr<Program> program;
     // The first error the check found.
-    std::optional<std::string> error;
+    std::optional<semantic::Diagnostic> error;
 };
 
 // Checks `input` in `session` (the session's definitions and bindings,

@@ -1,4 +1,4 @@
-spec/error_annotated_binding_mismatch.kex:7:1: error: Type mismatch: expected Integer, got String
-spec/error_annotated_binding_mismatch.kex:10:3: error: Type mismatch: expected String, got Integer
-spec/error_annotated_binding_mismatch.kex:11:3: error: Type mismatch: expected Integer, got String
-Aborted: 3 type errors — fix before running (use --no-check to skip).
+spec/error_annotated_binding_mismatch.kex:7:1: [KEXET-0001]: Error, Type mismatch: expected Integer, got String
+spec/error_annotated_binding_mismatch.kex:10:3: [KEXET-0001]: Error, Type mismatch: expected String, got Integer
+spec/error_annotated_binding_mismatch.kex:11:3: [KEXET-0001]: Error, Type mismatch: expected Integer, got String
+Aborted: 3 type errors. Fix them before running, or skip the check with --no-check.

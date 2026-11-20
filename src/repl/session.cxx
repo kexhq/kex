@@ -48,6 +48,22 @@ using kex::driver::g_dependencyFailureThrows;
 using kex::driver::LoadedDep;
 using kex::driver::sourceModulesNamedBy;
 using kex::process::BeamVm;
+
+// An error as the REPL prints it: a diagnostic with its code, otherwise the
+// exception's message, both colored like the compiler's (kexhq/kex#656).
+static auto replErrorText(const std::exception& e) -> std::string {
+    return kex::diagnostics::formatBriefException(e, "  ");
+}
+
+// Why a /load failed, after "was not loaded: ": a diagnostic with its code,
+// otherwise the message as it is.
+static auto replLoadFailure(const std::exception& e) -> std::string {
+    if (dynamic_cast<const kex::semantic::DiagnosticError*>(&e) ||
+        dynamic_cast<const kex::diag::CodedError*>(&e)) {
+        return replErrorText(e);
+    }
+    return kex::diagnostics::colorizeMessage(e.what());
+}
 // The BEAM REPL (`kex -i`, and `kex -c --run` without a file): every input is
 // lowered and evaluated in a long-lived BEAM VM. One session: that VM, and
 // everything defined in it so far.
@@ -216,7 +232,7 @@ auto BeamReplSession::load(const std::string& filePath) -> ReplStep {
         parser.parseProgram();
         throwOnParseErrors(parser);
     } catch (const std::exception& e) {
-        std::cerr << "  /load: " << filePath << " was not loaded: " << e.what() << "\n";
+        std::cerr << "  /load: " << filePath << " was not loaded: " << replLoadFailure(e) << "\n";
         return ReplStep::Next;
     }
     // Checked with the session and the modules it uses before it joins:
@@ -231,17 +247,15 @@ auto BeamReplSession::load(const std::string& filePath) -> ReplStep {
         mergeLoadedForCheck(checkProgram, filePath);
         kex::semantic::Analyzer checkAnalyzer(&preludeSemanticInterfaces());
         if (!checkAnalyzer.analyze(checkProgram)) {
-            std::string message = "semantic analysis failed";
             for (const auto& diagnostic : checkAnalyzer.diagnostics()) {
                 if (diagnostic.level == kex::semantic::Diagnostic::Level::Error) {
-                    message = diagnostic.message;
-                    break;
+                    throw kex::semantic::DiagnosticError(diagnostic);
                 }
             }
-            throw std::runtime_error(message);
+            throw std::runtime_error("semantic analysis failed");
         }
     } catch (const std::exception& e) {
-        std::cerr << "  /load: " << filePath << " was not loaded: " << e.what() << "\n";
+        std::cerr << "  /load: " << filePath << " was not loaded: " << replLoadFailure(e) << "\n";
         if (g_replLineFromScript) {
             g_replScriptFailed = true;
             return ReplStep::Stop;
@@ -325,7 +339,7 @@ auto BeamReplSession::define(const std::string& source) -> void {
         if (!checkAnalyzer.analyze(checkProgram)) {
             for (const auto& diagnostic : checkAnalyzer.diagnostics()) {
                 if (diagnostic.level == kex::semantic::Diagnostic::Level::Error) {
-                    throw std::runtime_error(diagnostic.message);
+                    throw kex::semantic::DiagnosticError(diagnostic);
                 }
             }
             throw std::runtime_error("semantic analysis failed");
@@ -498,7 +512,7 @@ auto BeamReplSession::evaluate(
     if (!semanticAnalyzer.analyze(semanticProgram)) {
         for (const auto& diagnostic : semanticAnalyzer.diagnostics()) {
             if (diagnostic.level == kex::semantic::Diagnostic::Level::Error) {
-                throw std::runtime_error(diagnostic.message);
+                throw kex::semantic::DiagnosticError(diagnostic);
             }
         }
         throw std::runtime_error("semantic analysis failed");
@@ -519,7 +533,7 @@ auto BeamReplSession::evaluate(
         if (!withAnalyzer.analyze(withProgram)) {
             for (const auto& diagnostic : withAnalyzer.diagnostics()) {
                 if (diagnostic.level == kex::semantic::Diagnostic::Level::Error) {
-                    throw std::runtime_error(diagnostic.message);
+                    throw kex::semantic::DiagnosticError(diagnostic);
                 }
             }
             throw std::runtime_error("semantic analysis failed");
@@ -980,9 +994,7 @@ auto BeamReplSession::run() -> int {
             try {
                 input = handleReplWithCommand(input, m_sessionWiths, pendingWith);
             } catch (const std::exception& e) {
-                std::cerr << "  " << kex::color::apply(kex::color::red)
-                          << "error:" << kex::color::apply(kex::color::reset) << " " << e.what()
-                          << "\n";
+                std::cerr << "  " << replErrorText(e) << "\n";
                 if (g_replLineFromScript) {
                     g_replScriptFailed = true;
                     break;
@@ -1083,9 +1095,7 @@ auto BeamReplSession::run() -> int {
                 break;
             }
         } catch (const std::exception& e) {
-            std::cerr << "  " << kex::color::apply(kex::color::red)
-                      << "error:" << kex::color::apply(kex::color::reset) << " " << e.what()
-                      << "\n";
+            std::cerr << "  " << replErrorText(e) << "\n";
             if (g_replLineFromScript) {
                 g_replScriptFailed = true;
                 break;
@@ -1258,7 +1268,10 @@ auto WalkerReplSession::load(const std::string& filePath) -> ReplStep {
                 &preludeSemanticInterfaces());
             if (!checked.program) {
                 std::cerr << "  /load: " << filePath << " was not loaded: "
-                          << checked.error.value_or("semantic analysis failed") << "\n";
+                          << (checked.error
+                                  ? kex::diagnostics::formatBriefDiagnostic(*checked.error)
+                                  : kex::diagnostics::formatBriefError("semantic analysis failed"))
+                          << "\n";
                 return ReplStep::Next;
             }
             keepChecked(std::move(checked));
@@ -1276,7 +1289,7 @@ auto WalkerReplSession::load(const std::string& filePath) -> ReplStep {
         m_replAccumSource += readFile(filePath) + "\n";
         std::cout << "  loaded " << filePath << "\n";
     } catch (const std::exception& e) {
-        std::cerr << "  /load: " << filePath << " was not loaded: " << e.what() << "\n";
+        std::cerr << "  /load: " << filePath << " was not loaded: " << replLoadFailure(e) << "\n";
     }
     return ReplStep::Next;
 }
@@ -1383,7 +1396,7 @@ auto WalkerReplSession::evaluate(
         // Analyze a parallel source containing prior REPL bindings so the
         // displayed type is the source-level type rather than FileHandle.
         std::optional<std::string> semanticType;
-        std::optional<std::string> semanticError;
+        std::optional<kex::semantic::Diagnostic> semanticError;
         // Before the try: its catch-all swallows exceptions so a stale
         // semantic history cannot break evaluation — this error must
         // surface instead.
@@ -1460,7 +1473,7 @@ auto WalkerReplSession::evaluate(
         }
 
         if (semanticError) {
-            throw std::runtime_error(*semanticError);
+            throw kex::semantic::DiagnosticError(*semanticError);
         }
 
         if (checked) {
@@ -1587,9 +1600,7 @@ auto WalkerReplSession::run() -> int {
             try {
                 line = handleReplWithCommand(line, m_sessionWiths, pendingWith);
             } catch (const std::exception& e) {
-                std::cerr << "  " << kex::color::apply(kex::color::red)
-                          << "error:" << kex::color::apply(kex::color::reset) << " " << e.what()
-                          << "\n";
+                std::cerr << "  " << replErrorText(e) << "\n";
                 if (g_replLineFromScript) {
                     g_replScriptFailed = true;
                     break;
@@ -1674,9 +1685,7 @@ auto WalkerReplSession::run() -> int {
         try {
             evaluate(std::move(source), implicitDo, pendingWith);
         } catch (const std::exception& e) {
-            std::cerr << "  " << kex::color::apply(kex::color::red)
-                      << "error:" << kex::color::apply(kex::color::reset) << " " << e.what()
-                      << "\n";
+            std::cerr << "  " << replErrorText(e) << "\n";
             if (g_replLineFromScript) {
                 g_replScriptFailed = true;
                 break;

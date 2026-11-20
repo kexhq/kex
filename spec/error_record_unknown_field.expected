@@ -1,1 +1,1 @@
-spec/error_record_unknown_field.kex:22:58: error: record `Rev` has no field `middle` — it has aardvark, apple, zebra
+spec/error_record_unknown_field.kex:22:58: [KEXET-0452]: Error, record `Rev` has no field `middle`. It has aardvark, apple, zebra

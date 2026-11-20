@@ -1,2 +1,2 @@
-spec/error_constructor_payloads.kex:8:28: error: `Broken` takes 0 values, but got 1
-spec/error_constructor_payloads.kex:9:28: error: `Torn` takes 1 value, but got 2
+spec/error_constructor_payloads.kex:8:28: [KEXET-0103]: Error, `Broken` takes 0 values, but got 1
+spec/error_constructor_payloads.kex:9:28: [KEXET-0102]: Error, `Torn` takes 1 value, but got 2

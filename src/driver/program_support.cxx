@@ -281,7 +281,7 @@ auto expandReplProgram(kex::ast::Program& program) -> void {
     }
     for (const auto& diagnostic : diagnostics) {
         if (diagnostic.level == kex::semantic::Diagnostic::Level::Error) {
-            throw std::runtime_error(diagnostic.message);
+            throw kex::semantic::DiagnosticError(diagnostic);
         }
     }
     throw std::runtime_error("compile-time expansion failed");

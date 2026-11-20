@@ -124,7 +124,7 @@ auto typesExactlyEqual(const TypePtr& a, const TypePtr& b) -> bool {
             } else if constexpr (std::is_same_v<AT, UnknownType>) {
                 return true;
             } else if constexpr (std::is_same_v<AT, VoidType>) {
-                return at.reason == bt->reason;
+                return at.leftRecord == bt->leftRecord && at.rightRecord == bt->rightRecord;
             } else if constexpr (std::is_same_v<AT, ConstrainedType>) {
                 return at.varName == bt->varName && at.traitName == bt->traitName &&
                        at.genericId == bt->genericId;

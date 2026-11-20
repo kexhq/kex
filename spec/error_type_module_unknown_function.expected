@@ -1,2 +1,2 @@
-spec/error_type_module_unknown_function.kex:11:28: error: `Time` has no function `monotonic`
-spec/error_type_module_unknown_function.kex:14:29: error: `Culture` has no function `named`
+spec/error_type_module_unknown_function.kex:11:28: [KEXET-0423]: Error, `Time` has no function `monotonic`
+spec/error_type_module_unknown_function.kex:14:29: [KEXET-0423]: Error, `Culture` has no function `named`

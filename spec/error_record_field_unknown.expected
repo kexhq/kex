@@ -1,1 +1,1 @@
-spec/error_record_field_unknown.kex:13:29: error: Undefined method `nonexistent` for `User`
+spec/error_record_field_unknown.kex:13:29: [KEXET-0101]: Error, Undefined method `nonexistent` for `User`

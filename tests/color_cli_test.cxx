@@ -218,7 +218,20 @@ int main() {
                assertTrue(contains(out, "\x1b[90m"), "missing gray location prefix: " + out);
                assertTrue(contains(out, "\x1b[31m"), "missing red error label: " + out);
                assertTrue(contains(out, "\x1b[35m->"), "missing magenta arrow: " + out);
+               assertTrue(contains(out, "\x1b[1m\x1b[31m[KEXET-"), "label not bold red: " + out);
+               assertTrue(contains(out, "]: Error,"), "label does not say Error: " + out);
            });
+
+        it("colors a warning's label and underline yellow, not red", []() {
+            auto path = writeTempSource(RANGED_VALIDATION_SRC);
+            auto out = runKex({"--check", path}, "");
+            std::remove(path.c_str());
+            assertTrue(
+                contains(out, "\x1b[1m\x1b[33m[KEXWC-0001]: Warning,"),
+                "warning label not bold yellow: " + out);
+            assertTrue(contains(out, "\x1b[33m^~"), "warning underline not yellow: " + out);
+            assertFalse(contains(out, "\x1b[31m[KEXWC"), "warning label red: " + out);
+        });
 
         it("renders function names bold and types cyan (distinct, not the same)", []() {
             auto path = writeTempSource(TYPE_ERROR_SRC);
@@ -239,7 +252,8 @@ int main() {
             auto out = runKex({"--no-colors", "--check", path}, "");
             std::remove(path.c_str());
             assertFalse(hasAnsi(out), "unexpected ANSI escapes in: " + out);
-            assertTrue(contains(out, "error:"), "missing plain 'error:' label: " + out);
+            // A coded diagnostic labels itself with its code (`[KEXET-...]:`).
+            assertTrue(contains(out, "[KEXET-"), "missing plain error label: " + out);
             assertTrue(contains(out, "filter"), "missing function name: " + out);
             assertTrue(contains(out, "Integer"), "missing type name: " + out);
             assertTrue(contains(out, "->"), "missing arrow: " + out);
@@ -250,7 +264,7 @@ int main() {
             auto out = runKex({"--no-colors", "--check", path}, "");
             std::remove(path.c_str());
             assertTrue(
-                contains(out, ":3:15-3:17: warning: ranged warning"),
+                contains(out, ":3:15-3:17: [KEXWC-0001]: Warning, ranged warning"),
                 "missing exclusive range in diagnostic header: " + out);
             assertTrue(
                 contains(out, "3 | main do demo`abcde` end"),
@@ -274,7 +288,7 @@ int main() {
             std::remove(path.c_str());
             assertTrue(
                 contains(
-                    out, ":2:1: error: Compile-time validator "
+                    out, ":2:1: [KEXEC-0057]: Error, Compile-time validator "
                          "`validateDemo` crashed:"),
                 "missing primary validator diagnostic: " + out);
             assertTrue(

@@ -544,8 +544,8 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr, const std::vector<TypeP
                         itemType = list->element;
                     } else {
                         error(
-                            item->location, "Collection-block spread expects a list, got " +
-                                                typeToString(spreadType));
+                            diag::Code::CollectionSpreadNotList, item->location,
+                            {{"type", typeToString(spreadType)}});
                         itemType = Type::unknown();
                     }
                 } else if (const auto* guarded = std::get_if<ast::TrailingIf>(&item->kind)) {
@@ -554,8 +554,8 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr, const std::vector<TypeP
                         !std::holds_alternative<TypeVar>(condition->kind) &&
                         !typesEqual(condition, Type::boolean())) {
                         error(
-                            guarded->condition->location,
-                            "Collection-block guard requires Bool, got " + typeToString(condition));
+                            diag::Code::CollectionGuardNotBool, guarded->condition->location,
+                            {{"type", typeToString(condition)}});
                     }
                     itemType = inferExpr(*guarded->expr);
                 } else {
@@ -735,9 +735,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     }
                 }
                 if (node.name == "from" && m_inCastSlot) {
-                    error(
-                        expr.location,
-                        "`from` is not available in a cast — no caller is waiting for a reply");
+                    error(diag::Code::FromInCast, expr.location);
                     return Type::unknown();
                 }
                 if (m_recordsNames && boundLocally) {
@@ -774,10 +772,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (!type) {
                     if (node.name == "new") {
                         error(
-                            expr.location, m_inMakeBlock && m_currentMakeType
-                                               ? "`new` requires a record receiver"
-                                               : "`new` requires a record receiver (or an "
-                                                 "explicit local binding)");
+                            m_inMakeBlock && m_currentMakeType
+                                ? diag::Code::NewRequiresRecordReceiver
+                                : diag::Code::NewRequiresRecordReceiverOrBinding,
+                            expr.location);
                     } else if (
                         node.name != "_" && !bareNameDeclared(node.name) &&
                         !m_referencedConstants.contains(&expr)) {
@@ -829,12 +827,17 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // (`xs.map(Wrap)`), it was "undefined", or, under the `using`
                 // that brings it in, to be brought in with that `using`.
                 if (const auto arity = constructorArityInScope(node.name); arity && *arity > 0) {
-                    error(
-                        expr.location,
-                        "`" + node.name + "` is a constructor taking " + std::to_string(*arity) +
-                            (*arity == 1 ? " value" : " values") + ", not a value: call it (`" +
-                            node.name + "(…)`), or pass a block (`{ |x| " + node.name +
-                            (*arity == 1 ? "(x) }`)" : "(x, …) }`)"));
+                    if (*arity == 1) {
+                        error(
+                            diag::Code::ConstructorUsedAsValueOneValue, expr.location,
+                            {{"name", node.name}, {"block", "{ |x| " + node.name + "(x) }"}});
+                    } else {
+                        error(
+                            diag::Code::ConstructorUsedAsValue, expr.location,
+                            {{"name", node.name},
+                             {"count", std::to_string(*arity)},
+                             {"block", "{ |x| " + node.name + "(x, …) }"}});
+                    }
                     return Type::unknown();
                 }
                 if (!reportConstructorOutOfScope(node.name, expr.location) &&
@@ -851,20 +854,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // remove (kexhq/kex#180).
                 auto actual = node.value ? resolve(inferExpr(*node.value)) : Type::unknown();
                 if (!m_capabilities.count(capability)) {
-                    error(
-                        expr.location, "'" + capability +
-                                           "' is not a capability, so it cannot "
-                                           "be replaced by 'with' — declare it as "
-                                           "`capability " +
-                                           capability + " do ... end`");
+                    error(diag::Code::NotACapability, expr.location, {{"capability", capability}});
                 } else if (
                     !std::holds_alternative<UnknownType>(actual->kind) &&
                     !std::holds_alternative<TypeVar>(actual->kind) &&
                     !satisfiesTrait(actual, capability)) {
                     // The replacement has to provide what the capability declares.
                     error(
-                        expr.location, "replacement for capability '" + capability +
-                                           "' does not implement it: " + typeToString(actual));
+                        diag::Code::CapabilityReplacementMismatch, expr.location,
+                        {{"capability", capability}, {"type", typeToString(actual)}});
                 }
                 pushScope();
                 auto bodyType = inferBody(node.body);
@@ -913,8 +911,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     return Type::unknown();
                 }
                 error(
-                    expr.location,
-                    "`.try` expects Result or Optional, got " + typeToString(operand));
+                    diag::Code::TryNotResultOrOptional, expr.location,
+                    {{"type", typeToString(operand)}});
                 return Type::unknown();
             } else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
                 auto outerTryingDepth = m_tryingBlockDepth;
@@ -946,8 +944,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         !argMatchesParam(candidate, result) &&
                         !argMatchesParam(result, candidate)) {
                         error(
-                            expr.location, "`trying` body returns " + typeToString(result) +
-                                               " but rescue returns " + typeToString(candidate));
+                            diag::Code::TryingRescueMismatch, expr.location,
+                            {{"body", typeToString(result)}, {"rescue", typeToString(candidate)}});
                     }
                 };
                 checkRescue(node.rescue, merge);
@@ -1071,11 +1069,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
                 if (const auto* binding = varType ? bindingOf(node.name) : nullptr;
                     binding && !binding->isVar) {
-                    error(expr.location, "Cannot assign to immutable binding: " + node.name);
+                    error(diag::Code::AssignToImmutable, expr.location, {{"name", node.name}});
                 }
                 if (!node.path.empty()) {
                     if (node.path.size() != 1) {
-                        error(expr.location, "nested record-field assignment is not supported yet");
+                        error(diag::Code::NestedFieldAssignment, expr.location);
                         return Type::unit();
                     }
                     auto resolvedVar = varType ? resolve(varType) : Type::unknown();
@@ -1083,14 +1081,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     auto record = named ? m_recordFields.find(resolveRecordName(named->name))
                                         : m_recordFields.end();
                     if (record == m_recordFields.end()) {
-                        error(expr.location, "field assignment requires a record binding");
+                        error(diag::Code::FieldAssignmentNeedsRecord, expr.location);
                         return Type::unit();
                     }
                     auto field = record->second.find(node.path.front());
                     if (field == record->second.end()) {
                         error(
-                            expr.location, "record `" + named->name + "` has no field `" +
-                                               node.path.front() + "`");
+                            diag::Code::RecordHasNoField, expr.location,
+                            {{"record", named->name}, {"field", node.path.front()}});
                     } else if (
                         !containsOpenType(valueType) && !containsOpenType(field->second) &&
                         !argMatchesParam(valueType, field->second) &&
@@ -1160,13 +1158,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                 outcome = inferBinaryOp(op, left, right, location);
                             } else {
                                 error(
-                                    location, "`" + symbol + "` is not defined for " +
-                                                  typeToString(left) + " and " +
-                                                  typeToString(resolve(right)) +
-                                                  (lacksBuiltinOperator(left, symbol)
-                                                       ? "; declare it in a `make " +
-                                                             typeToString(left) + "` block"
-                                                       : std::string{}));
+                                    lacksBuiltinOperator(left, symbol)
+                                        ? diag::Code::OperatorNotDefinedDeclareInMake
+                                        : diag::Code::OperatorNotDefined,
+                                    location,
+                                    {{"operator", symbol},
+                                     {"left", typeToString(left)},
+                                     {"right", typeToString(resolve(right))}});
                             }
                             answerPending(resultId, outcome);
                         });
@@ -1266,12 +1264,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                 const bool undecided = isUndetermined(equal);
                                 if (!undecided && !typesEqual(equal, Type::boolean())) {
                                     error(
-                                        expr.location, "`!=` is not defined here: `" +
-                                                           typeToString(resolve(leftType)) +
-                                                           "`'s `==` answers " +
-                                                           typeToString(equal) +
-                                                           ", not Bool, so there is no inequality "
-                                                           "to derive — declare `!=` beside it");
+                                        diag::Code::InequalityNotDerivable, expr.location,
+                                        {{"type", typeToString(resolve(leftType))},
+                                         {"result", typeToString(equal)}});
                                 }
                                 return Type::boolean();
                             }
@@ -1343,12 +1338,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                             lacksBuiltinOperator(receiver, operatorName) &&
                             (bound || std::holds_alternative<NamedType>(receiver->kind));
                         error(
+                            !nominal     ? diag::Code::OperatorNotDefined
+                            : traitOwner ? diag::Code::OperatorNotDefinedDeclareInTrait
+                                         : diag::Code::OperatorNotDefinedDeclareInMake,
                             expr.location,
-                            "`" + operatorName + "` is not defined for " + owner + " and " +
-                                typeToString(right) +
-                                (!nominal     ? std::string{}
-                                 : traitOwner ? "; declare it in trait `" + owner + "`"
-                                              : "; declare it in a `make " + owner + "` block"));
+                            {{"operator", operatorName},
+                             {"left", owner},
+                             {"right", typeToString(right)}});
                         return Type::unknown();
                     }
                 }
@@ -1363,8 +1359,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         !std::holds_alternative<UnknownType>(resolved->kind) &&
                         !typesEqual(resolved, Type::boolean())) {
                         error(
-                            expr.location,
-                            "Logical not '!' requires Bool, got " + typeToString(resolved));
+                            diag::Code::LogicalNotRequiresBool, expr.location,
+                            {{"type", typeToString(resolved)}});
                     }
                     return Type::boolean();
                 }
@@ -1377,8 +1373,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         // reached "Cannot negate" on the walker and `badarith` on
                         // BEAM, with nothing said while checking.
                         error(
-                            expr.location,
-                            "Unary '-' requires a number, got " + typeToString(resolved));
+                            diag::Code::NegateRequiresNumber, expr.location,
+                            {{"type", typeToString(resolved)}});
+
                         return Type::unknown();
                     }
                     return resolved;
@@ -1521,7 +1518,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                             ? std::get_if<ast::Identifier>(&node.receiver->kind)
                                             : nullptr) {
                     if (const auto* binding = bindingOf(ident->name); binding && !binding->isVar) {
-                        error(expr.location, "Cannot use '!' on immutable binding: " + ident->name);
+                        error(diag::Code::BangOnImmutable, expr.location, {{"name", ident->name}});
                     }
                 }
                 // Local module constructors use the same namespace syntax as
@@ -1552,8 +1549,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                 !constructor->second.imported) {
                                 if (!constructor->second.isPublic && m_currentModulePath != *path) {
                                     error(
-                                        expr.location, "cannot access private name `" +
-                                                           node.method + "` from " + *path);
+                                        diag::Code::PrivateNameAccess, expr.location,
+                                        {{"name", node.method}, {"module", *path}});
                                 }
                                 m_decidedCalls[&expr] = {
                                     CallKind::Constructor, constructor->second.typeName.empty()
@@ -1681,15 +1678,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                 !m_importedModulePaths.count(uid->name);
                             if (retiredRoot) {
                                 error(
-                                    r->location,
-                                    "`" + uid->name +
-                                        ".` interop is now `BEAM.`, "
-                                        "followed by the module's real name: write "
-                                        "`BEAM.lists.reverse(xs)`, `BEAM.erlang.node()`" +
-                                        std::string(
-                                            uid->name == "Elixir"
-                                                ? ", `BEAM.Elixir.Enum.map(xs, f)`"
-                                                : ""));
+                                    uid->name == "Elixir" ? diag::Code::RetiredElixirInterop
+                                                          : diag::Code::RetiredInteropRoot,
+                                    r->location, {{"root", uid->name}});
                             }
                             // Decided by its path: an Erlang function, or a runtime
                             // primitive; each segment names a module.
@@ -1985,7 +1976,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (writtenPath && importedPath) {
                     if (auto problem =
                             namespaceCallProblem(*writtenPath, *importedPath, node.method)) {
-                        error(node.receiver->location, *problem);
+                        error(problem->first, node.receiver->location, problem->second);
                         for (const auto& a : node.args) {
                             if (a) {
                                 inferExpr(*a);
@@ -2121,12 +2112,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                             exported.push_back(name);
                         }
                         std::sort(exported.begin(), exported.end());
-                        auto message =
-                            "`" + *importedPath + "` has no function `" + node.method + "`";
                         if (auto hint = closestName(node.method, exported); !hint.empty()) {
-                            message += " — did you mean `" + hint + "`?";
+                            error(
+                                diag::Code::ModuleHasNoFunctionDidYouMean, expr.location,
+                                {{"module", *importedPath}, {"name", node.method}, {"hint", hint}});
+                        } else {
+                            error(
+                                diag::Code::ModuleHasNoFunction, expr.location,
+                                {{"module", *importedPath}, {"name", node.method}});
                         }
-                        error(expr.location, message);
                         for (const auto& a : node.args) {
                             if (a) {
                                 inferExpr(*a);
@@ -2233,8 +2227,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     if (m_privateFreeFunctions.contains(*importedPath + "\n" + node.method) &&
                         !withinModule(*importedPath)) {
                         error(
-                            expr.location, "cannot access private name `" + node.method +
-                                               "` from " + *importedPath);
+                            diag::Code::PrivateNameAccess, expr.location,
+                            {{"name", node.method}, {"module", *importedPath}});
                         return Type::unknown();
                     }
                 } else if (
@@ -2323,9 +2317,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         if (!infinity && !containsOpenType(resolved) &&
                             !typesEqual(resolved, Type::integer())) {
                             error(
+                                diag::Code::WithinNotMilliseconds,
                                 arg ? arg->location : expr.location,
-                                "`within:` expects Integer milliseconds or :infinity, got " +
-                                    typeToString(resolved));
+                                {{"type", typeToString(resolved)}});
                         }
                         continue;
                     }
@@ -2427,54 +2421,47 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                              : (receiverNamed->typeArgs.empty()
                                                     ? Type::unknown()
                                                     : receiverNamed->typeArgs.front()));
-                        const auto unwrappedName = typeToString(unwrapped);
-                        const bool vowel = !unwrappedName.empty() &&
-                                           std::string("AEIOUaeiou").find(unwrappedName.front()) !=
-                                               std::string::npos;
                         const bool openUnwrapped = containsOpenType(unwrapped);
-                        const auto wanted = openUnwrapped ? std::string("the unwrapped value")
-                                                          : (vowel ? "an " : "a ") + unwrappedName;
-                        const std::string wrapper = optionalReceiver ? "optional" : "result";
                         if (wrappedFallback) {
+                            const std::string got =
+                                constructedWrapped
+                                    ? "`" +
+                                          std::string(
+                                              std::get_if<ast::FunctionCall>(&argument->kind)
+                                                  ? std::get<ast::FunctionCall>(argument->kind).name
+                                                  : std::get<ast::MethodCall>(argument->kind)
+                                                        .method) +
+                                          "(…)`"
+                                // A bare `None` is typed `T?` now that
+                                // constructors carry their ADT; its spelling is
+                                // what the reader wrote.
+                                : argument &&
+                                        (std::holds_alternative<ast::NoneLiteral>(argument->kind) ||
+                                         (std::holds_alternative<ast::UpperIdentifier>(
+                                              argument->kind) &&
+                                          std::get<ast::UpperIdentifier>(argument->kind).name ==
+                                              "None"))
+                                    ? std::string("None")
+                                    : typeToString(fallback);
                             error(
+                                openUnwrapped
+                                    ? (optionalReceiver ? diag::Code::OrWrappedFallbackOptionalOpen
+                                                        : diag::Code::OrWrappedFallbackResultOpen)
+                                    : (optionalReceiver ? diag::Code::OrWrappedFallbackOptional
+                                                        : diag::Code::OrWrappedFallbackResult),
                                 argument ? argument->location : expr.location,
-                                "`or` needs " + wanted + " to fall back to, but got " +
-                                    (constructedWrapped
-                                         ? "`" +
-                                               std::string(
-                                                   std::get_if<ast::FunctionCall>(&argument->kind)
-                                                       ? std::get<ast::FunctionCall>(argument->kind)
-                                                             .name
-                                                       : std::get<ast::MethodCall>(argument->kind)
-                                                             .method) +
-                                               "(…)`"
-                                     // A bare `None` is typed `T?` now
-                                     // that constructors carry their ADT;
-                                     // its spelling is what the reader
-                                     // wrote.
-                                     : argument && (std::holds_alternative<ast::NoneLiteral>(
-                                                        argument->kind) ||
-                                                    (std::holds_alternative<ast::UpperIdentifier>(
-                                                         argument->kind) &&
-                                                     std::get<ast::UpperIdentifier>(argument->kind)
-                                                             .name == "None"))
-                                         ? std::string("None")
-                                         : typeToString(fallback)) +
-                                    " — `or` is what leaves the " + wrapper +
-                                    "; pass a plain default, keep the value as it is, "
-                                    "or `match` on it");
+                                {{"type", typeToString(unwrapped)}, {"got", got}});
                         } else if (
                             functionFallback && !openUnwrapped &&
                             !std::holds_alternative<UnknownType>(unwrapped->kind) &&
                             !std::holds_alternative<FuncType>(unwrapped->kind)) {
-                            const std::string given = node.args.empty() ? "block" : "function";
+                            const bool block = node.args.empty();
                             error(
-                                argument->location,
-                                "`or` needs " + wanted + " to fall back to, but got a " + given +
-                                    " — `or` never calls it, so the " + given +
-                                    " itself would be the answer; pass a plain default, "
-                                    "or `match` on the " +
-                                    wrapper + " to compute one");
+                                block ? (optionalReceiver ? diag::Code::OrBlockFallbackOptional
+                                                          : diag::Code::OrBlockFallbackResult)
+                                      : (optionalReceiver ? diag::Code::OrFunctionFallbackOptional
+                                                          : diag::Code::OrFunctionFallbackResult),
+                                argument->location, {{"type", typeToString(unwrapped)}});
                         }
                     }
                 }
@@ -2590,9 +2577,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                     elemType = std::move(joined);
                                 } else {
                                     error(
-                                        expr.location,
-                                        "List elements must be the same type. Expected " +
-                                            typeToString(elemType) + ", got " + typeToString(t));
+                                        diag::Code::ListElementMismatch, expr.location,
+                                        {{"expected", typeToString(elemType)},
+                                         {"actual", typeToString(t)}});
                                 }
                             }
                         }
@@ -2610,14 +2597,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                             !open(element) && !argMatchesParam(element, elemType) &&
                             !argMatchesParam(elemType, element)) {
                             error(
-                                (*node.rest)->location,
-                                "The tail of `[x | rest]` must be a list of " +
-                                    typeToString(elemType) + ", got " + typeToString(rest));
+                                diag::Code::ListTailElementMismatch, (*node.rest)->location,
+                                {{"element", typeToString(elemType)},
+                                 {"actual", typeToString(rest)}});
                         }
                     } else if (!open(rest)) {
                         error(
-                            (*node.rest)->location,
-                            "The tail of `[x | rest]` must be a list, got " + typeToString(rest));
+                            diag::Code::ListTailNotList, (*node.rest)->location,
+                            {{"actual", typeToString(rest)}});
                     }
                 }
                 return Type::list(elemType);
@@ -2670,9 +2657,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 const auto unresolved = [](const TypePtr& bound) { return isUndetermined(bound); };
                 if ((!startElement && !unresolved(startType)) ||
                     (!endElement && !unresolved(endType))) {
-                    error(expr.location, "Range endpoints must be Integer, Float, or Char");
+                    error(diag::Code::RangeEndpointType, expr.location);
                 } else if (startElement && endElement && !typesEqual(startElement, endElement)) {
-                    error(expr.location, "Range endpoints must have the same type");
+                    error(diag::Code::RangeEndpointsDiffer, expr.location);
                 }
                 return Type::named("Range", {startElement ? startElement : Type::integer()});
             } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
@@ -2699,8 +2686,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         !std::holds_alternative<UnknownType>(resolved->kind) &&
                         !typesEqual(resolved, Type::boolean())) {
                         error(
-                            expr.location,
-                            "If condition must be Bool, got " + typeToString(resolved));
+                            diag::Code::IfConditionNotBool, expr.location,
+                            {{"type", typeToString(resolved)}});
                     }
                 }
                 // A branch that exits the function produces nothing for the
@@ -2740,9 +2727,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         node.elseBody && !rtPermissive && !rePermissive &&
                         !argMatchesParam(elifType, rt) && !argMatchesParam(rt, elifType)) {
                         error(
-                            expr.location, "Branch type mismatch: 'if' returns " +
-                                               typeToString(rt) + " but 'elif' returns " +
-                                               typeToString(elifType));
+                            diag::Code::ElifBranchMismatch, expr.location,
+                            {{"then", typeToString(rt)}, {"other", typeToString(elifType)}});
                     }
                     if (rtPermissive && !rePermissive) {
                         branchType = elifType;
@@ -2767,9 +2753,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         !thenPermissive && !elsePermissive && !argMatchesParam(elseType, rt) &&
                         !argMatchesParam(rt, elseType)) {
                         error(
-                            expr.location, "Branch type mismatch: 'if' returns " +
-                                               typeToString(rt) + " but 'else' returns " +
-                                               typeToString(elseType));
+                            diag::Code::ElseBranchMismatch, expr.location,
+                            {{"then", typeToString(rt)}, {"other", typeToString(elseType)}});
                     }
                     if (thenPermissive && !elsePermissive) {
                         branchType = elseType;
@@ -2830,9 +2815,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                 !armPermissive && !argMatchesParam(t, rt) &&
                                 !argMatchesParam(rt, t)) {
                                 error(
-                                    expr.location, "Match arm type mismatch: expected " +
-                                                       typeToString(rt) + " but arm returns " +
-                                                       typeToString(t));
+                                    diag::Code::MatchArmMismatch, expr.location,
+                                    {{"expected", typeToString(rt)}, {"actual", typeToString(t)}});
                             }
                         }
                     }
@@ -2877,9 +2861,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     if (const auto waited = resolve(inferExpr(**node.timeout));
                         isConcreteValue(waited) && !argMatchesParam(waited, Type::integer())) {
                         error(
-                            (*node.timeout)->location,
-                            "`after timeout:` takes milliseconds, an Integer, but got " +
-                                typeToString(waited));
+                            diag::Code::AfterTimeoutNotInteger, (*node.timeout)->location,
+                            {{"type", typeToString(waited)}});
                     }
                 }
                 if (node.afterBody && *node.afterBody) {
@@ -2985,8 +2968,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         !std::holds_alternative<UnknownType>(resolved->kind) &&
                         !typesEqual(resolved, Type::boolean())) {
                         error(
-                            expr.location,
-                            "While condition must be Bool, got " + typeToString(resolved));
+                            diag::Code::WhileConditionNotBool, expr.location,
+                            {{"type", typeToString(resolved)}});
                     }
                 }
                 inferBody(node.body);
@@ -3000,14 +2983,16 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (sourceName == names::kThisType || sourceName == "New") {
                     if (!m_inMakeBlock || !m_currentMakeType) {
                         error(
-                            expr.location,
-                            "`" + sourceName + "` construction requires a make block receiver");
+                            diag::Code::ThisConstructionOutsideMake, expr.location,
+                            {{"name", sourceName}});
                         return Type::unknown();
                     }
                     auto receiver = resolve(m_currentMakeType);
                     auto* named = std::get_if<NamedType>(&receiver->kind);
                     if (!named || !m_recordFields.count(resolveRecordName(named->name))) {
-                        error(expr.location, "`" + sourceName + "` requires a record receiver");
+                        error(
+                            diag::Code::ThisConstructionNeedsRecord, expr.location,
+                            {{"name", sourceName}});
                         return Type::unknown();
                     }
                     sourceName = named->name;
@@ -3049,8 +3034,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         if (!containsOpenType(valueType) &&
                             !argMatchesParam(valueType, Type::named(recordName))) {
                             error(
-                                val->location, "record spread expects `" + sourceName +
-                                                   "`, but got " + typeToString(valueType));
+                                diag::Code::RecordSpreadMismatch, val->location,
+                                {{"record", sourceName}, {"actual", typeToString(valueType)}});
                         }
                         continue;
                     }
@@ -3109,10 +3094,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                             }
                             layout += available[i];
                         }
-                        error(
-                            val->location, "record `" + sourceName + "` has no field `" +
-                                               fieldName + "` — it has " +
-                                               (layout.empty() ? "no fields" : layout));
+                        if (layout.empty()) {
+                            error(
+                                diag::Code::RecordHasNoFieldsAtAll, val->location,
+                                {{"record", sourceName}, {"field", fieldName}});
+                        } else {
+                            error(
+                                diag::Code::RecordHasNoFieldListed, val->location,
+                                {{"record", sourceName}, {"field", fieldName}, {"fields", layout}});
+                        }
                         continue;
                     }
                     auto expected = resolve(declared->second);
@@ -3130,9 +3120,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     if (!argMatchesParam(valueType, expected) &&
                         !literalCoercesTo(*val, expected)) {
                         error(
-                            val->location, "`" + sourceName + "." + fieldName + "` expects " +
-                                               typeToString(expected) + ", but got " +
-                                               typeToString(valueType));
+                            diag::Code::RecordFieldMismatch, val->location,
+                            {{"record", sourceName},
+                             {"field", fieldName},
+                             {"expected", typeToString(expected)},
+                             {"actual", typeToString(valueType)}});
                     }
                 }
                 if (!hasSpread) {
@@ -3152,9 +3144,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                             names += "`" + missing[i] + "`";
                         }
                         error(
-                            expr.location, "missing mandatory field" +
-                                               std::string(missing.size() == 1 ? " " : "s ") +
-                                               names + " constructing `" + sourceName + "`");
+                            missing.size() == 1 ? diag::Code::MissingMandatoryField
+                                                : diag::Code::MissingMandatoryFields,
+                            expr.location, {{"fields", names}, {"record", sourceName}});
                     }
                 }
                 // `recordName` is `node.typeName` itself when no declaration was
@@ -3170,7 +3162,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (record == m_recordFields.end() &&
                     !(m_importedInterfaces &&
                       m_importedInterfaces->recordArities.count(recordName))) {
-                    error(expr.location, "Unknown record type `" + sourceName + "`");
+                    error(diag::Code::UnknownRecordType, expr.location, {{"record", sourceName}});
                     return Type::unknown();
                 }
                 // A generic record's literal has to carry its arguments, or the
@@ -3199,8 +3191,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         !std::holds_alternative<TypeVar>(condType->kind) &&
                         !typesEqual(condType, Type::boolean())) {
                         error(
-                            expr.location,
-                            "If condition must be Bool, got " + typeToString(condType));
+                            diag::Code::IfConditionNotBool, expr.location,
+                            {{"type", typeToString(condType)}});
                     }
                 }
                 // `expr if cond` is a guarded STATEMENT: when the guard is false
@@ -3226,8 +3218,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         !std::holds_alternative<UnknownType>(resolved->kind) &&
                         !typesEqual(resolved, Type::boolean())) {
                         error(
-                            expr.location,
-                            "then/else condition must be Bool, got " + typeToString(resolved));
+                            diag::Code::ThenElseConditionNotBool, expr.location,
+                            {{"type", typeToString(resolved)}});
                     }
                 }
                 auto thenType = node.thenExpr ? inferExpr(*node.thenExpr) : Type::unknown();
@@ -3249,9 +3241,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     if (!thenPermissive && !elsePermissive && !argMatchesParam(re, rt) &&
                         !argMatchesParam(rt, re)) {
                         error(
-                            expr.location, "Branch type mismatch: 'then' returns " +
-                                               typeToString(rt) + " but 'else' returns " +
-                                               typeToString(re));
+                            diag::Code::ThenElseBranchMismatch, expr.location,
+                            {{"then", typeToString(rt)}, {"other", typeToString(re)}});
                     }
                 }
                 return resolve(thenType);
@@ -3343,8 +3334,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     }
                     if (candidates.empty() && knownModule && !typeHasIt) {
                         error(
-                            expr.location,
-                            "`" + node.module + "` has no function `" + node.name + "`");
+                            diag::Code::ModuleHasNoFunction, expr.location,
+                            {{"module", node.module}, {"name", node.name}});
                     }
                 }
 
@@ -3386,12 +3377,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                 });
                         });
                     if (sameArityAmbiguity) {
-                        std::string message = "Cannot reference overloaded function `" + node.name +
-                                              "` without disambiguating arguments";
+                        std::string signatures;
                         for (const auto* signature : distinct) {
-                            message += "\n\n" + displaySignature(node.name, *signature);
+                            signatures += "\n\n" + displaySignature(node.name, *signature);
                         }
-                        error(expr.location, message);
+                        error(
+                            diag::Code::AmbiguousOverloadReference, expr.location,
+                            {{"name", node.name}, {"signatures", signatures}});
                     }
                 }
 
@@ -3483,9 +3475,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // only in the backends — erlc rejecting it as an unbound
                 // variable, the walker misreporting a sibling member — so the
                 // checker says it where it is written (kexhq/kex#293).
-                error(
-                    expr.location, "'this' has no receiver here — it is only bound inside a "
-                                   "`make` block method");
+                error(diag::Code::ThisWithoutReceiver, expr.location);
                 return Type::unknown();
             } else {
                 return Type::unknown();
@@ -3522,8 +3512,9 @@ auto TypeChecker::inferBinaryOp(
         for (const auto& operand : {lhs, rhs}) {
             if (const auto id = typeVariableId(operand); id && m_rigidVars.contains(*id)) {
                 error(
-                    loc, "`" + std::string(tokenTypeName(op)) + "` is not defined for every `" +
-                             m_rigidVars.at(*id) + "`, which stands for any type");
+                    diag::Code::NotDefinedForEveryType, loc,
+                    {{"name", std::string(tokenTypeName(op))}, {"type", m_rigidVars.at(*id)}});
+
                 return Type::unknown();
             }
         }
@@ -3681,13 +3672,15 @@ auto TypeChecker::inferBinaryOp(
                 return Type::string();
             }
             if (leftIsString || rightIsString) {
-                error(loc, "Cannot add " + typeToString(lhs) + " and " + typeToString(rhs));
+                error(
+                    diag::Code::CannotAdd, loc,
+                    {{"left", typeToString(lhs)}, {"right", typeToString(rhs)}});
                 return Type::string();
             }
             if (!argMatchesParam(lhs, rhs) && !argMatchesParam(rhs, lhs)) {
                 error(
-                    loc, "Operator '+' requires matching types, got " + typeToString(lhs) +
-                             " and " + typeToString(rhs));
+                    diag::Code::PlusOperandsDiffer, loc,
+                    {{"left", typeToString(lhs)}, {"right", typeToString(rhs)}});
             }
             return lhs;
 
@@ -3704,7 +3697,7 @@ auto TypeChecker::inferBinaryOp(
                 return Type::float64();
             }
             if (leftIsString || rightIsString) {
-                error(loc, "Cannot use arithmetic operator on String");
+                error(diag::Code::ArithmeticOnString, loc);
                 return Type::integer();
             }
             return lhs;
@@ -3717,14 +3710,16 @@ auto TypeChecker::inferBinaryOp(
         case TokenType::LessEq:
         case TokenType::GreaterEq:
             if (isBool(lhs)) {
-                error(loc, "Cannot compare Bool values with '<', '>', '<=', '>='");
+                error(diag::Code::OrderingOnBool, loc);
             } else if (!isNumeric(lhs) || !isNumeric(rhs)) {
                 // Two values of unrelated types have no order: `i > "kex"` was
                 // accepted and failed on both backends with the message
                 // reported here (found by `make metamorphic-search`).
                 if (!containsOpenType(lhs) && !containsOpenType(rhs) &&
                     !argMatchesParam(lhs, rhs) && !argMatchesParam(rhs, lhs)) {
-                    error(loc, "Cannot compare " + typeToString(lhs) + " and " + typeToString(rhs));
+                    error(
+                        diag::Code::CannotCompare, loc,
+                        {{"left", typeToString(lhs)}, {"right", typeToString(rhs)}});
                 }
             }
             return Type::boolean();
@@ -3732,10 +3727,10 @@ auto TypeChecker::inferBinaryOp(
         case TokenType::AmpAmp:
         case TokenType::PipePipe:
             if (!isBool(lhs)) {
-                error(loc, "Logical operator requires Bool, got " + typeToString(lhs));
+                error(diag::Code::LogicalOperatorNotBool, loc, {{"type", typeToString(lhs)}});
             }
             if (!isBool(rhs)) {
-                error(loc, "Logical operator requires Bool, got " + typeToString(rhs));
+                error(diag::Code::LogicalOperatorNotBool, loc, {{"type", typeToString(rhs)}});
             }
             return Type::boolean();
 
@@ -3816,7 +3811,7 @@ auto TypeChecker::typeSelectorParameter(const ast::Param& param) -> TypePtr {
 // there is its whole source at hand.
 auto TypeChecker::namespaceCallProblem(
     const std::string& written, const std::string& resolved, const std::string& method)
-    -> std::optional<std::string> {
+    -> std::optional<std::pair<diag::Code, diag::Args>> {
     const auto rootEnd = written.find('.');
     const auto root = written.substr(0, rootEnd);
     const auto tail = rootEnd == std::string::npos ? std::string{} : written.substr(rootEnd);
@@ -3956,7 +3951,7 @@ auto TypeChecker::namespaceCallProblem(
         if (rootIsSomething) {
             return std::nullopt;
         }
-        return "Unknown module `" + written + "`";
+        return std::pair{diag::Code::UnknownModule, diag::Args{{"module", written}}};
     }
     const auto& path = match->path;
     if (reexported(path)) {
@@ -3998,7 +3993,8 @@ auto TypeChecker::namespaceCallProblem(
             constructorResultType(next, {}) != nullptr ||
             (m_moduleConstructors.count(deepest) && m_moduleConstructors.at(deepest).count(next));
         if (!held) {
-            return "`" + deepest + "` has no module `" + next + "`";
+            return std::pair{
+                diag::Code::ModuleHasNoModule, diag::Args{{"module", deepest}, {"name", next}}};
         }
     }
 
@@ -4030,11 +4026,13 @@ auto TypeChecker::namespaceCallProblem(
         }
     }
     std::sort(members.begin(), members.end());
-    auto message = "`" + written + "` has no function `" + method + "`";
     if (auto hint = closestName(method, members); !hint.empty()) {
-        message += " — did you mean `" + hint + "`?";
+        return std::pair{
+            diag::Code::ModuleHasNoFunctionDidYouMean,
+            diag::Args{{"module", written}, {"name", method}, {"hint", hint}}};
     }
-    return message;
+    return std::pair{
+        diag::Code::ModuleHasNoFunction, diag::Args{{"module", written}, {"name", method}}};
 }
 
 auto TypeChecker::moduleNamesType(const std::string& path) const -> bool {
@@ -4180,9 +4178,8 @@ auto TypeChecker::resolveTypeQuery(const ast::TypeQuery& query) -> TypePtr {
         }
         if (declaredSignatures > 1) {
             error(
-                query.argument->location,
-                "`Type.returnedBy` cannot choose between the overloads of `" +
-                    sourceName(functionName) + "`");
+                diag::Code::ReturnedByOverloaded, query.argument->location,
+                {{"name", sourceName(functionName)}, {"signatures", ""}});
             return Type::unknown();
         }
         if (auto declaration = m_functionDeclarations.find(functionName);
@@ -4193,23 +4190,22 @@ auto TypeChecker::resolveTypeQuery(const ast::TypeQuery& query) -> TypePtr {
                 return resolveTypeExpr(**function->clauses.front().returnAnnotation, generics);
             }
             error(
-                query.argument->location, "`Type.returnedBy` needs `" + sourceName(functionName) +
-                                              "` to declare its return type");
+                diag::Code::ReturnedByUndeclaredReturn, query.argument->location,
+                {{"name", sourceName(functionName)}});
             return Type::unknown();
         }
-        error(
-            query.argument->location,
-            "`Type.returnedBy` needs the NAME of a function; a lambda or a "
-            "function value carries no signature");
+        error(diag::Code::ReturnedByNeedsName, query.argument->location);
         return Type::unknown();
     }
     if (candidates.size() > 1) {
-        std::string message = "`Type.returnedBy` cannot choose between the overloads of `" +
-                              sourceName(functionName) + "`";
+        std::string signatures;
         for (const auto& candidate : candidates) {
-            message += "\n\n" + displaySignature(functionName, candidate);
+            signatures += "\n\n" + displaySignature(functionName, candidate);
         }
-        error(query.argument->location, message);
+        error(
+            diag::Code::ReturnedByOverloaded, query.argument->location,
+            {{"name", sourceName(functionName)}, {"signatures", signatures}});
+
         return Type::unknown();
     }
     return candidates.front().result;
@@ -5225,8 +5221,8 @@ auto TypeChecker::checkCall(
             }
             if (!anyTakes) {
                 error(
-                    loc, "`" + sourceName(name) + "` is not defined for every `" +
-                             m_rigidVars.at(var->id) + "`, which stands for any type");
+                    diag::Code::NotDefinedForEveryType, loc,
+                    {{"name", sourceName(name)}, {"type", m_rigidVars.at(var->id)}});
                 return Type::unknown();
             }
         }
@@ -5500,9 +5496,10 @@ auto TypeChecker::checkCall(
                 }
                 if (function->params.size() != effective->size()) {
                     error(
-                        loc, "`" + sourceName(name) + "` expects " +
-                                 std::to_string(function->params.size()) + " argument(s), got " +
-                                 std::to_string(effective->size()));
+                        diag::Code::WrongArgumentCount, loc,
+                        {{"name", sourceName(name)},
+                         {"expected", std::to_string(function->params.size())},
+                         {"actual", std::to_string(effective->size())}});
                     return function->result;
                 }
                 for (size_t i = 0; i < effective->size(); ++i) {
@@ -5588,15 +5585,36 @@ auto TypeChecker::checkCall(
         if (!userSignatures && !hiddenModules.empty()) {
             const auto others = importedCandidateSignatures(name);
             if (!others.empty() && std::none_of(others.begin(), others.end(), accepts)) {
-                std::string owners;
+                // One owner says which way it is out of reach; several are
+                // listed by that.
+                std::string hidden;
+                std::string privateOnes;
                 for (const auto& module : hiddenModules) {
                     const bool isPrivate = m_privateFreeFunctions.contains(module + "\n" + name);
-                    owners +=
-                        (owners.empty() ? "" : ", ") + std::string("`") + module + "." + name +
-                        "`" +
-                        (isPrivate ? " is private to `" + module + "`" : " is not imported here");
+                    auto& list = isPrivate ? privateOnes : hidden;
+                    list +=
+                        (list.empty() ? "" : ", ") + std::string("`") + module + "." + name + "`";
                 }
-                error(loc, "Undefined function: `" + name + "` — " + owners);
+                if (hiddenModules.size() == 1) {
+                    const auto& module = *hiddenModules.begin();
+                    error(
+                        privateOnes.empty() ? diag::Code::UndefinedFunctionNotImported
+                                            : diag::Code::UndefinedFunctionPrivate,
+                        loc,
+                        {{"name", name}, {"function", module + "." + name}, {"module", module}});
+                } else if (privateOnes.empty()) {
+                    error(
+                        diag::Code::UndefinedFunctionNoneImported, loc,
+                        {{"name", name}, {"functions", hidden}});
+                } else if (hidden.empty()) {
+                    error(
+                        diag::Code::UndefinedFunctionAllPrivate, loc,
+                        {{"name", name}, {"functions", privateOnes}});
+                } else {
+                    error(
+                        diag::Code::UndefinedFunctionHiddenOrPrivate, loc,
+                        {{"name", name}, {"hidden", hidden}, {"private", privateOnes}});
+                }
                 return Type::unknown();
             }
         }
@@ -5715,21 +5733,21 @@ auto TypeChecker::checkCall(
                 if (auto record = m_recordFields.find(resolveRecordName(innerNamed->name));
                     record != m_recordFields.end() && record->second.count(name)) {
                     error(
-                        loc, "`" + name + "` is a field of " + typeToString(inner) +
-                                 ", but the receiver is " + typeToString(receiver) +
-                                 " — the value may be None. Map over the "
-                                 "optional first: `.map { |v| v." +
-                                 name + " }`");
+                        diag::Code::FieldOfOptional, loc,
+                        {{"field", name},
+                         {"inner", typeToString(inner)},
+                         {"receiver", typeToString(receiver)},
+                         {"example", ".map { |v| v." + name + " }"}});
                 } else if (m_importedInterfaces) {
                     auto record = m_importedInterfaces->recordFieldNames.find(innerNamed->name);
                     if (record != m_importedInterfaces->recordFieldNames.end() &&
                         record->second.count(name)) {
                         error(
-                            loc, "`" + name + "` is a field of " + typeToString(inner) +
-                                     ", but the receiver is " + typeToString(receiver) +
-                                     " — the value may be None. Map over the "
-                                     "optional first: `.map { |v| v." +
-                                     name + " }`");
+                            diag::Code::FieldOfOptional, loc,
+                            {{"field", name},
+                             {"inner", typeToString(inner)},
+                             {"receiver", typeToString(receiver)},
+                             {"example", ".map { |v| v." + name + " }"}});
                     }
                 }
             } else if (auto* innerRecord = std::get_if<RecordType>(&inner->kind)) {
@@ -5737,11 +5755,11 @@ auto TypeChecker::checkCall(
                         innerRecord->fields.begin(), innerRecord->fields.end(),
                         [&](const auto& field) { return field.first == name; })) {
                     error(
-                        loc, "`" + name + "` is a field of " + typeToString(inner) +
-                                 ", but the receiver is " + typeToString(receiver) +
-                                 " — the value may be None. Map over the "
-                                 "optional first: `.map { |v| v." +
-                                 name + " }`");
+                        diag::Code::FieldOfOptional, loc,
+                        {{"field", name},
+                         {"inner", typeToString(inner)},
+                         {"receiver", typeToString(receiver)},
+                         {"example", ".map { |v| v." + name + " }"}});
                 }
             }
         }
@@ -6106,12 +6124,13 @@ auto TypeChecker::checkCall(
     }
     if (ambiguous) {
         error(
-            loc, "ambiguous imported " +
-                     std::string(
-                         isMethodCall && !kex::mangle::hasScope(name) ? "receiver function '"
-                                                                      : "function '") +
-                     sourceName(name) + "' is provided by both '" + ambiguous->first + "' and '" +
-                     ambiguous->second + "'");
+            isMethodCall && !kex::mangle::hasScope(name)
+                ? diag::Code::AmbiguousImportedReceiverFunction
+                : diag::Code::AmbiguousImportedFunction,
+            loc,
+            {{"name", sourceName(name)},
+             {"first", ambiguous->first},
+             {"second", ambiguous->second}});
         return Type::unknown();
     }
 
@@ -6488,11 +6507,14 @@ auto TypeChecker::checkCall(
                 if (std::binary_search(labels.begin(), labels.end(), label)) {
                     continue;
                 }
-                auto message = "Unknown named argument `" + label + ":` for `" + name + "`";
                 if (const auto hint = closestName(label, labels); !hint.empty()) {
-                    message += " — did you mean `" + hint + ":`?";
+                    error(
+                        diag::Code::UnknownNamedArgumentDidYouMean, loc,
+                        {{"label", label}, {"name", name}, {"hint", hint}});
+                } else {
+                    error(
+                        diag::Code::UnknownNamedArgument, loc, {{"label", label}, {"name", name}});
                 }
-                error(loc, message);
             }
         }
         std::vector<const Signature*> layouts;
@@ -6564,9 +6586,9 @@ auto TypeChecker::checkCall(
                 for (size_t i = 0; i < ordered.size(); ++i) {
                     if (!ordered[i] && i < required) {
                         error(
-                            loc, "Missing required argument `" +
-                                     layout.paramNames[i - receiverSlots] + "` for `" +
-                                     sourceName(name) + "`");
+                            diag::Code::MissingRequiredArgument, loc,
+                            {{"param", layout.paramNames[i - receiverSlots]},
+                             {"name", sourceName(name)}});
                         return Type::unknown();
                     }
                     if (!ordered[i]) {
@@ -6604,10 +6626,10 @@ auto TypeChecker::checkCall(
                 return function->result;
             }
             error(
-                loc, "`" + sourceName(name) +
-                         "` takes no arguments; the function it returns expects " +
-                         std::to_string(function->params.size()) + " argument(s), got " +
-                         std::to_string(argTypes.size()));
+                diag::Code::ReturnedFunctionArity, loc,
+                {{"name", sourceName(name)},
+                 {"expected", std::to_string(function->params.size())},
+                 {"actual", std::to_string(argTypes.size())}});
             return function->result;
         }
         // What it returns is no function (`Time.now(22)`): there is nothing
@@ -6616,8 +6638,9 @@ auto TypeChecker::checkCall(
         const auto* named = std::get_if<NamedType>(&held->kind);
         if (!containsOpenType(held) && !(named && named->name == "Block")) {
             error(
-                loc, "`" + sourceName(name) + "` takes no arguments, got " +
-                         std::to_string(argTypes.size()));
+                diag::Code::TakesNoArguments, loc,
+                {{"name", sourceName(name)}, {"actual", std::to_string(argTypes.size())}});
+
             return held;
         }
         return Type::unknown();
@@ -7117,11 +7140,13 @@ auto TypeChecker::checkCall(
             }
         }
         if (distinct.size() > 1 && concreteArguments && typedCandidates) {
-            std::string message = "Ambiguous overload for `" + sourceName(name) + "`; candidates:";
+            std::string signatures;
             for (const auto* candidate : distinct) {
-                message += "\n\n" + displaySignature(name, *candidate);
+                signatures += "\n\n" + displaySignature(name, *candidate);
             }
-            error(loc, message);
+            error(
+                diag::Code::AmbiguousOverload, loc,
+                {{"name", sourceName(name)}, {"signatures", signatures}});
         }
         // An unconstrained shorthand receiver (for example `&.kilo`) can
         // match several concrete receiver overloads. Picking the first one
@@ -7459,8 +7484,8 @@ auto TypeChecker::checkCall(
                         for (const auto& [label, value] : methodCall->namedArgs) {
                             if (label == "within") {
                                 error(
-                                    value ? value->location : methodCall->receiver->location,
-                                    "`within:` is not valid on an asynchronous cast slot");
+                                    diag::Code::WithinOnCastSlot,
+                                    value ? value->location : methodCall->receiver->location);
                             }
                         }
                     }
@@ -7582,11 +7607,12 @@ auto TypeChecker::checkCall(
                         auto hidden = m_privateMakeMethods.find(owner->name + "#" + name);
                         if (hidden != m_privateMakeMethods.end() && !withinModule(hidden->second)) {
                             error(
+                                hidden->second.empty() ? diag::Code::PrivateMakeMethod
+                                                       : diag::Code::PrivateMakeMethodInModule,
                                 methodCall->receiver->location,
-                                "`" + name + "` is private to `make " + owner->name + "`" +
-                                    (hidden->second.empty() ? std::string{}
-                                                            : " in `" + hidden->second + "`") +
-                                    " — it is only callable inside that block");
+                                {{"name", name},
+                                 {"type", owner->name},
+                                 {"module", hidden->second}});
                         }
                     }
                 }
@@ -7610,8 +7636,8 @@ auto TypeChecker::checkCall(
                     for (const auto& [label, value] : methodCall->namedArgs) {
                         if (label == "within") {
                             error(
-                                value ? value->location : methodCall->receiver->location,
-                                "`within:` is not valid on an asynchronous cast slot");
+                                diag::Code::WithinOnCastSlot,
+                                value ? value->location : methodCall->receiver->location);
                         }
                     }
                 }
@@ -7931,14 +7957,16 @@ auto TypeChecker::checkCall(
                            argMatchesParam(receiver, signature.params.front());
                 })) {
                 error(
-                    loc, "Undefined method `" + sourceName(name) + "` for `" +
-                             typeToString(receiver) + "`");
+                    diag::Code::UndefinedMethodFor, loc,
+                    {{"name", sourceName(name)}, {"receiver", typeToString(receiver)}});
                 return Type::unknown();
             }
         }
         error(
-            loc, "`" + sourceName(name) + "` expects " + std::to_string((*sigs)[0].params.size()) +
-                     " argument(s), got " + std::to_string(argTypes.size()));
+            diag::Code::WrongArgumentCount, loc,
+            {{"name", sourceName(name)},
+             {"expected", std::to_string((*sigs)[0].params.size())},
+             {"actual", std::to_string(argTypes.size())}});
         return (*sigs)[0].result;
     }
 
@@ -8122,19 +8150,22 @@ auto TypeChecker::checkCall(
     }
 
     const Signature& first = *firstPtr;
-    std::string detail = "different arguments";
+    // Which argument is off, when one can be named.
+    std::optional<diag::Args> argumentOff;
     // Only the arguments passed: a defaulted parameter may have none.
     for (size_t i = 0; i < first.params.size() && i < argTypes.size(); i++) {
         if (!fits(i, first.params[i])) {
             auto* constrained = std::get_if<ConstrainedType>(&first.params[i]->kind);
             std::string expected =
                 constrained ? constrained->traitName : typeToString(first.params[i]);
-            detail = "argument " + std::to_string(i + 1) + " to be " + expected + ", but got " +
-                     typeToString(resolvedThroughout(argTypes[i]));
+            argumentOff = diag::Args{
+                {"index", std::to_string(i + 1)},
+                {"expected", expected},
+                {"actual", typeToString(resolvedThroughout(argTypes[i]))}};
             break;
         }
     }
-    if (detail == "different arguments") {
+    if (!argumentOff) {
         if (const auto clash = genericConflictOf(first)) {
             // An argument a dedicated check already rejected (`or` given a
             // block, a deferred reply of the wrong type) is reported once.
@@ -8145,13 +8176,14 @@ auto TypeChecker::checkCall(
                 })) {
                 return first.result;
             }
-            detail = "argument " + std::to_string(clash->first + 1) + " to be " +
-                     typeToString(resolve(clash->second)) + ", but got " +
-                     typeToString(argTypes[clash->first]);
+            argumentOff = diag::Args{
+                {"index", std::to_string(clash->first + 1)},
+                {"expected", typeToString(resolve(clash->second))},
+                {"actual", typeToString(argTypes[clash->first])}};
         }
     }
 
-    std::string message = "`" + sourceName(name) + "` expects " + detail;
+    std::string signatures;
     // Vacuous candidates (params all TypeVar/Unknown/trait bounds — e.g. an
     // unannotated trait default method) add noise to the listing when
     // concrete candidates exist; show them only when they are all we have.
@@ -8203,9 +8235,17 @@ auto TypeChecker::checkCall(
         if (!shown.insert(rendered).second) {
             continue;
         }
-        message += "\n\n" + rendered;
+        signatures += "\n\n" + rendered;
     }
-    error(loc, message);
+    if (argumentOff) {
+        argumentOff->emplace_back("name", sourceName(name));
+        argumentOff->emplace_back("signatures", signatures);
+        error(diag::Code::NoOverloadArgumentMismatch, loc, std::move(*argumentOff));
+    } else {
+        error(
+            diag::Code::NoOverloadDifferentArguments, loc,
+            {{"name", sourceName(name)}, {"signatures", signatures}});
+    }
     // Lowered all the same only where the check does not gate the build
     // (`--no-check`), and there the value decides, as it does for a
     // receiver of unknown type: when the receiver is one the method takes
@@ -8420,8 +8460,10 @@ auto TypeChecker::missesRequiredArity(
         return false;
     }
     error(
-        loc, "`" + sourceName(name) + "` expects " + std::to_string(most) + " argument(s), got " +
-                 std::to_string(given));
+        diag::Code::WrongArgumentCount, loc,
+        {{"name", sourceName(name)},
+         {"expected", std::to_string(most)},
+         {"actual", std::to_string(given)}});
     return true;
 }
 
@@ -8576,7 +8618,7 @@ auto TypeChecker::checkByteLiterals(const ast::Expr& value, const TypePtr& expec
     const auto target = resolve(expected);
     if (isByte(target)) {
         if (!check(value)) {
-            error(value.location, "Byte literal must be in 0..255");
+            error(diag::Code::ByteLiteralRange, value.location);
         }
         return;
     }
@@ -8587,7 +8629,7 @@ auto TypeChecker::checkByteLiterals(const ast::Expr& value, const TypePtr& expec
     }
     for (const auto& element : written->elements) {
         if (element && !check(*element)) {
-            error(element->location, "Byte literal must be in 0..255");
+            error(diag::Code::ByteLiteralRange, element->location);
         }
     }
 }
@@ -9097,9 +9139,10 @@ auto TypeChecker::checkNeverEqual(const TypePtr& lhs, const TypePtr& rhs, Source
     }
     const auto& wrapped = left.empty() ? right : left;
     error(
-        loc, "`" + typeToString(lhs) + "` and `" + typeToString(rhs) +
-                 "` are never equal: compare with `" + (wrapped == "Optional" ? "Just" : "Ok") +
-                 "(value)`, or unwrap first (`.or(default)`, a `match`)");
+        diag::Code::WrappedNeverEqual, loc,
+        {{"left", typeToString(lhs)},
+         {"right", typeToString(rhs)},
+         {"constructor", wrapped == "Optional" ? "Just" : "Ok"}});
 }
 
 } // namespace kex::semantic

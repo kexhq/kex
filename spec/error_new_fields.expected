@@ -1,2 +1,2 @@
-spec/error_new_fields.kex:8:35: error: record `Point` has no field `z` — it has x, y
-spec/error_new_fields.kex:9:35: error: `Point.x` expects Integer, but got String
+spec/error_new_fields.kex:8:35: [KEXET-0452]: Error, record `Point` has no field `z`. It has x, y
+spec/error_new_fields.kex:9:35: [KEXET-0454]: Error, `Point.x` expects Integer, but got String

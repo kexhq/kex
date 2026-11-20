@@ -6,6 +6,7 @@
 #include "../beam/kexi.hxx"
 #include "../beam/kexi_registry.hxx"
 #include "../common/artifact_versions.hxx"
+#include "../common/diagnostics.hxx"
 #include "../common/prelude_tiers.hxx"
 #include "../hir/hir.hxx"
 #include "../ir/emit_core.hxx"
@@ -233,7 +234,9 @@ auto compilePreludeCore(
             }
         }
     } catch (const kex::ir::LowerError& e) {
-        std::cerr << "error: prelude: " << e.what() << "\n";
+        std::cerr << kex::diagnostics::formatFileDiagnostic(
+            "prelude", kex::semantic::makeDiagnostic(
+                           kex::semantic::Diagnostic::Level::Error, e.code, {}, e.args));
         return false;
     }
     return true;

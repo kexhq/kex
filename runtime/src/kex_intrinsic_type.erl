@@ -334,7 +334,9 @@ type_name({'Type', Name, Args, _}) ->
     iolist_to_binary([Name, "<", lists:join(", ", [type_name(A) || A <- Args]), ">"]).
 
 quoted(Field) when is_binary(Field) -> <<"\"", Field/binary, "\"">>;
-quoted(Field) -> iolist_to_binary(io_lib:format("~p", [Field])).
+% A key that is not a String reads as the walker shows it (`Just(admin?)`),
+% not as an Erlang term.
+quoted(Field) -> unicode:characters_to_binary(kex_io:to_string(Field)).
 
 ends_with(Binary, Suffix) ->
     Size = byte_size(Binary) - byte_size(Suffix),

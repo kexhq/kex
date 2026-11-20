@@ -47,12 +47,14 @@ bool g_dependencyFailureThrows = false;
     std::exit(1);
 }
 
-auto reportModuleFileError(const std::filesystem::path& file, int line, const std::string& message)
+auto reportModuleFileError(
+    const std::filesystem::path& file, int line, kex::diag::Code code, kex::diag::Args args)
     -> void {
-    std::cerr << kex::color::apply(kex::color::gray) << shownPath(file) << ":" << line
-              << ":1:" << kex::color::apply(kex::color::reset) << " "
-              << kex::color::apply(kex::color::bold) << kex::color::apply(kex::color::red)
-              << "error:" << kex::color::apply(kex::color::reset) << " " << message << "\n";
+    const auto shown = shownPath(file);
+    kex::diagnostics::printSemanticDiagnostic(
+        kex::semantic::makeDiagnostic(
+            kex::semantic::Diagnostic::Level::Error, code,
+            SourceLocation{.file = shown, .line = line, .column = 1}, std::move(args)));
 }
 
 // ── Dependency-discovery cache (kexhq/kex#323) ──────────────────────────────
@@ -424,14 +426,7 @@ auto loadDependencies(
                 // it died at RUNTIME with `Undefined function: Tey.Resolver`.
                 if (parser && !parser->diagnostics().empty()) {
                     for (const auto& diagnostic : parser->diagnostics()) {
-                        std::cerr << kex::color::apply(kex::color::gray) << diagnostic.location.file
-                                  << ":" << diagnostic.location.line << ":"
-                                  << diagnostic.location.column << ":"
-                                  << kex::color::apply(kex::color::reset) << " "
-                                  << kex::color::apply(kex::color::bold)
-                                  << kex::color::apply(kex::color::red)
-                                  << "error:" << kex::color::apply(kex::color::reset) << " "
-                                  << diagnostic.message << "\n";
+                        kex::diagnostics::printParseDiagnostic(diagnostic);
                     }
                     std::cerr << "error: could not parse module " << modName << "\n";
                     dependencyFailure("could not parse module " + modName);
@@ -536,11 +531,8 @@ auto loadDependencies(
                 if (header && ownFile &&
                     !declaredModuleNames(*depProg).contains(resolved->moduleName)) {
                     reportModuleFileError(
-                        *path, header->location.line,
-                        "this file is `" + resolved->moduleName +
-                            "` by its path, but "
-                            "declares `" +
-                            header->name + "`; name it `module " + resolved->moduleName + "`");
+                        *path, header->location.line, kex::diag::Code::ModuleFileDeclaresAnother,
+                        {{"module", resolved->moduleName}, {"declared", header->name}});
                     dependencyFailure(
                         "module file " + shownPath(*path) + " declares another module");
                 }
@@ -651,10 +643,8 @@ auto mergeDependencies(
             }
             expected += ".kex";
             reportModuleFileError(
-                found->file, found->line,
-                "module `" + name + "` is declared in a file whose path names `" + byPath +
-                    "`, so `" + name + "` is not found; name it `module " + byPath +
-                    "`, or move it to " + shownPath(expected));
+                found->file, found->line, kex::diag::Code::ModuleInFileNamedForAnother,
+                {{"module", name}, {"pathModule", byPath}, {"path", shownPath(expected)}});
             dependencyFailure(
                 "module `" + name + "` is declared in a file named for another module");
         }

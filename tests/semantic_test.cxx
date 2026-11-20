@@ -262,8 +262,7 @@ int main() {
                 "main do\n"
                 "  answer()\n"
                 "end\n",
-                interfaces,
-                "Undefined function: `answer` — `Helpers.answer` is not imported here"));
+                interfaces, "Undefined function: `answer`. `Helpers.answer` is not imported here"));
         });
 
         it("discovers an unindexed module from configured source roots", []() {

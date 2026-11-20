@@ -46,6 +46,8 @@ auto resolveModulePathIn(
 struct MergeOutcome {
     bool proceed = true;
     std::optional<std::string> ambiguity;
+    // With an ambiguity, the module that claimed the name first.
+    std::string ambiguousWith;
 };
 auto mergeImportOrigin(
     std::vector<ImportScope>& scopes, const std::string& name, ImportOrigin origin) -> MergeOutcome;

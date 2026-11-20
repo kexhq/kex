@@ -56,7 +56,8 @@ private:
     std::unordered_map<std::string, std::vector<SymbolInfo*>> m_byName;
 };
 
-using RuleViolation = std::function<void(const std::string& message)>;
+// One problem found, of a registered kind, with the values for its template.
+using RuleViolation = std::function<void(diag::Code code, diag::Args args)>;
 
 // `export target, only: [...] / except: [...]` written in module `current`,
 // with `target` as the caller resolved it.

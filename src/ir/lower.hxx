@@ -7,6 +7,7 @@
 // than silently generating invalid Core Erlang.
 #include "ir.hxx"
 #include "../ast/ast.hxx"
+#include "../common/diagnostic_codes.hxx"
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -19,8 +20,11 @@ class Program;
 
 namespace kex::ir {
 
-struct LowerError : std::runtime_error {
-    using std::runtime_error::runtime_error;
+// What lowering could not do, of a registered kind (lowering.def). what() is
+// the message rendered from `code` and `args`. It names no place in the
+// source: it is reported against the file being lowered.
+struct LowerError : diag::CodedError {
+    using diag::CodedError::CodedError;
 };
 
 // externalModules maps loaded-module short names (e.g. "BinaryTree") to their

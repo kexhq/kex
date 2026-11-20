@@ -665,7 +665,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 Op op = (n.op == TokenType::Minus) ? Op::Neg
                         : (n.op == TokenType::Bang)
                             ? Op::Not
-                            : throw LowerError("IR lower: unsupported unary operator");
+                            : throw LowerError(diag::Code::UnsupportedUnaryOperator);
                 auto ex = std::make_unique<Expr>();
                 std::vector<ExprPtr> args;
                 args.push_back(std::move(a));
@@ -1108,12 +1108,9 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                     subst[n.name] = hoisted->second;
                     return var(hoisted->second);
                 }
-                throw LowerError(
-                    "IR lower: an assignment inside a block, branch or `&&`/`||` "
-                    "operand is not supported here; assign in a statement of its own");
+                throw LowerError(diag::Code::AssignmentInsideExpression);
             } else {
-                throw LowerError(
-                    std::string("IR lower: unimplemented expr node ") + typeid(T).name());
+                throw LowerError(diag::Code::UnimplementedExprNode, {{"node", typeid(T).name()}});
             }
         },
         e->kind);
@@ -1277,7 +1274,7 @@ auto Lowering::lowerCurry(const ast::Expr& e, const ast::CurryExpr& n) -> ExprPt
                     return externalCallExpr(qualKey, ait->second, eit->second, ar, std::move(args));
                 }
             }
-            throw LowerError("IR lower: unknown module function in `~" + qualKey + "`");
+            throw LowerError(diag::Code::UnknownCapturedModuleFunction, {{"function", qualKey}});
         }
         auto ex = std::make_unique<Expr>();
         ex->node = prefixCall(n.name, std::move(args));

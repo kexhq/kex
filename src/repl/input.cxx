@@ -2,6 +2,7 @@
 // definition's name or a binding's pattern, line input (readline, history,
 // `--eval` scripts), Tab completion, and `/with` capability replacements.
 #include "../hir/hir.hxx"
+#include "../common/diagnostics.hxx"
 #include "../common/name_case.hxx"
 #include "../lexer/lexer.hxx"
 #include "../module/discovery.hxx"
@@ -392,16 +393,12 @@ auto throwOnParseErrors(const kex::Parser& parser) -> void {
     if (diagnostics.empty()) {
         return;
     }
-    std::string message;
+    // Every syntax error, each printed on a line of its own with its code.
+    std::vector<kex::semantic::Diagnostic> all;
     for (const auto& diagnostic : diagnostics) {
-        // Each continuation line re-prints the caller's prefix so multiple
-        // syntax errors read as a list rather than one run-on message.
-        if (!message.empty()) {
-            message += "\n  error: ";
-        }
-        message += diagnostic.message;
+        all.push_back(kex::diagnostics::fromParseDiagnostic(diagnostic));
     }
-    throw std::runtime_error(message);
+    throw kex::semantic::DiagnosticError(std::move(all));
 }
 
 // The parameter patterns of a clause, with variable names flattened to `_`:
