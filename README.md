@@ -318,7 +318,7 @@ Bindings are immutable by default. `var` opts into local mutation, and `!` is re
 main do
   let frozen = [1, 2, 3]
   # frozen.push!(4)
-  # runtime error: Cannot use '!' on immutable binding: frozen
+  # runtime error: cannot use '!' on immutable binding: frozen
 
   var list = [1, 2, 3, 4, 5]
   list.push!(6)

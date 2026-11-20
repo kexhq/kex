@@ -127,7 +127,7 @@ let convertTo(measure: Measure, unit: DataUnit) -> Result<Measure, String> do
       value: measure.canonical / target.factor,
       unit: target
     })
-    false => return Error("Cannot convert between different measurement kinds")
+    false => return Error("cannot convert between different measurement kinds")
   end
 end
 

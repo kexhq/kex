@@ -126,7 +126,7 @@ auto Evaluator::registerParserBuiltins() -> void {
         std::string path = pathVal->value;
         std::ifstream file(path);
         if (!file.is_open()) {
-            return Value::error(makeParseError("File not found: " + path, std::nullopt, path));
+            return Value::error(makeParseError("file not found: " + path, std::nullopt, path));
         }
         std::ostringstream ss;
         ss << file.rdbuf();
@@ -225,7 +225,7 @@ auto Evaluator::registerParserBuiltins() -> void {
                 }
             }
             return Value::error(
-                makeParseError("Failed to parse type expression", std::nullopt, filename));
+                makeParseError("failed to parse type expression", std::nullopt, filename));
         } catch (const std::exception& e) {
             return Value::error(makeParseError(e.what(), std::nullopt, filename));
         }

@@ -1,4 +1,4 @@
-spec/error_shared_constructor_in_scope.kex:6:1: [KEXET-0001]: Error, Type mismatch: expected Integer, got CallError.Timeout
+spec/error_shared_constructor_in_scope.kex:6:1: [KEXET-0001]: Error, type mismatch: expected Integer, got CallError.Timeout
 spec/error_shared_constructor_in_scope.kex:11:14: [KEXET-0491]: Error, `describe` expects argument 1 to be Kex.Backend, but got CallError.Timeout
 
 describe : Kex.Backend -> Bool

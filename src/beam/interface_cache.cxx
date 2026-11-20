@@ -64,7 +64,7 @@ auto checkedTuple(std::vector<TermPtr> elems, size_t expected, const char* what)
 // silently degrade to "unknown" — fail the build instead.
 static_assert(
     std::variant_size_v<decltype(Type::kind)> == 16,
-    "Type gained an alternative: extend typeToTerm/typeFromSax "
+    "type gained an alternative: extend typeToTerm/typeFromSax "
     "and the round-trip agreement test");
 
 auto typeToTerm(const TypePtr& t) -> TermPtr;

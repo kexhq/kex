@@ -1,2 +1,2 @@
-spec/error_then_else_from_enclosing_if.kex:7:25: [KEXEP-0063]: Error, Expected 'else' after 'then', got Newline
+spec/error_then_else_from_enclosing_if.kex:7:25: [KEXEP-0063]: Error, expected 'else' after 'then', got Newline
 Aborted: 1 syntax error. Fix them before running.

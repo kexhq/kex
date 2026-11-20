@@ -157,7 +157,7 @@ module Type do
   # The result of a conversion that answers +None+ for text it cannot read.
   parsed : Any? -> Type -> String -> Result<Any, String>
   let parsed(Just(value), _expected, _text) = Ok(value)
-  let parsed(None, expected, text) = Error("Expected ${expected.showValue}, got \"${text}\"")
+  let parsed(None, expected, text) = Error("expected ${expected.showValue}, got \"${text}\"")
 
 end
 
@@ -176,7 +176,7 @@ make Type.Field do
   let parse(text: String) -> Result<Any, String> do
     match @valueType.parse(text) do
       Ok(value) => Ok(value)
-      Error(message) => Error("Field \"${@name}\": ${message}")
+      Error(message) => Error("field \"${@name}\": ${message}")
     end
   end
 end
@@ -280,7 +280,7 @@ make Type do
   #   Type.named("User").construct({"id": "u1", "email": "ada@example.com"})
   #   # => Ok(User { id: u1, email: ada@example.com, admin?: false })
   #   Type.named("User").construct({"id": "u1", "mail": "x"})
-  #   # => Error("Unknown field \"mail\" for User")
+  #   # => Error("unknown field \"mail\" for User")
   let construct(values: {String: Any}) -> Result<Any, String> = Kex.Intrinsic.Type.construct(this.name, values)
 
   # Builds the constructor +name+ of this sum type from its arguments: reading
@@ -315,7 +315,7 @@ make Type do
   #
   # @example
   #   Type.named("Integer").parse("42")    # => Ok(42)
-  #   Type.named("Integer").parse("4x")    # => Error("Expected Integer, got \"4x\"")
+  #   Type.named("Integer").parse("4x")    # => Error("expected Integer, got \"4x\"")
   #   Type.named("Kind").parse("channel")  # => Ok(Channel)
   let parse(text: String) -> Result<Any, String> do
     match this.name do
@@ -329,11 +329,11 @@ make Type do
           Ok(value) => Ok(Just(value))
           Error(message) => Error(message)
         end
-        None => Error("Expected ${this.showValue}, got \"${text}\"")
+        None => Error("expected ${this.showValue}, got \"${text}\"")
       end
       _ => match this.nullaryNamed(text) do
         Just(name) => this.variant(name)
-        None => Error("Expected ${this.showValue}, got \"${text}\"")
+        None => Error("expected ${this.showValue}, got \"${text}\"")
       end
     end
   end

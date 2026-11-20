@@ -262,7 +262,7 @@ int main() {
                 "main do\n"
                 "  answer()\n"
                 "end\n",
-                interfaces, "Undefined function: `answer`. `Helpers.answer` is not imported here"));
+                interfaces, "undefined function: `answer`. `Helpers.answer` is not imported here"));
         });
 
         it("discovers an unindexed module from configured source roots", []() {
@@ -760,7 +760,7 @@ int main() {
         });
 
         it("resolves names inside interpolating backticks",
-           []() { assertTrue(hasError("let render() = $`hello ${missing}`\n", "Undefined")); });
+           []() { assertTrue(hasError("let render() = $`hello ${missing}`\n", "undefined")); });
 
         it("rejects foul calls inside interpolating backticks", []() {
             assertTrue(hasError(
@@ -776,7 +776,7 @@ int main() {
                 "main do\n"
                 "  let x = 5 + \"hello\"\n"
                 "end\n",
-                "Cannot add"));
+                "cannot add"));
         });
 
         it("rejects Bool + Int", []() {
@@ -826,7 +826,7 @@ int main() {
                 "main do\n"
                 "  let x = 5 && 3\n"
                 "end\n",
-                "Logical operator requires Bool"));
+                "logical operator requires Bool"));
         });
     });
 
@@ -861,7 +861,7 @@ int main() {
                 "  var x = 5\n"
                 "  x = \"hello\"\n"
                 "end\n",
-                "Type mismatch"));
+                "type mismatch"));
         });
 
         it("accepts same-type var reassignment", []() {
@@ -913,7 +913,7 @@ int main() {
                 "end\n"
                 "using Protocol, except: [HTTP]\n"
                 "let fetch = HTTP.get(\"local\")\n",
-                "Unknown module"));
+                "unknown module"));
         });
 
         it("checks the signature of an imported nested module", []() {
@@ -989,7 +989,7 @@ int main() {
                 "    Yes => 1\n"
                 "  end\n"
                 "end\n",
-                interfaces, "Non-exhaustive match"));
+                interfaces, "non-exhaustive match"));
         });
 
         it("validates implementations against imported trait definitions", []() {
@@ -1270,7 +1270,7 @@ int main() {
             assertTrue(hasErrorWithInterfaces(
                 "using Opt, except: [doubled]\n"
                 "main do \"wrong\".doubled end\n",
-                interfaces, "Undefined method `doubled`"));
+                interfaces, "undefined method `doubled`"));
             assertFalse(hasErrorWithInterfaces(
                 "using Opt, except: [doubled]\n"
                 "main do \"wrong\".doubled end\n",
@@ -1484,7 +1484,7 @@ int main() {
                 "main do\n"
                 "  unknown = 5\n"
                 "end\n",
-                "Undefined variable"));
+                "undefined variable"));
         });
 
         it("rejects ! on function parameter", []() {
@@ -1533,7 +1533,7 @@ int main() {
            []() { assertTrue(noErrors("main do\n  let x = 5 >= 3\nend\n")); });
 
         it("rejects Bool < Bool", []() {
-            assertTrue(hasError("main do\n  let x = true < false\nend\n", "Cannot compare Bool"));
+            assertTrue(hasError("main do\n  let x = true < false\nend\n", "cannot compare Bool"));
         });
 
         it("comparison returns Bool", []() {
@@ -1556,16 +1556,16 @@ int main() {
 
         it("rejects Int && Int", []() {
             assertTrue(
-                hasError("main do\n  let x = 1 && 2\nend\n", "Logical operator requires Bool"));
+                hasError("main do\n  let x = 1 && 2\nend\n", "logical operator requires Bool"));
         });
 
         it("rejects String || String", []() {
             assertTrue(hasError(
-                "main do\n  let x = \"a\" || \"b\"\nend\n", "Logical operator requires Bool"));
+                "main do\n  let x = \"a\" || \"b\"\nend\n", "logical operator requires Bool"));
         });
 
         it("rejects ! on non-Bool", []() {
-            assertTrue(hasError("main do\n  let x = !5\nend\n", "Logical not '!' requires Bool"));
+            assertTrue(hasError("main do\n  let x = !5\nend\n", "logical not '!' requires Bool"));
         });
 
         it("accepts ! on Bool", []() { assertTrue(noErrors("main do\n  let x = !true\nend\n")); });
@@ -1649,7 +1649,7 @@ int main() {
                 "  let x = 5\n"
                 "  let y = x + \"hello\"\n"
                 "end\n",
-                "Cannot add"));
+                "cannot add"));
         });
 
         it("propagates Bool type through let", []() {
@@ -1679,7 +1679,7 @@ int main() {
                 "  var x = 0\n"
                 "  x = \"oops\"\n"
                 "end\n",
-                "Type mismatch"));
+                "type mismatch"));
         });
 
         it("rejects Bool var assigned Int", []() {
@@ -1688,7 +1688,7 @@ int main() {
                 "  var flag = true\n"
                 "  flag = 42\n"
                 "end\n",
-                "Type mismatch"));
+                "type mismatch"));
         });
 
         it("accepts Int var assigned Int", []() {
@@ -2022,7 +2022,7 @@ int main() {
                 "    Left(number) => number\n"
                 "  end\n"
                 "end\n",
-                "Non-exhaustive match on Either: missing case(s) Right"));
+                "non-exhaustive match on Either: missing case(s) Right"));
         });
 
         it("rejects 'c'.even? — Char doesn't satisfy the Integer constraint", []() {
@@ -2112,7 +2112,7 @@ int main() {
                 "    Rectangle(w, h) => w * h\n"
                 "  end\n"
                 "end\n",
-                "Non-exhaustive"));
+                "non-exhaustive"));
         });
 
         it("says a payload constructor named bare is no value", []() {
@@ -2164,7 +2164,7 @@ int main() {
                 "    Just(v) => v\n"
                 "  end\n"
                 "end\n",
-                "Non-exhaustive"));
+                "non-exhaustive"));
         });
 
         it("accepts an Option match that does cover None", []() {
@@ -2192,7 +2192,7 @@ int main() {
                 "    Rectangle(w, h) => w * h\n"
                 "  end\n"
                 "end\n",
-                "Non-exhaustive"));
+                "non-exhaustive"));
         });
 
         it("binds constructor pattern args so they're not flagged as undefined", []() {
@@ -2532,28 +2532,28 @@ int main() {
     describe("Semantic — standalone type annotations", []() {
         it("rejects unknown types in bare declarations in every declaration scope", []() {
             assertTrue(
-                hasError("value : MissingType\nlet value = 1\n", "Unknown type `MissingType`"));
+                hasError("value : MissingType\nlet value = 1\n", "unknown type `MissingType`"));
             assertTrue(hasError(
                 "convert : MissingType -> Integer\nlet convert(x) = 1\n",
-                "Unknown type `MissingType`"));
+                "unknown type `MissingType`"));
             assertTrue(hasError(
                 "module Example do\n"
                 "  value : MissingType\n"
                 "  let value = 1\n"
                 "end\n",
-                "Unknown type `MissingType`"));
+                "unknown type `MissingType`"));
             assertTrue(hasError(
                 "trait Example do\n"
                 "  value : MissingType\n"
                 "end\n",
-                "Unknown type `MissingType`"));
+                "unknown type `MissingType`"));
             assertTrue(hasError(
                 "type Box\n"
                 "make Box do\n"
                 "  value :> MissingType\n"
                 "  let value = 1\n"
                 "end\n",
-                "Unknown type `MissingType`"));
+                "unknown type `MissingType`"));
         });
 
         it("accepts declared, generic, and forward-referenced declaration types", []() {
@@ -2570,12 +2570,12 @@ int main() {
                 "main do\n"
                 "  let value : String = 1\n"
                 "end\n",
-                "Type mismatch"));
+                "type mismatch"));
             assertTrue(hasError(
                 "let run do\n"
                 "  var value : String = 1\n"
                 "end\n",
-                "Type mismatch"));
+                "type mismatch"));
         });
 
         it("checks defaults against record fields and function parameters", []() {
@@ -2583,8 +2583,8 @@ int main() {
                 "record Settings do\n"
                 "  retries : Integer = \"many\"\n"
                 "end\n",
-                "Type mismatch"));
-            assertTrue(hasError("let retry(count: Integer = \"many\") = count\n", "Type mismatch"));
+                "type mismatch"));
+            assertTrue(hasError("let retry(count: Integer = \"many\") = count\n", "type mismatch"));
         });
 
         it("applies declarations inside module visibility blocks", []() {
@@ -3021,7 +3021,7 @@ int main() {
                 "let b(x) = a(x) + \"world\"\n"
                 "let a(x) = x * 2\n"
                 "main do IO.printLine(b(5)) end\n",
-                "Cannot add"));
+                "cannot add"));
         });
 
         it("mutual recursion type checks correctly", []() {
@@ -3049,7 +3049,7 @@ int main() {
                 "  let r = if x > 3 then \"big\" else 42 end\n"
                 "  IO.printLine(r)\n"
                 "end\n",
-                "Branch type mismatch"));
+                "branch type mismatch"));
         });
 
         it("mutual recursion with inline if-then-else works", []() {
@@ -3081,7 +3081,7 @@ int main() {
             assertTrue(hasError(
                 "let classify(n) = if n > 0 then \"pos\" elif n < 0 then 0 else \"zero\" end\n"
                 "main do IO.printLine(classify(5)) end\n",
-                "Branch type mismatch"));
+                "branch type mismatch"));
         });
 
         it("if/elif without else need not agree: the conditional is Void", []() {
@@ -3257,7 +3257,7 @@ int main() {
                 "let choose(value: Integer | String) = 1\n"
                 "let choose(value: Integer | Bool) = 2\n"
                 "main do IO.printLine(choose(1)) end\n",
-                "Ambiguous overload for `choose`"));
+                "ambiguous overload for `choose`"));
         });
 
         it("rejects a bare first-class reference to an overload set", []() {
@@ -3268,7 +3268,7 @@ int main() {
                 "  let renderer = ~render\n"
                 "  IO.printLine(renderer(1))\n"
                 "end\n",
-                "Cannot reference overloaded function `render`"));
+                "cannot reference overloaded function `render`"));
         });
 
         it("requires every overload to share purity", []() {
@@ -3276,7 +3276,7 @@ int main() {
                 "let process(value: String) = value\n"
                 "foul process(value: Integer) = IO.printLine(value)\n"
                 "main do process(\"ok\") end\n",
-                "Overloads of `process` must all have the same purity"));
+                "overloads of `process` must all have the same purity"));
         });
 
         it("records exact local make-method overload signatures", []() {

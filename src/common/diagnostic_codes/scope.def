@@ -1,5 +1,5 @@
 // scope diagnostics. See all.def.
-KEX_DIAGNOSTIC(DuplicateRecord, "KEXES-0001", "Duplicate record definition: {name}")
+KEX_DIAGNOSTIC(DuplicateRecord, "KEXES-0001", "duplicate record definition: {name}")
 KEX_DIAGNOSTIC(LoopControlInClosure, "KEXES-0002", "'{keyword}' cannot be used inside a closure")
 KEX_DIAGNOSTIC(LoopControlOutsideLoop, "KEXES-0003", "'{keyword}' used outside a loop")
 KEX_DIAGNOSTIC(AmbiguousReceiverDefinition, "KEXES-0004", "`{method}` is defined twice for receiver `{type}`. The declaration form gives neither definition priority, so the call is ambiguous")

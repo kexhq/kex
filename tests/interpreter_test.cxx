@@ -151,7 +151,7 @@ int main() {
                     "end\n"
                     "main do Read end\n");
             } catch (const RuntimeError& error) {
-                rejectedBare = std::string(error.what()).find("Undefined identifier: Read") !=
+                rejectedBare = std::string(error.what()).find("undefined identifier: Read") !=
                                std::string::npos;
             }
             assertTrue(rejectedBare, "module constructor leaked into the global scope");
@@ -401,7 +401,7 @@ int main() {
                     "  twice(21)\n"
                     "end\n");
             } catch (const RuntimeError& error) {
-                rejected = std::string(error.what()).find("Undefined function: twice") !=
+                rejected = std::string(error.what()).find("undefined function: twice") !=
                            std::string::npos;
             }
             assertTrue(rejected);
@@ -502,7 +502,7 @@ int main() {
                     "  App.outside()\n"
                     "end\n");
             } catch (const RuntimeError& error) {
-                outsideRejected = std::string(error.what()).find("Undefined function: value") !=
+                outsideRejected = std::string(error.what()).find("undefined function: value") !=
                                   std::string::npos;
             }
             assertTrue(outsideRejected);
@@ -1653,7 +1653,7 @@ int main() {
                 assertTrue(false, "expected an exception");
             } catch (const std::exception& e) {
                 std::string msg = e.what();
-                assertTrue(msg.find("Undefined function") != std::string::npos, msg);
+                assertTrue(msg.find("undefined function") != std::string::npos, msg);
             }
         });
 
@@ -1936,7 +1936,7 @@ int main() {
                 } catch (const RuntimeError& error) {
                     threw = true;
                     assertTrue(
-                        std::string(error.what()).find("Undefined function: " + name) !=
+                        std::string(error.what()).find("undefined function: " + name) !=
                             std::string::npos,
                         error.what());
                 }
@@ -2736,7 +2736,7 @@ int main() {
                        assertTrue(false, "expected an exception");
                    } catch (const std::exception& e) {
                        std::string msg = e.what();
-                       assertTrue(msg.find("Undefined function") != std::string::npos, msg);
+                       assertTrue(msg.find("undefined function") != std::string::npos, msg);
                    }
                });
 
@@ -2930,7 +2930,7 @@ int main() {
                 raises("1.0e308 + 1.0e308", "Float addition: result overflowed (Infinity)"),
                 "float addition overflow should raise");
             assertTrue(
-                raises("10.0 ^ 400.0", "Exponentiation: result overflowed (Infinity)"),
+                raises("10.0 ^ 400.0", "exponentiation: result overflowed (Infinity)"),
                 "exponentiation overflow should raise");
         });
 

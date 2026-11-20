@@ -143,7 +143,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 // Genuinely unbound: every binding site registers itself in
                 // `subst`, so absence means the walker would raise at runtime —
                 // emit the same error so `it`-caught failures match exactly.
-                return runtimeError("Undefined variable: " + n.name);
+                return runtimeError("undefined variable: " + n.name);
             } else if constexpr (std::is_same_v<T, ast::ThisExpr>) {
                 return var(currentName("this"));
             } else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
@@ -312,7 +312,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                             }
                             return callE(
                                 "erlang", "error", 1,
-                                one(lit(LitKind::String, loc + "runtime error: Division by zero")));
+                                one(lit(LitKind::String, loc + "runtime error: division by zero")));
                         }
                     }
                 }
@@ -971,7 +971,7 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 } else if (subst.count(n.tag)) {
                     call->node = CallIndirect{var(currentName(n.tag)), std::move(args), false};
                 } else {
-                    return wrapLets(binds, runtimeError("Undefined function: " + n.tag));
+                    return wrapLets(binds, runtimeError("undefined function: " + n.tag));
                 }
                 return wrapLets(binds, std::move(call));
             } else if constexpr (std::is_same_v<T, ast::MethodCall>) {

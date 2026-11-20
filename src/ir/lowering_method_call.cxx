@@ -252,7 +252,7 @@ auto Lowering::lowerValueReceiverCall(const ast::MethodCall& n) -> ExprPtr {
             }
             if (!byModule.empty()) {
                 return ret(runtimeError(
-                    "Ambiguous receiver function: " + m + "/" + std::to_string(arity)));
+                    "ambiguous receiver function: " + m + "/" + std::to_string(arity)));
             }
         }
     }
@@ -713,7 +713,7 @@ auto Lowering::lowerTypeNamespaceCall(const ast::MethodCall& n, const ast::Upper
         // ...or one from a module compiled apart.
         externalConstant(*n.receiver, type.name) != nullptr;
     if (!nullaryConstructorReceiver && !topLevelBindingReceiver) {
-        return wrapLets(binds, runtimeError("Undefined function: " + type.name + "." + n.method));
+        return wrapLets(binds, runtimeError("undefined function: " + type.name + "." + n.method));
     }
     return nullptr;
 }

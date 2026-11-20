@@ -440,7 +440,7 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
                     "erlang", "error", 1,
                     one(lit(
                         LitKind::String,
-                        loc + "runtime error: Cannot use '!' on immutable binding: " + id->name)),
+                        loc + "runtime error: cannot use '!' on immutable binding: " + id->name)),
                     false};
                 return err;
             }

@@ -1,1 +1,1 @@
-spec/error_foul_imported_bare.kex:11:29: [KEXEF-0001]: Error, Cannot call foul function 'fetch' from pure context
+spec/error_foul_imported_bare.kex:11:29: [KEXEF-0001]: Error, cannot call foul function 'fetch' from pure context

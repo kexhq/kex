@@ -408,7 +408,7 @@ auto Evaluator::resolvePendingExports() -> void {
             }
             if (target == m_moduleRegistry.end()) {
                 throw RuntimeError(
-                    "Unknown module exported by " + pending.owner + ": " + targetName,
+                    "unknown module exported by " + pending.owner + ": " + targetName,
                     pending.decl->location);
             }
 
@@ -455,7 +455,7 @@ auto Evaluator::ensureModuleLoaded(
     auto resolved = resolver.resolve(moduleName, currentModule);
     if (!resolved) {
         if (module::Resolver::isForeignNamespace(moduleName)) {
-            throw RuntimeError("Foreign module interop is not implemented: " + moduleName, loc);
+            throw RuntimeError("foreign module interop is not implemented: " + moduleName, loc);
         }
         // `using Leaf` written inside `module Mid` reaches here already
         // qualified as `Mid.Leaf`, because a nested module is the first
@@ -469,7 +469,7 @@ auto Evaluator::ensureModuleLoaded(
                 return ensureModuleLoaded(sibling->moduleName, loc, "");
             }
         }
-        throw RuntimeError("Unknown module: " + moduleName, loc);
+        throw RuntimeError("unknown module: " + moduleName, loc);
     }
     const auto canonicalName = resolved->moduleName;
     if (m_moduleRegistry.contains(canonicalName)) {
@@ -546,7 +546,7 @@ auto Evaluator::ensureModuleLoaded(
             const auto& diagnostic = parser.diagnostics().front();
             m_loadingModules.erase(canonicalName);
             throw RuntimeError(
-                "Failed to parse module " + canonicalName + ": " + diagnostic.message,
+                "failed to parse module " + canonicalName + ": " + diagnostic.message,
                 diagnostic.location);
         }
         // A source root can supply a leading package namespace for leaf module
@@ -587,7 +587,7 @@ auto Evaluator::ensureModuleLoaded(
                 const auto& diagnostic = expandDiagnostics.front();
                 m_loadingModules.erase(canonicalName);
                 throw RuntimeError(
-                    "Failed to expand module " + canonicalName + ": " + diagnostic.message,
+                    "failed to expand module " + canonicalName + ": " + diagnostic.message,
                     diagnostic.location);
             }
             expandedModules.emplace(
@@ -668,7 +668,7 @@ auto Evaluator::ensureModuleLoaded(
                 return ensureModuleLoaded(plain->moduleName, loc, "");
             }
         }
-        throw RuntimeError("Resolved file does not define module " + canonicalName, loc);
+        throw RuntimeError("resolved file does not define module " + canonicalName, loc);
     }
     return canonicalName;
 }
@@ -1004,7 +1004,7 @@ auto Evaluator::execUsingBlock(const ast::UsingBlock& block, const std::string& 
         moduleName = ensureModuleLoaded(moduleName, block.location, moduleScope);
         imported = m_moduleRegistry.find(moduleName);
         if (imported == m_moduleRegistry.end()) {
-            throw RuntimeError("Unknown module: " + moduleName, block.location);
+            throw RuntimeError("unknown module: " + moduleName, block.location);
         }
     }
 
@@ -2654,12 +2654,12 @@ auto Evaluator::evalIntrinsicCall(
     const auto category = scope.substr(scope.rfind('.') + 1);
     const auto native = m_intrinsicEnv->get(kex::mangle::qualify(category, call.method));
     if (!native) {
-        throw RuntimeError("Undefined intrinsic: " + category + "." + call.method, location);
+        throw RuntimeError("undefined intrinsic: " + category + "." + call.method, location);
     }
     if (auto* function = std::get_if<FunctionValue>(&native->data)) {
         return function->native(std::move(args));
     }
-    throw RuntimeError("Intrinsic " + call.method + " is not a function", location);
+    throw RuntimeError("intrinsic " + call.method + " is not a function", location);
 }
 
 auto Evaluator::testBuiltinCalled(const ast::FunctionCall& call) const
@@ -2698,7 +2698,7 @@ auto Evaluator::evalTestBuiltin(
     const auto native = m_intrinsicEnv->get(kex::mangle::qualify("Test", name));
     auto* function = native ? std::get_if<FunctionValue>(&native->data) : nullptr;
     if (!function) {
-        throw RuntimeError("Undefined intrinsic: Test." + name, location);
+        throw RuntimeError("undefined intrinsic: Test." + name, location);
     }
     return function->native(std::move(args));
 }
@@ -2888,7 +2888,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             }
                         }
                     }
-                    throw RuntimeError("Undefined variable: " + node.name, expr.location);
+                    throw RuntimeError("undefined variable: " + node.name, expr.location);
                 }
                 return autoCallZeroArgConstant(node.name, val);
             } else if constexpr (std::is_same_v<T, ast::LetExpr>) {
@@ -2927,11 +2927,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             } else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
                 auto value = node.value ? eval(*node.value) : Value::none();
                 if (!m_env->has(node.name)) {
-                    throw RuntimeError("Undefined variable: " + node.name, expr.location);
+                    throw RuntimeError("undefined variable: " + node.name, expr.location);
                 }
                 if (!m_env->isMutable(node.name)) {
                     throw RuntimeError(
-                        "Cannot assign to immutable binding: " + node.name, expr.location);
+                        "cannot assign to immutable binding: " + node.name, expr.location);
                 }
                 if (!node.path.empty()) {
                     if (node.path.size() != 1) {
@@ -2942,7 +2942,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     auto* record = current ? std::get_if<RecordValue>(&current->data) : nullptr;
                     if (!record) {
                         throw RuntimeError(
-                            "Field assignment requires a record binding", expr.location);
+                            "field assignment requires a record binding", expr.location);
                     }
                     if (!record->fields.count(node.path.front())) {
                         throw RuntimeError(
@@ -3137,7 +3137,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                                     isNamespaceCall = true;
                                 } catch (const RuntimeError& error) {
                                     if (std::string(error.what())
-                                            .find("Resolved file does not define module ") ==
+                                            .find("resolved file does not define module ") ==
                                         std::string::npos) {
                                         throw;
                                     }
@@ -3415,7 +3415,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                                                     knownModuleValue(namespaceName);
                         if (!knownNamespace) {
                             throw RuntimeError(
-                                "Undefined function: " + namespaceName + "." + node.method,
+                                "undefined function: " + namespaceName + "." + node.method,
                                 expr.location);
                         }
                     }
@@ -3427,12 +3427,12 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             dispatchName, std::move(args), std::move(namedArgs), expr.location);
                     } catch (const RuntimeError& error) {
                         const std::string undefined =
-                            "Undefined function: " + sourceName(dispatchName);
+                            "undefined function: " + sourceName(dispatchName);
                         if (std::string(error.what()).find(undefined) == std::string::npos) {
                             throw;
                         }
                         throw RuntimeError(
-                            "Undefined function: " + namespaceName + "." + node.method,
+                            "undefined function: " + namespaceName + "." + node.method,
                             expr.location);
                     }
                 }
@@ -3465,7 +3465,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 if (const auto& target = m_programs.targetOf(node);
                     target.kind == hir::TargetKind::Hidden) {
                     auto message =
-                        "Undefined method: " + node.method + " for " + receiver->typeName();
+                        "undefined method: " + node.method + " for " + receiver->typeName();
                     if (!target.owner.empty() && !node.namedArgs.empty()) {
                         message += " — `" + target.owner + "` defines a matching `" + node.method +
                                    "`; add `using " + target.owner + "`";
@@ -3507,11 +3507,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             "'!' requires a variable binding as the receiver", expr.location);
                     }
                     if (!m_env->has(ident->name)) {
-                        throw RuntimeError("Undefined variable: " + ident->name, expr.location);
+                        throw RuntimeError("undefined variable: " + ident->name, expr.location);
                     }
                     if (!m_env->isMutable(ident->name)) {
                         throw RuntimeError(
-                            "Cannot use '!' on immutable binding: " + ident->name, expr.location);
+                            "cannot use '!' on immutable binding: " + ident->name, expr.location);
                     }
                     auto result = callFunction(mangledName, args, namedArgs, expr.location);
                     m_env->set(ident->name, result);
@@ -3554,14 +3554,14 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     !m_env->get(mangledName) && !m_functionDefs.count(mangledName) &&
                     !dispatchTypeName(receiver).empty()) {
                     throw RuntimeError(
-                        "Undefined method: " + node.method + " for " + receiver->typeName(),
+                        "undefined method: " + node.method + " for " + receiver->typeName(),
                         expr.location);
                 }
                 try {
                     return callFunction(
                         mangledName, std::move(args), std::move(namedArgs), expr.location);
                 } catch (const RuntimeError& error) {
-                    const std::string undefined = "Undefined function: " + sourceName(mangledName);
+                    const std::string undefined = "undefined function: " + sourceName(mangledName);
                     if (std::string(error.what()).find(undefined) == std::string::npos) {
                         throw;
                     }
@@ -3579,7 +3579,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         if (qualified.empty()) {
                             throw;
                         }
-                        throw RuntimeError("Undefined function: " + qualified, expr.location);
+                        throw RuntimeError("undefined function: " + qualified, expr.location);
                     }
                     if (callableField && callableField->native) {
                         return callableField->native(std::move(fieldArgs));
@@ -3588,7 +3588,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         throw;
                     }
                     throw RuntimeError(
-                        "Undefined method: " + sourceName(mangledName) + " for " +
+                        "undefined method: " + sourceName(mangledName) + " for " +
                             receiver->typeName(),
                         expr.location);
                 }
@@ -3650,7 +3650,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             }
                         } else {
                             throw RuntimeError(
-                                "Cannot spread " + source->typeName() + " into a map",
+                                "cannot spread " + source->typeName() + " into a map",
                                 entry.value ? entry.value->location : expr.location);
                         }
                         continue;
@@ -3980,7 +3980,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         auto* spread = std::get_if<RecordValue>(&value->data);
                         if (!spread || spread->typeName != typeName) {
                             throw RuntimeError(
-                                "Cannot spread " + value->typeName() + " into record " + typeName,
+                                "cannot spread " + value->typeName() + " into record " + typeName,
                                 expr.location);
                         }
                         for (const auto& [name, field] : spread->fields) {
@@ -4284,7 +4284,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 if (val) {
                     return autoCallZeroArgConstant(node.name, val);
                 }
-                throw RuntimeError("Undefined identifier: " + node.name, expr.location);
+                throw RuntimeError("undefined identifier: " + node.name, expr.location);
             } else if constexpr (std::is_same_v<T, ast::TryExpr>) {
                 auto value = eval(*node.operand);
                 if (auto* var = std::get_if<VariantValue>(&value->data)) {
@@ -4347,7 +4347,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     moduleName = ensureModuleLoaded(moduleName, expr.location);
                     it = m_moduleRegistry.find(moduleName);
                     if (it == m_moduleRegistry.end()) {
-                        throw RuntimeError("Unknown module: " + moduleName, expr.location);
+                        throw RuntimeError("unknown module: " + moduleName, expr.location);
                     }
                 }
                 const bool scoped = !node.body.empty();
@@ -4609,7 +4609,7 @@ auto Evaluator::evalBinaryOp(
                     return Value::string(*lt + *rt);
                 }
             }
-            throw RuntimeError("Cannot add " + left->typeName() + " and " + right->typeName(), loc);
+            throw RuntimeError("cannot add " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::Minus:
             if (li && ri) {
@@ -4631,7 +4631,7 @@ auto Evaluator::evalBinaryOp(
                 return floatOp(lf->value - intToDouble(ri, *rightInt), "Float subtraction");
             }
             throw RuntimeError(
-                "Cannot subtract " + left->typeName() + " and " + right->typeName(), loc);
+                "cannot subtract " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::Star:
             if (li && ri) {
@@ -4653,14 +4653,14 @@ auto Evaluator::evalBinaryOp(
                 return floatOp(lf->value * intToDouble(ri, *rightInt), "Float multiplication");
             }
             throw RuntimeError(
-                "Cannot multiply " + left->typeName() + " and " + right->typeName(), loc);
+                "cannot multiply " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::Slash:
             if (rightInt && *rightInt == 0) {
-                throw RuntimeError("Division by zero", loc);
+                throw RuntimeError("division by zero", loc);
             }
             if (rf && rf->value == 0.0) {
-                throw RuntimeError("Division by zero", loc);
+                throw RuntimeError("division by zero", loc);
             }
             if (li && ri) {
                 return Value::integer(li->value / ri->value);
@@ -4678,22 +4678,22 @@ auto Evaluator::evalBinaryOp(
                 return floatOp(lf->value / intToDouble(ri, *rightInt), "Float division");
             }
             throw RuntimeError(
-                "Cannot divide " + left->typeName() + " and " + right->typeName(), loc);
+                "cannot divide " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::Percent:
             if (li && ri) {
                 if (ri->value == 0) {
-                    throw RuntimeError("Modulo by zero", loc);
+                    throw RuntimeError("modulo by zero", loc);
                 }
                 return Value::integer(li->value % ri->value);
             }
             if (leftInt && rightInt) {
                 if (*rightInt == 0) {
-                    throw RuntimeError("Modulo by zero", loc);
+                    throw RuntimeError("modulo by zero", loc);
                 }
                 return integerResult(*leftInt % *rightInt);
             }
-            throw RuntimeError("Modulo requires integers", loc);
+            throw RuntimeError("modulo requires integers", loc);
 
         case TokenType::Caret:
             // Preserve integer arithmetic (including arbitrary-precision
@@ -4707,18 +4707,18 @@ auto Evaluator::evalBinaryOp(
             if (leftInt && rightInt) {
                 return floatOp(
                     std::pow(intToDouble(li, *leftInt), intToDouble(ri, *rightInt)),
-                    "Exponentiation");
+                    "exponentiation");
             }
             if (lf && rf) {
-                return floatOp(std::pow(lf->value, rf->value), "Exponentiation");
+                return floatOp(std::pow(lf->value, rf->value), "exponentiation");
             }
             if (leftInt && rf) {
-                return floatOp(std::pow(intToDouble(li, *leftInt), rf->value), "Exponentiation");
+                return floatOp(std::pow(intToDouble(li, *leftInt), rf->value), "exponentiation");
             }
             if (lf && rightInt) {
-                return floatOp(std::pow(lf->value, intToDouble(ri, *rightInt)), "Exponentiation");
+                return floatOp(std::pow(lf->value, intToDouble(ri, *rightInt)), "exponentiation");
             }
-            throw RuntimeError("Exponentiation requires numbers", loc);
+            throw RuntimeError("exponentiation requires numbers", loc);
 
         case TokenType::EqEq: return Value::boolean(valuesEqual(left, right));
         case TokenType::NotEq: return Value::boolean(!valuesEqual(left, right));
@@ -4749,7 +4749,7 @@ auto Evaluator::evalBinaryOp(
                 return Value::boolean(lc->value < rc->value);
             }
             throw RuntimeError(
-                "Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
+                "cannot compare " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::GreaterThan:
             if (li && ri) {
@@ -4774,7 +4774,7 @@ auto Evaluator::evalBinaryOp(
                 return Value::boolean(lc->value > rc->value);
             }
             throw RuntimeError(
-                "Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
+                "cannot compare " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::LessEq:
             if (li && ri) {
@@ -4799,7 +4799,7 @@ auto Evaluator::evalBinaryOp(
                 return Value::boolean(lc->value <= rc->value);
             }
             throw RuntimeError(
-                "Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
+                "cannot compare " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::GreaterEq:
             if (li && ri) {
@@ -4824,13 +4824,13 @@ auto Evaluator::evalBinaryOp(
                 return Value::boolean(lc->value >= rc->value);
             }
             throw RuntimeError(
-                "Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
+                "cannot compare " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::AmpAmp: return Value::boolean(left->isTrue() && right->isTrue());
 
         case TokenType::PipePipe: return Value::boolean(left->isTrue() || right->isTrue());
 
-        default: throw RuntimeError("Unknown operator", loc);
+        default: throw RuntimeError("unknown operator", loc);
     }
 }
 
@@ -4876,11 +4876,11 @@ auto Evaluator::evalUnaryOp(TokenType op, const ValuePtr& operand, SourceLocatio
             if (auto* f = std::get_if<FloatValue>(&operand->data)) {
                 return Value::floating(-f->value);
             }
-            throw RuntimeError("Cannot negate " + operand->typeName(), loc);
+            throw RuntimeError("cannot negate " + operand->typeName(), loc);
 
         case TokenType::Bang: return Value::boolean(!operand->isTrue());
 
-        default: throw RuntimeError("Unknown unary operator", loc);
+        default: throw RuntimeError("unknown unary operator", loc);
     }
 }
 
@@ -5035,7 +5035,7 @@ auto Evaluator::callFunction(
         }
     }
     if (!val) {
-        throw RuntimeError("Undefined function: " + sourceName(name), loc);
+        throw RuntimeError("undefined function: " + sourceName(name), loc);
     }
 
     if (auto* func = std::get_if<FunctionValue>(&val->data)) {
@@ -5104,7 +5104,7 @@ auto Evaluator::callFunction(
                     }
                     if (!selected) {
                         throw RuntimeError(
-                            "No overload of `" + sourceName(defLookupKey) +
+                            "no overload of `" + sourceName(defLookupKey) +
                                 "` accepts these named arguments and argument count",
                             loc);
                     }

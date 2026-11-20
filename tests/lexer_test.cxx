@@ -370,7 +370,7 @@ int main() {
         it("reports an unterminated raw backtick string", []() {
             auto tok = firstToken("`never closed");
             assertEqual(tok.type, TokenType::Error);
-            assertTrue(tok.value.find("Unterminated backtick") != std::string::npos);
+            assertTrue(tok.value.find("unterminated backtick") != std::string::npos);
         });
     });
 

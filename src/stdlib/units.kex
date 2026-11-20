@@ -512,7 +512,7 @@ make Measure<D>, implement: Showable do
         value: scaledValue(this.canonical, target.factor),
         unit: target
       })
-      false => return Error("Cannot convert between different measurement kinds")
+      false => return Error("cannot convert between different measurement kinds")
     end
   end
 

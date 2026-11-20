@@ -366,12 +366,12 @@ auto Evaluator::registerTypeBuiltins() -> void {
         const auto name = stringArg(args);
         const auto key = typeNameKey(m_recordDefs, name);
         if (!key) {
-            return Value::error(Value::string("Not a record type: " + name));
+            return Value::error(Value::string("not a record type: " + name));
         }
         const auto* record = m_recordDefs.at(*key);
         const auto* values = args.size() > 1 ? std::get_if<MapValue>(&args[1]->data) : nullptr;
         if (!values) {
-            return Value::error(Value::string("Expected a map of field values"));
+            return Value::error(Value::string("expected a map of field values"));
         }
         std::unordered_map<std::string, ValuePtr> given;
         for (const auto& [k, v] : values->entries) {
@@ -383,7 +383,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
             if (!known) {
                 return Value::error(
                     Value::string(
-                        "Unknown field " + (field ? "\"" + field->value + "\"" : k->toString()) +
+                        "unknown field " + (field ? "\"" + field->value + "\"" : k->toString()) +
                         " for " + name));
             }
             given[field->value] = v;
@@ -407,7 +407,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
                 if (field.type && !matchesDeeply(found->second, *field.type, matches)) {
                     return Value::error(
                         Value::string(
-                            "Field \"" + field.name + "\" of " + name + " expects " +
+                            "field \"" + field.name + "\" of " + name + " expects " +
                             renderedType(structuredTypeValue(declared)) + ", got " +
                             renderedType(typeOfValue(found->second))));
                 }
@@ -418,7 +418,7 @@ auto Evaluator::registerTypeBuiltins() -> void {
                 fields[field.name] = Value::none();
             } else {
                 return Value::error(
-                    Value::string("Missing field \"" + field.name + "\" for " + name));
+                    Value::string("missing field \"" + field.name + "\" for " + name));
             }
         }
         return Value::ok(Value::record(*key, std::move(fields)));
@@ -431,12 +431,12 @@ auto Evaluator::registerTypeBuiltins() -> void {
             const auto name = stringArg(args);
             const auto key = typeNameKey(m_adtVariants, name);
             if (!key) {
-                return Value::error(Value::string("Not a sum type: " + name));
+                return Value::error(Value::string("not a sum type: " + name));
             }
             const auto* ctor = args.size() > 1 ? std::get_if<StringValue>(&args[1]->data) : nullptr;
             const auto* given = args.size() > 2 ? std::get_if<ListValue>(&args[2]->data) : nullptr;
             if (!ctor || !given) {
-                return Value::error(Value::string("Expected a constructor name and its arguments"));
+                return Value::error(Value::string("expected a constructor name and its arguments"));
             }
             for (const auto* variant : m_adtVariants.at(*key)) {
                 std::vector<const ast::TypeExpr*> argTypes;

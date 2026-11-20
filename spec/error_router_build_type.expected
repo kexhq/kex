@@ -1,1 +1,1 @@
-spec/error_router_build_type.kex:9:3: [KEXET-0001]: Error, Type mismatch: expected Integer, got Net.HTTP.Router
+spec/error_router_build_type.kex:9:3: [KEXET-0001]: Error, type mismatch: expected Integer, got Net.HTTP.Router

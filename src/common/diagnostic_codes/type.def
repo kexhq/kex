@@ -1,5 +1,5 @@
 // type diagnostics. See all.def.
 //
 // KEXET-0001 to KEXET-0099: shared by every part of the checker.
-KEX_DIAGNOSTIC(TypeMismatch, "KEXET-0001", "Type mismatch: expected {expected}, got {actual}")
-KEX_DIAGNOSTIC(TypeMismatchIncompatibleRecords, "KEXET-0002", "Type mismatch: expected {expected}, got {actual} (incompatible nominal record tags `{left}` and `{right}`)")
+KEX_DIAGNOSTIC(TypeMismatch, "KEXET-0001", "type mismatch: expected {expected}, got {actual}")
+KEX_DIAGNOSTIC(TypeMismatchIncompatibleRecords, "KEXET-0002", "type mismatch: expected {expected}, got {actual} (incompatible nominal record tags `{left}` and `{right}`)")

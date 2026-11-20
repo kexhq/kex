@@ -244,7 +244,7 @@ auto Evaluator::registerListBuiltins() -> void {
         auto range = std::get<RangeValue>(args.at(0)->data);
         const auto step = std::get<IntValue>(args.at(1)->data).value;
         if (step == 0) {
-            throw std::runtime_error("A range's step cannot be 0");
+            throw std::runtime_error("a range's step cannot be 0");
         }
         if (range.lower) {
             throw std::runtime_error("Float ranges cannot be stepped");
