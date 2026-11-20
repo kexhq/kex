@@ -1,0 +1,23 @@
+# A conversion none of a type's `to` overloads takes continues to the generic
+# conversion on both backends.
+#
+# Measure has two three-argument `to` overloads (a NumberFormat and a
+# TimeUnit). On BEAM they were reached through a dispatcher that picked
+# between them by argument type and raised `function_clause` for anything
+# else, while the walker fell through to the generic radix conversion and
+# answered None (found by `make metamorphic-search` on
+# spec/prelude_to_string_dispatch.kex).
+using Units.SI
+
+let shown(value: String?) -> String do
+  match value do
+    Just(text) => text
+    None => "none"
+  end
+end
+
+main do
+  IO.printLine(shown(1500.gram.to(String, 0)))
+  IO.printLine(shown(1500.gram.to(String)))
+  IO.printLine(shown(255.to(String, 16)))
+end

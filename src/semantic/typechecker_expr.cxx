@@ -6843,7 +6843,22 @@ auto TypeChecker::checkCall(
         // a native builtin that never appears in these tables at all. The
         // check is confined to the case where NOTHING matched, so a call that
         // does match still gets its real result type rather than `?`.
-        if (!anyFirstParamPlausible &&
+        // A trait default stands in for a method the receiver's type has no
+        // signature for. Where the type does have typed methods of this name,
+        // only at other arities (Measure's `to(String)` and its overloads,
+        // with Showable's default beside them), the call has the wrong number
+        // of arguments: `1500.gram.to()` checked clean, and BEAM found no
+        // clause for it.
+        const bool typedAtOtherArity =
+            traitProvides && std::any_of(sigs->begin(), sigs->end(), [&](const Signature& sig) {
+                if (sig.params.empty()) {
+                    return false;
+                }
+                const auto first = resolve(sig.params.front());
+                return !std::holds_alternative<TypeVar>(first->kind) &&
+                       !mentionsUnknownParam(first) && fits(0, sig.params.front());
+            });
+        if (!anyFirstParamPlausible && !typedAtOtherArity &&
             (anyUnknownParamCandidate ||
              (!anyConstrainedFirstParam && !hasReceiverRefinementConflict && !provableMismatch))) {
             // A default the receiver's type inherits, with no home module to
