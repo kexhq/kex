@@ -1284,6 +1284,31 @@ auto lowerProgram(
             namedArgumentDispatchers.emplace(name, owner, dispatchArity);
             auto def = L.makeArgumentDispatcher(
                 mangleReceiverImplementation(name, owner), dispatchArity, dispatched);
+            // A conversion none of the owner's overloads takes continues to
+            // the generic one, as a single per-type `to` does (see
+            // lowerMakeGroup): `1500.gram.to(String, 0)` matched neither
+            // Measure's NumberFormat nor its TimeUnit overload and died
+            // with `function_clause`, where the walker answered `None`. The
+            // generic `to` of this arity becomes `to$generic` when the
+            // collision dispatcher below takes its name.
+            if (name == "to" && L.lowersPrelude && L.collidingMethods.count("to") &&
+                std::any_of(mod.functions.begin(), mod.functions.end(), [&](const FunDef& fn) {
+                    return fn.name == "to" && fn.arity == dispatchArity;
+                })) {
+                FunClause fallback;
+                std::vector<ExprPtr> args;
+                for (int i = 0; i < dispatchArity; ++i) {
+                    auto param = std::make_unique<Pattern>();
+                    param->kind = PatKind::Var;
+                    param->name = "_a" + std::to_string(i);
+                    fallback.params.push_back(std::move(param));
+                    args.push_back(var("_a" + std::to_string(i)));
+                }
+                auto body = std::make_unique<Expr>();
+                body->node = Call{"", "to$generic", dispatchArity, std::move(args), false};
+                fallback.body = std::move(body);
+                def.clauses.push_back(std::move(fallback));
+            }
             mod.functions.push_back(std::move(def));
             continue;
         }

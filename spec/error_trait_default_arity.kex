@@ -1,0 +1,14 @@
+# kex: check-only
+# A method a trait default provides is still checked for its argument count
+# when the receiver's type has typed methods of that name.
+#
+# Measure is Showable, whose default `to(String)` has no signature of its own
+# for Measure, so `1500.gram.to()` was sent to run-time dispatch unchecked:
+# the walker printed an empty line and BEAM found no clause (found by
+# `make metamorphic-search` on spec/prelude_to_string_dispatch.kex). Measure's
+# own `to` overloads all take a target type, so the count is known.
+using Units.SI
+
+main do
+  IO.printLine(1500.gram.to())
+end
