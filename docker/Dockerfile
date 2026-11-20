@@ -39,7 +39,12 @@ ARG BUILD_JOBS=2
 # The build context has no .git (see .dockerignore), so the commit is passed
 # in rather than discovered.
 ARG KEX_GIT_REVISION
+# Warnings stay warnings here: a published image must not fail to build
+# because a newer compiler in the base image found something new. CI passes
+# KEX_WERROR=ON, so they are still caught before a release.
+ARG KEX_WERROR=OFF
 RUN cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
+        -DKEX_WERROR="$KEX_WERROR" \
         ${KEX_BUILD_DATE:+-DKEX_BUILD_DATE="$KEX_BUILD_DATE"} \
         ${KEX_GIT_REVISION:+-DKEX_GIT_REVISION="$KEX_GIT_REVISION"} \
     && cmake --build build --parallel "$BUILD_JOBS"

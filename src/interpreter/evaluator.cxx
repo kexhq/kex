@@ -6167,7 +6167,7 @@ auto Evaluator::bindPattern(
                 }
             }
         }
-    } else if (auto* constrPat = std::get_if<ast::ConstructorPattern>(&pattern.kind)) {
+    } else if (std::holds_alternative<ast::ConstructorPattern>(pattern.kind)) {
         if (!matchPattern(pattern, value, isMutable)) {
             throw RuntimeError("pattern mismatch — got " + value->inspect(), loc);
         }

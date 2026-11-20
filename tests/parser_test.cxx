@@ -1506,11 +1506,21 @@ int main() {
         auto variant(std::string, std::string, std::vector<Value> args) const -> Value {
             return args.empty() ? Value{} : args.front();
         }
+        // Fields by name, not position: GCC inlines a two-field SyntaxNode
+        // into the SyntaxToken branch and reports `fields[2]` out of bounds.
         auto record(std::string name, Fields fields) const -> Value {
+            const auto field = [&](const std::string& wanted) {
+                for (const auto& [key, value] : fields) {
+                    if (key == wanted) {
+                        return value;
+                    }
+                }
+                return Value{};
+            };
             if (name == "SyntaxToken") {
-                return fields[2].second + fields[1].second;
+                return field("trivia") + field("text");
             }
-            return fields[1].second; // SyntaxNode: its children, in order
+            return field("children"); // SyntaxNode: its children, in order
         }
         auto list(std::vector<Value> values) const -> Value {
             std::string out;

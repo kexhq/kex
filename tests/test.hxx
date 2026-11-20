@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../src/common/color.hxx"
+#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <sstream>
@@ -122,6 +123,15 @@ inline auto assertTrue(bool condition, const std::string& msg = "") -> void {
 inline auto assertFalse(bool condition, const std::string& msg = "") -> void {
     if (condition) {
         throw AssertionError(msg.empty() ? "Expected false" : msg);
+    }
+}
+
+// Runs a shell command whose exit status the test does not judge: it reads
+// what the command wrote instead. Only a shell that could not start fails.
+// (A `(void)` cast does not silence GCC's warn_unused_result on std::system.)
+inline auto runShell(const std::string& command) -> void {
+    if (std::system(command.c_str()) == -1) {
+        throw AssertionError("could not start a shell for: " + command);
     }
 }
 

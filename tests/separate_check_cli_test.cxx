@@ -386,7 +386,7 @@ let get(path, block) = "block ${path}"
             " --no-colors -c -o " + (root / "checked").string() + " --source-root " +
             (root / "app").string() + " --source-root " + (root / "lib").string() + " " +
             (root / "app" / "main.kex").string() + " > " + output.string() + " 2>&1";
-        (void)std::system(command.c_str());
+        runShell(command);
         return read(output);
     }
 
@@ -409,7 +409,7 @@ let get(path, block) = "block ${path}"
                                  " --no-colors --run " + (beams / "kex_main.beam").string() +
                                  " > " + output.string() + " 2>&1 || cat " + compiled.string() +
                                  " >> " + output.string();
-            (void)std::system(command.c_str());
+            runShell(command);
             return read(output);
         };
         std::filesystem::create_directories(root / "actual");
@@ -420,14 +420,14 @@ let get(path, block) = "block ${path}"
                                  (root / "actual").string() + roots +
                                  (root / "app" / "main.kex").string() + " > " +
                                  (root / "actual-build.out").string() + " 2>&1";
-        (void)std::system(actualBuild.c_str());
+        runShell(actualBuild);
         auto separate = runAs("separate");
         auto actual = runAs("actual");
         // What went wrong is in the build's own output when it emitted nothing.
         if (actual.find("open error") != std::string::npos) {
             actual += read(root / "actual-build.out");
         }
-        (void)std::system(("KEX_TIMINGS=1 " + actualBuild).c_str());
+        runShell("KEX_TIMINGS=1 " + actualBuild);
         const auto warmBuild = read(root / "actual-build.out");
         assertTrue(
             warmBuild.find("unit cache hit:") != std::string::npos,
@@ -438,7 +438,7 @@ let get(path, block) = "block ${path}"
 join : String -> String -> String
 let join(first, second) = "${first}:${second}"
 )KEX");
-        (void)std::system(("KEX_TIMINGS=1 " + actualBuild).c_str());
+        runShell("KEX_TIMINGS=1 " + actualBuild);
         const auto changedBuild = read(root / "actual-build.out");
         assertTrue(
             changedBuild.find(

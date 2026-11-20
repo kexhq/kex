@@ -1026,8 +1026,10 @@ add_test(NAME cluster_beam_test COMMAND cluster_beam_test WORKING_DIRECTORY ${CM
 # add_compile_options, so vendored code (third_party/lsp-framework, added with
 # add_subdirectory) keeps its own flags. -Wmissing-field-initializers stays off:
 # aggregates here are initialized partially on purpose (`{kind, name}`, the
-# rest defaulted). KEX_WERROR turns every warning into an error.
-option(KEX_WERROR "Treat compiler warnings as errors" OFF)
+# rest defaulted). KEX_WERROR, on by default, turns every warning into an
+# error; release builds and the published images turn it off, so a newer
+# compiler on a runner cannot fail a release (CI still builds with it on).
+option(KEX_WERROR "Treat compiler warnings as errors" ON)
 if(NOT MSVC)
     set(KEX_WARNING_FLAGS -Wall -Wextra -Wno-missing-field-initializers)
     if(KEX_WERROR)

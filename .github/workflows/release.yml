@@ -256,10 +256,15 @@ jobs:
       # manager: see the comment on the option in CMakeLists.txt. It is a
       # release-build setting rather than the default because a distribution
       # packaging Kex from source wants its own shared boost.
+      #
+      # KEX_WERROR=OFF here and in the two builds below: a release must not
+      # fail because a runner's newer compiler found a new warning. CI builds
+      # the same commit with warnings as errors.
       - name: Build
         run: |
           cmake -B build -G "Unix Makefiles" \
             -DCMAKE_BUILD_TYPE=Release \
+            -DKEX_WERROR=OFF \
             -DKEX_BOOST_STATIC=ON \
             -DKEX_BUILD_DATE="${{ needs.version.outputs.build_date }}"
           cmake --build build --parallel "$(getconf _NPROCESSORS_ONLN)"
@@ -366,7 +371,7 @@ jobs:
 
       - name: Build native kex (for the compiled stdlib unit)
         run: |
-          cmake -B build -G "Unix Makefiles"
+          cmake -B build -G "Unix Makefiles" -DKEX_WERROR=OFF
           cmake --build build --target kex_prelude_beam --parallel "$(getconf _NPROCESSORS_ONLN)"
 
       # ── The wasm toolchain, identical to ci.yml's wasm job. The cache keys
@@ -464,6 +469,7 @@ jobs:
         run: |
           source emsdk/emsdk_env.sh
           emcmake cmake -B build-wasm \
+            -DKEX_WERROR=OFF \
             -DKEX_PREBUILT_RUNTIME_DIR="$(pwd)/build/runtime/beam" \
             -DKEX_BUILD_DATE="${{ needs.version.outputs.build_date }}"
           cmake --build build-wasm --parallel "$(getconf _NPROCESSORS_ONLN)"
