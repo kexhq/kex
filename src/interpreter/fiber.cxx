@@ -210,7 +210,7 @@ auto fiberTrampoline(void* arg) -> void {
 } // namespace
 
 Fiber::Fiber(EntryFn entry, std::size_t stackSize)
-    : m_impl(std::make_unique<Impl>()), m_entry(std::move(entry)) {
+    : m_entry(std::move(entry)), m_impl(std::make_unique<Impl>()) {
     m_stackSize = stackSize;
     m_impl->stack.resize(stackSize);
     // Emscripten's own asyncify scratch buffer, separate from the C stack —
