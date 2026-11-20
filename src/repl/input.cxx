@@ -20,7 +20,13 @@
 #include <vector>
 #ifndef __EMSCRIPTEN__
 #include <cerrno>
+#include <condition_variable>
 #include <csignal>
+#include <memory>
+#include <mutex>
+#include <set>
+#include <thread>
+#include <unordered_set>
 #endif
 #include "../common/repl_commands.hxx"
 #include "../semantic/completion_at.hxx"
@@ -75,43 +81,110 @@ auto replInputIsDeclaration(const std::string& input) -> bool {
 }
 
 // The modules under the REPL's source roots, by the name each file declares:
-// what a dotted name typed at the prompt can lead to. Read once a session —
-// the roots are fixed when it starts — and only each file's header, so `DB.`
-// costs no parsing.
-auto replRootModules() -> const std::vector<std::string>& {
-    static const std::vector<std::string> modules = [] {
-        namespace fs = std::filesystem;
-        std::set<std::string> found;
-        const auto standard = standardModuleRoots();
-        const auto roots = moduleRootsFor((fs::current_path() / "<repl>").string());
-        for (const auto& root : roots) {
-            std::error_code ec;
-            if (standard.contains(fs::weakly_canonical(root, ec).string())) {
+// what a dotted name typed at the prompt can lead to. Only each file's header
+// is read, so `DB.` costs no parsing.
+//
+// The walk below a root can be large: with no `lib` or `src` the root is the
+// working directory itself, and a REPL opened above several checkouts read
+// every one of them on the first Tab, which held the prompt (keys included)
+// for seconds. The walk skips the standard library
+// at any depth and any nested checkout, and it runs on its own thread from
+// the REPL's start, so Tab never waits for it: until it is done, Tab offers
+// no modules from the roots. `/complete` waits, so a script gets them all.
+namespace {
+
+auto walkRootModules(
+    const std::vector<std::string>& roots, const std::unordered_set<std::string>& standard)
+    -> std::vector<std::string> {
+    namespace fs = std::filesystem;
+    std::set<std::string> found;
+    auto isStandard = [&](const fs::path& path) {
+        std::error_code ec;
+        return standard.contains(fs::weakly_canonical(path, ec).string());
+    };
+    for (const auto& root : roots) {
+        std::error_code ec;
+        if (isStandard(root)) {
+            continue;
+        }
+        fs::recursive_directory_iterator walk(
+            root, fs::directory_options::skip_permission_denied, ec);
+        for (; !ec && walk != fs::recursive_directory_iterator(); walk.increment(ec)) {
+            const auto& entry = *walk;
+            const auto name = entry.path().filename().string();
+            if (entry.is_directory(ec)) {
+                // Another checkout below the root is another project, and
+                // the standard library is the prelude's.
+                if (skippedByModuleWalk(name) || fs::exists(entry.path() / ".git", ec) ||
+                    isStandard(entry.path())) {
+                    walk.disable_recursion_pending();
+                }
                 continue;
             }
-            fs::recursive_directory_iterator walk(
-                root, fs::directory_options::skip_permission_denied, ec);
-            for (; !ec && walk != fs::recursive_directory_iterator(); walk.increment(ec)) {
-                const auto& entry = *walk;
-                const auto name = entry.path().filename().string();
-                if (entry.is_directory(ec)) {
-                    if (skippedByModuleWalk(name)) {
-                        walk.disable_recursion_pending();
-                    }
-                    continue;
-                }
-                if (entry.path().extension() != ".kex" || name.ends_with(".spec.kex")) {
-                    continue;
-                }
-                if (const auto header = moduleHeaderOf(entry.path());
-                    header && !header->name.empty()) {
-                    found.insert(header->name);
-                }
+            if (entry.path().extension() != ".kex" || name.ends_with(".spec.kex")) {
+                continue;
+            }
+            if (const auto header = moduleHeaderOf(entry.path()); header && !header->name.empty()) {
+                found.insert(header->name);
             }
         }
-        return std::vector<std::string>(found.begin(), found.end());
-    }();
-    return modules;
+    }
+    return {found.begin(), found.end()};
+}
+
+struct RootModuleScan {
+    std::mutex mutex;
+    std::condition_variable finished;
+    bool done = false;
+    std::vector<std::string> modules;
+};
+
+auto rootModuleScan() -> std::shared_ptr<RootModuleScan>& {
+    static std::shared_ptr<RootModuleScan> scan;
+    return scan;
+}
+
+} // namespace
+
+auto startReplRootModuleScan() -> void {
+    auto& scan = rootModuleScan();
+    if (scan) {
+        return;
+    }
+    scan = std::make_shared<RootModuleScan>();
+    // The roots are fixed when the session starts, so they are read here, on
+    // this thread, and the walk itself touches nothing shared.
+    auto roots = moduleRootsFor((std::filesystem::current_path() / "<repl>").string());
+    auto standard = standardModuleRoots();
+    auto run = [scan, roots = std::move(roots), standard = std::move(standard)] {
+        auto modules = walkRootModules(roots, standard);
+        {
+            std::lock_guard lock(scan->mutex);
+            scan->modules = std::move(modules);
+            scan->done = true;
+        }
+        scan->finished.notify_all();
+    };
+#ifdef __EMSCRIPTEN__
+    run();
+#else
+    // Detached: a session that ends first does not wait for the walk.
+    std::thread(std::move(run)).detach();
+#endif
+}
+
+// The modules found, or none while the walk is still running and `wait` is
+// false.
+auto replRootModules(bool wait) -> const std::vector<std::string>& {
+    static const std::vector<std::string> none;
+    startReplRootModuleScan();
+    const auto& scan = rootModuleScan();
+    std::unique_lock lock(scan->mutex);
+    if (wait) {
+        scan->finished.wait(lock, [&] { return scan->done; });
+    }
+    // Written once, under the lock, before `done`; never changed after.
+    return scan->done ? scan->modules : none;
 }
 
 // Completions for a dotted name the REPL's own index cannot know: a module
@@ -120,7 +193,7 @@ auto replRootModules() -> const std::vector<std::string>& {
 // loaded into the index the first time, so its members complete as the
 // prelude's do; and the next part of every module whose name it begins
 // (`DB.` offers `Repositories`, `Schema`, `Store`) is offered too.
-auto replRootCompletions(const std::string& qualified, const std::string& word)
+auto replRootCompletions(const std::string& qualified, const std::string& word, bool wait)
     -> std::vector<std::string> {
     std::vector<std::string> matches;
     if (!g_replCompletionBase) {
@@ -144,7 +217,7 @@ auto replRootCompletions(const std::string& qualified, const std::string& word)
             }
         }
     }
-    for (const auto& module : replRootModules()) {
+    for (const auto& module : replRootModules(wait)) {
         if (module.rfind(qualified + word, 0) != 0) {
             continue;
         }
@@ -156,7 +229,8 @@ auto replRootCompletions(const std::string& qualified, const std::string& word)
 
 // Completions for `line` at byte offset `point`. `replaceFrom` is where, in
 // `line`, the word each match replaces starts.
-auto replCompleteAt(const std::string& line, size_t point) -> kex::semantic::CompletionAt {
+auto replCompleteAt(const std::string& line, size_t point, bool waitForModules)
+    -> kex::semantic::CompletionAt {
     if (!g_replCompletionBase) {
         return {};
     }
@@ -190,7 +264,7 @@ auto replCompleteAt(const std::string& line, size_t point) -> kex::semantic::Com
         const bool modulePath = qualified.empty() ? !word.empty() && kex::startsUppercase(word)
                                                   : kex::startsUppercase(qualified);
         if (modulePath) {
-            for (auto& match : replRootCompletions(qualified, word)) {
+            for (auto& match : replRootCompletions(qualified, word, waitForModules)) {
                 completion.matches.push_back(std::move(match));
             }
             std::sort(completion.matches.begin(), completion.matches.end());
@@ -204,7 +278,7 @@ auto replCompleteAt(const std::string& line, size_t point) -> kex::semantic::Com
 
 // `/complete <prefix>`: each completed word, in full.
 auto printReplCompletions(const std::string& prefix) -> void {
-    const auto completion = replCompleteAt(prefix, prefix.size());
+    const auto completion = replCompleteAt(prefix, prefix.size(), true);
     if (completion.matches.empty()) {
         std::cout << "  (no completions for \"" << prefix << "\")\n";
         return;
@@ -646,7 +720,7 @@ static char** kexCompletion(const char* text, int start, int end) {
     // (after the dot of a member). Readline inserts whole words, so carry the
     // text between the two — `pa.` — in front of every match.
     const std::string line(rl_line_buffer);
-    const auto completion = replCompleteAt(line, static_cast<size_t>(end));
+    const auto completion = replCompleteAt(line, static_cast<size_t>(end), false);
     const auto from = std::max(completion.replaceFrom, static_cast<size_t>(start));
     const auto lead = line.substr(static_cast<size_t>(start), from - static_cast<size_t>(start));
     g_completionMatches.clear();

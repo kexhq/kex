@@ -922,6 +922,7 @@ auto BeamReplSession::run() -> int {
         m_completionBase.prelude = preludeCompletionSymbols();
     }
     g_replCompletionBase = &m_completionBase;
+    startReplRootModuleScan();
     installReplLineEditing();
 
     // Where a module's `using`s are found: the session's source roots
@@ -1501,6 +1502,7 @@ auto WalkerReplSession::run() -> int {
         m_completionBase.prelude = preludeCompletionSymbols();
     }
     g_replCompletionBase = &m_completionBase;
+    startReplRootModuleScan();
     installReplLineEditing();
 
     m_evaluator.emplace(&preludeSemanticInterfaces());
