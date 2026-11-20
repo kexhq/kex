@@ -625,11 +625,25 @@ auto TypeChecker::check(
             if (const auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(&program.items[i]);
                 main && *main && (*main)->synthetic && (*main)->body.size() == 1 &&
                 (*main)->body.front()) {
+                // Every name the pattern binds, not just a lone `let name`: a
+                // function reading `scale` from `let (scale, _) = ...` needs
+                // its type as much (kexhq/kex#692's fuzz).
                 if (const auto* let = std::get_if<ast::LetExpr>(&(*main)->body.front()->kind);
                     let && let->pattern) {
-                    if (const auto* var = std::get_if<ast::VarPattern>(&let->pattern->kind)) {
-                        topLevelValues.try_emplace(var->name, i);
-                    }
+                    ast::forEachSubPattern(*let->pattern, [&](const ast::Pattern& bound) {
+                        if (const auto* var = std::get_if<ast::VarPattern>(&bound.kind)) {
+                            topLevelValues.try_emplace(var->name, i);
+                        } else if (const auto* typed = std::get_if<ast::TypePattern>(&bound.kind)) {
+                            topLevelValues.try_emplace(typed->name, i);
+                        } else if (
+                            const auto* record = std::get_if<ast::RecordPattern>(&bound.kind)) {
+                            for (const auto& field : record->fields) {
+                                if (!field.pattern) {
+                                    topLevelValues.try_emplace(field.name, i);
+                                }
+                            }
+                        }
+                    });
                 }
             }
         }
@@ -736,8 +750,10 @@ auto TypeChecker::check(
         for (const auto& name : sorted) {
             if (const auto value = topLevelValues.find(name.substr(1));
                 name.starts_with('=') && value != topLevelValues.end()) {
-                checkTopLevel(program.items[value->second]);
-                valuesChecked.insert(value->second);
+                // Once, however many names its pattern binds.
+                if (valuesChecked.insert(value->second).second) {
+                    checkTopLevel(program.items[value->second]);
+                }
                 continue;
             }
             // Check ALL FunctionDefs with this name (handles overloaded functions
