@@ -252,7 +252,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // the same convention used by the remaining public-native namespaces.
     defineModule("Process");
 
-    defineIntrinsic("Process.run", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process.run", []([[maybe_unused]] std::vector<ValuePtr> args) -> ValuePtr {
 #ifdef __EMSCRIPTEN__
         return Value::error(Value::string("process execution is unavailable in wasm"));
 #else
@@ -489,7 +489,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     //
     // Nothing is captured, by definition. Callers that need the text keep
     // using `run`; callers that need a person to watch progress use this.
-    defineIntrinsic("Process.stream", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process.stream", []([[maybe_unused]] std::vector<ValuePtr> args) -> ValuePtr {
 #ifdef __EMSCRIPTEN__
         return Value::error(Value::string("process execution is unavailable in wasm"));
 #else
