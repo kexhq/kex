@@ -1,2 +1,2 @@
-spec/error_unknown_module_function.kex:7:31: [KEXET-0424]: `Process` has no function `whereis`, did you mean `whereIs`?
-spec/error_unknown_module_function.kex:8:29: [KEXET-0423]: `Digest` has no function `sha512`
+spec/error_unknown_module_function.kex:7:31: [KEXET-0424]: Error, `Process` has no function `whereis`, did you mean `whereIs`?
+spec/error_unknown_module_function.kex:8:29: [KEXET-0423]: Error, `Digest` has no function `sha512`

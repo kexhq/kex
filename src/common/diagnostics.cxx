@@ -210,15 +210,15 @@ auto printCollapseReport(const std::vector<kex::compiled::CollapseNote>& notes) 
     }
 }
 
-// `[KEXET-0001]:`, the code naming the kind of problem; its E or W says
-// whether it is an error or a warning, and its color too. A diagnostic with no
-// code says `error:` or `warning:` instead.
+// `[KEXET-0001]: Error,`: the code naming the kind of problem, then whether
+// it is an error or a warning, spelled out rather than left to the code's E or
+// W. A diagnostic with no code says `error:` or `warning:` instead.
 static auto severityLabel(const kex::semantic::Diagnostic& diag) -> std::string {
     using namespace kex::color;
     const bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
-    std::string out = std::string(apply(bold)) + apply(isError ? red : magenta);
+    std::string out = std::string(apply(bold)) + apply(isError ? red : yellow);
     if (const auto id = kex::diag::idOf(diag.code); !id.empty()) {
-        out += "[" + std::string(id) + "]:";
+        out += "[" + std::string(id) + "]: " + (isError ? "Error," : "Warning,");
     } else {
         out += isError ? "error:" : "warning:";
     }
@@ -228,7 +228,7 @@ static auto severityLabel(const kex::semantic::Diagnostic& diag) -> std::string 
 auto formatDiagnostic(const kex::semantic::Diagnostic& diag) -> std::string {
     using namespace kex::color;
     const bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
-    const auto* tone = isError ? red : magenta;
+    const auto* tone = isError ? red : yellow;
     std::ostringstream out;
     out << apply(gray) << diag.location.file << ":" << diag.location.line << ":"
         << diag.location.column;

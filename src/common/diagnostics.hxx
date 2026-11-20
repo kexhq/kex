@@ -32,7 +32,7 @@ auto colorizeMessage(const std::string& msg) -> std::string;
 // `--collapse-report`: what `compiled do` chain collapse folded away.
 auto printCollapseReport(const std::vector<kex::compiled::CollapseNote>& notes) -> void;
 
-// One diagnostic as printed: `file:line:col: [KEXET-0001]: message`,
+// One diagnostic as printed: `file:line:col: [KEXET-0001]: Error, message`,
 // then the source underlined when it has an end, then its notes. Colored when
 // kex::color is enabled.
 auto formatDiagnostic(const kex::semantic::Diagnostic& diag) -> std::string;
@@ -44,12 +44,12 @@ auto printSemanticDiagnostic(const kex::semantic::Diagnostic& diag) -> void;
 auto fromParseDiagnostic(const kex::ParseDiagnostic& diag) -> kex::semantic::Diagnostic;
 auto printParseDiagnostic(const kex::ParseDiagnostic& diag) -> void;
 
-// `path: [KEXEB-0001]: message`, for a diagnostic that names a file but no
+// `path: [KEXEB-0001]: Error, message`, for a diagnostic that names a file but no
 // place in it (a lowering error). Colored like formatDiagnostic.
 auto formatFileDiagnostic(const std::string& path, const kex::semantic::Diagnostic& diag)
     -> std::string;
 
-// `[KEXET-0001]: message` with no location, for the REPL, whose input
+// `[KEXET-0001]: Error, message` with no location, for the REPL, whose input
 // is wrapped in source the user never wrote. Colored like formatDiagnostic.
 auto formatBriefDiagnostic(const kex::semantic::Diagnostic& diag) -> std::string;
 // An exception as the REPL prints it: each diagnostic of a

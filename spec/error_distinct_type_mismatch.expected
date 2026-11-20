@@ -1,7 +1,7 @@
-spec/error_distinct_type_mismatch.kex:7:3: [KEXET-0491]: `acceptUser` expects argument 1 to be UserId, but got Integer
+spec/error_distinct_type_mismatch.kex:7:3: [KEXET-0491]: Error, `acceptUser` expects argument 1 to be UserId, but got Integer
 
 acceptUser : UserId -> UserId
-spec/error_distinct_type_mismatch.kex:9:3: [KEXET-0491]: `acceptUser` expects argument 1 to be UserId, but got OrderId
+spec/error_distinct_type_mismatch.kex:9:3: [KEXET-0491]: Error, `acceptUser` expects argument 1 to be UserId, but got OrderId
 
 acceptUser : UserId -> UserId
 Aborted: 2 type errors. Fix them before running, or skip the check with --no-check.

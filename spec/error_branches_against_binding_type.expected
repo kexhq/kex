@@ -1,1 +1,1 @@
-spec/error_branches_against_binding_type.kex:6:21: [KEXET-0446]: Match arm type mismatch: expected Integer but arm returns String
+spec/error_branches_against_binding_type.kex:6:21: [KEXET-0446]: Error, Match arm type mismatch: expected Integer but arm returns String

@@ -1,2 +1,2 @@
-spec/error_next_outside_loop.kex:3:3: [KEXES-0003]: 'next' used outside a loop
+spec/error_next_outside_loop.kex:3:3: [KEXES-0003]: Error, 'next' used outside a loop
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

@@ -1,2 +1,2 @@
-spec/error_type_mismatch.kex:4:20: [KEXET-0463]: Cannot add Integer and String
+spec/error_type_mismatch.kex:4:20: [KEXET-0463]: Error, Cannot add Integer and String
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

@@ -1,2 +1,2 @@
-spec/error_try_block_needs_holder.kex:9:1: [KEXET-0127]: `lengths` declared to return [Integer] but body returns [Result<Integer, ParseError>]
-spec/error_try_block_needs_holder.kex:12:64: [KEXET-0144]: `.try` can fail, and this block returns Integer, which cannot hold the failure: return a Result or an Optional, or handle it with `trying` or a `rescue`
+spec/error_try_block_needs_holder.kex:9:1: [KEXET-0127]: Error, `lengths` declared to return [Integer] but body returns [Result<Integer, ParseError>]
+spec/error_try_block_needs_holder.kex:12:64: [KEXET-0144]: Error, `.try` can fail, and this block returns Integer, which cannot hold the failure: return a Result or an Optional, or handle it with `trying` or a `rescue`

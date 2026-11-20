@@ -1,3 +1,3 @@
-spec/error_new_outside_make.kex:6:31: [KEXET-0449]: `New` construction requires a make block receiver
-spec/error_new_outside_make.kex:7:25: [KEXET-0449]: `This` construction requires a make block receiver
-spec/error_new_outside_make.kex:10:16: [KEXET-0404]: `new` requires a record receiver (or an explicit local binding)
+spec/error_new_outside_make.kex:6:31: [KEXET-0449]: Error, `New` construction requires a make block receiver
+spec/error_new_outside_make.kex:7:25: [KEXET-0449]: Error, `This` construction requires a make block receiver
+spec/error_new_outside_make.kex:10:16: [KEXET-0404]: Error, `new` requires a record receiver (or an explicit local binding)

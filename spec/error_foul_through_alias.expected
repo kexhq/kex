@@ -1,2 +1,2 @@
-spec/error_foul_through_alias.kex:13:42: [KEXEF-0001]: Cannot call foul function 'Entries.fetch' from pure context
-spec/error_foul_through_alias.kex:16:56: [KEXEF-0001]: Cannot call foul function 'Entries.fetch' from pure context
+spec/error_foul_through_alias.kex:13:42: [KEXEF-0001]: Error, Cannot call foul function 'Entries.fetch' from pure context
+spec/error_foul_through_alias.kex:16:56: [KEXEF-0001]: Error, Cannot call foul function 'Entries.fetch' from pure context

@@ -1,2 +1,2 @@
-spec/error_reserved_binding_pattern.kex:4:18: [KEXEP-0124]: `next` is a reserved keyword in Kex, so it cannot name a variable. Rename it
+spec/error_reserved_binding_pattern.kex:4:18: [KEXEP-0124]: Error, `next` is a reserved keyword in Kex, so it cannot name a variable. Rename it
 Aborted: 1 syntax error. Fix them before running.

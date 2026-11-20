@@ -1,1 +1,1 @@
-spec/error_using_nested_member_bare.kex:9:16: [KEXET-0146]: Undefined name: `separator`
+spec/error_using_nested_member_bare.kex:9:16: [KEXET-0146]: Error, Undefined name: `separator`

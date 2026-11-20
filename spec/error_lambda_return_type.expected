@@ -1,4 +1,4 @@
-spec/error_lambda_return_type.kex:5:15: [KEXET-0491]: `filter` expects argument 2 to be A -> Bool, but got Integer -> Integer
+spec/error_lambda_return_type.kex:5:15: [KEXET-0491]: Error, `filter` expects argument 2 to be A -> Bool, but got Integer -> Integer
 
 filter : A? -> (A -> Bool) -> A?
 

@@ -1,3 +1,3 @@
-spec/pattern_arity.kex:15:7: [KEXET-0114]: `Just` constructor takes 1 value(s), but the pattern destructures 2
-spec/pattern_arity.kex:17:7: [KEXET-0116]: `Pair` record takes 2 value(s), but the pattern destructures 1
-spec/pattern_arity.kex:21:13: [KEXET-0116]: `ParseError` record takes 5 value(s), but the pattern destructures 1
+spec/pattern_arity.kex:15:7: [KEXET-0114]: Error, `Just` constructor takes 1 value(s), but the pattern destructures 2
+spec/pattern_arity.kex:17:7: [KEXET-0116]: Error, `Pair` record takes 2 value(s), but the pattern destructures 1
+spec/pattern_arity.kex:21:13: [KEXET-0116]: Error, `ParseError` record takes 5 value(s), but the pattern destructures 1

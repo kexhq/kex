@@ -1,2 +1,2 @@
-spec/error_field_on_optional.kex:17:56: [KEXET-0478]: `id` is a field of M.Book, but the receiver is M.Book?. The value may be None. Map over the optional first: `.map { |v| v.id }`
+spec/error_field_on_optional.kex:17:56: [KEXET-0478]: Error, `id` is a field of M.Book, but the receiver is M.Book?. The value may be None. Map over the optional first: `.map { |v| v.id }`
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

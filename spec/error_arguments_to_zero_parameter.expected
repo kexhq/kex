@@ -1,4 +1,4 @@
-spec/error_arguments_to_zero_parameter.kex:15:14: [KEXET-0484]: `mk` takes no arguments; the function it returns expects 1 argument(s), got 2
-spec/error_arguments_to_zero_parameter.kex:16:14: [KEXET-0001]: Type mismatch: expected Integer, got String
-spec/error_arguments_to_zero_parameter.kex:17:20: [KEXET-0485]: `M.zero` takes no arguments, got 1
-spec/error_arguments_to_zero_parameter.kex:18:22: [KEXET-0485]: `Time.now` takes no arguments, got 1
+spec/error_arguments_to_zero_parameter.kex:15:14: [KEXET-0484]: Error, `mk` takes no arguments; the function it returns expects 1 argument(s), got 2
+spec/error_arguments_to_zero_parameter.kex:16:14: [KEXET-0001]: Error, Type mismatch: expected Integer, got String
+spec/error_arguments_to_zero_parameter.kex:17:20: [KEXET-0485]: Error, `M.zero` takes no arguments, got 1
+spec/error_arguments_to_zero_parameter.kex:18:22: [KEXET-0485]: Error, `Time.now` takes no arguments, got 1

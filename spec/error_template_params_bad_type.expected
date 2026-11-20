@@ -1,3 +1,3 @@
-spec/error_template_params_bad_type.kex:10:27: [KEXEP-0062]: Expected type expression
+spec/error_template_params_bad_type.kex:10:27: [KEXEP-0062]: Error, Expected type expression
 spec/error_template_params_bad_type.kex:10:27: note: in a template's `params:` frontmatter, `->->->` is not a type
 Aborted: compile-time expansion failed.

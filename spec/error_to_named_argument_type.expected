@@ -1,4 +1,4 @@
-spec/error_to_named_argument_type.kex:6:28: [KEXET-0491]: `to` expects argument 3 to be TimeUnit, but got Integer
+spec/error_to_named_argument_type.kex:6:28: [KEXET-0491]: Error, `to` expects argument 3 to be TimeUnit, but got Integer
 
 to : Atom -> Type<String> -> String?
 

@@ -1,1 +1,1 @@
-spec/error_record_spread_type.kex:12:27: [KEXET-0451]: record spread expects `Point`, but got Other
+spec/error_record_spread_type.kex:12:27: [KEXET-0451]: Error, record spread expects `Point`, but got Other

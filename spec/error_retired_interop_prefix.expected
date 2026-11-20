@@ -1,2 +1,2 @@
-spec/error_retired_interop_prefix.kex:5:16: [KEXET-0427]: `Erlang.` interop is now `BEAM.`, followed by the module's real name: write `BEAM.lists.reverse(xs)`, `BEAM.erlang.node()`
-spec/error_retired_interop_prefix.kex:6:16: [KEXET-0428]: `Elixir.` interop is now `BEAM.`, followed by the module's real name: write `BEAM.lists.reverse(xs)`, `BEAM.erlang.node()`, `BEAM.Elixir.Enum.map(xs, f)`
+spec/error_retired_interop_prefix.kex:5:16: [KEXET-0427]: Error, `Erlang.` interop is now `BEAM.`, followed by the module's real name: write `BEAM.lists.reverse(xs)`, `BEAM.erlang.node()`
+spec/error_retired_interop_prefix.kex:6:16: [KEXET-0428]: Error, `Elixir.` interop is now `BEAM.`, followed by the module's real name: write `BEAM.lists.reverse(xs)`, `BEAM.erlang.node()`, `BEAM.Elixir.Enum.map(xs, f)`

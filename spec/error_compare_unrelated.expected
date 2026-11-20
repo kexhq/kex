@@ -1,3 +1,3 @@
-spec/error_compare_unrelated.kex:10:20: [KEXET-0467]: Cannot compare Integer and String
-spec/error_compare_unrelated.kex:12:26: [KEXET-0467]: Cannot compare Integer and String
-spec/error_compare_unrelated.kex:19:29: [KEXET-0472]: `take` expects 2 argument(s), got 1
+spec/error_compare_unrelated.kex:10:20: [KEXET-0467]: Error, Cannot compare Integer and String
+spec/error_compare_unrelated.kex:12:26: [KEXET-0467]: Error, Cannot compare Integer and String
+spec/error_compare_unrelated.kex:19:29: [KEXET-0472]: Error, `take` expects 2 argument(s), got 1

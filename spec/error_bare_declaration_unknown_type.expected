@@ -1,8 +1,8 @@
-spec/error_bare_declaration_unknown_type.kex:14:16: [KEXET-0145]: Unknown type `MissingTraitType`
-spec/error_bare_declaration_unknown_type.kex:5:9: [KEXET-0145]: Unknown type `MissingTopLevel`
-spec/error_bare_declaration_unknown_type.kex:9:17: [KEXET-0145]: Unknown type `MissingModuleType`
-spec/error_bare_declaration_unknown_type.kex:19:16: [KEXET-0145]: Unknown type `MissingMakeType`
-spec/error_bare_declaration_unknown_type.kex:6:1: [KEXET-0001]: Type mismatch: expected MissingTopLevel, got Integer
-spec/error_bare_declaration_unknown_type.kex:10:3: [KEXET-0127]: `moduleValue` declared to return MissingModuleType but body returns Integer
-spec/error_bare_declaration_unknown_type.kex:20:3: [KEXET-0127]: `makeValue` declared to return MissingMakeType but body returns Integer
+spec/error_bare_declaration_unknown_type.kex:14:16: [KEXET-0145]: Error, Unknown type `MissingTraitType`
+spec/error_bare_declaration_unknown_type.kex:5:9: [KEXET-0145]: Error, Unknown type `MissingTopLevel`
+spec/error_bare_declaration_unknown_type.kex:9:17: [KEXET-0145]: Error, Unknown type `MissingModuleType`
+spec/error_bare_declaration_unknown_type.kex:19:16: [KEXET-0145]: Error, Unknown type `MissingMakeType`
+spec/error_bare_declaration_unknown_type.kex:6:1: [KEXET-0001]: Error, Type mismatch: expected MissingTopLevel, got Integer
+spec/error_bare_declaration_unknown_type.kex:10:3: [KEXET-0127]: Error, `moduleValue` declared to return MissingModuleType but body returns Integer
+spec/error_bare_declaration_unknown_type.kex:20:3: [KEXET-0127]: Error, `makeValue` declared to return MissingMakeType but body returns Integer
 Aborted: 7 type errors. Fix them before running, or skip the check with --no-check.

@@ -1,9 +1,9 @@
-spec/error_operator_overload_argument.kex:17:28: [KEXET-0491]: `==` expects argument 2 to be String, but got Integer
+spec/error_operator_overload_argument.kex:17:28: [KEXET-0491]: Error, `==` expects argument 2 to be String, but got Integer
 
 == : Col -> String -> Cond
 
 == : Measure<A> -> Measure<A> -> Bool
-spec/error_operator_overload_argument.kex:18:27: [KEXET-0491]: `<` expects argument 2 to be String, but got Col
+spec/error_operator_overload_argument.kex:18:27: [KEXET-0491]: Error, `<` expects argument 2 to be String, but got Col
 
 < : Col -> String -> Cond
 

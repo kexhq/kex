@@ -1,4 +1,4 @@
-spec/error_shorthand_lambda_type.kex:3:25: [KEXET-0491]: `split` expects argument 1 to be String, but got Integer
+spec/error_shorthand_lambda_type.kex:3:25: [KEXET-0491]: Error, `split` expects argument 1 to be String, but got Integer
 
 split : String -> [String]
 

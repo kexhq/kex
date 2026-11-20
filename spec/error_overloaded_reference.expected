@@ -1,4 +1,4 @@
-spec/error_overloaded_reference.kex:5:18: [KEXET-0460]: Cannot reference overloaded function `render` without disambiguating arguments
+spec/error_overloaded_reference.kex:5:18: [KEXET-0460]: Error, Cannot reference overloaded function `render` without disambiguating arguments
 
 render : Integer -> String
 

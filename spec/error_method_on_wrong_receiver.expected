@@ -1,4 +1,4 @@
-spec/error_method_on_wrong_receiver.kex:9:23: [KEXET-0491]: `iso` expects argument 1 to be Date, but got Result<Date, TimeError>
+spec/error_method_on_wrong_receiver.kex:9:23: [KEXET-0491]: Error, `iso` expects argument 1 to be Date, but got Result<Date, TimeError>
 
 iso : Date -> String
 

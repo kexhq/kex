@@ -1,9 +1,9 @@
-spec/error_operator_before_make.kex:19:1: [KEXET-0001]: Type mismatch: expected String, got Vec
-spec/error_operator_before_make.kex:6:3: [KEXET-0001]: Type mismatch: expected String, got Vec
-spec/error_operator_before_make.kex:8:3: [KEXET-0001]: Type mismatch: expected String, got Vec
-spec/error_operator_before_make.kex:7:3: [KEXET-0001]: Type mismatch: expected Integer, got Vec
-spec/error_operator_before_make.kex:9:25: [KEXET-0416]: `-` is not defined for Vec and Vec; declare it in a `make Vec` block
-spec/error_operator_before_make.kex:12:25: [KEXET-0491]: `+` expects argument 2 to be Vec, but got String
+spec/error_operator_before_make.kex:19:1: [KEXET-0001]: Error, Type mismatch: expected String, got Vec
+spec/error_operator_before_make.kex:6:3: [KEXET-0001]: Error, Type mismatch: expected String, got Vec
+spec/error_operator_before_make.kex:8:3: [KEXET-0001]: Error, Type mismatch: expected String, got Vec
+spec/error_operator_before_make.kex:7:3: [KEXET-0001]: Error, Type mismatch: expected Integer, got Vec
+spec/error_operator_before_make.kex:9:25: [KEXET-0416]: Error, `-` is not defined for Vec and Vec; declare it in a `make Vec` block
+spec/error_operator_before_make.kex:12:25: [KEXET-0491]: Error, `+` expects argument 2 to be Vec, but got String
 
 + : Binary -> Binary -> Binary
 
@@ -22,4 +22,4 @@ spec/error_operator_before_make.kex:12:25: [KEXET-0491]: `+` expects argument 2 
 + : Time -> Measure<Quantity.Time> -> Time
 
 + : Vec -> Vec -> Vec
-spec/error_operator_before_make.kex:13:3: [KEXET-0001]: Type mismatch: expected String, got Vec
+spec/error_operator_before_make.kex:13:3: [KEXET-0001]: Error, Type mismatch: expected String, got Vec

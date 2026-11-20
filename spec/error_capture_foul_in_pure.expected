@@ -1,2 +1,2 @@
-spec/error_capture_foul_in_pure.kex:8:46: [KEXEF-0003]: Cannot capture foul function 'shout' from pure context
+spec/error_capture_foul_in_pure.kex:8:46: [KEXEF-0003]: Error, Cannot capture foul function 'shout' from pure context
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

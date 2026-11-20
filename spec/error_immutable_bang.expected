@@ -1,2 +1,2 @@
-spec/error_immutable_bang.kex:6:15: [KEXET-0425]: Cannot use '!' on immutable binding: frozen
+spec/error_immutable_bang.kex:6:15: [KEXET-0425]: Error, Cannot use '!' on immutable binding: frozen
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

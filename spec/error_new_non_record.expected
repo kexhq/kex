@@ -1,2 +1,2 @@
-spec/error_new_non_record.kex:3:25: [KEXET-0403]: `new` requires a record receiver
-spec/error_new_non_record.kex:4:28: [KEXET-0450]: `New` requires a record receiver
+spec/error_new_non_record.kex:3:25: [KEXET-0403]: Error, `new` requires a record receiver
+spec/error_new_non_record.kex:4:28: [KEXET-0450]: Error, `New` requires a record receiver
