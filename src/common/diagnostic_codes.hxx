@@ -86,4 +86,22 @@ auto idOf(Code code) -> std::string_view;
 // Where a code is explained.
 auto urlOf(Code code) -> std::string;
 
+// "error" or "warning", from the code's severity letter.
+auto severityOf(const Entry& entry) -> std::string_view;
+// The stage named by the code's stage letter: "types", "parse", ...
+auto stageOf(const Entry& entry) -> std::string_view;
+
+// The registry as JSON, for tools outside the compiler (the site that
+// explains each code): `kex --explain all --json`. One object with the
+// compiler's version, every entry, and the retired codes:
+//
+//   {"version": "0.4.0", "entries": [{"code": "KEXET-0001",
+//     "name": "TypeMismatch", "severity": "error", "stage": "types",
+//     "template": "...", "slots": ["expected", "actual"],
+//     "url": "https://oops.kex.run/KEXET-0001"}, ...],
+//    "retired": ["KEXET-0099", ...]}
+auto catalogJson() -> std::string;
+// One entry as the object catalogJson lists: `kex --explain CODE --json`.
+auto entryJson(const Entry& entry) -> std::string;
+
 } // namespace kex::diag
