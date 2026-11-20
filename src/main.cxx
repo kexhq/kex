@@ -129,8 +129,10 @@ auto printUsage(const char* progName) -> void {
               << "  -n, --no-check    Skip semantic check when running\n"
               << "  -l, --lex         Print token stream\n"
               << "  -p, --parse       Print AST\n"
-              << "  -j, --json        With --check: output diagnostics as JSON\n"
-              << "      --explain CODE  What a diagnostic code means (KEXET-0001)\n"
+              << "  -j, --json        With --check: output diagnostics as JSON.\n"
+                 "                    With --explain: the entry, or every entry, as JSON\n"
+              << "      --explain CODE  What a diagnostic code means (KEXET-0001);\n"
+                 "                    `--explain all` lists every code\n"
               << "      --lsp         Run the Kex language server over stdio\n"
               << "  -s, --summary     Print public API signatures (Kex syntax). With a name\n"
                  "                    instead of a file, the standard library's help:\n"
@@ -1021,11 +1023,27 @@ int main(int argc, char* argv[]) {
     }
 
     // `--explain KEXET-0001`: the registry's entry for a diagnostic code.
+    // `--explain all` lists every code; with `--json` either answers in JSON,
+    // for tools such as the site that explains the codes.
     if (options.explainCode) {
+        if (*options.explainCode == "all") {
+            if (options.jsonOutput) {
+                std::cout << kex::diag::catalogJson();
+                return 0;
+            }
+            for (const auto& entry : kex::diag::entries()) {
+                std::cout << entry.id << "  " << entry.name << "\n";
+            }
+            return 0;
+        }
         const auto* found = kex::diag::find(*options.explainCode);
         if (!found) {
             std::cerr << "kex: no diagnostic has the code `" << *options.explainCode << "`\n";
             return 1;
+        }
+        if (options.jsonOutput) {
+            std::cout << kex::diag::entryJson(*found) << "\n";
+            return 0;
         }
         std::cout << found->id << ": " << found->name << "\n\n"
                   << "  " << found->english << "\n\n"

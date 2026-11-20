@@ -110,6 +110,41 @@ int main() {
                 std::string("expected Integer, got String"));
             assertEqual(kex::diag::fill("missing {gone}", {}), std::string("missing {gone}"));
         });
+
+        it("exports every entry and retired code as JSON", []() {
+            const auto json = kex::diag::catalogJson();
+            assertTrue(json.starts_with("{\n  \"version\": \""), json.substr(0, 40));
+            for (const auto& entry : kex::diag::entries()) {
+                assertTrue(
+                    json.find(kex::diag::entryJson(entry)) != std::string::npos,
+                    std::string(entry.id));
+            }
+            for (const auto id : kex::diag::retired()) {
+                assertTrue(
+                    json.find("\"" + std::string(id) + "\"") != std::string::npos, std::string(id));
+            }
+        });
+
+        it("writes an entry's severity, stage, slots and escaped template", []() {
+            const auto* mismatch = kex::diag::find("KEXET-0001");
+            assertTrue(mismatch != nullptr);
+            const auto json = kex::diag::entryJson(*mismatch);
+            assertTrue(json.find("\"severity\": \"error\"") != std::string::npos, json);
+            assertTrue(json.find("\"stage\": \"types\"") != std::string::npos, json);
+            assertTrue(
+                json.find("\"url\": \"https://oops.kex.run/KEXET-0001\"") != std::string::npos,
+                json);
+            for (const auto& entry : kex::diag::entries()) {
+                const auto one = kex::diag::entryJson(entry);
+                assertEqual(
+                    std::string(kex::diag::severityOf(entry)),
+                    std::string(entry.id[3] == 'W' ? "warning" : "error"), std::string(entry.id));
+                assertTrue(kex::diag::stageOf(entry) != "unknown", std::string(entry.id));
+                // A template's quotes and backslashes come out escaped, so no
+                // raw newline or unescaped quote breaks the object.
+                assertTrue(one.find('\n') == std::string::npos, std::string(entry.id));
+            }
+        });
     });
 
     return runAll();
