@@ -163,9 +163,11 @@ auto completionsFor(
                     // each other's methods here — acceptable for a completion
                     // list, and the alternative today is offering nothing at
                     // all for any module-qualified type.
-                    const auto tail = qualifier.rfind('.') == std::string::npos
-                                          ? qualifier
-                                          : qualifier.substr(qualifier.rfind('.') + 1);
+                    // The last segment of the type's name, not of its
+                    // arguments: `Measure<Quantity.Length>` is a Measure.
+                    const auto lastDot = qualifier.substr(0, qualifier.find('<')).rfind('.');
+                    const auto tail =
+                        lastDot == std::string::npos ? qualifier : qualifier.substr(lastDot + 1);
                     const auto generic = tail.find('<');
                     const auto base = generic == std::string::npos ? tail : tail.substr(0, generic);
                     const auto receiverGeneric = receiver.find('<');

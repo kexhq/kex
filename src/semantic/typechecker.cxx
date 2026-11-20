@@ -78,6 +78,8 @@ auto TypeChecker::check(
     m_successWrappers.clear();
     m_functionSignatures.clear();
     m_resolvedCalls.clear();
+    m_captureCalls.clear();
+    m_pendingCaptureCalls.clear();
     m_calledModules.clear();
     m_selectedCallSignatures.clear();
     m_captureSignatures.clear();
@@ -777,6 +779,23 @@ auto TypeChecker::check(
     }
 
     popScope();
+
+    // The method captures, now that what they flowed into is resolved.
+    // The capture's own type says it best: a generic parameter's (`A -> Bool`)
+    // is the signature's variable, the capture's is what it was used as.
+    for (const auto& pending : m_pendingCaptureCalls) {
+        auto receiver = pending.receiver;
+        if (const auto found = m_typeMap.find(pending.value);
+            !isFullyConcrete(resolve(receiver)) && found != m_typeMap.end()) {
+            const auto type = expandTypeAliases(resolve(found->second));
+            if (const auto* function = std::get_if<FuncType>(&type->kind);
+                function && function->params.size() == 1) {
+                receiver = function->params.front();
+            }
+        }
+        decideCaptureAsCall(*pending.value, *pending.capture, receiver);
+    }
+    m_pendingCaptureCalls.clear();
 
     // `m_typeMap` records each expression's type as it was INFERRED, which for
     // anything inferred before its unification is a bare TypeVar; the concrete
@@ -8062,6 +8081,14 @@ auto TypeChecker::bareNameDeclared(const std::string& name) const -> bool {
                    moduleMemberImported(owner.module, name, true);
         });
     if (namesKnownType(name) || namesDeclaredType(name, name) || ownerVisible) {
+        return true;
+    }
+    // A module the program declares, named by its first segment (`Net` of
+    // `Net.HTTP`), as an imported one is below: completion offered `Math`
+    // but not the file's own `Haversine`.
+    if (std::any_of(m_localModules.begin(), m_localModules.end(), [&](const std::string& module) {
+            return module.substr(0, module.find('.')) == name;
+        })) {
         return true;
     }
     // A module's constructor, inside the module or under a `using` of it.

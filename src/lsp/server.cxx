@@ -4141,10 +4141,11 @@ private:
                              ? 0
                              : startLineBegin + 1) +
                         1);
-                    if (const auto module = found->second.moduleReferences.find(
-                            Document::receiverKey(startLine, startColumn));
-                        module != found->second.moduleReferences.end() &&
-                        kex::startsUppercase(written)) {
+                    const auto module = found->second.moduleReferences.find(
+                        Document::receiverKey(startLine, startColumn));
+                    const bool modulePath = module != found->second.moduleReferences.end() &&
+                                            kex::startsUppercase(written);
+                    const auto asModulePath = [&] {
                         const auto firstEnd = std::min(written.find('.'), written.size());
                         const auto resolved = module->second + written.substr(firstEnd);
                         query.dbQuery = resolved + "." +
@@ -4152,19 +4153,30 @@ private:
                         query.rewriteFrom = resolved;
                         query.rewriteTo = written;
                         resolvedByAnalyzer = true;
+                    };
+                    // A module's own name completes as the module. A path
+                    // past it can reach a value (`Haversine.EARTH_RADIUS.`),
+                    // which completes as the checker typed it; only an
+                    // untyped path is a nested module (`Net.HTTP.`).
+                    if (modulePath && written.find('.') == std::string::npos) {
+                        asModulePath();
                     }
-                }
-                if (receiver.valid && !resolvedByAnalyzer) {
-                    if (auto qualifier = receiverQualifier(
-                            found->second, receiver, cursor, &m_interfaces,
-                            documentModuleRoots(found->second.path));
-                        !qualifier.empty()) {
-                        query.dbQuery = qualifier + "." +
-                                        text.substr(receiver.dot + 1, cursor - receiver.dot - 1);
-                        query.rewriteFrom = qualifier;
-                        query.rewriteTo =
-                            text.substr(receiver.start, receiver.dot - receiver.start);
-                        resolvedByAnalyzer = true;
+                    if (!resolvedByAnalyzer) {
+                        if (auto qualifier = receiverQualifier(
+                                found->second, receiver, cursor, &m_interfaces,
+                                documentModuleRoots(found->second.path));
+                            !qualifier.empty()) {
+                            query.dbQuery =
+                                qualifier + "." +
+                                text.substr(receiver.dot + 1, cursor - receiver.dot - 1);
+                            query.rewriteFrom = qualifier;
+                            query.rewriteTo =
+                                text.substr(receiver.start, receiver.dot - receiver.start);
+                            resolvedByAnalyzer = true;
+                        }
+                    }
+                    if (!resolvedByAnalyzer && modulePath) {
+                        asModulePath();
                     }
                 }
             }

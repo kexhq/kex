@@ -1021,6 +1021,36 @@ int main() {
                 "the hole's error did not map back to its own line: " + result);
         });
 
+        it("completes a module the file declares, and a constant's members", []() {
+            // examples/city_distance.kex: `Hav` offered no `Haversine`, and
+            // `EARTH_RADIUS.` nothing: its Measure<Quantity.Length> was split
+            // at the argument's dot.
+            const std::string uri = "file:///tmp/kex-lsp-module-constant.kex";
+            const std::string text = "using Units.SI\n"
+                                     "module Haversine do\n"
+                                     "  let EARTH_RADIUS = 6371.kilometer\n"
+                                     "  let around() = EARTH_RADIUS.sc\n"
+                                     "end\n"
+                                     "main do\n"
+                                     "  Hav\n"
+                                     "  Haversine.EARTH_RADIUS.sca\n"
+                                     "end\n";
+            const auto module = askAt(uri, text, "completion", 6, 5);
+            assertTrue(
+                module.find(R"("label":"Haversine")") != std::string::npos,
+                "the file's module was not offered: " + module);
+            const auto constant = askAt(uri, text, "completion", 3, 32);
+            assertTrue(
+                constant.find(R"("label":"scale")") != std::string::npos,
+                "the constant's Measure members were not offered: " + constant);
+            // Reached through its module, the constant is a member read the
+            // checker records by the member's name.
+            const auto qualified = askAt(uri, text, "completion", 7, 28);
+            assertTrue(
+                qualified.find(R"("label":"scaled")") != std::string::npos,
+                "the module-qualified constant's members were not offered: " + qualified);
+        });
+
         it("serves diagnostics and completion for unsaved buffers", []() {
             std::string messages;
             messages += frame(

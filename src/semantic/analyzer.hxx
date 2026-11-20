@@ -90,6 +90,11 @@ public:
         m_checker.linkModules(std::move(modules));
     }
     auto analyze(const ast::Program& program) -> bool;
+    // Whether analyze() ran: an Analyzer only set up (a `--no-check` build)
+    // has decided nothing.
+    auto analyzed() const -> bool {
+        return m_analyzed;
+    }
     auto diagnostics() const -> const std::vector<Diagnostic>&;
 
     // Presentation-widened `typeOf` — see TypeChecker::displayTypeOf.
@@ -146,6 +151,10 @@ public:
     auto resolvedTraits() const
         -> const std::unordered_map<const ast::MakeDef*, std::vector<std::string>>& {
         return m_checker.resolvedTraits();
+    }
+    auto captureCalls() const
+        -> const std::unordered_map<const ast::Expr*, const ast::MethodCall*>& {
+        return m_checker.captureCalls();
     }
     auto selectedCallSignatures() const -> const std::unordered_map<const ast::Expr*, Signature>& {
         return m_checker.selectedCallSignatures();
@@ -227,6 +236,7 @@ public:
     }
 
 private:
+    bool m_analyzed = false;
     // The purity walk: which effects run where, by the functions the checker
     // says each call runs, and where `break` and `next` may stand.
     template <typename Item>

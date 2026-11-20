@@ -1,5 +1,7 @@
 // Method-call lowering methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include <cstdlib>
+#include <cstdio>
 #include "../common/named_arguments.hxx"
 #include "../common/mangle.hxx"
 #include <algorithm>
@@ -190,6 +192,21 @@ auto Lowering::lowerValueReceiverCall(const ast::MethodCall& n) -> ExprPtr {
     // which looks the method up on the value as the walker does. Several
     // modules' providers are the checker's choice (its alternatives), never
     // made here.
+    //
+    // Only for a program the checker did not decide in full: one built with
+    // `--no-check`, or whose check failed and is lowered all the same. In a
+    // checked program every call is decided, and lowering makes no choice of
+    // its own (kexhq/kex#667); one reaching here is a checker bug, reported
+    // as one rather than answered by a search by name.
+    if (externalModules && (!localMethods.count(m) || !localArityExists) && hir &&
+        hir->targetOf(n).kind == hir::TargetKind::Undecided && hir->decidesEveryCall() &&
+        externalModules->receiverFunctions.count(m)) {
+        throw LowerError(
+            "IR lower: the checker left `" + m + "/" +
+            std::to_string(
+                static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 + (n.block ? 1 : 0)) +
+            "` undecided in a checked program");
+    }
     if (externalModules && (!localMethods.count(m) || !localArityExists)) {
         if (const auto found = externalModules->receiverFunctions.find(m);
             found != externalModules->receiverFunctions.end()) {
@@ -220,6 +237,17 @@ auto Lowering::lowerValueReceiverCall(const ast::MethodCall& n) -> ExprPtr {
                 }
                 const auto& providers = chosen->second;
                 const auto function = providers.size() == 1 ? providers.front()->beamFunction : m;
+                // KEX_SEARCH_AUDIT=1: each call this name-based search still
+                // decides, so the checker can be taught to decide it
+                // instead (kexhq/kex#667).
+                static const bool audit = std::getenv("KEX_SEARCH_AUDIT") != nullptr;
+                if (audit) {
+                    std::fprintf(
+                        stderr, "search: %s/%d -> %s:%s (%zu module%s, decided %d %s)\n", m.c_str(),
+                        arity, chosen->first.c_str(), function.c_str(), byModule.size(),
+                        byModule.size() == 1 ? "" : "s", static_cast<int>(hir->targetOf(n).kind),
+                        hir->targetOf(n).owner.c_str());
+                }
                 return ret(callE(chosen->first, function, arity, std::move(args)));
             }
             if (!byModule.empty()) {

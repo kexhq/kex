@@ -473,6 +473,24 @@ auto checkedReceiver(
     if (!expression && receiver.callOpen && bareCallReceiver(source, receiver)) {
         expression = typedAt(*checked->analyzer, positionOf(source, receiver.start));
     }
+    // A module's value, `Haversine.EARTH_RADIUS.`: a path the scan takes as
+    // one name, and a member read the checker records by its member's name,
+    // not where the path starts.
+    if (!expression && !receiver.callOpen) {
+        const auto lastDot = source.rfind('.', receiver.dot - 1);
+        if (lastDot != std::string::npos && lastDot > receiver.start) {
+            const auto [line, column] = positionOf(source, lastDot + 1);
+            for (const auto& [candidate, _] : checked->analyzer->typeMap()) {
+                if (const auto* call =
+                        candidate ? std::get_if<ast::MethodCall>(&candidate->kind) : nullptr;
+                    call && call->methodLocation.line == line &&
+                    call->methodLocation.column == column && candidate->location.file == path) {
+                    expression = candidate;
+                    break;
+                }
+            }
+        }
+    }
     return CheckedReceiver{std::move(*checked), expression};
 }
 
