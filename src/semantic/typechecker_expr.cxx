@@ -56,10 +56,12 @@ auto TypeChecker::resolveBlockHints(
         skippedTo->clear();
     }
     auto imported = importedCandidateSignatures(name);
-    if (isMethodCall) {
-        for (const auto* function : usingImportedMethods(name)) {
-            imported.push_back(function->signature);
-        }
+    // A `using` brings a module's functions in for a bare call as well as a
+    // dot call: `scope "/api" do ... end` under `using Rodolfo` must see
+    // `scope`'s `Block<[Entry]>`, or its body is not collected and the call
+    // gets only the last statement — `checkCall` already offers them.
+    for (const auto* function : usingImportedMethods(name, /*asMethod=*/isMethodCall)) {
+        imported.push_back(function->signature);
     }
     const std::vector<Signature>* sigs = nullptr;
     if (auto scoped = m_scopedDeclaredSignatures.find(m_currentModulePath + "\n" + name);
