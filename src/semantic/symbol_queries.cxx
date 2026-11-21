@@ -185,20 +185,6 @@ auto completionsFor(
                     break;
                 }
             }
-            // The fields of a record a compiled interface declares, for a
-            // receiver of that record's type: the qualifier is the type's
-            // name (completionQualifierForType), the key the interface files
-            // its fields under. A module loaded on demand (`Culture`,
-            // `Net.HTTP`) is not among the prelude sources indexed above, so
-            // its records' fields were offered nowhere (kexhq/kex#700).
-            if (auto record = imports->recordFieldNames.find(qualifier);
-                record != imports->recordFieldNames.end()) {
-                for (const auto& field : record->second) {
-                    if (field.rfind(memberPrefix, 0) == 0) {
-                        results.push_back(qualifier + "." + field);
-                    }
-                }
-            }
             const auto nestedPrefix = qualifier + ".";
             for (const auto& [moduleName, interface] : imports->modules) {
                 if (moduleName.rfind(nestedPrefix, 0) != 0) {

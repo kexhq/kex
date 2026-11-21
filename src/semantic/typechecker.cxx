@@ -7784,10 +7784,19 @@ auto TypeChecker::memberCompletions(const TypePtr& receiver, const ast::Expr& at
     }
     std::set<std::string> fields;
     if (const auto* named = std::get_if<NamedType>(&resolve(receiver)->kind)) {
-        if (const auto record = m_recordFields.find(resolveRecordName(named->name));
-            record != m_recordFields.end()) {
+        const auto identity = resolveRecordName(named->name);
+        if (const auto record = m_recordFields.find(identity); record != m_recordFields.end()) {
             for (const auto& [field, _] : record->second) {
                 fields.insert(field);
+            }
+        } else if (m_importedInterfaces) {
+            // A record of a module loaded on demand (`Culture.Culture`) is
+            // known from its interface, not from this program's tables
+            // (kexhq/kex#700). Its names are only candidates: the probe
+            // below decides each read, as it does every member's.
+            if (const auto record = m_importedInterfaces->recordFieldNames.find(identity);
+                record != m_importedInterfaces->recordFieldNames.end()) {
+                fields.insert(record->second.begin(), record->second.end());
             }
         }
     }
