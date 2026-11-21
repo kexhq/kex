@@ -1133,6 +1133,25 @@ int main() {
             }
         });
 
+        // A record of a module loaded on demand is known only from its
+        // compiled interface, whose field names were offered nowhere: a
+        // `Culture.Culture` completed to nothing, after `.try` or not
+        // (kexhq/kex#700).
+        it("completes the fields of a record a loaded module declares", []() {
+            const std::string input = "let c = Culture.DEFAULT\n"
+                                      "/complete c.\n"
+                                      "/complete Culture.of(\"hu-HU\").try.\n"
+                                      "/complete Culture.of(\"hu-HU\").try.numbers.dec\n";
+            for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                for (const auto* expected :
+                     {"  c.name\n", "  c.numbers\n", "  c.time\n",
+                      "  Culture.of(\"hu-HU\").try.name\n",
+                      "  Culture.of(\"hu-HU\").try.numbers.decimalSeparator\n"}) {
+                    assertTrue(out.find(expected) != std::string::npos, out);
+                }
+            }
+        });
+
         // A module under the session's source roots is offered before
         // anything has loaded it: its name from the file's header alone, and
         // its members once a path names it.
