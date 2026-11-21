@@ -183,6 +183,19 @@ describe("Tey.Docgen.Extract.pageTitle") do
     let dns = aModule("Net.DNS", "Net.DNS", [])
     assert(pageTitle("net/dns.kex", [dns]) == "Net.DNS")
   end
+
+  it("titles a file of several declarations by the one its stem names") do
+    # file_handle.kex declares FileHandle, Readable, Writable, ... and no
+    # module: the stem's `_` separates the words FileHandle runs together
+    # (kexhq/kex#721).
+    let declarations = [aRecord("Readable", "Readable"), aRecord("FileHandle", "FileHandle")]
+    assert(pageTitle("file_handle.kex", declarations) == "FileHandle")
+  end
+
+  it("camel-cases an underscore stem that names none of its declarations") do
+    let declarations = [aRecord("Readable", "Readable"), aRecord("Writable", "Writable")]
+    assert(pageTitle("file_access.kex", declarations) == "FileAccess")
+  end
 end
 
 describe("Tey.Docgen.Html.linkType") do

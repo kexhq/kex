@@ -20,7 +20,7 @@ module Tey.Docgen.Rdoc do
     rest : String
   end
 
-  foul parseDoc(text: String) -> Doc? do
+  let parseDoc(text: String) -> Doc? do
     if text.empty?
       return None
     end
@@ -28,7 +28,7 @@ module Tey.Docgen.Rdoc do
     return classifyBlocks(rewriteProseBlocks(blocks), "", [], None, [], None)
   end
 
-  foul parseOrEmpty(text: String) -> Doc do
+  let parseOrEmpty(text: String) -> Doc do
     match parseDoc(text) do
       Just(doc) => doc
       None => emptyDoc()
@@ -42,11 +42,11 @@ module Tey.Docgen.Rdoc do
   # the markup. Verbatim blocks and `@example` code are Kex source and are
   # left alone; `@param`/`@return` descriptions are prose and still rewrite.
   # Pairing never crosses a block: each block is rewritten on its own.
-  foul rewriteProseBlocks(blocks: [[String]]) -> [[String]] do
+  let rewriteProseBlocks(blocks: [[String]]) -> [[String]] do
     return blocks.map { |block| rewriteProseBlock(block) }
   end
 
-  foul rewriteProseBlock(block: [String]) -> [String] do
+  let rewriteProseBlock(block: [String]) -> [String] do
     if block.empty?
       return block
     end
@@ -59,7 +59,7 @@ module Tey.Docgen.Rdoc do
     return rewritePlusPairs(block.join("\n"), "").split("\n")
   end
 
-  foul rewritePlusPairs(s: String, accum: String) -> String do
+  let rewritePlusPairs(s: String, accum: String) -> String do
     match s.indexOf('+') do
       None => accum + s
       Just(start) => do
@@ -84,7 +84,7 @@ module Tey.Docgen.Rdoc do
   # against either delimiter (so `1 + 1` stays an addition), no backtick
   # inside (so converted spans never nest), and a non-identifier character on
   # both sides (so `a+b` stays put even if it ever reaches here).
-  foul plusPair?(head: String, inner: String, tail: String) -> Bool do
+  let plusPair?(head: String, inner: String, tail: String) -> Bool do
     if inner.empty?
       return false
     end
@@ -100,7 +100,7 @@ module Tey.Docgen.Rdoc do
     return boundaryBefore?(head) && boundaryAfter?(tail)
   end
 
-  foul boundaryBefore?(head: String) -> Bool do
+  let boundaryBefore?(head: String) -> Bool do
     if head.empty?
       return true
     end
@@ -110,7 +110,7 @@ module Tey.Docgen.Rdoc do
     end
   end
 
-  foul boundaryAfter?(tail: String) -> Bool do
+  let boundaryAfter?(tail: String) -> Bool do
     if tail.empty?
       return true
     end
@@ -126,7 +126,7 @@ module Tey.Docgen.Rdoc do
   # not merge into one block, or only the first would be parsed. An
   # `@example`'s indented code lines follow it and stay in its block (they
   # do not open with `@`).
-  foul splitParagraphs(lines: [String], current: [String], accum: [[String]]) -> [[String]] do
+  let splitParagraphs(lines: [String], current: [String], accum: [[String]]) -> [[String]] do
     if lines.empty?
       if current.empty?
         return accum
@@ -161,11 +161,11 @@ module Tey.Docgen.Rdoc do
     return splitParagraphs(rest, current + [line], accum)
   end
 
-  foul directiveBlock?(current: [String]) -> Bool do
+  let directiveBlock?(current: [String]) -> Bool do
     return (current.first.or("")).trim.startsWith?("@")
   end
 
-  foul indented?(line: String) -> Bool do
+  let indented?(line: String) -> Bool do
     return !line.trim.empty? && indentWidth(line) >= 2
   end
 
@@ -176,11 +176,11 @@ module Tey.Docgen.Rdoc do
   # instead, which both renderers turn back into a highlighted `<pre>`.
 
   # Leading-space count of a line.
-  foul indentWidth(s: String) -> Integer do
+  let indentWidth(s: String) -> Integer do
     return s.chars.takeWhile { |c| c == ' ' }.count
   end
 
-  foul verbatim?(lines: [String]) -> Bool do
+  let verbatim?(lines: [String]) -> Bool do
     let content = lines.reject { |l| l.trim.empty? }
     if content.empty?
       return false
@@ -190,7 +190,7 @@ module Tey.Docgen.Rdoc do
 
   # Strips the common indentation shared by every non-blank line, so a block
   # written at two spaces (or nested deeper) renders flush left.
-  foul dedent(lines: [String]) -> [String] do
+  let dedent(lines: [String]) -> [String] do
     let content = lines.reject { |l| l.trim.empty? }
     if content.empty?
       return lines
@@ -202,13 +202,13 @@ module Tey.Docgen.Rdoc do
     return lines.map { |l| l.trim.empty? then "" else l.drop(margin) }
   end
 
-  foul fenceVerbatim(lines: [String]) -> String do
+  let fenceVerbatim(lines: [String]) -> String do
     return (["```kex"] + dedent(lines) + ["```"]).join("\n")
   end
 
   # A blank line inside a verbatim block ends a paragraph but not the block,
   # so adjacent verbatim blocks are re-joined with the blank line between them.
-  foul mergeVerbatim(blocks: [[String]], accum: [[String]]) -> [[String]] do
+  let mergeVerbatim(blocks: [[String]], accum: [[String]]) -> [[String]] do
     if blocks.empty?
       return accum
     end
@@ -221,7 +221,7 @@ module Tey.Docgen.Rdoc do
     return mergeVerbatim(rest, accum + [block])
   end
 
-  foul classifyBlocks(blocks: [[String]], summary: String, params: [Param],
+  let classifyBlocks(blocks: [[String]], summary: String, params: [Param],
                       returns: Return?, examples: [Example],
                       deprecated: String?) -> Doc? do
     if blocks.empty?
@@ -268,14 +268,14 @@ module Tey.Docgen.Rdoc do
     return classifyBlocks(rest, nextSummary, params, returns, examples, deprecated)
   end
 
-  foul directiveBody(lines: [String], prefixLength: Integer) -> String do
+  let directiveBody(lines: [String], prefixLength: Integer) -> String do
     let first = (lines.first.or("")).drop(prefixLength).trim
     let continuation = lines.drop(1).map { |line| line.trim }
     return ([first] + continuation).join(" ").trim
   end
 
   # @param name [Type] description
-  foul parseParam(lines: [String]) -> Param do
+  let parseParam(lines: [String]) -> Param do
     let body = directiveBody(lines, 7)
     match body.indexOf(' ') do
       None => Param { name: body, typeName: "", description: "" }
@@ -294,7 +294,7 @@ module Tey.Docgen.Rdoc do
   end
 
   # Reads a `@return [Type] description` directive.
-  foul parseReturn(lines: [String]) -> Return do
+  let parseReturn(lines: [String]) -> Return do
     let body = directiveBody(lines, 8)
     match parseBracketed(body) do
       None => Return { typeName: "", description: body }
@@ -302,7 +302,7 @@ module Tey.Docgen.Rdoc do
     end
   end
 
-  foul parseExample(lines: [String]) -> Example do
+  let parseExample(lines: [String]) -> Example do
     let caption = (lines.first.or("")).drop(9).trim
     let code = dedent(lines.drop(1)).join("\n")
     return Example { caption: caption, code: code }
@@ -310,7 +310,7 @@ module Tey.Docgen.Rdoc do
 
   # "[...]" prefix → Bracketed. None when the text does not open with a
   # bracketed group.
-  foul parseBracketed(s: String) -> Bracketed? do
+  let parseBracketed(s: String) -> Bracketed? do
     if s.empty?
       return None
     end
@@ -327,7 +327,7 @@ module Tey.Docgen.Rdoc do
     end
   end
 
-  foul findClosingBracket(s: String, index: Integer, depth: Integer) -> Integer? do
+  let findClosingBracket(s: String, index: Integer, depth: Integer) -> Integer? do
     if index >= s.count
       return None
     end

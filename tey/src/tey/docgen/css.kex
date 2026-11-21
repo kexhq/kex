@@ -9,7 +9,7 @@
 # <out>/assets/style.css.
 
 module Tey.Docgen.Css do
-  foul siteCss() -> String do
+  let siteCss() -> String do
     return Kex.embed("assets/style.css")
   end
 end

@@ -49,7 +49,7 @@ module Tey.Docgen.Serve do
   # its name, and the router matches exactly — so it answers the bare, the
   # slash-terminated, and the named spelling. Every other file answers its
   # own path only.
-  foul routesFor(prefix: String, name: String) -> [String] do
+  let routesFor(prefix: String, name: String) -> [String] do
     let path = FS.Path.join(prefix, name)
     if name == "index.html"
       return [path, prefix, "${prefix}/"]
@@ -87,7 +87,7 @@ module Tey.Docgen.Serve do
     end
   end
 
-  foul contentTypeFor(path: String) -> String do
+  let contentTypeFor(path: String) -> String do
     return "text/html; charset=utf-8" if path.endsWith?(".html")
     return "text/css; charset=utf-8" if path.endsWith?(".css")
     return "text/javascript; charset=utf-8" if path.endsWith?(".js")

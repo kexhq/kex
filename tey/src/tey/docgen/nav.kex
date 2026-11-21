@@ -14,11 +14,11 @@ module Tey.Docgen.Nav do
   # Every module in the package, in declaration order, pointing at the page
   # it lives on. Nested modules are entries of their own (the sidebar nests
   # them by name).
-  foul buildModules(pages: [SourcePage]) -> [ModuleIndexEntry] do
+  let buildModules(pages: [SourcePage]) -> [ModuleIndexEntry] do
     return pages.flatMap { |p| modulesOnPage(p.entities, p.urlPath) }
   end
 
-  foul modulesOnPage(entities: [Entity], urlPath: String) -> [ModuleIndexEntry] do
+  let modulesOnPage(entities: [Entity], urlPath: String) -> [ModuleIndexEntry] do
     return entities.flatMap { |e|
       match e do
         ModuleDecl(entry) => [moduleEntry(entry, urlPath)] + modulesOnPage(entry.children, urlPath)
@@ -27,7 +27,7 @@ module Tey.Docgen.Nav do
     }
   end
 
-  foul moduleEntry(entry: ModuleEntry, urlPath: String) -> ModuleIndexEntry do
+  let moduleEntry(entry: ModuleEntry, urlPath: String) -> ModuleIndexEntry do
     return ModuleIndexEntry {
       qualifiedName: entry.qualifiedName,
       summary: firstLine(entry.doc.summary),
@@ -36,7 +36,7 @@ module Tey.Docgen.Nav do
     }
   end
 
-  foul firstLine(summary: String) -> String do
+  let firstLine(summary: String) -> String do
     return summary.split("\n").first.or("")
   end
 
@@ -47,11 +47,11 @@ module Tey.Docgen.Nav do
   # of its own ("Control" for "Control.Retry") leaves the page at the top
   # level. Titles, not paths, carry the relation — the module names are
   # what a reader scans for.
-  foul parentTitleOf(pages: [SourcePage], page: SourcePage) -> String? do
+  let parentTitleOf(pages: [SourcePage], page: SourcePage) -> String? do
     return parentLoop(page.title.split("."), pages, page)
   end
 
-  foul parentLoop(parts: [String], pages: [SourcePage], page: SourcePage) -> String? do
+  let parentLoop(parts: [String], pages: [SourcePage], page: SourcePage) -> String? do
     return None if parts.count <= 1
     let candidate = parts.take(parts.count - 1).join(".")
     if claimedByAnother?(pages, page, candidate)
@@ -60,30 +60,30 @@ module Tey.Docgen.Nav do
     return parentLoop(parts.take(parts.count - 1), pages, page)
   end
 
-  foul claimedByAnother?(pages: [SourcePage], page: SourcePage, title: String) -> Bool do
+  let claimedByAnother?(pages: [SourcePage], page: SourcePage, title: String) -> Bool do
     return pages.any? { |p| p.title == title && p.urlPath != page.urlPath }
   end
 
   # The sidebar's top level: pages nothing parents, alphabetically by
   # title — a reader scans by name, not by directory-walk order.
-  foul topLevelPages(pages: [SourcePage]) -> [SourcePage] do
+  let topLevelPages(pages: [SourcePage]) -> [SourcePage] do
     return sortedByTitle(pages.filter { |p| parentTitleOf(pages, p) == None })
   end
 
   # The pages nested directly under `title`, alphabetically.
-  foul childPages(pages: [SourcePage], title: String) -> [SourcePage] do
+  let childPages(pages: [SourcePage], title: String) -> [SourcePage] do
     return sortedByTitle(pages.filter { |p| parentTitleOf(pages, p) == Just(title) })
   end
 
   # Every page in `page`'s family at any depth, alphabetically — what a
   # module page lists as its submodules.
-  foul descendantPages(pages: [SourcePage], page: SourcePage) -> [SourcePage] do
+  let descendantPages(pages: [SourcePage], page: SourcePage) -> [SourcePage] do
     return sortedByTitle(pages.filter { |p|
       p.urlPath != page.urlPath && p.title.startsWith?(page.title + ".")
     })
   end
 
-  foul sortedByTitle(pages: [SourcePage]) -> [SourcePage] do
+  let sortedByTitle(pages: [SourcePage]) -> [SourcePage] do
     return pages.sort { |a, b| a.title.lowerCase < b.title.lowerCase }
   end
 
@@ -92,7 +92,7 @@ module Tey.Docgen.Nav do
   # a simple one ("Path") survives only while nothing else claims it — once
   # two different entities answer "Request", the simple spelling stops
   # linking and only the spelled-out names do.
-  foul buildLinks(pages: [SourcePage]) -> [LinkEntry] do
+  let buildLinks(pages: [SourcePage]) -> [LinkEntry] do
     let entries = pages.flatMap { |p| linkEntriesOnPage(p.entities, p.urlPath) }
     return entries.filter { |e| uniqueTarget?(entries, e) }
   end
@@ -103,14 +103,14 @@ module Tey.Docgen.Nav do
   # signature means the type, and the type has a home page
   # (Relations.homePathOf). Those homes fill in what uniqueness left out;
   # a name that already links keeps its link.
-  foul withTypeHomes(links: [LinkEntry], types: [Tey.Docgen.Model.TypeFacts]) -> [LinkEntry] do
+  let withTypeHomes(links: [LinkEntry], types: [Tey.Docgen.Model.TypeFacts]) -> [LinkEntry] do
     let homes = types.filter { |t| !t.homePath.empty? && resolve(links, t.name) == None }.map { |t|
       LinkEntry { name: t.name, urlPath: t.homePath, anchor: t.homeAnchor, kind: "type" }
     }
     return links + homes
   end
 
-  foul linkEntriesOnPage(entities: [Entity], urlPath: String) -> [LinkEntry] do
+  let linkEntriesOnPage(entities: [Entity], urlPath: String) -> [LinkEntry] do
     return entities.flatMap { |e|
       let own = linkableNames(e).map { |n|
         LinkEntry { name: n, urlPath: urlPath, anchor: anchorOf(e), kind: kindOf(e) }
@@ -127,7 +127,7 @@ module Tey.Docgen.Nav do
 
   # `List.map`, `Enumerable.filter`: members are linkable under their
   # owner's name, so prose that writes `List.map` lands on the method.
-  foul memberLinks(ownerName: String, owner: String, functions: [Tey.Docgen.Model.FunctionEntry], urlPath: String) -> [LinkEntry] do
+  let memberLinks(ownerName: String, owner: String, functions: [Tey.Docgen.Model.FunctionEntry], urlPath: String) -> [LinkEntry] do
     return functions.map { |f| f.name }.uniq.map { |n|
       LinkEntry { name: "${ownerName}.${n}", urlPath: urlPath, anchor: Tey.Docgen.Model.memberAnchorOf(owner, n), kind: "function" }
     }
@@ -138,7 +138,7 @@ module Tey.Docgen.Nav do
   # spelling too. A make's target with type parameters ("[X]",
   # "Map<K, V>") links under the base name before the "<" — the anchor is
   # still the full-target one, matching the section id.
-  foul linkableNames(e: Entity) -> [String] do
+  let linkableNames(e: Entity) -> [String] do
     match e do
       FuncDecl(_) => []
       MakeDecl(entry) => do
@@ -158,30 +158,30 @@ module Tey.Docgen.Nav do
 
   # Whether `candidate`'s name answers to exactly one target: every other
   # entry under the same name must land on the same (page, anchor).
-  foul uniqueTarget?(entries: [LinkEntry], candidate: LinkEntry) -> Bool do
+  let uniqueTarget?(entries: [LinkEntry], candidate: LinkEntry) -> Bool do
     return entries.filter { |e|
       e.name == candidate.name && differentTarget?(e, candidate)
     }.empty?
   end
 
-  foul differentTarget?(a: LinkEntry, b: LinkEntry) -> Bool do
+  let differentTarget?(a: LinkEntry, b: LinkEntry) -> Bool do
     return a.urlPath != b.urlPath || a.anchor != b.anchor
   end
 
-  foul resolve(links: [LinkEntry], name: String) -> LinkEntry? do
+  let resolve(links: [LinkEntry], name: String) -> LinkEntry? do
     return links.find { |l| l.name == name }
   end
 
   # Splits a type reference into identifier segments and separator runs, so
   # a renderer can link the identifiers and leave the punctuation alone:
   # "Map<String, FS.Path>" → ["Map", "<", "String", ", ", "FS.Path", ">"].
-  foul segmentsOf(typeText: String) -> [String] do
+  let segmentsOf(typeText: String) -> [String] do
     return splitLoop(typeText, "", "", [])
   end
 
   # `ident` is the identifier being read, `sep` the separator run since it;
   # only one is non-empty at a time, and whichever it is goes out in order.
-  foul splitLoop(rest: String, ident: String, sep: String, out: [String]) -> [String] do
+  let splitLoop(rest: String, ident: String, sep: String, out: [String]) -> [String] do
     if rest.empty?
       return flushIdent(ident, flushSep(sep, out))
     end
@@ -192,38 +192,38 @@ module Tey.Docgen.Nav do
     return splitLoop(rest.drop(1), "", sep + ch, flushIdent(ident, out))
   end
 
-  foul flushIdent(ident: String, out: [String]) -> [String] do
+  let flushIdent(ident: String, out: [String]) -> [String] do
     if ident.empty?
       return out
     end
     return out + [ident]
   end
 
-  foul flushSep(sep: String, out: [String]) -> [String] do
+  let flushSep(sep: String, out: [String]) -> [String] do
     if sep.empty?
       return out
     end
     return out + [sep]
   end
 
-  foul isIdentChar?(ch: String) -> Bool do
+  let isIdentChar?(ch: String) -> Bool do
     return "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.".contains?(ch)
   end
 
   # The href from one page of this package to another, with anchor:
   # same page → "#anchor"; else up to the version directory and back down.
-  foul hrefFrom(fromPath: String, toPath: String, anchor: String) -> String do
+  let hrefFrom(fromPath: String, toPath: String, anchor: String) -> String do
     if fromPath == toPath
       return "#${anchor}"
     end
     return "${upsToVersionDir(fromPath)}${toPath}.html#${anchor}"
   end
 
-  foul upsToVersionDir(urlPath: String) -> String do
+  let upsToVersionDir(urlPath: String) -> String do
     return ups(urlPath.split("/").count - 1)
   end
 
-  foul ups(n: Integer) -> String do
+  let ups(n: Integer) -> String do
     if n <= 0
       return ""
     end

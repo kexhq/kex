@@ -11,7 +11,7 @@
 module Tey.Docgen.Relations do
   using Tey.Docgen.Model, only: [Entity, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, TypeDecl, RecordDecl, ConstDecl, TraitEntry, MakeEntry, FunctionEntry, SourcePage, PackageModel, Extension, TypeFacts, TraitFacts, anchorOf, baseTypeOf]
 
-  foul build(pages: [SourcePage]) -> ([TypeFacts], [TraitFacts]) do
+  let build(pages: [SourcePage]) -> ([TypeFacts], [TraitFacts]) do
     let traitNames = pages.flatMap { |page| traitEntries(page.entities) }.flatMap { |t| [t.name, t.qualifiedName] }
     let extensions = pages.flatMap { |page| pageExtensions(page, page.entities) }
     # `make Inspectable do` gives every Inspectable a default method: it
@@ -27,12 +27,12 @@ module Tey.Docgen.Relations do
   # the trait: the signature the trait declares, with `This` read as the
   # implementing type. Done on the pages, before anything renders them, so
   # every output states the same signature.
-  foul withTraitSignatures(pages: [SourcePage]) -> [SourcePage] do
+  let withTraitSignatures(pages: [SourcePage]) -> [SourcePage] do
     let traits = pages.flatMap { |p| traitEntries(p.entities) }
     return pages.map { |p| SourcePage { ...p, entities: p.entities.map { |e| typedByTraits(e, traits) } } }
   end
 
-  foul typedByTraits(e: Entity, traits: [TraitEntry]) -> Entity do
+  let typedByTraits(e: Entity, traits: [TraitEntry]) -> Entity do
     match e do
       MakeDecl(m) => MakeDecl(MakeEntry { ...m, functions: m.functions.map { |f| typedByTrait(f, m, traits) } })
       ModuleDecl(m) => ModuleDecl(Tey.Docgen.Model.ModuleEntry { ...m, children: m.children.map { |c| typedByTraits(c, traits) } })
@@ -40,7 +40,7 @@ module Tey.Docgen.Relations do
     end
   end
 
-  foul typedByTrait(f: FunctionEntry, m: MakeEntry, traits: [TraitEntry]) -> FunctionEntry do
+  let typedByTrait(f: FunctionEntry, m: MakeEntry, traits: [TraitEntry]) -> FunctionEntry do
     return f if !f.signatures.all? { |s| s == f.name }
     let implemented = m.implements.map { |i| baseTypeOf(i) }
     let declared = traits.filter { |t| implemented.contains?(t.name) || implemented.contains?(t.qualifiedName) }.flatMap { |t| t.functions }
@@ -48,11 +48,11 @@ module Tey.Docgen.Relations do
     return signatures.empty? then f else FunctionEntry { ...f, signatures: signatures }
   end
 
-  foul asImplementor(signature: String, target: String) -> String do
+  let asImplementor(signature: String, target: String) -> String do
     return Tey.Docgen.Nav.segmentsOf(signature).map { |seg| seg == "This" then target else seg }.join("")
   end
 
-  foul pageExtensions(page: SourcePage, entities: [Entity]) -> [Extension] do
+  let pageExtensions(page: SourcePage, entities: [Entity]) -> [Extension] do
     return entities.flatMap { |e|
       match e do
         MakeDecl(entry) => [extensionOf(page, e, entry)]
@@ -62,7 +62,7 @@ module Tey.Docgen.Relations do
     }
   end
 
-  foul extensionOf(page: SourcePage, entity: Entity, entry: MakeEntry) -> Extension do
+  let extensionOf(page: SourcePage, entity: Entity, entry: MakeEntry) -> Extension do
     return Extension {
       target: entry.target,
       urlPath: page.urlPath,
@@ -73,7 +73,7 @@ module Tey.Docgen.Relations do
     }
   end
 
-  foul typeFacts(base: String, extensions: [Extension], pages: [SourcePage]) -> TypeFacts do
+  let typeFacts(base: String, extensions: [Extension], pages: [SourcePage]) -> TypeFacts do
     let mine = extensions.filter { |e| baseTypeOf(e.target) == base }
     let home = homePathOf(base, mine, pages)
     return TypeFacts {
@@ -89,7 +89,7 @@ module Tey.Docgen.Relations do
   # page titled after it (string.kex for the builtin String); else the page
   # whose make block adds the most methods — number.kex for Integer, not
   # algebra.kex, which only makes it a Monoid.
-  foul homePathOf(base: String, mine: [Extension], pages: [SourcePage]) -> String do
+  let homePathOf(base: String, mine: [Extension], pages: [SourcePage]) -> String do
     match pages.find { |p| declares?(p.entities, base) } do
       Just(page) => return page.urlPath
       None => ()
@@ -110,7 +110,7 @@ module Tey.Docgen.Relations do
     end
   end
 
-  foul homeAnchorOf(base: String, home: String, mine: [Extension], pages: [SourcePage]) -> String do
+  let homeAnchorOf(base: String, home: String, mine: [Extension], pages: [SourcePage]) -> String do
     let declared = pages.filter { |p| p.urlPath == home }.flatMap { |p| declarationAnchors(p.entities, base) }
     match declared.first do
       Just(anchor) => return anchor
@@ -122,7 +122,7 @@ module Tey.Docgen.Relations do
     end
   end
 
-  foul declarationAnchors(entities: [Entity], base: String) -> [String] do
+  let declarationAnchors(entities: [Entity], base: String) -> [String] do
     return entities.flatMap { |e|
       match e do
         TypeDecl(entry) => entry.name == base then [anchorOf(e)] else []
@@ -133,7 +133,7 @@ module Tey.Docgen.Relations do
     }
   end
 
-  foul companionModule?(entities: [Entity], base: String) -> Bool do
+  let companionModule?(entities: [Entity], base: String) -> Bool do
     return entities.any? { |e|
       match e do
         ModuleDecl(entry) => entry.qualifiedName == base || companionModule?(entry.children, base)
@@ -142,7 +142,7 @@ module Tey.Docgen.Relations do
     }
   end
 
-  foul declares?(entities: [Entity], base: String) -> Bool do
+  let declares?(entities: [Entity], base: String) -> Bool do
     return entities.any? { |e|
       match e do
         TypeDecl(entry) => entry.name == base || entry.qualifiedName == base
@@ -153,7 +153,7 @@ module Tey.Docgen.Relations do
     }
   end
 
-  foul pageTraits(page: SourcePage, entities: [Entity], extensions: [Extension]) -> [TraitFacts] do
+  let pageTraits(page: SourcePage, entities: [Entity], extensions: [Extension]) -> [TraitFacts] do
     return entities.flatMap { |e|
       match e do
         TraitDecl(entry) => [TraitFacts {
@@ -171,27 +171,27 @@ module Tey.Docgen.Relations do
 
   # `implement: Enumerable` and `implement: Kex.Enumerable` both name the
   # trait declared as `Enumerable` inside `module Kex`.
-  foul namesTrait?(written: String, name: String, qualifiedName: String) -> Bool do
+  let namesTrait?(written: String, name: String, qualifiedName: String) -> Bool do
     let spelled = (written.split("<").first.or(written)).trim
     return spelled == qualifiedName || spelled == name || qualifiedName.endsWith?(".${spelled}")
   end
 
   # The facts for the type a make target extends, if any make extends it.
-  foul typeFactsFor(model: PackageModel, base: String) -> TypeFacts? do
+  let typeFactsFor(model: PackageModel, base: String) -> TypeFacts? do
     return model.types.find { |t| t.name == base }
   end
 
-  foul traitFactsFor(model: PackageModel, written: String) -> TraitFacts? do
+  let traitFactsFor(model: PackageModel, written: String) -> TraitFacts? do
     return model.traits.find { |t| namesTrait?(written, t.name, t.qualifiedName) }
   end
 
   # The declaration of a trait, for its method list.
-  foul traitEntryFor(model: PackageModel, facts: TraitFacts) -> TraitEntry? do
+  let traitEntryFor(model: PackageModel, facts: TraitFacts) -> TraitEntry? do
     let found = model.pages.flatMap { |p| traitEntries(p.entities) }
     return found.find { |t| t.qualifiedName == facts.qualifiedName }
   end
 
-  foul traitEntries(entities: [Entity]) -> [TraitEntry] do
+  let traitEntries(entities: [Entity]) -> [TraitEntry] do
     return entities.flatMap { |e|
       match e do
         TraitDecl(entry) => [entry]
@@ -205,7 +205,7 @@ module Tey.Docgen.Relations do
   # no body and given no default anywhere. Provided: a body in the trait,
   # or a default from a `make <Trait>` block in any file — plus methods such
   # a block adds that the trait never declared.
-  foul traitMethods(model: PackageModel, entry: TraitEntry) -> ([FunctionEntry], [FunctionEntry]) do
+  let traitMethods(model: PackageModel, entry: TraitEntry) -> ([FunctionEntry], [FunctionEntry]) do
     let defaults = model.pages.flatMap { |p| traitDefaults(p.entities, entry) }
     let defaultNames = defaults.map { |f| f.name }
     let declaredNames = entry.functions.map { |f| f.name }
@@ -214,7 +214,7 @@ module Tey.Docgen.Relations do
     return (required, provided + defaults.reject { |f| declaredNames.contains?(f.name) })
   end
 
-  foul traitDefaults(entities: [Entity], entry: TraitEntry) -> [FunctionEntry] do
+  let traitDefaults(entities: [Entity], entry: TraitEntry) -> [FunctionEntry] do
     return entities.flatMap { |e|
       match e do
         MakeDecl(m) => do
@@ -228,14 +228,14 @@ module Tey.Docgen.Relations do
   end
 
   # Whether a make target names a trait of this package.
-  foul traitTarget?(model: PackageModel, target: String) -> Bool do
+  let traitTarget?(model: PackageModel, target: String) -> Bool do
     let base = baseTypeOf(target)
     return model.traits.any? { |t| t.name == base || t.qualifiedName == base }
   end
 
   # Every function documented anywhere in these entities: top-level and
   # module functions, trait methods, make members.
-  foul allFunctions(entities: [Entity]) -> [FunctionEntry] do
+  let allFunctions(entities: [Entity]) -> [FunctionEntry] do
     return entities.flatMap { |e|
       match e do
         FuncDecl(entry) => [entry]
@@ -249,7 +249,7 @@ module Tey.Docgen.Relations do
 
   # A trait method with no clause is one an implementor must write; one with
   # a body comes for free.
-  foul required?(f: FunctionEntry) -> Bool do
+  let required?(f: FunctionEntry) -> Bool do
     return f.clauseCount == 0
   end
 end
