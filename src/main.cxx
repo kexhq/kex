@@ -205,6 +205,8 @@ auto printUsage(const char* progName) -> void {
               << "  --colors          Use ANSI colors even when output is not a terminal\n"
               << "                    (also: FORCE_COLOR=1)\n"
               << "  --no-colors       Disable ANSI color output (also: NO_COLOR=1)\n"
+              << "                    Diagnostic codes link to oops.kex.run in a terminal;\n"
+              << "                    KEX_HYPERLINKS=0 turns that off, =1 on when piped\n"
               << "  --no-snippets     Print diagnostics without their source and underline\n";
 }
 
@@ -577,6 +579,21 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
                 }
         }
     }
+
+#ifndef __EMSCRIPTEN__
+    // Diagnostic codes link to oops.kex.run where styling is on and stderr,
+    // where diagnostics go, is a terminal that is not `dumb`. KEX_HYPERLINKS=0
+    // or =1 decides instead, for a parent that relays the output to a screen.
+    // Without colors there are no links either way (color::link).
+    {
+        const char* term = std::getenv("TERM");
+        kex::color::hyperlinks =
+            isatty(STDERR_FILENO) && !(term && std::string_view(term) == "dumb");
+        if (const char* links = std::getenv("KEX_HYPERLINKS"); links && *links) {
+            kex::color::hyperlinks = std::string_view(links) != "0";
+        }
+    }
+#endif
 
     if (options.buildPreludeDir) {
         options.exitNow = buildPrelude(*options.buildPreludeDir, options.verifyHir);

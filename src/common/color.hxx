@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+
 namespace kex::color {
 
 constexpr auto reset = "\033[0m";
@@ -32,6 +35,25 @@ inline bool enabled = true;
 
 inline auto apply(const char* code) -> const char* {
     return enabled ? code : "";
+}
+
+// OSC 8 terminal hyperlinks (https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda):
+// a diagnostic's code links to its page on oops.kex.run. Off unless styling
+// is: main() turns it on for a terminal, and KEX_HYPERLINKS overrides that.
+inline bool hyperlinks = false;
+
+// +text+ linked to +url+ when hyperlinks are on, and +text+ alone otherwise.
+// A terminal that does not know OSC 8 shows the text and ignores the rest.
+inline auto link(std::string_view url, std::string_view text) -> std::string {
+    if (!enabled || !hyperlinks || url.empty()) {
+        return std::string(text);
+    }
+    std::string out = "\033]8;;";
+    out += url;
+    out += "\033\\";
+    out += text;
+    out += "\033]8;;\033\\";
+    return out;
 }
 
 } // namespace kex::color
