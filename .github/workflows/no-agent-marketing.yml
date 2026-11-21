@@ -1,0 +1,26 @@
+name: No agent marketing
+
+# Fails when a PR's commits, title or description carry AI-agent attribution
+# or marketing lines ("Generated with Claude Code", "Co-Authored-By: Claude",
+# ...). `edited` re-runs the check when the PR title or description changes.
+# Rules: https://github.com/kexhq/no-agent-marketing/tree/main/rules
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: no-agent-marketing-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: No agent marketing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: kexhq/no-agent-marketing@v1
