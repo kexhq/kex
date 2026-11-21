@@ -4,6 +4,7 @@
 #include "ast/syntax.hxx"
 #include "ast/type_text.hxx"
 #include "common/color.hxx"
+#include "common/crash_report.hxx"
 #include "interpreter/evaluator.hxx"
 #include "hir/hir.hxx"
 #include "ir/lower.hxx"
@@ -992,9 +993,20 @@ auto firstProgramArgument(int argc, char* argv[], int file) -> int {
 }
 
 int main(int argc, char* argv[]) {
+    kex::crash::rememberCommandLine(argc, argv);
     auto options = parseCommandLine(argc, argv);
     if (options.exitNow) {
         return *options.exitNow;
+    }
+    // From here a crash says it is the compiler's bug, and where to report it.
+    // After the command line, which decides colors and hyperlinks.
+    kex::crash::installCrashHandlers();
+    // KEX_DEBUG_CRASH=internal or =abort fails on purpose, so that what the
+    // user sees then can be tested (tests/crash_report_test.cxx).
+    if (const char* crash = std::getenv("KEX_DEBUG_CRASH"); crash && *crash) {
+        if (std::string_view(crash) == "abort") {
+            std::abort();
+        }
     }
     // The opt-in standard library is described by the checker, as a build of a
     // program using it describes it, for every check, run and the editor alike.
@@ -1258,7 +1270,15 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    // Set once the tree-walk interpreter starts running the program: from
+    // then on an exception is the program failing (a runtime error, an
+    // assertion, a built-in refusing its argument), not the compiler.
+    bool runningProgram = false;
     try {
+        if (const char* crash = std::getenv("KEX_DEBUG_CRASH");
+            crash && std::string_view(crash) == "internal") {
+            throw std::runtime_error("KEX_DEBUG_CRASH asked for an internal error");
+        }
         kex::Parser parser(std::move(tokens), filepath);
         auto program = parser.parseProgram();
 
@@ -1411,6 +1431,7 @@ int main(int argc, char* argv[]) {
         }
 
         if (mode == Mode::Run) {
+            runningProgram = true;
             return runOnWalker(options, filepath, program, scriptArgs, expandParsedProgram);
         }
         return checkEntry(options, filepath, program, parser.diagnostics());
@@ -1418,6 +1439,15 @@ int main(int argc, char* argv[]) {
         std::cerr << kex::color::apply(kex::color::bold) << kex::color::apply(kex::color::red)
                   << "Internal error:" << kex::color::apply(kex::color::reset) << " " << e.what()
                   << "\n";
+        // The program's own failure is not the compiler's bug to report.
+        const bool programFailed = runningProgram ||
+                                   dynamic_cast<const kex::interpreter::RuntimeError*>(&e) ||
+                                   dynamic_cast<const kex::interpreter::TryException*>(&e) ||
+                                   dynamic_cast<const kex::interpreter::EvaluationTimeout*>(&e) ||
+                                   dynamic_cast<const kex::interpreter::SandboxViolation*>(&e);
+        if (!programFailed) {
+            std::cerr << kex::crash::internalErrorReport(e.what());
+        }
         return 1;
     }
 
