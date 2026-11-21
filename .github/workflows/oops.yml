@@ -1,0 +1,39 @@
+name: Oops
+
+# Asks kexhq/oops to rebuild https://oops.kex.run when the diagnostic registry
+# changes. The site lists every code from `kex --explain all --json` on this
+# repo's main, so a code added, renamed or retired here only shows up there
+# once it rebuilds. It also rebuilds nightly, so a missed dispatch costs a
+# day, not a code.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/common/diagnostic_codes/**"
+      - "src/common/diagnostic_codes.cxx"
+      - "src/common/diagnostic_codes.hxx"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      # Requires the OOPS_DISPATCH_TOKEN secret: a fine-grained PAT with
+      # Contents: read+write on kexhq/oops, which is what a repository
+      # dispatch needs. Without it this warns and stops instead of failing a
+      # push to main: the nightly rebuild still picks the change up.
+      - name: Ask kexhq/oops to rebuild
+        env:
+          GH_TOKEN: ${{ secrets.OOPS_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::OOPS_DISPATCH_TOKEN is not set, so oops.kex.run rebuilds at its nightly run instead. Create a fine-grained PAT with Contents read+write on kexhq/oops and store it as an Actions secret in kexhq/kex."
+            exit 0
+          fi
+          gh api repos/kexhq/oops/dispatches \
+            -f event_type=registry \
+            -F "client_payload[sha]=${{ github.sha }}"
