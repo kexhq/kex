@@ -94,6 +94,15 @@ auto throwOnParseErrors(const kex::Parser& parser) -> void;
 
 // Line input: readline when built with it, `--eval` lines first.
 auto readLine(const std::string& prompt) -> std::pair<std::string, bool>;
+// The line `readLine` will read next, read ahead when the input is a pipe or
+// a script; none from a terminal, whose next line is not typed yet.
+auto peekReplLine() -> std::optional<std::string>;
+// Whether `line` carries on the input before it: a method chain's next link,
+// `  .map { ... }`, which a file reads as part of the expression above.
+auto replContinuesInput(const std::string& line) -> bool;
+// The body of a pasted `main do ... end`: in the REPL, every input already
+// runs as main's, and `main` itself is no statement.
+auto replUnwrapMain(const std::string& source) -> std::optional<std::string>;
 auto takeReplInputCancelled() -> bool;
 auto bindReplCancelKeys() -> void;
 // Completion and the cancel keys on the line editor; the history, kept.

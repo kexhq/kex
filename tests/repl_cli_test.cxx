@@ -875,6 +875,42 @@ int main() {
         });
     });
 
+    // Code pasted into the REPL reads as it does from a file (kexhq/kex#718):
+    // a chain whose links start their lines, an `if` (which takes no `do`)
+    // spread over lines, and a whole `main do ... end`.
+    describe("REPL CLI — pasted multi-line code", []() {
+        const std::string pasted = "[\"1\", \"x\", \"3\"]\n"
+                                   "  .map { |s| Integer.parse(s).optional }\n"
+                                   "  .filter(~set?)\n"
+                                   "  .map { |o| o.or(0) }\n"
+                                   "let n = 5\n"
+                                   "if n > 3\n"
+                                   "  IO.printLine(\"big\")\n"
+                                   "else\n"
+                                   "  IO.printLine(\"small\")\n"
+                                   "end\n"
+                                   "let size(x: Integer) -> String do\n"
+                                   "  if x > 1  # not done yet\n"
+                                   "    return \"many: do\"\n"
+                                   "  end\n"
+                                   "  \"one\"\n"
+                                   "end\n"
+                                   "size(3)\n"
+                                   "main do\n"
+                                   "  IO.printLine(\"in main\")\n"
+                                   "end\n";
+        it("runs it as the file would, in both REPLs", [pasted]() {
+            for (const auto& out : {runRepl(pasted), runBeamRepl(pasted)}) {
+                assertTrue(out.find("=> [1, 3] : [Integer]") != std::string::npos, out);
+                assertTrue(out.find("\nbig\n") != std::string::npos, out);
+                assertTrue(out.find("\nsmall\n") == std::string::npos, out);
+                assertTrue(out.find("\"many: do\"") != std::string::npos, out);
+                assertTrue(out.find("\nin main\n") != std::string::npos, out);
+                assertTrue(out.find("Error") == std::string::npos, out);
+            }
+        });
+    });
+
     describe("REPL CLI — /clear", []() {
         it("lists /clear in /help", []() {
             auto out = runRepl("/help\n");

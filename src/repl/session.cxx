@@ -1063,7 +1063,10 @@ auto BeamReplSession::run() -> int {
         std::string source = input;
         int dc = replBlockDepth(source);
         bool cancelled = false;
-        while (dc > 0 || replHasOpenDelimiter(source)) {
+        // A line that carries the input on (`  .map { ... }`) is read with
+        // it, as a file reads it, once the input is complete so far.
+        while (dc > 0 || replHasOpenDelimiter(source) ||
+               (peekReplLine() && replContinuesInput(*peekReplLine()))) {
             g_replPendingInput = source;
             auto [cont, contOk] = readLine("  ...> ");
             if (takeReplInputCancelled()) {
@@ -1081,6 +1084,9 @@ auto BeamReplSession::run() -> int {
             std::cout << kex::color::apply(kex::color::gray) << "   (cancelled)"
                       << kex::color::apply(kex::color::reset) << "\n";
             continue;
+        }
+        if (auto body = replUnwrapMain(source)) {
+            source = std::move(*body);
         }
         // Clauses of one function are NOT gathered by reading ahead here. That
         // is what made a complete line hang on `...>`: after `let fact(0) = 1`
@@ -1641,7 +1647,8 @@ auto WalkerReplSession::run() -> int {
         int doCount = implicitDo ? 1 : replBlockDepth(source);
 
         bool cancelled = false;
-        while (doCount > 0 || replHasOpenDelimiter(source)) {
+        while (doCount > 0 || replHasOpenDelimiter(source) ||
+               (peekReplLine() && replContinuesInput(*peekReplLine()))) {
             g_replPendingInput = source;
             auto [contLine, contOk] = readLine("...> ");
             if (takeReplInputCancelled()) {
@@ -1660,6 +1667,9 @@ auto WalkerReplSession::run() -> int {
             std::cout << kex::color::apply(kex::color::gray) << "   (cancelled)"
                       << kex::color::apply(kex::color::reset) << "\n";
             continue;
+        }
+        if (auto body = replUnwrapMain(source)) {
+            source = std::move(*body);
         }
         // Clauses are not gathered by reading ahead — see the BEAM REPL above.
         // A complete line is accepted as soon as it is entered, and clauses of
