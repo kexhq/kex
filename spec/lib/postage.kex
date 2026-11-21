@@ -1,0 +1,12 @@
+# Overloads that differ only by a trailing labelled parameter, in a module
+# of their own, for spec/named_overload_arity_imported.kex.
+module Postage
+
+send : String -> String -> String
+foul send(env, path) = "plain ${env} ${path}"
+
+send : String -> String -> String -> String
+foul send(env, path, from: String) = "from ${env} ${path} ${from}"
+
+send : String -> String -> String -> Integer -> String
+foul send(env, path, from: String, headers: Integer) = "headers ${env} ${path} ${from} ${headers}"

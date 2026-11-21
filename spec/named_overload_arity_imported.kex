@@ -1,0 +1,15 @@
+# A labelled call runs the overload the checker selected, also when the
+# overloads are another unit's, reached through `using` (kexhq/kex#740).
+# spec/named_overload_arity.kex covers one file; across units, BEAM placed
+# the labels by whichever overload the interface listed under the name, and
+# `send("e", "p", from: "dir")` ran the four-parameter `send` with
+# `headers` = None.
+
+using Postage
+
+main do
+  IO.printLine(send("e", "p"))
+  IO.printLine(send("e", "p", from: "dir"))
+  IO.printLine(send("e", "p", from: "dir", headers: 7))
+  IO.printLine(Postage.send("e", "p", from: "dir"))
+end

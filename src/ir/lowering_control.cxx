@@ -1000,12 +1000,31 @@ auto Lowering::lowerExternalImportCall(const ast::FunctionCall& n, const std::st
     const auto beamFn = externalModules->exportToBeamFn.at(qualKey);
     std::vector<Binding> binds;
     std::vector<ExprPtr> args;
+    // The overload the checker selected says which parameters there are.
+    // The interface's table is keyed by name alone and holds one overload's,
+    // so a labelled `send(env, path, from: dir)` beside a longer `send` with
+    // a `headers:` ran the longer one, `headers` filled with None
+    // (kexhq/kex#740, a return of #433 across units).
+    const auto* selected = hir ? hir->selectedSignatureOf(n) : nullptr;
+    const auto* exportedNames = [&]() -> const std::vector<std::string>* {
+        const auto found = externalModules->exportParamNames.find(qualKey);
+        return found == externalModules->exportParamNames.end() ? nullptr : &found->second;
+    }();
+    const auto* paramNames =
+        selected && !selected->paramNames.empty() ? &selected->paramNames : exportedNames;
+    // Its defaults, when the interface's are that overload's.
+    const auto* defaults = [&]() -> const std::vector<std::string>* {
+        const auto found = externalModules->exportDefaults.find(qualKey);
+        return found != externalModules->exportDefaults.end() && paramNames &&
+                       found->second.size() == paramNames->size()
+                   ? &found->second
+                   : nullptr;
+    }();
     if (!n.namedArgs.empty()) {
-        auto pit = externalModules->exportParamNames.find(qualKey);
-        if (pit == externalModules->exportParamNames.end()) {
+        if (!paramNames) {
             throw LowerError(diag::Code::NamedArgsUnknownExternalParams, {{"function", qualKey}});
         }
-        const auto& pnames = pit->second;
+        const auto& pnames = *paramNames;
         args.resize(pnames.size());
         for (const auto& [an, av] : n.namedArgs) {
             for (size_t i = 0; i < pnames.size(); i++) {
@@ -1032,9 +1051,8 @@ auto Lowering::lowerExternalImportCall(const ast::FunctionCall& n, const std::st
             }
             args[next] = std::move(p);
         }
-        if (auto defaults = externalModules->exportDefaults.find(qualKey);
-            defaults != externalModules->exportDefaults.end()) {
-            fillOmittedArguments(defaults->second, args);
+        if (defaults) {
+            fillOmittedArguments(*defaults, args);
         }
         for (auto& a : args) {
             if (!a) {
@@ -1050,13 +1068,9 @@ auto Lowering::lowerExternalImportCall(const ast::FunctionCall& n, const std::st
         }
         // Fewer arguments than parameters: the rest are the callee's
         // defaults, which only its interface knows.
-        const auto defaults = externalModules->exportDefaults.find(qualKey);
-        const auto names = externalModules->exportParamNames.find(qualKey);
-        if (defaults != externalModules->exportDefaults.end() &&
-            names != externalModules->exportParamNames.end() &&
-            args.size() < names->second.size()) {
-            args.resize(names->second.size());
-            fillOmittedArguments(defaults->second, args);
+        if (defaults && args.size() < paramNames->size()) {
+            args.resize(paramNames->size());
+            fillOmittedArguments(*defaults, args);
         }
     }
     const int ar = static_cast<int>(args.size());
