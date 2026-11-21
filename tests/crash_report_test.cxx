@@ -92,6 +92,20 @@ int main() {
             assertTrue(WIFEXITED(run.status) && WEXITSTATUS(run.status) == 1, "exit status not 1");
         });
 
+        it("does not blame the compiler for the program's own failure", []() {
+            char tmp[] = "/tmp/kex_crash_src_XXXXXX";
+            close(mkstemp(tmp));
+            const std::string path = std::string(tmp) + ".kex";
+            std::rename(tmp, path.c_str());
+            std::ofstream(path) << "main do\n  let zero = 0\n  IO.printLine(1 / zero)\nend\n";
+            auto run = runKex("", "--no-colors --run-walker " + path);
+            std::remove(path.c_str());
+            assertTrue(contains(run.output, "division by zero"), "no runtime error: " + run.output);
+            assertFalse(
+                contains(run.output, "bug in the Kex compiler"),
+                "a runtime error blamed on the compiler: " + run.output);
+        });
+
         it("reports a crash, then dies of the same signal", []() {
             const auto path = sourceFile();
             auto run = runKex("KEX_DEBUG_CRASH=abort", "--no-colors -C " + path);

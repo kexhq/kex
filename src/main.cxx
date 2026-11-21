@@ -1270,6 +1270,10 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    // Set once the tree-walk interpreter starts running the program: from
+    // then on an exception is the program failing (a runtime error, an
+    // assertion, a built-in refusing its argument), not the compiler.
+    bool runningProgram = false;
     try {
         if (const char* crash = std::getenv("KEX_DEBUG_CRASH");
             crash && std::string_view(crash) == "internal") {
@@ -1427,14 +1431,23 @@ int main(int argc, char* argv[]) {
         }
 
         if (mode == Mode::Run) {
+            runningProgram = true;
             return runOnWalker(options, filepath, program, scriptArgs, expandParsedProgram);
         }
         return checkEntry(options, filepath, program, parser.diagnostics());
     } catch (const std::exception& e) {
         std::cerr << kex::color::apply(kex::color::bold) << kex::color::apply(kex::color::red)
                   << "Internal error:" << kex::color::apply(kex::color::reset) << " " << e.what()
-                  << "\n"
-                  << kex::crash::internalErrorReport(e.what());
+                  << "\n";
+        // The program's own failure is not the compiler's bug to report.
+        const bool programFailed = runningProgram ||
+                                   dynamic_cast<const kex::interpreter::RuntimeError*>(&e) ||
+                                   dynamic_cast<const kex::interpreter::TryException*>(&e) ||
+                                   dynamic_cast<const kex::interpreter::EvaluationTimeout*>(&e) ||
+                                   dynamic_cast<const kex::interpreter::SandboxViolation*>(&e);
+        if (!programFailed) {
+            std::cerr << kex::crash::internalErrorReport(e.what());
+        }
         return 1;
     }
 
