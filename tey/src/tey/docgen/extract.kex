@@ -118,14 +118,14 @@ module Tey.Docgen.Extract do
     let named = entities.map { |e| baseSpelling(nameOf(e)) }.filter { |name|
       namesStem?(name, fileStem(stem))
     }
-    return named.first.or(stem.split("_").map { |part| titleCase(part) }.join(""))
+    return named.first.or(stem.pascalCase)
   end
 
-  # Whether a declaration's name is the one a file stem spells: the stem
-  # separates words with `_` and the name runs them together, so
-  # `file_handle` names `FileHandle` (kexhq/kex#721).
+  # Whether a declaration's name is the one a file stem spells, in either's
+  # capitals: `file_handle` names `FileHandle` (kexhq/kex#721), and `dns`
+  # names `DNS`.
   let namesStem?(name: String, stem: String) -> Bool do
-    return name.lowerCase == stem.replace("_", "").lowerCase
+    return name.lowerCase == stem.pascalCase.lowerCase
   end
 
   # "FileHandle<CanRead, W>" -> "FileHandle", "FS.Path" -> "Path": what the
@@ -917,15 +917,5 @@ module Tey.Docgen.Extract do
   let stripExt(name: String) -> String do
     return name.take(name.count - 4) if name.endsWith?(".kex")
     return name
-  end
-
-  let titleCase(s: String) -> String do
-    if s.empty?
-      return s
-    end
-    # The total `get`: the empty string already returned above, so the
-    # fallback never fires. (`capitalize` is not this — it lower-cases the
-    # tail, and a title here keeps whatever case the source wrote.)
-    return s.get(0, ' ').upperCase + s.drop(1)
   end
 end
