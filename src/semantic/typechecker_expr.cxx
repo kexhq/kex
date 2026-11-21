@@ -6460,7 +6460,8 @@ auto TypeChecker::checkCall(
                 (named && !(isPrimitiveTypeName(named->name) || m_adtVariants.count(named->name) ||
                             constructorOwner(*named) ||
                             m_recordFields.count(resolveRecordName(named->name))));
-            m_unresolvedMethods.push_back({name, loc, typeToString(receiver), fieldMayExist});
+            m_unresolvedMethods.push_back(
+                {name, loc, typeToString(receiver), fieldMayExist, receiver});
             auto& imports = m_unresolvedMethodImports.emplace_back(m_declarationImports);
             for (const auto& scope : m_importScopeStack) {
                 imports.insert(imports.end(), scope.begin(), scope.end());
@@ -6727,7 +6728,12 @@ auto TypeChecker::checkCall(
     // if the receiver is Unknown and no overload matches the full arity while
     // overloads DO match with the receiver dropped, treat it as a plain
     // function call through a namespace — drop argTypes[0] and re-check.
-    if (!argTypes.empty() && (isUndetermined(argTypes[0]))) {
+    //
+    // Not for a known module's function called by its qualified name
+    // (`Type.fieldValues(value, 0)`): its arguments carry no receiver, so the
+    // first one is an argument, and dropping it because it is an `Any` let an
+    // extra argument through to fail at run time.
+    if (!argTypes.empty() && (isUndetermined(argTypes[0])) && !kex::mangle::hasScope(name)) {
         bool anyFullMatch = false;
         bool anyDroppedMatch = false;
         for (const auto& sig : *sigs) {
@@ -7990,7 +7996,11 @@ auto TypeChecker::checkCall(
         // gradual field read into an error: `e.value` on the `Error(e)` of
         // `Integer.parse` (a ParseError field) was reported as a bad call to
         // OptionParser's `value/2` the moment OptionParser joined the prelude.
-        if (isMethodCall && !argTypes.empty()) {
+        // Only a receiver: in a module's function called by its qualified
+        // name (`Type.fieldValues(value, 0)`), the first argument is an
+        // argument like the rest, and an extra one is an error whatever its
+        // type. An `Any` let the call through to fail at run time.
+        if (isMethodCall && !argTypes.empty() && !kex::mangle::hasScope(name)) {
             auto receiver = resolve(argTypes.front());
             if (isUndetermined(receiver)) {
                 return Type::unknown();

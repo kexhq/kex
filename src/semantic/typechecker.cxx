@@ -904,7 +904,8 @@ auto TypeChecker::reportUnknownMethods() -> void {
         }
         return importedHere(moduleName, member);
     };
-    auto knownSomewhere = [&](const std::string& name, bool fieldMayExist) {
+    auto knownSomewhere = [&](const std::string& name, bool fieldMayExist,
+                              const TypePtr& receiverType) {
         if (m_methodSignatures.count(name) || m_userSignatures.count(name) ||
             m_annotatedMethods.count(name) || m_makeMethodNames.count(name)) {
             return true;
@@ -929,6 +930,14 @@ auto TypeChecker::reportUnknownMethods() -> void {
             // trivially in reach.
             if (traitName.find('.') != std::string::npos && m_capabilities.count(traitName) > 0 &&
                 !moduleInReach(traitName, name)) {
+                continue;
+            }
+            // Nor may a trait vouch for a receiver whose type is known and
+            // does not implement it: `message` is Errorable's, so
+            // `result.message` on a Result checked clean, then died with
+            // `if_clause` on BEAM (kexhq/kex#738). A receiver that may be
+            // anything (fieldMayExist) keeps the name-only answer.
+            if (!fieldMayExist && receiverType && !m_traits.satisfies(receiverType, traitName)) {
                 continue;
             }
             for (const auto& required : trait.requiredMethods) {
@@ -994,7 +1003,8 @@ auto TypeChecker::reportUnknownMethods() -> void {
         // Checked here, not at the call: the guess may come later in the file.
         if (knownSomewhere(
                 unresolved.name,
-                unresolved.fieldMayExist || m_guessedReceiverTypes.count(unresolved.receiver))) {
+                unresolved.fieldMayExist || m_guessedReceiverTypes.count(unresolved.receiver),
+                unresolved.receiverType)) {
             continue;
         }
         if (unresolved.receiver.empty() || unresolved.receiver == "Unknown") {
