@@ -540,6 +540,9 @@ private:
         // primitive, an ADT, a record already searched): a field of some
         // OTHER record with this name then says nothing about the call.
         bool fieldMayExist = true;
+        // The receiver's type, for what only a type can answer: whether it
+        // implements the trait that declares a function of this name.
+        TypePtr receiverType;
     };
     std::vector<UnresolvedMethod> m_unresolvedMethods;
     // Types an unknown receiver was bound to by a method's name alone.

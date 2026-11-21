@@ -6460,7 +6460,8 @@ auto TypeChecker::checkCall(
                 (named && !(isPrimitiveTypeName(named->name) || m_adtVariants.count(named->name) ||
                             constructorOwner(*named) ||
                             m_recordFields.count(resolveRecordName(named->name))));
-            m_unresolvedMethods.push_back({name, loc, typeToString(receiver), fieldMayExist});
+            m_unresolvedMethods.push_back(
+                {name, loc, typeToString(receiver), fieldMayExist, receiver});
             auto& imports = m_unresolvedMethodImports.emplace_back(m_declarationImports);
             for (const auto& scope : m_importScopeStack) {
                 imports.insert(imports.end(), scope.begin(), scope.end());

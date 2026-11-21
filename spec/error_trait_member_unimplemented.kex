@@ -1,0 +1,11 @@
+# kex: check-only
+# A trait's function names vouch for a call only on a receiver that may
+# implement the trait (kexhq/kex#738). `message` is Errorable's; a Result does
+# not implement Errorable, so `r.message` is undefined, as `42.bogusName` is.
+# It checked clean, then died with `if_clause` on BEAM.
+
+main do
+  let r : Result<Integer, String> = Ok(1)
+  let m : Integer = r.message
+  IO.print(m)
+end

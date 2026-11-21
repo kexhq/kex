@@ -1,0 +1,4 @@
+spec/error_trait_member_unimplemented.kex:9:30: [KEXET-0101]: Error, undefined method `message` for `Result<Integer, String>`
+  |
+9 |   let m : Integer = r.message
+  |                     ^^^^^^^^^
