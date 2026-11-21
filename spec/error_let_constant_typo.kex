@@ -1,0 +1,11 @@
+# kex: check-only
+# A `let` of an uppercase name is a constant only when `=` (or a type) comes
+# next. `let HELLO - 16`, a typo for `=`, was taken as a constant with no
+# body, passed `--check`, and failed in lowering with a mangled C++ name
+# (kexhq/kex#701). It is a syntax error at the `-`.
+
+main do
+  let HELLO - 16
+
+  IO.printLine("Hello, ${22 / (HELLO - 16)}")
+end

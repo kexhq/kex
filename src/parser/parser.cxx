@@ -3518,8 +3518,14 @@ auto Parser::isLetFunctionDefAhead() -> bool {
         advance(); // let
         advance(); // UpperIdent name
         bool isPattern = check(TokenType::LParen) || check(TokenType::LBrace);
+        // A constant is `let NAME = value` (or `: Type =`, `-> Type =`). Any
+        // other token is a mistake in a binding, `let HELLO - 16` for
+        // `let HELLO = 16`; taken as a constant's definition it parsed as one
+        // with no body, and the `- 16` was left to a later stage (#701).
+        bool isConstant = check(TokenType::Equals) || check(TokenType::Colon) ||
+                          check(TokenType::Arrow) || check(TokenType::Do);
         m_pos = savedPos2;
-        return !isPattern;
+        return !isPattern && isConstant;
     }
 
     // Look further: is there a ( after the name? Or is it let name = expr (simple

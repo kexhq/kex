@@ -7,9 +7,45 @@
 #include "../common/mangle.hxx"
 #include <algorithm>
 
+#if __has_include(<cxxabi.h>)
+#include <cxxabi.h>
+#include <cstdlib>
+#endif
+#include <typeinfo>
+
 namespace kex::ir {
 
+auto astNodeName(const std::type_info& type) -> std::string {
+    std::string name = type.name();
+#if __has_include(<cxxabi.h>)
+    int status = 0;
+    if (char* readable = abi::__cxa_demangle(type.name(), nullptr, nullptr, &status)) {
+        if (status == 0) {
+            name = readable;
+        }
+        std::free(readable); // NOLINT(cppcoreguidelines-no-malloc)
+    }
+#endif
+    if (const auto colons = name.rfind("::"); colons != std::string::npos) {
+        name.erase(0, colons + 2);
+    }
+    return name;
+}
+
 auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
+    try {
+        return lowerNode(e);
+    } catch (LowerError& error) {
+        // The innermost expression is where it went wrong: the first one to
+        // see the error with no location gives it its own.
+        if (error.location.line == 0 && e) {
+            error.location = e->location;
+        }
+        throw;
+    }
+}
+
+auto Lowering::lowerNode(const ast::ExprPtr& e) -> ExprPtr {
     if (!e) {
         return litBool(false);
     }
@@ -1110,7 +1146,8 @@ auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
                 }
                 throw LowerError(diag::Code::AssignmentInsideExpression);
             } else {
-                throw LowerError(diag::Code::UnimplementedExprNode, {{"node", typeid(T).name()}});
+                throw LowerError(
+                    diag::Code::UnimplementedExprNode, {{"node", astNodeName(typeid(T))}});
             }
         },
         e->kind);

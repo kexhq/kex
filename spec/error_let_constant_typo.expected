@@ -1,0 +1,4 @@
+spec/error_let_constant_typo.kex:8:13: [KEXEP-0102]: Error, expected '=' in let binding, got -
+  |
+8 |   let HELLO - 16
+  |             ^

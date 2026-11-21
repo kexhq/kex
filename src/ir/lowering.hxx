@@ -415,6 +415,8 @@ struct Lowering {
 
     // ---- Expression lowering ---------------------------------------------
     auto lower(const ast::ExprPtr& e) -> ExprPtr;
+    // `lower` without the LowerError location bookkeeping.
+    auto lowerNode(const ast::ExprPtr& e) -> ExprPtr;
 
     static auto curryOp(const std::string& name) -> std::optional<Op>;
     auto lowerNameAsUfcsFun(const std::string& name, const std::vector<ast::ExprPtr>& args)
