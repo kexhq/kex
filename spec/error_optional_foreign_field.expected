@@ -1,0 +1,8 @@
+spec/error_optional_foreign_field.kex:11:38: [KEXET-0478]: Error, `name` is a field of Culture.Culture, but the receiver is Culture.Culture?. The value may be None. Map over the optional first: `.map { |v| v.name }`
+   |
+11 |   IO.inspect(Culture.of("hu-HU").name)
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^
+spec/error_optional_foreign_field.kex:10:39: [KEXET-0101]: Error, undefined method `names` for `Culture.Culture?`
+   |
+10 |   IO.inspect(Culture.of("hu-HU").names)
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^
