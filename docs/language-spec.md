@@ -2332,7 +2332,8 @@ end
 
 ### Truthyable
 
-Crystal-style truthiness (`false`, `None`, `()`, `NaN` are falsy).
+Crystal-style truthiness (`false`, `None`, `()` are falsy). There is no NaN to
+consider: a `Float` is always finite (see [Types](types.md)).
 
 ```
 trait Truthyable do
