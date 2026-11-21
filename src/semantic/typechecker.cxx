@@ -3935,6 +3935,18 @@ auto TypeChecker::checkPatternMatrix(
     // a map (spec/record_pattern_anonymous.kex), and one can lack the key.
     // Such an arm covers what a literal does, so a fallback is still owed.
     const bool mapSubject = std::holds_alternative<MapType>(resolve(subject)->kind);
+    // A named record pattern asserts the record's type, so `Pt { x }` takes
+    // no `Qt` even where the two share their fields
+    // (spec/named_record_pattern.kex). Against a subject of one record type,
+    // a pattern naming another covers what a literal does, and a fallback is
+    // still owed. Dropping the `_` beside such an arm was accepted, and failed
+    // at run time with no matching clause (found by `make metamorphic-search`).
+    std::string subjectRecord;
+    if (const auto* named = std::get_if<NamedType>(&resolve(subject)->kind)) {
+        if (const auto name = resolveRecordName(named->name); m_recordFields.contains(name)) {
+            subjectRecord = name;
+        }
+    }
     std::vector<std::vector<Space>> rows;
     for (const auto& clause : node.clauses) {
         if (clause.guard && *clause.guard) {
@@ -3947,6 +3959,12 @@ auto TypeChecker::checkPatternMatrix(
             if (const auto* structural = std::get_if<ast::RecordPattern>(&pattern->kind);
                 mapSubject && structural && structural->typeName.empty()) {
                 rows.push_back({Space{literal + "{}", {}}});
+                continue;
+            }
+            if (const auto* named = std::get_if<ast::RecordPattern>(&pattern->kind);
+                named && !subjectRecord.empty() && !named->typeName.empty() &&
+                resolveRecordName(named->typeName) != subjectRecord) {
+                rows.push_back({Space{literal + named->typeName + "{}", {}}});
                 continue;
             }
             auto space = spaceOf(*pattern);

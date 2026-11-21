@@ -1203,7 +1203,13 @@ void collectFromTypeDef(
     }
     // A transparent alias (`type FilePath = String`) has no constructors —
     // recording `String` as one made every bare `String` widen to `FilePath`.
-    if (td.variants && !td.isDistinct && !kex::isTransparentTypeAlias(td)) {
+    // Nor has a union naming a qualified type (`type Reply = String |
+    // Web.Page`), which the check reads as an alias as well: recorded with
+    // `String` and `Page` for constructors, it reached an importer as an ADT,
+    // not the alias its body above describes, and `Web.Reply` in that
+    // importer's own signatures matched no imported signature's union.
+    if (td.variants && !td.isDistinct && !kex::isTransparentTypeAlias(td) &&
+        kex::typeConstructors(td)) {
         // An ADT declared inside a module is known by its qualified name, as
         // a record is: `Kex.Backend`, never a bare `Backend` that a same-named
         // constructor elsewhere (NetErrorKind's) could be mistaken for.
