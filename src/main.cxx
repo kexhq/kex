@@ -4,6 +4,7 @@
 #include "ast/syntax.hxx"
 #include "ast/type_text.hxx"
 #include "common/color.hxx"
+#include "common/crash_report.hxx"
 #include "interpreter/evaluator.hxx"
 #include "hir/hir.hxx"
 #include "ir/lower.hxx"
@@ -992,9 +993,20 @@ auto firstProgramArgument(int argc, char* argv[], int file) -> int {
 }
 
 int main(int argc, char* argv[]) {
+    kex::crash::rememberCommandLine(argc, argv);
     auto options = parseCommandLine(argc, argv);
     if (options.exitNow) {
         return *options.exitNow;
+    }
+    // From here a crash says it is the compiler's bug, and where to report it.
+    // After the command line, which decides colors and hyperlinks.
+    kex::crash::installCrashHandlers();
+    // KEX_DEBUG_CRASH=internal or =abort fails on purpose, so that what the
+    // user sees then can be tested (tests/crash_report_test.cxx).
+    if (const char* crash = std::getenv("KEX_DEBUG_CRASH"); crash && *crash) {
+        if (std::string_view(crash) == "abort") {
+            std::abort();
+        }
     }
     // The opt-in standard library is described by the checker, as a build of a
     // program using it describes it, for every check, run and the editor alike.
@@ -1259,6 +1271,10 @@ int main(int argc, char* argv[]) {
     }
 
     try {
+        if (const char* crash = std::getenv("KEX_DEBUG_CRASH");
+            crash && std::string_view(crash) == "internal") {
+            throw std::runtime_error("KEX_DEBUG_CRASH asked for an internal error");
+        }
         kex::Parser parser(std::move(tokens), filepath);
         auto program = parser.parseProgram();
 
@@ -1417,7 +1433,8 @@ int main(int argc, char* argv[]) {
     } catch (const std::exception& e) {
         std::cerr << kex::color::apply(kex::color::bold) << kex::color::apply(kex::color::red)
                   << "Internal error:" << kex::color::apply(kex::color::reset) << " " << e.what()
-                  << "\n";
+                  << "\n"
+                  << kex::crash::internalErrorReport(e.what());
         return 1;
     }
 
