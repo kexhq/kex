@@ -768,7 +768,11 @@ if(TARGET kex_prelude_beam)
         KEX_RUNTIME_BEAM_DIR="${KEX_RUNTIME_BEAM_DIR}")
     add_dependencies(semantic_test kex_prelude_beam)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-    target_compile_definitions(semantic_test PRIVATE KEX_RUNTIME_BEAM_DIR="")
+    # kex_lib already exports the prebuilt unit's directory when it has one;
+    # defining it again would be a macro redefinition.
+    if(NOT KEX_WASM_RUNTIME_UNIT)
+        target_compile_definitions(semantic_test PRIVATE KEX_RUNTIME_BEAM_DIR="")
+    endif()
     target_link_options(semantic_test PRIVATE -sNODERAWFS=1)
 endif()
 add_test(NAME semantic_test COMMAND semantic_test)
@@ -828,7 +832,11 @@ if(TARGET kex_prelude_beam)
         KEX_RUNTIME_BEAM_DIR="${KEX_RUNTIME_BEAM_DIR}")
     add_dependencies(completion_test kex_prelude_beam)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-    target_compile_definitions(completion_test PRIVATE KEX_RUNTIME_BEAM_DIR="")
+    # kex_lib already exports the prebuilt unit's directory when it has one;
+    # defining it again would be a macro redefinition.
+    if(NOT KEX_WASM_RUNTIME_UNIT)
+        target_compile_definitions(completion_test PRIVATE KEX_RUNTIME_BEAM_DIR="")
+    endif()
     target_link_options(completion_test PRIVATE -sNODERAWFS=1)
 endif()
 add_test(NAME completion_test COMMAND completion_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
@@ -1032,8 +1040,10 @@ add_test(NAME cluster_beam_test COMMAND cluster_beam_test WORKING_DIRECTORY ${CM
 # add_compile_options, so vendored code (third_party/lsp-framework, added with
 # add_subdirectory) keeps its own flags. -Wmissing-field-initializers stays off:
 # aggregates here are initialized partially on purpose (`{kind, name}`, the
-# rest defaulted). KEX_WERROR turns every warning into an error.
-option(KEX_WERROR "Treat compiler warnings as errors" OFF)
+# rest defaulted). KEX_WERROR, on by default, turns every warning into an
+# error; release builds and the published images turn it off, so a newer
+# compiler on a runner cannot fail a release (CI still builds with it on).
+option(KEX_WERROR "Treat compiler warnings as errors" ON)
 if(NOT MSVC)
     set(KEX_WARNING_FLAGS -Wall -Wextra -Wno-missing-field-initializers)
     if(KEX_WERROR)

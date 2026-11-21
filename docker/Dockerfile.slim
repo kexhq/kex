@@ -31,6 +31,10 @@ COPY . .
 
 ARG KEX_BUILD_DATE
 ARG KEX_GIT_REVISION
+# Warnings stay warnings here: a published image must not fail to build
+# because a newer compiler in the base image found something new. CI passes
+# KEX_WERROR=ON, so they are still caught before a release.
+ARG KEX_WERROR=OFF
 ARG BUILD_JOBS=2
 # Compiled objects go through ccache into a BuildKit cache mount, so a
 # rebuild compiles only what changed. CI carries the mount between runs (see
@@ -38,6 +42,7 @@ ARG BUILD_JOBS=2
 ENV CCACHE_DIR=/root/.cache/ccache CCACHE_MAXSIZE=500M
 RUN --mount=type=cache,target=/root/.cache/ccache \
     cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
+        -DKEX_WERROR="$KEX_WERROR" \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
         ${KEX_BUILD_DATE:+-DKEX_BUILD_DATE="$KEX_BUILD_DATE"} \
         ${KEX_GIT_REVISION:+-DKEX_GIT_REVISION="$KEX_GIT_REVISION"} \

@@ -262,7 +262,10 @@ auto runIrOnBeam(const std::string& source, const std::string& stem) -> std::str
     auto run = "erl -noshell -pa build/runtime/beam -pa runtime/beam -pa /tmp -eval "
                "'io:format(\"~p~n\", [kex_" +
                stem + ":main()]), halt()'";
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(run.c_str(), "r"), pclose);
+    // A lambda, not `decltype(&pclose)`: pclose's attributes are dropped
+    // from a template argument, which GCC warns about.
+    const auto closePipe = [](FILE* file) { pclose(file); };
+    std::unique_ptr<FILE, decltype(closePipe)> pipe(popen(run.c_str(), "r"), closePipe);
     assertTrue(pipe != nullptr, "popen should run the BEAM module");
     std::string output;
     char buf[256];
@@ -2017,9 +2020,9 @@ int main() {
                 "r");
             assertTrue(pipe != nullptr, "popen succeeded");
             char buf[256] = {};
-            fgets(buf, sizeof(buf), pipe);
+            const char* line = fgets(buf, sizeof(buf), pipe);
             pclose(pipe);
-            std::string actual(buf);
+            std::string actual(line ? line : "");
             while (!actual.empty() && (actual.back() == '\n' || actual.back() == '\r')) {
                 actual.pop_back();
             }
@@ -2044,9 +2047,9 @@ int main() {
                 "r");
             assertTrue(pipe != nullptr, "popen succeeded");
             char buffer[256] = {};
-            fgets(buffer, sizeof(buffer), pipe);
+            const char* line = fgets(buffer, sizeof(buffer), pipe);
             pclose(pipe);
-            std::string actual(buffer);
+            std::string actual(line ? line : "");
             while (!actual.empty() && (actual.back() == '\n' || actual.back() == '\r')) {
                 actual.pop_back();
             }

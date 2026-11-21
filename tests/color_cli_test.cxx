@@ -74,7 +74,7 @@ auto runKexStreams(const std::vector<std::string>& args) -> CapturedStreams {
         cmd += " " + arg;
     }
     cmd += " > " + std::string(outPath) + " 2> " + errPath;
-    std::system(cmd.c_str());
+    runShell(cmd);
 
     auto read = [](const char* path) {
         std::ifstream file(path);

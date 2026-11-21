@@ -55,7 +55,7 @@ struct Package {
                              " --source-root " + (root / "app").string() + " --source-root " +
                              (root / "lib").string() + " " + (root / "app" / "main.kex").string() +
                              " > " + report.string() + " 2>&1";
-        (void)std::system(command.c_str());
+        runShell(command);
         return read(report);
     }
 
@@ -65,7 +65,7 @@ struct Package {
         const auto command = "cd " + (root / "out").string() +
                              " && erl -noshell -pa . -eval 'kex_main:main(), halt().' > " +
                              output.string() + " 2>&1";
-        (void)std::system(command.c_str());
+        runShell(command);
         return read(output);
     }
 

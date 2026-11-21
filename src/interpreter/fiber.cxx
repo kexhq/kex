@@ -162,7 +162,6 @@ auto Fiber::trampolineBody() -> void {
 #else // __EMSCRIPTEN__
 
 namespace {
-thread_local Fiber* g_startingFiber = nullptr;
 
 // The "native" context — wherever execution is when it's not inside any
 // Fiber (i.e. the scheduler's own flat driving loop). Every Fiber::resume()
@@ -210,7 +209,7 @@ auto fiberTrampoline(void* arg) -> void {
 } // namespace
 
 Fiber::Fiber(EntryFn entry, std::size_t stackSize)
-    : m_impl(std::make_unique<Impl>()), m_entry(std::move(entry)) {
+    : m_entry(std::move(entry)), m_impl(std::make_unique<Impl>()) {
     m_stackSize = stackSize;
     m_impl->stack.resize(stackSize);
     // Emscripten's own asyncify scratch buffer, separate from the C stack —

@@ -187,9 +187,9 @@ int main() {
 
             const std::string kex = KEX_BINARY_PATH;
             const auto logA = root / "a.log";
-            std::system((kex + " --no-colors --sname " + nodeA + " --cookie " + cookie + " " +
-                         (root / "node_a.kex").string() + " > " + logA.string() + " 2>&1 &")
-                            .c_str());
+            runShell(
+                kex + " --no-colors --sname " + nodeA + " --cookie " + cookie + " " +
+                (root / "node_a.kex").string() + " > " + logA.string() + " 2>&1 &");
             auto outputB = popenCapture(
                 kex + " --no-colors --sname " + nodeB + " --cookie " + cookie + " " +
                 (root / "node_b.kex").string() + " 2>&1");
@@ -241,10 +241,10 @@ int main() {
             char tmp[] = "/tmp/kex_cluster_example_XXXXXX";
             fs::path root = mkdtemp(tmp);
             const auto logStore = root / "store.log";
-            std::system(("cd " + dir.string() + " && " + kex +
-                         " --no-colors --sname store --cookie kexexample store_node.kex > " +
-                         logStore.string() + " 2>&1 &")
-                            .c_str());
+            runShell(
+                "cd " + dir.string() + " && " + kex +
+                " --no-colors --sname store --cookie kexexample store_node.kex > " +
+                logStore.string() + " 2>&1 &");
             auto client = popenCapture(
                 "cd " + dir.string() + " && " + kex +
                 " --no-colors --sname client --cookie kexexample"
@@ -260,7 +260,7 @@ int main() {
             // A client that failed never stopped the store, which would then
             // hold the test open until ctest's timeout.
             if (store.find("stopping") == std::string::npos) {
-                std::system("pkill -f 'sname store --cookie kexexample' 2>/dev/null");
+                runShell("pkill -f 'sname store --cookie kexexample' 2>/dev/null");
             }
             std::error_code ec;
             fs::remove_all(root, ec);
