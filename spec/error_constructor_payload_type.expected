@@ -1,5 +1,20 @@
 spec/error_constructor_payload_type.kex:15:29: [KEXET-0104]: Error, `Count` expects a value of type Integer, but got String
+   |
+15 |   let inside() -> Request = Count("inside")
+   |                             ^^^^^^^^^^^^^^^
 spec/error_constructor_payload_type.kex:24:15: [KEXET-0104]: Error, `Circle` expects a value of type Float, but got String
+   |
+24 |   let wrong = Circle("wide")
+   |               ^^^^^^^^^^^^^^
 spec/error_constructor_payload_type.kex:25:14: [KEXET-0104]: Error, `Count` expects a value of type Integer, but got String
+   |
+25 |   let bare = Count("many")
+   |              ^^^^^^^^^^^^^
 spec/error_constructor_payload_type.kex:26:30: [KEXET-0104]: Error, `Count` expects a value of type Integer, but got String
+   |
+26 |   let qualified = Store.Count("many")
+   |                   ^^^^^^^^^^^^^^^^^^^
 spec/error_constructor_payload_type.kex:27:16: [KEXET-0105]: Error, `Rename` expects value 2 of type String, but got Integer
+   |
+27 |   let second = Rename("a", 2)
+   |                ^^^^^^^^^^^^^^

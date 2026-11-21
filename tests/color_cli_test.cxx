@@ -229,7 +229,7 @@ int main() {
             assertTrue(
                 contains(out, "\x1b[1m\x1b[33m[KEXWC-0001]: Warning,"),
                 "warning label not bold yellow: " + out);
-            assertTrue(contains(out, "\x1b[33m^~"), "warning underline not yellow: " + out);
+            assertTrue(contains(out, "\x1b[33m^^"), "warning underline not yellow: " + out);
             assertFalse(contains(out, "\x1b[31m[KEXWC"), "warning label red: " + out);
         });
 
@@ -269,7 +269,7 @@ int main() {
             assertTrue(
                 contains(out, "3 | main do demo`abcde` end"),
                 "missing ranged diagnostic source line: " + out);
-            assertTrue(contains(out, "^~"), "missing ranged diagnostic underline: " + out);
+            assertTrue(contains(out, "^^"), "missing ranged diagnostic underline: " + out);
         });
 
         it("emits validator range endpoints in JSON", []() {
@@ -389,6 +389,49 @@ int main() {
             assertFalse(hasAnsi(out), "unexpected ANSI escapes in: " + out);
             assertTrue(contains(out, "✓ passes"), "missing passing tick: " + out);
             assertTrue(contains(out, "✗ fails"), "missing failing cross: " + out);
+        });
+    });
+
+    // Source snippets (kexhq/kex#657).
+    describe("Diagnostic snippets", []() {
+        const std::string annotated = "main do\n  let x: Integer = \"a\"\n  IO.printLine(x)\nend\n";
+
+        it("underlines the value and labels the annotation it was checked against", [annotated]() {
+            auto path = writeTempSource(annotated);
+            auto out = runKex({"--no-colors", "--check", path}, "");
+            std::remove(path.c_str());
+            const std::string expected =
+                ":2:20: [KEXET-0001]: Error, type mismatch: expected Integer, got String\n"
+                "  |\n"
+                "2 |   let x: Integer = \"a\"\n"
+                "  |          -------   ^^^ this has type String\n"
+                "  |          |\n"
+                "  |          expected because of this annotation\n";
+            assertTrue(contains(out, expected), "snippet not laid out as expected: " + out);
+        });
+
+        it("prints only the diagnostic's line with --no-snippets", [annotated]() {
+            auto path = writeTempSource(annotated);
+            auto out = runKex({"--no-colors", "--no-snippets", "--check", path}, "");
+            std::remove(path.c_str());
+            assertTrue(
+                contains(out, "[KEXET-0001]: Error, type mismatch"), "missing header: " + out);
+            assertFalse(contains(out, " | "), "snippet printed with --no-snippets: " + out);
+        });
+
+        it("carries the spans and labels as data in JSON, with no snippet", [annotated]() {
+            auto path = writeTempSource(annotated);
+            auto out = runKex({"--json", path}, "");
+            std::remove(path.c_str());
+            assertFalse(contains(out, "  |"), "snippet printed in JSON: " + out);
+            // `"a"` is bytes 27..30 of the source.
+            assertTrue(contains(out, "\"start_offset\": 27"), "missing start offset: " + out);
+            assertTrue(contains(out, "\"end_offset\": 30"), "missing end offset: " + out);
+            assertTrue(
+                contains(out, "\"label\": \"this has type String\""), "missing label: " + out);
+            assertTrue(
+                contains(out, "\"message\": \"expected because of this annotation\""),
+                "missing secondary label: " + out);
         });
     });
 

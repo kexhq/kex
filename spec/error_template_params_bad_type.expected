@@ -1,3 +1,9 @@
 spec/error_template_params_bad_type.kex:10:27: [KEXEP-0062]: Error, expected type expression
+   |
+10 |   let show = Template.text(`---
+   |              ^^^^^^^^^^^^^^^^^^
 spec/error_template_params_bad_type.kex:10:27: note: in a template's `params:` frontmatter, `->->->` is not a type
+   |
+10 |   let show = Template.text(`---
+   |              ------------------
 Aborted: compile-time expansion failed.

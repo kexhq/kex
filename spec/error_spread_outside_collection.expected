@@ -1,2 +1,5 @@
 spec/error_spread_outside_collection.kex:5:11: [KEXEP-0064]: Error, `...` only spreads into a list, a map, or a `do` block body
+  |
+5 |   let y = ...xs
+  |           ^^^
 Aborted: 1 syntax error. Fix them before running.

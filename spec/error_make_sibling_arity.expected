@@ -7,3 +7,6 @@ sum : [Number] -> Number
 sum : [A] -> (A -> Number) -> Number
 
 sum : [Shelf.Book] -> [Shelf.Book] -> A
+   |
+17 |     let tally = this.sum()
+   |                 ^^^^^^^^^^

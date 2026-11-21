@@ -1,2 +1,8 @@
 spec/error_match_range_exhaustive.kex:10:3: [KEXET-0108]: Error, non-exhaustive match: missing case(s) (_.._)
+   |
+10 |   match az do
+   |   ^^^^^^^^^^^
 spec/error_match_range_exhaustive.kex:19:3: [KEXET-0108]: Error, non-exhaustive match: missing case(s) (_.._)
+   |
+19 |   match 1..10 do
+   |   ^^^^^^^^^^^^^^

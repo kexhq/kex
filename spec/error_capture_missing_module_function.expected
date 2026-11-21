@@ -1,2 +1,5 @@
 spec/error_capture_missing_module_function.kex:6:30: [KEXET-0423]: Error, `String` has no function `upcase`
+  |
+6 |   IO.printLine("${["ab"].map(~String.upcase)}")
+  |                              ^^^^^^^^^^^^^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

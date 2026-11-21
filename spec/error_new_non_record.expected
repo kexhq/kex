@@ -1,2 +1,8 @@
 spec/error_new_non_record.kex:3:25: [KEXET-0403]: Error, `new` requires a record receiver
+  |
+3 |   let copy -> Integer = new
+  |                         ^^^
 spec/error_new_non_record.kex:4:28: [KEXET-0450]: Error, `New` requires a record receiver
+  |
+4 |   let changed -> Integer = New { }
+  |                            ^^^^^^^

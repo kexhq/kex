@@ -3,4 +3,7 @@ spec/error_overloaded_reference.kex:5:18: [KEXET-0460]: Error, cannot reference 
 render : Integer -> String
 
 render : String -> String
+  |
+5 |   let renderer = ~render
+  |                  ^^^^^^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

@@ -3,6 +3,12 @@ spec/error_call_through_type_variable.kex:11:52: [KEXET-0491]: Error, `upperCase
 upperCase : Char -> Char
 
 upperCase : String -> String
+   |
+11 |   IO.printLine(applyTo({ |n| n + 1 }, 41).upperCase)
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 spec/error_call_through_type_variable.kex:12:16: [KEXET-0491]: Error, `takesString` expects argument 1 to be String, but got Integer
 
 takesString : String -> String
+   |
+12 |   IO.printLine(takesString(applyTo({ |n| n + 1 }, 41)))
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

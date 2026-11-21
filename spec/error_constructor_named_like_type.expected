@@ -1,3 +1,9 @@
 spec/error_constructor_named_like_type.kex:11:1: [KEXET-0001]: Error, type mismatch: expected NetErrorKind, got Kex.Backend
+   |
+11 | let kind = Kex.BACKEND
+   | ^^^^^^^^^^^^^^^^^^^^^^
 spec/error_constructor_named_like_type.kex:14:1: [KEXET-0001]: Error, type mismatch: expected Other, got Color
+   |
+14 | let other = Red
+   | ^^^^^^^^^^^^^^^
 Aborted: 2 type errors. Fix them before running, or skip the check with --no-check.

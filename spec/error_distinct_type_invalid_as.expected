@@ -1,2 +1,5 @@
 spec/error_distinct_type_invalid_as.kex:4:22: [KEXET-0180]: Error, cannot convert String to UserId with `.as`
+  |
+4 |   "not an integer".as(UserId)
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

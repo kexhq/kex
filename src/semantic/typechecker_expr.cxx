@@ -4249,8 +4249,16 @@ auto TypeChecker::declaredBindingType(
             return declared;
         }
     }
+    // Reported at the initializer, with the annotation the expected type came
+    // from as a second place (kexhq/kex#657).
+    const auto mismatch = [&](const TypePtr& found) {
+        typeMismatch(value ? value->location : loc, declared, found);
+        labelLast(
+            "this has type " + typeToString(found), (*annotation)->location,
+            "expected because of this annotation");
+    };
     if (value && atomOutsideSet(*value, declared)) {
-        typeMismatch(loc, declared, Type::atom(std::get<ast::AtomLiteral>(value->kind).name));
+        mismatch(Type::atom(std::get<ast::AtomLiteral>(value->kind).name));
         return declared;
     }
     if (value && literalCoercesTo(*value, declared)) {
@@ -4259,7 +4267,7 @@ auto TypeChecker::declaredBindingType(
     if (!std::holds_alternative<UnknownType>(actual->kind) &&
         !std::holds_alternative<TypeVar>(actual->kind) && !unsubstitutedThis &&
         !argMatchesParam(actual, declared)) {
-        typeMismatch(loc, declared, actual);
+        mismatch(actual);
     }
     return declared;
 }

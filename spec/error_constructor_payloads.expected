@@ -1,2 +1,8 @@
 spec/error_constructor_payloads.kex:8:28: [KEXET-0103]: Error, `Broken` takes 0 values, but got 1
+  |
+8 | let nullary() -> Problem = Broken(5)
+  |                            ^^^^^^^^^
 spec/error_constructor_payloads.kex:9:28: [KEXET-0102]: Error, `Torn` takes 1 value, but got 2
+  |
+9 | let tooMany() -> Problem = Torn(1, 2)
+  |                            ^^^^^^^^^^

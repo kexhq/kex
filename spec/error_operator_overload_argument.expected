@@ -3,9 +3,15 @@ spec/error_operator_overload_argument.kex:17:28: [KEXET-0491]: Error, `==` expec
 == : Col -> String -> Cond
 
 == : Measure<A> -> Measure<A> -> Bool
+   |
+17 |   IO.printLine("${email == 5}")
+   |                   ^^^^^^^^^^
 spec/error_operator_overload_argument.kex:18:27: [KEXET-0491]: Error, `<` expects argument 2 to be String, but got Col
 
 < : Col -> String -> Cond
 
 < : Measure<A> -> Measure<A> -> Bool
+   |
+18 |   IO.printLine("${email < email}")
+   |                   ^^^^^^^^^^^^^
 Aborted: 2 type errors. Fix them before running, or skip the check with --no-check.

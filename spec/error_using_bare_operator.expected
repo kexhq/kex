@@ -1,1 +1,4 @@
 spec/error_using_bare_operator.kex:6:33: [KEXEP-0131]: Error, an operator in a using option list is written in parentheses: `(||)`
+  |
+6 | using Vector, only: [magnitude, ||]
+  |                                 ^^

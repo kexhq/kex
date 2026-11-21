@@ -1,1 +1,4 @@
 spec/error_serving_cast_within.kex:12:58: [KEXET-0487]: Error, `within:` is not valid on an asynchronous cast slot
+   |
+12 | foul bad(server: Server<Counter>) = server.reset(within: 10)
+   |                                                          ^^

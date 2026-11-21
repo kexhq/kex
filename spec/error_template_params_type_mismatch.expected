@@ -1,1 +1,4 @@
 spec/error_template_params_type_mismatch.kex:11:16: [KEXET-0001]: Error, type mismatch: expected Integer, got String
+   |
+11 |   IO.printLine(show("not a number"))
+   |                ^^^^^^^^^^^^^^^^^^^^

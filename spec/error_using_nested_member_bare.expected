@@ -1,1 +1,4 @@
 spec/error_using_nested_member_bare.kex:9:16: [KEXET-0146]: Error, undefined name: `separator`
+  |
+9 |   IO.printLine(separator)
+  |                ^^^^^^^^^

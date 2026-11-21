@@ -1,1 +1,4 @@
 spec/error_result_type_variable.kex:7:1: [KEXET-0127]: Error, `same` declared to return A but body returns Integer
+  |
+7 | let same(a: A) -> A = 1
+  | ^^^^^^^^^^^^^^^^^^^^^^^

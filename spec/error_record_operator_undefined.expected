@@ -1,14 +1,56 @@
 spec/error_record_operator_undefined.kex:19:38: [KEXET-0417]: Error, `+` is not defined for Named and Named; declare it in trait `Named`
+   |
+19 | let joined(a: Named, b: Named) = a + b
+   |                                  ^^^^^
 spec/error_record_operator_undefined.kex:22:46: [KEXET-0417]: Error, `+` is not defined for Showable and Showable; declare it in trait `Showable`
+   |
+22 | let shownSum(a: Showable, b: Showable) = a + b
+   |                                          ^^^^^
 spec/error_record_operator_undefined.kex:40:25: [KEXET-0415]: Error, `+` is not defined for (Integer, Integer) and (Integer, Integer)
+   |
+40 |   IO.printLine((1, 2) + (3, 4))
+   |                ^^^^^^^^^^^^^^^
 spec/error_record_operator_undefined.kex:41:22: [KEXET-0415]: Error, `-` is not defined for [Integer] and [Integer]
+   |
+41 |   IO.printLine([1] - [2])
+   |                ^^^^^^^^^
 spec/error_record_operator_undefined.kex:42:22: [KEXET-0415]: Error, `<` is not defined for [Integer] and [Integer]
+   |
+42 |   IO.printLine([1] < [2])
+   |                ^^^^^^^^^
 spec/error_record_operator_undefined.kex:43:25: [KEXET-0415]: Error, `+` is not defined for {Atom: Integer} and {Atom: Integer}
+   |
+43 |   IO.printLine({a: 1} + {b: 2})
+   |                ^^^^^^^^^^^^^^^
 spec/error_record_operator_undefined.kex:45:26: [KEXET-0415]: Error, `+` is not defined for Integer? and Integer?
+   |
+45 |   IO.printLine(Just(1) + Just(2))
+   |                ^^^^^^^^^^^^^^^^^
 spec/error_record_operator_undefined.kex:54:46: [KEXET-0417]: Error, `-` is not defined for Summable and Summable; declare it in trait `Summable`
+   |
+54 | let differed(a: Summable, b: Summable) = a - b
+   |                                          ^^^^^
 spec/error_record_operator_undefined.kex:28:20: [KEXET-0416]: Error, `-` is not defined for Point and Point; declare it in a `make Point` block
+   |
+28 |   IO.printLine(a - b)
+   |                ^^^^^
 spec/error_record_operator_undefined.kex:29:20: [KEXET-0416]: Error, `<` is not defined for Point and Point; declare it in a `make Point` block
+   |
+29 |   IO.printLine(a < b)
+   |                ^^^^^
 spec/error_record_operator_undefined.kex:30:20: [KEXET-0415]: Error, `*` is not defined for Integer and Point
+   |
+30 |   IO.printLine(2 * a)
+   |                ^^^^^
 spec/error_record_operator_undefined.kex:31:16: [KEXET-0420]: Error, unary '-' requires a number, got Point
+   |
+31 |   IO.printLine(-a)
+   |                ^^
 spec/error_record_operator_undefined.kex:33:27: [KEXET-0416]: Error, `+` is not defined for Money and Money; declare it in a `make Money` block
+   |
+33 |   IO.printLine(Cents(1) + Cents(2))
+   |                ^^^^^^^^^^^^^^^^^^^
 spec/error_record_operator_undefined.kex:34:16: [KEXET-0420]: Error, unary '-' requires a number, got Money
+   |
+34 |   IO.printLine(-Free)
+   |                ^^^^^

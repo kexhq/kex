@@ -1,2 +1,5 @@
 spec/error_private_module_function.kex:11:31: [KEXET-0426]: Error, cannot access private name `secret` from Vault
+   |
+11 |   IO.printLine("${Vault.secret(1)}")
+   |                   ^^^^^^^^^^^^^^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

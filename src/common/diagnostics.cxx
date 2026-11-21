@@ -10,7 +10,10 @@
 #include <algorithm>
 #include <cctype>
 #include <iostream>
+#include <map>
+#include <optional>
 #include <sstream>
+#include <string_view>
 
 namespace kex::diagnostics {
 
@@ -225,6 +228,307 @@ static auto severityLabel(const kex::semantic::Diagnostic& diag) -> std::string 
     return out + apply(reset);
 }
 
+// --- Source snippets (kexhq/kex#657) ---------------------------------------
+//
+//   file.kex:2:20: [KEXET-0001]: Error, Type mismatch: expected Integer, got String
+//     |
+//   2 |   let x: Integer = "a"
+//     |          -------   ^^^ this is a String
+//     |          |
+//     |          expected because of this annotation
+//
+// The primary span is underlined with `^` in the diagnostic's color, each
+// secondary span with `-`; a span's label goes beside its underline when
+// nothing lies to its right, and beneath it, joined by `|`, otherwise.
+
+namespace {
+
+// A source file split into lines, read once however many diagnostics name it.
+struct SourceLines {
+    std::string text;
+    std::vector<std::size_t> starts; // byte offset of each line, 0-based
+};
+
+auto sourceLines(const std::string& file) -> const SourceLines* {
+    static std::map<std::string, std::optional<SourceLines>> cache;
+    auto [it, inserted] = cache.try_emplace(file);
+    if (inserted) {
+        auto text = readFile(file);
+        if (!text.empty()) {
+            SourceLines lines{std::move(text), {0}};
+            for (std::size_t i = 0; i < lines.text.size(); ++i) {
+                if (lines.text[i] == '\n') {
+                    lines.starts.push_back(i + 1);
+                }
+            }
+            it->second = std::move(lines);
+        }
+    }
+    return it->second ? &*it->second : nullptr;
+}
+
+// The text of a 1-based line, without its newline.
+auto lineText(const SourceLines& source, int line) -> std::string_view {
+    const auto begin = source.starts[static_cast<std::size_t>(line - 1)];
+    auto end = static_cast<std::size_t>(line) < source.starts.size()
+                   ? source.starts[static_cast<std::size_t>(line)] - 1
+                   : source.text.size();
+    if (end > begin && source.text[end - 1] == '\r') {
+        --end;
+    }
+    return std::string_view(source.text).substr(begin, end - begin);
+}
+
+// One underlined span, on one line: byte columns [start, end), 0-based.
+struct Mark {
+    std::string file;
+    int line = 0;
+    std::size_t start = 0;
+    std::size_t end = 0;
+    bool primary = false;
+    std::string label;
+    // A span running past its first line ends here (1-based line, column).
+    int throughLine = 0;
+    int throughColumn = 0;
+};
+
+auto markOf(
+    const SourceLocation& loc,
+    const std::optional<SourceLocation>& endLoc,
+    bool primary,
+    std::string label) -> std::optional<Mark> {
+    if (loc.file.empty() || loc.line < 1) {
+        return std::nullopt;
+    }
+    const auto* source = sourceLines(std::string(loc.file));
+    if (!source || static_cast<std::size_t>(loc.line) > source->starts.size()) {
+        return std::nullopt;
+    }
+    const auto lineStart = source->starts[static_cast<std::size_t>(loc.line - 1)];
+    const auto text = lineText(*source, loc.line);
+    Mark mark{std::string(loc.file), loc.line, 0, 0, primary, std::move(label), 0, 0};
+
+    // The byte range, when it lies where the line and column say: a location
+    // whose offsets count in another buffer must not underline this one.
+    const bool rangeHere = loc.startOffset >= 0 &&
+                           static_cast<std::size_t>(loc.startOffset) >= lineStart &&
+                           static_cast<std::size_t>(loc.startOffset) <= lineStart + text.size();
+    mark.start = rangeHere ? static_cast<std::size_t>(loc.startOffset) - lineStart
+                           : static_cast<std::size_t>(std::max(0, loc.column - 1));
+    mark.start = std::min(mark.start, text.size());
+
+    // Where the span ends, as a line and a byte offset into the file.
+    int endLine = loc.line;
+    std::size_t endByte = lineStart + mark.start + 1;
+    if (endLoc && endLoc->line >= loc.line &&
+        static_cast<std::size_t>(endLoc->line) <= source->starts.size()) {
+        endLine = endLoc->line;
+        endByte = source->starts[static_cast<std::size_t>(endLine - 1)] +
+                  static_cast<std::size_t>(std::max(0, endLoc->column - 1));
+    } else if (
+        rangeHere && loc.endOffset > loc.startOffset &&
+        static_cast<std::size_t>(loc.endOffset) <= source->text.size()) {
+        endByte = static_cast<std::size_t>(loc.endOffset);
+        const auto after =
+            std::upper_bound(source->starts.begin(), source->starts.end(), endByte - 1);
+        endLine = static_cast<int>(after - source->starts.begin());
+    }
+
+    if (endLine == loc.line) {
+        mark.end = std::min(text.size(), endByte - lineStart);
+    } else {
+        // A node over several lines (a whole `match`) is underlined on its
+        // first; only an explicit end (a validator's range) says where it stops.
+        mark.end = text.size();
+    }
+    if (endLine != loc.line && endLoc) {
+        mark.throughLine = endLine;
+        mark.throughColumn =
+            static_cast<int>(endByte - source->starts[static_cast<std::size_t>(endLine - 1)]) + 1;
+    }
+    if (mark.end <= mark.start) {
+        // An empty span, or one at the end of its line: one cell, past the text.
+        mark.end = mark.start + 1;
+    }
+    return mark;
+}
+
+// What the bytes before `upTo` of a line take on screen, as padding: a tab
+// stays a tab so the underline lines up whatever the terminal's tab width,
+// and a multi-byte character takes one cell.
+auto padding(std::string_view text, std::size_t upTo) -> std::string {
+    std::string out;
+    for (std::size_t i = 0; i < upTo; ++i) {
+        const auto c = i < text.size() ? static_cast<unsigned char>(text[i]) : ' ';
+        if (c == '\t') {
+            out += '\t';
+        } else if ((c & 0xC0) != 0x80) {
+            out += ' ';
+        }
+    }
+    return out;
+}
+
+auto renderSnippet(std::vector<Mark> marks, const std::string& mainFile, const char* tone)
+    -> std::string {
+    using namespace kex::color;
+    if (marks.empty()) {
+        return {};
+    }
+    std::stable_sort(marks.begin(), marks.end(), [&](const Mark& a, const Mark& b) {
+        const bool aMain = a.file == mainFile;
+        const bool bMain = b.file == mainFile;
+        if (aMain != bMain) {
+            return aMain;
+        }
+        if (a.file != b.file) {
+            return a.file < b.file;
+        }
+        if (a.line != b.line) {
+            return a.line < b.line;
+        }
+        return a.start < b.start;
+    });
+    int widest = 0;
+    for (const auto& mark : marks) {
+        widest = std::max(widest, mark.line);
+    }
+    const std::string gutter(std::to_string(widest).size(), ' ');
+    const auto bar = [&] { return std::string(apply(gray)) + gutter + " |" + apply(reset); };
+
+    std::ostringstream out;
+    std::string file;
+    int previous = 0;
+    for (std::size_t i = 0; i < marks.size();) {
+        if (marks[i].file != file) {
+            if (!file.empty() || marks[i].file != mainFile) {
+                out << apply(gray) << gutter << "--> " << marks[i].file << ":" << marks[i].line
+                    << ":" << (marks[i].start + 1) << apply(reset) << "\n";
+            }
+            file = marks[i].file;
+            previous = 0;
+            out << bar() << "\n";
+        } else if (marks[i].line > previous + 1) {
+            out << apply(gray) << gutter << "..." << apply(reset) << "\n";
+        }
+        const auto line = marks[i].line;
+        std::vector<const Mark*> here;
+        for (; i < marks.size() && marks[i].file == file && marks[i].line == line; ++i) {
+            here.push_back(&marks[i]);
+        }
+        previous = line;
+        const auto* source = sourceLines(file);
+        const auto text = lineText(*source, line);
+        const auto number = std::to_string(line);
+        out << apply(gray) << std::string(gutter.size() - number.size(), ' ') << number << " |"
+            << apply(reset) << (text.empty() ? "" : " ") << text << "\n";
+
+        // The underline row: secondary spans first, so a primary one over the
+        // same columns shows on top.
+        std::size_t width = 0;
+        for (const auto* mark : here) {
+            width = std::max(width, mark->end);
+        }
+        std::vector<char> under(width, ' ');
+        std::vector<const char*> colorAt(width, nullptr);
+        for (int pass = 0; pass < 2; ++pass) {
+            for (const auto* mark : here) {
+                if (mark->primary != (pass == 1)) {
+                    continue;
+                }
+                for (auto c = mark->start; c < mark->end; ++c) {
+                    under[c] = mark->primary ? '^' : '-';
+                    colorAt[c] = mark->primary ? tone : cyan;
+                }
+            }
+        }
+        const auto colorOf = [&](const Mark* mark) { return mark->primary ? tone : cyan; };
+        // The rightmost labelled span says its label inline, when nothing
+        // starts after it; the others hang beneath, right to left.
+        std::vector<const Mark*> hanging;
+        const Mark* inlineLabel = nullptr;
+        for (const auto* mark : here) {
+            if (!mark->label.empty()) {
+                hanging.push_back(mark);
+            }
+        }
+        if (!hanging.empty()) {
+            const auto* last = hanging.back();
+            const bool nothingAfter = std::none_of(here.begin(), here.end(), [&](const Mark* m) {
+                return m != last && m->start >= last->start;
+            });
+            if (nothingAfter) {
+                inlineLabel = last;
+                hanging.pop_back();
+            }
+        }
+
+        std::string row = padding(text, 0);
+        for (std::size_t c = 0; c < width;) {
+            if (under[c] == ' ') {
+                const auto byte = c < text.size() ? static_cast<unsigned char>(text[c]) : ' ';
+                if (byte == '\t') {
+                    row += '\t';
+                } else if ((byte & 0xC0) != 0x80) {
+                    row += ' ';
+                }
+                ++c;
+                continue;
+            }
+            const auto* color = colorAt[c];
+            std::string run;
+            while (c < width && under[c] != ' ' && colorAt[c] == color) {
+                if (c >= text.size() || (static_cast<unsigned char>(text[c]) & 0xC0) != 0x80) {
+                    run += under[c];
+                }
+                ++c;
+            }
+            row += std::string(apply(color)) + run + apply(reset);
+        }
+        out << bar() << " " << row;
+        if (inlineLabel) {
+            out << " " << apply(colorOf(inlineLabel)) << inlineLabel->label << apply(reset);
+        }
+        out << "\n";
+
+        // Right to left: a row of `|` down from every span still waiting,
+        // then the same row with the rightmost one's label in place of its `|`.
+        for (auto k = hanging.size(); k-- > 0;) {
+            for (int step = 0; step < 2; ++step) {
+                std::string row;
+                std::size_t at = 0;
+                for (std::size_t j = 0; j <= k; ++j) {
+                    const auto* mark = hanging[j];
+                    row += padding(text, mark->start).substr(padding(text, at).size());
+                    at = mark->start + 1;
+                    const bool labelHere = step == 1 && j == k;
+                    row += std::string(apply(colorOf(mark))) + (labelHere ? mark->label : "|") +
+                           apply(reset);
+                }
+                out << bar() << " " << row << "\n";
+            }
+        }
+        for (const auto* mark : here) {
+            if (mark->throughLine) {
+                out << bar() << " ... through line " << mark->throughLine << ", column "
+                    << mark->throughColumn << "\n";
+            }
+        }
+    }
+    return out.str();
+}
+
+auto noteHeader(const kex::semantic::DiagnosticNote& note) -> std::string {
+    using namespace kex::color;
+    std::ostringstream out;
+    out << apply(gray) << note.location.file << ":" << note.location.line << ":"
+        << note.location.column << ":" << apply(reset) << " " << apply(bold) << apply(cyan)
+        << "note:" << apply(reset) << " " << colorizeMessage(note.message) << "\n";
+    return out.str();
+}
+
+} // namespace
+
 auto formatDiagnostic(const kex::semantic::Diagnostic& diag) -> std::string {
     using namespace kex::color;
     const bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
@@ -238,38 +542,29 @@ auto formatDiagnostic(const kex::semantic::Diagnostic& diag) -> std::string {
     out << ":" << apply(reset) << " " << severityLabel(diag) << " " << colorizeMessage(diag.message)
         << "\n";
 
-    if (diag.endLocation) {
-        auto source = readFile(std::string(diag.location.file));
-        if (!source.empty()) {
-            std::istringstream lines{source};
-            std::string line;
-            for (int current = 1; current <= diag.location.line && std::getline(lines, line);
-                 ++current) {
-                if (current != diag.location.line) {
-                    continue;
-                }
-                const auto start = std::max(1, diag.location.column);
-                int finish = static_cast<int>(line.size()) + 1;
-                if (diag.endLocation->line == diag.location.line) {
-                    finish = std::max(start + 1, diag.endLocation->column);
-                }
-                const auto width = std::max(1, finish - start);
-                out << "  " << current << " | " << line << "\n"
-                    << "    | " << std::string(static_cast<size_t>(start - 1), ' ') << apply(tone)
-                    << "^" << std::string(static_cast<size_t>(width - 1), '~') << apply(reset)
-                    << "\n";
-                if (diag.endLocation->line != diag.location.line) {
-                    out << "    | ... through line " << diag.endLocation->line << ", column "
-                        << diag.endLocation->column << "\n";
-                }
-            }
+    if (!snippets) {
+        for (const auto& note : diag.notes) {
+            out << noteHeader(note);
         }
+        return out.str();
     }
 
+    std::vector<Mark> marks;
+    if (auto primary = markOf(diag.location, diag.endLocation, true, diag.label)) {
+        marks.push_back(std::move(*primary));
+    }
+    for (const auto& label : diag.labels) {
+        if (auto secondary = markOf(label.location, std::nullopt, false, label.message)) {
+            marks.push_back(std::move(*secondary));
+        }
+    }
+    out << renderSnippet(marks, std::string(diag.location.file), tone);
+
     for (const auto& note : diag.notes) {
-        out << apply(gray) << note.location.file << ":" << note.location.line << ":"
-            << note.location.column << ":" << apply(reset) << " " << apply(bold) << apply(cyan)
-            << "note:" << apply(reset) << " " << colorizeMessage(note.message) << "\n";
+        out << noteHeader(note);
+        if (auto mark = markOf(note.location, std::nullopt, false, "")) {
+            out << renderSnippet({std::move(*mark)}, std::string(note.location.file), cyan);
+        }
     }
     return out.str();
 }

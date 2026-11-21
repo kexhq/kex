@@ -1,5 +1,20 @@
 spec/error_match_nested_exhaustive.kex:9:3: [KEXET-0108]: Error, non-exhaustive match: missing case(s) (Just(_), None), (None, Just(_))
+  |
+9 |   match pair do
+  |   ^^^^^^^^^^^^^
 spec/error_match_nested_exhaustive.kex:16:3: [KEXET-0108]: Error, non-exhaustive match: missing case(s) [_, _ | _]
+   |
+16 |   match xs do
+   |   ^^^^^^^^^^^
 spec/error_match_nested_exhaustive.kex:23:3: [KEXET-0108]: Error, non-exhaustive match: missing case(s) false
+   |
+23 |   match flag do
+   |   ^^^^^^^^^^^^^
 spec/error_match_nested_exhaustive.kex:29:3: [KEXET-0108]: Error, non-exhaustive match: missing case(s) Just(_)
+   |
+29 |   match value do
+   |   ^^^^^^^^^^^^^^
 spec/error_match_nested_exhaustive.kex:36:3: [KEXET-0108]: Error, non-exhaustive match: missing case(s) _
+   |
+36 |   match n do
+   |   ^^^^^^^^^^

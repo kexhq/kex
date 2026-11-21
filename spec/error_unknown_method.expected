@@ -1,3 +1,12 @@
 spec/error_unknown_method.kex:24:32: [KEXET-0101]: Error, undefined method `nosuchMethod` for `Box`
+   |
+24 |   IO.printLine(box.nosuchMethod)
+   |                ^^^^^^^^^^^^^^^^
 spec/error_unknown_method.kex:25:35: [KEXET-0101]: Error, undefined method `alsoNotAMethod` for `String`
+   |
+25 |   IO.printLine("hi".alsoNotAMethod)
+   |                ^^^^^^^^^^^^^^^^^^^
 spec/error_unknown_method.kex:26:36: [KEXET-0101]: Error, undefined method `neitherIsThis` for `[Integer]`
+   |
+26 |   IO.printLine([1, 2].neitherIsThis)
+   |                ^^^^^^^^^^^^^^^^^^^^

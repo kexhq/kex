@@ -1,1 +1,4 @@
 spec/error_missing_record_field.kex:9:16: [KEXET-0455]: Error, missing mandatory field `y` constructing `Point`
+  |
+9 |   IO.printLine(Point { x: 1 })
+  |                ^^^^^^^^^^^^^^

@@ -1,3 +1,9 @@
 spec/error_template_hole_unparseable.kex:8:29: [KEXEP-0074]: Error, unexpected token: ->
+  |
+8 |   IO.printLine(Template.text(`<%= ->->-> %>`))
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 spec/error_template_hole_unparseable.kex:8:29: note: in a template hole `->->->`
+  |
+8 |   IO.printLine(Template.text(`<%= ->->-> %>`))
+  |                ------------------------------
 Aborted: compile-time expansion failed.

@@ -1,1 +1,4 @@
 spec/error_serving_transition_reply_type.kex:9:46: [KEXET-0001]: Error, type mismatch: expected Integer, got String
+  |
+9 |   slot bad -> Reply<Integer> = { new, reply: "wrong" }
+  |                                              ^^^^^^^

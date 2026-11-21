@@ -11,4 +11,7 @@ filter : String -> (Char -> Bool) -> String
 filter : [A] -> (A -> Bool) -> [A]
 
 filter : {A: B} -> (A -> B -> Bool) -> {A: B}
+  |
+5 |   nums.filter { |x| x + 1 }
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

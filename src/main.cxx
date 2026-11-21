@@ -204,7 +204,8 @@ auto printUsage(const char* progName) -> void {
               << "      --info        Print this build's details as JSON, for tools\n"
               << "  --colors          Use ANSI colors even when output is not a terminal\n"
               << "                    (also: FORCE_COLOR=1)\n"
-              << "  --no-colors       Disable ANSI color output (also: NO_COLOR=1)\n";
+              << "  --no-colors       Disable ANSI color output (also: NO_COLOR=1)\n"
+              << "  --no-snippets     Print diagnostics without their source and underline\n";
 }
 
 auto printVersion() -> void {
@@ -277,6 +278,7 @@ enum Value {
     Name,
     Cookie,
     Colors,
+    NoSnippets,
     Credits,
     Progress,
     DumpHir,
@@ -352,6 +354,7 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
         {"explain", required_argument, nullptr, Option::Explain},
         {"no-colors", no_argument, nullptr, 'N'},
         {"colors", no_argument, nullptr, Option::Colors},
+        {"no-snippets", no_argument, nullptr, Option::NoSnippets},
         {"no-prelude", no_argument, nullptr, Option::NoPrelude},
         {"source-root", required_argument, nullptr, Option::SourceRoot},
         {"quiet", no_argument, nullptr, 'q'},
@@ -516,6 +519,8 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
             case 'i': options.mode = Mode::Repl; break;
             case 'j':
                 options.jsonOutput = true;
+                // JSON carries the spans as data instead.
+                kex::diagnostics::snippets = false;
                 options.mode = Mode::Check;
                 break;
             case 's':
@@ -563,6 +568,7 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
                 }
             case 'N': kex::color::enabled = false; break;
             case Option::Colors: kex::color::enabled = true; break;
+            case Option::NoSnippets: kex::diagnostics::snippets = false; break;
             default:
                 printUsage(argv[0]);
                 {
@@ -682,6 +688,35 @@ auto checkEntry(
                 std::cout << ",\n"
                           << "    \"end_line\": " << d.endLocation->line << ",\n"
                           << "    \"end_column\": " << d.endLocation->column;
+            }
+            // The span as byte offsets into the file, end exclusive, and what
+            // the text printer underlines beside it (kexhq/kex#657).
+            const auto offsets = [](const kex::SourceLocation& at,
+                                    const std::string& indent) -> std::string {
+                if (at.startOffset < 0 || at.endOffset < at.startOffset) {
+                    return {};
+                }
+                return ",\n" + indent + "\"start_offset\": " + std::to_string(at.startOffset) +
+                       ",\n" + indent + "\"end_offset\": " + std::to_string(at.endOffset);
+            };
+            std::cout << offsets(d.location, "    ");
+            if (!d.label.empty()) {
+                std::cout << ",\n    \"label\": \"" << jsonEscape(d.label) << "\"";
+            }
+            if (!d.labels.empty()) {
+                std::cout << ",\n    \"labels\": [\n";
+                for (size_t labelIndex = 0; labelIndex < d.labels.size(); ++labelIndex) {
+                    const auto& label = d.labels[labelIndex];
+                    std::cout << "      {\n"
+                              << "        \"file\": \""
+                              << jsonEscape(std::string(label.location.file)) << "\",\n"
+                              << "        \"line\": " << label.location.line << ",\n"
+                              << "        \"column\": " << label.location.column << ",\n"
+                              << "        \"message\": \"" << jsonEscape(label.message) << "\""
+                              << offsets(label.location, "        ") << "\n"
+                              << "      }" << (labelIndex + 1 < d.labels.size() ? "," : "") << "\n";
+                }
+                std::cout << "    ]";
             }
             if (!hint.empty()) {
                 std::cout << ",\n    \"hint\": \"" << jsonEscape(hint) << "\"";

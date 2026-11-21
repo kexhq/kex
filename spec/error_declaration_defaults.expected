@@ -1,3 +1,9 @@
 spec/error_declaration_defaults.kex:7:28: [KEXET-0001]: Error, type mismatch: expected Integer, got String
+  |
+7 | let retry(count: Integer = "many") = count
+  |                            ^^^^^^
 spec/error_declaration_defaults.kex:4:23: [KEXET-0001]: Error, type mismatch: expected Integer, got String
+  |
+4 |   retries : Integer = "many"
+  |                       ^^^^^^
 Aborted: 2 type errors. Fix them before running, or skip the check with --no-check.

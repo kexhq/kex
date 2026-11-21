@@ -1,5 +1,19 @@
 spec/error_with_not_capability.kex:35:3: [KEXET-0407]: Error, 'Plain' is not a capability, so it cannot be replaced by 'with'. Declare it as `capability Plain do ... end`
+   |
+35 |   with Plain = NotAClock { x: 1 } do
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 spec/error_with_not_capability.kex:38:3: [KEXET-0407]: Error, 'Cloc' is not a capability, so it cannot be replaced by 'with'. Declare it as `capability Cloc do ... end`
+   |
+38 |   with Cloc = NotAClock { x: 1 } do
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 spec/error_with_not_capability.kex:41:3: [KEXET-0408]: Error, replacement for capability 'Clock' does not implement it: NotAClock
-spec/error_with_not_capability.kex:45:5: [KEXET-0001]: Error, type mismatch: expected String, got Integer
+   |
+41 |   with Clock = NotAClock { x: 1 } do
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+spec/error_with_not_capability.kex:45:25: [KEXET-0001]: Error, type mismatch: expected String, got Integer
+   |
+45 |     let wrong: String = 99
+   |                ------   ^^ this has type Integer
+   |                |
+   |                expected because of this annotation
 Aborted: 4 type errors. Fix them before running, or skip the check with --no-check.

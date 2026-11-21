@@ -20,6 +20,15 @@ struct DiagnosticNote {
     std::string message;
 };
 
+// A secondary span of a diagnostic (kexhq/kex#657): a place the problem
+// involves besides the one it is reported at, such as the annotation an
+// expected type came from. Printed underlined with `-` beside the primary
+// span's `^`, its message beneath.
+struct DiagnosticLabel {
+    SourceLocation location;
+    std::string message;
+};
+
 struct Diagnostic {
     enum class Level { Error, Warning };
     Level level;
@@ -34,6 +43,10 @@ struct Diagnostic {
     // translation can render them again.
     diag::Code code = diag::Code::None;
     diag::Args args = {};
+    // What the primary span is, printed beside its `^` ("this is a String");
+    // empty prints none. The secondary spans, each with its own message.
+    std::string label = {};
+    std::vector<DiagnosticLabel> labels = {};
 };
 
 // A check that failed, thrown where the caller reports problems as an

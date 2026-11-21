@@ -1,1 +1,4 @@
 spec/error_branches_against_binding_type.kex:6:21: [KEXET-0446]: Error, match arm type mismatch: expected Integer but arm returns String
+  |
+6 |   let n : Integer = match kind do
+  |                     ^^^^^^^^^^^^^

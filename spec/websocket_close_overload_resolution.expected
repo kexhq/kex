@@ -1,1 +1,4 @@
 spec/websocket_close_overload_resolution.kex:12:45: [KEXEF-0001]: Error, cannot call foul function 'close' from pure context
+   |
+12 | let closeIt(c: Connection) -> Void = c.close
+   |                                      ^^^^^^^

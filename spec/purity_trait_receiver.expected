@@ -1,2 +1,5 @@
 spec/purity_trait_receiver.kex:21:44: [KEXEF-0001]: Error, cannot call foul function 'now' from pure context
+   |
+21 | let stamp(c: Clock) -> String = "at ${c.now()}"
+   |                                       ^^^^^^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

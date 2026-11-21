@@ -1,2 +1,8 @@
 spec/error_ambiguous_receiver_free_fn.kex:10:3: [KEXES-0004]: Error, `tag` is defined twice for receiver `String`. The declaration form gives neither definition priority, so the call is ambiguous
+   |
+10 |   let tag -> String = "make/String"
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 spec/error_ambiguous_receiver_free_fn.kex:7:1: note: the other definition is here
+  |
+7 | let tag(s) = "free/String"
+  | ---

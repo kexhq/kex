@@ -11,6 +11,9 @@ map : Result<A, B> -> (A -> C) -> Result<C, B>
 map : Stream<A> -> (A -> B) -> Stream<B>
 
 map : [A] -> (A -> B) -> [B]
+   |
+13 |   IO.printLine(found.map { |x, y| x.a }.or(0))
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^
 spec/error_block_spread_non_tuple.kex:15:24: [KEXET-0491]: Error, `map` expects argument 2 to be A -> C, but got Integer? -> D -> D
 
 map : A? -> (A -> B) -> B?
@@ -24,6 +27,9 @@ map : Result<A, B> -> (A -> C) -> Result<C, B>
 map : Stream<A> -> (A -> B) -> Stream<B>
 
 map : [A] -> (A -> B) -> [B]
+   |
+15 |   IO.printLine(got.map { |tag, value| value }.inspect)
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 spec/error_block_spread_non_tuple.kex:17:27: [KEXET-0491]: Error, `map` expects argument 2 to be A -> B, but got Integer? -> D -> D
 
 map : A? -> (A -> B) -> B?
@@ -37,3 +43,6 @@ map : Result<A, B> -> (A -> C) -> Result<C, B>
 map : Stream<A> -> (A -> B) -> Stream<B>
 
 map : [A] -> (A -> B) -> [B]
+   |
+17 |   IO.printLine(maybes.map { |tag, value| value }.inspect)
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

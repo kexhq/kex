@@ -1,4 +1,16 @@
 spec/error_trait_requirement_arity.kex:11:35: [KEXET-0472]: Error, `combine` expects 2 argument(s), got 1
+   |
+11 |   let twice -> This = this.combine()
+   |                       ^^^^^^^^^^^^^^
 spec/error_trait_requirement_arity.kex:26:28: [KEXET-0472]: Error, `combine` expects 2 argument(s), got 1
+   |
+26 |   IO.printLine(word.combine().text)
+   |                ^^^^^^^^^^^^^^
 spec/error_trait_requirement_arity.kex:27:28: [KEXET-0472]: Error, `combine` expects 2 argument(s), got 3
+   |
+27 |   IO.printLine(word.combine(word, word).text)
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^
 spec/error_trait_requirement_arity.kex:28:26: [KEXET-0472]: Error, `label` expects 1 argument(s), got 2
+   |
+28 |   IO.printLine(word.label(1))
+   |                ^^^^^^^^^^^^^

@@ -1,2 +1,8 @@
 spec/error_duplicate_trait_impl.kex:18:3: [KEXES-0004]: Error, `greeting` is defined twice for receiver `Alpha`. The declaration form gives neither definition priority, so the call is ambiguous
+   |
+18 |   let greeting = "second"
+   |   ^^^^^^^^^^^^^^^^^^^^^^^
 spec/error_duplicate_trait_impl.kex:14:3: note: the other definition is here
+   |
+14 |   let greeting = "first"
+   |   ----------------------

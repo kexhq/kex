@@ -1,2 +1,8 @@
 spec/error_using_body_scope.kex:13:15: [KEXET-0165]: Error, undefined function: `answer`. `M.answer` is not imported here
+   |
+13 |   let run() = answer()
+   |               ^^^^^^^^
 spec/error_using_body_scope.kex:20:14: [KEXET-0165]: Error, undefined function: `answer`. `M.answer` is not imported here
+   |
+20 | IO.printLine(answer())
+   |              ^^^^^^^^

@@ -1,1 +1,4 @@
 spec/error_requirement_result.kex:21:3: [KEXET-0126]: Error, `getChar` is required to return String? but body returns String
+   |
+21 |   foul getChar = "c"
+   |   ^^^^^^^^^^^^^^^^^^

@@ -1,4 +1,17 @@
 spec/error_annotated_binding_mismatch.kex:7:1: [KEXET-0001]: Error, type mismatch: expected Integer, got String
-spec/error_annotated_binding_mismatch.kex:10:3: [KEXET-0001]: Error, type mismatch: expected String, got Integer
-spec/error_annotated_binding_mismatch.kex:11:3: [KEXET-0001]: Error, type mismatch: expected Integer, got String
+  |
+7 | let count = "not a number"
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+spec/error_annotated_binding_mismatch.kex:10:23: [KEXET-0001]: Error, type mismatch: expected String, got Integer
+   |
+10 |   let label: String = 42
+   |              ------   ^^ this has type Integer
+   |              |
+   |              expected because of this annotation
+spec/error_annotated_binding_mismatch.kex:11:24: [KEXET-0001]: Error, type mismatch: expected Integer, got String
+   |
+11 |   var total: Integer = "zero"
+   |              -------   ^^^^^^ this has type String
+   |              |
+   |              expected because of this annotation
 Aborted: 3 type errors. Fix them before running, or skip the check with --no-check.

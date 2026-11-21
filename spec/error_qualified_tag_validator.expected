@@ -1,3 +1,4 @@
 spec/error_qualified_tag_validator.kex:5:28-5:28: [KEXEC-0054]: Error, a shout needs words
-  5 |   IO.printLine(Marks.shout``)
-    |                            ^
+  |
+5 |   IO.printLine(Marks.shout``)
+  |                ^^^^^^^^^^^^

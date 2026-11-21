@@ -1,2 +1,5 @@
 spec/error_if_with_do.kex:3:11: [KEXEP-0158]: Error, use 'then' instead of 'do' in if expression: `if cond then body end`
+  |
+3 |   if true do
+  |           ^^
 Aborted: 1 syntax error. Fix them before running.

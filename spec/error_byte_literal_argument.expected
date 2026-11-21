@@ -1,3 +1,12 @@
 spec/error_byte_literal_argument.kex:10:25: [KEXET-0493]: Error, Byte literal must be in 0..255
+   |
+10 |   IO.printLine("${f([1, 300])}")
+   |                         ^^^
 spec/error_byte_literal_argument.kex:11:25: [KEXET-0493]: Error, Byte literal must be in 0..255
+   |
+11 |   IO.printLine("${f([1, -1])}")
+   |                         ^^
 spec/error_byte_literal_argument.kex:12:21: [KEXET-0493]: Error, Byte literal must be in 0..255
+   |
+12 |   IO.printLine("${g(256)}")
+   |                     ^^^

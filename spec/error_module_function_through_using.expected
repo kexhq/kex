@@ -1,1 +1,4 @@
 spec/error_module_function_through_using.kex:9:25: [KEXET-0424]: Error, `URI.URL` has no function `parze`, did you mean `parse`?
+  |
+9 |   IO.printLine(URL.parze("https://example.test/"))
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

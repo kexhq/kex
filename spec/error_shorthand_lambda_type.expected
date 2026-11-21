@@ -3,4 +3,7 @@ spec/error_shorthand_lambda_type.kex:3:25: [KEXET-0491]: Error, `split` expects 
 split : String -> [String]
 
 split : String -> String | Regex.Regex -> [String]
+  |
+3 |   let result = nums.map(&.split(" "))
+  |                         ^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

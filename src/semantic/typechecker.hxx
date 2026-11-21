@@ -891,6 +891,9 @@ private:
     auto error(diag::Code code, SourceLocation loc, diag::Args args = {}) -> void;
     auto warning(diag::Code code, SourceLocation loc, diag::Args args = {}) -> void;
     auto typeMismatch(SourceLocation loc, const TypePtr& expected, const TypePtr& actual) -> void;
+    // Labels the diagnostic just reported (kexhq/kex#657): what its primary
+    // span is, and another place it involves with what that place is.
+    auto labelLast(std::string primary, SourceLocation other, std::string otherLabel) -> void;
     // True, and the check is left until the body answers, when `actual` is a
     // make-block method's result its body has not decided yet
     // (m_pendingResults): `main` above the make block cannot know it.

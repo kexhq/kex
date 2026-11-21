@@ -1,3 +1,18 @@
-spec/error_module_return_type.kex:30:3: [KEXET-0001]: Error, type mismatch: expected Integer, got [String]?
-spec/error_module_return_type.kex:32:3: [KEXET-0001]: Error, type mismatch: expected String, got Integer
-spec/error_module_return_type.kex:34:3: [KEXET-0001]: Error, type mismatch: expected [String]?, got Integer
+spec/error_module_return_type.kex:30:31: [KEXET-0001]: Error, type mismatch: expected Integer, got [String]?
+   |
+30 |   let wrong: Integer = M.lines("x")
+   |              -------   ^^^^^^^^^^^^ this has type [String]?
+   |              |
+   |              expected because of this annotation
+spec/error_module_return_type.kex:32:34: [KEXET-0001]: Error, type mismatch: expected String, got Integer
+   |
+32 |   let alsoWrong: String = M.width("x")
+   |                  ------   ^^^^^^^^^^^^ this has type Integer
+   |                  |
+   |                  expected because of this annotation
+spec/error_module_return_type.kex:34:35: [KEXET-0001]: Error, type mismatch: expected [String]?, got Integer
+   |
+34 |   let crossed: [String]? = N.lines("x")
+   |                ---------   ^^^^^^^^^^^^ this has type Integer
+   |                |
+   |                expected because of this annotation

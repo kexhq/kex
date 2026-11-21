@@ -1,2 +1,8 @@
 spec/error_receive_timeout_type.kex:8:18: [KEXET-0447]: Error, `after timeout:` takes milliseconds, an Integer, but got Integer?
+  |
+8 |   after timeout: Just(70)
+  |                  ^^^^^^^^
 spec/error_receive_timeout_type.kex:11:18: [KEXET-0447]: Error, `after timeout:` takes milliseconds, an Integer, but got String
+   |
+11 |   after timeout: "kex"
+   |                  ^^^^^

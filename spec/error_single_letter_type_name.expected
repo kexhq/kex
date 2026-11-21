@@ -1,5 +1,17 @@
 spec/error_single_letter_type_name.kex:5:10: [KEXEP-0020]: Error, `T` is a type parameter, so it cannot name a record. Give it a longer name
+  |
+5 | record T do
+  |          ^^
 spec/error_single_letter_type_name.kex:9:8: [KEXEP-0011]: Error, `U` is a type parameter, so it cannot name a type. Give it a longer name
+  |
+9 | type U = Bad(Integer)
+  |        ^
 spec/error_single_letter_type_name.kex:11:9: [KEXEP-0026]: Error, `V` is a type parameter, so it cannot name a trait. Give it a longer name
+   |
+11 | trait V do
+   |         ^^
 spec/error_single_letter_type_name.kex:14:8: [KEXEP-0032]: Error, `W` is a type parameter, so it cannot name a make target. Give it a longer name
+   |
+14 | make W do
+   |        ^^
 Aborted: 4 syntax errors. Fix them before running.

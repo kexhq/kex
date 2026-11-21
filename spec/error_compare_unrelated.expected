@@ -1,3 +1,12 @@
 spec/error_compare_unrelated.kex:10:20: [KEXET-0467]: Error, cannot compare Integer and String
+   |
+10 |   IO.printLine(i > "kex")
+   |                ^^^^^^^^^
 spec/error_compare_unrelated.kex:12:26: [KEXET-0467]: Error, cannot compare Integer and String
+   |
+12 |     n : Integer when n > "a" => "big"
+   |                      ^^^^^^^
 spec/error_compare_unrelated.kex:19:29: [KEXET-0472]: Error, `take` expects 2 argument(s), got 1
+   |
+19 |   IO.printLine(naturals.take())
+   |                ^^^^^^^^^^^^^^^

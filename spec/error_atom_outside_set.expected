@@ -1,5 +1,16 @@
-spec/error_atom_outside_set.kex:5:1: [KEXET-0001]: Error, type mismatch: expected :ok | :error, got :banana
+spec/error_atom_outside_set.kex:5:28: [KEXET-0001]: Error, type mismatch: expected :ok | :error, got :banana
+  |
+5 | let status: :ok | :error = :banana
+  |             ------------   ^^^^^^^ this has type :banana
+  |             |
+  |             expected because of this annotation
 spec/error_atom_outside_set.kex:11:10: [KEXET-0001]: Error, type mismatch: expected :yes | :no, got :maybe
+   |
+11 |   return :maybe if flag
+   |          ^^^^^^
 spec/error_atom_outside_set.kex:18:16: [KEXET-0491]: Error, `check` expects argument 1 to be :ok | :error, but got Atom
 
 check : :ok | :error -> String
+   |
+18 |   IO.printLine(check(:nope))
+   |                ^^^^^^^^^^^^

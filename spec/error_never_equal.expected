@@ -1,2 +1,8 @@
 spec/error_never_equal.kex:9:22: [KEXET-0494]: Error, `String?` and `String` are never equal: compare with `Just(value)`, or unwrap first (`.or(default)`, a `match`)
+  |
+9 |   IO.inspect(code == "USD")
+  |              ^^^^^^^^^^^^^
 spec/error_never_equal.kex:12:36: [KEXET-0494]: Error, `Result<Integer, ParseError>` and `Integer` are never equal: compare with `Ok(value)`, or unwrap first (`.or(default)`, a `match`)
+   |
+12 |   IO.inspect(Integer.parse("1") == 1)
+   |              ^^^^^^^^^^^^^^^^^^^^^^^
