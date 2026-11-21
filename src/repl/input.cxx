@@ -27,6 +27,7 @@
 #include <mutex>
 #include <set>
 #include <thread>
+#include <unistd.h>
 #include <unordered_set>
 #endif
 #include "../common/repl_commands.hxx"
@@ -620,26 +621,77 @@ auto replTrimLeadingIndent(std::string source) -> std::string {
     return source;
 }
 
-// Whether `source[at, at + length)` is a whole word: no letter or digit on
-// either side.
-auto replWholeWordAt(const std::string& source, size_t at, size_t length) -> bool {
-    const auto wordChar = [](char c) { return kex::isNameByte(c); };
-    return (at == 0 || !wordChar(source[at - 1])) &&
-           (at + length >= source.size() || !wordChar(source[at + length]));
-}
-
-// Unmatched `do` minus `end` keywords (whole words) in `source`: how many
-// blocks an input still has open, so a REPL keeps reading while it is
-// positive. Shared by the BEAM and the tree-walk REPL.
+// Blocks an input still has open, so a REPL keeps reading while it is
+// positive: openers minus `end`s. An opener is a `do`, or an `if` that opens
+// a statement (first on its line) or a value (`= if`): `if` takes no `do`,
+// and its `end` closes it all the same. Counting `do` alone, a pasted
+// `if` / `else` / `end` ran each branch as a statement of its own
+// (kexhq/kex#718). Words in strings and comments, and members (`range.end`),
+// are not keywords. Shared by the BEAM and the tree-walk REPL.
 auto replBlockDepth(const std::string& source) -> int {
     int depth = 0;
+    bool lineStart = true; // nothing but blanks yet on this line
+    bool afterEquals = false;
+    const auto endLine = [&] {
+        afterEquals = false;
+        lineStart = true;
+    };
     for (size_t i = 0; i < source.size(); i++) {
-        if (source.compare(i, 2, "do") == 0 && replWholeWordAt(source, i, 2)) {
-            depth++;
+        const char c = source[i];
+        if (c == '\n') {
+            endLine();
+            continue;
         }
-        if (source.compare(i, 3, "end") == 0 && replWholeWordAt(source, i, 3)) {
-            depth--;
+        if (c == '#') {
+            while (i + 1 < source.size() && source[i + 1] != '\n') {
+                i++;
+            }
+            continue;
         }
+        // A Char literal: `'"'` opens no string.
+        if (c == '\'') {
+            const auto close =
+                source.find('\'', i + (i + 1 < source.size() && source[i + 1] == '\\' ? 3 : 2));
+            if (close != std::string::npos && close - i <= 4) {
+                i = close;
+            }
+            lineStart = afterEquals = false;
+            continue;
+        }
+        if (c == '"' || c == '`') {
+            for (i++; i < source.size() && source[i] != c; i++) {
+                if (source[i] == '\\') {
+                    i++;
+                }
+            }
+            lineStart = afterEquals = false;
+            continue;
+        }
+        if (c == ' ' || c == '\t' || c == '\r') {
+            continue;
+        }
+        if (!kex::isNameByte(c) || (i > 0 && kex::isNameByte(source[i - 1]))) {
+            afterEquals =
+                c == '=' && (i + 1 >= source.size() || source[i + 1] != '=') &&
+                (i == 0 || std::string_view("=!<>").find(source[i - 1]) == std::string_view::npos);
+            lineStart = false;
+            continue;
+        }
+        size_t length = 0;
+        while (i + length < source.size() && kex::isNameByte(source[i + length])) {
+            length++;
+        }
+        const auto word = std::string_view(source).substr(i, length);
+        const bool member = i > 0 && source[i - 1] == '.';
+        if (!member) {
+            if (word == "do" || (word == "if" && (lineStart || afterEquals))) {
+                depth++;
+            } else if (word == "end") {
+                depth--;
+            }
+        }
+        lineStart = afterEquals = false;
+        i += length - 1;
     }
     return depth;
 }
@@ -786,12 +838,22 @@ std::deque<std::string> g_replScript;
 bool g_replLineFromScript = false;
 bool g_replScriptFailed = false;
 
+// Lines read ahead of the REPL by `peekReplLine`, served first.
+std::deque<std::string> g_replReadAhead;
+
 auto readLine(const std::string& prompt) -> std::pair<std::string, bool> {
     g_replInputCancelled = false;
     g_replLineFromScript = !g_replScript.empty();
     if (g_replLineFromScript) {
         auto line = std::move(g_replScript.front());
         g_replScript.pop_front();
+        return {line, true};
+    }
+    if (!g_replReadAhead.empty()) {
+        // Echoed as a line read from a pipe is, after its prompt.
+        auto line = std::move(g_replReadAhead.front());
+        g_replReadAhead.pop_front();
+        std::cout << prompt << line << "\n";
         return {line, true};
     }
 #ifdef HAS_READLINE
@@ -813,6 +875,77 @@ auto readLine(const std::string& prompt) -> std::pair<std::string, bool> {
     }
     return {line, true};
 #endif
+}
+
+auto peekReplLine() -> std::optional<std::string> {
+    if (!g_replScript.empty()) {
+        return g_replScript.front();
+    }
+    if (!g_replReadAhead.empty()) {
+        return g_replReadAhead.front();
+    }
+#ifdef __EMSCRIPTEN__
+    return std::nullopt;
+#else
+    // A terminal's next line has not been typed yet; a paste into one comes
+    // whole, as one input (bracketed paste).
+    if (isatty(STDIN_FILENO)) {
+        return std::nullopt;
+    }
+    std::string line;
+#ifdef HAS_READLINE
+    // Byte by byte, as readline reads: a buffered read would take input
+    // readline is still to see.
+    char c = 0;
+    bool any = false;
+    while (::read(STDIN_FILENO, &c, 1) == 1) {
+        any = true;
+        if (c == '\n') {
+            break;
+        }
+        line += c;
+    }
+    if (!any) {
+        return std::nullopt;
+    }
+#else
+    if (!std::getline(std::cin, line)) {
+        return std::nullopt;
+    }
+#endif
+    g_replReadAhead.push_back(line);
+    return line;
+#endif
+}
+
+auto replContinuesInput(const std::string& line) -> bool {
+    const auto first = line.find_first_not_of(" \t");
+    return first != std::string::npos && line[first] == '.' &&
+           (first + 1 >= line.size() || line[first + 1] != '.');
+}
+
+auto replUnwrapMain(const std::string& source) -> std::optional<std::string> {
+    const auto first = source.find_first_not_of(" \t\n");
+    if (first == std::string::npos || source.compare(first, 4, "main") != 0) {
+        return std::nullopt;
+    }
+    auto at = source.find_first_not_of(" \t", first + 4);
+    if (at == std::string::npos || source.compare(at, 2, "do") != 0) {
+        return std::nullopt;
+    }
+    at = source.find_first_not_of(" \t", at + 2);
+    if (at == std::string::npos || source[at] != '\n') {
+        return std::nullopt; // `main do |args|`, or a body on the `do` line
+    }
+    const auto last = source.find_last_not_of(" \t\n");
+    if (last < 3 || source.compare(last - 2, 3, "end") != 0 || kex::isNameByte(source[last - 3])) {
+        return std::nullopt;
+    }
+    auto body = source.substr(at + 1, last - 2 - (at + 1));
+    if (replBlockDepth(body) != 0) {
+        return std::nullopt;
+    }
+    return body;
 }
 
 auto replWithBindingName(const std::string& capability) -> std::string {
