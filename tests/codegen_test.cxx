@@ -1129,6 +1129,12 @@ int main() {
             assertTrue(rejected, "a field read cannot choose between identical tags and sizes");
         });
 
+        it("names an AST node as the source tree does, not mangled (#701)", []() {
+            assertEqual(kex::ir::astNodeName(typeid(kex::ast::LetExpr)), std::string("LetExpr"));
+            assertEqual(
+                kex::ir::astNodeName(typeid(kex::ast::TrailingIf)), std::string("TrailingIf"));
+        });
+
         it("separates free calls from receiver calls of the same name and arity", []() {
             auto core = emitIr(
                 "record Widget do value : Integer end\n"

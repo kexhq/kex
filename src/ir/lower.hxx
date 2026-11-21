@@ -21,11 +21,17 @@ class Program;
 namespace kex::ir {
 
 // What lowering could not do, of a registered kind (lowering.def). what() is
-// the message rendered from `code` and `args`. It names no place in the
-// source: it is reported against the file being lowered.
+// the message rendered from `code` and `args`. `location` is the innermost
+// expression being lowered when it was thrown, or line 0 when it was thrown
+// outside any; it is reported against the file being lowered then.
 struct LowerError : diag::CodedError {
     using diag::CodedError::CodedError;
+    SourceLocation location{};
 };
+
+// An AST node's type as the source tree names it, `LetExpr` rather than the
+// mangled `N3kex3ast7LetExprE`, for the errors that name one.
+auto astNodeName(const std::type_info& type) -> std::string;
 
 // externalModules maps loaded-module short names (e.g. "BinaryTree") to their
 // BEAM atoms (e.g. "Kex.BinaryTree"). Used by the REPL to resolve calls into

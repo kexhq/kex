@@ -1133,7 +1133,7 @@ auto lowerProgram(
                     L.subst = std::move(savedSubst);
                 } else {
                     throw LowerError(
-                        diag::Code::UnimplementedTopLevelItem, {{"item", typeid(T).name()}});
+                        diag::Code::UnimplementedTopLevelItem, {{"item", astNodeName(typeid(T))}});
                 }
             },
             item);

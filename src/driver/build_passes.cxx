@@ -716,7 +716,7 @@ auto LowerPass::run(Unit& unit, UnitAnalysisManager& analyses) -> pass::Preserve
         std::cerr << diagnostics::formatFileDiagnostic(
             module::shownPath(path),
             semantic::makeDiagnostic(
-                semantic::Diagnostic::Level::Error, error.code, {}, error.args));
+                semantic::Diagnostic::Level::Error, error.code, error.location, error.args));
     } catch (const std::exception& error) {
         std::fprintf(stderr, "error: %s: %s\n", module::shownPath(path).c_str(), error.what());
     }
