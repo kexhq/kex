@@ -419,6 +419,39 @@ int main() {
     describe("Diagnostic snippets", []() {
         const std::string annotated = "main do\n  let x: Integer = \"a\"\n  IO.printLine(x)\nend\n";
 
+        it("highlights the source line and the code the message quotes", []() {
+            auto path =
+                writeTempSource("# a comment\nlet compiled = 1\nlet name: String = :atom\n");
+            auto out = runKex({"--check", path}, "");
+            std::remove(path.c_str());
+            // The message quotes a keyword, highlighted as one; the code ends
+            // the message's backticks with no newline after it.
+            assertTrue(
+                contains(out, "`\x1b[0m\x1b[35mcompiled\x1b[0m\x1b[90m`"),
+                "quoted keyword not highlighted: " + out);
+            assertTrue(
+                contains(out, "\x1b[35mlet\x1b[0m \x1b[35mcompiled\x1b[0m = \x1b[33m1\x1b[0m"),
+                "source line not highlighted: " + out);
+            assertTrue(
+                contains(out, "name: \x1b[36mString\x1b[0m = \x1b[33m:atom\x1b[0m"),
+                "type or atom not highlighted: " + out);
+        });
+
+        it("keeps a quoted function name bold", []() {
+            auto path = writeTempSource(TYPE_ERROR_SRC);
+            auto out = runKex({"--check", path}, "");
+            std::remove(path.c_str());
+            assertTrue(contains(out, "\x1b[1mfilter\x1b[0m\x1b[90m`"), "function not bold: " + out);
+        });
+
+        it("prints the source line as written without colors", []() {
+            auto path = writeTempSource("let compiled = 1\n");
+            auto out = runKex({"--no-colors", "--check", path}, "");
+            std::remove(path.c_str());
+            assertTrue(contains(out, "1 | let compiled = 1\n"), "source line changed: " + out);
+            assertFalse(contains(out, "\x1b["), "escape codes without colors: " + out);
+        });
+
         it("underlines the value and labels the annotation it was checked against", [annotated]() {
             auto path = writeTempSource(annotated);
             auto out = runKex({"--no-colors", "--check", path}, "");

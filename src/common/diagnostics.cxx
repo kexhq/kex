@@ -4,6 +4,7 @@
 #include "file_io.hxx"
 
 #include "../compiled/expand.hxx"
+#include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
 #include "../semantic/analyzer.hxx"
 
@@ -48,12 +49,139 @@ auto extractHint(const std::string& msg) -> std::string {
     return msg.substr(pos, end - pos);
 }
 
+namespace {
+
+// How a byte of Kex is shown: in a snippet's source line, and in code a
+// message quotes in backticks.
+enum class Style : unsigned char { Plain, Keyword, Arrow, Type, Literal, Number, String, Comment };
+
+auto styleOf(TokenType type) -> Style {
+    switch (type) {
+        case TokenType::True:
+        case TokenType::False:
+        case TokenType::None:
+        case TokenType::Atom: return Style::Literal;
+        case TokenType::UpperIdent: return Style::Type;
+        case TokenType::Arrow:
+        case TokenType::FatArrow: return Style::Arrow;
+        case TokenType::Integer:
+        case TokenType::Float: return Style::Number;
+        case TokenType::String:
+        case TokenType::RawString:
+        case TokenType::InterpolatedRawString:
+        case TokenType::Char: return Style::String;
+        default:
+            // The keywords come first in TokenType, After through While.
+            return type >= TokenType::After && type <= TokenType::While ? Style::Keyword
+                                                                        : Style::Plain;
+    }
+}
+
+auto colorOf(Style style) -> const char* {
+    using namespace kex::color;
+    switch (style) {
+        case Style::Keyword:
+        case Style::Arrow: return magenta;
+        case Style::Type: return cyan;
+        case Style::Literal:
+        case Style::Number: return yellow;
+        case Style::String: return green;
+        case Style::Comment: return gray;
+        case Style::Plain: return nullptr;
+    }
+    return nullptr;
+}
+
+// A style for every byte of +text+, from the lexer: a token's bytes take its
+// type's style, and a `#` between tokens starts a comment that runs to the end
+// of its line. A file that does not lex cleanly is still styled as far as the
+// lexer's tokens go, so a lexical error's own line shows what it can.
+auto stylesOf(const std::string& text, const std::string& file) -> std::vector<Style> {
+    std::vector<Style> styles(text.size(), Style::Plain);
+    std::vector<Token> tokens;
+    try {
+        tokens = Lexer(text, file).tokenizeAll();
+    } catch (...) {
+        return styles;
+    }
+    std::size_t covered = 0;
+    const auto commentsIn = [&](std::size_t from, std::size_t to) {
+        for (auto i = from; i < to; ++i) {
+            if (text[i] != '#') {
+                continue;
+            }
+            const auto end = std::min(to, text.find('\n', i));
+            std::fill(
+                styles.begin() + static_cast<std::ptrdiff_t>(i),
+                styles.begin() + static_cast<std::ptrdiff_t>(end), Style::Comment);
+            i = end;
+        }
+    };
+    for (const auto& token : tokens) {
+        // The end of input carries no text of its own, but its range can
+        // cover the whole of a text with no newline at its end: it must not
+        // paint over what came before it.
+        if (token.type == TokenType::Eof || token.startOffset < 0 ||
+            token.endOffset < token.startOffset) {
+            continue;
+        }
+        const auto start = std::min(static_cast<std::size_t>(token.startOffset), text.size());
+        const auto end = std::min(static_cast<std::size_t>(token.endOffset), text.size());
+        if (start >= covered) {
+            commentsIn(covered, start);
+        }
+        const auto style = styleOf(token.type);
+        if (style == Style::Plain) {
+            covered = std::max(covered, end);
+            continue;
+        }
+        std::fill(
+            styles.begin() + static_cast<std::ptrdiff_t>(start),
+            styles.begin() + static_cast<std::ptrdiff_t>(end), style);
+        covered = std::max(covered, end);
+    }
+    commentsIn(covered, text.size());
+    return styles;
+}
+
+// +text+ with +styles+ (one per byte) as colors. A byte with no style of its
+// own takes +plain+, when there is one.
+auto renderStyled(std::string_view text, const Style* styles, const char* plain) -> std::string {
+    using namespace kex::color;
+    if (!enabled) {
+        return std::string(text);
+    }
+    std::string out;
+    out.reserve(text.size() * 2);
+    const char* current = nullptr;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const char* color = colorOf(styles[i]);
+        if (!color && text[i] != ' ') {
+            color = plain;
+        }
+        if (color != current) {
+            out += current ? reset : "";
+            out += color ? color : "";
+            current = color;
+        }
+        out += text[i];
+    }
+    if (current) {
+        out += reset;
+    }
+    return out;
+}
+
+} // namespace
+
 // Syntax-highlights a diagnostic message body using a palette kept distinct
 // from Value::inspect's literal coloring: type names / type vars become cyan
 // (matching the REPL/IO.inspect type suffix), function names become bold
-// (backtick spans and signature heads), arrows (->) become magenta, and
-// backtick delimiters become gray. Cyan-vs-bold keeps functions and types
-// distinguishable. Honors kex::color::enabled.
+// (signature heads), arrows (->) become magenta, and backtick delimiters
+// become gray. Code in backticks is highlighted as Kex, as a snippet's source
+// line is, with any other name in it bold: most often it names a function.
+// Cyan-vs-bold keeps functions and types distinguishable. Honors
+// kex::color::enabled.
 auto colorizeMessage(const std::string& msg) -> std::string {
     using namespace kex::color;
     const auto isIdentChar = [](char c) -> bool {
@@ -76,9 +204,11 @@ auto colorizeMessage(const std::string& msg) -> std::string {
             out += apply(gray);
             out += '`';
             out += apply(reset);
-            out += apply(bold);
-            out.append(msg, i + 1, end - i - 1);
-            out += apply(reset);
+            // Code, highlighted as Kex; a name that is not a keyword or a type
+            // is most often a function's, and stays bold.
+            const std::string code = msg.substr(i + 1, end - i - 1);
+            const auto styles = stylesOf(code, "<message>");
+            out += renderStyled(code, styles.data(), apply(bold));
             out += apply(gray);
             out += '`';
             out += apply(reset);
@@ -248,8 +378,12 @@ namespace {
 
 // A source file split into lines, read once however many diagnostics name it.
 struct SourceLines {
+    std::string file;
     std::string text;
     std::vector<std::size_t> starts; // byte offset of each line, 0-based
+    // How each byte is shown: worked out the first time a styled line is
+    // printed, and only then.
+    mutable std::optional<std::vector<Style>> styles;
 };
 
 auto sourceLines(const std::string& file) -> const SourceLines* {
@@ -258,7 +392,7 @@ auto sourceLines(const std::string& file) -> const SourceLines* {
     if (inserted) {
         auto text = readFile(file);
         if (!text.empty()) {
-            SourceLines lines{std::move(text), {0}};
+            SourceLines lines{file, std::move(text), {0}, std::nullopt};
             for (std::size_t i = 0; i < lines.text.size(); ++i) {
                 if (lines.text[i] == '\n') {
                     lines.starts.push_back(i + 1);
@@ -280,6 +414,18 @@ auto lineText(const SourceLines& source, int line) -> std::string_view {
         --end;
     }
     return std::string_view(source.text).substr(begin, end - begin);
+}
+
+// A line of +source+ as it is printed: syntax-highlighted when styling is on.
+auto styledLine(const SourceLines& source, std::string_view text) -> std::string {
+    if (!kex::color::enabled) {
+        return std::string(text);
+    }
+    if (!source.styles) {
+        source.styles = stylesOf(source.text, source.file);
+    }
+    const auto offset = static_cast<std::size_t>(text.data() - source.text.data());
+    return renderStyled(text, source.styles->data() + offset, nullptr);
 }
 
 // One underlined span, on one line: byte columns [start, end), 0-based.
@@ -424,7 +570,7 @@ auto renderSnippet(std::vector<Mark> marks, const std::string& mainFile, const c
         const auto text = lineText(*source, line);
         const auto number = std::to_string(line);
         out << apply(gray) << std::string(gutter.size() - number.size(), ' ') << number << " |"
-            << apply(reset) << (text.empty() ? "" : " ") << text << "\n";
+            << apply(reset) << (text.empty() ? "" : " ") << styledLine(*source, text) << "\n";
 
         // The underline row: secondary spans first, so a primary one over the
         // same columns shows on top.
