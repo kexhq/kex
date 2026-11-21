@@ -894,6 +894,8 @@ private:
     // Labels the diagnostic just reported (kexhq/kex#657): what its primary
     // span is, and another place it involves with what that place is.
     auto labelLast(std::string primary, SourceLocation other, std::string otherLabel) -> void;
+    // The expression a clause answers with: its last, through a `return`.
+    static auto resultExpressionOf(const ast::FunctionClause& clause) -> const ast::Expr*;
     // True, and the check is left until the body answers, when `actual` is a
     // make-block method's result its body has not decided yet
     // (m_pendingResults): `main` above the make block cannot know it.
@@ -1114,6 +1116,9 @@ private:
 
     // typeName -> constructor names; constructorName -> owning typeName.
     std::unordered_map<std::string, std::vector<std::string>> m_adtVariants;
+    // Where a sum type of this program is declared, by identity: what a
+    // diagnostic about the type points back at (kexhq/kex#719).
+    std::unordered_map<std::string, SourceLocation> m_adtDeclarations;
     std::unordered_map<std::string, std::string> m_adtOfConstructor;
     // Every imported ADT that declares a constructor spelling. The maps above
     // drop a spelling two ADTs share (`Timeout` is Process.CallError's and

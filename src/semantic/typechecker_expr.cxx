@@ -8158,8 +8158,9 @@ auto TypeChecker::checkCall(
     }
 
     const Signature& first = *firstPtr;
-    // Which argument is off, when one can be named.
+    // Which argument is off, when one can be named, and its position.
     std::optional<diag::Args> argumentOff;
+    std::size_t offIndex = 0;
     // Only the arguments passed: a defaulted parameter may have none.
     for (size_t i = 0; i < first.params.size() && i < argTypes.size(); i++) {
         if (!fits(i, first.params[i])) {
@@ -8170,6 +8171,7 @@ auto TypeChecker::checkCall(
                 {"index", std::to_string(i + 1)},
                 {"expected", expected},
                 {"actual", typeToString(resolvedThroughout(argTypes[i]))}};
+            offIndex = i;
             break;
         }
     }
@@ -8184,6 +8186,7 @@ auto TypeChecker::checkCall(
                 })) {
                 return first.result;
             }
+            offIndex = clash->first;
             argumentOff = diag::Args{
                 {"index", std::to_string(clash->first + 1)},
                 {"expected", typeToString(resolve(clash->second))},
@@ -8248,7 +8251,37 @@ auto TypeChecker::checkCall(
     if (argumentOff) {
         argumentOff->emplace_back("name", sourceName(name));
         argumentOff->emplace_back("signatures", signatures);
-        error(diag::Code::NoOverloadArgumentMismatch, loc, std::move(*argumentOff));
+        // The argument itself, underlined, against the parameter of the
+        // function it was passed to, where that is declared in this file.
+        const ast::Expr* argument =
+            offIndex < argExprs.size() && argExprs[offIndex] ? argExprs[offIndex] : nullptr;
+        std::string actual;
+        for (const auto& [key, value] : *argumentOff) {
+            if (key == "actual") {
+                actual = value;
+            }
+        }
+        error(
+            diag::Code::NoOverloadArgumentMismatch, argument ? argument->location : loc,
+            std::move(*argumentOff));
+        if (argument) {
+            const ast::Param* param = nullptr;
+            if (first.clause) {
+                // A receiver prepended to the signature has no parameter of
+                // its own in the clause.
+                const auto shift = first.params.size() - first.clause->params.size();
+                if (offIndex >= shift && offIndex - shift < first.clause->params.size()) {
+                    param = &first.clause->params[offIndex - shift];
+                }
+            }
+            if (param && param->type) {
+                labelLast(
+                    "this has type " + actual, (*param->type)->location,
+                    "expected because of this parameter");
+            } else {
+                labelLast("this has type " + actual, {}, "");
+            }
+        }
     } else {
         error(
             diag::Code::NoOverloadDifferentArguments, loc,

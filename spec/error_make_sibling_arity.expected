@@ -1,4 +1,4 @@
-spec/error_make_sibling_arity.kex:17:25: [KEXET-0491]: Error, `sum` expects argument 1 to be Range<A>, but got [Shelf.Book]
+spec/error_make_sibling_arity.kex:17:17: [KEXET-0491]: Error, `sum` expects argument 1 to be Range<A>, but got [Shelf.Book]
 
 sum : Range<A> -> Integer
 
@@ -9,4 +9,4 @@ sum : [A] -> (A -> Number) -> Number
 sum : [Shelf.Book] -> [Shelf.Book] -> A
    |
 17 |     let tally = this.sum()
-   |                 ^^^^^^^^^^
+   |                 ^^^^ this has type [Shelf.Book]

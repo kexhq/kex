@@ -1,6 +1,6 @@
-spec/error_readonly_alias_write.kex:12:53: [KEXET-0491]: Error, `print` expects argument 1 to be FileHandle<A, CanWrite>, but got FileHandle<CanRead, CannotWrite>
+spec/error_readonly_alias_write.kex:12:46: [KEXET-0491]: Error, `print` expects argument 1 to be FileHandle<A, CanWrite>, but got FileHandle<CanRead, CannotWrite>
 
 print : FileHandle<A, CanWrite> -> Showable -> Void
    |
 12 | foul writeThrough(h: ReadOnlyFile) -> Void = h.print("no")
-   |                                              ^^^^^^^^^^^^^
+   |                                              ^ this has type FileHandle<CanRead, CannotWrite>

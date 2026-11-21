@@ -4,18 +4,24 @@ spec/error_distinct_literal_coercion.kex:8:20: [KEXET-0001]: Error, type mismatc
   |           ------   ^ this has type Integer
   |           |
   |           expected because of this annotation
-spec/error_distinct_literal_coercion.kex:9:3: [KEXET-0491]: Error, `fetched` expects argument 1 to be BookId, but got Integer
+spec/error_distinct_literal_coercion.kex:9:11: [KEXET-0491]: Error, `fetched` expects argument 1 to be BookId, but got Integer
 
 fetched : BookId -> BookId
   |
+4 | let fetched(id: BookId) = id
+  |                 ------ expected because of this parameter
+ ...
 9 |   fetched(n)
-  |   ^^^^^^^^^^
-spec/error_distinct_literal_coercion.kex:10:3: [KEXET-0491]: Error, `fetched` expects argument 1 to be BookId, but got String
+  |           ^ this has type Integer
+spec/error_distinct_literal_coercion.kex:10:11: [KEXET-0491]: Error, `fetched` expects argument 1 to be BookId, but got String
 
 fetched : BookId -> BookId
    |
+ 4 | let fetched(id: BookId) = id
+   |                 ------ expected because of this parameter
+  ...
 10 |   fetched("1")
-   |   ^^^^^^^^^^^^
+   |           ^^^ this has type String
 spec/error_distinct_literal_coercion.kex:11:20: [KEXET-0001]: Error, type mismatch: expected TeamId, got Integer
    |
 11 |   let t : TeamId = 4

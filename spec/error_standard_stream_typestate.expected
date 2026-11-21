@@ -1,18 +1,18 @@
-spec/error_standard_stream_typestate.kex:10:18: [KEXET-0491]: Error, `printLine` expects argument 1 to be FileHandle<A, CanWrite>, but got FileHandle<CanRead, CannotWrite>
+spec/error_standard_stream_typestate.kex:10:8: [KEXET-0491]: Error, `printLine` expects argument 1 to be FileHandle<A, CanWrite>, but got FileHandle<CanRead, CannotWrite>
 
 printLine : FileHandle<A, CanWrite> -> Showable -> Void
    |
 10 |   IO.in.printLine("stdin is not a sink")
-   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-spec/error_standard_stream_typestate.kex:11:17: [KEXET-0491]: Error, `getLine` expects argument 1 to be FileHandle<CanRead, A>, but got FileHandle<CannotRead, CanWrite>
+   |   ^^^^^ this has type FileHandle<CanRead, CannotWrite>
+spec/error_standard_stream_typestate.kex:11:9: [KEXET-0491]: Error, `getLine` expects argument 1 to be FileHandle<CanRead, A>, but got FileHandle<CannotRead, CanWrite>
 
 getLine : FileHandle<CanRead, A> -> String?
    |
 11 |   IO.out.getLine
-   |   ^^^^^^^^^^^^^^
-spec/error_standard_stream_typestate.kex:12:16: [KEXET-0491]: Error, `read` expects argument 1 to be FileHandle<CanRead, A>, but got FileHandle<CannotRead, CanWrite>
+   |   ^^^^^^ this has type FileHandle<CannotRead, CanWrite>
+spec/error_standard_stream_typestate.kex:12:11: [KEXET-0491]: Error, `read` expects argument 1 to be FileHandle<CanRead, A>, but got FileHandle<CannotRead, CanWrite>
 
 read : FileHandle<CanRead, A> -> Result<String, ReadError>
    |
 12 |   IO.error.read
-   |   ^^^^^^^^^^^^^
+   |   ^^^^^^^^ this has type FileHandle<CannotRead, CanWrite>

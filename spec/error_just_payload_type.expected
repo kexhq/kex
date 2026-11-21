@@ -1,7 +1,10 @@
-spec/error_just_payload_type.kex:12:17: [KEXET-0491]: Error, `wantsInteger` expects argument 1 to be Integer, but got Page
+spec/error_just_payload_type.kex:12:30: [KEXET-0491]: Error, `wantsInteger` expects argument 1 to be Integer, but got Page
 
 wantsInteger : Integer -> Integer
    |
+ 9 | let wantsInteger(n: Integer) -> Integer = n
+   |                     ------- expected because of this parameter
+  ...
 12 |   Just(item) => wantsInteger(item)
-   |                 ^^^^^^^^^^^^^^^^^^
+   |                              ^^^^ this has type Page
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

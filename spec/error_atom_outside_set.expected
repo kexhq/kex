@@ -8,9 +8,12 @@ spec/error_atom_outside_set.kex:11:10: [KEXET-0001]: Error, type mismatch: expec
    |
 11 |   return :maybe if flag
    |          ^^^^^^
-spec/error_atom_outside_set.kex:18:16: [KEXET-0491]: Error, `check` expects argument 1 to be :ok | :error, but got Atom
+spec/error_atom_outside_set.kex:18:22: [KEXET-0491]: Error, `check` expects argument 1 to be :ok | :error, but got Atom
 
 check : :ok | :error -> String
    |
+ 8 | let check(s: :ok | :error) -> String = "${s}"
+   |              ------------ expected because of this parameter
+  ...
 18 |   IO.printLine(check(:nope))
-   |                ^^^^^^^^^^^^
+   |                      ^^^^^ this has type Atom

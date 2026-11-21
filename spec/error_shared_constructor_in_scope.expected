@@ -2,10 +2,13 @@ spec/error_shared_constructor_in_scope.kex:6:1: [KEXET-0001]: Error, type mismat
   |
 6 | let count = Timeout
   | ^^^^^^^^^^^^^^^^^^^
-spec/error_shared_constructor_in_scope.kex:11:14: [KEXET-0491]: Error, `describe` expects argument 1 to be Kex.Backend, but got CallError.Timeout
+spec/error_shared_constructor_in_scope.kex:11:23: [KEXET-0491]: Error, `describe` expects argument 1 to be Kex.Backend, but got CallError.Timeout
 
 describe : Kex.Backend -> Bool
    |
+ 8 | let describe(backend: Kex.Backend) -> Bool = backend.beam?
+   |                       ----------- expected because of this parameter
+  ...
 11 |   IO.inspect(describe(Timeout))
-   |              ^^^^^^^^^^^^^^^^^
+   |                       ^^^^^^^ this has type CallError.Timeout
 Aborted: 2 type errors. Fix them before running, or skip the check with --no-check.

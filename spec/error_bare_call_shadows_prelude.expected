@@ -1,7 +1,7 @@
-spec/error_bare_call_shadows_prelude.kex:14:16: [KEXET-0491]: Error, `get` expects argument 2 to be String -> String, but got Integer
+spec/error_bare_call_shadows_prelude.kex:14:26: [KEXET-0491]: Error, `get` expects argument 2 to be String -> String, but got Integer
 
 get : String -> (String -> String) -> String
    |
 14 |   IO.printLine(get("hi", 42))
-   |                ^^^^^^^^^^^^^
+   |                          ^^ this has type Integer
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.
