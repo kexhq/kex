@@ -17,7 +17,16 @@ let count(items: [Integer]) -> Integer do
   items.first.or(0)
 end
 
+# The postfix guard form is a `return` too (kexhq/kex#723); a guard of the
+# right type, and a value-less one, pass.
+let label(n: Integer) -> Integer do
+  return "negative" if n < 0
+  return 0 if n == 0
+  n
+end
+
 main do
   IO.inspect(firstWords(["a b"], false))
   IO.inspect(count([1]))
+  IO.inspect(label(1))
 end

@@ -5675,6 +5675,10 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         if (effectiveReturnType && !def.isSlot && !containsOpenType(effectiveReturnType)) {
             for (const auto& [returned, type] : clauseReturns) {
                 const auto* value = std::get<ast::ReturnExpr>(returned->kind).value.get();
+                if (const auto* guarded =
+                        value ? std::get_if<ast::TrailingIf>(&value->kind) : nullptr) {
+                    value = guarded->expr.get();
+                }
                 const auto actual = resolve(type);
                 if (returned != clause.body.back().get() && !containsOpenType(actual) &&
                     !argMatchesParam(actual, effectiveReturnType) &&

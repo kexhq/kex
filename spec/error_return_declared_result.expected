@@ -6,3 +6,7 @@ spec/error_return_declared_result.kex:15:5: [KEXET-0124]: Error, `count` declare
    |
 15 |     return "none"
    |     ^^^^^^^^^^^^^
+spec/error_return_declared_result.kex:23:3: [KEXET-0124]: Error, `label` declared to return Integer but returns String here
+   |
+23 |   return "negative" if n < 0
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^

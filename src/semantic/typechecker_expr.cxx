@@ -2874,14 +2874,33 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 return resultType;
             } else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
                 auto value = node.value ? inferExpr(*node.value) : Type::unit();
+                // `return x if cond` is a ReturnExpr around TrailingIf{x, cond}.
+                // As a statement the guard yields nothing, but when it holds
+                // the function leaves with x, so x's type is what the clause
+                // is answered with (kexhq/kex#723).
+                auto leavesWith = value;
+                if (const auto* guarded =
+                        node.value ? std::get_if<ast::TrailingIf>(&node.value->kind) : nullptr;
+                    guarded && guarded->expr) {
+                    if (const auto found = m_typeMap.find(guarded->expr.get());
+                        found != m_typeMap.end()) {
+                        leavesWith = found->second;
+                    }
+                }
                 if (m_clauseReturns && m_blockDepth == m_clauseTriesDepth) {
-                    m_clauseReturns->push_back({&expr, value});
+                    m_clauseReturns->push_back({&expr, leavesWith});
                 }
                 return value;
             } else if constexpr (std::is_same_v<T, ast::Lambda>) {
                 // Lambda used as a value (not a trailing block — that path goes
                 // through inferBlock). Infer param types and body, return a proper
                 // FuncType so call-site checking can validate the argument types.
+                //
+                // A `return` in it is not one of the enclosing function's: the
+                // lambda may be called after that function has returned, and
+                // then it is the lambda's own value (spec/return_in_block_scope).
+                // So it is not checked against the function's declared result.
+                const auto outerReturns = std::exchange(m_clauseReturns, nullptr);
                 if (node.params.empty()) {
                     m_blockDepth++;
                     BlockTries blockTries(m_clauseTries, m_clauseTriesDepth, m_blockDepth);
@@ -2892,6 +2911,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     }
                     popScope();
                     m_blockDepth--;
+                    m_clauseReturns = outerReturns;
                     return Type::func(
                         {}, blockFailingResult(node, blockTries.tries, resolve(bodyType)));
                 }
@@ -2925,6 +2945,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     checkRescue(*node.rescue);
                 }
                 m_blockDepth--;
+                m_clauseReturns = outerReturns;
                 auto resultType = resolve(bodyType);
                 if (node.returnAnnotation) {
                     auto declared = resolveTypeExpr(**node.returnAnnotation, genericVars);
