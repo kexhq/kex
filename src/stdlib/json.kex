@@ -167,8 +167,7 @@ private do
     # A record is an object of its fields, in declaration order.
     if let Just(values) = Type.fieldValues(value)
       let names = Type.of(value).fields.map { |field| field.name }
-      let fields = names.zip(values).map do |pair|
-        let (name, item) = pair
+      let fields = names.zip(values).map do |name, item|
         "${encodeString(name)}:${stringifyValue(item)}"
       end
       return "{${fields.join(",")}}"
@@ -189,8 +188,7 @@ private do
       :variant => return constructorName(value)
       :list => return "[${value.map(~stringifyValue).join(",")}]"
       :map => do
-        let fields = Kex.Intrinsic.Map.entries(value).map do |entry|
-          let (key, item) = entry
+        let fields = Kex.Intrinsic.Map.entries(value).map do |key, item|
           "${encodeString(objectKey(key))}:${stringifyValue(item)}"
         end
         return "{${fields.join(",")}}"

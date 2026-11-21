@@ -5,7 +5,7 @@
 # block, on both backends.
 
 let scaledSum(items: [Integer], k: Integer) -> Integer do
-  items.map { |x| x * k }.filter { |x| x % 3 == 0 }.reduce(0) { |acc, x| acc + x }
+  items.map { |x| x * k }.filter { |x| x.dividesBy?(3) }.reduce(0) { |acc, x| acc + x }
 end
 
 main do
@@ -31,5 +31,5 @@ main do
     x > 10
   end
   IO.printLine(logged)
-  IO.printLine((1..200_000).items.map { |x| x * 2 }.filter { |x| x % 4 == 0 }.reduce(0) { |a, x| a + x })
+  IO.printLine((1..200_000).items.map { |x| x * 2 }.filter { |x| x.dividesBy?(4) }.reduce(0) { |a, x| a + x })
 end

@@ -15,7 +15,7 @@
 # HI
 # hi
 
-let even?(n: Int) = n.modulo(2) == 0
+let even?(n: Int) = n.dividesBy?(2)
 
 main do
   let nums = [1, 2, 3, 4, 5]

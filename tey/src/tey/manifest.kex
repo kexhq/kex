@@ -170,8 +170,7 @@ let read(text: String) -> ManifestPackage or! String do
   let (packageName, packageBody) = package
   name = packageName
 
-  Tey.Manifest.declarations(packageBody, "").each do |entry|
-    let (expression, group) = entry
+  Tey.Manifest.declarations(packageBody, "").each do |expression, group|
     match Tey.Manifest.call(expression) do
       Just(call) => do
       let (declaration, arguments, named, block) = call

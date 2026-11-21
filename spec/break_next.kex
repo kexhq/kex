@@ -18,7 +18,7 @@ main do
   var k = 0
   while k < 10 do
     k = k + 1
-    next if k.modulo(2) == 0
+    next if k.dividesBy?(2)
     sum = sum + k
   end
   IO.printLine("while next: sum=${sum}")
@@ -28,7 +28,7 @@ main do
   loop do
     m = m + 1
     break if m > 10
-    next if m.modulo(2) == 0
+    next if m.dividesBy?(2)
     sum2 = sum2 + m
   end
   IO.printLine("loop next: sum2=${sum2}")

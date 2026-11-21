@@ -18,7 +18,7 @@ main do
 
   IO.printLine(inArgs(x > 0 then "yes" else "no"))
 
-  let assigned = x.modulo(2) == 0 then "even" else "odd"
+  let assigned = x.dividesBy?(2) then "even" else "odd"
   IO.printLine(assigned)
 
   let withMethodCalls = list.empty? then "none" else "${list.count} items"

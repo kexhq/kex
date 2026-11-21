@@ -8,13 +8,13 @@
 # [2, 4, 6, 8, 10]
 # [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]
 
-let even?(n: Int) = n.modulo(2) == 0
+let even?(n: Int) = n.dividesBy?(2)
 
 let isPrime?(n: Int) do
   if n < 2
     return false
   end
-  return (2..n - 1).all? { |d| n.modulo(d) != 0 }
+  return (2..n - 1).all? { |d| !n.dividesBy?(d) }
 end
 
 main do

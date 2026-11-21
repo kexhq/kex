@@ -610,8 +610,7 @@ make Measure<D>, implement: Showable do
           (0.000000001, "ns"), (0.000001, "μs"), (0.001, "ms"),
           (1.0, "s"), (60.0, "min"), (3600.0, "h"),
           (86400.0, "d"), (604800.0, "wk")
-        ].map do |entry|
-          let (factor, symbol) = entry
+        ].map do |factor, symbol|
           UnitDefinition {
             conversionFactor: factor, dimension: :time, notation: symbol
           }
@@ -637,8 +636,7 @@ make Measure<D>, implement: Showable do
       return [
         (0.000000001, "n"), (0.000001, "μ"), (0.001, "m"),
         (1.0, ""), (1000.0, "k"), (1000000.0, "M"), (1000000000.0, "G")
-      ].map do |entry|
-        let (factor, prefix) = entry
+      ].map do |factor, prefix|
         UnitDefinition {
           conversionFactor: base.conversionFactor * factor,
           dimension: base.dimension,

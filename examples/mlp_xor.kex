@@ -49,7 +49,7 @@ main do
   loop do
     epoch = epoch + 1
     net = trainEpoch(net, samples, 0.5)
-    if epoch % 500 == 0
+    if epoch.dividesBy?(500)
       IO.printLine("epoch ${epoch}   loss ${loss(net, samples)}")
     end
     break if epoch >= 20000 || loss(net, samples) < 0.0001
@@ -82,8 +82,7 @@ end
 # then squashes through tanh.
 activate : Layer -> [Float] -> [Float]
 let activate(layer, input) do
-  return layer.weights.zip(layer.biases).map do |pair|
-    let (row, bias) = pair
+  return layer.weights.zip(layer.biases).map do |row, bias|
     Math.tanh(dot(row, input) + bias)
   end
 end
@@ -106,8 +105,7 @@ let predict(net, input) = forward(net, input).last.or([])
 # backpropagated from the layer above it.
 deltas : Network -> [[Float]] -> [Float] -> [[Float]]
 let deltas(net, activations, target) do
-  let outDeltas = activations.last.or([0.0]).zip(target).map do |pair|
-    let (a, t) = pair
+  let outDeltas = activations.last.or([0.0]).zip(target).map do |a, t|
     (a - t) * (1.0 - a * a)
   end
   let layersAbove = net.layers.drop(1).reverse
@@ -138,15 +136,12 @@ end
 # its gradient, scaled by the learning rate.
 descend : Layer -> [Float] -> [Float] -> Float -> Layer
 let descend(layer, input, ds, rate) do
-  let weights = layer.weights.zip(ds).map do |pair|
-    let (row, d) = pair
-    row.zip(input).map do |pr|
-      let (w, x) = pr
+  let weights = layer.weights.zip(ds).map do |row, d|
+    row.zip(input).map do |w, x|
       w - rate * d * x
     end
   end
-  let biases = layer.biases.zip(ds).map do |pair|
-    let (b, d) = pair
+  let biases = layer.biases.zip(ds).map do |b, d|
     b - rate * d
   end
   return Layer { weights: weights, biases: biases }
@@ -158,8 +153,7 @@ let trainSample(net, sample, rate) do
   let activations = forward(net, sample.input)
   let ds = deltas(net, activations, sample.target).reverse
   let inputs = activations.take(activations.count - 1)
-  let layers = net.layers.zip(inputs).zip(ds).map do |pair|
-    let (rest, d) = pair
+  let layers = net.layers.zip(inputs).zip(ds).map do |rest, d|
     let (layer, input) = rest
     descend(layer, input, d, rate)
   end

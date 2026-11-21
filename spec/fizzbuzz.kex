@@ -10,7 +10,7 @@ type FizzBuzz
 # Pattern-based fizzbuzz calculation with multiple clauses
 # This shows Kex's elegant pattern matching on divisibility
 let fizzbuzz(n: Int) -> FizzBuzz do
-  match (n.modulo(3) == 0, n.modulo(5) == 0) do
+  match (n.dividesBy?(3), n.dividesBy?(5)) do
     (true, true)   => FizzBuzz
     (true, false)  => Fizz
     (false, true)  => Buzz

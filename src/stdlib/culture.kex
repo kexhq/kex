@@ -392,8 +392,7 @@ let of(code) do
     ("ZU_ZA", '.', Just((',', [3])), [:year, :month, :day], '-', ':')
   ]
   var found: Culture? = None
-  rows.each do |row|
-    let (tag, decimal, groups, order, dateSeparator, timeSeparator) = row
+  rows.each do |tag, decimal, groups, order, dateSeparator, timeSeparator|
     if tag == want
       let numbers = NumberSettings { decimalSeparator: decimal, groups: groups }
       let time = TimeSettings {

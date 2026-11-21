@@ -8,7 +8,7 @@ main do
   # `next` advances the counter just like falling off the end of the body.
   var odds = 0
   loop do |i|
-    next if i % 2 == 0
+    next if i.dividesBy?(2)
     odds = odds + i
     break if i > 7
   end
