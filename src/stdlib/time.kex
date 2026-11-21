@@ -244,7 +244,7 @@ module Time do
   # @param nanos [Integer] nanoseconds since the Unix epoch
   # @return [DateTime] that instant, in the local zone
   foul momentAt(nanos: Integer) -> DateTime do
-    let epochSeconds = Time.floorDiv(nanos, 1000000000)
+    let epochSeconds = nanos.div(1000000000)
     let offset = (Kex.Intrinsic.Time.localOffset(epochSeconds)).second
     return Time.withNanosecond(DateTime.fromEpochSeconds(epochSeconds, offset), nanos - epochSeconds * 1000000000)
   end
@@ -511,13 +511,9 @@ module Time do
     return DateTime { date: moment.date, time: time, offset: moment.offset }
   end
 
-  # Kex's `/` truncates toward zero; instants before the epoch need the floor.
-  let floorDiv(value: Integer, divisor: Integer) -> Integer do
-    let quotient = value / divisor
-    return quotient if value.modulo(divisor) == 0
-    return quotient - 1 if (value < 0) != (divisor < 0)
-    return quotient
-  end
+  # Kex's `/` truncates toward zero; instants before the epoch need the floor,
+  # which `Integer.div` is.
+  let floorDiv(value: Integer, divisor: Integer) -> Integer = value.div(divisor)
 
   # A Duration holds Float seconds, so it is rounded to the nanosecond, the
   # finest unit it names, before truncating: 7.nanosecond is 7e-9 seconds,
@@ -662,7 +658,7 @@ make Time, implement: Inspectable, Showable do
   #   (Time.of(14, 3, 0).try + 500.millisecond).iso   # => "14:03:00.500"
   let +(span: Duration) -> Time do
     let nanos = this.nanosecond + span.wholeNanoseconds
-    let carry = Time.floorDiv(nanos, 1000000000)
+    let carry = nanos.div(1000000000)
     return Time.fromSecondsSinceMidnight(this.secondsSinceMidnight + carry, nanos - carry * 1000000000)
   end
 

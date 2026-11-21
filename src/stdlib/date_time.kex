@@ -63,7 +63,7 @@ module DateTime do
   # The civil rendering of an instant, at a given offset.
   let fromEpochSeconds(count: Integer, offset: Duration) -> DateTime do
     let local = count + offset.wholeSeconds
-    let day = Time.floorDiv(local, 86400)
+    let day = local.div(86400)
     return DateTime {
       date: Time.civilFromDays(day),
       time: Time.fromSecondsSinceMidnight(local - day * 86400),
@@ -129,7 +129,7 @@ module DateTime do
   #   DateTime.utcNow().iso   # => "2026-07-30T12:03:00Z"
   foul utcNow() -> DateTime do
     let nanos = Time.nanosOf(Time.Clock.now())
-    let epochSeconds = Time.floorDiv(nanos, 1000000000)
+    let epochSeconds = nanos.div(1000000000)
     return Time.withNanosecond(DateTime.fromEpochSeconds(epochSeconds, Duration.zero()), nanos - epochSeconds * 1000000000)
   end
 
@@ -229,7 +229,7 @@ make DateTime, implement: Inspectable, Showable do
   #   # => "2026-07-30T15:33:00Z"
   let +(span: Duration) -> DateTime do
     let nanos = this.time.nanosecond + span.wholeNanoseconds
-    let carry = Time.floorDiv(nanos, 1000000000)
+    let carry = nanos.div(1000000000)
     let moved = DateTime.fromEpochSeconds(this.epochSeconds + carry, this.offset)
     return Time.withNanosecond(moved, nanos - carry * 1000000000)
   end
