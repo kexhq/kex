@@ -18,9 +18,13 @@ namespace {
 
 // Output is captured through a pipe, where colors are off by default, so
 // every run asks for them with `--colors`. A test's own `--no-colors` comes
-// later on the command line and still wins.
-auto runKex(const std::vector<std::string>& args, const std::string& standardIn) -> std::string {
-    std::string cmd = std::string(KEX_BINARY_PATH) + " --colors";
+// later on the command line and still wins. +env+ goes before the command, as
+// `NAME=value ...`.
+auto runKex(
+    const std::vector<std::string>& args,
+    const std::string& standardIn,
+    const std::string& env = "") -> std::string {
+    std::string cmd = (env.empty() ? "" : env + " ") + std::string(KEX_BINARY_PATH) + " --colors";
     for (const auto& a : args) {
         cmd += " ";
         cmd += a;
@@ -219,7 +223,9 @@ int main() {
                assertTrue(contains(out, "\x1b[31m"), "missing red error label: " + out);
                assertTrue(contains(out, "\x1b[35m->"), "missing magenta arrow: " + out);
                assertTrue(contains(out, "\x1b[1m\x1b[31m[KEXET-"), "label not bold red: " + out);
-               assertTrue(contains(out, "]: Error,"), "label does not say Error: " + out);
+               assertTrue(
+                   contains(out, "]: Error\x1b[0m,"),
+                   "label does not say Error, or colors the comma: " + out);
            });
 
         it("colors a warning's label and underline yellow, not red", []() {
@@ -227,10 +233,27 @@ int main() {
             auto out = runKex({"--check", path}, "");
             std::remove(path.c_str());
             assertTrue(
-                contains(out, "\x1b[1m\x1b[33m[KEXWC-0001]: Warning,"),
+                contains(out, "\x1b[1m\x1b[33m[KEXWC-0001]: Warning\x1b[0m,"),
                 "warning label not bold yellow: " + out);
             assertTrue(contains(out, "\x1b[33m^^"), "warning underline not yellow: " + out);
             assertFalse(contains(out, "\x1b[31m[KEXWC"), "warning label red: " + out);
+        });
+
+        it("links the code to oops.kex.run when hyperlinks are asked for", []() {
+            auto path = writeTempSource(TYPE_ERROR_SRC);
+            auto linked = runKex({"--check", path}, "", "KEX_HYPERLINKS=1");
+            auto piped = runKex({"--check", path}, "");
+            auto plain = runKex({"--no-colors", "--check", path}, "", "KEX_HYPERLINKS=1");
+            auto off = runKex({"--check", path}, "", "KEX_HYPERLINKS=0");
+            std::remove(path.c_str());
+            assertTrue(
+                contains(
+                    linked, "[\x1b]8;;https://oops.kex.run/KEXET-0491\x1b\\KEXET-0491"
+                            "\x1b]8;;\x1b\\]: Error"),
+                "code not linked: " + linked);
+            assertFalse(contains(piped, "\x1b]8;;"), "linked into a pipe unasked: " + piped);
+            assertFalse(contains(plain, "\x1b]8;;"), "linked without colors: " + plain);
+            assertFalse(contains(off, "\x1b]8;;"), "linked with KEX_HYPERLINKS=0: " + off);
         });
 
         it("renders function names bold and types cyan (distinct, not the same)", []() {
