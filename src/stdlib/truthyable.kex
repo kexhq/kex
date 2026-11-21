@@ -72,6 +72,19 @@ make Bool, implement: Truthyable do
   let not = !this
 end
 
+make (), implement: Truthyable do
+  # Always +false+: the unit value is nothing, which is what a function
+  # without a value of its own answers.
+  #
+  # @return [Bool] always +false+
+  #
+  # @example
+  #   ().truthy?   # => false
+  #   ().falsy?    # => true
+  truthy? :> Bool
+  let truthy?(@_) = false
+end
+
 make Integer, implement: Truthyable do
   # Always +true+, including for zero.
   #

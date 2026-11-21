@@ -52,4 +52,7 @@ main do
   IO.printLine("${[1, 2].count { |n| Ok(n) }}")
   IO.printLine("${[1, 2].all? { |n| Just(n) }} ${[1, 2].any? { |n| None }}")
   IO.printLine("${[1, 2].partition { |n| n > 1 then Ok(n) else None }}")
+
+  # `()` is falsy, as `false` and `None` are (#707).
+  IO.printLine("${().truthy?} ${().falsy?}")
 end

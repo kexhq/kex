@@ -683,6 +683,10 @@ auto makeTargetName(const KexiTypePtr& type) -> std::string {
     if (type->kind == KexiType::Optional) {
         return "Optional";
     }
+    // The unit type, as the checker keys its conformances (`make ()`).
+    if (type->kind == KexiType::Tuple && type->typeArgs.empty()) {
+        return "()";
+    }
     return "";
 }
 

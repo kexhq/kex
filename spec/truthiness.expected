@@ -16,3 +16,4 @@ then-else
 2
 true false
 ([2], [1])
+false true

@@ -776,7 +776,16 @@ inline auto sourceSemanticInterfaces(
 
     for (auto& program : programs) {
 
-        auto makeTargetName = [](const ast::MakeDef& make) { return makeTargetLeaf(make.target); };
+        // The unit type has no name to write: `make ()` is keyed as the
+        // checker spells it, so `().falsy?` finds Truthyable's default.
+        auto makeTargetName = [](const ast::MakeDef& make) -> std::string {
+            if (const auto* tuple =
+                    make.target ? std::get_if<ast::TupleType>(&make.target->kind) : nullptr;
+                tuple && tuple->elements.empty()) {
+                return "()";
+            }
+            return makeTargetLeaf(make.target);
+        };
 
         auto makeTargetSpelling = [](const ast::MakeDef& make) {
             const auto name = writtenMakeTarget(make.target);
