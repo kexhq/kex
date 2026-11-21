@@ -118,7 +118,11 @@ auto stylesOf(const std::string& text, const std::string& file) -> std::vector<S
         }
     };
     for (const auto& token : tokens) {
-        if (token.startOffset < 0 || token.endOffset < token.startOffset) {
+        // The end of input carries no text of its own, but its range can
+        // cover the whole of a text with no newline at its end: it must not
+        // paint over what came before it.
+        if (token.type == TokenType::Eof || token.startOffset < 0 ||
+            token.endOffset < token.startOffset) {
             continue;
         }
         const auto start = std::min(static_cast<std::size_t>(token.startOffset), text.size());
@@ -127,6 +131,10 @@ auto stylesOf(const std::string& text, const std::string& file) -> std::vector<S
             commentsIn(covered, start);
         }
         const auto style = styleOf(token.type);
+        if (style == Style::Plain) {
+            covered = std::max(covered, end);
+            continue;
+        }
         std::fill(
             styles.begin() + static_cast<std::ptrdiff_t>(start),
             styles.begin() + static_cast<std::ptrdiff_t>(end), style);
