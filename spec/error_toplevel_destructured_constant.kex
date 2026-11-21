@@ -1,0 +1,9 @@
+# A function reading a name a top-level destructuring `let` binds is checked
+# against that name's type, as it is for a lone `let name = ...`.
+let (scale, _) = ("kex", 0)
+
+let scaled(n: Integer) -> Integer = n * scale
+
+main do
+  IO.printLine(scaled(2))
+end
