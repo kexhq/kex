@@ -626,6 +626,22 @@ int main() {
             }
         });
 
+        // A record of a module loaded on demand is known from its interface
+        // alone, and its fields were offered nowhere (kexhq/kex#700).
+        it("completes the fields of a record an opt-in module declares", []() {
+            const auto reply = askAt(
+                "file:///tmp/kex-lsp-culture.kex",
+                "using Culture\n\nmain do\n  let culture = Culture.of(\"hu-HU\").try\n"
+                "  culture.\nend\n",
+                "completion", 4, 10);
+            for (const auto* field : {"name", "numbers", "time"}) {
+                assertTrue(
+                    reply.find(std::string("\"filterText\":\"") + field + "\"") !=
+                        std::string::npos,
+                    std::string("missing ") + field + ": " + reply);
+            }
+        });
+
         it("completes a range's own functions", []() {
             const auto reply = askAt(
                 "file:///tmp/kex-lsp-range.kex", "main do\n  let range = 1..10\n  range.\nend\n",

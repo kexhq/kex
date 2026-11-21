@@ -596,18 +596,27 @@ auto completeAt(
     result.replaceFrom = wordStart;
     const auto word = source.substr(wordStart, cursor - wordStart);
 
-    // A member of an expression the analyzer can type.
+    // A member of an expression the analyzer can type: the checker's own
+    // answer for the receiver's type where it is written, as the language
+    // server's (Analyzer::memberCompletions). Nothing is matched by name.
     if (const auto receiver = scanDotReceiver(source, cursor); receiver.valid) {
-        result.qualifier =
-            recoveredReceiverQualifier(check, source, path, receiver, cursor, interfaces);
-        if (!result.qualifier.empty()) {
-            const auto qualified = result.qualifier + ".";
-            for (auto& match : globalCompletions(qualified + word, check(path, source))) {
-                if (match.rfind(qualified, 0) == 0) {
-                    result.matches.push_back(match.substr(qualified.size()));
+        if (const auto found = checkedReceiver(check, source, path, receiver, cursor);
+            found && found->expression) {
+            auto& analyzer = *found->checked.analyzer;
+            const auto type = receiverTypeOf(analyzer, found->expression);
+            result.qualifier = completionQualifierForType(type);
+            if (!result.qualifier.empty()) {
+                for (const auto& member : analyzer.memberCompletions(type, *found->expression)) {
+                    if (member.name.rfind(word, 0) == 0) {
+                        result.matches.push_back(member.name);
+                    }
                 }
+                std::sort(result.matches.begin(), result.matches.end());
+                result.matches.erase(
+                    std::unique(result.matches.begin(), result.matches.end()),
+                    result.matches.end());
+                return result;
             }
-            return result;
         }
     }
 
