@@ -6,10 +6,10 @@ spec/error_annotation_arity_mismatch.kex:4:21: [KEXET-0415]: Error, `+` is not d
   |
 4 | let add(a, b) = a + b
   |                 ^^^^^
-spec/error_annotation_arity_mismatch.kex:7:16: [KEXET-0491]: Error, `add` expects argument 1 to be (Integer, Integer), but got Integer
+spec/error_annotation_arity_mismatch.kex:7:20: [KEXET-0491]: Error, `add` expects argument 1 to be (Integer, Integer), but got Integer
 
 add : (Integer, Integer) -> A -> Integer
   |
 7 |   IO.printLine(add(1, 2))
-  |                ^^^^^^^^^
+  |                    ^ this has type Integer
 Aborted: 2 type errors. Fix them before running, or skip the check with --no-check.

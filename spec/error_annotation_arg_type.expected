@@ -1,7 +1,7 @@
-spec/error_annotation_arg_type.kex:7:16: [KEXET-0491]: Error, `add` expects argument 1 to be Integer, but got String
+spec/error_annotation_arg_type.kex:7:20: [KEXET-0491]: Error, `add` expects argument 1 to be Integer, but got String
 
 add : Integer -> Integer -> Integer
   |
 7 |   IO.printLine(add("oops", 1))
-  |                ^^^^^^^^^^^^^^
+  |                    ^^^^^^ this has type String
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

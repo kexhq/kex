@@ -1,9 +1,12 @@
-spec/error_dotted_module_call_arguments.kex:13:42: [KEXET-0491]: Error, `Shop.Catalog.price` expects argument 2 to be Integer, but got String
+spec/error_dotted_module_call_arguments.kex:13:50: [KEXET-0491]: Error, `Shop.Catalog.price` expects argument 2 to be Integer, but got String
 
 Shop.Catalog.price : String -> Integer -> Integer
    |
+ 7 |   foul price(name: String, quantity: Integer) -> Integer do
+   |                                      ------- expected because of this parameter
+  ...
 13 |   let total: Integer = Shop.Catalog.price("tey", "two")
-   |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |                                                  ^^^^^ this has type String
 spec/error_dotted_module_call_arguments.kex:14:41: [KEXET-0001]: Error, type mismatch: expected String, got Integer
    |
 14 |   let label: String = Shop.Catalog.price("tey", 2)

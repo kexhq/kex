@@ -1,12 +1,12 @@
-spec/error_generic_shared_across_arguments.kex:17:19: [KEXET-0491]: Error, `same` expects argument 2 to be Integer, but got String
+spec/error_generic_shared_across_arguments.kex:17:27: [KEXET-0491]: Error, `same` expects argument 2 to be Integer, but got String
 
 same : A -> A -> Bool
    |
 17 |   IO.printLine("${same(1, "s")}")
-   |                   ^^^^^^^^^^^^
-spec/error_generic_shared_across_arguments.kex:18:19: [KEXET-0491]: Error, `put` expects argument 2 to be Integer, but got String
+   |                           ^^^ this has type String
+spec/error_generic_shared_across_arguments.kex:18:40: [KEXET-0491]: Error, `put` expects argument 2 to be Integer, but got String
 
 put : Box<A> -> A -> Bool
    |
 18 |   IO.printLine("${put(Box { item: 1 }, "s")}")
-   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |                                        ^^^ this has type String

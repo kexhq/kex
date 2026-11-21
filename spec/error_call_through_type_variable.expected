@@ -1,14 +1,17 @@
-spec/error_call_through_type_variable.kex:11:52: [KEXET-0491]: Error, `upperCase` expects argument 1 to be Char, but got Integer
+spec/error_call_through_type_variable.kex:11:16: [KEXET-0491]: Error, `upperCase` expects argument 1 to be Char, but got Integer
 
 upperCase : Char -> Char
 
 upperCase : String -> String
    |
 11 |   IO.printLine(applyTo({ |n| n + 1 }, 41).upperCase)
-   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-spec/error_call_through_type_variable.kex:12:16: [KEXET-0491]: Error, `takesString` expects argument 1 to be String, but got Integer
+   |                ^^^^^^^ this has type Integer
+spec/error_call_through_type_variable.kex:12:28: [KEXET-0491]: Error, `takesString` expects argument 1 to be String, but got Integer
 
 takesString : String -> String
    |
+ 8 | let takesString(s: String) -> String = s
+   |                    ------ expected because of this parameter
+  ...
 12 |   IO.printLine(takesString(applyTo({ |n| n + 1 }, 41)))
-   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^ this has type Integer

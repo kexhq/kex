@@ -1638,6 +1638,7 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def, const std::string& module
     // `Beam` is reached through the module, never by spelling alone.
     const auto identity = modulePath.empty() ? def.name : modulePath + "." + def.name;
     m_adtVariants[identity] = names;
+    m_adtDeclarations[identity] = def.location;
     m_nullaryVariants[identity] = std::move(nullary);
     m_declaredTypeArity[identity] = def.typeParams.size();
     if (modulePath.empty()) {
@@ -3675,6 +3676,10 @@ auto TypeChecker::checkMatchExhaustiveness(
         list += missing[i];
     }
     error(diag::Code::NonExhaustiveMatchOn, loc, {{"type", adtName}, {"cases", list}});
+    if (const auto declared = m_adtDeclarations.find(adtName);
+        declared != m_adtDeclarations.end()) {
+        labelLast("", declared->second, "`" + adtName + "` is declared here");
+    }
     return true;
 }
 
@@ -5878,13 +5883,27 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 return result && literalCoercesTo(*result, effectiveReturnType);
             }()) {
             const bool required = effectiveReturnType == requiredResult;
+            // The result that answers the wrong type, underlined against the
+            // return type it breaks, when that result is the one at fault: an
+            // early `return` of another type leaves it on the declaration.
+            const ast::Expr* result = resultExpressionOf(clause);
+            const bool resultAtFault = !required && clause.returnAnnotation && result && [&] {
+                const auto typed = m_typeMap.find(result);
+                return typed != m_typeMap.end() &&
+                       typesEqual(resolve(typed->second), resolve(bodyType));
+            }();
             error(
                 required ? diag::Code::RequiredReturnTypeMismatch
                          : diag::Code::DeclaredReturnTypeMismatch,
-                def.location,
+                resultAtFault ? result->location : def.location,
                 {{"name", def.name},
                  {"expected", typeToString(effectiveReturnType)},
                  {"actual", typeToString(bodyType)}});
+            if (resultAtFault) {
+                labelLast(
+                    "this has type " + typeToString(bodyType), (*clause.returnAnnotation)->location,
+                    "expected because of this return type");
+            }
         }
         // A result written as a type variable promises any type the caller
         // asks for: a body that answers one concrete type, which the
@@ -7095,7 +7114,23 @@ auto TypeChecker::labelLast(std::string primary, SourceLocation other, std::stri
     }
     auto& last = m_diagnostics->back();
     last.label = std::move(primary);
-    last.labels.push_back({other, std::move(otherLabel)});
+    // Only a place in the diagnostic's own file: a declaration in the standard
+    // library or another unit would print that file, which the reader did not
+    // write and a spec's expected output cannot name.
+    if (other.line > 0 && other.file == last.location.file) {
+        last.labels.push_back({other, std::move(otherLabel)});
+    }
+}
+
+auto TypeChecker::resultExpressionOf(const ast::FunctionClause& clause) -> const ast::Expr* {
+    if (clause.body.empty() || !clause.body.back()) {
+        return nullptr;
+    }
+    const ast::Expr* result = clause.body.back().get();
+    if (const auto* returned = std::get_if<ast::ReturnExpr>(&result->kind)) {
+        result = returned->value.get();
+    }
+    return result;
 }
 
 auto TypeChecker::typeMismatch(SourceLocation loc, const TypePtr& expected, const TypePtr& actual)

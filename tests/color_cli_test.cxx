@@ -466,6 +466,69 @@ int main() {
             assertTrue(contains(out, expected), "snippet not laid out as expected: " + out);
         });
 
+        it("underlines the wrong argument and labels the parameter (kexhq/kex#719)", []() {
+            auto path = writeTempSource(
+                "let half(n: Integer) -> Integer = n / 2\n\nmain do\n  "
+                "IO.printLine(half(\"ten\"))\nend\n");
+            auto out = runKex({"--no-colors", "--check", path}, "");
+            std::remove(path.c_str());
+            const std::string expected =
+                ":4:21: [KEXET-0491]: Error, `half` expects argument 1 to be Integer, but got "
+                "String\n\nhalf : Integer -> Integer\n"
+                "  |\n"
+                "1 | let half(n: Integer) -> Integer = n / 2\n"
+                "  |             ------- expected because of this parameter\n"
+                " ...\n"
+                "4 |   IO.printLine(half(\"ten\"))\n"
+                "  |                     ^^^^^ this has type String\n";
+            assertTrue(contains(out, expected), "argument not underlined as expected: " + out);
+        });
+
+        it("labels no parameter of a function it did not see declared", []() {
+            auto path = writeTempSource("main do\n  IO.printLine(\"abc\".take(\"x\"))\nend\n");
+            auto out = runKex({"--no-colors", "--check", path}, "");
+            std::remove(path.c_str());
+            assertTrue(
+                contains(out, "  |                           ^^^ this has type String\n"),
+                "argument not underlined: " + out);
+            assertFalse(contains(out, "because of this parameter"), "labelled elsewhere: " + out);
+        });
+
+        it("underlines the result against the declared return type", []() {
+            auto path = writeTempSource(
+                "let label(n: Integer) -> Integer do\n  let doubled = n * 2\n  "
+                "\"value ${doubled}\"\nend\n\nmain do\n  IO.printLine(label(1))\nend\n");
+            auto out = runKex({"--no-colors", "--check", path}, "");
+            std::remove(path.c_str());
+            const std::string expected =
+                ":3:3: [KEXET-0127]: Error, `label` declared to return Integer but body returns "
+                "String\n"
+                "  |\n"
+                "1 | let label(n: Integer) -> Integer do\n"
+                "  |                          ------- expected because of this return type\n"
+                " ...\n"
+                "3 |   \"value ${doubled}\"\n"
+                "  |   ^^^^^^^^^^^^^^^^^^ this has type String\n";
+            assertTrue(contains(out, expected), "result not underlined as expected: " + out);
+        });
+
+        it("points a non-exhaustive match back at its type's declaration", []() {
+            auto path = writeTempSource(
+                "type Shade = Light | Tint(Integer)\n\nlet describe(shade: Shade) -> String do\n"
+                "  match shade do\n    Tint(n) => \"tint ${n}\"\n  end\nend\n\n"
+                "main do\n  IO.printLine(describe(Light))\nend\n");
+            auto out = runKex({"--no-colors", "--check", path}, "");
+            std::remove(path.c_str());
+            const std::string expected =
+                "  |\n"
+                "1 | type Shade = Light | Tint(Integer)\n"
+                "  | ---------------------------------- `Shade` is declared here\n"
+                " ...\n"
+                "4 |   match shade do\n"
+                "  |   ^^^^^^^^^^^^^^\n";
+            assertTrue(contains(out, expected), "declaration not labelled: " + out);
+        });
+
         it("prints only the diagnostic's line with --no-snippets", [annotated]() {
             auto path = writeTempSource(annotated);
             auto out = runKex({"--no-colors", "--no-snippets", "--check", path}, "");

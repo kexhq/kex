@@ -1,7 +1,9 @@
-spec/error_optional_for_payload.kex:8:1: [KEXET-0127]: Error, `firstOf` declared to return Integer but body returns Integer?
+spec/error_optional_for_payload.kex:8:53: [KEXET-0127]: Error, `firstOf` declared to return Integer but body returns Integer?
   |
 8 | let firstOf(list: [Integer]) -> Integer = list.first
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |                                 -------   ^^^^^^^^^^ this has type Integer?
+  |                                 |
+  |                                 expected because of this return type
 spec/error_optional_for_payload.kex:11:20: [KEXET-0001]: Error, type mismatch: expected Integer, got Integer?
    |
 11 |   let a: Integer = Just(0)
@@ -14,12 +16,15 @@ spec/error_optional_for_payload.kex:12:20: [KEXET-0001]: Error, type mismatch: e
    |          -------   ^^^^ this has type T1?
    |          |
    |          expected because of this annotation
-spec/error_optional_for_payload.kex:13:16: [KEXET-0491]: Error, `pick` expects argument 1 to be Integer, but got Integer?
+spec/error_optional_for_payload.kex:13:21: [KEXET-0491]: Error, `pick` expects argument 1 to be Integer, but got Integer?
 
 pick : Integer -> Integer
    |
+ 6 | let pick(n: Integer) -> Integer = n
+   |             ------- expected because of this parameter
+  ...
 13 |   IO.printLine(pick(Just(5)))
-   |                ^^^^^^^^^^^^^
+   |                     ^^^^^^^ this has type Integer?
 spec/error_optional_for_payload.kex:15:20: [KEXET-0001]: Error, type mismatch: expected Integer, got Integer?
    |
 15 |   let d: Integer = c

@@ -1,13 +1,19 @@
-spec/error_distinct_type_mismatch.kex:7:3: [KEXET-0491]: Error, `acceptUser` expects argument 1 to be UserId, but got Integer
+spec/error_distinct_type_mismatch.kex:7:18: [KEXET-0491]: Error, `acceptUser` expects argument 1 to be UserId, but got Integer
 
 acceptUser : UserId -> UserId
   |
+4 | let acceptUser(id: UserId) = id
+  |                    ------ expected because of this parameter
+ ...
 7 |   acceptUser(1 + 1)
-  |   ^^^^^^^^^^^^^^^^^
-spec/error_distinct_type_mismatch.kex:9:3: [KEXET-0491]: Error, `acceptUser` expects argument 1 to be UserId, but got OrderId
+  |              ^^^^^ this has type Integer
+spec/error_distinct_type_mismatch.kex:9:14: [KEXET-0491]: Error, `acceptUser` expects argument 1 to be UserId, but got OrderId
 
 acceptUser : UserId -> UserId
   |
+4 | let acceptUser(id: UserId) = id
+  |                    ------ expected because of this parameter
+ ...
 9 |   acceptUser(order)
-  |   ^^^^^^^^^^^^^^^^^
+  |              ^^^^^ this has type OrderId
 Aborted: 2 type errors. Fix them before running, or skip the check with --no-check.

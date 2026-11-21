@@ -1,12 +1,18 @@
-spec/error_argument_fixes_unknown.kex:18:16: [KEXET-0491]: Error, `strs` expects argument 1 to be [String], but got [Integer]
+spec/error_argument_fixes_unknown.kex:18:21: [KEXET-0491]: Error, `strs` expects argument 1 to be [String], but got [Integer]
 
 strs : [String] -> Integer
    |
+10 | let strs(xs: [String]) -> Integer = xs.count
+   |              -------- expected because of this parameter
+  ...
 18 |   IO.printLine(strs(numbers))
-   |                ^^^^^^^^^^^^^
-spec/error_argument_fixes_unknown.kex:25:3: [KEXET-0491]: Error, `count` expects argument 1 to be Process<Integer>, but got Process<String>
+   |                     ^^^^^^^ this has type [Integer]
+spec/error_argument_fixes_unknown.kex:25:9: [KEXET-0491]: Error, `count` expects argument 1 to be Process<Integer>, but got Process<String>
 
 count : Process<Integer> -> Void
    |
+13 | let count(to: Process<Integer>) -> Void = to.send(1)
+   |               ---------------- expected because of this parameter
+  ...
 25 |   count(me)
-   |   ^^^^^^^^^
+   |         ^^ this has type Process<String>

@@ -1,6 +1,6 @@
-spec/error_serving_deferred_reply_type.kex:9:15: [KEXET-0491]: Error, `reply` expects argument 2 to be Integer, but got String
+spec/error_serving_deferred_reply_type.kex:9:16: [KEXET-0491]: Error, `reply` expects argument 2 to be Integer, but got String
 
 reply : From<A> -> A -> Void
   |
 9 |     from.reply("wrong")
-  |     ^^^^^^^^^^^^^^^^^^^
+  |                ^^^^^^^ this has type String

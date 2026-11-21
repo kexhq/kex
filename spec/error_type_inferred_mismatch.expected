@@ -1,7 +1,7 @@
-spec/error_type_inferred_mismatch.kex:5:16: [KEXET-0491]: Error, `double` expects argument 1 to be Number, but got String
+spec/error_type_inferred_mismatch.kex:5:23: [KEXET-0491]: Error, `double` expects argument 1 to be Number, but got String
 
 double : Number -> Integer
   |
 5 |   IO.printLine(double("hello"))
-  |                ^^^^^^^^^^^^^^^
+  |                       ^^^^^^^ this has type String
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

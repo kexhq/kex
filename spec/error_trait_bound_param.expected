@@ -1,7 +1,10 @@
-spec/error_trait_bound_param.kex:15:16: [KEXET-0491]: Error, `showDescription` expects argument 1 to be Describable, but got Animal
+spec/error_trait_bound_param.kex:15:32: [KEXET-0491]: Error, `showDescription` expects argument 1 to be Describable, but got Animal
 
 showDescription : Describable -> String
    |
+12 | let showDescription(item: Describable) = item.describe()
+   |                           ----------- expected because of this parameter
+  ...
 15 |   IO.printLine(showDescription(Animal { name: "Cat" }))
-   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |                                ^^^^^^^^^^^^^^^^^^^^^^ this has type Animal
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

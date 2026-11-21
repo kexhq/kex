@@ -1,4 +1,7 @@
 spec/error_exhaustive_adt.kex:11:28: [KEXET-0107]: Error, non-exhaustive match on Color: missing case(s) Blue
    |
+ 8 | type Color = Red | Green | Blue
+   | ------------------------------- `Color` is declared here
+  ...
 11 |   let describe(c: Color) = match c do
    |                            ^^^^^^^^^^
