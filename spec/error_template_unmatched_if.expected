@@ -1,2 +1,5 @@
 spec/error_template_unmatched_if.kex:7:29: [KEXEC-0014]: Error, template `if` has no matching `end`
+  |
+7 |   IO.printLine(Template.text(`<% if x %>oops`))
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Aborted: compile-time expansion failed.

@@ -3,4 +3,7 @@ spec/error_typed_overload_no_match.kex:6:16: [KEXET-0491]: Error, `process` expe
 process : Integer -> Integer
 
 process : String -> String
+  |
+6 |   IO.printLine(process(3.14))
+  |                ^^^^^^^^^^^^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

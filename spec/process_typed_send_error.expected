@@ -1,4 +1,7 @@
 spec/process_typed_send_error.kex:14:9: [KEXET-0491]: Error, `send` expects argument 2 to be Msg, but got String
 
 send : Process<A> -> A -> Void
+   |
+14 |   p.send("wrong type")
+   |   ^^^^^^^^^^^^^^^^^^^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

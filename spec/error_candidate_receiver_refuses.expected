@@ -1,6 +1,12 @@
 spec/error_candidate_receiver_refuses.kex:14:26: [KEXET-0101]: Error, undefined method `read` for `Layer`
+   |
+14 |   IO.printLine(layer.read(1))
+   |                ^^^^^^^^^^^^^
 spec/error_candidate_receiver_refuses.kex:15:25: [KEXET-0491]: Error, `min` expects argument 1 to be Comparable, but got Layer
 
 min : Range<A> -> A?
 
 min : [A] -> A?
+   |
+15 |   IO.printLine(layer.min(2))
+   |                ^^^^^^^^^^^^

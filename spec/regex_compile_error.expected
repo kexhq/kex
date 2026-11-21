@@ -1,1 +1,4 @@
 spec/regex_compile_error.kex:11:28: [KEXEC-0054]: Error, missing closing parenthesis
+   |
+11 |   let bad = regex`(unclosed`
+   |             ^^^^^^^^^^^^^^^^

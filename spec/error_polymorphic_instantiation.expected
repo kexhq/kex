@@ -1,4 +1,10 @@
 spec/error_polymorphic_instantiation.kex:25:20: [KEXET-0463]: Error, cannot add Integer and String
+   |
+25 |   IO.printLine(n + s)
+   |                ^^^^^
 spec/error_polymorphic_instantiation.kex:26:16: [KEXET-0491]: Error, `takesInteger` expects argument 1 to be Integer, but got String
 
 takesInteger : Integer -> String
+   |
+26 |   IO.printLine(takesInteger(id("not an integer")))
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

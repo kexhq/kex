@@ -1,8 +1,14 @@
 spec/typestate_survives_standin.kex:19:22: [KEXET-0491]: Error, `print` expects argument 1 to be FileHandle<A, CanWrite>, but got FileHandle<CanRead, CannotWrite>
 
 print : FileHandle<A, CanWrite> -> Showable -> Void
+   |
+19 |   return reader.print("no")
+   |          ^^^^^^^^^^^^^^^^^^
 spec/typestate_survives_standin.kex:25:21: [KEXET-0491]: Error, `read` expects argument 1 to be FileHandle<CanRead, A>, but got FileHandle<CannotRead, CanWrite>
 
 read : FileHandle<CanRead, A> -> Result<String, ReadError>
 
 read : String -> Result<String, FS.FileError>
+   |
+25 |   return writer.read
+   |          ^^^^^^^^^^^

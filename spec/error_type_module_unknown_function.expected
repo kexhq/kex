@@ -1,2 +1,8 @@
 spec/error_type_module_unknown_function.kex:11:28: [KEXET-0423]: Error, `Time` has no function `monotonic`
+   |
+11 |   IO.inspect(Time.monotonic)
+   |              ^^^^^^^^^^^^^^
 spec/error_type_module_unknown_function.kex:14:29: [KEXET-0423]: Error, `Culture` has no function `named`
+   |
+14 |   IO.printLine(Culture.named("x"))
+   |                ^^^^^^^^^^^^^^^^^^

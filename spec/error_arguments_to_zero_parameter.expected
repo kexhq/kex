@@ -1,4 +1,16 @@
 spec/error_arguments_to_zero_parameter.kex:15:14: [KEXET-0484]: Error, `mk` takes no arguments; the function it returns expects 1 argument(s), got 2
+   |
+15 |   IO.inspect(mk(3, 4))
+   |              ^^^^^^^^
 spec/error_arguments_to_zero_parameter.kex:16:14: [KEXET-0001]: Error, type mismatch: expected Integer, got String
+   |
+16 |   IO.inspect(mk("three"))
+   |              ^^^^^^^^^^^
 spec/error_arguments_to_zero_parameter.kex:17:20: [KEXET-0485]: Error, `M.zero` takes no arguments, got 1
+   |
+17 |   IO.inspect(M.zero(22))
+   |              ^^^^^^^^^^
 spec/error_arguments_to_zero_parameter.kex:18:22: [KEXET-0485]: Error, `Time.now` takes no arguments, got 1
+   |
+18 |   IO.inspect(Time.now(22))
+   |              ^^^^^^^^^^^^

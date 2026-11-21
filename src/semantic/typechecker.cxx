@@ -7088,6 +7088,16 @@ auto TypeChecker::warning(diag::Code code, SourceLocation loc, diag::Args args) 
     }
 }
 
+auto TypeChecker::labelLast(std::string primary, SourceLocation other, std::string otherLabel)
+    -> void {
+    if (!m_diagnostics || m_diagnostics->empty()) {
+        return;
+    }
+    auto& last = m_diagnostics->back();
+    last.label = std::move(primary);
+    last.labels.push_back({other, std::move(otherLabel)});
+}
+
 auto TypeChecker::typeMismatch(SourceLocation loc, const TypePtr& expected, const TypePtr& actual)
     -> void {
     diag::Args args = {{"expected", typeToString(expected)}, {"actual", typeToString(actual)}};

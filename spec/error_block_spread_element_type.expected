@@ -1,3 +1,6 @@
 spec/error_block_spread_element_type.kex:8:47: [KEXET-0491]: Error, `doubled` expects argument 1 to be Integer, but got String
 
 doubled : Integer -> Integer
+  |
+8 |   IO.printLine([("a", 1)].map { |name, count| doubled(name) })
+  |                                               ^^^^^^^^^^^^^

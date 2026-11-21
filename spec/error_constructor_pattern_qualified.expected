@@ -1,1 +1,4 @@
 spec/error_constructor_pattern_qualified.kex:15:5: [KEXET-0112]: Error, `Paints` has no constructor `Dark`
+   |
+15 |     Paints.Dark => "dark"
+   |     ^^^^^^^^^^^

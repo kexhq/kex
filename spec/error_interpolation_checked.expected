@@ -7,3 +7,6 @@ length : Range<A> -> Integer
 length : String -> Integer
 
 length : [A] -> Integer
+   |
+10 |   IO.printLine("${n.length}")
+   |                   ^^^^^^^^

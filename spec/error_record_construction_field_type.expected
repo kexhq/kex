@@ -1,2 +1,5 @@
 spec/error_record_construction_field_type.kex:9:24: [KEXET-0454]: Error, `User.name` expects String, but got Integer
+  |
+9 |   let u = User { name: 42, age: 30 }
+  |                        ^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

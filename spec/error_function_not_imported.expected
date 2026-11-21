@@ -1,2 +1,8 @@
 spec/error_function_not_imported.kex:29:16: [KEXET-0165]: Error, undefined function: `put`. `Router.put` is not imported here
+   |
+29 |   IO.printLine(put("/commands", 2))
+   |                ^^^^^^^^^^^^^^^^^^^
 spec/error_function_not_imported.kex:30:16: [KEXET-0166]: Error, undefined function: `tableOf`. `Logs.tableOf` is private to `Logs`
+   |
+30 |   IO.printLine(tableOf("SELECT 1"))
+   |                ^^^^^^^^^^^^^^^^^^^

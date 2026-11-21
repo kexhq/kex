@@ -1,2 +1,8 @@
 spec/error_unknown_module_function.kex:7:31: [KEXET-0424]: Error, `Process` has no function `whereis`, did you mean `whereIs`?
+  |
+7 |   IO.printLine(Process.whereis(:logger))
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^
 spec/error_unknown_module_function.kex:8:29: [KEXET-0423]: Error, `Digest` has no function `sha512`
+  |
+8 |   IO.printLine(Digest.sha512("text"))
+  |                ^^^^^^^^^^^^^^^^^^^^^

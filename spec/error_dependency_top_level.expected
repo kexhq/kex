@@ -1,3 +1,12 @@
 spec/error_dependency_top_level.kex:12:16: [KEXET-0168]: Error, undefined function: `shelves`. pantry.kex declares it outside its module, for itself
+   |
+12 |   IO.printLine(shelves())
+   |                ^^^^^^^^^
 spec/error_dependency_top_level.kex:13:16: [KEXET-0168]: Error, undefined function: `Full`. pantry.kex declares it outside its module, for itself
+   |
+13 |   IO.printLine(Full(1))
+   |                ^^^^^^^
 spec/error_dependency_top_level.kex:14:16: [KEXET-0157]: Error, undefined constructor or type: `Empty`. pantry.kex declares it outside its module, for itself
+   |
+14 |   IO.printLine(Empty)
+   |                ^^^^^

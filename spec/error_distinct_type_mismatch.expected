@@ -1,7 +1,13 @@
 spec/error_distinct_type_mismatch.kex:7:3: [KEXET-0491]: Error, `acceptUser` expects argument 1 to be UserId, but got Integer
 
 acceptUser : UserId -> UserId
+  |
+7 |   acceptUser(1 + 1)
+  |   ^^^^^^^^^^^^^^^^^
 spec/error_distinct_type_mismatch.kex:9:3: [KEXET-0491]: Error, `acceptUser` expects argument 1 to be UserId, but got OrderId
 
 acceptUser : UserId -> UserId
+  |
+9 |   acceptUser(order)
+  |   ^^^^^^^^^^^^^^^^^
 Aborted: 2 type errors. Fix them before running, or skip the check with --no-check.

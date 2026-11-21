@@ -1,4 +1,13 @@
 spec/error_byte_literal_range.kex:2:24: [KEXET-0493]: Error, Byte literal must be in 0..255
+  |
+2 |   let negative: Byte = -1
+  |                        ^^
 spec/error_byte_literal_range.kex:3:24: [KEXET-0493]: Error, Byte literal must be in 0..255
+  |
+3 |   let tooLarge: Byte = 256
+  |                        ^^^
 spec/error_byte_literal_range.kex:4:28: [KEXET-0493]: Error, Byte literal must be in 0..255
+  |
+4 |   let list: [Byte] = [104, 300]
+  |                            ^^^
 Aborted: 3 type errors. Fix them before running, or skip the check with --no-check.

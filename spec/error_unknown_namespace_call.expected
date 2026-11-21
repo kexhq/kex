@@ -1,5 +1,20 @@
 spec/error_unknown_namespace_call.kex:11:21: [KEXET-0421]: Error, unknown module `Web.Server`
+   |
+11 |   let a = Web.Server.build(18080)
+   |           ^^^^^^^^^^
 spec/error_unknown_namespace_call.kex:12:11: [KEXET-0421]: Error, unknown module `Nope`
+   |
+12 |   let b = Nope.thing(1)
+   |           ^^^^
 spec/error_unknown_namespace_call.kex:13:11: [KEXET-0423]: Error, `Shop` has no function `cost`
+   |
+13 |   let c = Shop.cost(2)
+   |           ^^^^
 spec/error_unknown_namespace_call.kex:14:21: [KEXET-0422]: Error, `Shop` has no module `Inner`
+   |
+14 |   let d = Shop.Inner.price(3)
+   |           ^^^^^^^^^^
 spec/error_unknown_namespace_call.kex:15:21: [KEXET-0423]: Error, `IO` has no function `nothing`
+   |
+15 |   let e = IO.nothing("x")
+   |           ^^^^^^^^^^^^^^^

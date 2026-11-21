@@ -1,2 +1,5 @@
 spec/error_record_module_bare_ctor.kex:15:3: [KEXET-0165]: Error, undefined function: `Fahrenheit`. `Temperature.Fahrenheit` is not imported here
+   |
+15 |   Fahrenheit(0.0)
+   |   ^^^^^^^^^^^^^^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

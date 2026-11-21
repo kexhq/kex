@@ -20,6 +20,10 @@ struct ParseDiagnostic;
 
 namespace kex::diagnostics {
 
+// Whether a diagnostic shows its source with the span underlined
+// (kexhq/kex#657). On by default; `--no-snippets` and `--json` turn it off.
+inline bool snippets = true;
+
 // JSON string escaping (hand-rolled — no external dep).
 auto jsonEscape(const std::string& s) -> std::string;
 

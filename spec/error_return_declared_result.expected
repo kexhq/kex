@@ -1,2 +1,8 @@
 spec/error_return_declared_result.kex:8:5: [KEXET-0124]: Error, `firstWords` declared to return [String] but returns [Char?] here
+  |
+8 |     return lines.map { |line| line.first.try }
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 spec/error_return_declared_result.kex:15:5: [KEXET-0124]: Error, `count` declared to return Integer but returns String here
+   |
+15 |     return "none"
+   |     ^^^^^^^^^^^^^

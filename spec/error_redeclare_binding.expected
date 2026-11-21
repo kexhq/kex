@@ -1,5 +1,17 @@
 spec/error_redeclare_binding.kex:6:3: [KEXET-0133]: Error, cannot redeclare 'y': already declared with 'var'
+  |
+6 |   var y = 20
+  |   ^^^^^^^^^^
 spec/error_redeclare_binding.kex:9:3: [KEXET-0135]: Error, cannot redeclare immutable binding: x
+  |
+9 |   let x = "hello"
+  |   ^^^^^^^^^^^^^^^
 spec/error_redeclare_binding.kex:11:3: [KEXET-0134]: Error, cannot redeclare 'y': was declared with 'var'
+   |
+11 |   let y = 11
+   |   ^^^^^^^^^^
 spec/error_redeclare_binding.kex:12:3: [KEXET-0135]: Error, cannot redeclare immutable binding: x
+   |
+12 |   var x = 2
+   |   ^^^^^^^^^
 Aborted: 4 type errors. Fix them before running, or skip the check with --no-check.

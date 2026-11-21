@@ -1,1 +1,6 @@
-spec/error_router_build_type.kex:9:3: [KEXET-0001]: Error, type mismatch: expected Integer, got Net.HTTP.Router
+spec/error_router_build_type.kex:9:36: [KEXET-0001]: Error, type mismatch: expected Integer, got Net.HTTP.Router
+  |
+9 |   let wrong: Integer = Router.build
+  |              -------   ^^^^^^^^^^^^ this has type Net.HTTP.Router
+  |              |
+  |              expected because of this annotation

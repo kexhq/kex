@@ -1,7 +1,25 @@
 spec/error_or_block.kex:5:74: [KEXET-0434]: Error, `or` needs a fallback of type Integer, but got a block. `or` never calls it, so the block itself would be the answer; pass a plain default, or `match` on the result to compute one
+  |
+5 | let port(configured: Result<Integer, String>) -> Integer = configured.or { |_| 8080 }
+  |                                                                          ^
 spec/error_or_block.kex:8:31: [KEXET-0434]: Error, `or` needs a fallback of type Void, but got a block. `or` never calls it, so the block itself would be the answer; pass a plain default, or `match` on the result to compute one
+  |
+8 |   FS.File.write(path, "x").or { |_| die("no") }
+  |                               ^
 spec/error_or_block.kex:13:80: [KEXET-0436]: Error, `or` needs a fallback of type Integer, but got a function. `or` never calls it, so the function itself would be the answer; pass a plain default, or `match` on the result to compute one
+   |
+13 | let lambdaPort(configured: Result<Integer, String>) -> Integer = configured.or({ |_| 8080 })
+   |                                                                                ^^^^^^^^^^^^
 spec/error_or_block.kex:15:79: [KEXET-0436]: Error, `or` needs a fallback of type Integer, but got a function. `or` never calls it, so the function itself would be the answer; pass a plain default, or `match` on the result to compute one
+   |
+15 | let namedPort(configured: Result<Integer, String>) -> Integer = configured.or(fallbackPort)
+   |                                                                               ^^^^^^^^^^^^
 spec/error_or_block.kex:17:82: [KEXET-0436]: Error, `or` needs a fallback of type Integer, but got a function. `or` never calls it, so the function itself would be the answer; pass a plain default, or `match` on the result to compute one
+   |
+17 | let capturedPort(configured: Result<Integer, String>) -> Integer = configured.or(~fallbackPort)
+   |                                                                                  ^^^^^^^^^^^^^
 spec/error_or_block.kex:19:46: [KEXET-0435]: Error, `or` needs a fallback of type String, but got a function. `or` never calls it, so the function itself would be the answer; pass a plain default, or `match` on the optional to compute one
+   |
+19 | let label(name: String?) -> String = name.or(&.upperCase)
+   |                                              ^^^^^^^^^^^
 Aborted: 6 type errors. Fix them before running, or skip the check with --no-check.

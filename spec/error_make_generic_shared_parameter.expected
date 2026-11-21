@@ -1,8 +1,14 @@
 spec/error_make_generic_shared_parameter.kex:22:32: [KEXET-0491]: Error, `plus` expects argument 2 to be Qty<A>, but got Qty<Length>
 
 plus : Qty<A> -> Qty<A> -> Qty<A>
+   |
+22 |   let mixed = seconds(1.0).plus(meters(1.0))
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 spec/error_make_generic_shared_parameter.kex:23:32: [KEXET-0491]: Error, `<` expects argument 2 to be Qty<A>, but got Qty<Length>
 
 < : Measure<A> -> Measure<A> -> Bool
 
 < : Qty<A> -> Qty<A> -> Bool
+   |
+23 |   let ordered = seconds(1.0) < meters(2.0)
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,2 +1,5 @@
 spec/error_method_on_qualified_imported_type.kex:9:27: [KEXET-0101]: Error, undefined method `nmuber` for `Net.Port`
+  |
+9 |   IO.printLine(port.nmuber)
+  |                ^^^^^^^^^^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

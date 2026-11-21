@@ -1,3 +1,12 @@
 spec/pattern_unknown_constructor.kex:10:5: [KEXET-0115]: Error, `Some` is not a constructor of `Optional` (it has `Just`, `None`). This pattern can never match
+   |
+10 |     Some(v) => "some"
+   |     ^^^^^^^
 spec/pattern_unknown_constructor.kex:16:10: [KEXET-0115]: Error, `Some` is not a constructor of `Optional` (it has `Just`, `None`). This pattern can never match
+   |
+16 |   if let Some(v) = x
+   |          ^^^^^^^
 spec/pattern_unknown_constructor.kex:26:5: [KEXET-0115]: Error, `Yellow` is not a constructor of `Light` (it has `Red`, `Amber`, `Green`). This pattern can never match
+   |
+26 |     Yellow => "slow"
+   |     ^^^^^^

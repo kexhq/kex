@@ -1,2 +1,5 @@
 spec/error_returned_by_not_a_function.kex:4:35: [KEXET-0174]: Error, `Type.returnedBy` needs the NAME of a function; a lambda or a function value carries no signature
+  |
+4 | type FromLambda = Type.returnedBy(&.count)
+  |                                   ^^^^^^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

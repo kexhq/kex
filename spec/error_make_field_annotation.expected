@@ -1,3 +1,12 @@
 spec/error_make_field_annotation.kex:22:3: [KEXET-0184]: Error, `b` is declared in this `make` block but nothing defines it. Inside a `make` block `b : …` declares a METHOD, not a record field; declare fields in `record Thing`
+   |
+22 |   b : Integer
+   |   ^^^^^^^^^^^
 spec/error_make_field_annotation.kex:25:3: [KEXET-0183]: Error, `a` is declared in this `make` block but nothing defines it. Inside a `make` block `a : …` declares a METHOD, not a record field; the field is already declared by `record Thing`, so drop this line
+   |
+25 |   a : String
+   |   ^^^^^^^^^^
 spec/error_make_field_annotation.kex:28:3: [KEXET-0182]: Error, `shout` is declared in this `make` block but nothing defines it. A method the runtime provides is declared with `:>`, which makes the receiver implicit
+   |
+28 |   shout : String -> String
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^

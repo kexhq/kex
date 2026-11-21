@@ -1,2 +1,5 @@
 spec/error_multichars.kex:3:16: [KEXEL-0019]: Error, unterminated char literal
+  |
+3 |   IO.printLine('this is wrong (chars)')
+  |                ^^
 Aborted: 1 syntax error. Fix them before running.

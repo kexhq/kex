@@ -1,4 +1,7 @@
 spec/predicate_type_errors.kex:7:30: [KEXET-0491]: Error, `digit?` expects argument 1 to be Char, but got String
 
 digit? : Char -> Bool
+  |
+7 |   IO.printLine("hello".digit?)
+  |                ^^^^^^^^^^^^^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

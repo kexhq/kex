@@ -1,3 +1,9 @@
 spec/error_immut.kex:4:3: [KEXET-0411]: Error, cannot assign to immutable binding: x
+  |
+4 |   x = 33
+  |   ^^^^^^
 spec/error_immut.kex:7:3: [KEXET-0135]: Error, cannot redeclare immutable binding: x
+  |
+7 |   let x = []
+  |   ^^^^^^^^^^
 Aborted: 2 type errors. Fix them before running, or skip the check with --no-check.

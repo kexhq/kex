@@ -1,2 +1,5 @@
 spec/error_while_without_do.kex:4:14: [KEXEP-0097]: Error, expected 'do' after 'while' condition, got Newline
+  |
+4 |   while i < 3
+  |              ^
 Aborted: 1 syntax error. Fix them before running.

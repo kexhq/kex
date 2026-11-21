@@ -43,3 +43,6 @@ to : Measure<A> -> Type<String> -> TimeUnit -> NumberFormat -> String?
 to : Number -> Type<String> -> NumberFormat -> Culture.Culture -> String?
 
 to : Time -> Type<String> -> DateFormat -> Culture.Culture -> String?
+  |
+6 |   IO.printLine(90.minute.to(String, in: 5).or(""))
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^

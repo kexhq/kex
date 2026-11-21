@@ -1,2 +1,8 @@
 spec/error_ambiguous_receiver_make.kex:9:28: [KEXES-0004]: Error, `shout` is defined twice for receiver `String`. The declaration form gives neither definition priority, so the call is ambiguous
+  |
+9 | module B do make String do let shout -> String = "B:" + this end end
+  |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 spec/error_ambiguous_receiver_make.kex:8:28: note: the other definition is here
+  |
+8 | module A do make String do let shout -> String = "A:" + this end end
+  |                            ---------------------------------

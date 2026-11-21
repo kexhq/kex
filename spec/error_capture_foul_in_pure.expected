@@ -1,2 +1,5 @@
 spec/error_capture_foul_in_pure.kex:8:46: [KEXEF-0003]: Error, cannot capture foul function 'shout' from pure context
+  |
+8 | let quiet(xs: [String]) -> [String] = xs.map(~shout)
+  |                                              ^^^^^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

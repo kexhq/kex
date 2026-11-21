@@ -1,2 +1,5 @@
 spec/error_readable_missing_binary.kex:3:1: [KEXET-0131]: Error, make TextReader, implement: Readable. Missing required method 'readBytes'
+  |
+3 | make TextReader, implement: Readable do
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

@@ -1,4 +1,16 @@
 spec/error_constructor_arity_imported.kex:10:11: [KEXET-0102]: Error, `Just` takes 1 value, but got 0
+   |
+10 |   let a = Just()
+   |           ^^^^^^
 spec/error_constructor_arity_imported.kex:11:11: [KEXET-0102]: Error, `Ok` takes 1 value, but got 2
+   |
+11 |   let b = Ok(1, 2)
+   |           ^^^^^^^^
 spec/error_constructor_arity_imported.kex:12:11: [KEXET-0102]: Error, `Error` takes 1 value, but got 0
+   |
+12 |   let c = Error()
+   |           ^^^^^^^
 spec/error_constructor_arity_imported.kex:13:11: [KEXET-0102]: Error, `Circle` takes 1 value, but got 0
+   |
+13 |   let d = Circle()
+   |           ^^^^^^^^

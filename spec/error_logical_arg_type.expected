@@ -1,4 +1,7 @@
 spec/error_logical_arg_type.kex:4:16: [KEXET-0491]: Error, `both` expects argument 1 to be Bool, but got Integer
 
 both : Bool -> Bool -> Bool
+  |
+4 |   IO.printLine(both(42, false))
+  |                ^^^^^^^^^^^^^^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

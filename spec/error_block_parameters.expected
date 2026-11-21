@@ -1,7 +1,16 @@
 spec/error_block_parameters.kex:22:5: [KEXET-0001]: Error, type mismatch: expected Column, got Integer
+   |
+22 |     42
+   |     ^^
 spec/error_block_parameters.kex:24:20: [KEXET-0491]: Error, `createTable` expects argument 2 to be Block<TableBuilder, [Column]>, but got TableBuilder -> A -> [Column]
 
 createTable : String -> (Block<TableBuilder, [Column]>) -> [Column]
+   |
+24 |   let wrongArity = createTable("b") do |t, u|
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
 spec/error_block_parameters.kex:27:21: [KEXET-0491]: Error, `createTable` expects argument 2 to be Block<TableBuilder, [Column]>, but got () -> [String]
 
 createTable : String -> (Block<TableBuilder, [Column]>) -> [Column]
+   |
+27 |   let noParameter = createTable("c") do
+   |                     ^^^^^^^^^^^^^^^^^^^

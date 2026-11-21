@@ -1,2 +1,5 @@
 spec/error_then_else_from_enclosing_if.kex:7:25: [KEXEP-0063]: Error, expected 'else' after 'then', got Newline
+  |
+7 |     let x = ready then 1
+  |                         ^
 Aborted: 1 syntax error. Fix them before running.

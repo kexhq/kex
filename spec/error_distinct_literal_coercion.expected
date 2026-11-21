@@ -1,9 +1,25 @@
-spec/error_distinct_literal_coercion.kex:8:3: [KEXET-0001]: Error, type mismatch: expected BookId, got Integer
+spec/error_distinct_literal_coercion.kex:8:20: [KEXET-0001]: Error, type mismatch: expected BookId, got Integer
+  |
+8 |   let x : BookId = n
+  |           ------   ^ this has type Integer
+  |           |
+  |           expected because of this annotation
 spec/error_distinct_literal_coercion.kex:9:3: [KEXET-0491]: Error, `fetched` expects argument 1 to be BookId, but got Integer
 
 fetched : BookId -> BookId
+  |
+9 |   fetched(n)
+  |   ^^^^^^^^^^
 spec/error_distinct_literal_coercion.kex:10:3: [KEXET-0491]: Error, `fetched` expects argument 1 to be BookId, but got String
 
 fetched : BookId -> BookId
-spec/error_distinct_literal_coercion.kex:11:3: [KEXET-0001]: Error, type mismatch: expected TeamId, got Integer
+   |
+10 |   fetched("1")
+   |   ^^^^^^^^^^^^
+spec/error_distinct_literal_coercion.kex:11:20: [KEXET-0001]: Error, type mismatch: expected TeamId, got Integer
+   |
+11 |   let t : TeamId = 4
+   |           ------   ^ this has type Integer
+   |           |
+   |           expected because of this annotation
 Aborted: 4 type errors. Fix them before running, or skip the check with --no-check.
