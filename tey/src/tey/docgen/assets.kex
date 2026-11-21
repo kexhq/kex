@@ -7,7 +7,7 @@
 # The script itself is assets/site.js, embedded at compile time.
 
 module Tey.Docgen.Assets do
-  foul siteJs() -> String do
+  let siteJs() -> String do
     return Kex.embed("assets/site.js")
   end
 end

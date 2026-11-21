@@ -151,11 +151,11 @@ module Tey.Docgen.Index do
     return ()
   end
 
-  foul normalizeType(text: String) -> String do
+  let normalizeType(text: String) -> String do
     return text.replace(" ", "")
   end
 
-  foul optString(value: String?) -> String do
+  let optString(value: String?) -> String do
     return value.or("")
   end
 
@@ -178,11 +178,11 @@ module Tey.Docgen.Index do
 
   # The file's opening comment block, `#` markers stripped, ready for the same
   # Rdoc parse every other doc comment goes through.
-  foul leadingComment(lines: [String]) -> String do
+  let leadingComment(lines: [String]) -> String do
     return lines.takeWhile { |line| line.startsWith?("#") }.map { |line| commentBody(line) }.join("\n")
   end
 
-  foul commentBody(line: String) -> String do
+  let commentBody(line: String) -> String do
     return line.drop(2) if line.startsWith?("# ")
     return line.drop(1)
   end
@@ -190,7 +190,7 @@ module Tey.Docgen.Index do
   # The file's opening comment, when it is its own block: a blank line
   # after it, not a declaration. A comment that runs straight into a
   # declaration is that declaration's doc, and the page gets no intro.
-  foul fileHeader(lines: [String]) -> String do
+  let fileHeader(lines: [String]) -> String do
     let comment = lines.takeWhile { |line| line.trim.startsWith?("#") && !line.startsWith?("#!") }
     return "" if comment.empty?
     let after = lines.drop(comment.count).first.or("x")
@@ -200,7 +200,7 @@ module Tey.Docgen.Index do
 
   # "using List" -> "List"; anything else (a comment, a blank line, an
   # `only:` list) -> "".
-  foul usingName(line: String) -> String do
+  let usingName(line: String) -> String do
     return "" if !line.startsWith?("using ")
     return line.drop(6).split(",").first.or("").trim
   end
@@ -311,7 +311,7 @@ module Tey.Docgen.Index do
   end
 
   # "kex/ast" → "kex"; "fs" → "" (already inside versionDir).
-  foul dirNameOf(urlPath: String) -> String do
+  let dirNameOf(urlPath: String) -> String do
     let parts = urlPath.split("/")
     if parts.count <= 1
       return ""
@@ -360,7 +360,7 @@ module Tey.Docgen.Index do
   # reader of the file needs nothing but the file. Page paths stay relative
   # to the version directory — the URL prefix is `<package>/<version>/`, and
   # whoever assembles the site is the one that knows the site root.
-  foul versionManifestJson(pages: [SourcePage], model: PackageModel) -> String do
+  let versionManifestJson(pages: [SourcePage], model: PackageModel) -> String do
     return JSON.stringify({
       package: model.package,
       version: model.version,
@@ -370,7 +370,7 @@ module Tey.Docgen.Index do
     })
   end
 
-  foul manifestJson(pages: [SourcePage]) -> String do
+  let manifestJson(pages: [SourcePage]) -> String do
     return JSON.stringify(pages.map { |p|
       {
         path: p.urlPath,
@@ -396,7 +396,7 @@ module Tey.Docgen.Index do
 
   # This build's entry first, the other packages' and versions' kept: the
   # pure half of accumulate, so the upsert rule itself can be spec'd.
-  foul upsertVersion(current: VersionEntry, existing: [VersionEntry]) -> [VersionEntry] do
+  let upsertVersion(current: VersionEntry, existing: [VersionEntry]) -> [VersionEntry] do
     let kept = existing.filter { |e|
       !(e.package == current.package && e.id == current.id)
     }
@@ -420,7 +420,7 @@ module Tey.Docgen.Index do
     end
   end
 
-  foul parseVersionEntry(v: Any) -> VersionEntry do
+  let parseVersionEntry(v: Any) -> VersionEntry do
     return VersionEntry {
       id: jsonText(v["id"]),
       label: jsonText(v["label"]),
@@ -429,30 +429,30 @@ module Tey.Docgen.Index do
     }
   end
 
-  foul jsonText(value: Any?) -> String do
+  let jsonText(value: Any?) -> String do
     match value do
       Just(v) => "${v}"
       None => ""
     end
   end
 
-  foul labelOrPackage(model: PackageModel) -> String do
+  let labelOrPackage(model: PackageModel) -> String do
     if model.label.empty?
       return model.package
     end
     return model.label
   end
 
-  foul versionsJson(entries: [VersionEntry]) -> String do
+  let versionsJson(entries: [VersionEntry]) -> String do
     return JSON.stringify({ versions: entries.map { |e| versionEntryValue(e) } })
   end
 
-  foul versionEntryValue(e: VersionEntry) -> Any do
+  let versionEntryValue(e: VersionEntry) -> Any do
     let value: Any = { id: e.id, label: e.label, generatedAt: e.generatedAt, package: e.package }
     return value
   end
 
-  foul llmsTxt(pages: [SourcePage], model: PackageModel) -> String do
+  let llmsTxt(pages: [SourcePage], model: PackageModel) -> String do
     let label = if model.label.empty? then model.package else model.label end
     let root = normalizeBaseUrl(model.baseUrl)
     let home = "${root}/${model.package}/${model.version}"
@@ -476,19 +476,19 @@ module Tey.Docgen.Index do
     return header + links + "\n"
   end
 
-  foul llmsFullTxt(pages: [SourcePage], model: PackageModel) -> String do
+  let llmsFullTxt(pages: [SourcePage], model: PackageModel) -> String do
     let texts = pages.map { |p| Tey.Docgen.Markdown.pageMarkdown(p, model) }
     return texts.join("\n\n---\n\n") + "\n"
   end
 
-  foul robotsTxt(baseUrl: String) -> String do
+  let robotsTxt(baseUrl: String) -> String do
     if baseUrl.empty?
       return "User-agent: *\nAllow: /\n"
     end
     return "User-agent: *\nAllow: /\nSitemap: ${normalizeBaseUrl(baseUrl)}/sitemap.xml\n"
   end
 
-  foul sitemapXml(pages: [SourcePage], model: PackageModel) -> String do
+  let sitemapXml(pages: [SourcePage], model: PackageModel) -> String do
     let root = normalizeBaseUrl(model.baseUrl)
     let urls = pages.map { |p|
       "  <url>\n    <loc>${root}/${p.urlPath}</loc>\n    <lastmod>${model.generatedAt}</lastmod>\n  </url>"
@@ -501,7 +501,7 @@ module Tey.Docgen.Index do
     ].join("")
   end
 
-  foul normalizeBaseUrl(url: String) -> String do
+  let normalizeBaseUrl(url: String) -> String do
     if url.endsWith?("/")
       return url.take(url.count - 1)
     end

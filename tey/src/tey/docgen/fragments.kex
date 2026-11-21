@@ -57,7 +57,7 @@ module Tey.Docgen.Fragments do
   # Everything a theme might show beside the body: which unit and version
   # this is (the header badge), where the source lives, and the page's
   # sections for an "On this page" list.
-  foul unitData(model: PackageModel, source: String, toc: [TocEntry]) -> Any do
+  let unitData(model: PackageModel, source: String, toc: [TocEntry]) -> Any do
     let data: Any = {
       package: model.package,
       version: model.version,
@@ -76,7 +76,7 @@ module Tey.Docgen.Fragments do
     nested? : Bool
   end
 
-  foul tocValue(t: TocEntry) -> Any do
+  let tocValue(t: TocEntry) -> Any do
     let value: Any = { title: t.title, anchor: t.anchor, kind: t.kind, nested: t.nested? }
     return value
   end
@@ -84,35 +84,35 @@ module Tey.Docgen.Fragments do
   # The rail as markup too, so a theme template can place it without
   # walking JSON: a template language that sees the data as `Any` cannot
   # iterate it. A page with a single section has nothing to navigate.
-  foul tocHtml(toc: [TocEntry]) -> String do
+  let tocHtml(toc: [TocEntry]) -> String do
     return "" if toc.count < 2
     let items = toc.map { |t| "<li${tocClass(t)}><a href=\"#${Tey.Docgen.Html.esc(t.anchor)}\">${Tey.Docgen.Html.esc(t.title)}</a></li>" }
     return "<nav><p class=\"toc-heading\">On this page</p><ul>${items.join("")}</ul></nav>"
   end
 
-  foul tocClass(t: TocEntry) -> String do
+  let tocClass(t: TocEntry) -> String do
     return " class=\"toc-member\"" if t.kind == MemberKind
     return t.nested? then " class=\"toc-nested\"" else ""
   end
 
   # "/prelude/0.4.0/": where the unit is mounted.
-  foul unitRoot(model: PackageModel) -> String do
+  let unitRoot(model: PackageModel) -> String do
     return "/${model.package}/${model.version}/"
   end
 
-  foul pageUrl(model: PackageModel, urlPath: String) -> String do
+  let pageUrl(model: PackageModel, urlPath: String) -> String do
     return urlPath.empty? then unitRoot(model) else "${unitRoot(model)}${urlPath}/"
   end
 
   # The page tree, nested the way the standalone sidebar nests it: a module
   # family (Net, Net.DNS, Net.HTTP) is one branch.
-  foul navTree(pages: [SourcePage], model: PackageModel) -> Any do
+  let navTree(pages: [SourcePage], model: PackageModel) -> Any do
     let children = Tey.Docgen.Nav.topLevelPages(pages).map { |p| navNode(p, pages, model) }
     let tree: Any = { title: Tey.Docgen.Html.labelOf(model), path: unitRoot(model), children: children }
     return tree
   end
 
-  foul navNode(page: SourcePage, pages: [SourcePage], model: PackageModel) -> Any do
+  let navNode(page: SourcePage, pages: [SourcePage], model: PackageModel) -> Any do
     let children = Tey.Docgen.Nav.childPages(pages, page.title).map { |c| navNode(c, pages, model) }
     let node: Any = { title: page.title, path: pageUrl(model, page.urlPath), children: children }
     return node
@@ -123,13 +123,13 @@ module Tey.Docgen.Fragments do
   # the declarations a module holds. The members are what make the rail
   # worth having on the page of one long type: `List` is a single section
   # fifty functions deep.
-  foul tocOf(page: SourcePage, model: PackageModel) -> [TocEntry] do
+  let tocOf(page: SourcePage, model: PackageModel) -> [TocEntry] do
     return tocAt(page.entities, false, page, model)
   end
 
   # A module that is only the file's namespace has no section, so what it
   # declares stands at the top level of the rail.
-  foul tocAt(entities: [Entity], nested: Bool, page: SourcePage, model: PackageModel) -> [TocEntry] do
+  let tocAt(entities: [Entity], nested: Bool, page: SourcePage, model: PackageModel) -> [TocEntry] do
     return Tey.Docgen.Html.sectionEntities(entities).flatMap { |e|
       let own = TocEntry { title: tocTitle(e), anchor: anchorOf(e), kind: kindOf(e), nested?: nested }
       match e do
@@ -147,7 +147,7 @@ module Tey.Docgen.Fragments do
 
   # What the section of `e` lists, under the anchors the renderer gives
   # them: a type's functions come from the make blocks folded into it.
-  foul memberToc(e: Entity, entities: [Entity], model: PackageModel) -> [TocEntry] do
+  let memberToc(e: Entity, entities: [Entity], model: PackageModel) -> [TocEntry] do
     match e do
       TypeDecl(entry) => Tey.Docgen.Html.receiverOrder(Tey.Docgen.Html.makesFor(entities, entry.name), entry.name).flatMap { |m| functionToc(m.functions, m.target) }
       RecordDecl(entry) => Tey.Docgen.Html.receiverOrder(Tey.Docgen.Html.makesFor(entities, entry.name), entry.name).flatMap { |m| functionToc(m.functions, m.target) }
@@ -164,15 +164,15 @@ module Tey.Docgen.Fragments do
     end
   end
 
-  foul functionToc(functions: [FunctionEntry], owner: String) -> [TocEntry] do
+  let functionToc(functions: [FunctionEntry], owner: String) -> [TocEntry] do
     return functions.map { |f| f.name }.uniq.map { |n| memberEntry(n, memberAnchorOf(owner, n)) }
   end
 
-  foul memberEntry(name: String, anchor: String) -> TocEntry do
+  let memberEntry(name: String, anchor: String) -> TocEntry do
     return TocEntry { title: name, anchor: anchor, kind: MemberKind, nested?: true }
   end
 
-  foul tocTitle(e: Entity) -> String do
+  let tocTitle(e: Entity) -> String do
     match e do
       ModuleDecl(entry) => entry.qualifiedName
       _ => nameOf(e)
@@ -181,7 +181,7 @@ module Tey.Docgen.Fragments do
 
   # One sentence for the page's <meta name="description">: the file's intro,
   # else what its first declaration says, else its title.
-  foul descriptionOf(page: SourcePage) -> String do
+  let descriptionOf(page: SourcePage) -> String do
     let intro = Tey.Docgen.Html.firstSentence(Tey.Docgen.Rdoc.parseOrEmpty(page.intro).summary)
     return intro if !intro.empty?
     let first = page.entities.map { |e| Tey.Docgen.Html.firstSentence(Tey.Docgen.Html.summaryOf(e)) }.find { |s| !s.empty? }
@@ -192,7 +192,7 @@ module Tey.Docgen.Fragments do
   # page at `urlPath`, "../net.html#module-net" is "/prelude/0.4.0/net/#module-net"
   # and "index.html" is "/prelude/0.4.0/". A fragment-only href ("#x"), an
   # absolute one and an external URL stay as they are.
-  foul absolutize(html: String, model: PackageModel, urlPath: String) -> String do
+  let absolutize(html: String, model: PackageModel, urlPath: String) -> String do
     let parts = html.split("href=\"")
     let base = unitRoot(model).split("/").reject { |s| s.empty? } + Tey.Docgen.Index.dirNameOf(urlPath).split("/").reject { |s| s.empty? }
     let rewritten = parts.drop(1).map { |part|
@@ -202,7 +202,7 @@ module Tey.Docgen.Fragments do
     return parts.first.or("") + rewritten.join("")
   end
 
-  foul sitePath(href: String, base: [String]) -> String do
+  let sitePath(href: String, base: [String]) -> String do
     return href if href.empty? || href.startsWith?("#") || href.startsWith?("/") || href.contains?("://") || href.startsWith?("mailto:")
     let pieces = href.split("#")
     let target = pieces.first.or("")
@@ -218,7 +218,7 @@ module Tey.Docgen.Fragments do
     return "/" + segments.join("/") + fragment
   end
 
-  foul normalize(base: [String], rel: [String]) -> [String] do
+  let normalize(base: [String], rel: [String]) -> [String] do
     return rel.reduce(base, { |acc, s|
       if s == ".." then acc.take(acc.count - 1)
       elif s == "." || s.empty? then acc

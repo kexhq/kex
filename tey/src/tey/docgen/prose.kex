@@ -104,7 +104,7 @@ module Tey.Docgen.Prose do
     end
   end
 
-  foul pageOf(fileName: String, text: String) -> ProsePage do
+  let pageOf(fileName: String, text: String) -> ProsePage do
     let document = Tey.Docgen.Md.parseDocument(text)
     let urlPath = stripSuffix(fileName, ".md")
     # A page with no `title:` is titled by its file, so an untitled draft
@@ -122,7 +122,7 @@ module Tey.Docgen.Prose do
     }
   end
 
-  foul stripSuffix(name: String, suffix: String) -> String do
+  let stripSuffix(name: String, suffix: String) -> String do
     return name.take(name.count - suffix.count) if name.endsWith?(suffix)
     return name
   end
@@ -163,7 +163,7 @@ module Tey.Docgen.Prose do
   # not the module grid reference builds get. Deliberately separate from
   # `versionIndexHtml` — `tey docs build` keeps documenting any package, and
   # nothing about a book leaks into it.
-  foul proseIndexHtml(pages: [ProsePage], model: PackageModel) -> String do
+  let proseIndexHtml(pages: [ProsePage], model: PackageModel) -> String do
     let label = Tey.Docgen.Index.labelOrPackage(model)
     let heading = "<h1>${Tey.Docgen.Html.esc(label)} <span class=\"ver\">${Tey.Docgen.Html.esc(model.version)}</span></h1>"
     let lede = "<p class=\"lede\">${Tey.Docgen.Html.esc(label)} — read cover to cover, or jump in anywhere.</p>"
@@ -171,7 +171,7 @@ module Tey.Docgen.Prose do
     return Tey.Docgen.Html.layout(label, "", "${heading}\n${lede}\n<ol class=\"chapters\">\n${items}\n</ol>", model)
   end
 
-  foul chapterItem(prose: ProsePage) -> String do
+  let chapterItem(prose: ProsePage) -> String do
     let title = "<a href=\"${prose.page.urlPath}.html\">${Tey.Docgen.Html.esc(prose.page.title)}</a>"
     if prose.description.empty?
       return "<li>${title}</li>"
@@ -181,7 +181,7 @@ module Tey.Docgen.Prose do
 
   # Chapter footer: the siblings around this one, so the book reads forward
   # as well as sideways. First and last chapters link one way only.
-  foul prevNextHtml(pages: [ProsePage], index: Integer) -> String do
+  let prevNextHtml(pages: [ProsePage], index: Integer) -> String do
     match pages.at(index) do
       None => ""
       Just(prose) => do
@@ -191,7 +191,7 @@ module Tey.Docgen.Prose do
     end
   end
 
-  foul prevLink(pages: [ProsePage], index: Integer, up: String) -> String do
+  let prevLink(pages: [ProsePage], index: Integer, up: String) -> String do
     return "" if index <= 0
     match pages.at(index - 1) do
       None => ""
@@ -199,14 +199,14 @@ module Tey.Docgen.Prose do
     end
   end
 
-  foul nextLink(pages: [ProsePage], index: Integer, up: String) -> String do
+  let nextLink(pages: [ProsePage], index: Integer, up: String) -> String do
     match pages.at(index + 1) do
       None => ""
       Just(sibling) => "<a class=\"next\" href=\"${up}${sibling.page.urlPath}.html\">${Tey.Docgen.Html.esc(sibling.page.title)} →</a>"
     end
   end
 
-  foul chapterNav(prev: String, nextHtml: String) -> String do
+  let chapterNav(prev: String, nextHtml: String) -> String do
     if prev.empty?
       return "" if nextHtml.empty?
       return "<nav class=\"prevnext\">${nextHtml}</nav>"

@@ -252,7 +252,7 @@ module Tey.Docgen.Model do
   end
 
   # The kind label used in indexes and JSON for each entity variant.
-  foul kindOf(entity: Entity) -> String do
+  let kindOf(entity: Entity) -> String do
     match entity do
       TypeDecl(_) => "type"
       RecordDecl(_) => "record"
@@ -265,7 +265,7 @@ module Tey.Docgen.Model do
   end
 
   # The primary display name of an entity (a make's is its target type).
-  foul nameOf(entity: Entity) -> String do
+  let nameOf(entity: Entity) -> String do
     match entity do
       TypeDecl(e) => e.name
       RecordDecl(e) => e.name
@@ -277,7 +277,7 @@ module Tey.Docgen.Model do
     end
   end
 
-  foul qualifiedNameOf(entity: Entity) -> String do
+  let qualifiedNameOf(entity: Entity) -> String do
     match entity do
       TypeDecl(e) => e.qualifiedName
       RecordDecl(e) => e.qualifiedName
@@ -289,7 +289,7 @@ module Tey.Docgen.Model do
     end
   end
 
-  foul lineOf(entity: Entity) -> Integer do
+  let lineOf(entity: Entity) -> Integer do
     match entity do
       TypeDecl(e) => e.line
       RecordDecl(e) => e.line
@@ -304,7 +304,7 @@ module Tey.Docgen.Model do
   # The anchor id an entity's HTML section renders at. Lives here — not in
   # the HTML renderer — because the cross-link index and the sidebar compute
   # the same ids, and the HTML must match whatever they resolved to.
-  foul anchorOf(entity: Entity) -> String do
+  let anchorOf(entity: Entity) -> String do
     match entity do
       MakeDecl(e) => return "make-${ownerSlugOf(e.target)}"
       _ => return "${kindOf(entity)}-${slugOf(anchorNameOf(entity))}"
@@ -314,7 +314,7 @@ module Tey.Docgen.Model do
   # A make's anchor is keyed by its full target spelling (type params
   # included), a module's by its qualified name — the section ids are
   # derived from the same texts.
-  foul anchorNameOf(entity: Entity) -> String do
+  let anchorNameOf(entity: Entity) -> String do
     match entity do
       MakeDecl(e) => e.target
       _ => qualifiedNameOf(entity)
@@ -324,7 +324,7 @@ module Tey.Docgen.Model do
   # The anchor of a function documented inside a trait or make section:
   # scoped by its owner, because `count` is a member of both `[X]` and
   # `String`, and one page can hold several owners.
-  foul memberAnchorOf(owner: String, name: String) -> String do
+  let memberAnchorOf(owner: String, name: String) -> String do
     return "${ownerSlugOf(owner)}-${slugOf(name)}"
   end
 
@@ -332,25 +332,25 @@ module Tey.Docgen.Model do
   # `FileHandle<CanRead, W>` -> "filehandle-canread". Type variables (a lone
   # capital, optionally numbered) say nothing about WHICH methods these are,
   # so they are dropped rather than baked into every anchor.
-  foul ownerSlugOf(owner: String) -> String do
+  let ownerSlugOf(owner: String) -> String do
     let spelled = owner.replace("[", " List ").replace("{", " Map ")
     let words = Tey.Docgen.Model.wordsOf(spelled).reject { |w| typeVariable?(w) }
     let joined = words.map { |w| w.lowerCase }.join("-")
     return joined.empty? then slugOf(owner) else joined
   end
 
-  foul typeVariable?(word: String) -> Bool do
+  let typeVariable?(word: String) -> Bool do
     return false if word.empty? || word.count > 2
     let head = word.take(1)
     return head.upperCase == head && head.lowerCase != head && word.drop(1).all? { |c| c.digit? }
   end
 
   # Identifier-ish runs of a type text: letters, digits, `_`, `?`, `!`.
-  foul wordsOf(text: String) -> [String] do
+  let wordsOf(text: String) -> [String] do
     return text.split(" ").flatMap { |part| wordSplit(part, "", []) }.reject { |w| w.empty? }
   end
 
-  foul wordSplit(rest: String, word: String, out: [String]) -> [String] do
+  let wordSplit(rest: String, word: String, out: [String]) -> [String] do
     return out + [word] if rest.empty?
     let ch = rest.take(1)
     if "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_?!".contains?(ch)
@@ -362,7 +362,7 @@ module Tey.Docgen.Model do
   # An id-safe spelling of a name: lower case, every run of punctuation one
   # dash. `?` and `!` survive — they are part of Kex names (`empty?`) and
   # legal in a fragment.
-  foul slugOf(name: String) -> String do
+  let slugOf(name: String) -> String do
     let words = wordsOf(name.replace(".", " ").replace("/", " "))
     return operatorSlug(name) if words.empty?
     return words.map { |w| w.lowerCase }.join("-")
@@ -370,12 +370,12 @@ module Tey.Docgen.Model do
 
   # An operator method has no letters to slug: `+` is "op-plus", `<=>` is
   # "op-lt-eq-gt" — distinct, stable and readable in a URL.
-  foul operatorSlug(name: String) -> String do
+  let operatorSlug(name: String) -> String do
     let names = name.chars.map { |c| operatorCharName(c) }.reject { |n| n.empty? }
     return "op-" + names.join("-")
   end
 
-  foul operatorCharName(c: Char) -> String do
+  let operatorCharName(c: Char) -> String do
     match c do
       '+' => "plus"
       '-' => "minus"
@@ -400,7 +400,7 @@ module Tey.Docgen.Model do
   # "[X]" -> "List", "{K: V}" -> "Map", "FileHandle<R, W>" -> "FileHandle",
   # "Map<K, V>" -> "Map": the type a make block extends, whatever
   # specialisation it spells.
-  foul baseTypeOf(target: String) -> String do
+  let baseTypeOf(target: String) -> String do
     let t = target.trim
     return "List" if t.startsWith?("[")
     return "Map" if t.startsWith?("{")

@@ -80,7 +80,7 @@ module Tey.Docgen.Cli do
 
   # Styled like OptionParser's own blocks: a bold heading, then one aligned
   # row per entry, padded on the unstyled name.
-  foul outputsHelp() -> String do
+  let outputsHelp() -> String do
     let outputs = [
       ("<pkg>/<ver>/*.html", "one styled page per source file"),
       ("<pkg>/<ver>/*.md", "the same pages as Markdown"),

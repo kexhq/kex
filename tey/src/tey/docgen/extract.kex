@@ -11,7 +11,7 @@ module Tey.Docgen.Extract do
   using Kex.AST, only: [Node, TypeRef, PatternRef]
   using Tey.Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, SourcePage, Doc, nameOf, qualifiedNameOf]
 
-  foul fileEntities(items: [Kex.AST.Node]) -> [Entity] do
+  let fileEntities(items: [Kex.AST.Node]) -> [Entity] do
     return entitiesIn(items, "")
   end
 
@@ -22,7 +22,7 @@ module Tey.Docgen.Extract do
   # algebra.kex's "Algebraic structures: ..." read as the summary of
   # `Monoid`. The header is cut off that doc here and kept as the page's
   # own intro.
-  foul pageFor(source: String, items: [Kex.AST.Node], header: String) -> SourcePage do
+  let pageFor(source: String, items: [Kex.AST.Node], header: String) -> SourcePage do
     let detached = detachHeader(items, header)
     let entities = fileEntities(detached)
     return SourcePage {
@@ -35,7 +35,7 @@ module Tey.Docgen.Extract do
   end
 
   # The items with the header removed from the first documented one.
-  foul detachHeader(items: [Kex.AST.Node], header: String) -> [Kex.AST.Node] do
+  let detachHeader(items: [Kex.AST.Node], header: String) -> [Kex.AST.Node] do
     return items if header.trim.empty?
     match items.findIndex { |item| docOf(item) != None } do
       None => items
@@ -45,7 +45,7 @@ module Tey.Docgen.Extract do
     end
   end
 
-  foul withoutHeader(item: Kex.AST.Node, header: String) -> Kex.AST.Node do
+  let withoutHeader(item: Kex.AST.Node, header: String) -> Kex.AST.Node do
     let doc = docOf(item).or("")
     let head = header.trim
     # A doc that does not start with the header keeps everything: the header
@@ -55,7 +55,7 @@ module Tey.Docgen.Extract do
     return withDoc(item, remaining.empty? then None else Just(remaining))
   end
 
-  foul docOf(item: Kex.AST.Node) -> String? do
+  let docOf(item: Kex.AST.Node) -> String? do
     match item do
       TypeDef(info) => info.doc
       RecordDef(info) => info.doc
@@ -69,7 +69,7 @@ module Tey.Docgen.Extract do
     end
   end
 
-  foul withDoc(item: Kex.AST.Node, doc: String?) -> Kex.AST.Node do
+  let withDoc(item: Kex.AST.Node, doc: String?) -> Kex.AST.Node do
     match item do
       TypeDef(info) => TypeDef(Kex.AST.TypeInfo { ...info, doc: doc })
       RecordDef(info) => RecordDef(Kex.AST.RecordInfo { ...info, doc: doc })
@@ -87,7 +87,7 @@ module Tey.Docgen.Extract do
   # not the file name's "Optionparser", and "FileHandle", not "Filehandle".
   # Preference order: a single top-level module, then a single top-level
   # type/record/trait, then the file name title-cased.
-  foul pageTitle(source: String, entities: [Entity]) -> String do
+  let pageTitle(source: String, entities: [Entity]) -> String do
     let tops = entities.flatMap { |e|
       match e do
         ModuleDecl(entry) => [entry]
@@ -124,13 +124,13 @@ module Tey.Docgen.Extract do
   # Whether a declaration's name is the one a file stem spells: the stem
   # separates words with `_` and the name runs them together, so
   # `file_handle` names `FileHandle` (kexhq/kex#721).
-  foul namesStem?(name: String, stem: String) -> Bool do
+  let namesStem?(name: String, stem: String) -> Bool do
     return name.lowerCase == stem.replace("_", "").lowerCase
   end
 
   # "FileHandle<CanRead, W>" -> "FileHandle", "FS.Path" -> "Path": what the
   # file could plausibly be named after.
-  foul baseSpelling(name: String) -> String do
+  let baseSpelling(name: String) -> String do
     return (name.split("<").first.or("")).split(".").last.or("")
   end
 
@@ -142,7 +142,7 @@ module Tey.Docgen.Extract do
   # last segment matches the stem is the page ("dns.kex" -> Net.DNS); else
   # a nested module matching it is ("queue.kex" -> Data.Queue); else the
   # top module stands ("mock.kex" -> Mock, a file about the family).
-  foul moduleTitle(entry: ModuleEntry, stem: String) -> String do
+  let moduleTitle(entry: ModuleEntry, stem: String) -> String do
     return entry.qualifiedName if lastSegmentMatches?(entry.qualifiedName, stem)
     match nestedModuleNamed(entry.children, stem) do
       Just(qualified) => return qualified
@@ -150,11 +150,11 @@ module Tey.Docgen.Extract do
     end
   end
 
-  foul lastSegmentMatches?(qualifiedName: String, stem: String) -> Bool do
+  let lastSegmentMatches?(qualifiedName: String, stem: String) -> Bool do
     return namesStem?(qualifiedName.split(".").last.or(""), stem)
   end
 
-  foul nestedModuleNamed(children: [Entity], stem: String) -> String? do
+  let nestedModuleNamed(children: [Entity], stem: String) -> String? do
     match children.find { |c| namesStem?(nameOf(c), stem) } do
       Just(child) => Just(qualifiedNameOf(child))
       None => None
@@ -162,11 +162,11 @@ module Tey.Docgen.Extract do
   end
 
   # "kex/ast" -> "ast".
-  foul fileStem(path: String) -> String do
+  let fileStem(path: String) -> String do
     return path.split("/").last.or(path)
   end
 
-  foul entitiesIn(body: [Kex.AST.Node], prefix: String) -> [Entity] do
+  let entitiesIn(body: [Kex.AST.Node], prefix: String) -> [Entity] do
     return finalize(bodyEntities(body, prefix, []))
   end
 
@@ -199,7 +199,7 @@ module Tey.Docgen.Extract do
     default? : Bool
   end
 
-  foul bodyEntities(body: [Kex.AST.Node], prefix: String, accum: [Pending]) -> [Pending] do
+  let bodyEntities(body: [Kex.AST.Node], prefix: String, accum: [Pending]) -> [Pending] do
     if body.empty?
       return accum
     end
@@ -217,14 +217,14 @@ module Tey.Docgen.Extract do
     end
   end
 
-  foul finalize(accum: [Pending]) -> [Entity] do
+  let finalize(accum: [Pending]) -> [Entity] do
     return mergeMakes(accum.map { |p| finalizeOne(p) })
   end
 
   # Two `make Queue<A>` blocks in one file (one for the collection traits,
   # one for Blankable) are one set of methods to a reader: the later block
   # folds into the first, traits and members appended.
-  foul mergeMakes(entities: [Entity]) -> [Entity] do
+  let mergeMakes(entities: [Entity]) -> [Entity] do
     return entities.reduce([], { |acc, e|
       match e do
         MakeDecl(entry) => match acc.findIndex { |a| sameMakeTarget?(a, entry.target) } do
@@ -236,14 +236,14 @@ module Tey.Docgen.Extract do
     })
   end
 
-  foul sameMakeTarget?(e: Entity, target: String) -> Bool do
+  let sameMakeTarget?(e: Entity, target: String) -> Bool do
     match e do
       MakeDecl(entry) => entry.target == target
       _ => false
     end
   end
 
-  foul absorbMake(e: Entity, later: MakeEntry) -> Entity do
+  let absorbMake(e: Entity, later: MakeEntry) -> Entity do
     match e do
       MakeDecl(first) => MakeDecl(MakeEntry {
         target: first.target,
@@ -257,14 +257,14 @@ module Tey.Docgen.Extract do
     end
   end
 
-  foul finalizeOne(p: Pending) -> Entity do
+  let finalizeOne(p: Pending) -> Entity do
     match p do
       Done(entity) => entity
       PendingFn(fn) => FuncDecl(finalizeFunction(fn))
     end
   end
 
-  foul typeEntity(info: Kex.AST.TypeInfo, prefix: String) -> Entity do
+  let typeEntity(info: Kex.AST.TypeInfo, prefix: String) -> Entity do
     let variants = match info.variants do
       Just(vs) => Just(vs.map { |v| variantEntry(v) })
       None => None
@@ -282,11 +282,11 @@ module Tey.Docgen.Extract do
 
   # A named helper (rather than an inline lambda) so the element type of
   # `v.fields` comes from VariantInfo, not from VariantEntry's [String].
-  foul variantEntry(v: Kex.AST.VariantInfo) -> VariantEntry do
+  let variantEntry(v: Kex.AST.VariantInfo) -> VariantEntry do
     return VariantEntry { name: v.name, fields: v.fields.map { |f| typeText(f) } }
   end
 
-  foul recordEntity(info: Kex.AST.RecordInfo, prefix: String) -> Entity do
+  let recordEntity(info: Kex.AST.RecordInfo, prefix: String) -> Entity do
     return RecordDecl(RecordEntry {
       name: info.name,
       qualifiedName: qualify(prefix, info.name),
@@ -299,7 +299,7 @@ module Tey.Docgen.Extract do
     })
   end
 
-  foul traitEntity(info: Kex.AST.TraitInfo, prefix: String) -> Entity do
+  let traitEntity(info: Kex.AST.TraitInfo, prefix: String) -> Entity do
     return TraitDecl(TraitEntry {
       name: info.name,
       qualifiedName: qualify(prefix, info.name),
@@ -310,7 +310,7 @@ module Tey.Docgen.Extract do
     })
   end
 
-  foul makeEntity(info: Kex.AST.MakeInfo) -> Entity do
+  let makeEntity(info: Kex.AST.MakeInfo) -> Entity do
     return MakeDecl(MakeEntry {
       target: typeText(info.target),
       final?: info.final?,
@@ -323,7 +323,7 @@ module Tey.Docgen.Extract do
     })
   end
 
-  foul moduleEntity(info: Kex.AST.ModuleInfo, prefix: String) -> Entity do
+  let moduleEntity(info: Kex.AST.ModuleInfo, prefix: String) -> Entity do
     let nested = qualify(prefix, info.name)
     return ModuleDecl(ModuleEntry {
       name: info.name,
@@ -334,7 +334,7 @@ module Tey.Docgen.Extract do
     })
   end
 
-  foul constantEntity(info: Kex.AST.ConstantInfo, prefix: String) -> Entity do
+  let constantEntity(info: Kex.AST.ConstantInfo, prefix: String) -> Entity do
     return ConstDecl(ConstantEntry {
       name: info.name,
       qualifiedName: qualify(prefix, info.name),
@@ -344,7 +344,7 @@ module Tey.Docgen.Extract do
     })
   end
 
-  foul functionEntries(body: [Kex.AST.Node], prefix: String, receiverMethods: Bool) -> [FunctionEntry] do
+  let functionEntries(body: [Kex.AST.Node], prefix: String, receiverMethods: Bool) -> [FunctionEntry] do
     let entities = entitiesIn(body, prefix)
     let grouped = entities.map { |e|
       match e do
@@ -364,7 +364,7 @@ module Tey.Docgen.Extract do
     return grouped.reduce([], { |accum, group| accum + group })
   end
 
-  foul noteAnnotation(accum: [Pending], info: Kex.AST.AnnotationInfo, prefix: String) -> [Pending] do
+  let noteAnnotation(accum: [Pending], info: Kex.AST.AnnotationInfo, prefix: String) -> [Pending] do
     match findPending(accum, info.name) do
       None => accum + [PendingFn(PendingFunction {
         name: info.name,
@@ -379,7 +379,7 @@ module Tey.Docgen.Extract do
     end
   end
 
-  foul addAnnotation(p: Pending, info: Kex.AST.AnnotationInfo) -> Pending do
+  let addAnnotation(p: Pending, info: Kex.AST.AnnotationInfo) -> Pending do
     match p do
       PendingFn(fn) => do
         if fn.name != info.name
@@ -406,7 +406,7 @@ module Tey.Docgen.Extract do
     end
   end
 
-  foul noteFunction(accum: [Pending], info: Kex.AST.FunctionInfo, prefix: String) -> [Pending] do
+  let noteFunction(accum: [Pending], info: Kex.AST.FunctionInfo, prefix: String) -> [Pending] do
     # A module-level `let NAME = value` arrives as a zero-clause-param
     # function whose clause has NO parameter list — that, not arity, is what
     # distinguishes it from `foul f() = ...` (empty list, but present).
@@ -436,7 +436,7 @@ module Tey.Docgen.Extract do
   # a handle that is always the same one; `IO.getLine` reads a new line every
   # time it is named, and calling that a constant is a lie about both what it
   # does and when it happens.
-  foul constantBinding?(info: Kex.AST.FunctionInfo) -> Bool do
+  let constantBinding?(info: Kex.AST.FunctionInfo) -> Bool do
     if info.foul?
       return false
     end
@@ -446,7 +446,7 @@ module Tey.Docgen.Extract do
     end
   end
 
-  foul noteConstant(accum: [Pending], info: Kex.AST.FunctionInfo, prefix: String) -> [Pending] do
+  let noteConstant(accum: [Pending], info: Kex.AST.FunctionInfo, prefix: String) -> [Pending] do
     match findPending(accum, info.name) do
       None => accum + [Done(ConstDecl(ConstantEntry {
         name: info.name,
@@ -461,7 +461,7 @@ module Tey.Docgen.Extract do
 
   # The annotation arrived first and created a PendingFunction; the binding
   # now replaces it with the constant entry, keeping name/doc/line.
-  foul constantFromPending(p: Pending, info: Kex.AST.FunctionInfo, prefix: String) -> Pending do
+  let constantFromPending(p: Pending, info: Kex.AST.FunctionInfo, prefix: String) -> Pending do
     match p do
       PendingFn(fn) => do
         if fn.name != info.name
@@ -505,7 +505,7 @@ module Tey.Docgen.Extract do
     end
   end
 
-  foul returnTypeText(info: Kex.AST.FunctionInfo) -> String do
+  let returnTypeText(info: Kex.AST.FunctionInfo) -> String do
     let declared = info.clauses.flatMap { |clause|
       match clause.returnType do
         Just(ref) => [signatureTypeText(ref)]
@@ -515,7 +515,7 @@ module Tey.Docgen.Extract do
     return declared.first.or("")
   end
 
-  foul addClause(p: Pending, info: Kex.AST.FunctionInfo, lists: [[ParamSig]]) -> Pending do
+  let addClause(p: Pending, info: Kex.AST.FunctionInfo, lists: [[ParamSig]]) -> Pending do
     match p do
       PendingFn(fn) => do
         if fn.name != info.name
@@ -543,11 +543,11 @@ module Tey.Docgen.Extract do
     end
   end
 
-  foul findPending(accum: [Pending], name: String) -> Integer? do
+  let findPending(accum: [Pending], name: String) -> Integer? do
     return indexedFind(accum, name, 0)
   end
 
-  foul indexedFind(accum: [Pending], name: String, index: Integer) -> Integer? do
+  let indexedFind(accum: [Pending], name: String, index: Integer) -> Integer? do
     if accum.empty?
       return None
     end
@@ -558,7 +558,7 @@ module Tey.Docgen.Extract do
     end
   end
 
-  foul finalizeFunction(fn: PendingFunction) -> FunctionEntry do
+  let finalizeFunction(fn: PendingFunction) -> FunctionEntry do
     return FunctionEntry {
       name: fn.name,
       qualifiedName: fn.qualifiedName,
@@ -575,7 +575,7 @@ module Tey.Docgen.Extract do
   # The one return type the source commits to: the annotation's result, or
   # the inline `-> T` of an unannotated clause. What the @return tag says is
   # checked against this (Index.reportDocDrift), never shown instead of it.
-  foul declaredReturn(fn: PendingFunction) -> String do
+  let declaredReturn(fn: PendingFunction) -> String do
     match fn.annotations.first do
       Just(a) => do
         let ref = annotationRef(a)
@@ -593,14 +593,14 @@ module Tey.Docgen.Extract do
   end
 
   # What a curried type finally answers: `A -> (A -> T -> A) -> A` is A.
-  foul finalResult(ref: Kex.AST.TypeRef) -> Kex.AST.TypeRef do
+  let finalResult(ref: Kex.AST.TypeRef) -> Kex.AST.TypeRef do
     match ref do
       FunctionType(_, result) => finalResult(result)
       _ => ref
     end
   end
 
-  foul docReturnType(doc: Doc) -> String do
+  let docReturnType(doc: Doc) -> String do
     match doc.returns do
       Just(r) => r.typeName
       None => ""
@@ -610,14 +610,14 @@ module Tey.Docgen.Extract do
   # The type names a function is about — every parameter type plus the
   # result type of each annotation, deduplicated. This is what lets search
   # answer "what touches Integer" rather than just "what is called Integer".
-  foul functionTypes(fn: PendingFunction) -> [String] do
+  let functionTypes(fn: PendingFunction) -> [String] do
     let per = fn.annotations.map { |a| annotationTypes(a, fn.paramLists) }
     let inline = fn.paramLists.flatten.map { |p| p.typeName }
     let declared = fn.returnType.empty? then [] else [fn.returnType]
     return (per.flatten + inline + declared).reject { |t| t.empty? }.uniq
   end
 
-  foul annotationTypes(info: Kex.AST.AnnotationInfo, paramLists: [[ParamSig]]) -> [String] do
+  let annotationTypes(info: Kex.AST.AnnotationInfo, paramLists: [[ParamSig]]) -> [String] do
     let ref = annotationRef(info)
     match matchingParamList(ref, paramLists) do
       Just(names) => match flattenToArity(ref, names.count) do
@@ -641,7 +641,7 @@ module Tey.Docgen.Extract do
   # no clause at all (a trait's required method) has only its type, and
   # borrows parameter names from its @param tags when they line up.
 
-  foul signatureTexts(fn: PendingFunction) -> [String] do
+  let signatureTexts(fn: PendingFunction) -> [String] do
     if fn.annotations.empty?
       return match bestParams(fn.paramLists) do
         Just(params) => [plainSignature(fn, params)]
@@ -653,7 +653,7 @@ module Tey.Docgen.Extract do
 
   # A signature built from the clause alone: inline types first, the doc
   # tags as the fallback, bare names when neither says.
-  foul plainSignature(fn: PendingFunction, params: [ParamSig]) -> String do
+  let plainSignature(fn: PendingFunction, params: [ParamSig]) -> String do
     let result = fn.returnType.empty? then docReturnType(fn.doc) else fn.returnType
     if params.empty?
       return result.empty? then fn.name else "${fn.name} -> ${result}"
@@ -666,7 +666,7 @@ module Tey.Docgen.Extract do
     return "${fn.name}(${shown.join(", ")})${tail}"
   end
 
-  foul renderSignature(info: Kex.AST.AnnotationInfo, fn: PendingFunction) -> String do
+  let renderSignature(info: Kex.AST.AnnotationInfo, fn: PendingFunction) -> String do
     let ref = annotationRef(info)
     match bestParams(matchingParamLists(ref, fn.paramLists)) do
       Just(params) => do
@@ -689,7 +689,7 @@ module Tey.Docgen.Extract do
 
   # An annotation with no clause to take names from: the @param tags name
   # the parameters when there are exactly as many as the type has.
-  foul docNamedSignature(name: String, ref: Kex.AST.TypeRef, doc: Doc) -> String do
+  let docNamedSignature(name: String, ref: Kex.AST.TypeRef, doc: Doc) -> String do
     let arity = doc.params.count
     let plain = unnamedSignature(name, ref)
     return plain if arity == 0
@@ -708,35 +708,35 @@ module Tey.Docgen.Extract do
   # A type that cannot be paired with a clause is shown as the source wrote
   # it, sigil included: `:>` is what says the receiver is implied, and a
   # plain `:` in its place would describe a function that takes no receiver.
-  foul annotationSigil(info: Kex.AST.AnnotationInfo) -> String do
+  let annotationSigil(info: Kex.AST.AnnotationInfo) -> String do
     return info.implicitThis? then ":>" else ":"
   end
 
   # A function with nothing to name its parameters by still reads as a
   # function: `combine(This) -> This`, and with none to take, `lines ->
   # [String]`.
-  foul unnamedSignature(name: String, ref: Kex.AST.TypeRef) -> String do
+  let unnamedSignature(name: String, ref: Kex.AST.TypeRef) -> String do
     match ref do
       FunctionType(types, result) => "${name}(${types.map { |t| signatureParamText(t) }.join(", ")}) -> ${signatureTypeText(result)}"
       _ => "${name} -> ${signatureTypeText(ref)}"
     end
   end
 
-  foul paramText(name: String, typeName: String, optional: Bool) -> String do
+  let paramText(name: String, typeName: String, optional: Bool) -> String do
     let base = typeName.empty? then name else "${name}: ${parenthesized(typeName)}"
     return optional then "${base} = …" else base
   end
 
   # A function type inside a parameter list reads as the parameter's type
   # only in parentheses: `f: (T -> Void)`, not `f: T -> Void`.
-  foul parenthesized(typeName: String) -> String do
+  let parenthesized(typeName: String) -> String do
     return typeName if !typeName.contains?("->") || (typeName.startsWith?("(") && typeName.endsWith?(")"))
     return "(${typeName})"
   end
 
   # A pattern parameter (`repeat(0)`) shows the name its @param tag gives
   # that position, or `_` — never the literal, which reads as an argument.
-  foul displayName(p: ParamSig, index: Integer, fn: PendingFunction) -> String do
+  let displayName(p: ParamSig, index: Integer, fn: PendingFunction) -> String do
     return p.name if p.named? || (fn.name == ConversionName && typeArgument?(p.name))
     match fn.doc.params.at(index) do
       Just(tag) => tag.name
@@ -750,11 +750,11 @@ module Tey.Docgen.Extract do
   # pattern is a constructor being matched (`None`), not something to pass.
   let ConversionName = "to"
 
-  foul typeArgument?(pattern: String) -> Bool do
+  let typeArgument?(pattern: String) -> Bool do
     return pattern.take(1).chars.all? { |c| c.upper? } && !pattern.empty? && pattern.chars.all? { |c| c.letter? || c.digit? || c == '.' }
   end
 
-  foul docParamType(doc: Doc, name: String) -> String do
+  let docParamType(doc: Doc, name: String) -> String do
     match doc.params.find { |p| p.name == name } do
       Just(p) => p.typeName
       None => ""
@@ -764,7 +764,7 @@ module Tey.Docgen.Extract do
   # Of several clauses' parameter lists, the one that names the most
   # parameters — `repeat(n: Integer)` over `repeat(0)` — merged with the
   # types the other clauses of the same arity declare.
-  foul bestParams(lists: [[ParamSig]]) -> [ParamSig]? do
+  let bestParams(lists: [[ParamSig]]) -> [ParamSig]? do
     match lists.first do
       None => None
       Just(first) => do
@@ -775,11 +775,11 @@ module Tey.Docgen.Extract do
     end
   end
 
-  foul namedCount(list: [ParamSig]) -> Integer do
+  let namedCount(list: [ParamSig]) -> Integer do
     return list.filter { |p| p.named? }.count
   end
 
-  foul withPeerType(p: ParamSig, index: Integer, peers: [[ParamSig]]) -> ParamSig do
+  let withPeerType(p: ParamSig, index: Integer, peers: [[ParamSig]]) -> ParamSig do
     return p if !p.typeName.empty?
     let typed = peers.flatMap { |list|
       match list.at(index) do
@@ -793,7 +793,7 @@ module Tey.Docgen.Extract do
   # Source-style type text: function arrows chain to the right without the
   # redundant parentheses typeRefText adds, and a function-typed parameter is
   # parenthesized so `(X -> Y) -> Z` stays distinct from `X -> Y -> Z`.
-  foul signatureTypeText(ref: Kex.AST.TypeRef) -> String do
+  let signatureTypeText(ref: Kex.AST.TypeRef) -> String do
     match ref do
       FunctionType(params, result) =>
         "${params.map { |p| signatureParamText(p) }.join(", ")} -> ${signatureTypeText(result)}"
@@ -801,28 +801,28 @@ module Tey.Docgen.Extract do
     end
   end
 
-  foul signatureParamText(p: Kex.AST.TypeRef) -> String do
+  let signatureParamText(p: Kex.AST.TypeRef) -> String do
     match p do
       FunctionType(_, _) => "(${signatureTypeText(p)})"
       _ => typeText(p)
     end
   end
 
-  foul annotationRef(info: Kex.AST.AnnotationInfo) -> Kex.AST.TypeRef do
+  let annotationRef(info: Kex.AST.AnnotationInfo) -> Kex.AST.TypeRef do
     match info do
       Kex.AST.AnnotationInfo { type: t } => t
     end
   end
 
-  foul matchingParamList(ref: Kex.AST.TypeRef, paramLists: [[ParamSig]]) -> [ParamSig]? do
+  let matchingParamList(ref: Kex.AST.TypeRef, paramLists: [[ParamSig]]) -> [ParamSig]? do
     return paramLists.find { |names| paramsMatch?(ref, names) }
   end
 
-  foul matchingParamLists(ref: Kex.AST.TypeRef, paramLists: [[ParamSig]]) -> [[ParamSig]] do
+  let matchingParamLists(ref: Kex.AST.TypeRef, paramLists: [[ParamSig]]) -> [[ParamSig]] do
     return paramLists.filter { |names| paramsMatch?(ref, names) }
   end
 
-  foul paramsMatch?(ref: Kex.AST.TypeRef, names: [ParamSig]) -> Bool do
+  let paramsMatch?(ref: Kex.AST.TypeRef, names: [ParamSig]) -> Bool do
     match flattenToArity(ref, names.count) do
       FunctionType(params, _) => params.count == names.count
       _ => names.empty?
@@ -833,7 +833,7 @@ module Tey.Docgen.Extract do
   # `FilePath -> Read -> Mode -> R` with arity 3 becomes
   # `(FilePath, Read, Mode) -> R`. A type that runs out of layers first, or
   # whose next layer would overshoot, is left where it stands.
-  foul flattenToArity(ref: Kex.AST.TypeRef, arity: Integer) -> Kex.AST.TypeRef do
+  let flattenToArity(ref: Kex.AST.TypeRef, arity: Integer) -> Kex.AST.TypeRef do
     match ref do
       FunctionType(params, FunctionType(innerParams, innerResult)) => do
         return ref if params.count >= arity
@@ -849,18 +849,18 @@ module Tey.Docgen.Extract do
 
   # `let factor(@Nanosecond) = ...` matches on the receiver: the pattern
   # picks the clause and is not something a caller passes.
-  foul clauseParams(clause: Kex.AST.ClauseInfo) -> [ParamSig] do
+  let clauseParams(clause: Kex.AST.ClauseInfo) -> [ParamSig] do
     return clause.params.reject { |p| receiverPattern?(p) }.map { |p| paramSig(p) }
   end
 
-  foul receiverPattern?(p: Kex.AST.ParamInfo) -> Bool do
+  let receiverPattern?(p: Kex.AST.ParamInfo) -> Bool do
     match p do
       Kex.AST.ParamInfo { name: None, pattern: Just(ThisPattern(_)) } => true
       _ => false
     end
   end
 
-  foul paramSig(p: Kex.AST.ParamInfo) -> ParamSig do
+  let paramSig(p: Kex.AST.ParamInfo) -> ParamSig do
     let typeName = match p do
       Kex.AST.ParamInfo { type: Just(t) } => signatureParamText(t)
       _ => ""
@@ -872,7 +872,7 @@ module Tey.Docgen.Extract do
     return ParamSig { name: paramName(p), typeName: typeName, named?: named, default?: p.default? }
   end
 
-  foul paramName(p: Kex.AST.ParamInfo) -> String do
+  let paramName(p: Kex.AST.ParamInfo) -> String do
     match p do
       Kex.AST.ParamInfo { name: Just(n) } => n
       Kex.AST.ParamInfo { name: None, pattern: Just(pattern) } => Kex.AST.patternRefText(pattern)
@@ -880,24 +880,24 @@ module Tey.Docgen.Extract do
     end
   end
 
-  foul annotationTypeOf(info: Kex.AST.ConstantInfo) -> String do
+  let annotationTypeOf(info: Kex.AST.ConstantInfo) -> String do
     match info do
       Kex.AST.ConstantInfo { type: Just(t) } => typeText(t)
       _ => ""
     end
   end
 
-  foul fieldTypeName(f: Kex.AST.FieldInfo) -> String do
+  let fieldTypeName(f: Kex.AST.FieldInfo) -> String do
     match f do
       Kex.AST.FieldInfo { type: t } => typeText(t)
     end
   end
 
-  foul typeText(ref: Kex.AST.TypeRef) -> String do
+  let typeText(ref: Kex.AST.TypeRef) -> String do
     return Kex.AST.typeRefText(ref)
   end
 
-  foul typeTextOpt(ref: Kex.AST.TypeRef?) -> String do
+  let typeTextOpt(ref: Kex.AST.TypeRef?) -> String do
     match ref do
       Just(r) => Kex.AST.typeRefText(r)
       None => "?"
@@ -907,19 +907,19 @@ module Tey.Docgen.Extract do
   # Modules may be written fully qualified (`module FS.File do` inside
   # `module FS do`), so a dotted name already carries its prefix — never
   # prepend twice. A short name gets the parent's prefix as usual.
-  foul qualify(prefix: String, name: String) -> String do
+  let qualify(prefix: String, name: String) -> String do
     if prefix.empty? || name.startsWith?("${prefix}.")
       return name
     end
     return "${prefix}.${name}"
   end
 
-  foul stripExt(name: String) -> String do
+  let stripExt(name: String) -> String do
     return name.take(name.count - 4) if name.endsWith?(".kex")
     return name
   end
 
-  foul titleCase(s: String) -> String do
+  let titleCase(s: String) -> String do
     if s.empty?
       return s
     end

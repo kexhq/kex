@@ -13,12 +13,12 @@ module Tey.Docgen.Highlight do
     text : String
   end
 
-  foul highlight(source: String) -> String do
+  let highlight(source: String) -> String do
     return renderTokens(lexAll(source.chars, []))
   end
 
   # out accumulates newest-first; the final reverse restores source order.
-  foul lexAll(cs: [Char], out: [Tok]) -> [Tok] do
+  let lexAll(cs: [Char], out: [Tok]) -> [Tok] do
     if cs.empty?
       return out.reverse
     end
@@ -26,7 +26,7 @@ module Tey.Docgen.Highlight do
     return lexAll(rest, toks + out)
   end
 
-  foul nextToken(cs: [Char], out: [Tok]) -> ([Tok], [Char]) do
+  let nextToken(cs: [Char], out: [Tok]) -> ([Tok], [Char]) do
     let c = cs.first.or(' ')
     if c.space?
       let spaces = cs.takeWhile { |ch| ch.space? }
@@ -57,7 +57,7 @@ module Tey.Docgen.Highlight do
   end
 
   # cs starts after the opening quote; acc is newest-first tokens so far.
-  foul lexString(cs: [Char], acc: [Tok]) -> ([Tok], [Char]) do
+  let lexString(cs: [Char], acc: [Tok]) -> ([Tok], [Char]) do
     let (text, rest) = takeStringText(cs, [])
     let withText = if text.empty?
       acc
@@ -82,7 +82,7 @@ module Tey.Docgen.Highlight do
 
   # Collect literal string text up to (not including) the closing quote, an
   # interpolation opener, or the end of input. Backslash escapes are opaque.
-  foul takeStringText(cs: [Char], acc: [Char]) -> (String, [Char]) do
+  let takeStringText(cs: [Char], acc: [Char]) -> (String, [Char]) do
     if cs.empty?
       return (textOf(acc.reverse), cs)
     end
@@ -100,7 +100,7 @@ module Tey.Docgen.Highlight do
   # From just after "${", collect the interpolation body up to its matching
   # "}" (which is consumed but not collected). Embedded "..." strings are
   # skipped whole so braces inside them do not count.
-  foul balancedBraces(cs: [Char], depth: Integer, acc: [Char]) -> ([Char], [Char]) do
+  let balancedBraces(cs: [Char], depth: Integer, acc: [Char]) -> ([Char], [Char]) do
     if cs.empty?
       return (acc.reverse, cs)
     end
@@ -123,11 +123,11 @@ module Tey.Docgen.Highlight do
 
   # Consume a whole "..." literal starting at the opening quote; returns the
   # consumed characters (both quotes included) and the remainder.
-  foul skipString(cs: [Char]) -> ([Char], [Char]) do
+  let skipString(cs: [Char]) -> ([Char], [Char]) do
     return skipStringBody(cs.drop(1), ['"'])
   end
 
-  foul skipStringBody(cs: [Char], acc: [Char]) -> ([Char], [Char]) do
+  let skipStringBody(cs: [Char], acc: [Char]) -> ([Char], [Char]) do
     if cs.empty?
       return (acc.reverse, cs)
     end
@@ -142,7 +142,7 @@ module Tey.Docgen.Highlight do
     return skipStringBody(cs.drop(1), [c] + acc)
   end
 
-  foul lexNumber(cs: [Char]) -> ([Tok], [Char]) do
+  let lexNumber(cs: [Char]) -> ([Tok], [Char]) do
     if startsWithChars?(cs, "0x") || startsWithChars?(cs, "0X")
       let digits = cs.drop(2).takeWhile { |ch| hexDigit?(ch) }
       let count = 2 + digits.count
@@ -162,7 +162,7 @@ module Tey.Docgen.Highlight do
     return ([Tok { cls: "number", text: textOf(cs.take(total)) }], cs.drop(total))
   end
 
-  foul exponentLength(cs: [Char]) -> Integer do
+  let exponentLength(cs: [Char]) -> Integer do
     let c = cs.first.or(' ')
     if c != 'e' && c != 'E'
       return 0
@@ -176,11 +176,11 @@ module Tey.Docgen.Highlight do
     return 1 + signCount + digits.count
   end
 
-  foul hexDigit?(c: Char) -> Bool do
+  let hexDigit?(c: Char) -> Bool do
     return c.digit? || c.in?('a'..'f') || c.in?('A'..'F') || c == '_'
   end
 
-  foul lexIdentifier(cs: [Char], out: [Tok]) -> ([Tok], [Char]) do
+  let lexIdentifier(cs: [Char], out: [Tok]) -> ([Tok], [Char]) do
     let span = cs.takeWhile { |ch| identChar?(ch) }
     let word = textOf(span)
     let rest = cs.drop(span.count)
@@ -190,7 +190,7 @@ module Tey.Docgen.Highlight do
     return ([Tok { cls: cls, text: word }], rest)
   end
 
-  foul classifyWord(word: String, prevDot: Bool, nextCh: Char) -> String do
+  let classifyWord(word: String, prevDot: Bool, nextCh: Char) -> String do
     if keywords().contains?(word)
       return "keyword"
     end
@@ -214,18 +214,18 @@ module Tey.Docgen.Highlight do
 
   # The most recent token that is not whitespace: out is newest-first, so a
   # plain find walks backwards in time.
-  foul previousDot?(out: [Tok]) -> Bool do
+  let previousDot?(out: [Tok]) -> Bool do
     match out.find { |t| !(t.cls == "plain" && t.text.trim.empty?) } do
       Just(t) => t.text == "."
       None => false
     end
   end
 
-  foul identChar?(c: Char) -> Bool do
+  let identChar?(c: Char) -> Bool do
     return c.letter? || c.digit? || c == '_' || c == '?' || c == '!'
   end
 
-  foul lexOperator(cs: [Char]) -> ([Tok], [Char]) do
+  let lexOperator(cs: [Char]) -> ([Tok], [Char]) do
     if startsWithChars?(cs, "...")
       return ([Tok { cls: "op", text: "..." }], cs.drop(3))
     end
@@ -243,7 +243,7 @@ module Tey.Docgen.Highlight do
     return ([Tok { cls: "plain", text: c.string }], cs.drop(1))
   end
 
-  foul twoCharOp(cs: [Char]) -> String do
+  let twoCharOp(cs: [Char]) -> String do
     let s = textOf(cs.take(2))
     if ["->", "=>", "<-", "==", "!=", "<=", ">=", "&&", "||", "::", "??"].contains?(s)
       return s
@@ -254,7 +254,7 @@ module Tey.Docgen.Highlight do
   # Functions rather than module constants: on BEAM, method calls on a
   # module-level constant fail to dispatch.
 
-  foul keywords() -> [String] do
+  let keywords() -> [String] do
     return ["let", "var", "make", "record", "type", "do", "end", "match", "return",
             "if", "elif", "else", "then", "unless", "trait", "foul", "implement",
             "main", "static", "using", "module", "in", "loop", "receive", "spawn",
@@ -264,29 +264,29 @@ module Tey.Docgen.Highlight do
             "this", "timeout", "try", "trying", "when"]
   end
 
-  foul constants() -> [String] do
+  let constants() -> [String] do
     return ["true", "false", "nil", "Just", "None", "Some", "Ok", "Error",
             "Less", "Greater", "Equal", "This"]
   end
 
-  foul typeNames() -> [String] do
+  let typeNames() -> [String] do
     return ["Int", "Float", "Bool", "String", "Char", "Symbol", "Integer", "List",
             "Map", "Vector", "Set", "Result", "Optional", "Range", "Stream", "Feed",
             "Process", "IO", "Math", "File", "Http", "A", "B", "T", "K", "V"]
   end
 
-  foul renderTokens(toks: [Tok]) -> String do
+  let renderTokens(toks: [Tok]) -> String do
     return toks.map { |t| renderTok(t) }.join("")
   end
 
   # The same highlighting, with every type name that `hrefOf` can place
   # wrapped in a link to it — signatures read as code and navigate as a
   # reference. `hrefOf` answers "" for a name it cannot place.
-  foul highlightLinked(source: String, hrefOf: (String -> String)) -> String do
+  let highlightLinked(source: String, hrefOf: (String -> String)) -> String do
     return lexAll(source.chars, []).map { |t| renderLinkedTok(t, hrefOf) }.join("")
   end
 
-  foul renderLinkedTok(t: Tok, hrefOf: (String -> String)) -> String do
+  let renderLinkedTok(t: Tok, hrefOf: (String -> String)) -> String do
     let plain = renderTok(t)
     return plain if t.cls != "type"
     let href = hrefOf(t.text)
@@ -294,7 +294,7 @@ module Tey.Docgen.Highlight do
     return "<a class=\"xref\" href=\"${esc(href)}\">${plain}</a>"
   end
 
-  foul renderTok(t: Tok) -> String do
+  let renderTok(t: Tok) -> String do
     if t.cls == "plain" || t.cls == "ident"
       return esc(t.text)
     end
@@ -303,15 +303,15 @@ module Tey.Docgen.Highlight do
 
   # Local copy of Tey.Docgen.Html.esc — duplicating four replaces keeps the
   # modules acyclic (Html calls Highlight for code blocks).
-  foul esc(s: String) -> String do
+  let esc(s: String) -> String do
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
   end
 
-  foul textOf(cs: [Char]) -> String do
+  let textOf(cs: [Char]) -> String do
     return cs.map { |c| c.string }.join("")
   end
 
-  foul startsWithChars?(cs: [Char], s: String) -> Bool do
+  let startsWithChars?(cs: [Char], s: String) -> Bool do
     return cs.take(s.count) == s.chars
   end
 end

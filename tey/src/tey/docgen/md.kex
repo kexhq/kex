@@ -48,14 +48,14 @@ module Tey.Docgen.Md do
   end
 
   # The whole job: text in, document out.
-  foul parseDocument(text: String) -> Document do
+  let parseDocument(text: String) -> Document do
     let (front, body) = splitFrontmatter(text.replace("\r\n", "\n").split("\n"))
     return Document { frontmatter: front, blocks: parseBlocks(body) }
   end
 
   # Text in, HTML out — `parse` then `render`, which is all a caller wanting a
   # page body needs.
-  foul toHtml(text: String) -> String do
+  let toHtml(text: String) -> String do
     return render(parseDocument(text).blocks)
   end
 
@@ -63,7 +63,7 @@ module Tey.Docgen.Md do
 
   # A leading `---` fence delimits frontmatter. Without one the document is
   # all body, and every field takes its default.
-  foul splitFrontmatter(lines: [String]) -> (Frontmatter, [String]) do
+  let splitFrontmatter(lines: [String]) -> (Frontmatter, [String]) do
     if lines.first.or("").trim != "---"
       return (Frontmatter {}, lines)
     end
@@ -77,13 +77,13 @@ module Tey.Docgen.Md do
     end
   end
 
-  foul closingFence(lines: [String], index: Integer) -> Integer? do
+  let closingFence(lines: [String], index: Integer) -> Integer? do
     return None if index >= lines.count
     return Just(index) if lines.at(index).or("").trim == "---"
     return closingFence(lines, index + 1)
   end
 
-  foul frontmatterOf(lines: [String], accum: Frontmatter) -> Frontmatter do
+  let frontmatterOf(lines: [String], accum: Frontmatter) -> Frontmatter do
     if lines.empty?
       return accum
     end
@@ -99,37 +99,37 @@ module Tey.Docgen.Md do
     end
   end
 
-  foul assign(front: Frontmatter, key: String, value: String) -> Frontmatter do
+  let assign(front: Frontmatter, key: String, value: String) -> Frontmatter do
     return Frontmatter { ...front, title: value } if key == "title"
     return Frontmatter { ...front, description: value } if key == "description"
     return Frontmatter { ...front, order: Integer.parse(value).or(0) } if key == "order"
     return front
   end
 
-  foul unquote(value: String) -> String do
+  let unquote(value: String) -> String do
     return trimEnds(value) if quoted?(value, "\"")
     return trimEnds(value) if quoted?(value, "'")
     return value
   end
 
   # Drops the first and last character — the quotes `quoted?` just matched.
-  foul trimEnds(value: String) -> String do
+  let trimEnds(value: String) -> String do
     return value.drop(1).take(value.count - 2)
   end
 
-  foul quoted?(value: String, mark: String) -> Bool do
+  let quoted?(value: String, mark: String) -> Bool do
     return value.count >= 2 && value.startsWith?(mark) && value.endsWith?(mark)
   end
 
   # --- block structure ---------------------------------------------------
 
-  foul parseBlocks(lines: [String]) -> [MdBlock] do
+  let parseBlocks(lines: [String]) -> [MdBlock] do
     return blockLoop(lines, [])
   end
 
   # One pass over the lines, each branch consuming the whole construct it
   # recognises and returning the lines it did not take.
-  foul blockLoop(lines: [String], accum: [MdBlock]) -> [MdBlock] do
+  let blockLoop(lines: [String], accum: [MdBlock]) -> [MdBlock] do
     if lines.empty?
       return accum
     end
@@ -164,24 +164,24 @@ module Tey.Docgen.Md do
     return blockLoop(afterParagraph, accum + [paragraph])
   end
 
-  foul fence?(line: String) -> Bool do
+  let fence?(line: String) -> Bool do
     return line.trim.startsWith?("```")
   end
 
   # `---`, `***` or `___`, three or more, nothing else on the line. Checked
   # after frontmatter is gone, so a stray `---` here really is a break.
-  foul rule?(line: String) -> Bool do
+  let rule?(line: String) -> Bool do
     let t = line.trim
     return false if t.count < 3
     return ruleOf?(t, "-") || ruleOf?(t, "*") || ruleOf?(t, "_")
   end
 
-  foul ruleOf?(text: String, mark: String) -> Bool do
+  let ruleOf?(text: String, mark: String) -> Bool do
     return text.chars.all? { |c| c.string == mark }
   end
 
   # `##` → 2. Zero when the line is not a heading; `#hashtag` is not one.
-  foul headingLevel(line: String) -> Integer do
+  let headingLevel(line: String) -> Integer do
     let t = line.trim
     let hashes = countHashes(t, 0)
     return 0 if hashes == 0 || hashes > 6
@@ -189,7 +189,7 @@ module Tey.Docgen.Md do
     return hashes
   end
 
-  foul countHashes(text: String, seen: Integer) -> Integer do
+  let countHashes(text: String, seen: Integer) -> Integer do
     return seen if !text.startsWith?("#")
     return countHashes(text.drop(1), seen + 1)
   end
@@ -198,7 +198,7 @@ module Tey.Docgen.Md do
 
   # The info string is the language. An unterminated fence runs to the end of
   # the document rather than failing — a truncated page still renders.
-  foul takeCode(lines: [String]) -> (MdBlock, [String]) do
+  let takeCode(lines: [String]) -> (MdBlock, [String]) do
     let language = lines.first.or("").trim.drop(3).trim
     let rest = lines.drop(1)
     let end? = closingCodeFence(rest, 0)
@@ -206,7 +206,7 @@ module Tey.Docgen.Md do
     return (Code(language, body.join("\n")), rest.drop(end? + 1))
   end
 
-  foul closingCodeFence(lines: [String], index: Integer) -> Integer do
+  let closingCodeFence(lines: [String], index: Integer) -> Integer do
     return index if index >= lines.count
     return index if fence?(lines.at(index).or(""))
     return closingCodeFence(lines, index + 1)
@@ -216,18 +216,18 @@ module Tey.Docgen.Md do
 
   # `>` is stripped from each line and what remains is parsed as blocks, so a
   # quote can hold anything a document can, nesting included.
-  foul takeQuote(lines: [String]) -> (MdBlock, [String]) do
+  let takeQuote(lines: [String]) -> (MdBlock, [String]) do
     let taken = lines.takeWhile { |line| quoteLine?(line) }
     let inner = taken.map { |line| stripQuote(line) }
     return (Quote(parseBlocks(inner)), lines.drop(taken.count))
   end
 
-  foul quoteLine?(line: String) -> Bool do
+  let quoteLine?(line: String) -> Bool do
     let t = line.trim
     return t.startsWith?("> ") || t == ">"
   end
 
-  foul stripQuote(line: String) -> String do
+  let stripQuote(line: String) -> String do
     let t = line.trim
     return "" if t == ">"
     return t.drop(2)
@@ -238,7 +238,7 @@ module Tey.Docgen.Md do
   # Nesting is by indentation: a line indented past the first item's marker
   # belongs to that item and is parsed as blocks in its own right, so a list
   # can hold paragraphs, code and deeper lists.
-  foul takeList(lines: [String]) -> (MdBlock, [String]) do
+  let takeList(lines: [String]) -> (MdBlock, [String]) do
     let ordered? = numberMarker(lines.first.or("")) != ""
     let taken = lines.takeWhile { |line| listLine?(line) }
     let items = listItems(taken, indentOf(lines.first.or("")), [], [])
@@ -248,13 +248,13 @@ module Tey.Docgen.Md do
   # A list continues through its own items, indented continuation lines, and
   # blank lines — but a blank line followed by unindented text ends it, which
   # is why the run is cut at the first line that is neither.
-  foul listLine?(line: String) -> Bool do
+  let listLine?(line: String) -> Bool do
     return true if line.trim.empty?
     return true if bulletMarker(line) != "" || numberMarker(line) != ""
     return indentOf(line) > 0
   end
 
-  foul listItems(lines: [String], indent: Integer, current: [String],
+  let listItems(lines: [String], indent: Integer, current: [String],
                  accum: [ListItem]) -> [ListItem] do
     if lines.empty?
       return flushItem(current, accum)
@@ -271,7 +271,7 @@ module Tey.Docgen.Md do
 
   # The first line is the item's own text; anything below it is nested
   # content, dedented so it parses as a document of its own.
-  foul flushItem(current: [String], accum: [ListItem]) -> [ListItem] do
+  let flushItem(current: [String], accum: [ListItem]) -> [ListItem] do
     if current.empty?
       return accum
     end
@@ -281,31 +281,31 @@ module Tey.Docgen.Md do
     return accum + [ListItem { text: text, children: parseBlocks(trimmed) }]
   end
 
-  foul dropTrailingBlanks(lines: [String]) -> [String] do
+  let dropTrailingBlanks(lines: [String]) -> [String] do
     return lines if lines.empty?
     return lines if !lines.last.or("").trim.empty?
     return dropTrailingBlanks(lines.take(lines.count - 1))
   end
 
   # Removes the common indent, so nested content is parsed at column zero.
-  foul dedent(lines: [String]) -> [String] do
+  let dedent(lines: [String]) -> [String] do
     let content = lines.reject { |line| line.trim.empty? }
     return lines if content.empty?
     let least = content.map { |line| indentOf(line) }.reduce(9999, { |a, b| a < b then a else b })
     return lines.map { |line| line.trim.empty? then "" else line.drop(least) }
   end
 
-  foul indentOf(line: String) -> Integer do
+  let indentOf(line: String) -> Integer do
     return line.chars.takeWhile { |c| c == ' ' || c == '\t' }.count
   end
 
-  foul itemMarker(line: String) -> String do
+  let itemMarker(line: String) -> String do
     let bullet = bulletMarker(line)
     return bullet if bullet != ""
     return numberMarker(line)
   end
 
-  foul bulletMarker(line: String) -> String do
+  let bulletMarker(line: String) -> String do
     let t = line.trim
     return "-" if t.startsWith?("- ")
     return "*" if t.startsWith?("* ")
@@ -314,7 +314,7 @@ module Tey.Docgen.Md do
   end
 
   # "12. " → "12." ; anything else → "".
-  foul numberMarker(line: String) -> String do
+  let numberMarker(line: String) -> String do
     let t = line.trim
     let digits = t.chars.takeWhile { |c| c.digit? }.map { |c| c.string }.join("")
     return "" if digits.empty?
@@ -326,23 +326,23 @@ module Tey.Docgen.Md do
 
   # A GFM table is a header row and a delimiter row of dashes; without the
   # delimiter the lines are ordinary paragraphs.
-  foul tableStart?(lines: [String]) -> Bool do
+  let tableStart?(lines: [String]) -> Bool do
     return false if lines.count < 2
     return false if !lines.first.or("").contains?("|")
     return delimiterRow?(lines.at(1).or(""))
   end
 
-  foul delimiterRow?(line: String) -> Bool do
+  let delimiterRow?(line: String) -> Bool do
     let t = line.trim
     return false if !t.contains?("-")
     return t.chars.all? { |c| delimiterChar?(c.string) }
   end
 
-  foul delimiterChar?(c: String) -> Bool do
+  let delimiterChar?(c: String) -> Bool do
     return c == "-" || c == "|" || c == ":" || c == " "
   end
 
-  foul takeTable(lines: [String]) -> (MdBlock, [String]) do
+  let takeTable(lines: [String]) -> (MdBlock, [String]) do
     let header = cellsOf(lines.first.or(""))
     let rest = lines.drop(2)
     let bodyLines = rest.takeWhile { |line| line.contains?("|") && !line.trim.empty? }
@@ -352,7 +352,7 @@ module Tey.Docgen.Md do
 
   # Leading and trailing pipes are optional, so the split is trimmed of the
   # empty cells they produce.
-  foul cellsOf(line: String) -> [String] do
+  let cellsOf(line: String) -> [String] do
     let t = line.trim
     let inner = t.startsWith?("|") then t.drop(1) else t
     let core = inner.endsWith?("|") then inner.take(inner.count - 1) else inner
@@ -363,13 +363,13 @@ module Tey.Docgen.Md do
 
   # Runs to a blank line or to the start of any other construct, so a list or
   # fence directly under prose is not swallowed into it.
-  foul takeParagraph(lines: [String]) -> (MdBlock, [String]) do
+  let takeParagraph(lines: [String]) -> (MdBlock, [String]) do
     let taken = lines.takeWhile { |line| paragraphLine?(line) }
     let body = taken.map { |line| line.trim }.join(" ")
     return (Paragraph(body), lines.drop(taken.count))
   end
 
-  foul paragraphLine?(line: String) -> Bool do
+  let paragraphLine?(line: String) -> Bool do
     return false if line.trim.empty?
     return false if fence?(line) || rule?(line)
     return false if headingLevel(line) > 0
@@ -380,11 +380,11 @@ module Tey.Docgen.Md do
 
   # --- rendering ---------------------------------------------------------
 
-  foul render(items: [MdBlock]) -> String do
+  let render(items: [MdBlock]) -> String do
     return items.map { |block| renderBlock(block) }.join("\n")
   end
 
-  foul renderBlock(block: MdBlock) -> String do
+  let renderBlock(block: MdBlock) -> String do
     match block do
       Heading(level, text) => do
         let tag = "h${level}"
@@ -403,37 +403,37 @@ module Tey.Docgen.Md do
   # Kex code goes through the same highlighter the reference pages use, so a
   # snippet in the guide looks like a signature in the reference. Everything
   # else is escaped and left plain.
-  foul renderCode(language: String, body: String) -> String do
+  let renderCode(language: String, body: String) -> String do
     if language == "kex" || language == ""
       return "<pre class=\"code\"><code>${Tey.Docgen.Highlight.highlight(body)}</code></pre>"
     end
     return "<pre class=\"code\"><code class=\"language-${esc(language)}\">${esc(body)}</code></pre>"
   end
 
-  foul renderItems(items: [ListItem]) -> String do
+  let renderItems(items: [ListItem]) -> String do
     return items.map { |item| renderItem(item) }.join("\n")
   end
 
-  foul renderItem(item: ListItem) -> String do
+  let renderItem(item: ListItem) -> String do
     if item.children.empty?
       return "<li>${inline(item.text)}</li>"
     end
     return "<li>${inline(item.text)}\n${render(item.children)}\n</li>"
   end
 
-  foul renderTable(header: [String], rows: [[String]]) -> String do
+  let renderTable(header: [String], rows: [[String]]) -> String do
     let head = header.map { |cell| "<th>${inline(cell)}</th>" }.join("")
     let body = rows.map { |row| renderRow(row) }.join("\n")
     return "<div class=\"table-scroll\">\n<table>\n<thead><tr>${head}</tr></thead>\n<tbody>\n${body}\n</tbody>\n</table>\n</div>"
   end
 
-  foul renderRow(row: [String]) -> String do
+  let renderRow(row: [String]) -> String do
     let cells = row.map { |cell| "<td>${inline(cell)}</td>" }.join("")
     return "<tr>${cells}</tr>"
   end
 
   # A heading's id: lowercase, non-alphanumerics folded to single dashes.
-  foul anchor(text: String) -> String do
+  let anchor(text: String) -> String do
     let lowered = stripInline(text).lowerCase
     let mapped = lowered.chars.map { |c| anchorChar(c) }.join("")
     return trimDashes(squeezeDashes(mapped, ""))
@@ -441,19 +441,19 @@ module Tey.Docgen.Md do
 
   # `String.trim` takes no argument, and the folding above can leave a dash at
   # either end (`## \`try\`` → `-try-`).
-  foul trimDashes(text: String) -> String do
+  let trimDashes(text: String) -> String do
     return text if text.empty?
     return trimDashes(text.drop(1)) if text.startsWith?("-")
     return trimDashes(text.take(text.count - 1)) if text.endsWith?("-")
     return text
   end
 
-  foul anchorChar(c: Char) -> String do
+  let anchorChar(c: Char) -> String do
     return c.string if c.letter? || c.digit?
     return "-"
   end
 
-  foul squeezeDashes(text: String, accum: String) -> String do
+  let squeezeDashes(text: String, accum: String) -> String do
     return accum if text.empty?
     let head = text.take(1)
     if head == "-" && accum.endsWith?("-")
@@ -463,7 +463,7 @@ module Tey.Docgen.Md do
   end
 
   # Inline markers removed, for anchors and any other plain-text use.
-  foul stripInline(text: String) -> String do
+  let stripInline(text: String) -> String do
     return text.replace("`", "").replace("**", "").replace("*", "").replace("_", "")
   end
 
@@ -471,11 +471,11 @@ module Tey.Docgen.Md do
 
   # Code spans first and separately: their content is escaped but never
   # scanned for emphasis, so `a*b*c` inside backticks stays literal.
-  foul inline(text: String) -> String do
+  let inline(text: String) -> String do
     return inlineLoop(text, "")
   end
 
-  foul inlineLoop(text: String, accum: String) -> String do
+  let inlineLoop(text: String, accum: String) -> String do
     return accum if text.empty?
     match text.indexOf('`') do
       None => accum + emphasis(text)
@@ -495,11 +495,11 @@ module Tey.Docgen.Md do
   end
 
   # Links before emphasis, so a `*` inside a URL is not read as a marker.
-  foul emphasis(text: String) -> String do
+  let emphasis(text: String) -> String do
     return links(text, "")
   end
 
-  foul links(text: String, accum: String) -> String do
+  let links(text: String, accum: String) -> String do
     return accum if text.empty?
     match text.indexOf('[') do
       None => accum + marks(text)
@@ -520,7 +520,7 @@ module Tey.Docgen.Md do
 
   # `label](href)` → (label, href, what follows). None when the shape is not
   # a link after all, in which case the `[` is literal text.
-  foul linkParts(rest: String) -> (String, String, String)? do
+  let linkParts(rest: String) -> (String, String, String)? do
     match rest.indexOf(']') do
       None => None
       Just(close) => do
@@ -540,11 +540,11 @@ module Tey.Docgen.Md do
 
   # `**bold**` before `*italic*`, or the opening `**` would parse as an empty
   # emphasis. Escaping happens here, on the text that is left.
-  foul marks(text: String) -> String do
+  let marks(text: String) -> String do
     return wrap(esc(text), "**", "strong", "*", "em")
   end
 
-  foul wrap(text: String, strongMark: String, strongTag: String,
+  let wrap(text: String, strongMark: String, strongTag: String,
             emMark: String, emTag: String) -> String do
     let bolded = pairs(text, strongMark, strongTag, "")
     return pairs(bolded, emMark, emTag, "")
@@ -552,7 +552,7 @@ module Tey.Docgen.Md do
 
   # Replaces each surviving pair of markers with a tag. An unpaired marker is
   # left as written rather than swallowing the rest of the line.
-  foul pairs(text: String, mark: String, tag: String, accum: String) -> String do
+  let pairs(text: String, mark: String, tag: String, accum: String) -> String do
     match indexOfText(text, mark, 0) do
       None => accum + text
       Just(start) => do
@@ -573,13 +573,13 @@ module Tey.Docgen.Md do
   # Where `needle` first occurs in `haystack`, or None. String.indexOf takes a
   # Char, and the markers here are two characters wide ("**"), so the search
   # is spelled out.
-  foul indexOfText(haystack: String, needle: String, at: Integer) -> Integer? do
+  let indexOfText(haystack: String, needle: String, at: Integer) -> Integer? do
     return None if at + needle.count > haystack.count
     return Just(at) if haystack.drop(at).startsWith?(needle)
     return indexOfText(haystack, needle, at + 1)
   end
 
-  foul esc(s: String) -> String do
+  let esc(s: String) -> String do
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
   end
 end
