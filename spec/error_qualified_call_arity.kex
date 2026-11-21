@@ -1,0 +1,16 @@
+# kex: check-only
+# A module's function called by its qualified name takes exactly its
+# parameters, whatever its arguments' types. With an `Any` first argument,
+# the extra one was let through: the first argument was taken for an unknown
+# receiver and dropped, so `Type.fieldValues(value, 0)` checked as
+# `Type.fieldValues(0)` and failed at run time (found by the metamorphic
+# search, seed 44946670039).
+
+let encoded(value: Any) -> Integer do
+  let values = Type.fieldValues(value, 0).or([])
+  values.count
+end
+
+main do
+  IO.inspect(encoded(1))
+end

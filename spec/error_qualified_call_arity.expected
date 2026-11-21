@@ -1,0 +1,4 @@
+spec/error_qualified_call_arity.kex:10:32: [KEXET-0472]: Error, `Type.fieldValues` expects 1 argument(s), got 2
+   |
+10 |   let values = Type.fieldValues(value, 0).or([])
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^
