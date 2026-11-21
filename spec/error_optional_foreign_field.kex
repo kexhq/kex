@@ -1,0 +1,13 @@
+# kex: check-only
+# A member read on an optional is judged by its value's type (kexhq/kex#699).
+# `names` is a field of Culture.TimeSettings, not of Culture.Culture, so on a
+# `Culture?` it is as undefined as on a `Culture`; that some other record has
+# it let the read through, to fail at run time. A field the value does have
+# is reported once, with the advice to map over the optional, and not again
+# as a call to an unrelated `name : Weekday -> String`.
+
+main do
+  IO.inspect(Culture.of("hu-HU").names)
+  IO.inspect(Culture.of("hu-HU").name)
+  IO.inspect(Culture.of("hu-HU").map { |c| c.name })
+end

@@ -5757,6 +5757,10 @@ auto TypeChecker::checkCall(
             // unwrap first. Only when the inner type really has the field —
             // `.or`/`.map` are method calls that must keep resolving
             // normally (kexhq/kex#294).
+            // Once said, the read is done: going on to the method lookup
+            // only blamed an unrelated same-named function as well
+            // (`name : Weekday -> String`, kexhq/kex#699).
+            bool reported = false;
             auto inner = resolve(optional->inner);
             if (auto* innerNamed = std::get_if<NamedType>(&inner->kind)) {
                 if (auto record = m_recordFields.find(resolveRecordName(innerNamed->name));
@@ -5767,6 +5771,7 @@ auto TypeChecker::checkCall(
                          {"inner", typeToString(inner)},
                          {"receiver", typeToString(receiver)},
                          {"example", ".map { |v| v." + name + " }"}});
+                    reported = true;
                 } else if (m_importedInterfaces) {
                     auto record = m_importedInterfaces->recordFieldNames.find(innerNamed->name);
                     if (record != m_importedInterfaces->recordFieldNames.end() &&
@@ -5777,6 +5782,7 @@ auto TypeChecker::checkCall(
                              {"inner", typeToString(inner)},
                              {"receiver", typeToString(receiver)},
                              {"example", ".map { |v| v." + name + " }"}});
+                        reported = true;
                     }
                 }
             } else if (auto* innerRecord = std::get_if<RecordType>(&inner->kind)) {
@@ -5789,7 +5795,11 @@ auto TypeChecker::checkCall(
                          {"inner", typeToString(inner)},
                          {"receiver", typeToString(receiver)},
                          {"example", ".map { |v| v." + name + " }"}});
+                    reported = true;
                 }
+            }
+            if (reported) {
+                return Type::unknown();
             }
         }
     }
@@ -6425,19 +6435,26 @@ auto TypeChecker::checkCall(
             // field after all — also once the guess has flowed on through
             // `find` and `.try` and no inference variable is left to see.
             const auto receiver = resolve(argTypes[0]);
-            const auto* named = std::get_if<NamedType>(&receiver->kind);
+            // An optional's field is its value's: when the value has it, the
+            // field-on-optional check above reports it with its own advice,
+            // and when it has not, the field is no more there than on the
+            // value itself. Judged on the value, `.names` on a `Culture?`
+            // is undefined as it is on a `Culture` (kexhq/kex#699), not let
+            // through because some other record has a `names` field.
+            const auto* optional = std::get_if<OptionalType>(&receiver->kind);
+            const auto valueType = optional ? resolve(optional->inner) : receiver;
+            const auto* named = std::get_if<NamedType>(&valueType->kind);
             // Nor does a list, map, tuple or function: some record in the
             // prelude having a `size` field let `xs.size` check clean on a
             // list, and fail at run time.
-            // An optional's field is its value's, which the field-on-optional
-            // check above reports with its own advice.
-            const bool structural = std::holds_alternative<RecordType>(receiver->kind) ||
-                                    std::holds_alternative<OptionalType>(receiver->kind) ||
-                                    std::holds_alternative<IntersectionType>(receiver->kind) ||
-                                    std::holds_alternative<UnionType>(receiver->kind) ||
-                                    std::holds_alternative<ConstrainedType>(receiver->kind);
+            const bool structural = std::holds_alternative<RecordType>(valueType->kind) ||
+                                    std::holds_alternative<OptionalType>(valueType->kind) ||
+                                    std::holds_alternative<IntersectionType>(valueType->kind) ||
+                                    std::holds_alternative<UnionType>(valueType->kind) ||
+                                    std::holds_alternative<ConstrainedType>(valueType->kind);
             const bool fieldMayExist =
-                std::holds_alternative<TypeVar>(argTypes[0]->kind) || structural ||
+                std::holds_alternative<TypeVar>(optional ? valueType->kind : argTypes[0]->kind) ||
+                (optional && std::holds_alternative<UnknownType>(valueType->kind)) || structural ||
                 (named && !(isPrimitiveTypeName(named->name) || m_adtVariants.count(named->name) ||
                             constructorOwner(*named) ||
                             m_recordFields.count(resolveRecordName(named->name))));
