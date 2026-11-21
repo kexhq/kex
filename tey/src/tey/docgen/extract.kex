@@ -116,9 +116,16 @@ module Tey.Docgen.Extract do
     # source's own spelling beats a title-cased file name ("Filehandle").
     let stem = stripExt(source)
     let named = entities.map { |e| baseSpelling(nameOf(e)) }.filter { |name|
-      name.lowerCase == fileStem(stem).lowerCase
+      namesStem?(name, fileStem(stem))
     }
-    return named.first.or(titleCase(stem))
+    return named.first.or(stem.split("_").map { |part| titleCase(part) }.join(""))
+  end
+
+  # Whether a declaration's name is the one a file stem spells: the stem
+  # separates words with `_` and the name runs them together, so
+  # `file_handle` names `FileHandle` (kexhq/kex#721).
+  foul namesStem?(name: String, stem: String) -> Bool do
+    return name.lowerCase == stem.replace("_", "").lowerCase
   end
 
   # "FileHandle<CanRead, W>" -> "FileHandle", "FS.Path" -> "Path": what the
@@ -144,11 +151,11 @@ module Tey.Docgen.Extract do
   end
 
   foul lastSegmentMatches?(qualifiedName: String, stem: String) -> Bool do
-    return (qualifiedName.split(".").last.or("")).lowerCase == stem.lowerCase
+    return namesStem?(qualifiedName.split(".").last.or(""), stem)
   end
 
   foul nestedModuleNamed(children: [Entity], stem: String) -> String? do
-    match children.find { |c| nameOf(c).lowerCase == stem.lowerCase } do
+    match children.find { |c| namesStem?(nameOf(c), stem) } do
       Just(child) => Just(qualifiedNameOf(child))
       None => None
     end
