@@ -1,0 +1,34 @@
+# kex: check-only
+# A named record pattern asserts the record's type, so `Pt { x }` takes no
+# `Qt` even though both carry `x` and `y` (spec/named_record_pattern.kex).
+# A match on a Qt whose only arm names Pt covers nothing, and owes a fallback.
+#
+# It was accepted, and failed at run time with no matching clause for the Qt
+# (found by `make metamorphic-search` dropping the `_` arm of
+# spec/named_record_pattern.kex).
+record Pt do
+  x : Integer
+  y : Integer
+end
+record Qt do
+  x : Integer
+  y : Integer
+end
+
+let other(q: Qt) -> String do
+  match q do
+    Pt { x } => "matched Pt ${x}"
+  end
+end
+
+# Its own type's pattern binding every field it names takes it whole.
+let own(q: Qt) -> String do
+  match q do
+    Qt { x } => "matched Qt ${x}"
+  end
+end
+
+main do
+  IO.printLine(other(Qt { x: 1, y: 2 }))
+  IO.printLine(own(Qt { x: 1, y: 2 }))
+end
