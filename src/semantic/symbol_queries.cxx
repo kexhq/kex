@@ -185,13 +185,13 @@ auto completionsFor(
                     break;
                 }
             }
-            // The fields of a record a compiled interface declares. A module
-            // loaded on demand (`Culture`, `Net.HTTP`) is not among the
-            // prelude sources indexed above, so its records' fields were
-            // offered nowhere: `Culture.DEFAULT.` and `Culture.of(...).try.`
-            // completed to nothing (kexhq/kex#700).
-            if (auto record =
-                    imports->recordFieldNames.find(qualifier.substr(0, qualifier.find('<')));
+            // The fields of a record a compiled interface declares, for a
+            // receiver of that record's type: the qualifier is the type's
+            // name (completionQualifierForType), the key the interface files
+            // its fields under. A module loaded on demand (`Culture`,
+            // `Net.HTTP`) is not among the prelude sources indexed above, so
+            // its records' fields were offered nowhere (kexhq/kex#700).
+            if (auto record = imports->recordFieldNames.find(qualifier);
                 record != imports->recordFieldNames.end()) {
                 for (const auto& field : record->second) {
                     if (field.rfind(memberPrefix, 0) == 0) {
