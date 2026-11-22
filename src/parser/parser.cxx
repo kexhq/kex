@@ -287,6 +287,7 @@ auto Parser::syncToStatement() -> void {
 auto Parser::parseProgram() -> ast::Program {
     ast::Program program;
     skipNewlines();
+    program.blank = atEnd();
 
     while (!atEnd()) {
         try {

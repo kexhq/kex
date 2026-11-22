@@ -547,6 +547,7 @@ auto clone(const ModuleDef& module) -> std::unique_ptr<ModuleDef> {
 
 auto clone(const Program& program) -> std::optional<Program> {
     Program out;
+    out.blank = program.blank;
     if (!cloneItems(program.items, out.items)) {
         return std::nullopt;
     }
