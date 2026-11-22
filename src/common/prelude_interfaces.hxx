@@ -784,8 +784,8 @@ inline auto sourceSemanticInterfaces(
         };
 
         auto collectMakeAnnotations = [&](const ast::MakeDef& make, const std::string& owner = "",
-                                          const std::unordered_set<std::string>* ownTypes =
-                                              nullptr) {
+                                          const std::unordered_set<std::string>* ownTypes = nullptr,
+                                          const std::set<std::string>* nestedRecords = nullptr) {
             auto typeName = makeTargetName(make);
             if (!typeName.empty()) {
                 for (const auto& trait : make.implements) {
@@ -820,6 +820,17 @@ inline auto sourceSemanticInterfaces(
             std::unordered_map<std::string, kex::semantic::TypePtr> tvars;
             if (make.target) {
                 selfType = resolveSourceType(*make.target, tvars);
+            }
+            // A target written from the module (`make TCP.TCPConnection` in
+            // `Net.Socket`) names a nested module's record: receive it by its
+            // identity, or no call on that record reaches these functions and
+            // one takes another type's of the same name (kexhq/kex#620).
+            if (const auto* named =
+                    selfType ? std::get_if<kex::semantic::NamedType>(&selfType->kind) : nullptr;
+                named && nestedRecords && !owner.empty() &&
+                nestedRecords->contains(makeTargetSpelling(make)) &&
+                named->name == makeTargetSpelling(make)) {
+                selfType = kex::semantic::Type::named(owner + "." + named->name, named->typeArgs);
             }
             std::unordered_set<std::string> annotatedMembers;
             for (const auto& item : make.body) {
@@ -1146,6 +1157,8 @@ inline auto sourceSemanticInterfaces(
                         }
                     }
                 }
+                std::set<std::string> nestedRecords;
+                kex::collectNestedRecordPaths(mod.body, nestedRecords, moduleName);
                 const auto qualifyOwn =
                     [&](const auto& self,
                         const kex::semantic::TypePtr& type) -> kex::semantic::TypePtr {
@@ -1274,7 +1287,7 @@ inline auto sourceSemanticInterfaces(
                     }
                     if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
                         if (*make) {
-                            collectMakeAnnotations(**make, moduleName, &ownTypes);
+                            collectMakeAnnotations(**make, moduleName, &ownTypes, &nestedRecords);
                         }
                     }
                     if (const auto* record = std::get_if<std::unique_ptr<ast::RecordDef>>(&item);

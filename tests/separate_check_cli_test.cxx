@@ -16,7 +16,8 @@
 // a trait default a type of another unit inherits,
 // a function of another unit called by UFCS, an operator one unit
 // overloads for two of its types, called on each from another unit, and a
-// method only one type of another unit owns, called on it from this one.
+// method only one type of another unit owns, called on it from this one,
+// and a `make` naming a nested module's record from its module.
 #include "test.hxx"
 #include <cstdlib>
 #include <filesystem>
@@ -361,6 +362,22 @@ make Marks.Mark do
   let loud -> String = Marks.exclaimed(@text)
 end
 )KEX");
+        // A `make` naming a nested module's record from its module, and a
+        // function the prelude has for another type (`FileHandle.getLine`).
+        write("lib/wire.kex", R"KEX(module Wire
+
+module Tcp do
+  record Conn do
+    id : Integer = 0
+  end
+
+  foul open() -> Conn = Conn {}
+end
+
+make Tcp.Conn do
+  foul getLine -> String? = Just("wire line")
+end
+)KEX");
         write("lib/web/routes.kex", R"KEX(module Web.Routes
 
 record Context do
@@ -498,6 +515,7 @@ using TeamUsers
 using Crates, only: [Crate]
 using Bags
 using Ids, only: [UserId]
+using Wire
 using Fields, only: [IntField, TextField]
 using Tokens, only: [Token]
 using FS
@@ -594,6 +612,7 @@ main do
   # A block ending in a `.try` on an Optional is an `Outcome`'s `Reply?`,
   # through the bare `get` the prelude's own overloads share a name with.
   IO.printLine(get("/maybe", do |_| "${[1].first.try}" end))
+  IO.printLine(Wire.Tcp.open().getLine.or("no line"))
 end
 )KEX";
 
@@ -659,6 +678,9 @@ foul timed(server: Server<Counter>) = server.reset(within: 10)
                 ran.find("Any([One(1), One(2)])") != std::string::npos &&
                     ran.find("All([One(1), One(2)])") != std::string::npos,
                 "external union boolean operators did not run: " + ran);
+            assertTrue(
+                ran.find("\nwire line\n") != std::string::npos,
+                "a make naming a nested module's record from its module did not run: " + ran);
         });
     });
     return runAll();
