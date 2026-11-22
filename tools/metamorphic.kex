@@ -13,10 +13,10 @@
 # make test-metamorphic gates the relations that pass. make
 # metamorphic-search runs the relations and the mutations from a seed: a
 # fresh one from the clock unless METAMORPHIC_SEED is given, printed first so
-# a run replays. It leaves out the relations whose failure is an open bug
-# (knownOpen), so a failing search is always news; METAMORPHIC_MODE=search-all
-# runs them too. Every case and what each step answered are saved under the
-# output directory; a finding also writes finding.txt there.
+# a run replays. It skips nothing: a relation or mutation that finds a bug
+# fails the search until the bug is fixed. Every case and what each step
+# answered are saved under the output directory; a finding also writes
+# finding.txt there.
 #
 # The runner uses the walker so a BEAM lowering bug cannot break the test
 # driver itself.
@@ -54,30 +54,10 @@ record Run do
   files  : [String] = []
 end
 
-let modes -> [String] = ["search", "search-all", "gate", "relations"]
+let modes -> [String] = ["search", "gate", "relations"]
 
-# The relations the gate runs, by seed: every one but the known-open ones.
+# The relations the gate runs, by seed.
 let gateSeeds -> [Integer] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-
-# Relations whose failure is an open bug, left out of `search` so a failing
-# search is always news; `search-all` and `relations` run them too. Each
-# leaves this list with the fix for its bug.
-let knownOpen -> [Integer] = [
-  11, 12, # a `make` target written from its module (kexhq/kex#620)
-  14,     # Integer and Float mixed in arithmetic (kexhq/kex#766)
-  15, 16, # `==` and literal arms across unrelated types (kexhq/kex#773)
-  18,     # a map's values of two types (kexhq/kex#771)
-  22,     # `make` for an undeclared type (kexhq/kex#772)
-  23,     # `return n` refused where a final `n` is taken (kexhq/kex#774)
-  24,     # a field captured with `~` (kexhq/kex#775)
-  25,     # `.or(~f)` with a function of no parameters (kexhq/kex#776)
-  26,     # an operator on a type parameter inside a block (kexhq/kex#777)
-  27,     # walking a Float range (kexhq/kex#778)
-  28,     # a keyword as a function's name (kexhq/kex#779)
-  29,     # a top-level `make`'s private function (kexhq/kex#780)
-  30,     # a private name after `using` (kexhq/kex#781)
-  31      # a function on an unannotated parameter (kexhq/kex#782)
-]
 
 # Runs +count+ cases from +seed+ and answers the exit status: 0 when every
 # case held, 1 on a finding, 2 when the run could not start.
@@ -116,20 +96,10 @@ end
 # mutations by turns.
 foul caseHolds?(run: Run, caseSeed: Integer, index: Integer, mode: String) -> Bool do
   return relationHolds?(run, gateSeeds.at(index).or(1)) if mode == "gate"
-  # Every relation seed in turn, the known-open ones too: what a relation
-  # still finds, without the mutations between.
+  # Every relation seed in turn, without the mutations between.
   return relationHolds?(run, caseSeed) if mode == "relations"
   return mutationHandled?(run, caseSeed / 2) if caseSeed % 2 == 1
-  relationHolds?(run, searchedRelation(caseSeed / 2, mode == "search-all"))
-end
-
-# The relation seed a search case runs. Leaving the known-open relations
-# out, each seed maps to its own relation seed whose relation is one of the
-# others, so no two cases of a run repeat one.
-let searchedRelation(seed: Integer, all: Bool) -> Integer do
-  return seed if all
-  let allowed = (0..relationCount - 1).items.reject { |r| knownOpen.contains?(r) }
-  seed / allowed.count * relationCount + allowed.at(seed % allowed.count).or(1)
+  relationHolds?(run, caseSeed / 2)
 end
 
 # --- Relations ---------------------------------------------------------------
