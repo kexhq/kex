@@ -872,6 +872,9 @@ auto heldNode(const Item& item) -> const void* {
 
 struct Program {
     std::vector<TopLevelItem> items;
+    // Its source has no code: nothing but blank lines and comments. Not the
+    // same as no items, which is also what a file that failed to parse leaves.
+    bool blank = false;
 };
 
 // Which of a merged file's top-level items join the program that merges it —

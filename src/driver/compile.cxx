@@ -469,12 +469,24 @@ auto copyRuntimeBeams(const std::string& outputDir, bool needsPrelude) -> bool {
                      "rebuild or reinstall the Kex toolchain\n";
         return false;
     }
+    // `-o ebin` names where the build goes, whether or not it is there yet.
     std::error_code ec;
+    fs::create_directories(outputDir, ec);
+    if (ec) {
+        std::cerr << "error: could not create the output directory " << outputDir << ": "
+                  << ec.message() << "\n";
+        return false;
+    }
     for (const auto& entry : fs::directory_iterator(prebuilt)) {
         if (entry.path().extension() == ".beam") {
             fs::copy_file(
                 entry.path(), fs::path{outputDir} / entry.path().filename(),
                 fs::copy_options::overwrite_existing, ec);
+            if (ec) {
+                std::cerr << "error: could not copy " << entry.path().filename().string()
+                          << " into " << outputDir << ": " << ec.message() << "\n";
+                return false;
+            }
         }
     }
     if (needsPrelude && !fs::exists(fs::path{outputDir} / (kex::names::kPreludeModule + ".beam"))) {

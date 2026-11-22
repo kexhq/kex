@@ -4,6 +4,7 @@
 #include "module_rules.hxx"
 #include "receiver_conflicts.hxx"
 #include "resolve_core.hxx"
+#include "../lexer/lexer.hxx"
 
 #include <algorithm>
 #include <cctype>
@@ -46,6 +47,14 @@ auto receiverModuleName(const ast::Expr& receiver) -> std::string {
 
 auto Analyzer::analyze(const ast::Program& program) -> bool {
     m_analyzed = true;
+    // A file with nothing in it is a valid program that does nothing, but
+    // seldom the one meant. Blank and still without items: a spec base or the
+    // project's modules merged in give a blank file code to run.
+    if (program.blank && program.items.empty() && !m_entryFiles.empty()) {
+        m_diagnostics.push_back(makeDiagnostic(
+            Diagnostic::Level::Warning, diag::Code::EmptyProgram,
+            SourceLocation{internFilename(m_entryFiles.front()), 1, 1}));
+    }
     // Which names one module may take from another (`using`, `export`).
     for (auto& violation : findModuleRuleViolations(
              program, m_importedInterfaces, m_moduleLocator ? &m_moduleLocator : nullptr,

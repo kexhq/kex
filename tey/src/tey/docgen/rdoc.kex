@@ -47,15 +47,13 @@ module Tey.Docgen.Rdoc do
   end
 
   let rewriteProseBlock(block: [String]) -> [String] do
-    if block.empty?
-      return block
-    end
+    return block if block.empty?
+
     if (block.first.or("")).trim.startsWith?("@example")
       return block
     end
-    if verbatim?(block)
-      return block
-    end
+    return block if verbatim?(block)
+
     return rewritePlusPairs(block.join("\n"), "").split("\n")
   end
 
@@ -111,9 +109,8 @@ module Tey.Docgen.Rdoc do
   end
 
   let boundaryAfter?(tail: String) -> Bool do
-    if tail.empty?
-      return true
-    end
+    return true if tail.empty?
+
     match tail.chars.first do
       None => true
       Just(c) => !(c.letter? || c.digit?)
@@ -128,9 +125,8 @@ module Tey.Docgen.Rdoc do
   # do not open with `@`).
   let splitParagraphs(lines: [String], current: [String], accum: [[String]]) -> [[String]] do
     if lines.empty?
-      if current.empty?
-        return accum
-      end
+      return accum if current.empty?
+
       return accum + [current]
     end
     let line = lines.first.or("")

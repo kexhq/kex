@@ -3,3 +3,4 @@ KEX_DIAGNOSTIC(DuplicateRecord, "KEXES-0001", "duplicate record definition: {nam
 KEX_DIAGNOSTIC(LoopControlInClosure, "KEXES-0002", "'{keyword}' cannot be used inside a closure")
 KEX_DIAGNOSTIC(LoopControlOutsideLoop, "KEXES-0003", "'{keyword}' used outside a loop")
 KEX_DIAGNOSTIC(AmbiguousReceiverDefinition, "KEXES-0004", "`{method}` is defined twice for receiver `{type}`. The declaration form gives neither definition priority, so the call is ambiguous")
+KEX_DIAGNOSTIC(EmptyProgram, "KEXWS-0001", "the program is empty")

@@ -637,6 +637,7 @@ auto AssemblePass::run(Unit& unit, UnitAnalysisManager& analyses) -> pass::Prese
     auto& program = unit.program();
     if (unit.isEntry()) {
         unit.ast.items = std::move(program.entry().items);
+        unit.ast.blank = program.entry().blank;
     } else {
         for (const auto& path : unit.files()) {
             auto* file = program.dependencyFile(path);

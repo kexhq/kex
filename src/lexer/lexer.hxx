@@ -28,6 +28,17 @@ auto tokenTexts(const std::vector<Token>& tokens, std::string_view source)
 // tries to name something with one.
 auto isKeywordToken(TokenType type) -> bool;
 
+// +filename+ kept for the life of the process, so a location can view it.
+auto internFilename(std::string_view filename) -> std::string_view;
+
+// How much every Lexer in this process has scanned: tokens, and the distinct
+// files they came from.
+struct LexTally {
+    std::size_t tokens = 0;
+    std::size_t files = 0;
+};
+auto lexTally() -> LexTally;
+
 class Lexer {
 public:
     explicit Lexer(std::string source, std::string_view filename = "<stdin>");
