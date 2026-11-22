@@ -16,16 +16,15 @@ namespace {
 namespace c = kex::color;
 
 constexpr std::array thinking = {
-    "Pondering",   "Reasoning",  "Ruminating", "Cogitating", "Kexifying",  "Kexinating",
-    "Kexinizing",  "Kexafating", "Mulling",    "Percolating", "Noodling",  "Kexploring",
-    "Kexpanding",  "Deliberating",
+    "Pondering",  "Reasoning",  "Ruminating", "Cogitating",   "Kexifying",
+    "Kexinating", "Kexinizing", "Kexafating", "Mulling",      "Percolating",
+    "Noodling",   "Kexploring", "Kexpanding", "Deliberating",
 };
 
 constexpr std::array worked = {
-    "Cogitated", "Pondered",   "Mulled",     "Ruminated",  "Brewed",     "Percolated",
-    "Marinated", "Simmered",   "Noodled",    "Deliberated", "Kexinated", "Kexified",
-    "Kexinized", "Kexafated",  "Kexpanded",  "Kexecuted",  "Kexorcised", "Kexcavated",
-    "Kexpedited", "Kexplored",
+    "Cogitated", "Pondered",  "Mulled",      "Ruminated",  "Brewed",     "Percolated", "Marinated",
+    "Simmered",  "Noodled",   "Deliberated", "Kexinated",  "Kexified",   "Kexinized",  "Kexafated",
+    "Kexpanded", "Kexecuted", "Kexorcised",  "Kexcavated", "Kexpedited", "Kexplored",
 };
 
 constexpr std::array openers = {
@@ -101,14 +100,16 @@ auto plural(std::uintmax_t count, const char* noun) -> std::string {
 }
 
 auto mark(const char* symbol) -> void {
-    std::fprintf(stderr, "%s%s%s%s ", c::apply(c::bold), c::apply(c::purple), symbol,
-                 c::apply(c::reset));
+    std::fprintf(
+        stderr, "%s%s%s%s ", c::apply(c::bold), c::apply(c::purple), symbol, c::apply(c::reset));
 }
 
 } // namespace
 
 IamAi::IamAi(std::string entry, std::string outputDir)
-    : m_entry(std::move(entry)), m_outputDir(std::move(outputDir)), m_seed(seedFor(m_entry)),
+    : m_entry(std::move(entry)),
+      m_outputDir(std::move(outputDir)),
+      m_seed(seedFor(m_entry)),
       m_start(std::chrono::steady_clock::now()),
       m_fileStart(std::filesystem::file_time_type::clock::now()) {
     // Two different ones after "Thinking".
@@ -162,13 +163,16 @@ auto IamAi::finish(int status) -> void {
         std::chrono::duration<double>(std::chrono::steady_clock::now() - m_start).count();
 
     mark("✻");
-    std::fprintf(stderr, "%s%s for %s%s\n", c::apply(c::gray), worked[pick(worked.size())],
-                 duration(seconds).c_str(), c::apply(c::reset));
+    std::fprintf(
+        stderr, "%s%s for %s%s\n", c::apply(c::gray), worked[pick(worked.size())],
+        duration(seconds).c_str(), c::apply(c::reset));
 
     if (status != 0) {
-        std::fprintf(stderr, "\nI apologize — the build failed.\n%s\nI'm confident this will "
-                             "fix it.\n",
-                     wrongCauses[pick(wrongCauses.size())]);
+        std::fprintf(
+            stderr,
+            "\nI apologize — the build failed.\n%s\nI'm confident this will "
+            "fix it.\n",
+            wrongCauses[pick(wrongCauses.size())]);
         std::fflush(stderr);
         return;
     }
@@ -179,18 +183,17 @@ auto IamAi::finish(int status) -> void {
     std::error_code ec;
     for (const auto& file : std::filesystem::directory_iterator(m_outputDir, ec)) {
         std::error_code fileError;
-        if (file.path().extension() == ".beam" &&
-            file.last_write_time(fileError) >= m_fileStart && !fileError) {
+        if (file.path().extension() == ".beam" && file.last_write_time(fileError) >= m_fileStart &&
+            !fileError) {
             written++;
             writtenBytes += file.file_size(fileError);
         }
     }
     const auto read = kex::lexTally();
     const auto outputTokens = writtenBytes / bytesPerToken;
-    const double cost =
-        (static_cast<double>(read.tokens) * inputRate +
-         static_cast<double>(outputTokens) * outputRate) /
-        1e6;
+    const double cost = (static_cast<double>(read.tokens) * inputRate +
+                         static_cast<double>(outputTokens) * outputRate) /
+                        1e6;
 
     std::fprintf(
         stderr,
