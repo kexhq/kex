@@ -1181,6 +1181,9 @@ int main(int argc, char* argv[]) {
 
     std::string filepath = argv[optind];
     std::optional<kex::driver::IamAi> narration;
+    if (const char* env = std::getenv("KEX_IAM_AI"); env && *env && std::string_view(env) != "0") {
+        iamAi = true;
+    }
     if (iamAi && mode == Mode::Compile && !compileRun) {
         narration.emplace(filepath, outputDir);
     }
