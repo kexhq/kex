@@ -54,15 +54,35 @@ record Run do
   files  : [String] = []
 end
 
-let modes -> [String] = ["search", "search-all", "gate"]
+let modes -> [String] = ["search", "search-all", "gate", "relations"]
 
 # The relations the gate runs, by seed: every one but the known-open ones.
 let gateSeeds -> [Integer] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 # Relations whose failure is an open bug, left out of `search` so a failing
-# search is always news; `search-all` runs them too. 0: assignment as a
-# value (kexhq/kex#614).
-let knownOpen -> [Integer] = [0]
+# search is always news; `search-all` and `relations` run them too. Each
+# leaves this list with the fix for its bug.
+let knownOpen -> [Integer] = [
+  11, 12, # a `make` target written from its module (kexhq/kex#620)
+  13,     # an argument beside an `Any` parameter (kexhq/kex#764)
+  14,     # Integer and Float mixed in arithmetic (kexhq/kex#766)
+  15, 16, # `==` and literal arms across unrelated types (kexhq/kex#773)
+  17,     # unary minus on what is no number (kexhq/kex#769)
+  18,     # a map's values of two types (kexhq/kex#771)
+  19,     # a tuple pattern of another arity (kexhq/kex#767)
+  20,     # `return Error(...)` from a plain type (kexhq/kex#768)
+  21,     # a `!` function on no `var` (kexhq/kex#770)
+  22,     # `make` for an undeclared type (kexhq/kex#772)
+  23,     # `return n` refused where a final `n` is taken (kexhq/kex#774)
+  24,     # a field captured with `~` (kexhq/kex#775)
+  25,     # `.or(~f)` with a function of no parameters (kexhq/kex#776)
+  26,     # an operator on a type parameter inside a block (kexhq/kex#777)
+  27,     # walking a Float range (kexhq/kex#778)
+  28,     # a keyword as a function's name (kexhq/kex#779)
+  29,     # a top-level `make`'s private function (kexhq/kex#780)
+  30,     # a private name after `using` (kexhq/kex#781)
+  31      # a function on an unannotated parameter (kexhq/kex#782)
+]
 
 # Runs +count+ cases from +seed+ and answers the exit status: 0 when every
 # case held, 1 on a finding, 2 when the run could not start.
@@ -101,6 +121,9 @@ end
 # mutations by turns.
 foul caseHolds?(run: Run, caseSeed: Integer, index: Integer, mode: String) -> Bool do
   return relationHolds?(run, gateSeeds.at(index).or(1)) if mode == "gate"
+  # Every relation seed in turn, the known-open ones too: what a relation
+  # still finds, without the mutations between.
+  return relationHolds?(run, caseSeed) if mode == "relations"
   return mutationHandled?(run, caseSeed / 2) if caseSeed % 2 == 1
   relationHolds?(run, searchedRelation(caseSeed / 2, mode == "search-all"))
 end
@@ -125,7 +148,7 @@ record Relation do
   eligibleSites : Integer = 1
 end
 
-let relationCount -> Integer = 11
+let relationCount -> Integer = 32
 
 # The relation a seed picks, over an expression the seed picks too.
 foul relation(seed: Integer) -> Relation do
@@ -141,6 +164,27 @@ foul relation(seed: Integer) -> Relation do
     7  => braceAndDoBlock(value)
     9  => movedIntoModule(value)
     10 => literalBinding(seed)
+    11 => relativeMakeTarget(value)
+    12 => moduleIntoFile(seed, value)
+    13 => argumentBesideLenient(seed, value)
+    14 => mixedArithmetic(seed, confusionPair(seed, 4))
+    15 => unrelatedEquality(confusionPair(seed))
+    16 => literalArmOfAnotherType(confusionPair(seed))
+    17 => negatedNonNumber(confusionPair(seed))
+    18 => mixedMapValues(seed, confusionPair(seed, 2))
+    19 => tupleOfAnotherArity(seed, confusionPair(seed, 2))
+    20 => returnedWrapper(seed, confusionPair(seed, 3))
+    21 => bangOnNonVariable(seed)
+    22 => makeForUndeclaredType(seed)
+    23 => returnAsLastExpression(seed)
+    24 => blockAsCapture(seed)
+    25 => orWithNullaryCapture(seed)
+    26 => operatorOnTypeParameter(seed)
+    27 => enumeratedFloatRange(seed)
+    28 => keywordAsFunctionName(seed)
+    29 => privateMakeFunctionOutside(seed)
+    30 => privateNameAfterUsing(seed)
+    31 => missingFunctionOnUnannotated(seed)
     _  => unusedDeclaration(seed)
   end
 end
@@ -240,6 +284,491 @@ let movedIntoModule(value: String) -> Relation do
                      declarations: ["using MetamorphicHelper"]),
     moduleSource: ["module MetamorphicHelper", double, ""].join("\n")
   }
+end
+
+# Module MetamorphicHelper's body: a nested module's record, and a `make`
+# for it naming it as +target+, whose function shares its name with one the
+# prelude has for another type (`FileHandle.getLine`). A call that loses the
+# record's identity lands on that one instead (kexhq/kex#620).
+let helperBody(target: String) -> [String] = [
+  "module Tcp do",
+  "  record Conn do",
+  "    id : Integer = 0",
+  "  end",
+  "",
+  "  let open(id: Integer) -> Conn = Conn { id: id }",
+  "end",
+  "",
+  "make ${target} do",
+  "  let getLine -> String? = Just(\"line \${@id}\")",
+  "end"
+]
+
+let helperCall(value: String) -> String do
+  "IO.printLine(MetamorphicHelper.Tcp.open(${value}).getLine.or(\"none\"))"
+end
+
+# The module in the program's own file, between `do` and `end`.
+let inlineHelper(target: String) -> [String] do
+  ["module MetamorphicHelper do", ...indented(helperBody(target)), "end", ""]
+end
+
+# A `make` target written from its module, or by its whole path.
+let relativeMakeTarget(value: String) -> Relation do
+  let body = [helperCall(value)]
+  Relation {
+    name: "make target written from its module",
+    original: program(body, declarations: inlineHelper("MetamorphicHelper.Tcp.Conn")),
+    changed: program(body, declarations: inlineHelper("Tcp.Conn"))
+  }
+end
+
+# The same module in its own file, reached through --source-root, with its
+# `make` target spelled either way.
+let moduleIntoFile(seed: Integer, value: String) -> Relation do
+  let target = seed / relationCount % 2 == 0 then "Tcp.Conn" else "MetamorphicHelper.Tcp.Conn"
+  let body = [helperCall(value)]
+  Relation {
+    name: "module into its own file (make ${target})",
+    original: program(body, declarations: inlineHelper(target)),
+    changed: program(body, declarations: ["using MetamorphicHelper", ""]),
+    moduleSource: ["module MetamorphicHelper", "", ...helperBody(target), ""].join("\n")
+  }
+end
+
+# A function with a parameter that takes anything (`Any`, defaulted or not,
+# `[Any]`), as a free function or a record's `make` function. The original
+# call is right; the changed one passes a number where a `Bool` goes, which
+# the checker must refuse. One such parameter used to switch off checking
+# for the call's other arguments (kexhq/kex#764).
+let argumentBesideLenient(seed: Integer, value: String) -> Relation do
+  let variant = seed / relationCount
+  let (lenient, trailing) = lenientParameters.at(variant % lenientParameters.count).or(("", ""))
+  let asMake = variant / lenientParameters.count % 2 == 1
+  let signature = "tag(label: Atom, flag: Bool = false, ${lenient}) -> String = \"\${label}\""
+  let declarations = asMake then [
+    "record MetamorphicBox do",
+    "  id : Integer = 0",
+    "end",
+    "",
+    "make MetamorphicBox do",
+    "  let ${signature}",
+    "end",
+    ""
+  ] else ["let ${signature}", ""]
+  let callee = asMake then "MetamorphicBox {}.tag" else "tag"
+  Relation {
+    name: "argument beside ${lenient}${asMake then " in a make" else ""}",
+    original: program(["IO.printLine(${callee}(:owner, true${trailing}))"], declarations: declarations),
+    changed: program(["IO.printLine(${callee}(:owner, ${value}${trailing}))"],
+                     declarations: declarations),
+    rejectChanged: true
+  }
+end
+
+# Each lenient parameter, and the arguments a call must pass after the
+# flag for it.
+let lenientParameters -> [(String, String)] = [
+  ("extra: Any = :none", ""),
+  ("extra: Any", ", 1"),
+  ("extra: [Any] = []", ""),
+  ("extra: Any = :none, more: Integer = 0", ", more: 1")
+]
+
+# --- Type confusions ----------------------------------------------------------
+#
+# Each relation below is a well-typed program and the same program with two
+# types confused, which the checker must refuse. Each varies by seed over
+# pairs of sample values, so it finds a neighbour of the bug it was written
+# for as well as that bug. The checker accepting one is the finding: run, the
+# program mostly prints something wrong without crashing, which no run
+# could tell.
+
+record Sample do
+  type  : String
+  value : String
+end
+
+let samples -> [Sample] = [
+  Sample { type: "Integer", value: "7" },
+  Sample { type: "Float", value: "2.5" },
+  Sample { type: "String", value: "\"kex\"" },
+  Sample { type: "Bool", value: "true" },
+  Sample { type: "Atom", value: ":kex" }
+]
+
+let numeric?(sample: Sample) -> Bool = ["Integer", "Float"].contains?(sample.type)
+
+let integerSample -> Sample = Sample { type: "Integer", value: "7" }
+
+let stringSample -> Sample = Sample { type: "String", value: "\"kex\"" }
+
+# Two samples of different types, from the seed's variant once the
+# relation's own +shapes+ choices are taken from it (see variantOf).
+let confusionPair(seed: Integer, shapes: Integer = 1) -> (Sample, Sample) do
+  let variant = seed / relationCount / shapes
+  let first = variant % samples.count
+  let offset = 1 + variant / samples.count % (samples.count - 1)
+  (samples.at(first).or(integerSample), samples.at((first + offset) % samples.count).or(stringSample))
+end
+
+# The second of a pair, unless both are numbers: Integer and Float compare
+# and print alike, so their mix says nothing about unrelated types.
+let unrelatedTo(first: Sample, second: Sample) -> Sample do
+  numeric?(first) && numeric?(second) then stringSample else second
+end
+
+let confusion(name: String, original: String, changed: String) -> Relation do
+  Relation { name: name, original: original, changed: changed, rejectChanged: true }
+end
+
+let operators -> [String] = ["+", "-", "*", "/"]
+
+# `a * b` of an Integer and a Float was typed Integer while `a + b` was
+# refused (kexhq/kex#766).
+let mixedArithmetic(seed: Integer, pair: (Sample, Sample)) -> Relation do
+  let (first, second) = pair
+  let op = operators.at(variantOf(seed, operators.count)).or("+")
+  let lines = [
+    "let a = ${first.value}",
+    "let b = ${second.value}",
+    "IO.printLine(a ${op} b)"
+  ]
+  confusion(
+    "${first.type} ${op} ${second.type}",
+    program(["let a = 7", "let b = 3", "IO.printLine(a ${op} b)"]),
+    program(lines)
+  )
+end
+
+# `==` between unrelated types can never hold (kexhq/kex#773).
+let unrelatedEquality(pair: (Sample, Sample)) -> Relation do
+  let (first, given) = pair
+  let second = unrelatedTo(first, given)
+  confusion(
+    "${first.type} == ${second.type}",
+    program(["let a = ${first.value}", "IO.printLine(a == ${first.value})"]),
+    program(["let a = ${first.value}", "IO.printLine(a == ${second.value})"])
+  )
+end
+
+# A literal arm of another type in a match can never match (kexhq/kex#773).
+let literalArmOfAnotherType(pair: (Sample, Sample)) -> Relation do
+  let (first, given) = pair
+  # Float literals make poor patterns; match on an Integer instead.
+  let matched = first.type == "Float" then integerSample else first
+  let candidate = given.type == "Float" then stringSample else unrelatedTo(matched, given)
+  let arm = candidate.type == matched.type then integerSample else candidate
+  confusion(
+    "${arm.type} arm in a match on ${matched.type}",
+    program(matchLines(matched, matched.value)),
+    program(matchLines(matched, arm.value))
+  )
+end
+
+let matchLines(matched: Sample, arm: String) -> [String] do
+  [
+    "let a: ${matched.type} = ${matched.value}",
+    "let shown = match a do",
+    "  ${arm} => \"same\"",
+    "  _ => \"other\"",
+    "end",
+    "IO.printLine(shown)"
+  ]
+end
+
+# Unary minus on what is not a number (kexhq/kex#769).
+let negatedNonNumber(pair: (Sample, Sample)) -> Relation do
+  let (first, second) = pair
+  let target = nonNumeric(first, second)
+  confusion(
+    "unary - on ${target.type}",
+    program(["let a = 7", "IO.printLine(-a)"]),
+    program(["let a = ${target.value}", "IO.printLine(-a)"])
+  )
+end
+
+let nonNumeric(first: Sample, second: Sample) -> Sample do
+  return first if !numeric?(first)
+  return second if !numeric?(second)
+  stringSample
+end
+
+# A map's values of two types, in a literal or through `put`, as a list's
+# elements are refused (kexhq/kex#771).
+let mixedMapValues(seed: Integer, pair: (Sample, Sample)) -> Relation do
+  let (first, given) = pair
+  let second = unrelatedTo(first, given)
+  let throughPut = variantOf(seed, 2) == 1
+  let mixed = throughPut then "{\"x\": ${first.value}}.put(\"y\", ${second.value})"
+              else "{\"x\": ${first.value}, \"y\": ${second.value}}"
+  confusion(
+    "map of ${first.type} and ${second.type}${throughPut then " through put" else ""}",
+    program(["IO.printLine({\"x\": ${first.value}, \"y\": ${first.value}})"]),
+    program(["IO.printLine(${mixed})"])
+  )
+end
+
+# A tuple pattern with more or fewer names than the tuple has elements
+# (kexhq/kex#767).
+let tupleOfAnotherArity(seed: Integer, pair: (Sample, Sample)) -> Relation do
+  let (first, second) = pair
+  let twoTuple = "(${first.value}, ${second.value})"
+  let triple = "(${first.value}, ${second.value}, ${first.value})"
+  let fewerNames = variantOf(seed, 2) == 0
+  let changed = fewerNames then "let (a, b) = ${triple}" else "let (a, b, c) = ${twoTuple}"
+  confusion(
+    "tuple pattern of ${fewerNames then "two names for three" else "three names for two"}",
+    program(["let (a, b) = ${twoTuple}", "IO.printLine(a)"]),
+    program([changed, "IO.printLine(a)"])
+  )
+end
+
+# A `return` of a wrapper (`Error`, `Just`) or another type from a function
+# declared to answer the plain type (kexhq/kex#768).
+let returnedWrapper(seed: Integer, pair: (Sample, Sample)) -> Relation do
+  let (first, second) = pair
+  let wrongs = ["Error(${first.value})", "Just(${first.value})", second.value]
+  let wrong = wrongs.at(variantOf(seed, wrongs.count)).or(second.value)
+  let body = ["IO.printLine(pick(false))"]
+  confusion(
+    "return ${wrong} from a function answering ${first.type}",
+    program(body, declarations: pickReturning(first, first.value)),
+    program(body, declarations: pickReturning(first, wrong))
+  )
+end
+
+let pickReturning(answer: Sample, returned: String) -> [String] do
+  [
+    "let pick(flag: Bool) -> ${answer.type} do",
+    "  return ${returned} if flag",
+    "  ${answer.value}",
+    "end",
+    ""
+  ]
+end
+
+# A `!` function on what is no `var`: a literal, a call's result, a `let`
+# (kexhq/kex#770).
+let bangOnNonVariable(seed: Integer) -> Relation do
+  let receivers = [
+    ["IO.printLine([3, 1].sort!)"],
+    ["IO.printLine([3, 1].map { |n| n + 1 }.sort!)"],
+    ["let items = [3, 1]", "IO.printLine(items.sort!)"]
+  ]
+  let index = seed / relationCount % receivers.count
+  confusion(
+    "! function on a receiver of kind ${index}",
+    program(["var items = [3, 1]", "items.sort!", "IO.printLine(items)"]),
+    program(receivers.at(index).or([]))
+  )
+end
+
+# A `make` for a type no one declares, as a typo of one that is
+# (kexhq/kex#772).
+let makeForUndeclaredType(seed: Integer) -> Relation do
+  let target = ["Bxo", "Boks", "Boxes", "Box.Inner"].at(seed / relationCount % 4).or("Bxo")
+  let body = ["IO.printLine(Box {}.size)"]
+  confusion(
+    "make for undeclared ${target}",
+    program(body, declarations: boxMadeAs("Box")),
+    program(body, declarations: boxMadeAs(target))
+  )
+end
+
+let boxMadeAs(made: String) -> [String] do
+  [
+    "record Box do",
+    "  size : Integer = 1",
+    "end",
+    "",
+    "make ${made} do",
+    "  let doubled -> Integer = 2",
+    "end",
+    ""
+  ]
+end
+
+# A function's final value written as `return`: the checker must take both
+# or neither (kexhq/kex#774).
+let returnAsLastExpression(seed: Integer) -> Relation do
+  let shapes = [
+    ("Integer?", "let n = Integer.parse(text).try"),
+    ("Integer?", "let n = 7"),
+    ("Integer", "let n = text.count"),
+    ("[Integer]", "let n = [text.count]")
+  ]
+  let (declared, binding) = shapes.at(seed / relationCount % shapes.count).or(("Integer", "let n = 1"))
+  let body = ["IO.printLine(pick(\"42\"))"]
+  Relation {
+    name: "return as the last expression of a function answering ${declared}",
+    original: program(body, declarations: pickEnding(declared, binding, "n")),
+    changed: program(body, declarations: pickEnding(declared, binding, "return n"))
+  }
+end
+
+let pickEnding(declared: String, binding: String, last: String) -> [String] do
+  ["let pick(text: String) -> ${declared} do", "  ${binding}", "  ${last}", "end", ""]
+end
+
+# A block that only calls one name on its parameter, and the `~` capture of
+# that name: a record's field, a `make` function, a top-level function
+# (kexhq/kex#775).
+let blockAsCapture(seed: Integer) -> Relation do
+  let shapes = [
+    ("all?", "done", "item.done"),
+    ("map", "size", "item.size"),
+    ("map", "doubled", "item.doubled"),
+    ("filter", "small?", "small?(item)")
+  ]
+  let (call, name, applied) = shapes.at(seed / relationCount % shapes.count).or(("map", "size", "item.size"))
+  let declarations = [
+    "record Item do",
+    "  done : Bool = false",
+    "  size : Integer = 2",
+    "end",
+    "",
+    "make Item do",
+    "  let doubled -> Integer = @size * 2",
+    "end",
+    "",
+    "let small?(item: Item) -> Bool = item.size < 3",
+    ""
+  ]
+  let items = "[Item {}, Item { done: true, size: 5 }]"
+  Relation {
+    name: "block as the capture ~${name}",
+    original: program(["IO.printLine(${items}.${call} { |item| ${applied} })"], declarations: declarations),
+    changed: program(["IO.printLine(${items}.${call}(~${name}))"], declarations: declarations)
+  }
+end
+
+# The variant of a relation a seed picks, among +count+.
+let variantOf(seed: Integer, count: Integer) -> Integer = seed / relationCount % count
+
+# `.or` given a captured function of no parameters, which is no value of
+# the optional's type (kexhq/kex#776).
+let orWithNullaryCapture(seed: Integer) -> Relation do
+  let (declared, element, fallback) = [
+    ("String", "\"ada\"", "\"nobody\""),
+    ("Integer", "1", "0")
+  ].at(variantOf(seed, 2)).or(("String", "\"ada\"", "\"nobody\""))
+  let declarations = ["let fallback -> ${declared} = ${fallback}", ""]
+  confusion(
+    "or with a captured ${declared} function of no parameters",
+    program(["IO.printLine([${element}].first.or(fallback))"], declarations: declarations),
+    program(["IO.printLine([${element}].first.or(~fallback))"], declarations: declarations)
+  )
+end
+
+# An operator or function on a type parameter that not every type has
+# (kexhq/kex#777, like #646 for `make` blocks).
+# Written directly it was refused; in a block over the parameter's values
+# it got through.
+let operatorOnTypeParameter(seed: Integer) -> Relation do
+  let (declared, body) = [
+    ("X", "[a].reduce(b) { |x, y| x + y }"),
+    ("X", "[a].reduce(b) { |x, y| x * y }"),
+    ("Bool", "[a].any? { |x| x > b }"),
+    ("[X]", "[a].map { |x| x - b }"),
+    ("[String]", "[a].map { |x| x.upperCase }"),
+    ("X", "a + b")
+  ].at(variantOf(seed, 6)).or(("X", "a + b"))
+  let call = ["IO.printLine(combine(true, false))"]
+  confusion(
+    "${body} on a type parameter",
+    program(call, declarations: ["let combine(a: X, b: X) -> X = a", ""]),
+    program(call, declarations: ["let combine(a: X, b: X) -> ${declared} = ${body}", ""])
+  )
+end
+
+# Walking a range of Floats, which has no next element (kexhq/kex#778).
+let enumeratedFloatRange(seed: Integer) -> Relation do
+  let walk = ["count", "items", "map { |x| x }", "sum", "first"].at(variantOf(seed, 5)).or("count")
+  confusion(
+    "${walk} over a Float range",
+    program(["IO.printLine((1..5).${walk})"]),
+    program(["IO.printLine((1.0..5.0).${walk})"])
+  )
+end
+
+# A keyword as a top-level function's name, which no call can then reach
+# (kexhq/kex#779). Only declared: a call would not even parse.
+let keywordAsFunctionName(seed: Integer) -> Relation do
+  let (keyword, foulForm) = [
+    ("match", false), ("loop", false), ("next", true), ("match", true), ("loop", true)
+  ].at(variantOf(seed, 5)).or(("match", false))
+  let declared = { |name|
+    foulForm then "foul ${name} -> Void = IO.printLine(\"x\")" else "let ${name}(n: Integer) -> Integer = n"
+  }
+  confusion(
+    "${keyword} as a ${foulForm then "foul" else "let"} function's name",
+    program(["IO.printLine(1)"], declarations: [declared("${keyword}Named"), ""]),
+    program(["IO.printLine(1)"], declarations: [declared(keyword), ""])
+  )
+end
+
+# A `make` block's private function called from outside the block, at the
+# top level or in a module (kexhq/kex#780).
+let privateMakeFunctionOutside(seed: Integer) -> Relation do
+  let inModule = variantOf(seed, 2) == 1
+  let block = [
+    "record User do",
+    "  name : String",
+    "end",
+    "",
+    "make User do",
+    "  let label -> String = secret",
+    "  private do",
+    "    let secret -> String = @name",
+    "  end",
+    "end"
+  ]
+  let declarations = inModule then ["module Accounts do", ...indented(block), "end", "", "using Accounts", ""]
+                     else [...block, ""]
+  let user = "User { name: \"Ada\" }"
+  confusion(
+    "private make function called outside${inModule then " in a module" else ""}",
+    program(["IO.printLine(${user}.label)"], declarations: declarations),
+    program(["IO.printLine(${user}.secret)"], declarations: declarations)
+  )
+end
+
+# A module's private name, reached after `using` or by its path
+# (kexhq/kex#781).
+let privateNameAfterUsing(seed: Integer) -> Relation do
+  let (reference, isFunction) = [
+    ("secret", false), ("secret()", true), ("Config.secret", false)
+  ].at(variantOf(seed, 3)).or(("secret", false))
+  let definition = isFunction then "let secret() -> Integer = 5" else "let secret = 5"
+  let declarations = [
+    "module Config do",
+    "  let shown = 1",
+    "  private do",
+    "    ${definition}",
+    "  end",
+    "end",
+    "",
+    "using Config",
+    ""
+  ]
+  confusion(
+    "private ${reference} after using",
+    program(["IO.printLine(shown)"], declarations: declarations),
+    program(["IO.printLine(${reference})"], declarations: declarations)
+  )
+end
+
+# An unannotated parameter called with a function no argument has, then
+# given an Integer (kexhq/kex#782).
+let missingFunctionOnUnannotated(seed: Integer) -> Relation do
+  let called = ["frobnicate", "upperCase", "first"].at(variantOf(seed, 3)).or("frobnicate")
+  let call = ["IO.printLine(describe(1))"]
+  confusion(
+    "${called} on an unannotated parameter given an Integer",
+    program(call, declarations: ["let describe(x) = x + 1", ""]),
+    program(call, declarations: ["let describe(x) = x.${called}", ""])
+  )
 end
 
 # A literal of an example bound to a name first, where the literal's text
@@ -361,8 +890,34 @@ let mutations -> [Mutation] = [
   Mutation { name: "extra argument", kinds: callKinds, rewrite: ~extraArgument },
   Mutation { name: "drop arguments", kinds: callKinds, rewrite: ~droppedArguments },
   Mutation { name: "unwrap Just", kinds: ["FunctionCall"], rewrite: ~unwrappedJust },
-  Mutation { name: "drop a match arm", kinds: ["MatchExpr"], rewrite: ~withoutAnArm }
+  Mutation { name: "drop a match arm", kinds: ["MatchExpr"], rewrite: ~withoutAnArm },
+  Mutation { name: "negate a string", kinds: ["StringLiteral"], rewrite: ~negated },
+  Mutation { name: "extra tuple element", kinds: ["TupleExpr"], rewrite: ~widenedTuple },
+  Mutation { name: "return an Error", kinds: ["ReturnExpr"], rewrite: ~returnedError },
+  Mutation { name: "! on a list literal", kinds: ["ListExpr"], rewrite: ~bangedList }
 ]
+
+# `-"kex"`: a number's operator on what is not one (kexhq/kex#769).
+let negated(text: String) -> [String] = ["-${text}"]
+
+# `(a, b)` as `(a, b, 0)`, against a pattern of two (kexhq/kex#767).
+let widenedTuple(text: String) -> [String] do
+  return [] if !text.startsWith?("(") || !text.endsWith?(")") || text.contains?("\n")
+  ["${text.take(text.count - 1)}, 0)"]
+end
+
+# `return x` as `return Error(x)` in whatever the function answers
+# (kexhq/kex#768); a bare `return` has nothing to wrap.
+let returnedError(text: String) -> [String] do
+  let value = text.drop("return".count).trim
+  return [] if !text.startsWith?("return ") || value.empty? || value.contains?("\n")
+  ["return Error(${value})"]
+end
+
+# A `!` function on a literal, which is no `var` to rewrite (kexhq/kex#770).
+let bangedList(text: String) -> [String] do
+  text == "[]" || text.contains?("\n") then [] else ["${text}.reverse!"]
+end
 
 let wrappedInJust(text: String) -> [String] = ["Just(${text})"]
 
@@ -512,8 +1067,11 @@ foul mutationVerdict(run: Run, seed: Integer, item: MutationCase) -> Bool do
   return passes(label, "rejected") if !succeeded?(check)
   let runs = bothBackends(run, [after], "spec")
   let crashed = runs.any? { |_, result| typeCrash?(result) }
-  let ranClean = runs.all? { |_, result| succeeded?(result) }
-  return passes(label, "accepted, runs") if !crashed && (!ranClean || runsAgree?(runs))
+  # Both backends failing alike is the program's own error (an index out of
+  # range the mutation caused); only one failing is the backends disagreeing.
+  let succeeding = runs.count { |_, result| succeeded?(result) }
+  let agreed = succeeding == 0 || runsAgree?(runs)
+  return passes(label, "accepted, runs") if !crashed && agreed
   let verdict = crashed then "accepted by the checker, then crashed" else "backends disagree"
   let header = [
     "seed=${seed}",
@@ -595,7 +1153,12 @@ let typeCrashMarkers -> [String] = [
   "no matching clause", "No matching clause", "undefined method",
   "undefined function", "undefined variable", "cannot add", "cannot subtract",
   "cannot multiply", "cannot divide", "cannot compare", "cannot call",
-  "Internal error", "pattern mismatch"
+  "Internal error", "pattern mismatch",
+  # A compile stage refusing what the check passed: any error diagnostic
+  # (`[KEXEB-0030]` from lowering, `[KEXET-0491]` from the checker a run
+  # repeats), and a backend failing below the diagnostics (kexhq/kex#708).
+  "[KEXE", "erlc failed", "IR lower", "unimplemented",
+  "cannot negate", "requires a variable binding"
 ]
 
 typeCrash? : Outcome -> Bool
