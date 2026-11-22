@@ -1,5 +1,3 @@
-# NEVER run `git commit` or `git push`. Never propose or suggest it either. Leave all changes in the working tree.
-
 # Kex Language Compiler
 
 Kex is a functional programming language with Ruby-like syntax, UFCS (Uniform Function Call Syntax), immutability by default, and an Elixir-style process model. File extension: `.kex`.
@@ -71,6 +69,9 @@ make test-wasm    # + runs the interpreter test suite via Node
 - `m_member` for class members
 - `auto foo() -> ReturnType` trailing return style
 - Namespace: `kex`
+
+## Commit style
+Make the commits brief, always do modifications via PRs. Always make the PR descriptions detailed.
 
 ### Kex (`.kex` sources)
 Use the `STYLE.md` file for concrete rules and examples for Kex code (`.kex` files).
