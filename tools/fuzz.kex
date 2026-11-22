@@ -670,10 +670,12 @@ let genLit(ctx: Ctx, tag) -> (String, Ctx) do
   return (lit, withEnv(ctx2, ctx.env))
 end
 
-# A list of Integers walked by a block, as an Integer or a Bool. The block's
-# parameters join the env for its body, which reads the bindings around it
-# too (a closure); they are named by depth, so a block in another's body
-# never shadows it, and they leave the env with the block.
+# A list of Integers walked by a block, as an Integer or a Bool, in
+# parentheses: opening a line (an `if` branch), a bare `[` reads as indexing
+# the line before. The block's parameters join the env for its body, which
+# reads the bindings around it too (a closure); they are named by depth, so a
+# block in another's body never shadows it, and they leave the env with the
+# block.
 let genBlockWalk(ctx: Ctx, tag, depth: Integer) -> (String, Ctx) do
   let item = "item${depth}"
   let total = "total${depth}"
@@ -684,20 +686,20 @@ let genBlockWalk(ctx: Ctx, tag, depth: Integer) -> (String, Ctx) do
   if tag == :bool
     let (test, ctx5) = genTyped(withItem, :bool, depth)
     let walk = shape == 0 then "any?" else "all?"
-    return ("${items}.${walk} { |${item}| ${test} }", withEnv(ctx5, ctx.env))
+    return ("(${items}.${walk} { |${item}| ${test} })", withEnv(ctx5, ctx.env))
   end
   if shape == 0
     let (mapped, ctx6) = genTyped(withItem, :int, depth)
     let summed = ".reduce(0) { |${total}, ${item}| ${total} + ${item} }"
-    return ("${items}.map { |${item}| ${mapped} }${summed}", withEnv(ctx6, ctx.env))
+    return ("(${items}.map { |${item}| ${mapped} }${summed})", withEnv(ctx6, ctx.env))
   end
   if shape == 1
     let (kept, ctx7) = genTyped(withItem, :bool, depth)
-    return ("${items}.filter { |${item}| ${kept} }.count", withEnv(ctx7, ctx.env))
+    return ("(${items}.filter { |${item}| ${kept} }.count)", withEnv(ctx7, ctx.env))
   end
   let (start, ctx8) = genTyped(ctx4, :int, depth)
   let (step, ctx9) = genTyped(remember(withEnv(ctx8, withItem.env), :int, total), :int, depth)
-  return ("${items}.reduce(${start}) { |${total}, ${item}| ${step} }", withEnv(ctx9, ctx.env))
+  return ("(${items}.reduce(${start}) { |${total}, ${item}| ${step} })", withEnv(ctx9, ctx.env))
 end
 
 # Top-level declarations ahead of `main`, each of whose calls joins the env
