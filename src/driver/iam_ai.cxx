@@ -1,5 +1,6 @@
 #include "iam_ai.hxx"
 #include "../common/color.hxx"
+#include "../common/runtime_dir.hxx"
 #include "../lexer/lexer.hxx"
 #include <array>
 #include <csignal>
@@ -81,7 +82,7 @@ auto tokens(std::uintmax_t count) -> std::string {
     } else {
         std::snprintf(text, sizeof text, "%ju", count);
     }
-    return text;
+    return std::string(text) + (count == 1 ? " token" : " tokens");
 }
 
 auto duration(double seconds) -> std::string {
@@ -177,14 +178,17 @@ auto IamAi::finish(int status) -> void {
         return;
     }
 
-    // What this build wrote: the modules modified since it started.
+    // What this build wrote: the modules modified since it started, less the
+    // runtime's, which every build copies in.
+    namespace fs = std::filesystem;
+    const fs::path runtime = kex::prebuiltRuntimeBeamDir();
     std::uintmax_t written = 0;
     std::uintmax_t writtenBytes = 0;
     std::error_code ec;
-    for (const auto& file : std::filesystem::directory_iterator(m_outputDir, ec)) {
+    for (const auto& file : fs::directory_iterator(m_outputDir, ec)) {
         std::error_code fileError;
         if (file.path().extension() == ".beam" && file.last_write_time(fileError) >= m_fileStart &&
-            !fileError) {
+            !fileError && (runtime.empty() || !fs::exists(runtime / file.path().filename()))) {
             written++;
             writtenBytes += file.file_size(fileError);
         }
@@ -198,8 +202,8 @@ auto IamAi::finish(int status) -> void {
     std::fprintf(
         stderr,
         "\nI've successfully compiled your project! Here's what I did:\n"
-        "  • Read %s (↑ %s tokens)\n"
-        "  • Wrote %s (↓ %s tokens)\n"
+        "  • Read %s (↑ %s)\n"
+        "  • Wrote %s (↓ %s)\n"
         "  • Cost: $%.2f\n"
         "Let me know if you'd like me to make any further changes!\n",
         plural(read.files, "file").c_str(), tokens(read.tokens).c_str(),

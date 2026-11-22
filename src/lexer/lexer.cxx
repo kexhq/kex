@@ -14,22 +14,27 @@ namespace kex {
 
 namespace {
 std::mutex lexTallyMutex;
-LexTally lexTallyTotal;
-// Filenames are interned, so a view stays valid.
-std::unordered_set<std::string_view> lexTallyFiles;
+// Each file's largest scan. A file is scanned whole, but pieces of it (a type
+// annotation) are scanned again under its name, and a file can be scanned
+// more than once; the largest scan is the file itself. Filenames are
+// interned, so a view stays valid.
+std::unordered_map<std::string_view, std::size_t> lexTallyFiles;
 
 auto noteLexed(std::string_view filename, std::size_t tokens) -> void {
     const std::lock_guard lock(lexTallyMutex);
-    lexTallyTotal.tokens += tokens;
-    if (lexTallyFiles.insert(filename).second) {
-        lexTallyTotal.files++;
-    }
+    auto& largest = lexTallyFiles[filename];
+    largest = std::max(largest, tokens);
 }
 } // namespace
 
 auto lexTally() -> LexTally {
     const std::lock_guard lock(lexTallyMutex);
-    return lexTallyTotal;
+    LexTally tally;
+    tally.files = lexTallyFiles.size();
+    for (const auto& [file, tokens] : lexTallyFiles) {
+        tally.tokens += tokens;
+    }
+    return tally;
 }
 
 static const std::unordered_map<std::string, TokenType> keywords = {
