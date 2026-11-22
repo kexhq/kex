@@ -1,0 +1,21 @@
+# kex: check-only
+# The clauses of a function must take every constructor of a sum type they
+# match on, as the arms of a match must (kexhq/kex#749). `area` has no clause
+# for `Square`: BEAM crashed with `function_clause` and the walker printed
+# nothing. A clause per constructor, or a catch-all, is accepted.
+type Shape = Circle(Float) | Square(Float) | Triangle(Float, Float)
+
+let area(Circle(r)) = 3.0 * r * r
+let area(Triangle(b, h)) = b * h / 2.0
+
+let scaled(Circle(r), k) = Circle(r * k)
+let scaled(Square(s), k) = Square(s * k)
+let scaled(shape, _) = shape
+
+let side(Square(s)) = s
+let side(_) = 0.0
+
+main do
+  IO.printLine(area(Square(2.0)))
+  IO.printLine(side(scaled(Square(1.0), 2.0)))
+end

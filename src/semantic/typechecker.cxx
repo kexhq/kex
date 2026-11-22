@@ -63,6 +63,8 @@ auto TypeChecker::check(
     const std::vector<std::string>& entryFiles) -> void {
     m_diagnostics = &diagnostics;
     m_entryFiles = entryFiles;
+    m_clauseCoverageGaps.clear();
+    m_clauseCoverageSites.clear();
     m_makeTargetIdentities.clear();
     m_nameUses.clear();
     m_scopeNames.clear();
@@ -833,6 +835,7 @@ auto TypeChecker::check(
     }
     decideOperators(program);
 
+    checkClauseCoverage();
     reportUnknownMethods();
 }
 
@@ -3587,8 +3590,9 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
     m_declarationImports = previousImports;
 }
 
-auto TypeChecker::checkMatchExhaustiveness(
-    const ast::MatchExpr& node, const TypePtr& subject, SourceLocation loc) -> bool {
+auto TypeChecker::uncoveredConstructors(
+    const std::vector<CoverageArm>& arms, const TypePtr& subject)
+    -> std::optional<std::pair<std::string, std::vector<std::string>>> {
     bool hasUnguardedCatchAll = false;
     std::set<std::string> covered;
     std::string adtName;
@@ -3620,50 +3624,47 @@ auto TypeChecker::checkMatchExhaustiveness(
         return std::nullopt;
     };
 
-    for (const auto& clause : node.clauses) {
-        bool guarded = clause.guard && *clause.guard;
-        for (const auto& pat : clause.patterns) {
-            if (!pat) {
-                continue;
+    for (const auto& arm : arms) {
+        const auto* pat = arm.pattern;
+        if (!pat || std::holds_alternative<ast::WildcardPattern>(pat->kind) ||
+            std::holds_alternative<ast::VarPattern>(pat->kind)) {
+            if (!arm.guarded) {
+                hasUnguardedCatchAll = true;
             }
-            if (std::holds_alternative<ast::WildcardPattern>(pat->kind) ||
-                std::holds_alternative<ast::VarPattern>(pat->kind)) {
-                if (!guarded) {
-                    hasUnguardedCatchAll = true;
-                }
-                continue;
-            }
-            std::string ctorName;
-            if (auto* ctor = std::get_if<ast::ConstructorPattern>(&pat->kind)) {
-                ctorName = ctor->name;
-            } else if (auto* lit = std::get_if<ast::LiteralPattern>(&pat->kind);
-                       lit && lit->literal.type == TokenType::None) {
-                // `None` lexes as its own TokenType::None (lexer.cxx), so
-                // it parses as a LiteralPattern, not ConstructorPattern{
-                // "None"} — treat it as the Option constructor it is.
-                ctorName = "None";
-            } else {
-                continue; // literal/list/tuple/record/range patterns don't drive ADT exhaustiveness
-            }
+            continue;
+        }
+        std::string ctorName;
+        if (auto* ctor = std::get_if<ast::ConstructorPattern>(&pat->kind)) {
+            ctorName = ctor->name;
+        } else if (auto* lit = std::get_if<ast::LiteralPattern>(&pat->kind);
+                   lit && lit->literal.type == TokenType::None) {
+            // `None` lexes as its own TokenType::None (lexer.cxx), so
+            // it parses as a LiteralPattern, not ConstructorPattern{
+            // "None"} — treat it as the Option constructor it is.
+            ctorName = "None";
+        } else if (arm.strict) {
+            return std::nullopt; // a kind of pattern this verdict cannot weigh
+        } else {
+            continue; // literal/list/tuple/record/range patterns don't drive ADT exhaustiveness
+        }
 
-            const auto owner = ownerOf(ctorName);
-            if (!owner) {
-                inconclusive = true; // unregistered constructor — can't prove the closed set
-                continue;
-            }
-            if (adtName.empty()) {
-                adtName = *owner;
-            } else if (adtName != *owner) {
-                inconclusive = true; // patterns span more than one ADT
-            }
-            if (!guarded) {
-                covered.insert(ctorName);
-            }
+        const auto owner = ownerOf(ctorName);
+        if (!owner) {
+            inconclusive = true; // unregistered constructor — can't prove the closed set
+            continue;
+        }
+        if (adtName.empty()) {
+            adtName = *owner;
+        } else if (adtName != *owner) {
+            inconclusive = true; // patterns span more than one ADT
+        }
+        if (!arm.guarded) {
+            covered.insert(ctorName);
         }
     }
 
     if (hasUnguardedCatchAll || inconclusive || adtName.empty()) {
-        return false;
+        return std::nullopt;
     }
 
     std::vector<std::string> missing;
@@ -3675,22 +3676,107 @@ auto TypeChecker::checkMatchExhaustiveness(
     // Every constructor taken at the top; what their arguments take is
     // the matrix's to say (`Just(1)` beside `None` leaves `Just(2)`).
     if (missing.empty()) {
-        return false;
+        return std::nullopt;
     }
+    return std::pair{adtName, std::move(missing)};
+}
 
+namespace {
+auto joinedCases(const std::vector<std::string>& cases) -> std::string {
     std::string list;
-    for (size_t i = 0; i < missing.size(); i++) {
+    for (size_t i = 0; i < cases.size(); i++) {
         if (i) {
             list += ", ";
         }
-        list += missing[i];
+        list += cases[i];
     }
-    error(diag::Code::NonExhaustiveMatchOn, loc, {{"type", adtName}, {"cases", list}});
+    return list;
+}
+} // namespace
+
+auto TypeChecker::checkMatchExhaustiveness(
+    const ast::MatchExpr& node, const TypePtr& subject, SourceLocation loc) -> bool {
+    std::vector<CoverageArm> arms;
+    for (const auto& clause : node.clauses) {
+        const bool guarded = clause.guard && *clause.guard;
+        for (const auto& pat : clause.patterns) {
+            if (pat) {
+                arms.push_back({pat.get(), guarded});
+            }
+        }
+    }
+    const auto uncovered = uncoveredConstructors(arms, subject);
+    if (!uncovered) {
+        return false;
+    }
+    const auto& [adtName, missing] = *uncovered;
+    error(
+        diag::Code::NonExhaustiveMatchOn, loc,
+        {{"type", adtName}, {"cases", joinedCases(missing)}});
     if (const auto declared = m_adtDeclarations.find(adtName);
         declared != m_adtDeclarations.end()) {
         labelLast("", declared->second, "`" + adtName + "` is declared here");
     }
     return true;
+}
+
+// The clauses of a function are the arms of a match on its arguments, so a
+// constructor no clause takes in some argument position is a value the
+// function has no answer for: `let area(Circle(r))` alone, called with a
+// `Square`, crashed on BEAM with `function_clause` and returned nothing on
+// the walker (kexhq/kex#749). Each position is judged on its own, which is
+// sound: a constructor missing from one column is missing whatever the
+// other columns take. Only a definition that is the sole one of its name
+// and arity in its scope is judged, since clauses written apart are
+// separate definitions that overload one another.
+auto TypeChecker::noteClauseCoverage(const ast::FunctionDef& def) -> void {
+    if (m_inMakeBlock || m_currentMakeType || def.clauses.empty() || def.computedName) {
+        return;
+    }
+    const auto arity = def.clauses.front().params.size();
+    const auto key = m_currentModulePath + "/" + def.name + "/" + std::to_string(arity);
+    const auto site = std::string(def.location.file) + ":" + std::to_string(def.location.line) +
+                      ":" + std::to_string(def.location.column);
+    if (!m_clauseCoverageSites[key].insert(site).second) {
+        return;
+    }
+    if (!std::all_of(def.clauses.begin(), def.clauses.end(), [&](const auto& clause) {
+            return clause.params.size() == arity;
+        })) {
+        return;
+    }
+    for (size_t pi = 0; pi < arity; ++pi) {
+        std::vector<CoverageArm> arms;
+        for (const auto& clause : def.clauses) {
+            const auto& param = clause.params[pi];
+            // A named parameter takes every value of its type, whether that
+            // is written or not.
+            arms.push_back({param.pattern ? param.pattern->get() : nullptr, false, true});
+        }
+        if (auto uncovered = uncoveredConstructors(arms, nullptr)) {
+            m_clauseCoverageGaps.push_back(
+                {key, def.name, def.location, std::move(uncovered->first),
+                 std::move(uncovered->second)});
+            return;
+        }
+    }
+}
+
+auto TypeChecker::checkClauseCoverage() -> void {
+    for (const auto& gap : m_clauseCoverageGaps) {
+        if (m_clauseCoverageSites[gap.key].size() != 1) {
+            continue;
+        }
+        error(
+            diag::Code::NonExhaustiveClauses, gap.location,
+            {{"name", gap.name}, {"type", gap.type}, {"cases", joinedCases(gap.missing)}});
+        if (const auto declared = m_adtDeclarations.find(gap.type);
+            declared != m_adtDeclarations.end()) {
+            labelLast("", declared->second, "`" + gap.type + "` is declared here");
+        }
+    }
+    m_clauseCoverageGaps.clear();
+    m_clauseCoverageSites.clear();
 }
 
 // A match over a union of types (`type Reply = String | Safe | Redirect`)
@@ -5182,6 +5268,7 @@ auto TypeChecker::checkUsingBlock(const ast::UsingBlock& block) -> void {
 }
 
 auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
+    noteClauseCoverage(def);
     // A method of a `make` for a trait takes its receiver's dictionary.
     if (m_currentMakeType) {
         if (auto trait = declaredTraitOf(m_currentMakeType); !trait.empty()) {

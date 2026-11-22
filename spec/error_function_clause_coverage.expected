@@ -1,0 +1,7 @@
+spec/error_function_clause_coverage.kex:8:1: [KEXET-0186]: Error, non-exhaustive clauses of `area`: missing case(s) Square of Shape
+  |
+6 | type Shape = Circle(Float) | Square(Float) | Triangle(Float, Float)
+  | ------------------------------------------------------------------- `Shape` is declared here
+ ...
+8 | let area(Circle(r)) = 3.0 * r * r
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
