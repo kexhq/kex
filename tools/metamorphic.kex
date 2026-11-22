@@ -124,7 +124,7 @@ foul caseHolds?(run: Run, caseSeed: Integer, index: Integer, mode: String) -> Bo
   # Every relation seed in turn, the known-open ones too: what a relation
   # still finds, without the mutations between.
   return relationHolds?(run, caseSeed) if mode == "relations"
-  return mutationHandled?(run, caseSeed / 2) if caseSeed % 2 == 1
+  return mutationHandled?(run, caseSeed / 2, mode == "search-all") if caseSeed % 2 == 1
   relationHolds?(run, searchedRelation(caseSeed / 2, mode == "search-all"))
 end
 
@@ -874,10 +874,14 @@ end
 
 # One way to break a program: the kinds of node it rewrites, and the
 # replacements it offers for a node's text (none where it does not apply).
+# A mutation that finds an open bug names it, and `search` leaves it out as
+# it leaves out a known-open relation, so a failing search is always news;
+# `search-all` runs it. It loses the name with the fix for its bug.
 record Mutation do
   name    : String
   kinds   : [String]
   rewrite : String -> [String]
+  openBug : String = ""
 end
 
 let literalKinds -> [String] = ["IntLiteral", "StringLiteral"]
@@ -891,11 +895,28 @@ let mutations -> [Mutation] = [
   Mutation { name: "drop arguments", kinds: callKinds, rewrite: ~droppedArguments },
   Mutation { name: "unwrap Just", kinds: ["FunctionCall"], rewrite: ~unwrappedJust },
   Mutation { name: "drop a match arm", kinds: ["MatchExpr"], rewrite: ~withoutAnArm },
-  Mutation { name: "negate a string", kinds: ["StringLiteral"], rewrite: ~negated },
-  Mutation { name: "extra tuple element", kinds: ["TupleExpr"], rewrite: ~widenedTuple },
-  Mutation { name: "return an Error", kinds: ["ReturnExpr"], rewrite: ~returnedError },
-  Mutation { name: "! on a list literal", kinds: ["ListExpr"], rewrite: ~bangedList }
+  Mutation {
+    name: "negate a string", kinds: ["StringLiteral"], rewrite: ~negated, openBug: "kexhq/kex#769"
+  },
+  Mutation {
+    name: "extra tuple element", kinds: ["TupleExpr"], rewrite: ~widenedTuple,
+    openBug: "kexhq/kex#767"
+  },
+  Mutation {
+    name: "return an Error", kinds: ["ReturnExpr"], rewrite: ~returnedError,
+    openBug: "kexhq/kex#768"
+  },
+  Mutation {
+    name: "! on a list literal", kinds: ["ListExpr"], rewrite: ~bangedList,
+    openBug: "kexhq/kex#770"
+  }
 ]
+
+# The mutations a search draws from: those that find no open bug, unless
+# +all+.
+let searchedMutations(all: Bool) -> [Mutation] do
+  all then mutations else mutations.filter { |mutation| mutation.openBug.empty? }
+end
 
 # `-"kex"`: a number's operator on what is not one (kexhq/kex#769).
 let negated(text: String) -> [String] = ["-${text}"]
@@ -1013,16 +1034,16 @@ end
 # The seed picks a mutation, a file, and one of the sites the mutation
 # offers in it. A file with no site falls through to the next file; a large
 # odd stride spreads neighbouring seeds over the corpus.
-foul mutationCase(seed: Integer, files: [String]) -> MutationCase? do
-  let mutation = mutations.at(seed % mutations.count).try
-  let start = seed / mutations.count * 7919
+foul mutationCase(seed: Integer, files: [String], pool: [Mutation] = mutations) -> MutationCase? do
+  let mutation = pool.at(seed % pool.count).try
+  let start = seed / pool.count * 7919
   var attempt = 0
   while attempt < files.count do
     let path = files.at((start + attempt) % files.count).or("")
     let source = FS.File.read(path).or("")
     let sites = sitesIn(source, mutation)
     if !sites.empty?
-      let (site, rewritten) = sites.at(seed / mutations.count * 104729 % sites.count).try
+      let (site, rewritten) = sites.at(seed / pool.count * 104729 % sites.count).try
       let shown = "${site}  ->  ${rewritten}"
       return Just(MutationCase {
         name: mutation.name,
@@ -1049,8 +1070,8 @@ end
 
 # A mutated spec: refused by the checker, or run alike on both backends
 # without crashing. The spec suite has already run the original.
-foul mutationHandled?(run: Run, seed: Integer) -> Bool do
-  if let Just(item) = mutationCase(seed, run.files)
+foul mutationHandled?(run: Run, seed: Integer, all: Bool) -> Bool do
+  if let Just(item) = mutationCase(seed, run.files, searchedMutations(all))
     return mutationVerdict(run, seed, item)
   end
   IO.printLine("SKIP mutation ${seed}: no site in the corpus")

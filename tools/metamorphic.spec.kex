@@ -137,6 +137,15 @@ describe("metamorphic") do
     end
   end
 
+  it("leaves mutations that find an open bug out of a search") do
+    let searched = searchedMutations(false)
+    assert(searched.count < mutations.count)
+    assert(searched.all? { |mutation| mutation.openBug.empty? })
+    assert(searchedMutations(true).count == mutations.count)
+    let names = (0..40).items.map { |seed| mutationCase(seed, corpus, searched) }
+    assert(!names.any? { |item| item.map { |found| found.name == "negate a string" }.or(false) })
+  end
+
   it("leaves known-open relations out without repeating a case") do
     let seeds = (0..43).items.map { |seed| searchedRelation(seed, false) }
     assert(!seeds.any? { |seed| knownOpen.contains?(seed % relationCount) })
