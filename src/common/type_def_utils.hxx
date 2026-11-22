@@ -231,8 +231,7 @@ auto forEachTypeDef(const Items& items, const Visit& visit, const std::string& m
 // nested module. A `make` targeting one of these is part of that type's own
 // interface — it travels with any value of the type, so it is not import-gated.
 // A `make` targeting anything else is patching a FOREIGN type, which is the
-// action-at-a-distance `using` has to gate (docs/ufcs-dispatch-plan.md
-// "Follow-up", case 1).
+// action-at-a-distance `using` has to gate (spec/module_scoped_make.kex).
 template <typename Items>
 inline auto collectDeclaredTypeNames(const Items& items, std::set<std::string>& out) -> void {
     for (const auto& item : items) {

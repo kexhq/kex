@@ -38,7 +38,7 @@ struct Signature {
     std::vector<std::string> paramNames;
     // The module whose `make` block defines this method, "" for a top-level
     // one. A module-scoped `make` is import-gated exactly like every other
-    // module member (docs/ufcs-dispatch-plan.md "Follow-up"), so a call site
+    // module member (spec/module_scoped_make.kex), so a call site
     // may only see it with a matching `using` in scope.
     std::string makeModule;
     // The module whose body declares this free function, "" for a top-level

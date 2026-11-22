@@ -1605,5 +1605,4 @@ an ordinary `var` bound to the clone, which you assign fields on
 (`new.age = @age + 1`) and return. `new { ... }` is an error, and deliberately
 so — keeping `new` an ordinary binding is what makes a `make` block pure sugar
 for `var new = This { ...this }`, granting no power a hand-written function
-lacks. See `docs/new-operator-plan.md` (Decisions, and "Casing: `new` and `New`
-are different things") and `examples/new.kex`.
+lacks. See `examples/new.kex`.

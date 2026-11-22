@@ -140,5 +140,5 @@ terms, so foreign callers can send `{add, <<"coffee">>}` with
 `gen_server:call/2` or the atom `clear` with `gen_server:cast/2`. Only declared
 slots are exposed; ordinary helper functions are not request handlers.
 
-The full rationale, rejected alternatives, and deferred supervision work live
-in [the serving design plan](serving-plan.md).
+The original design plan, with its rationale and rejected alternatives, was
+`docs/serving-plan.md`; it remains in the git history.

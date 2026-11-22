@@ -8,8 +8,8 @@
 namespace kex::semantic {
 
 // Two definitions of the same method for the SAME receiver type are an
-// equally-specific tie, which docs/ufcs-dispatch-plan.md "Decisions (locked)"
-// makes a compile error naming both candidates. Nothing else can: declaration
+// equally-specific tie, which is a compile error naming both candidates
+// (spec/error_ambiguous_receiver_make.kex). Nothing else can be: declaration
 // form carries no dispatch priority, so there is no rule that picks a winner —
 // and each backend was picking a different one.
 //
