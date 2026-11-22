@@ -1311,6 +1311,29 @@ private:
     // (`MainDef(info)`) is untyped only because interfaces carry no payload
     // types, and guessing a record for it misread `info.body`.
     std::unordered_set<int> m_unannotatedParamVars;
+    // What an unannotated function asks of its unannotated parameters
+    // (kexhq/kex#782). `let describe(x) = x.upperCase` checked clean, and
+    // `describe(1)` failed at run time on both backends: nothing tied `x` to a
+    // type, so nothing at the call knew `Integer` has no `upperCase`.
+    // Each such parameter's variable, to its function ("name/arity") and
+    // position; the functions called on each, by function and position; and
+    // the calls to judge once every function has been checked.
+    std::unordered_map<int, std::pair<std::string, std::size_t>> m_unannotatedParamOwner;
+    std::unordered_map<std::string, std::map<std::size_t, std::set<std::string>>>
+        m_parameterDemands;
+    struct DemandedCall {
+        std::string function;
+        std::string key;
+        std::vector<TypePtr> argTypes;
+        SourceLocation location;
+    };
+    std::vector<DemandedCall> m_demandedCalls;
+    // Whether `type` has a function or field `name`: a field of its record,
+    // or a function whose first parameter takes it.
+    auto typeHasFunction(const TypePtr& type, const std::string& name) -> bool;
+    // The calls of m_demandedCalls whose argument lacks what the function
+    // calls on it.
+    auto reportUnmetDemands() -> void;
     // Fields without a default whose declared type is not Optional.
     std::unordered_map<std::string, std::unordered_set<std::string>> m_requiredRecordFields;
     auto registerRecordFields(const ast::Program& program, bool namesOnly = false) -> void;

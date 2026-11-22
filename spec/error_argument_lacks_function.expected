@@ -1,0 +1,10 @@
+spec/error_argument_lacks_function.kex:19:22: [KEXET-0491]: Error, `named` expects argument 1 to be Item, but got Integer
+
+named : Item -> String
+   |
+19 |   IO.printLine(named(7))
+   |                      ^ this has type Integer
+spec/error_argument_lacks_function.kex:17:16: [KEXET-0503]: Error, `describe` calls `upperCase` on its argument 1, and Integer has no `upperCase`
+   |
+17 |   IO.printLine(describe(1))
+   |                ^^^^^^^^^^^

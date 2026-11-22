@@ -982,9 +982,10 @@ auto runOnWalker(
     if (evaluator.testsFailed() > 0) {
         return 1;
     }
-    if (auto* i = std::get_if<kex::interpreter::IntValue>(&result->data)) {
-        return static_cast<int>(i->value);
-    }
+    // A program sets its exit status with `System.exit`, as on BEAM. Taken
+    // from `main`'s last value, `3.times do ... end` exited 3 on the walker
+    // and 0 on BEAM (found by `make metamorphic-search`).
+    (void)result;
     return 0;
 }
 

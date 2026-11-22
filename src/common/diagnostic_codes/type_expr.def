@@ -95,3 +95,4 @@ KEX_DIAGNOSTIC(ArithmeticRequiresNumbers, "KEXET-0497", "operator '{op}' require
 KEX_DIAGNOSTIC(UnrelatedNeverEqual, "KEXET-0498", "`{left}` and `{right}` are never equal: values of unrelated types")
 KEX_DIAGNOSTIC(LiteralPatternNeverMatches, "KEXET-0499", "the pattern `{literal}` never matches a value of type {type}")
 KEX_DIAGNOSTIC(FloatRangeNotWalked, "KEXET-0502", "`{name}` walks a range's values, and a Float range has none to walk: use an Integer range, or ask it `contains?`")
+KEX_DIAGNOSTIC(ArgumentLacksFunction, "KEXET-0503", "`{name}` calls `{function}` on its argument {index}, and {type} has no `{function}`")

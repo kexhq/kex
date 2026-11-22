@@ -1141,8 +1141,16 @@ let typeCrashMarkers -> [String] = [
 ]
 
 typeCrash? : Outcome -> Bool
-let typeCrash?(Ok(value)) = value.exitCode != 0 && crashText?(value.stdout + value.stderr)
+let typeCrash?(Ok(value)) do
+  let text = value.stdout + value.stderr
+  value.exitCode != 0 && crashText?(text) && !ownFailure?(text)
+end
 let typeCrash?(Error(_))  = false
+
+# A failing `assert` of the program itself: a mutation can make one fail
+# (`Just(None)` as `None`), which says nothing about the checker. It prints
+# as "Internal error: assertion failed" on both backends.
+let ownFailure?(text: String) -> Bool = text.contains?("assertion failed")
 
 let crashText?(text: String) -> Bool = typeCrashMarkers.any? { |marker| text.contains?(marker) }
 

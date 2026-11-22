@@ -66,6 +66,9 @@ auto TypeChecker::check(
     m_clauseCoverageGaps.clear();
     m_clauseCoverageSites.clear();
     m_makeTargetIdentities.clear();
+    m_unannotatedParamOwner.clear();
+    m_parameterDemands.clear();
+    m_demandedCalls.clear();
     m_nameUses.clear();
     m_scopeNames.clear();
     m_localDefinitions.clear();
@@ -837,6 +840,81 @@ auto TypeChecker::check(
 
     checkClauseCoverage();
     reportUnknownMethods();
+    reportUnmetDemands();
+}
+
+auto TypeChecker::typeHasFunction(const TypePtr& given, const std::string& name) -> bool {
+    const auto type = resolve(given);
+    if (const auto* named = std::get_if<NamedType>(&type->kind)) {
+        if (const auto record = m_recordFields.find(resolveRecordName(named->name));
+            record != m_recordFields.end() && record->second.contains(name)) {
+            return true;
+        }
+        if (m_importedInterfaces) {
+            if (const auto record = m_importedInterfaces->recordFieldNames.find(named->name);
+                record != m_importedInterfaces->recordFieldNames.end() &&
+                record->second.contains(name)) {
+                return true;
+            }
+        }
+    }
+    const auto takes = [&](const std::vector<Signature>& signatures) {
+        return std::any_of(signatures.begin(), signatures.end(), [&](const Signature& sig) {
+            return !sig.params.empty() && argMatchesParam(type, sig.params.front());
+        });
+    };
+    if (const auto methods = m_methodSignatures.find(name);
+        methods != m_methodSignatures.end() && takes(methods->second)) {
+        return true;
+    }
+    if (const auto user = m_userSignatures.find(name);
+        user != m_userSignatures.end() && takes(user->second)) {
+        return true;
+    }
+    return takes(importedCandidateSignatures(name));
+}
+
+auto TypeChecker::reportUnmetDemands() -> void {
+    for (const auto& call : m_demandedCalls) {
+        const auto demands = m_parameterDemands.find(call.key);
+        if (demands == m_parameterDemands.end()) {
+            continue;
+        }
+        // A parameter its function settled on a type (`x.label` binds `x` to the
+        // one record with a `label`) is checked as any typed argument is.
+        const auto signatures = m_userSignatures.find(call.function);
+        const auto stillOpen = [&](std::size_t index) {
+            return signatures == m_userSignatures.end() ||
+                   std::any_of(
+                       signatures->second.begin(), signatures->second.end(),
+                       [&](const Signature& sig) {
+                           return sig.params.size() == call.argTypes.size() &&
+                                  index < sig.params.size() &&
+                                  containsOpenType(resolve(sig.params[index]));
+                       });
+        };
+        for (const auto& [index, functions] : demands->second) {
+            if (index >= call.argTypes.size() || !call.argTypes[index] || !stillOpen(index)) {
+                continue;
+            }
+            // Only an argument whose type is settled: an open one says nothing yet.
+            const auto argument = resolve(call.argTypes[index]);
+            if (containsOpenType(argument) || std::holds_alternative<UnionType>(argument->kind)) {
+                continue;
+            }
+            for (const auto& function : functions) {
+                if (!typeHasFunction(argument, function)) {
+                    error(
+                        diag::Code::ArgumentLacksFunction, call.location,
+                        {{"name", call.function},
+                         {"function", function},
+                         {"index", std::to_string(index + 1)},
+                         {"type", typeToString(argument)}});
+                    break;
+                }
+            }
+        }
+    }
 }
 
 // A method call whose NAME is not defined anywhere — the typo case. Both
@@ -5682,6 +5760,14 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 paramType = freshTypeVar();
                 if (auto* var = std::get_if<TypeVar>(&paramType->kind)) {
                     m_unannotatedParamVars.insert(var->id);
+                    // A free function of one clause: what its body calls on this
+                    // parameter is asked of every argument passed for it. Several
+                    // clauses may each take another shape, and a `make`
+                    // function's parameters sit beside an implicit receiver.
+                    if (!m_inMakeBlock && def.clauses.size() == 1 && !def.name.empty()) {
+                        m_unannotatedParamOwner[var->id] = {
+                            def.name + "/" + std::to_string(clause.params.size()), pi};
+                    }
                 }
             }
             paramTypes.push_back(paramType);

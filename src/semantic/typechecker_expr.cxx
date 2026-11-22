@@ -5296,6 +5296,22 @@ auto TypeChecker::checkCall(
     const ast::Expr* callExpr,
     const std::vector<const ast::Expr*>* argumentExprs) -> TypePtr {
     auto argTypes = suppliedArgTypes;
+    // A call on an unannotated parameter is what its function asks of the
+    // arguments passed for it; a call to a function of this program is judged
+    // against what it asks, once every function has been checked
+    // (reportUnmetDemands, kexhq/kex#782).
+    if (isMethodCall && !argTypes.empty()) {
+        if (const auto* var = std::get_if<TypeVar>(&resolve(argTypes[0])->kind)) {
+            if (const auto owner = m_unannotatedParamOwner.find(var->id);
+                owner != m_unannotatedParamOwner.end()) {
+                m_parameterDemands[owner->second.first][owner->second.second].insert(name);
+            }
+        }
+    }
+    if (m_userSignatures.contains(name)) {
+        m_demandedCalls.push_back(
+            {name, name + "/" + std::to_string(argTypes.size()), argTypes, loc});
+    }
     // A receiver whose type is a variable the function's signature writes is
     // any type: only a function taking any receiver applies (`a.showValue`),
     // not String's `upperCase` on `a: A` (kexhq/kex#644).
