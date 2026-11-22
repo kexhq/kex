@@ -511,10 +511,6 @@ module Time do
     return DateTime { date: moment.date, time: time, offset: moment.offset }
   end
 
-  # Kex's `/` truncates toward zero; instants before the epoch need the floor,
-  # which `Integer.div` is.
-  let floorDiv(value: Integer, divisor: Integer) -> Integer = value.div(divisor)
-
   # A Duration holds Float seconds, so it is rounded to the nanosecond, the
   # finest unit it names, before truncating: 7.nanosecond is 7e-9 seconds,
   # and dividing that by 1e-9 directly gives 6.999... and so 6.
