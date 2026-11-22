@@ -8195,13 +8195,41 @@ auto TypeChecker::checkCall(
     // appears in no signature table. The runtime still catches a real mistake.
     // A method candidate whose receiver is known and refuses this one is not
     // the function called: its other unknowns say nothing (as above).
+    // An Unknown the source WROTE (`default: Any`, `[Any]`) is no such gap:
+    // it is the declared contract, and the other parameters still hold. Read
+    // as one, a single `Any` parameter let every other argument through
+    // unchecked — `text(:owner, 0)` into a `Bool` — and the BEAM, which
+    // dispatches on those types, then found no `text` to call (kexhq/kex#764,
+    // found by `make metamorphic-search`).
+    const auto unlearnedParam = [](const Signature* sig, std::size_t i) {
+        if (!mentionsUnknownParam(sig->params[i])) {
+            return false;
+        }
+        if (!sig->clause) {
+            return true;
+        }
+        // A `make` method's receiver is in `params` but not in the clause.
+        const auto& written = sig->clause->params;
+        const std::size_t offset =
+            sig->params.size() > written.size() ? sig->params.size() - written.size() : 0;
+        if (i < offset) {
+            return true;
+        }
+        const auto& param = written[i - offset];
+        return !param.type && !param.signatureType;
+    };
     const bool unreliableCandidates =
         std::all_of(arityMatches.begin(), arityMatches.end(), [&](const Signature* sig) {
             if (isMethodCall && !sig->params.empty() && !argTypes.empty() &&
                 !mentionsUnknownParam(sig->params[0]) && !fits(0, sig->params[0])) {
                 return false;
             }
-            return std::any_of(sig->params.begin(), sig->params.end(), mentionsUnknownParam);
+            for (std::size_t i = 0; i < sig->params.size(); ++i) {
+                if (unlearnedParam(sig, i)) {
+                    return true;
+                }
+            }
+            return false;
         });
     if (unreliableCandidates) {
         return arityMatches[0]->result;

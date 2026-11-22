@@ -12,9 +12,12 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -576,6 +579,24 @@ private:
         -> bool;
     auto checkPatternMatrix(const ast::MatchExpr& node, const TypePtr& subject, SourceLocation loc)
         -> void;
+    // One arm of a coverage question: its pattern (null takes everything),
+    // whether a guard narrows it, and whether a pattern other than a
+    // constructor leaves the question open rather than being skipped.
+    struct CoverageArm {
+        const ast::Pattern* pattern;
+        bool guarded = false;
+        bool strict = false;
+    };
+    // The sum type the arms' constructors belong to, and the constructors no
+    // unguarded arm takes; nothing when no verdict is possible or none is
+    // missing.
+    auto uncoveredConstructors(const std::vector<CoverageArm>& arms, const TypePtr& subject)
+        -> std::optional<std::pair<std::string, std::vector<std::string>>>;
+    // Notes a function whose clauses leave a constructor of an argument's
+    // sum type untaken (kexhq/kex#749), and reports what was noted once
+    // every definition is seen.
+    auto noteClauseCoverage(const ast::FunctionDef& def) -> void;
+    auto checkClauseCoverage() -> void;
 
     // Defines every variable a pattern introduces (VarPattern, shorthand
     // record fields, nested constructor/list/tuple args) in the current
@@ -1122,6 +1143,21 @@ private:
     // Where a sum type of this program is declared, by identity: what a
     // diagnostic about the type points back at (kexhq/kex#719).
     std::unordered_map<std::string, SourceLocation> m_adtDeclarations;
+    // What checkClauseCoverage found, each under its definition's scope,
+    // name and arity; and where each definition of those is written, since
+    // only the sole definition of them is judged.
+    // A definition's scope, name and arity, and where one is written.
+    using ClauseCoverageKey = std::tuple<std::string, std::string, std::size_t>;
+    using ClauseCoverageSite = std::tuple<std::string_view, int, int>;
+    struct ClauseCoverageGap {
+        ClauseCoverageKey key;
+        std::string name;
+        SourceLocation location;
+        std::string type;
+        std::vector<std::string> missing;
+    };
+    std::vector<ClauseCoverageGap> m_clauseCoverageGaps;
+    std::map<ClauseCoverageKey, std::set<ClauseCoverageSite>> m_clauseCoverageSites;
     std::unordered_map<std::string, std::string> m_adtOfConstructor;
     // Every imported ADT that declares a constructor spelling. The maps above
     // drop a spelling two ADTs share (`Timeout` is Process.CallError's and

@@ -87,4 +87,5 @@ KEX_DIAGNOSTIC(MakeContractUndefined, "KEXET-0182", "`{name}` is declared in thi
 KEX_DIAGNOSTIC(MakeContractRepeatsField, "KEXET-0183", "`{name}` is declared in this `make` block but nothing defines it. Inside a `make` block `{name} : …` declares a METHOD, not a record field; the field is already declared by `record {record}`, so drop this line")
 KEX_DIAGNOSTIC(MakeContractFieldTyped, "KEXET-0184", "`{name}` is declared in this `make` block but nothing defines it. Inside a `make` block `{name} : …` declares a METHOD, not a record field; declare fields in `record {record}`")
 KEX_DIAGNOSTIC(NewIsReserved, "KEXET-0185", "`new` is reserved for the next-state binding; use a name such as `build` for constructor functions")
+KEX_DIAGNOSTIC(NonExhaustiveClauses, "KEXET-0186", "non-exhaustive clauses of `{name}`: missing case(s) {cases} of {type}")
 KEX_DIAGNOSTIC(AnnotationArityMismatch, "KEXWT-0001", "type annotation for '{name}' declares {declared} parameter(s) but definition has {actual}")
