@@ -1,0 +1,25 @@
+# A body's last `return v` is its value `v`. In a `-> Integer?` function a
+# final `n` is lifted to `Just(n)`, and `return n` was refused for the same
+# `n` (kexhq/kex#774). Both are accepted, and answer alike.
+
+let viaReturn(text: String) -> Integer? do
+  let n = Integer.parse(text).try
+  return n
+end
+
+let viaLast(text: String) -> Integer? do
+  let n = Integer.parse(text).try
+  n
+end
+
+let early(text: String) -> Integer? do
+  return None if text.empty?
+  return text.count
+end
+
+main do
+  IO.printLine(viaReturn("42"))
+  IO.printLine(viaLast("42"))
+  IO.printLine(early(""))
+  IO.printLine(early("abc"))
+end

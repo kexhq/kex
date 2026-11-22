@@ -2842,6 +2842,9 @@ int main() {
     describe("Semantic — traits", []() {
         it("valid trait implementation passes", []() {
             assertTrue(noErrors(
+                "record Point do\n"
+                "  x : Integer = 0\n"
+                "end\n"
                 "trait Printable do\n"
                 "  toString : () -> String\n"
                 "end\n"
@@ -2872,6 +2875,9 @@ int main() {
 
         it("implementing multiple traits all satisfied passes", []() {
             assertTrue(noErrors(
+                "record Thing do\n"
+                "  x : Integer = 0\n"
+                "end\n"
                 "trait Scorable do\n"
                 "  score : () -> Integer\n"
                 "end\n"
@@ -2898,6 +2904,9 @@ int main() {
 
         it("foul trait method implemented as foul passes", []() {
             assertTrue(noErrors(
+                "record Doc do\n"
+                "  x : Integer = 0\n"
+                "end\n"
                 "trait Storable do\n"
                 "  foul save : () -> String\n"
                 "end\n"

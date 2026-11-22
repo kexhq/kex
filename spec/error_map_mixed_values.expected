@@ -1,0 +1,54 @@
+spec/error_map_mixed_values.kex:14:29: [KEXET-0491]: Error, `put` expects argument 3 to be Integer, but got String
+
+put : FileHandle<A, CanWrite> -> Binary -> Result<Void, WriteError>
+
+put : Process.Shared<A> -> A -> Void
+
+put : {A: B} -> A -> B -> {A: B}
+   |
+14 |   IO.printLine(m.put("bob", "old"))
+   |                             ^^^^^ this has type String
+spec/error_map_mixed_values.kex:15:22: [KEXET-0491]: Error, `get` expects argument 2 to be String, but got Integer
+
+get : FileHandle<CanRead, A> -> Result<Binary?, ReadError>
+
+get : Process.Shared<A> -> A?
+
+get : Binary -> Integer -> Byte?
+
+get : Range<A> -> Integer -> A?
+
+get : String -> Integer -> Char?
+
+get : String -> Range<Integer> -> String
+
+get : [A] -> Integer -> A?
+
+get : [A] -> Range<Integer> -> [A]
+
+get : {A: B} -> A -> B?
+
+get : Binary -> Integer -> Byte -> Byte
+
+get : Range<A> -> Integer -> A -> A
+
+get : String -> Integer -> Char -> Char
+
+get : [A] -> Integer -> A -> A
+
+get : {A: B} -> A -> B -> B
+   |
+15 |   IO.printLine(m.get(7))
+   |                      ^ this has type Integer
+spec/error_map_mixed_values.kex:16:23: [KEXET-0491]: Error, `has?` expects argument 2 to be String, but got Integer
+
+has? : {A: B} -> A -> Bool
+   |
+16 |   IO.printLine(m.has?(7))
+   |                       ^ this has type Integer
+spec/error_map_mixed_values.kex:17:24: [KEXET-0491]: Error, `merge` expects argument 2 to be {String: Integer}, but got {String: String}
+
+merge : {A: B} -> {A: B} -> {A: B}
+   |
+17 |   IO.printLine(m.merge({ "b": "x" }))
+   |                        ^^^^^^^^^^^^ this has type {String: String}

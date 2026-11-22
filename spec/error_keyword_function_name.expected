@@ -1,0 +1,4 @@
+spec/error_keyword_function_name.kex:7:5: [KEXEP-0001]: Error, `match` is a reserved keyword in Kex, so it cannot name a function. Rename it
+  |
+7 | let match(n: Integer) -> Integer = n
+  |     ^^^^^

@@ -1,0 +1,22 @@
+# kex: check-only
+# `using` brings in what a module exports, not its private names. A private
+# constant named bare after `using Config` checked clean; the walker could not
+# find it and BEAM could (kexhq/kex#781). Its public names stay reachable.
+
+module Config do
+  let shown = 1
+
+  private do
+    let secret = 5
+    let hidden() -> Integer = 6
+  end
+end
+
+using Config
+
+main do
+  IO.printLine(shown)
+  IO.printLine(secret)
+  IO.printLine(hidden())
+  IO.printLine(Config.secret)
+end

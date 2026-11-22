@@ -1,0 +1,4 @@
+spec/error_make_undeclared_type.kex:11:6: [KEXET-0145]: Error, unknown type `Usr`
+   |
+11 | make Usr do
+   |      ^^^

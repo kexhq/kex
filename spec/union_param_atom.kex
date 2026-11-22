@@ -28,7 +28,10 @@ let byInteger(h: Holder) -> String do
 end
 
 main do
-  let h = Holder { slots: { name: "Ada" }.put(1, "first") }
+  # Annotated: `{ name: "Ada" }` alone is a `{Atom: String}`, which takes no
+  # Integer key (kexhq/kex#771).
+  let slots: Map<Any, String> = { name: "Ada" }
+  let h = Holder { slots: slots.put(1, "first") }
   IO.printLine(h.pick(:name))
   IO.printLine(byAtom(h))
   IO.printLine(byInteger(h))

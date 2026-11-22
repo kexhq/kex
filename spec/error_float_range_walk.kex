@@ -1,0 +1,13 @@
+# kex: check-only
+# A Float range has bounds and no values to walk. `count`, `map`, `sum` and
+# every other walk failed at run time with "Float ranges cannot be
+# enumerated" (kexhq/kex#778); `contains?` and showing it stay.
+
+main do
+  IO.printLine((1.0..5.0).count)
+  IO.printLine((1.0..5.0).map { |x| x })
+  IO.printLine((1.0..5.0).sum)
+  IO.printLine((1.0..5.0).contains?(2.5))
+  IO.printLine((1.0..5.0).to(String))
+  IO.printLine((1..5).count)
+end

@@ -502,6 +502,9 @@ private:
         -> TypePtr;
     auto ownFunctionOfMake(const std::string& name) const -> bool;
     auto withinModule(const std::string& module) const -> bool;
+    // Whether `name` is a private function of some module this code is not
+    // within (m_privateFreeFunctions).
+    auto privateElsewhere(const std::string& name) const -> bool;
     // Whether a bare call to `name` may reach a free function declared in
     // `module`: from inside it, or — unless it is private there — under a
     // `using` of it whose `only:` / `except:` admit the name.
@@ -619,6 +622,10 @@ private:
     // A make function redefining what an import already gives its target
     // type at that arity (kexhq/kex#637).
     auto rejectRedefinedImports(const ast::MakeDef& def) -> void;
+    // A `make` whose target names no type, module or capability anything but
+    // `make` itself declares (`make Usr` for `record User`), reported as
+    // KEXET-0145 at the target (kexhq/kex#772).
+    auto rejectUndeclaredMakeTarget(const ast::MakeDef& def) -> void;
     // Whether a clause declared to return a Result ends in its success value,
     // which is then wrapped in `Ok` (recorded as the clause's success wrapper).
     auto wrapsDeclaredSuccess(
@@ -1102,6 +1109,10 @@ private:
     std::unordered_set<std::string> m_moduleTypeIdentities;
     // Every type name the program declares (kex::collectDeclaredTypeNames).
     std::set<std::string> m_declaredTypeNames;
+    // The same, before `make` targets are added: a `make` declares its
+    // target as a type, so a `make` for a name nothing else declares (a typo
+    // of a record's name) is found against this one (kexhq/kex#772).
+    std::set<std::string> m_declaredBeforeMakes;
     // Whether resolving an annotation reports a name it cannot resolve (off
     // while probing a prefix, `FileMode` of `FileMode.Write`), and the
     // written names already reported.
@@ -1228,6 +1239,14 @@ private:
     // The type `Ctor(args...)` produces, or nullptr when the name is not a
     // registered ADT constructor.
     auto siblingConstructorJoin(const TypePtr& a, const TypePtr& b) const -> TypePtr;
+    // The type a collection's elements so far (`joined`) and the next one
+    // (`next`) share: an undetermined one adopts the other, two that match or
+    // share a trait or an ADT join. Two that do not are reported as `code` with
+    // `joined` kept (a list's elements), or with no `code` widen to an unknown
+    // (a map's keys and values, which may be data of several types).
+    auto joinElementType(
+        TypePtr joined, const TypePtr& next, std::optional<diag::Code> code, SourceLocation loc)
+        -> TypePtr;
     // The ADT owning the nullary constructor a NamedType spells, or nullptr.
     // A name that is itself a declared type is that type, never a constructor
     // singleton that happens to share its spelling.

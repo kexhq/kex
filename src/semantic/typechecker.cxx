@@ -5099,8 +5099,51 @@ auto TypeChecker::bindPatternVars(const ast::Pattern& pat, TypePtr expected) -> 
                 if (node.end) {
                     bindPatternVars(*node.end);
                 }
+            } else if constexpr (std::is_same_v<T, ast::LiteralPattern>) {
+                // A literal of another kind than a primitive scrutinee never
+                // matches: `"one" =>` in a match on an Integer was accepted and
+                // only the fallback arm ever ran (kexhq/kex#773). Integer and
+                // Float literals match each other's values (docs/language-spec.md
+                // §23.6), and anything still open is left alone.
+                const auto* scrutinee =
+                    expected ? std::get_if<PrimitiveType>(&expected->kind) : nullptr;
+                std::optional<PrimitiveType::Kind> literal;
+                switch (node.literal.type) {
+                    case TokenType::String: literal = PrimitiveType::String; break;
+                    case TokenType::Char: literal = PrimitiveType::Char; break;
+                    case TokenType::Atom: literal = PrimitiveType::Atom; break;
+                    case TokenType::True:
+                    case TokenType::False: literal = PrimitiveType::Bool; break;
+                    case TokenType::Integer:
+                    case TokenType::Float: literal = PrimitiveType::Integer; break;
+                    default: break;
+                }
+                const auto shown =
+                    node.literal.type == TokenType::String ? "\"" + node.literal.value + "\""
+                    : node.literal.type == TokenType::Atom && !node.literal.value.starts_with(":")
+                        ? ":" + node.literal.value
+                        : node.literal.value;
+                const bool scrutineeIsNumber = expected && isNumericType(expected);
+                const bool literalIsNumber = literal == PrimitiveType::Integer;
+                const bool knownScrutinee =
+                    scrutinee ||
+                    (expected && std::holds_alternative<SizedFloatType>(expected->kind));
+                if (literal && knownScrutinee && literalIsNumber != scrutineeIsNumber) {
+                    error(
+                        diag::Code::LiteralPatternNeverMatches, pat.location,
+                        {{"literal", shown}, {"type", typeToString(expected)}});
+                } else if (
+                    literal && scrutinee && !literalIsNumber && scrutinee->kind != *literal &&
+                    // A Char against a String, as `==` leaves it (checkNeverEqual).
+                    !((*literal == PrimitiveType::Char || *literal == PrimitiveType::String) &&
+                      (scrutinee->kind == PrimitiveType::Char ||
+                       scrutinee->kind == PrimitiveType::String))) {
+                    error(
+                        diag::Code::LiteralPatternNeverMatches, pat.location,
+                        {{"literal", shown}, {"type", typeToString(expected)}});
+                }
             }
-            // LiteralPattern, WildcardPattern introduce nothing.
+            // WildcardPattern introduces nothing.
         },
         pat.kind);
 }
@@ -6398,6 +6441,15 @@ auto TypeChecker::withinModule(const std::string& module) const -> bool {
     return m_currentModulePath == module || m_currentModulePath.rfind(module + ".", 0) == 0;
 }
 
+auto TypeChecker::privateElsewhere(const std::string& name) const -> bool {
+    const auto suffix = "\n" + name;
+    return std::any_of(
+        m_privateFreeFunctions.begin(), m_privateFreeFunctions.end(), [&](const std::string& key) {
+            return key.size() > suffix.size() && key.ends_with(suffix) &&
+                   !withinModule(key.substr(0, key.size() - suffix.size()));
+        });
+}
+
 auto TypeChecker::makeModuleVisible(const std::string& module) const -> bool {
     if (module.empty()) {
         return true;
@@ -6486,6 +6538,38 @@ auto TypeChecker::freeFunctionVisible(const std::string& module, const std::stri
         }
     }
     return std::any_of(m_declarationImports.begin(), m_declarationImports.end(), admits);
+}
+
+auto TypeChecker::rejectUndeclaredMakeTarget(const ast::MakeDef& def) -> void {
+    const auto written = kex::writtenMakeTarget(def.target, kex::StructuralTarget::Excluded);
+    if (!written || written->parts.empty()) {
+        return; // `make [T]`, `make {K: V}`, a union: shapes, not names
+    }
+    const auto dotted = written->dotted();
+    const auto& last = written->parts.back();
+    if (builtinType(last) || isPrimitiveTypeName(last) || m_declaredBeforeMakes.count(dotted) ||
+        m_declaredBeforeMakes.count(last) || m_capabilities.count(dotted) ||
+        m_localModules.count(dotted) || m_importedModulePaths.count(dotted) ||
+        m_traits.lookup(dotted)) {
+        return;
+    }
+    // Resolved, the target names a type by its identity: a record or sum type
+    // of a module (`make Tcp.Conn` in `Wire` is `Wire.Tcp.Conn`), an alias,
+    // or an imported one.
+    const auto resolved = m_currentMakeType ? resolve(m_currentMakeType) : nullptr;
+    const auto* named = resolved ? std::get_if<NamedType>(&resolved->kind) : nullptr;
+    if (!named) {
+        return; // a primitive, a list, a function: never a typo of a name
+    }
+    const auto& identity = named->name;
+    if (m_recordFields.count(identity) || m_adtVariants.count(identity) ||
+        m_moduleTypeIdentities.count(identity) || m_declaredAliases.count(identity) ||
+        m_traits.lookup(identity) ||
+        (m_importedInterfaces && (m_importedInterfaces->typeNames.count(identity) ||
+                                  m_importedInterfaces->typeNames.count(last)))) {
+        return;
+    }
+    error(diag::Code::UnknownType, def.target->location, {{"name", dotted}});
 }
 
 // A `make` giving a type a function the prelude already gives it — same name,
@@ -6593,6 +6677,7 @@ auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
     if (def.target) {
         m_currentMakeType = resolveTypeExpr(*def.target, m_currentMakeTargetVars);
         m_makeTargetIdentities[&def] = makeOwnerNames(def.target, resolve(m_currentMakeType));
+        rejectUndeclaredMakeTarget(def);
     }
     rejectRedefinedImports(def);
     for (const auto& item : def.body) {

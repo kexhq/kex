@@ -464,18 +464,24 @@ let nonNumeric(first: Sample, second: Sample) -> Sample do
   stringSample
 end
 
-# A map's values of two types, in a literal or through `put`, as a list's
-# elements are refused (kexhq/kex#771).
+# A map's values of two types. A literal of them is data, a map of `Any`, and
+# must check and run alike whether it is printed as written or bound first.
+# `put` of another type on a map whose values are one type must be refused:
+# the functions on a map bound neither its key nor its value type, so any
+# went in (kexhq/kex#771).
 let mixedMapValues(seed: Integer, pair: (Sample, Sample)) -> Relation do
   let (first, given) = pair
   let second = unrelatedTo(first, given)
-  let throughPut = variantOf(seed, 2) == 1
-  let mixed = throughPut then "{\"x\": ${first.value}}.put(\"y\", ${second.value})"
-              else "{\"x\": ${first.value}, \"y\": ${second.value}}"
+  let mixed = "{\"x\": ${first.value}, \"y\": ${second.value}}"
+  return Relation {
+    name: "map of ${first.type} and ${second.type}",
+    original: program(["IO.printLine(${mixed})"]),
+    changed: program(["let mixed = ${mixed}", "IO.printLine(mixed)"])
+  } if variantOf(seed, 2) == 0
   confusion(
-    "map of ${first.type} and ${second.type}${throughPut then " through put" else ""}",
-    program(["IO.printLine({\"x\": ${first.value}, \"y\": ${first.value}})"]),
-    program(["IO.printLine(${mixed})"])
+    "map of ${first.type} and ${second.type} through put",
+    program(["IO.printLine({\"x\": ${first.value}}.put(\"y\", ${first.value}))"]),
+    program(["IO.printLine({\"x\": ${first.value}}.put(\"y\", ${second.value}))"])
   )
 end
 
@@ -666,8 +672,8 @@ end
 # (kexhq/kex#779). Only declared: a call would not even parse.
 let keywordAsFunctionName(seed: Integer) -> Relation do
   let (keyword, foulForm) = [
-    ("match", false), ("loop", false), ("next", true), ("match", true), ("loop", true)
-  ].at(variantOf(seed, 5)).or(("match", false))
+    ("match", false), ("next", false), ("next", true), ("match", true)
+  ].at(variantOf(seed, 4)).or(("match", false))
   let declared = { |name|
     foulForm then "foul ${name} -> Void = IO.printLine(\"x\")" else "let ${name}(n: Integer) -> Integer = n"
   }
@@ -819,9 +825,12 @@ foul writeRelation(root: String, item: Relation) -> Void or! FS.FileError do
   FS.File.write("${root}/metamorphichelper.kex", item.moduleSource)
 end
 
+# A program the checker must refuse may be refused by the parser instead
+# (`let match(n) = n`), so only the others have to parse.
 let wellFormed?(item: Relation) -> Bool do
   let helperOk = item.moduleSource.empty? || syntaxOk(item.moduleSource, "Program")
-  let programs = syntaxOk(item.original, "Program") && syntaxOk(item.changed, "Program")
+  let changedOk = item.rejectChanged || syntaxOk(item.changed, "Program")
+  let programs = syntaxOk(item.original, "Program") && changedOk
   helperOk && programs && item.eligibleSites > 0
 end
 

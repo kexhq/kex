@@ -1,10 +1,12 @@
 describe("metamorphic") do
+  # A program the checker must refuse may be one the parser refuses.
   it("emits every relation as two losslessly parsed programs") do
     var seed = 0
     while seed < relationCount * 8 do
       let item = relation(seed)
       assert(syntaxOk(item.original, "Program"), "original seed ${seed}: ${item.name}")
-      assert(syntaxOk(item.changed, "Program"), "changed seed ${seed}: ${item.name}")
+      let changedOk = item.rejectChanged || syntaxOk(item.changed, "Program")
+      assert(changedOk, "changed seed ${seed}: ${item.name}")
       seed += 1
     end
   end
