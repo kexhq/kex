@@ -60,6 +60,7 @@
 #include "common/prelude_loader.hxx"
 #include "help/api_help.hxx"
 #include "skill/skill.hxx"
+#include "driver/iam_ai.hxx"
 #include "semantic/completion_at.hxx"
 #include "semantic/symbol_queries.hxx"
 #include <functional>
@@ -83,6 +84,7 @@ using kex::driver::sourceModulesNamedBy;
 
 // `--progress`: whether a build shows its steps (BuildProgress).
 bool progressRequested = false;
+bool iamAi = false;
 
 // dump instead of a reason. Empty when +name+ is acceptable.
 auto nodeNameProblem(const std::string& name, bool shortName) -> std::string {
@@ -292,6 +294,7 @@ enum Value {
     PrintAfterAll,
     TimePasses,
     PrintPipelinePasses,
+    IamAi,
 };
 } // namespace Option
 
@@ -362,6 +365,7 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
         {"source-root", required_argument, nullptr, Option::SourceRoot},
         {"quiet", no_argument, nullptr, 'q'},
         {"progress", no_argument, nullptr, Option::Progress},
+        {"iam-ai", no_argument, nullptr, Option::IamAi},
         {"sname", required_argument, nullptr, Option::Sname},
         {"name", required_argument, nullptr, Option::Name},
         {"cookie", required_argument, nullptr, Option::Cookie},
@@ -505,6 +509,7 @@ auto parseCommandLine(int argc, char* argv[]) -> Options {
             case Option::SourceRoot: cliSourceRoots.emplace_back(optarg); break;
             case 'q': quietBuild = true; break;
             case Option::Progress: progressRequested = true; break;
+            case Option::IamAi: iamAi = true; break;
             case Option::BuildPrelude: options.buildPreludeDir = optarg; break;
             case 'r':
                 options.mode = Mode::Compile;
@@ -1175,6 +1180,10 @@ int main(int argc, char* argv[]) {
     }
 
     std::string filepath = argv[optind];
+    std::optional<kex::driver::IamAi> narration;
+    if (iamAi && mode == Mode::Compile && !compileRun) {
+        narration.emplace(filepath, outputDir);
+    }
     const int firstProgramArg = firstProgramArgument(argc, argv, optind);
     kex::module::Resolver::setEntryFile(filepath);
 #ifndef __EMSCRIPTEN__
@@ -1217,13 +1226,10 @@ int main(int argc, char* argv[]) {
     // BEAM `--run` path can use the entry file's ORIGINAL bytes as part of a
     // run-result cache key (kexhq/kex#323) — see `runCacheKeyFor`.
     const std::string entryRawSourceForCache = source;
-    // An empty file is an empty program to the AST tools. The interpreter answers
-    // `Kex.AST.parse("")` and `parseSyntax("")` with an empty tree, and BEAM
-    // reaches both through a temporary file, so refusing it here made the two
-    // backends disagree. A file that could not be opened still stops here —
-    // readFile has already said why.
-    if (source.empty() && !((mode == Mode::EmitAst || mode == Mode::EmitSyntax) &&
-                            std::filesystem::is_regular_file(filepath))) {
+    // An empty file is an empty program, which the checker warns about. A file
+    // that could not be opened stops here — readFile has already said why.
+    if (source.empty() &&
+        !(std::filesystem::is_regular_file(filepath) && std::ifstream(filepath))) {
         return 1;
     }
 
@@ -1426,8 +1432,12 @@ int main(int argc, char* argv[]) {
         }
 
         if (mode == Mode::Compile || mode == Mode::EmitCore) {
-            return compileToBeam(
+            const int status = compileToBeam(
                 options, filepath, program, scriptArgs, entryRawSourceForCache, buildFlags);
+            if (narration) {
+                narration->finish(status);
+            }
+            return status;
         }
 
         if (mode == Mode::Run) {

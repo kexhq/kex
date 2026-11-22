@@ -4,12 +4,33 @@
 #include "../common/utf8.hxx"
 #include <algorithm>
 #include <cctype>
+#include <mutex>
 #include <gmpxx.h>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace kex {
+
+namespace {
+std::mutex lexTallyMutex;
+LexTally lexTallyTotal;
+// Filenames are interned, so a view stays valid.
+std::unordered_set<std::string_view> lexTallyFiles;
+
+auto noteLexed(std::string_view filename, std::size_t tokens) -> void {
+    const std::lock_guard lock(lexTallyMutex);
+    lexTallyTotal.tokens += tokens;
+    if (lexTallyFiles.insert(filename).second) {
+        lexTallyTotal.files++;
+    }
+}
+} // namespace
+
+auto lexTally() -> LexTally {
+    const std::lock_guard lock(lexTallyMutex);
+    return lexTallyTotal;
+}
 
 static const std::unordered_map<std::string, TokenType> keywords = {
     {"after", TokenType::After},
@@ -74,7 +95,7 @@ auto isKeywordToken(TokenType type) -> bool {
 //
 // Interning the name for the process lifetime makes every location printable.
 // The set is node-based, so the views stay valid as it grows.
-static auto internFilename(std::string_view filename) -> std::string_view {
+auto internFilename(std::string_view filename) -> std::string_view {
     static std::unordered_set<std::string> pool;
     return *pool.emplace(filename).first;
 }
@@ -346,6 +367,7 @@ auto Lexer::tokenizeAll() -> std::vector<Token> {
     if (tokens.back().type != TokenType::Eof) {
         tokens.push_back(makeToken(TokenType::Eof));
     }
+    noteLexed(m_filename, tokens.size());
     return tokens;
 }
 

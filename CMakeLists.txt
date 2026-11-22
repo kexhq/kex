@@ -543,7 +543,7 @@ else()
     message(STATUS "Runtime beams: skipped (erlc not found); BEAM modes require prebuilt runtime artifacts")
 endif()
 
-add_executable(kex src/main.cxx src/repl/input.cxx src/repl/session.cxx src/driver/toolchain.cxx src/driver/prelude_build.cxx src/driver/compile.cxx src/driver/program_support.cxx src/driver/build_passes.cxx src/driver/stdlib_interfaces.cxx)
+add_executable(kex src/main.cxx src/repl/input.cxx src/repl/session.cxx src/driver/toolchain.cxx src/driver/prelude_build.cxx src/driver/compile.cxx src/driver/program_support.cxx src/driver/build_passes.cxx src/driver/stdlib_interfaces.cxx src/driver/iam_ai.cxx)
 target_link_libraries(kex PRIVATE kex_lib)
 target_compile_definitions(kex PRIVATE KEX_RUNTIME_OTP_FLOOR=${KEX_RUNTIME_OTP_FLOOR})
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
