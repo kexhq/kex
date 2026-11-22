@@ -1,0 +1,17 @@
+# kex: check-only
+# A guard may fail, so a match whose arms are all guarded is not exhaustive:
+# it needs an arm that takes what every guard turns down. Dropping the `_` of
+# spec/when_guards.kex's `chain` was accepted, and failed at run time with
+# "no matching clause for 3" (found by `make metamorphic-search`).
+
+let chain(n: Integer) -> String do
+  return match n do
+    x when x.even? => "even"
+    x when x > 100 => "big odd"
+    x when x > 10 => "medium odd"
+  end
+end
+
+main do
+  IO.printLine(chain(3))
+end

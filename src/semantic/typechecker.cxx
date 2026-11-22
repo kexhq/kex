@@ -3989,7 +3989,14 @@ auto TypeChecker::checkPatternMatrix(
             rows.push_back({std::move(*space)});
         }
     }
+    // Every arm guarded: any guard may fail, so nothing is certain to match.
+    // With no rows the question went unasked, and a match of guarded arms
+    // alone passed as exhaustive, to fail at run time with no matching
+    // clause (found by `make metamorphic-search`, seed 44961894151).
     if (rows.empty()) {
+        if (!node.clauses.empty()) {
+            error(diag::Code::NonExhaustiveMatch, loc, {{"cases", "_"}});
+        }
         return;
     }
 

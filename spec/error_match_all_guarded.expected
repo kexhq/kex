@@ -1,0 +1,4 @@
+spec/error_match_all_guarded.kex:8:10: [KEXET-0108]: Error, non-exhaustive match: missing case(s) _
+  |
+8 |   return match n do
+  |          ^^^^^^^^^^
