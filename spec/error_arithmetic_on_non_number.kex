@@ -1,0 +1,12 @@
+# kex: check-only
+# `-`, `*`, `/`, `%` and `^` are for numbers. On a Bool, Atom or Char the
+# operation was typed as its left operand and failed on both backends at run
+# time; only a String was refused (found by `make metamorphic-search`).
+
+main do
+  IO.printLine(:kex - 7)
+  IO.printLine(true * :kex)
+  IO.printLine(7 / true)
+  IO.printLine(7 - 2)
+  IO.printLine(7 * 2.5)
+end

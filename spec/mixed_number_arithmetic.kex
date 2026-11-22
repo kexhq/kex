@@ -1,0 +1,21 @@
+# Arithmetic promotes (docs/language-spec.md §23.6): an Integer and a Float
+# give a Float, under every operator, whether the operands are bindings or
+# annotated parameters. A `Float` parameter is typed by the `Float` bound, and
+# `count * price` on one was typed Integer while `count + price` was refused
+# (kexhq/kex#766).
+
+let viaPlus(count: Integer, price: Float) -> Float = count + price
+let viaTimes(count: Integer, price: Float) -> Float = count * price
+let viaMinus(price: Float, count: Integer) -> Float = price - count
+let both(a: Float, b: Float) -> Float = a / b
+
+main do
+  let a = 3
+  let b = 2.5
+  IO.printLine(a + b)
+  IO.printLine(a * b)
+  IO.printLine(viaPlus(3, 2.5))
+  IO.printLine(viaTimes(3, 2.5))
+  IO.printLine(viaMinus(2.5, 3))
+  IO.printLine(both(5.0, 2.0))
+end

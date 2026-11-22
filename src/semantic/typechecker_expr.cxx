@@ -3670,7 +3670,17 @@ auto TypeChecker::inferBinaryOp(
         }
     }
 
-    auto isFloat = [](const TypePtr& t) { return std::holds_alternative<SizedFloatType>(t->kind); };
+    // A `Float` parameter is typed by the `Float` bound, not a concrete float.
+    // Read as neither, `count * price` on `count: Integer, price: Float` fell to
+    // `return lhs` and was typed Integer, and `count + price` was refused as
+    // two different types, though arithmetic promotes (docs/language-spec.md
+    // §23.6) and `3 * 2.5` between bindings is a Float (kexhq/kex#766).
+    auto isFloat = [](const TypePtr& t) {
+        if (const auto* bound = std::get_if<ConstrainedType>(&t->kind)) {
+            return bound->traitName == "Float";
+        }
+        return std::holds_alternative<SizedFloatType>(t->kind);
+    };
     auto isIntegerLike = [](const TypePtr& t) {
         if (auto* prim = std::get_if<PrimitiveType>(&t->kind)) {
             return prim->kind == PrimitiveType::Integer;
@@ -3731,6 +3741,21 @@ auto TypeChecker::inferBinaryOp(
             if (leftIsString || rightIsString) {
                 error(diag::Code::ArithmeticOnString, loc);
                 return Type::integer();
+            }
+            // A Bool, Atom, Char or Unit has no arithmetic either: `:kex - 7` and
+            // `true * :kex` were typed as their left operand and failed on both
+            // backends (found by `make metamorphic-search`).
+            if (const auto nonNumber =
+                    [](const TypePtr& t) {
+                        return std::holds_alternative<PrimitiveType>(t->kind) && !isNumericType(t);
+                    };
+                nonNumber(lhs) || nonNumber(rhs)) {
+                error(
+                    diag::Code::ArithmeticRequiresNumbers, loc,
+                    {{"op", std::string(tokenTypeName(op))},
+                     {"left", typeToString(lhs)},
+                     {"right", typeToString(rhs)}});
+                return Type::unknown();
             }
             return lhs;
 

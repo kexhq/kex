@@ -389,21 +389,26 @@ end
 
 let operators -> [String] = ["+", "-", "*", "/"]
 
-# `a * b` of an Integer and a Float was typed Integer while `a + b` was
-# refused (kexhq/kex#766).
+# Arithmetic on two samples. Integer and Float promote (docs/language-spec.md
+# §23.6), so with bindings and with annotated parameters it must check and
+# run alike: on parameters, `a * b` was typed Integer and `a + b` refused
+# (kexhq/kex#766). Any other pair has no arithmetic, and must be refused.
 let mixedArithmetic(seed: Integer, pair: (Sample, Sample)) -> Relation do
   let (first, second) = pair
   let op = operators.at(variantOf(seed, operators.count)).or("+")
-  let lines = [
-    "let a = ${first.value}",
-    "let b = ${second.value}",
-    "IO.printLine(a ${op} b)"
-  ]
-  confusion(
+  let bound = ["let a = ${first.value}", "let b = ${second.value}", "IO.printLine(a ${op} b)"]
+  return confusion(
     "${first.type} ${op} ${second.type}",
     program(["let a = 7", "let b = 3", "IO.printLine(a ${op} b)"]),
-    program(lines)
-  )
+    program(bound)
+  ) if !numeric?(first) || !numeric?(second)
+  let combine = "let combine(a: ${first.type}, b: ${second.type}) -> Float = a ${op} b"
+  Relation {
+    name: "${first.type} ${op} ${second.type} on parameters and bindings",
+    original: program(bound),
+    changed: program(["IO.printLine(combine(${first.value}, ${second.value}))"],
+                     declarations: [combine, ""])
+  }
 end
 
 # `==` between unrelated types can never hold (kexhq/kex#773).

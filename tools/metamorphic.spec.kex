@@ -18,7 +18,7 @@ describe("metamorphic") do
       "module into its own file (make Tcp.Conn)",
       "argument beside extra: Any = :none",
       "argument beside extra: Any = :none in a make",
-      "Integer * Float",
+      "Integer * Float on parameters and bindings",
       "Integer == String",
       "String arm in a match on Integer",
       "unary - on String",
