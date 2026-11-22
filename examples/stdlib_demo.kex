@@ -12,7 +12,7 @@ let fib(0) = 0
 let fib(1) = 1
 let fib(n: Int) = fib(n - 1) + fib(n - 2)
 
-let even?(n: Int) = n.modulo(2) == 0
+let even?(n: Int) = n.dividesBy?(2)
 let odd?(n: Int) = !even?(n)
 
 main do

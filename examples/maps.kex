@@ -84,8 +84,7 @@ main do
   end
 
   IO.printLine("entries:")
-  scores.entries.each do |pair|
-    let (k, v) = pair
+  scores.entries.each do |k, v|
     IO.printLine("  ${k} => ${v}")
   end
 

@@ -91,13 +91,11 @@ module Tey.Docgen.Cli do
       ("llms.txt, llms-full.txt", "the documentation as plain text for language models"),
       ("robots.txt, sitemap.xml", "for crawlers")
     ]
-    let names = outputs.map do |output|
-      let (name, _) = output
+    let names = outputs.map do |name, _|
       name
     end
     let width = names.map { |name| name.count }.max.or(0)
-    let rows = outputs.map do |output|
-      let (name, description) = output
+    let rows = outputs.map do |name, description|
       let padding = " ".repeat(width - name.count)
       "  ${Console.CYAN}${name}${Console.RESET}${padding}  ${description}"
     end

@@ -79,11 +79,9 @@ end
 
 describe("Stream — Fibonacci") do
   it("generates a fibonacci-like sequence") do
-    let fibs = Stream.from((0, 1)) { |pair|
-      let (a, b) = pair
+    let fibs = Stream.from((0, 1)) { |a, b|
       (b, a + b)
-    }.map { |pair|
-      let (a, _) = pair
+    }.map { |a, _|
       a
     }
     assert(fibs.take(8) == [0, 1, 1, 2, 3, 5, 8, 13])

@@ -34,7 +34,7 @@ main do
   var index = 0
   loop do
     break if index >= 5
-    evenTotal = evenTotal + index if index % 2 == 0
+    evenTotal = evenTotal + index if index.dividesBy?(2)
     index = index + 1
   end
   IO.printLine("even ${evenTotal}")

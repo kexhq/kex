@@ -72,7 +72,8 @@ trait Monoid do
     # combines one copy at a time.
     let half = this.repeat(n.div(2))
     let doubled = half.combine(half)
-    n.modulo(2) == 0 then doubled else doubled.combine(this)
+
+    return n.dividesBy?(2) then doubled else doubled.combine(this)
   end
 end
 

@@ -1102,7 +1102,7 @@ module Tey.Docgen.Html do
   # trait, `List.map` — linked to it.
   let linkedInline(text: String, hrefOf: (String -> String)) -> String do
     let parts = text.split("`")
-    if parts.count == 1 || parts.count % 2 == 0
+    if parts.count == 1 || parts.count.dividesBy?(2)
       return esc(text)
     end
     return parts.mapIndexed { |part, i|
