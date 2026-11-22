@@ -1,0 +1,12 @@
+spec/error_tuple_pattern_arity.kex:8:5: [KEXET-0496]: Error, the tuple has 2 value(s), but the pattern destructures 3: `(Integer, Integer)`
+  |
+8 |     (a, b, c) => a + b + c
+  |     ^^^^^^^^^
+spec/error_tuple_pattern_arity.kex:14:7: [KEXET-0496]: Error, the tuple has 3 value(s), but the pattern destructures 2: `(Integer, Integer, Integer)`
+   |
+14 |   let (a, b) = (1, 2, 3)
+   |       ^^^^^^
+spec/error_tuple_pattern_arity.kex:15:7: [KEXET-0496]: Error, the tuple has 2 value(s), but the pattern destructures 3: `(Integer, Integer)`
+   |
+15 |   let (x, y, z) = (1, 2)
+   |       ^^^^^^^^^

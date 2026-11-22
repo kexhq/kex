@@ -1,0 +1,8 @@
+spec/error_bang_on_non_variable.kex:8:28: [KEXET-0495]: Error, `sort!` rewrites the `var` it is called on, and this receiver is no variable: bind it with `var` first
+  |
+8 |   IO.printLine([3, 1].sort!)
+  |                ^^^^^^^^^^^^
+spec/error_bang_on_non_variable.kex:9:46: [KEXET-0495]: Error, `sort!` rewrites the `var` it is called on, and this receiver is no variable: bind it with `var` first
+  |
+9 |   IO.printLine([3, 1].map { |n| n + 1 }.sort!)
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

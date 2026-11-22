@@ -90,3 +90,4 @@ KEX_DIAGNOSTIC(NoOverloadArgumentMismatch, "KEXET-0491", "`{name}` expects argum
 KEX_DIAGNOSTIC(NoOverloadDifferentArguments, "KEXET-0492", "`{name}` expects different arguments{signatures}")
 KEX_DIAGNOSTIC(ByteLiteralRange, "KEXET-0493", "Byte literal must be in 0..255")
 KEX_DIAGNOSTIC(WrappedNeverEqual, "KEXET-0494", "`{left}` and `{right}` are never equal: compare with `{constructor}(value)`, or unwrap first (`.or(default)`, a `match`)")
+KEX_DIAGNOSTIC(BangOnNonVariable, "KEXET-0495", "`{name}!` rewrites the `var` it is called on, and this receiver is no variable: bind it with `var` first")

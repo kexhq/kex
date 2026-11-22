@@ -1,0 +1,42 @@
+# kex: check-only
+# A `return` of an `Error` from a function declared to answer a plain type.
+# `Error("bad")` is a `Result` whatever its open `Ok` side, and never an
+# Integer: it went unchecked, and came out at the caller, where `+ 1` failed
+# (kexhq/kex#768). A `return` of the declared type stays fine.
+#
+# `Float` is a trait bound, not a concrete type, and a result declared as one
+# had no `return` checked at all, not even `return "kex"`.
+
+let parse(text: String) -> Integer do
+  return Error("bad") if text.empty?
+  1
+end
+
+let named(text: String) -> String do
+  return [] if text.empty?
+  text
+end
+
+let fine(text: String) -> Integer do
+  return 0 if text.empty?
+  text.count
+end
+
+let ratio(text: String) -> Float do
+  return "none" if text.empty?
+  return Error(text) if text == "bad"
+  2.5
+end
+
+let half(value: Float) -> Float do
+  return value if value < 1.0
+  value / 2.0
+end
+
+main do
+  IO.printLine(parse("") + 1)
+  IO.printLine(named(""))
+  IO.printLine(fine("ab"))
+  IO.printLine(ratio("x"))
+  IO.printLine(half(3.0))
+end

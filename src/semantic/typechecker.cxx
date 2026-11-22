@@ -5074,6 +5074,16 @@ auto TypeChecker::bindPatternVars(const ast::Pattern& pat, TypePtr expected) -> 
             } else if constexpr (std::is_same_v<T, ast::TuplePattern>) {
                 const TupleType* tuple =
                     expected ? std::get_if<TupleType>(&expected->kind) : nullptr;
+                // `let (a, b) = (1, 2, 3)` matches nothing: BEAM raised a pattern
+                // mismatch, and the walker bound the first two and dropped the
+                // third (kexhq/kex#767).
+                if (tuple && tuple->elements.size() != node.elements.size()) {
+                    error(
+                        diag::Code::TuplePatternArity, pat.location,
+                        {{"count", std::to_string(tuple->elements.size())},
+                         {"given", std::to_string(node.elements.size())},
+                         {"type", typeToString(expected)}});
+                }
                 for (size_t i = 0; i < node.elements.size(); ++i) {
                     if (node.elements[i]) {
                         bindPatternVars(
@@ -5769,7 +5779,16 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 }
             }
         }
-        if (effectiveReturnType && !def.isSlot && !containsOpenType(effectiveReturnType)) {
+        // `Float` and `Number` are trait bounds, not concrete types, so a
+        // result declared as one counted as open, and no `return` from such a
+        // function was checked at all: `return "kex"` from `-> Float` passed.
+        const auto* numberBound =
+            effectiveReturnType ? std::get_if<ConstrainedType>(&resolve(effectiveReturnType)->kind)
+                                : nullptr;
+        const bool primitiveNumberResult =
+            numberBound && primitiveNumberTrait(numberBound->traitName);
+        if (effectiveReturnType && !def.isSlot &&
+            (!containsOpenType(effectiveReturnType) || primitiveNumberResult)) {
             for (const auto& [returned, type] : clauseReturns) {
                 const auto* value = std::get<ast::ReturnExpr>(returned->kind).value.get();
                 if (const auto* guarded =
@@ -5777,7 +5796,25 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                     value = guarded->expr.get();
                 }
                 const auto actual = resolve(type);
-                if (returned != clause.body.back().get() && !containsOpenType(actual) &&
+                // An open type can still be judged when no choice for its open
+                // parts could make it the declared one: `return Error("bad")` is a
+                // `Result<?, String>` whatever its `?`, and never an `Integer`. It
+                // went unchecked, and the `Error` came out at the caller as an
+                // Integer (kexhq/kex#768).
+                const auto declared = resolve(effectiveReturnType);
+                const bool plainDeclared = std::holds_alternative<PrimitiveType>(declared->kind) ||
+                                           std::holds_alternative<SizedIntType>(declared->kind) ||
+                                           std::holds_alternative<SizedFloatType>(declared->kind) ||
+                                           primitiveNumberResult;
+                const auto* actualNamed = std::get_if<NamedType>(&actual->kind);
+                const bool shapedActual = std::holds_alternative<OptionalType>(actual->kind) ||
+                                          std::holds_alternative<ListType>(actual->kind) ||
+                                          std::holds_alternative<TupleType>(actual->kind) ||
+                                          std::holds_alternative<MapType>(actual->kind) ||
+                                          std::holds_alternative<FuncType>(actual->kind) ||
+                                          (actualNamed && actualNamed->name == "Result");
+                const bool judged = !containsOpenType(actual) || (plainDeclared && shapedActual);
+                if (returned != clause.body.back().get() && judged &&
                     !argMatchesParam(actual, effectiveReturnType) &&
                     !(value && literalCoercesTo(*value, effectiveReturnType))) {
                     error(

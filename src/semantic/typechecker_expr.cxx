@@ -1370,10 +1370,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     // Unary negation requires a numeric operand.
                     if (auto* tv = std::get_if<TypeVar>(&resolved->kind)) {
                         unifyVar(tv->id, Type::constrained("N", "Number"));
-                    } else if (lacksBuiltinOperator(resolved, "-")) {
+                    } else if (
+                        lacksBuiltinOperator(resolved, "-") ||
+                        (std::holds_alternative<PrimitiveType>(resolved->kind) &&
+                         !isNumericType(resolved))) {
                         // Negation is numbers only, on both backends: a record or ADT
                         // reached "Cannot negate" on the walker and `badarith` on
-                        // BEAM, with nothing said while checking.
+                        // BEAM, with nothing said while checking, and so did a
+                        // String, Bool or Atom (`-"5"`, kexhq/kex#769).
                         error(
                             diag::Code::NegateRequiresNumber, expr.location,
                             {{"type", typeToString(resolved)}});
@@ -1515,13 +1519,18 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     node.tag, {Type::list(Type::string()), Type::list(Type::unknown())},
                     expr.location, false, nullptr, &expr);
             } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
-                // `x.push!(v)` rebinds `x`, so `x` has to be a `var`.
+                // `x.push!(v)` rebinds `x`, so `x` has to be a `var`. A receiver
+                // that is no name at all (`[3, 1].sort!`, `xs.map(f).sort!`) has
+                // nothing to rebind: both backends failed it at run time with
+                // "'!' requires a variable binding" (kexhq/kex#770).
                 if (const auto* ident = node.mutating && node.receiver
                                             ? std::get_if<ast::Identifier>(&node.receiver->kind)
                                             : nullptr) {
                     if (const auto* binding = bindingOf(ident->name); binding && !binding->isVar) {
                         error(diag::Code::BangOnImmutable, expr.location, {{"name", ident->name}});
                     }
+                } else if (node.mutating && node.receiver) {
+                    error(diag::Code::BangOnNonVariable, expr.location, {{"name", node.method}});
                 }
                 // Local module constructors use the same namespace syntax as
                 // module constants. Imported constructors are ordinary typed

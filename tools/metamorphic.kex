@@ -64,14 +64,9 @@ let gateSeeds -> [Integer] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 # leaves this list with the fix for its bug.
 let knownOpen -> [Integer] = [
   11, 12, # a `make` target written from its module (kexhq/kex#620)
-  13,     # an argument beside an `Any` parameter (kexhq/kex#764)
   14,     # Integer and Float mixed in arithmetic (kexhq/kex#766)
   15, 16, # `==` and literal arms across unrelated types (kexhq/kex#773)
-  17,     # unary minus on what is no number (kexhq/kex#769)
   18,     # a map's values of two types (kexhq/kex#771)
-  19,     # a tuple pattern of another arity (kexhq/kex#767)
-  20,     # `return Error(...)` from a plain type (kexhq/kex#768)
-  21,     # a `!` function on no `var` (kexhq/kex#770)
   22,     # `make` for an undeclared type (kexhq/kex#772)
   23,     # `return n` refused where a final `n` is taken (kexhq/kex#774)
   24,     # a field captured with `~` (kexhq/kex#775)
