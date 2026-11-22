@@ -12,9 +12,12 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -1143,15 +1146,18 @@ private:
     // What checkClauseCoverage found, each under its definition's scope,
     // name and arity; and where each definition of those is written, since
     // only the sole definition of them is judged.
+    // A definition's scope, name and arity, and where one is written.
+    using ClauseCoverageKey = std::tuple<std::string, std::string, std::size_t>;
+    using ClauseCoverageSite = std::tuple<std::string_view, int, int>;
     struct ClauseCoverageGap {
-        std::string key;
+        ClauseCoverageKey key;
         std::string name;
         SourceLocation location;
         std::string type;
         std::vector<std::string> missing;
     };
     std::vector<ClauseCoverageGap> m_clauseCoverageGaps;
-    std::unordered_map<std::string, std::set<std::string>> m_clauseCoverageSites;
+    std::map<ClauseCoverageKey, std::set<ClauseCoverageSite>> m_clauseCoverageSites;
     std::unordered_map<std::string, std::string> m_adtOfConstructor;
     // Every imported ADT that declares a constructor spelling. The maps above
     // drop a spelling two ADTs share (`Timeout` is Process.CallError's and

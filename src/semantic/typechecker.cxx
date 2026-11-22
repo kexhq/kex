@@ -3734,10 +3734,10 @@ auto TypeChecker::noteClauseCoverage(const ast::FunctionDef& def) -> void {
         return;
     }
     const auto arity = def.clauses.front().params.size();
-    const auto key = m_currentModulePath + "/" + def.name + "/" + std::to_string(arity);
-    const auto site = std::string(def.location.file) + ":" + std::to_string(def.location.line) +
-                      ":" + std::to_string(def.location.column);
-    if (!m_clauseCoverageSites[key].insert(site).second) {
+    const ClauseCoverageKey key{m_currentModulePath, def.name, arity};
+    if (!m_clauseCoverageSites[key]
+             .emplace(def.location.file, def.location.line, def.location.column)
+             .second) {
         return;
     }
     if (!std::all_of(def.clauses.begin(), def.clauses.end(), [&](const auto& clause) {

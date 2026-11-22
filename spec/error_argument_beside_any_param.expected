@@ -1,0 +1,18 @@
+spec/error_argument_beside_any_param.kex:22:31: [KEXET-0491]: Error, `text` expects argument 3 to be Bool, but got Integer
+
+text : Builder -> Atom -> Bool -> Any -> String
+   |
+15 |   let text(label: Atom, primaryKey: Bool = false, default: Any = :none) -> String = "${label}"
+   |                                     ---- expected because of this parameter
+  ...
+22 |   IO.printLine(t.text(:owner, 0))
+   |                               ^ this has type Integer
+spec/error_argument_beside_any_param.kex:23:28: [KEXET-0491]: Error, `tag` expects argument 2 to be Bool, but got Integer
+
+tag : Atom -> Bool -> Any -> String
+   |
+18 | let tag(label: Atom, primaryKey: Bool = false, default: Any = :none) -> String = "${label}"
+   |                                  ---- expected because of this parameter
+  ...
+23 |   IO.printLine(tag(:owner, 0))
+   |                            ^ this has type Integer

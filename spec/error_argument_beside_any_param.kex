@@ -1,0 +1,25 @@
+# kex: check-only
+# A parameter written `Any` takes any argument; the others keep their types.
+# `Any` is the checker's Unknown, and a signature with an Unknown parameter
+# was read as one it never learned (an un-annotated stand-in), so one `Any`
+# let every other argument through unchecked. The metamorphic search found
+# it as `t.text(:owner, oneOf: [...], 0)` in
+# spec/named_block_argument_typed.kex: accepted, run by the walker, then
+# "undefined method: text" on the BEAM.
+
+record Builder do
+  table : String = ""
+end
+
+make Builder do
+  let text(label: Atom, primaryKey: Bool = false, default: Any = :none) -> String = "${label}"
+end
+
+let tag(label: Atom, primaryKey: Bool = false, default: Any = :none) -> String = "${label}"
+
+main do
+  let t = Builder {}
+  IO.printLine(t.text(:owner, 0))
+  IO.printLine(tag(:owner, 0))
+  IO.printLine(tag(:owner, true, 0))
+end
