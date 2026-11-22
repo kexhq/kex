@@ -319,6 +319,48 @@ inline auto collectDeclaredRecordNames(const Items& items, std::set<std::string>
     }
 }
 
+// The records `items`' nested modules declare, by their path from the module
+// that holds `items`: `TCP.TCPConnection` for `module TCP do record
+// TCPConnection` inside `Net.Socket`. A `make TCP.TCPConnection` written
+// there names that record; read by its spelling alone it named a type no
+// module declares, so its functions went to no receiver, and a call took
+// another type's function of the same name instead (kexhq/kex#620).
+// `module` is the path of the module holding `items`, `path` the one being
+// walked; a nested module's name may already be its whole path.
+template <typename Items>
+inline auto collectNestedRecordPaths(
+    const Items& items,
+    std::set<std::string>& out,
+    const std::string& module,
+    const std::string& path = "") -> void {
+    const auto& current = path.empty() ? module : path;
+    for (const auto& item : items) {
+        std::visit(
+            [&](const auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                    if (node) {
+                        collectNestedRecordPaths(
+                            node->body, out, module, ast::nestedModulePath(current, node->name));
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                    if (node && current != module) {
+                        const auto relative =
+                            module.empty() ? current : current.substr(module.size() + 1);
+                        out.insert(relative + "." + node->name);
+                    }
+                } else if constexpr (
+                    std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>> ||
+                    std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                    if (node) {
+                        collectNestedRecordPaths(node->items, out, module, current);
+                    }
+                }
+            },
+            item);
+    }
+}
+
 // Whether a `make` block's structural target (`make [T]`, `make {K: V}`)
 // counts as the named `List` / `Map` for a caller.
 enum class StructuralTarget { Excluded, Named };

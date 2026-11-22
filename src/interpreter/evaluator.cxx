@@ -1075,6 +1075,7 @@ auto Evaluator::execModule(const ast::ModuleDef& mod, const std::string& parentM
     // own interface, not a patch of someone else's (see execMakeDefFor).
     kex::collectDeclaredTypeNames(mod.body, m_moduleDeclaredTypes[moduleName]);
     kex::collectDeclaredRecordNames(mod.body, m_moduleDeclaredRecords[moduleName]);
+    kex::collectNestedRecordPaths(mod.body, m_moduleDeclaredRecords[moduleName], moduleName);
     if (mod.isCapability) {
         auto& members = m_capabilityMembers[moduleName];
         for (const auto& item : mod.body) {
