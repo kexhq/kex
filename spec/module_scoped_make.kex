@@ -1,8 +1,8 @@
 # kex: no-check
 # A `make` inside a module is import-gated, like every other module member.
 # It used to be the one exception: visible everywhere with no `using` at all,
-# and escaping `using X do ... end` in both directions
-# (docs/ufcs-dispatch-plan.md "Follow-up", case 1).
+# and escaping `using X do ... end` in both directions. Now it needs a
+# `using` like every other module member.
 #
 # The gate applies to a make for a FOREIGN type — patching someone else's type
 # is the action-at-a-distance `using` has to scope. A make for a type the same

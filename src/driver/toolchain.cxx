@@ -181,12 +181,9 @@ auto storeCachedBeam(const std::filesystem::path& entry, const std::filesystem::
 // in isolation (KEX_TIMINGS=1, warm .beam cache): a single file's frontend
 // plus erlc costs ~2.1s even with nothing to recompile.
 //
-// True per-module reuse (skip typechecking a dependency at all, only that
-// dependency, only when IT changed) needs real separate compilation — the
-// whole program is still typechecked and lowered as one merged AST, so a
-// dependency's own cost isn't separable from the entry file's. That is
-// "module system and packaging" work, tracked in docs/module-sys-plan.md
-// rather than attempted here.
+// Per-unit reuse (skip checking and lowering a dependency that did not
+// change) is the separate-compilation unit cache (src/cache/separate_unit.hxx).
+// This cache sits one level above it and answers the whole run.
 //
 // What IS safe to cache without that: for `kex --run` (Mode::Compile,
 // compileRun — a throwaway compile-then-execute with no persistent .beam

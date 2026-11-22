@@ -1,5 +1,5 @@
 # Regex — how the API reads under the testing DSL. See src/stdlib/regex.kex,
-# examples/regexes.kex, and docs/strings-and-tags-plan.md (the tag machinery).
+# examples/regexes.kex, and docs/strings.md (tagged literals).
 # Backed by PCRE2 (interpreter) / Erlang `re` (BEAM).
 
 using Regex

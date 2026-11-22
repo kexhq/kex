@@ -6264,7 +6264,7 @@ auto TypeChecker::publishQualifiedSignatures(
 //
 // Before this, a `make` inside a module was visible everywhere with no `using`
 // at all — the one module member that was not import-gated
-// (docs/ufcs-dispatch-plan.md "Follow-up", case 1).
+// (spec/module_scoped_make.kex).
 // Is the code being checked inside `module`, or inside one nested within it?
 // An empty owner is the top level, which everything in the file shares.
 auto TypeChecker::withinModule(const std::string& module) const -> bool {
