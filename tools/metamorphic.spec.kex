@@ -1,12 +1,45 @@
 describe("metamorphic") do
   it("emits every relation as two losslessly parsed programs") do
     var seed = 0
-    while seed < 33 do
+    while seed < relationCount * 8 do
       let item = relation(seed)
       assert(syntaxOk(item.original, "Program"), "original seed ${seed}: ${item.name}")
       assert(syntaxOk(item.changed, "Program"), "changed seed ${seed}: ${item.name}")
       seed += 1
     end
+  end
+
+  # Each reported bug the relations were written for, by the name of the
+  # variant that reproduces it: a change to the variants must keep them.
+  it("reaches the shape of every bug it was written for") do
+    let names = (0..relationCount * 80 - 1).items.map { |seed| relation(seed).name }.uniq
+    let wanted = [
+      "make target written from its module",
+      "module into its own file (make Tcp.Conn)",
+      "argument beside extra: Any = :none",
+      "argument beside extra: Any = :none in a make",
+      "Integer * Float",
+      "Integer == String",
+      "String arm in a match on Integer",
+      "unary - on String",
+      "map of Integer and String",
+      "map of Integer and String through put",
+      "tuple pattern of two names for three",
+      "return Error(7) from a function answering Integer",
+      "! function on a receiver of kind 0",
+      "make for undeclared Bxo",
+      "return as the last expression of a function answering Integer?",
+      "or with a captured String function of no parameters",
+      "[a].reduce(b) { |x, y| x + y } on a type parameter",
+      "count over a Float range",
+      "match as a let function's name",
+      "next as a foul function's name",
+      "private make function called outside",
+      "private secret after using",
+      "frobnicate on an unannotated parameter given an Integer",
+      "block as the capture ~done"
+    ]
+    wanted.each { |name| assert(names.contains?(name), "no variant named ${name}") }
   end
 
   it("places the binder inside the generated loop") do
@@ -40,6 +73,33 @@ describe("metamorphic") do
     let item = relation(9)
     assert(item.moduleSource.contains?("module MetamorphicHelper"))
     assert(item.changed.contains?("MetamorphicHelper.double"))
+  end
+
+  it("spells a nested record's make target from its module") do
+    let item = relation(11)
+    assert(item.original.contains?("make MetamorphicHelper.Tcp.Conn do"))
+    assert(item.changed.contains?("make Tcp.Conn do"))
+    assert(item.changed.contains?("let getLine -> String? = Just(\"line \${@id}\")"))
+  end
+
+  it("moves a module with a make block into its own file, both spellings") do
+    let relative = relation(12)
+    let qualified = relation(12 + relationCount)
+    assert(relative.moduleSource.startsWith?("module MetamorphicHelper\n"))
+    assert(relative.moduleSource.contains?("make Tcp.Conn do"))
+    assert(qualified.moduleSource.contains?("make MetamorphicHelper.Tcp.Conn do"))
+    assert(relative.changed.contains?("using MetamorphicHelper"))
+    assert(!relative.changed.contains?("module MetamorphicHelper"))
+  end
+
+  it("refuses a wrong argument beside every lenient parameter") do
+    let variants = (0..lenientParameters.count * 2 - 1).items.map do |variant|
+      relation(13 + variant * relationCount)
+    end
+    assert(variants.all? { |item| item.rejectChanged })
+    assert(variants.map { |item| item.name }.uniq.count == variants.count)
+    assert(variants.any? { |item| item.changed.contains?("MetamorphicBox {}.tag(:owner, 2 + 5") })
+    assert(variants.any? { |item| item.original.contains?("tag(:owner, true, more: 1)") })
   end
 
   it("rewrites a plain call with an extra argument or none") do
