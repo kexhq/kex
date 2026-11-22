@@ -16,7 +16,7 @@ end
 let firstEven(items: [Integer]) -> String do
   return "empty" if items.empty?
   items.each do |item|
-    return "even ${item}" if item % 2 == 0
+    return "even ${item}" if item.dividesBy?(2)
   end
   return "all odd"
 end

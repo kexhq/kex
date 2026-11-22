@@ -6,7 +6,7 @@ main do
   IO.printLine("aabbcc".uniq)
 
   # partition
-  let (evens, odds) = [1, 2, 3, 4, 5].partition { |n| n.modulo(2) == 0 }
+  let (evens, odds) = [1, 2, 3, 4, 5].partition { |n| n.dividesBy?(2) }
   IO.printLine(evens)
   IO.printLine(odds)
 

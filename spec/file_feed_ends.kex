@@ -44,7 +44,7 @@ main do
 
   # A filter whose matches are far apart is not silently cut short.
   IO.printLine(Stream.from(0) { |n| n + 1 }
-    .filter { |n| n.modulo(1000) == 0 }
+    .filter { |n| n.dividesBy?(1000) }
     .take(3))
 
   FS.File.delete(path)

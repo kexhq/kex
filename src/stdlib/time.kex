@@ -272,9 +272,9 @@ module Time do
   #   Time.leapYear?(1900)   # => false
   #   Time.leapYear?(2000)   # => true
   let leapYear?(year: Integer) -> Bool do
-    return false if year.modulo(4) != 0
-    return true if year.modulo(100) != 0
-    return year.modulo(400) == 0
+    return false if !year.dividesBy?(4)
+    return true if !year.dividesBy?(100)
+    return year.dividesBy?(400)
   end
 
   # The number of days in a month.
@@ -486,8 +486,8 @@ module Time do
   # round-trip silently dropped sub-second precision.
   let formatFraction(nanosecond: Integer) -> String do
     return "" if nanosecond == 0
-    return ".${Time.padTo(nanosecond / 1000000, 3)}" if nanosecond.modulo(1000000) == 0
-    return ".${Time.padTo(nanosecond / 1000, 6)}" if nanosecond.modulo(1000) == 0
+    return ".${Time.padTo(nanosecond / 1000000, 3)}" if nanosecond.dividesBy?(1000000)
+    return ".${Time.padTo(nanosecond / 1000, 6)}" if nanosecond.dividesBy?(1000)
     return ".${Time.padTo(nanosecond, 9)}"
   end
 

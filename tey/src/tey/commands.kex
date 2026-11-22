@@ -636,8 +636,7 @@ foul installMemberTargetsFrom(member: Member, force?: Bool, origin: Receipt,
     let teyBuilt? = exists? && Tey.Programs.teyBuilt?(path)
     (target.name, Tey.Programs.claim(target.name, package.name, receipts, exists?, teyBuilt?))
   end
-  let refusals = claims.flatMap do |entry|
-    let (name, claim) = entry
+  let refusals = claims.flatMap do |name, claim|
     match Tey.Programs.refusal(name, claim, FS.Path.join(binDirectory, name), force?) do
       Just(reason) => [reason]
       None => []
@@ -700,8 +699,7 @@ foul recordInstall(package: ManifestPackage, origin: Receipt, installed: [String
                    receipts: [Receipt], claims: [(String, Claim)]) -> Void or! String do
   return Ok(()) if installed.empty?
   let binDirectory = Tey.Toolchain.binDirectory
-  claims.each do |entry|
-    let (name, claim) = entry
+  claims.each do |name, claim|
     match claim do
       OwnedBy(owner) when installed.contains?(name) => Tey.Commands.releaseTarget(owner, name).try
       _ => ()

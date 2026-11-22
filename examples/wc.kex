@@ -50,8 +50,7 @@ main(args) do
   let counts = args.map { |f| wordCount(f) }
 
   # zip pairs each count triple with its filename; order matches printRow.
-  counts.zip(args).each do |pair|
-    let (c, f) = pair
+  counts.zip(args).each do |c, f|
     printRow(c, f)
   end
 

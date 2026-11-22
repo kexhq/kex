@@ -23,7 +23,7 @@ let anotherTen = naturals.take(10)
 # Range operations
 let sum = (1..100).sum
 let squares = (1..10).map { |x| x * x }
-let evensInRange = (1..20).filter { |x| x.modulo(2) == 0 }
+let evensInRange = (1..20).filter { |x| x.dividesBy?(2) }
 
 # Feeds are IO resources, so the functions that read them are foul
 module FileReader do
@@ -62,7 +62,7 @@ end
 # Infinite stream processing
 let primes = Stream.from(2) { |n| n + 1 }
   .filter do |n|
-    (2..n - 1).all? { |d| n.modulo(d) != 0 }
+    (2..n - 1).all? { |d| !n.dividesBy?(d) }
   end
 
 let first_100_primes = primes.take(100)

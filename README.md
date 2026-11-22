@@ -337,13 +337,13 @@ let naturals = Stream.from(0) { |n| n + 1 }
 
 let primes = Stream.from(2) { |n| n + 1 }
   .filter do |n|
-    (2..n - 1).all? { |d| n.modulo(d) != 0 }
+    (2..n - 1).all? { |d| !n.dividesBy?(d) }
   end
 
 let firstTenPrimes = primes.take(10)
 
 let squaresOfMultiplesOfThree = (1..100)
-  .filter { |x| x.modulo(3) == 0 }
+  .filter { |x| x.dividesBy?(3) }
   .map { |x| x * x }
   .take(5)
 ```

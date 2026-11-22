@@ -93,8 +93,7 @@ main(args, env) do
       end
     end
   end
-  let unanchored = published.zip(outcomes).flatMap do |pair|
-    let (finding, outcome) = pair
+  let unanchored = published.zip(outcomes).flatMap do |finding, outcome|
     outcome == :unanchored then [finding] else []
   end
 
