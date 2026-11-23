@@ -515,6 +515,11 @@ public:
 
 private:
     hir::ProgramSet m_programs;
+    // The types passed to the functions being called, innermost last, by letter:
+    // `A` in `total(A is Monoid => …)` called with a `[Purse]` is Purse's type
+    // value, which `A.identity` dispatches on (§12 step 7).
+    std::vector<std::unordered_map<std::string, ValuePtr>> m_typeFrames;
+    auto typeArgumentValue(const semantic::TypeArgument& argument) -> ValuePtr;
     const semantic::ImportedInterfaces* m_interfaces = nullptr;
     // Every module this evaluator loaded at run time, checked (kept alive for
     // their answers).

@@ -69,7 +69,13 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
     // The module a call written on a module path names, as the checker
     // decided it (`Util` of `Util.double(21)`).
     std::vector<std::string> path;
-    const auto calledModule = modulePath(*n.receiver, path) ? checkedCallModule(n) : std::string{};
+    // A type variable the function was passed (`A.identity`, §12 step 7) is a
+    // value, the type's atom, and no module.
+    const auto* letter = std::get_if<ast::UpperIdentifier>(&n.receiver->kind);
+    const bool throughTypeVariable = letter && typeParameterVars.contains(letter->name);
+    const auto calledModule = !throughTypeVariable && modulePath(*n.receiver, path)
+                                  ? checkedCallModule(n)
+                                  : std::string{};
     if (const auto* resolved = hir->resolvedTargetOf(n)) {
         if (!resolved->localDispatchTypes.empty() &&
             resolved->localDispatchTypes.front().starts_with("Server<")) {
@@ -661,6 +667,36 @@ auto Lowering::lowerModuleFunctionCall(
 // path calls.
 auto Lowering::lowerTypeNamespaceCall(const ast::MethodCall& n, const ast::UpperIdentifier& type)
     -> ExprPtr {
+    // A type variable this function was passed (`A.identity`, §12 step 7) is a
+    // value: the call dispatches on it like any other.
+    if (typeParameterVars.contains(type.name)) {
+        return nullptr;
+    }
+    // A primitive type named as the receiver (`String.identity`): the
+    // prelude's function for the name, given the type's atom, as a type
+    // passed to a bounded function is (§12 step 7).
+    if (primGuardBifs().count(type.name) && externalModules) {
+        const int arity = static_cast<int>(n.args.size()) + 1;
+        if (const auto providers = externalModules->receiverFunctions.find(n.method);
+            providers != externalModules->receiverFunctions.end() && n.namedArgs.empty() &&
+            !n.block) {
+            for (const auto& provider : providers->second) {
+                if (provider.moduleAtom != names::kPreludeModule || provider.beamArity != arity ||
+                    provider.isFoul) {
+                    continue;
+                }
+                std::vector<Binding> binds;
+                std::vector<ExprPtr> args;
+                args.push_back(lit(LitKind::Atom, type.name));
+                for (const auto& a : n.args) {
+                    args.push_back(atomize(a, binds));
+                }
+                return wrapLets(
+                    binds,
+                    callE(provider.moduleAtom, provider.beamFunction, arity, std::move(args)));
+            }
+        }
+    }
     std::vector<Binding> binds;
     // The arguments run before whatever this call turns out to be.
     for (const auto& a : n.args) {

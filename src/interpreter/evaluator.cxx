@@ -2721,6 +2721,28 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             "Evaluator sandbox: step limit reached (maxSteps: " +
             std::to_string(m_sandbox->maxSteps) + ")");
     }
+    // A call that passes its callee the types it needs (§12 step 7): evaluated
+    // here, in the caller's frame, so a type the caller was handed passes on.
+    struct TypeFrame {
+        std::vector<std::unordered_map<std::string, ValuePtr>>* frames = nullptr;
+        ~TypeFrame() {
+            if (frames) {
+                frames->pop_back();
+            }
+        }
+    } typeFrame;
+    if (!m_programs.empty()) {
+        if (const auto* arguments = m_programs.typeArgumentsOf(expr)) {
+            std::unordered_map<std::string, ValuePtr> frame;
+            for (const auto& argument : *arguments) {
+                if (auto value = typeArgumentValue(argument)) {
+                    frame.emplace(argument.letter, std::move(value));
+                }
+            }
+            m_typeFrames.push_back(std::move(frame));
+            typeFrame.frames = &m_typeFrames;
+        }
+    }
     return std::visit(
         [this, &expr](const auto& node) -> ValuePtr {
             using T = std::decay_t<decltype(node)>;
@@ -3168,7 +3190,18 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     if (auto* upperIdent =
                             std::get_if<ast::UpperIdentifier>(&node.receiver->kind)) {
                         bool isKnownVariant = m_variantParent.count(upperIdent->name) > 0;
-                        auto existing = m_env->get(upperIdent->name);
+                        // `A.identity`: the type the call passed for A.
+                        ValuePtr existing;
+                        if (!m_typeFrames.empty() &&
+                            m_programs.typeVariableReceiverOf(expr) == upperIdent->name) {
+                            if (const auto passed = m_typeFrames.back().find(upperIdent->name);
+                                passed != m_typeFrames.back().end()) {
+                                existing = passed->second;
+                            }
+                        }
+                        if (!existing) {
+                            existing = m_env->get(upperIdent->name);
+                        }
                         // A constant declared inside a module is stored under its
                         // qualified lexical name (`Validators::TYPES`). Resolve it
                         // before deciding an uppercase receiver must be a module;
@@ -4253,6 +4286,14 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             } else if constexpr (std::is_same_v<T, ast::NextExpr>) {
                 throw NextException{};
             } else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
+                // A single capital is a type variable: the type its call passed
+                // (`A` in `A.identity`, §12 step 7).
+                if (node.name.size() == 1 && !m_typeFrames.empty()) {
+                    if (const auto passed = m_typeFrames.back().find(node.name);
+                        passed != m_typeFrames.back().end()) {
+                        return passed->second;
+                    }
+                }
                 // A type named as a value is its `Type` record, as the checker typed
                 // it (`Type<String>`).
                 if (auto value = m_programs.typeValueOf(expr)) {
@@ -6568,6 +6609,29 @@ auto Evaluator::evalRescue(
 
     // No clause matched — re-throw
     throw TryException(error);
+}
+
+} // namespace kex::interpreter
+
+namespace kex::interpreter {
+
+// The value a type passed to a function is: the caller's own, handed on, or
+// the type's name as the walker binds it (a record's token, a primitive's
+// type value), what `Purse.identity` evaluates its receiver to.
+auto Evaluator::typeArgumentValue(const semantic::TypeArgument& argument) -> ValuePtr {
+    if (!argument.via.empty()) {
+        if (m_typeFrames.empty()) {
+            return nullptr;
+        }
+        const auto passed = m_typeFrames.back().find(argument.via);
+        return passed == m_typeFrames.back().end() ? nullptr : passed->second;
+    }
+    if (!argument.type) {
+        return nullptr;
+    }
+    const auto* named = std::get_if<semantic::NamedType>(&argument.type->kind);
+    const auto name = named ? named->name : semantic::typeToString(argument.type);
+    return m_env->get(name);
 }
 
 } // namespace kex::interpreter

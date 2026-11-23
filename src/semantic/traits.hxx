@@ -59,6 +59,10 @@ struct Signature {
     // #651): each receiver type argument, by position, and the trait it must
     // satisfy for the function to apply.
     TypeArgBounds receiverBounds;
+    // The letters a call must pass the types of (§12 step 7: `A` of `total(A
+    // is Monoid => …)` when its body says `A.identity`), for a function known
+    // only through its interface. Passed after its other arguments.
+    std::vector<std::string> typeParameters;
     // The clause it was made from, for a signature of a FunctionDef: lowering
     // places a call's arguments into it (hir::Program::selectedSignatureOf).
     const ast::FunctionClause* clause = nullptr;

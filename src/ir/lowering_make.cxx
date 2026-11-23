@@ -790,6 +790,16 @@ auto Lowering::makeDispatcher(
             gv->name = "_gv";
             mc.patterns.push_back(std::move(gv));
             mc.guard = typeGuard(ty, var("_gv"));
+            // A record's or a primitive's clause takes its type ATOM too (`String`
+            // in `String.identity`): a type-qualified call
+            // (`Purse.identity`, or `A.identity` with A a Purse) passes it as
+            // the receiver, as each implementation's own guard already allows.
+            if (records.count(ty) || primGuardBifs().count(ty)) {
+                mc.guard = callE(
+                    "erlang", "or", 2,
+                    two(std::move(*mc.guard),
+                        intrin(Op::Eq, two(var("_gv"), lit(LitKind::Atom, ty)))));
+            }
             std::vector<ExprPtr> args;
             for (int i = 0; i < arity; i++) {
                 args.push_back(var("_a" + std::to_string(i)));

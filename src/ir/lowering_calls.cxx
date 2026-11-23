@@ -7,6 +7,15 @@
 namespace kex::ir {
 
 auto Lowering::lowerFunctionCall(const ast::Expr& e, const ast::FunctionCall& n) -> ExprPtr {
+    // The types its callee needs passed (§12 step 7), after its arguments,
+    // whichever way the call itself is lowered.
+    if (const auto* types = hir->typeArgumentsOf(e); types && !m_passingTypes) {
+        m_passingTypes = true;
+        auto lowered = lowerFunctionCall(e, n);
+        m_passingTypes = false;
+        appendTypeArguments(lowered, *types);
+        return lowered;
+    }
     // The function the checker resolved the name to (`using` and scope
     // applied): one of this unit's modules', or one compiled apart. A local
     // binding of the name still wins.
@@ -648,6 +657,13 @@ auto Lowering::modulePath(const ast::Expr& e, std::vector<std::string>& out) -> 
 }
 
 auto Lowering::lowerMethodCall(const ast::MethodCall& n) -> ExprPtr {
+    if (const auto* types = hir->typeArgumentsOf(n); types && !m_passingTypes) {
+        m_passingTypes = true;
+        auto lowered = lowerMethodCall(n);
+        m_passingTypes = false;
+        appendTypeArguments(lowered, *types);
+        return lowered;
+    }
     // `App.Models.User` as a value is that type's token, the same atom a
     // bare `User` is (kexhq/kex#509): what `select(as: App.Models.User)`
     // passes and `Type.of` reads. Sum types are registered by bare name.
@@ -709,6 +725,60 @@ auto Lowering::lowerMethodCall(const ast::MethodCall& n) -> ExprPtr {
     auto result = std::make_unique<Expr>();
     result->node = std::move(match);
     return makeLet(name, std::move(receiver), std::move(result));
+}
+
+} // namespace kex::ir
+
+namespace kex::ir {
+
+auto Lowering::typeArgumentExpr(const semantic::TypeArgument& argument) -> ExprPtr {
+    if (!argument.via.empty()) {
+        if (const auto passed = typeParameterVars.find(argument.via);
+            passed != typeParameterVars.end()) {
+            return var(passed->second);
+        }
+    }
+    if (!argument.type) {
+        return lit(LitKind::Atom, "undefined");
+    }
+    const auto* named = std::get_if<semantic::NamedType>(&argument.type->kind);
+    return lit(LitKind::Atom, named ? named->name : semantic::typeToString(argument.type));
+}
+
+} // namespace kex::ir
+
+namespace kex::ir {
+
+auto Lowering::appendTypeArguments(
+    ExprPtr& lowered, const std::vector<semantic::TypeArgument>& types) -> void {
+    Expr* at = lowered.get();
+    while (at) {
+        if (auto* let = std::get_if<Let>(&at->node)) {
+            at = let->body.get();
+            continue;
+        }
+        if (auto* call = std::get_if<Call>(&at->node)) {
+            // The implicit arguments keep one order, a definition's and a
+            // call's alike: the explicit ones, trait dictionaries, the types,
+            // then the capability context (lowerFunctionGroup). localCall has
+            // appended the context already, so the types go in front of it.
+            const auto explicitCount = call->args.size();
+            const bool hasContext =
+                call->module.empty() && explicitCount > 0 &&
+                callNeedsContext(call->name, static_cast<int>(explicitCount) - 1);
+            auto position = hasContext ? call->args.end() - 1 : call->args.end();
+            for (const auto& argument : types) {
+                position = call->args.insert(position, typeArgumentExpr(argument)) + 1;
+            }
+            // A call into another unit may already carry its interface's arity.
+            call->arity = static_cast<int>(call->args.size());
+        } else if (auto* indirect = std::get_if<CallIndirect>(&at->node)) {
+            for (const auto& argument : types) {
+                indirect->args.push_back(typeArgumentExpr(argument));
+            }
+        }
+        return;
+    }
 }
 
 } // namespace kex::ir

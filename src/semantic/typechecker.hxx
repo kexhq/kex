@@ -1550,6 +1550,43 @@ private:
     // name: the candidates for a receiver whose head is still a variable, and
     // for nothing else.
     std::unordered_map<std::string, std::vector<Signature>> m_higherKindedRequirements;
+    // The type variables of the clause whose body is being checked, by letter:
+    // `A` in `A.identity` (§12 step 7).
+    std::unordered_map<std::string, TypePtr> m_bodyTypeVars;
+    // Calls through a bounded type variable, and the letter each goes through.
+    std::unordered_map<const ast::Expr*, std::string> m_typeVariableReceivers;
+    // `method` through the type variable `variable` (its bound placeholder):
+    // the bound trait's requirement at that type, or none.
+    auto boundTypeCall(const TypePtr& variable, const ast::MethodCall& call) -> TypePtr;
+    // The functions that need their bounded types passed, each with its letters
+    // in order, and what every call of one passes.
+    std::unordered_map<const ast::FunctionDef*, std::vector<std::string>> m_typeParameters;
+    std::unordered_map<const ast::Expr*, std::vector<TypeArgument>> m_typeArguments;
+    // The same by the method call node, which lowering holds.
+    std::unordered_map<const ast::MethodCall*, std::vector<TypeArgument>> m_methodTypeArguments;
+    // What each call of a function known by its interface bound its letters to.
+    std::unordered_map<const ast::Expr*, std::vector<std::pair<std::string, TypePtr>>>
+        m_importedTypeBindings;
+    auto recordTypeArguments(const ast::Program& program) -> void;
+
+public:
+    auto typeParameters() const
+        -> const std::unordered_map<const ast::FunctionDef*, std::vector<std::string>>& {
+        return m_typeParameters;
+    }
+    auto typeArguments() const
+        -> const std::unordered_map<const ast::Expr*, std::vector<TypeArgument>>& {
+        return m_typeArguments;
+    }
+    auto methodTypeArguments() const
+        -> const std::unordered_map<const ast::MethodCall*, std::vector<TypeArgument>>& {
+        return m_methodTypeArguments;
+    }
+    auto typeVariableReceivers() const -> const std::unordered_map<const ast::Expr*, std::string>& {
+        return m_typeVariableReceivers;
+    }
+
+private:
     // Protocol entry names declared with `slot`, used to recognize the
     // compiler-owned `within:` call option on a Server<X> receiver.
     std::unordered_set<std::string> m_slotMethodNames;

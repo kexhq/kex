@@ -89,6 +89,8 @@ struct KexiExport {
     // The capabilities calling it needs (docs/typechecker-hm-plan.md §9), by
     // qualified module name. Absent in chunks written before it existed.
     std::vector<std::string> requiredCapabilities;
+    // The letters a call passes the types of (Signature::typeParameters).
+    std::vector<std::string> typeParameters;
 };
 
 struct KexiConstant {

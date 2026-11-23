@@ -198,6 +198,7 @@ auto importedFunction(
     tieImportedTraitResult(result.signature);
     result.signature.paramNames = exported.paramNames;
     result.signature.requiredCapabilities = exported.requiredCapabilities;
+    result.signature.typeParameters = exported.typeParameters;
     if (exported.defaultedParams > 0) {
         result.signature.requiredParams = result.signature.params.size() - exported.defaultedParams;
     }

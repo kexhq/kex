@@ -1041,3 +1041,14 @@ auto applicationOf(const TypePtr& type) -> std::optional<Application> {
 }
 
 } // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto substituteThis(const TypePtr& type, const TypePtr& with) -> TypePtr {
+    if (isThisPlaceholder(type)) {
+        return with;
+    }
+    return mapTypeChildren(type, [&](const TypePtr& child) { return substituteThis(child, with); });
+}
+
+} // namespace kex::semantic

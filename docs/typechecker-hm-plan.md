@@ -137,6 +137,26 @@ Done:
   receiver whose head is still a variable, so `[1].map` stays the list's own,
   and such a call is dispatched by the value through the prelude's
   dispatcher (`spec/stdlib_functor.kex`).
+- §12 step 7, first part: a call through a bounded type variable
+  (`A.identity` under `A is Monoid`), which has no value to dispatch on. The
+  function is passed its types (type-passing: a type's atom serves as the
+  dictionary, since dispatchers take it as a receiver). Only functions that
+  need it get the hidden parameters: a body calling through a letter, or
+  handing its letter to such a function. The checker records each call's
+  types (`TypeArgument`), KexI exports a function's type parameters, the
+  walker binds letters per call, and BEAM appends the atoms to the call
+  (`spec/bound_type_passing.kex`). A requirement's `This` on a bounded
+  receiver is now that receiver (`a.combine(b)` on an A is an A).
+  A direct `String.identity` on BEAM goes to the prelude's function given the
+  type's atom too (it failed in 0.4.0-rc.3).
+  Second part: the types and the capability context are one kind of
+  implicit argument, in one order for a definition and a call (explicit,
+  dictionaries, types, context), appended at the central call builders. A
+  foul bounded function takes both, and a `with` substitution still reaches
+  it (`spec/bound_type_passing_capability.kex`); the types going after the
+  context was a real mismatch the shared order fixed. The context still has
+  its own gate (`threadsCapabilities`) and its own variable; folding both
+  into one `ImplicitParameter` list per function is the remaining cleanup.
 - Effects through signatures and data (decision 6, option a, #142): see
   decision 6. A program's own record or sum type now wins over an imported
   alias of the same bare name (`record Handler` beside Net.HTTP's alias).

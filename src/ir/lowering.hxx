@@ -283,6 +283,10 @@ struct Lowering {
     // The checker's static type for `expr` (null when it has none).
     // Lexical source binding -> trait -> hidden dictionary IR binding.
     std::unordered_map<std::string, std::unordered_map<std::string, std::string>> traitDictionaries;
+    // The types the function being lowered was passed, by letter (`A` in
+    // `total(A is Monoid => …)`): each a hidden parameter holding the type's
+    // atom, which `A.identity` dispatches on (§12 step 7).
+    std::unordered_map<std::string, std::string> typeParameterVars;
     std::unordered_map<std::string, std::vector<ExternalModules::TraitMethod>> traitMethods;
     // ADT/variant type → its tag names (e.g. Optional → {"Just","None"}). Used
     // by the dispatcher to wildcard-match any variant of a type, not just the
@@ -509,6 +513,14 @@ struct Lowering {
     bool m_lowerMutatingAsValue = false;
 
     auto makeTraitDictionary(const std::string& trait, const ast::Expr& value) -> ExprPtr;
+    // The value passed for a type a callee needs: the type's atom, or the one
+    // this function was passed (§12 step 7).
+    auto typeArgumentExpr(const semantic::TypeArgument& argument) -> ExprPtr;
+    // `types` appended to the call `lowered` makes, found past the bindings
+    // its arguments were atomized into.
+    auto appendTypeArguments(ExprPtr& lowered, const std::vector<semantic::TypeArgument>& types)
+        -> void;
+    bool m_passingTypes = false;
 
     auto makeTraitDictionaryFor(const std::string& trait, const std::string& concreteType)
         -> ExprPtr;

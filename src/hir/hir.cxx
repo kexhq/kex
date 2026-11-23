@@ -267,6 +267,24 @@ auto Program::literalIsFloat(const ast::Expr& literal) const -> bool {
     return m_analysis && m_analysis->literalIsFloat(literal);
 }
 
+auto Program::typeParametersOf(const ast::FunctionDef& def) const -> std::vector<std::string> {
+    return m_analysis ? m_analysis->typeParametersOf(def) : std::vector<std::string>{};
+}
+
+auto Program::typeArgumentsOf(const ast::Expr& call) const
+    -> const std::vector<semantic::TypeArgument>* {
+    return m_analysis ? m_analysis->typeArgumentsOf(call) : nullptr;
+}
+
+auto Program::typeArgumentsOf(const ast::MethodCall& call) const
+    -> const std::vector<semantic::TypeArgument>* {
+    return m_analysis ? m_analysis->typeArgumentsOf(call) : nullptr;
+}
+
+auto Program::typeVariableReceiverOf(const ast::Expr& call) const -> std::string {
+    return m_analysis ? m_analysis->typeVariableReceiverOf(call) : std::string{};
+}
+
 auto Program::recordOf(const ast::Expr& expr) const -> std::string {
     const auto type = typeOf(expr);
     const auto* named = type ? std::get_if<semantic::NamedType>(&type->kind) : nullptr;
@@ -458,6 +476,20 @@ auto ProgramSet::literalIsFloat(const ast::Expr& literal) const -> bool {
     return newestAnswer<bool>(
         m_owners, &literal, m_base, false,
         [&](const Program& p) { return p.literalIsFloat(literal); }, [](bool f) { return f; });
+}
+
+auto ProgramSet::typeArgumentsOf(const ast::Expr& call) const
+    -> const std::vector<semantic::TypeArgument>* {
+    return newestAnswer<const std::vector<semantic::TypeArgument>*>(
+        m_owners, &call, m_base, nullptr, [&](const Program& p) { return p.typeArgumentsOf(call); },
+        [](const auto* found) { return found != nullptr; });
+}
+
+auto ProgramSet::typeVariableReceiverOf(const ast::Expr& call) const -> std::string {
+    return newestAnswer<std::string>(
+        m_owners, &call, m_base, std::string{},
+        [&](const Program& p) { return p.typeVariableReceiverOf(call); },
+        [](const std::string& letter) { return !letter.empty(); });
 }
 
 namespace {

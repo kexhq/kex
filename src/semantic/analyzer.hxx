@@ -265,6 +265,25 @@ public:
     auto literalIsFloat(const ast::Expr& literal) const -> bool {
         return m_checker.floatLiterals().contains(&literal);
     }
+    // The letters a function takes its types for, the types a call passes,
+    // and the letter a call goes through (§12 step 7: `A.identity`).
+    auto typeParametersOf(const ast::FunctionDef& def) const -> std::vector<std::string> {
+        const auto found = m_checker.typeParameters().find(&def);
+        return found == m_checker.typeParameters().end() ? std::vector<std::string>{}
+                                                         : found->second;
+    }
+    auto typeArgumentsOf(const ast::Expr& call) const -> const std::vector<TypeArgument>* {
+        const auto found = m_checker.typeArguments().find(&call);
+        return found == m_checker.typeArguments().end() ? nullptr : &found->second;
+    }
+    auto typeArgumentsOf(const ast::MethodCall& call) const -> const std::vector<TypeArgument>* {
+        const auto found = m_checker.methodTypeArguments().find(&call);
+        return found == m_checker.methodTypeArguments().end() ? nullptr : &found->second;
+    }
+    auto typeVariableReceiverOf(const ast::Expr& call) const -> std::string {
+        const auto found = m_checker.typeVariableReceivers().find(&call);
+        return found == m_checker.typeVariableReceivers().end() ? std::string{} : found->second;
+    }
     // The function a bare call names, or "".
     auto calledFunctionOf(const ast::Expr& call) const -> std::string {
         const auto found = m_checker.calledFunctions().find(&call);

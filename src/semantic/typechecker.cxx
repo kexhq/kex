@@ -103,6 +103,7 @@ auto TypeChecker::check(
     m_nullaryVariants.clear();
     m_methodSignatures.clear();
     m_higherKindedRequirements.clear();
+    m_importedTypeBindings.clear();
     m_slotMethodNames.clear();
     m_makeMethodNames.clear();
     m_makeMethodReceivers.clear();
@@ -861,6 +862,7 @@ auto TypeChecker::check(
     checkClauseCoverage();
     reportUnknownMethods();
     reportUnmetDemands();
+    recordTypeArguments(program);
 }
 
 auto TypeChecker::typeHasFunction(const TypePtr& given, const std::string& name) -> bool {
@@ -6027,7 +6029,10 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 }
             }
         }
+        // `A.identity` in the body goes through the clause's own A.
+        const auto outerBodyTypeVars = std::exchange(m_bodyTypeVars, genericVars);
         auto bodyType = inferBody(clause.body, expectsResult ? effectiveReturnType : nullptr);
+        m_bodyTypeVars = outerBodyTypeVars;
         // A body ending in one of them gives that variable, not the declared
         // result: `-> Integer = a` for `a: A`, `-> A = b` for `b: B`.
         if (const auto produced = typeVariableId(resolve(bodyType));
@@ -9549,6 +9554,287 @@ auto TypeChecker::reshapedApplication(Application application, std::size_t arity
         }
     }
     return {Type::named(head->name, std::move(kept)), std::move(open)};
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TypeChecker::boundTypeCall(const TypePtr& variable, const ast::MethodCall& call) -> TypePtr {
+    const auto placeholder = resolve(variable);
+    std::vector<std::string> traits;
+    if (const auto* bound = std::get_if<ConstrainedType>(&placeholder->kind)) {
+        traits.push_back(bound->traitName);
+    } else if (const auto* both = std::get_if<IntersectionType>(&placeholder->kind)) {
+        for (const auto& member : both->members) {
+            if (const auto* bound = std::get_if<ConstrainedType>(&resolve(member)->kind)) {
+                traits.push_back(bound->traitName);
+            }
+        }
+    }
+    for (const auto& name : traits) {
+        const auto* trait = m_traits.get(name);
+        if (!trait) {
+            continue;
+        }
+        for (const auto& required : trait->requiredMethods) {
+            if (required.name != call.method || required.params.size() != call.args.size()) {
+                continue;
+            }
+            // The requirement's `This` is the variable itself: `identity :> This`
+            // answers an A.
+            return substituteThis(required.result, variable);
+        }
+    }
+    return nullptr;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// Which functions need their bounded types passed, and what each call of one
+// passes (§12 step 7). A function needs them when a clause body calls through
+// a letter (`A.identity`), or hands its letter on to a function that does.
+// Each call's types come from matching the callee's written parameter types
+// against the argument types: `xs: [A]` given a `[Purse]` makes A a Purse.
+auto TypeChecker::recordTypeArguments(const ast::Program& program) -> void {
+    m_typeParameters.clear();
+    m_typeArguments.clear();
+    m_methodTypeArguments.clear();
+    std::unordered_map<const ast::FunctionClause*, const ast::FunctionDef*> defOf;
+    std::unordered_map<const ast::FunctionDef*, std::vector<std::string>> letters;
+    std::unordered_map<std::string, const ast::FunctionDef*> byName;
+    std::unordered_set<std::string> namedTwice;
+    std::vector<const ast::FunctionDef*> functions;
+    ast::forEachFunction(program, [&](const ast::FunctionDef& def) {
+        functions.push_back(&def);
+        if (!byName.emplace(def.name, &def).second) {
+            namedTwice.insert(def.name);
+        }
+        for (const auto& clause : def.clauses) {
+            defOf[&clause] = &def;
+        }
+        if (!def.clauses.empty()) {
+            auto& mine = letters[&def];
+            for (const auto& [letter, _] : def.clauses.front().typeParamBounds) {
+                if (std::find(mine.begin(), mine.end(), letter) == mine.end()) {
+                    mine.push_back(letter);
+                }
+            }
+        }
+    });
+
+    for (const auto& name : namedTwice) {
+        byName.erase(name);
+    }
+    struct Call {
+        const ast::Expr* expr;
+        const ast::FunctionDef* callee;
+        const ast::FunctionDef* caller;
+    };
+    std::vector<Call> calls;
+    struct ImportedCall {
+        const ast::Expr* expr;
+        const Signature* callee;
+        const ast::FunctionDef* caller;
+    };
+    std::vector<ImportedCall> importedCalls;
+    std::unordered_set<const ast::FunctionDef*> needs;
+    // Every function's body, and `main`'s (a caller with no letters of its own).
+    const auto scan = [&](const ast::FunctionDef* def, const std::vector<ast::ExprPtr>& body) {
+        std::function<void(const ast::Expr&)> visit = [&](const ast::Expr& e) {
+            if (def && m_typeVariableReceivers.contains(&e)) {
+                needs.insert(def);
+            }
+            if (const auto selected = m_selectedCallSignatures.find(&e);
+                selected != m_selectedCallSignatures.end()) {
+                const ast::FunctionDef* callee = nullptr;
+                if (const auto byClause = defOf.find(selected->second.clause);
+                    selected->second.clause && byClause != defOf.end()) {
+                    callee = byClause->second;
+                } else if (const auto named = byName.find(selected->second.name);
+                           named != byName.end()) {
+                    // A plain function call keeps no clause: the bounded function of
+                    // that name, when it is the only one.
+                    callee = named->second;
+                }
+                if (callee && !letters[callee].empty()) {
+                    calls.push_back({&e, callee, def});
+                } else if (!callee && !selected->second.typeParameters.empty()) {
+                    // A function of another unit, known by its interface.
+                    importedCalls.push_back({&e, &selected->second, def});
+                }
+            }
+            ast::forEachChild(e, [&](const ast::ExprPtr& child) {
+                if (child) {
+                    visit(*child);
+                }
+            });
+        };
+        for (const auto& expr : body) {
+            if (expr) {
+                visit(*expr);
+            }
+        }
+    };
+    for (const auto* def : functions) {
+        for (const auto& clause : def->clauses) {
+            scan(def, clause.body);
+        }
+    }
+    for (const auto& item : program.items) {
+        if (const auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(&item); main && *main) {
+            scan(nullptr, (*main)->body);
+        }
+    }
+
+    // The argument expressions of a call, in parameter order. A module written
+    // as the receiver (`Folds.total(xs)`) is none: there the arguments alone
+    // fill the parameters.
+    const auto argumentsOf = [](const ast::Expr& call, std::size_t parameters) {
+        std::vector<const ast::Expr*> args;
+        if (const auto* function = std::get_if<ast::FunctionCall>(&call.kind)) {
+            for (const auto& arg : function->args) {
+                args.push_back(arg.get());
+            }
+            if (function->block && *function->block) {
+                args.push_back(function->block->get());
+            }
+        } else if (const auto* method = std::get_if<ast::MethodCall>(&call.kind)) {
+            const auto given = method->args.size() + (method->block && *method->block ? 1 : 0);
+            if (given < parameters) {
+                args.push_back(method->receiver.get());
+            }
+            for (const auto& arg : method->args) {
+                args.push_back(arg.get());
+            }
+            if (method->block && *method->block) {
+                args.push_back(method->block->get());
+            }
+        }
+        return args;
+    };
+    // What each letter is at one call.
+    const auto argumentsAt = [&](const Call& call) {
+        std::unordered_map<std::string, TypePtr> found;
+        const auto& wanted = letters[call.callee];
+        const std::function<void(const ast::TypeExpr&, const TypePtr&)> match =
+            [&](const ast::TypeExpr& written, const TypePtr& given) {
+                if (!given) {
+                    return;
+                }
+                const auto actual = resolve(given);
+                if (const auto* name = std::get_if<ast::TypeName>(&written.kind);
+                    name && name->parts.size() == 1 &&
+                    std::find(wanted.begin(), wanted.end(), name->parts[0]) != wanted.end()) {
+                    found.try_emplace(name->parts[0], actual);
+                } else if (const auto* list = std::get_if<ast::ListType>(&written.kind)) {
+                    if (const auto* elements = std::get_if<ListType>(&actual->kind);
+                        list->element) {
+                        if (elements) {
+                            match(*list->element, elements->element);
+                        }
+                    }
+                } else if (const auto* optional = std::get_if<ast::OptionalType>(&written.kind)) {
+                    if (const auto* inner = std::get_if<OptionalType>(&actual->kind);
+                        inner && optional->inner) {
+                        match(*optional->inner, inner->inner);
+                    }
+                } else if (const auto* generic = std::get_if<ast::GenericType>(&written.kind)) {
+                    if (const auto applied = applicationOf(actual);
+                        applied && applied->args.size() == generic->args.size()) {
+                        for (std::size_t i = 0; i < generic->args.size(); ++i) {
+                            if (generic->args[i]) {
+                                match(*generic->args[i], applied->args[i]);
+                            }
+                        }
+                    }
+                }
+            };
+        const auto& params = call.callee->clauses.front().params;
+        const auto args = argumentsOf(*call.expr, params.size());
+        for (std::size_t i = 0; i < params.size() && i < args.size(); ++i) {
+            if (params[i].type && *params[i].type && args[i]) {
+                match(**params[i].type, typeOf(args[i]));
+            }
+        }
+        std::vector<TypeArgument> result;
+        for (const auto& letter : wanted) {
+            TypeArgument argument{letter, nullptr, {}};
+            if (const auto it = found.find(letter); it != found.end()) {
+                argument.type = it->second;
+                // The caller's own letter, handed on.
+                if (const auto* bound = std::get_if<ConstrainedType>(&it->second->kind);
+                    bound && std::find(
+                                 letters[call.caller].begin(), letters[call.caller].end(),
+                                 bound->varName) != letters[call.caller].end()) {
+                    argument.via = bound->varName;
+                }
+            }
+            result.push_back(std::move(argument));
+        }
+        return result;
+    };
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (const auto& call : calls) {
+            if (!needs.contains(call.callee) || needs.contains(call.caller)) {
+                continue;
+            }
+            for (const auto& argument : argumentsAt(call)) {
+                if (!argument.via.empty()) {
+                    needs.insert(call.caller);
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
+    for (const auto* def : needs) {
+        m_typeParameters[def] = letters[def];
+    }
+    for (const auto& call : calls) {
+        if (needs.contains(call.callee)) {
+            m_typeArguments[call.expr] = argumentsAt(call);
+        }
+    }
+    // A call of another unit's function: its interface's parameter types,
+    // where a bounded letter reads back as a bound named by it.
+    for (const auto& call : importedCalls) {
+        // What the call bound each letter to, as its selection recorded.
+        std::unordered_map<std::string, TypePtr> found;
+        if (const auto bindings = m_importedTypeBindings.find(call.expr);
+            bindings != m_importedTypeBindings.end()) {
+            for (const auto& [letter, type] : bindings->second) {
+                if (type) {
+                    found.emplace(letter, resolve(type));
+                }
+            }
+        }
+        const auto& wanted = call.callee->typeParameters;
+        std::vector<TypeArgument> passed;
+        for (const auto& letter : wanted) {
+            TypeArgument argument{letter, nullptr, {}};
+            if (const auto it = found.find(letter); it != found.end()) {
+                argument.type = it->second;
+                if (const auto* bound = std::get_if<ConstrainedType>(&it->second->kind);
+                    bound && call.caller &&
+                    std::find(
+                        letters[call.caller].begin(), letters[call.caller].end(), bound->varName) !=
+                        letters[call.caller].end()) {
+                    argument.via = bound->varName;
+                }
+            }
+            passed.push_back(std::move(argument));
+        }
+        m_typeArguments[call.expr] = std::move(passed);
+    }
+    for (const auto& [expr, passed] : m_typeArguments) {
+        if (const auto* method = std::get_if<ast::MethodCall>(&expr->kind)) {
+            m_methodTypeArguments[method] = passed;
+        }
+    }
 }
 
 } // namespace kex::semantic

@@ -208,6 +208,14 @@ struct Type {
 };
 
 auto typeToString(const TypePtr& type) -> std::string;
+// What a type passed to a function is (docs/typechecker-hm-plan.md §12 step 7):
+// `letter` (`A`) as a concrete type, or the caller's own type variable (`via`)
+// when the caller is generic too.
+struct TypeArgument {
+    std::string letter;
+    TypePtr type;
+    std::string via;
+};
 // A type as a constructor applied to arguments (§8.2, #342): `[X]` is `List`
 // applied to X, `X?` `Optional`, `Map<K, V>` `Map`, `Box<A>` `Box`, and a
 // `TypeApp` its own head. None for a type that applies nothing.
@@ -301,6 +309,9 @@ auto holdsFailure(const TypePtr& type) -> bool;
 // A trait's `This` left as written (`NamedType("This")`), which only a
 // receiver's type substitutes.
 auto isThisPlaceholder(const TypePtr& type) -> bool;
+// `type` with every `This` in it replaced by `with`: a requirement's `This` is
+// the receiver it is called on (`combine :> This -> This` on an `A` answers A).
+auto substituteThis(const TypePtr& type, const TypePtr& with) -> TypePtr;
 
 // The type a built-in type NAME denotes, or null when the name is not one: the
 // one table every name-to-type lookup reads — the checker's globals, the

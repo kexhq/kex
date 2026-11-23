@@ -45,7 +45,7 @@ namespace schema {
 constexpr size_t kIfaces = 15;
 constexpr size_t kModulePair = 2;
 constexpr size_t kModuleBody = 6;
-constexpr size_t kSignature = 11;
+constexpr size_t kSignature = 12;
 constexpr size_t kFn = 17;
 constexpr size_t kTrait = 6;
 constexpr size_t kAdt = 9;
@@ -397,7 +397,8 @@ auto signatureToTerm(const kex::semantic::Signature& sig) -> TermPtr {
         {Term::atom("signature"), Term::binary(sig.name), Term::list(std::move(params)),
          typeToTerm(sig.result), Term::boolean(sig.isFoul), required, Term::list(std::move(names)),
          Term::binary(sig.makeModule), Term::binary(sig.declaringModule),
-         stringsTerm(sig.requiredCapabilities), boundsTerm(sig.receiverBounds)},
+         stringsTerm(sig.requiredCapabilities), boundsTerm(sig.receiverBounds),
+         stringsTerm(sig.typeParameters)},
         schema::kSignature, "signature");
 }
 
@@ -438,6 +439,11 @@ auto signatureFromSax(SaxReader& sax) -> kex::semantic::Signature {
     }
     sax.endList();
     sig.receiverBounds = boundsFromSax(sax);
+    const auto typeParameterCount = sax.beginList();
+    for (size_t i = 0; i < typeParameterCount; ++i) {
+        sig.typeParameters.push_back(sax.readBinary());
+    }
+    sax.endList();
     return sig;
 }
 

@@ -541,6 +541,11 @@ void collectFromFunctionDef(
             exp.paramNames.push_back(p.name ? *p.name : "");
         }
     }
+    // The types a caller passes it (§12 step 7), after its other arguments.
+    if (analysis) {
+        exp.typeParameters = analysis->typeParametersOf(fd);
+        exp.beamArity += static_cast<int>(exp.typeParameters.size());
+    }
     if (!fd.clauses.empty()) {
         exp.defaultedParams = trailingDefaults(fd.clauses[clause].params, 0);
         exp.defaultSources = defaultSourcesOf(fd.clauses[clause].params, 0);

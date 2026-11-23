@@ -129,11 +129,14 @@ auto Lowering::lowerFunctionGroup(
     // threaded caller — the substitution dispatch passes the context
     // through as well (kexhq/kex#181).
     const bool wantsContext = threadsCapabilities() && foulDef;
+    // The types it needs passed (§12 step 7), after its dictionaries.
+    const auto typeParameters = hir->typeParametersOf(*group[0]);
     def.arity = explicitArity + dictionaryArity + (implicitThisName.empty() ? 0 : 1) +
-                (wantsContext ? 1 : 0);
+                static_cast<int>(typeParameters.size()) + (wantsContext ? 1 : 0);
     def.hasCapabilityContext = wantsContext;
     auto savedModulePath = currentModulePath;
     auto savedTraitDictionaries = traitDictionaries;
+    auto savedTypeParameterVars = typeParameterVars;
     auto savedFunctionSymbol = currentFunctionSymbol;
     currentFunctionSymbol = def.name;
     // Do the clauses in this group differ in their declared parameter
@@ -298,6 +301,14 @@ auto Lowering::lowerFunctionGroup(
                 fc.params.push_back(std::move(pat));
                 traitDictionaries[implicitThisName][currentMakeType] = dictionary;
             }
+            for (const auto& letter : typeParameters) {
+                auto passed = fresh("Type_" + letter);
+                auto pat = std::make_unique<Pattern>();
+                pat->kind = PatKind::Var;
+                pat->name = passed;
+                fc.params.push_back(std::move(pat));
+                typeParameterVars[letter] = passed;
+            }
             // The context is the last parameter, after any trait
             // dictionaries, and is in scope for the whole body so calls
             // inside it pass it along (kexhq/kex#181).
@@ -422,6 +433,7 @@ auto Lowering::lowerFunctionGroup(
         }
     }
     traitDictionaries = std::move(savedTraitDictionaries);
+    typeParameterVars = std::move(savedTypeParameterVars);
     currentModulePath = std::move(savedModulePath);
     currentFunctionSymbol = std::move(savedFunctionSymbol);
     return def;

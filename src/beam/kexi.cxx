@@ -370,6 +370,7 @@ auto exportToTerm(const KexiExport& exp) -> TermPtr {
     }
     fields.push_back(Term::list(std::move(defaults)));
     fields.push_back(stringsToTerm(exp.requiredCapabilities));
+    fields.push_back(stringsToTerm(exp.typeParameters));
     return Term::tuple(std::move(fields));
 }
 
@@ -397,6 +398,9 @@ auto termToExport(const TermPtr& term) -> KexiExport {
     }
     if (t.size() > 9) {
         e.requiredCapabilities = termToStrings(t[9]);
+    }
+    if (t.size() > 10) {
+        e.typeParameters = termToStrings(t[10]);
     }
     return e;
 }

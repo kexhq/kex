@@ -1568,6 +1568,45 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     node.tag, {Type::list(Type::string()), Type::list(Type::unknown())},
                     expr.location, false, nullptr, &expr);
             } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
+                // `A.identity` with `A is Monoid` (§12 step 7): a call through a
+                // bounded type variable, answered by the bound trait's requirement
+                // at that type. No value carries A, so the type itself is passed
+                // to the function and the call dispatches on it.
+                if (const auto* letter =
+                        node.receiver ? std::get_if<ast::UpperIdentifier>(&node.receiver->kind)
+                                      : nullptr) {
+                    if (const auto bound = m_bodyTypeVars.find(letter->name);
+                        bound != m_bodyTypeVars.end()) {
+                        if (auto answered = boundTypeCall(bound->second, node)) {
+                            m_typeVariableReceivers[&expr] = letter->name;
+                            m_decidedCalls[&expr] = {CallKind::Dispatch, node.method};
+                            // Answered through the prelude's dispatcher for the name,
+                            // which takes a type's atom; a program defining its own
+                            // keeps its dispatcher, which falls back to it.
+                            if (!m_methodSignatures.contains(node.method) && m_importedInterfaces) {
+                                if (const auto providers =
+                                        m_importedInterfaces->receiverFunctions.find(node.method);
+                                    providers != m_importedInterfaces->receiverFunctions.end()) {
+                                    const int arity = static_cast<int>(node.args.size()) + 1;
+                                    for (const auto& provider : providers->second) {
+                                        if (provider.backendModule == names::kPreludeModule &&
+                                            provider.backendFunction == node.method &&
+                                            provider.backendArity == arity) {
+                                            m_resolvedCalls[&node] = dispatcherTarget(provider);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            for (const auto& arg : node.args) {
+                                if (arg) {
+                                    inferExpr(*arg);
+                                }
+                            }
+                            return answered;
+                        }
+                    }
+                }
                 // `x.push!(v)` rebinds `x`, so `x` has to be a `var`. A receiver
                 // that is no name at all (`[3, 1].sort!`, `xs.map(f).sort!`) has
                 // nothing to rebind: both backends failed it at run time with
@@ -5616,7 +5655,7 @@ auto TypeChecker::checkCall(
                 for (const auto& required : trait->requiredMethods) {
                     if (required.name == name && argTypes.size() == required.params.size() + 1) {
                         viaTrait(receiverTrait);
-                        return required.result;
+                        return substituteThis(required.result, receiver);
                     }
                 }
                 if (std::find(trait->defaultMethods.begin(), trait->defaultMethods.end(), name) !=
@@ -5648,7 +5687,7 @@ auto TypeChecker::checkCall(
                         if (required.name == name &&
                             argTypes.size() == required.params.size() + 1) {
                             viaTrait(traitName);
-                            return required.result;
+                            return substituteThis(required.result, receiver);
                         }
                     }
                 }
@@ -6567,7 +6606,9 @@ auto TypeChecker::checkCall(
                 if (const TraitDef* trait = m_traits.get(ct->traitName)) {
                     for (const auto& req : trait->requiredMethods) {
                         if (req.name == name) {
-                            return req.result;
+                            // Its `This` is the receiver: `acc.combine(x)` on an `A`
+                            // answers an A.
+                            return substituteThis(req.result, receiver);
                         }
                     }
                 }
@@ -8134,6 +8175,30 @@ auto TypeChecker::checkCall(
             return mapTypeChildren(type, applyGenerics);
         };
         auto selectedResult = normalizeIntersection(applyGenerics(matched.result));
+        // What a function known by its interface was passed for each letter it
+        // needs (§12 step 7): its bound placeholder, as this call bound it.
+        if (callExpr && !matched.clause && !matched.typeParameters.empty()) {
+            std::vector<std::pair<std::string, TypePtr>> passed;
+            for (const auto& letter : matched.typeParameters) {
+                TypePtr bound;
+                std::function<void(const TypePtr&)> find = [&](const TypePtr& type) {
+                    if (bound || !type) {
+                        return;
+                    }
+                    if (const auto* placeholder = std::get_if<ConstrainedType>(&type->kind);
+                        placeholder && placeholder->varName == letter) {
+                        bound = applyGenerics(type);
+                        return;
+                    }
+                    forEachTypeChild(type, find);
+                };
+                for (const auto& param : matched.params) {
+                    find(param);
+                }
+                passed.emplace_back(letter, bound);
+            }
+            m_importedTypeBindings[callExpr] = std::move(passed);
+        }
         // A function value passed for a generic function parameter must take
         // what this call passes it: `["a"].map(~inc)` was caught, but a value
         // (`let f = ~inc; ["a"].map(f)`, or `~add(1)`) was matched against
