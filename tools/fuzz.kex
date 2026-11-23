@@ -5,7 +5,13 @@
 # `!`/`&&`/`||`, atoms, tuples, lists, maps, string interpolation, `let`
 # bindings that later expressions can reuse, `if`, and statement-level
 # `match`, and observable short-circuit/branch effects) and runs each under
-# both backends with a time budget.
+# both backends with a time budget. Ahead of `main` it declares what those
+# expressions then call: functions over typed and defaulted parameters
+# (called positionally, without the default, by name and by UFCS), a record
+# with a `make` function over its fields, a sum type with a function by
+# clauses, and a module whose `make` names a nested module's record. Lists
+# are walked by blocks (`map`, `filter`, `reduce`, `any?`, `all?`) whose
+# bodies read the block's parameters and the bindings around them.
 # Correct-by-construction means: no division by zero, no partial operations,
 # no loops, no way to hang — so anything but identical, successful output is
 # a finding: a crash, a timeout, or output that differs.
@@ -313,7 +319,10 @@ let pickHoleTag(ctx: Ctx) do
   if n == 0 then return (:int, ctx2) else return (:bool, ctx2) end
 end
 
-let genInterp(ctx: Ctx, depth: Integer) -> (String, Ctx) do
+let genInterp(given: Ctx, depth: Integer) -> (String, Ctx) do
+  # A declaration's call may pass a string literal (`fuzzFn0(1, "x")`): it
+  # stays out of the holes, which hold no quote.
+  let ctx = withEnv(given, quoteFree(given.env))
   let (n0, ctx2) = draw(ctx, 5)
   let (s0, ctx3) = genChars(ctx2, n0, "")
   let (htag, ctx4) = pickHoleTag(ctx3)
@@ -322,13 +331,13 @@ let genInterp(ctx: Ctx, depth: Integer) -> (String, Ctx) do
   let (s1, ctx7) = genChars(ctx6, n1, "")
   let (two, ctx8) = draw(ctx7, 2)
   if two == 0
-    return ("\"${s0}\$" + "{${h0}}${s1}\"", ctx8)
+    return ("\"${s0}\$" + "{${h0}}${s1}\"", withEnv(ctx8, given.env))
   else
     let (htag2, ctx9) = pickHoleTag(ctx8)
     let (h1, ctx10) = genTyped(ctx9, htag2, depth - 1)
     let (n2, ctx11) = draw(ctx10, 5)
     let (s2, ctx12) = genChars(ctx11, n2, "")
-    return ("\"${s0}\$" + "{${h0}}${s1}\$" + "{${h1}}${s2}\"", ctx12)
+    return ("\"${s0}\$" + "{${h0}}${s1}\$" + "{${h1}}${s2}\"", withEnv(ctx12, given.env))
   end
 end
 
@@ -356,7 +365,8 @@ end
 # Map keys stay simple — a fresh literal or a bare live binding. A
 # parenthesized key mangles the parse, so computed keys are out.
 let genMapKey(ctx: Ctx) -> (String, Ctx) do
-  let names = namesFor(ctx.env, :string)
+  # A plain binding only: a call there (`{ f(x): 1 }`) reads as a block.
+  let names = namesFor(ctx.env, :string).filter { |name| name.chars.all? { |c| c.alpha? || c.digit? } }
   let (useVar, ctx2) = draw(ctx, 2)
   if useVar == 0 && names.length > 0
     let (i, ctx3) = draw(ctx2, names.length)
@@ -516,15 +526,19 @@ let genBool(ctx: Ctx, depth: Integer) -> (String, Ctx) do
 end
 
 # One expression of the tagged type: usually a fresh computation, but one
-# draw in four reuses a live binding instead — so later lets read earlier
-# ones, and the final print can name a binding outright.
+# draw in five reuses a live binding instead — so later lets read earlier
+# ones, and the final print can name a binding outright — and one in five,
+# above the bottom, walks a list with a block.
 let genTyped(ctx: Ctx, tag, depth: Integer) -> (String, Ctx) do
-  let (roll, ctx2) = draw(ctx, 4)
+  let (roll, ctx2) = draw(ctx, 5)
   let names = namesFor(ctx2.env, tag)
   if roll == 0 && names.length > 0
     let (i, ctx3) = draw(ctx2, names.length)
     return (names.at(i).or(""), ctx3)
   else
+    if roll == 4 && depth > 0 && (tag == :int || tag == :bool)
+      return genBlockWalk(ctx2, tag, depth - 1)
+    end
     if tag == :int
       return genInt(ctx2, depth)
     else
@@ -625,6 +639,221 @@ let genExpr(ctx: Ctx, tag, depth: Integer, allowMatch: Bool) -> (String, Ctx) do
   end
 end
 
+# --- Blocks and declarations ------------------------------------------------
+
+let emptyEnv() -> Env = Env { ints: [], floats: [], strings: [], bools: [] }
+
+let withEnv(ctx: Ctx, env: Env) -> Ctx = Ctx { rng: ctx.rng, counter: ctx.counter, env: env }
+
+let quoteFree(env: Env) -> Env do
+  let plain = { |names| names.reject { |name| name.contains?("\"") } }
+  Env {
+    ints: plain(env.ints),
+    floats: plain(env.floats),
+    strings: plain(env.strings),
+    bools: plain(env.bools)
+  }
+end
+
+let typeName(tag) -> String do
+  match tag do
+    :int => "Integer"
+    :float => "Float"
+    :string => "String"
+    _ => "Bool"
+  end
+end
+
+# A literal of the tag, reading no binding.
+let genLit(ctx: Ctx, tag) -> (String, Ctx) do
+  let (lit, ctx2) = genTyped(withEnv(ctx, emptyEnv()), tag, 0)
+  return (lit, withEnv(ctx2, ctx.env))
+end
+
+# A list of Integers walked by a block, as an Integer or a Bool, in
+# parentheses: opening a line (an `if` branch), a bare `[` reads as indexing
+# the line before. The block's parameters join the env for its body, which
+# reads the bindings around it too (a closure); they are named by depth, so a
+# block in another's body never shadows it, and they leave the env with the
+# block.
+let genBlockWalk(ctx: Ctx, tag, depth: Integer) -> (String, Ctx) do
+  let item = "item${depth}"
+  let total = "total${depth}"
+  let (count, ctx2) = draw(ctx, 3)
+  let (items, ctx3) = genListLit(ctx2, :int, count + 1)
+  let (shape, ctx4) = draw(ctx3, 3)
+  let withItem = remember(ctx4, :int, item)
+  if tag == :bool
+    let (test, ctx5) = genTyped(withItem, :bool, depth)
+    let walk = shape == 0 then "any?" else "all?"
+    return ("(${items}.${walk} { |${item}| ${test} })", withEnv(ctx5, ctx.env))
+  end
+  if shape == 0
+    let (mapped, ctx6) = genTyped(withItem, :int, depth)
+    let summed = ".reduce(0) { |${total}, ${item}| ${total} + ${item} }"
+    return ("(${items}.map { |${item}| ${mapped} }${summed})", withEnv(ctx6, ctx.env))
+  end
+  if shape == 1
+    let (kept, ctx7) = genTyped(withItem, :bool, depth)
+    return ("(${items}.filter { |${item}| ${kept} }.count)", withEnv(ctx7, ctx.env))
+  end
+  let (start, ctx8) = genTyped(ctx4, :int, depth)
+  let (step, ctx9) = genTyped(remember(withEnv(ctx8, withItem.env), :int, total), :int, depth)
+  return ("(${items}.reduce(${start}) { |${total}, ${item}| ${step} })", withEnv(ctx9, ctx.env))
+end
+
+# Top-level declarations ahead of `main`, each of whose calls joins the env
+# under its result's tag, so main's expressions call them like bindings:
+# functions over typed and defaulted parameters (called positionally, with
+# the default left out, by name, and by UFCS), a record with a defaulted
+# field and a `make` function over its fields, a sum type with a function by
+# clauses, and a module whose `make` names a nested module's record.
+let genDecls(ctx: Ctx) -> (String, Ctx) do
+  let (functions, ctx2) = draw(ctx, 3)
+  var text = ""
+  var current = ctx2
+  var index = 0
+  while index < functions do
+    let (decl, advanced) = genFunctionDecl(current, index)
+    text = "${text}${decl}\n"
+    current = advanced
+    index += 1
+  end
+  var kind = 0
+  while kind < 3 do
+    let (wanted, drawn) = draw(current, 2)
+    current = drawn
+    if wanted == 0
+      let (kindDecl, built) = genKindDecl(current, kind)
+      text = "${text}${kindDecl}\n"
+      current = built
+    end
+    kind += 1
+  end
+  return (text, current)
+end
+
+let genKindDecl(ctx: Ctx, kind: Integer) -> (String, Ctx) do
+  match kind do
+    0 => genRecordDecl(ctx, 0)
+    1 => genSumDecl(ctx, 0)
+    _ => genModuleDecl(ctx, 0)
+  end
+end
+
+let genFunctionDecl(ctx: Ctx, index: Integer) -> (String, Ctx) do
+  let name = "fuzzFn${index}"
+  let (first, ctx2) = pickType(ctx)
+  let (second, ctx3) = pickType(ctx2)
+  let (result, ctx4) = pickType(ctx3)
+  let (fallback, ctx5) = genLit(ctx4, second)
+  let params = remember(remember(withEnv(ctx5, emptyEnv()), first, "a"), second, "b")
+  let (body, ctx6) = genTyped(params, result, 2)
+  let signature = "a: ${typeName(first)}, b: ${typeName(second)} = ${fallback}"
+  let decl = "let ${name}(${signature}) -> ${typeName(result)} = ${body}\n"
+  let (a, ctx7) = genTyped(withEnv(ctx6, ctx.env), first, 1)
+  let (b, ctx8) = genTyped(ctx7, second, 1)
+  let (form, ctx9) = draw(ctx8, 4)
+  let call = match form do
+    0 => "${name}(${a}, ${b})"
+    1 => "${name}(${a})"
+    2 => "${name}(${a}, b: ${b})"
+    _ => "(${a}).${name}(${b})"
+  end
+  return (decl, remember(ctx9, result, call))
+end
+
+let genRecordDecl(ctx: Ctx, index: Integer) -> (String, Ctx) do
+  let boxName = "FuzzBox${index}"
+  let function = "fuzzGet${index}"
+  let (fallback, ctx2) = genLit(ctx, :int)
+  let (result, ctx3) = pickType(ctx2)
+  let fields = remember(remember(withEnv(ctx3, emptyEnv()), :int, "@count"), :string, "@label")
+  let (body, ctx4) = genTyped(fields, result, 2)
+  let decl = [
+    "record ${boxName} do",
+    "  count : Integer = ${fallback}",
+    "  label : String",
+    "end",
+    "",
+    "make ${boxName} do",
+    "  let ${function} -> ${typeName(result)} = ${body}",
+    "end",
+    ""
+  ].join("\n")
+  let (label, ctx5) = genTyped(withEnv(ctx4, ctx.env), :string, 1)
+  let (count, ctx6) = genTyped(ctx5, :int, 1)
+  let (form, ctx7) = draw(ctx6, 3)
+  let defaulted = "${boxName} { label: ${label} }"
+  let given = "${boxName} { count: ${count}, label: ${label} }"
+  let built = match form do
+    0 => remember(ctx7, result, "${defaulted}.${function}")
+    1 => remember(ctx7, result, "${given}.${function}")
+    _ => remember(ctx7, :int, "${given}.count")
+  end
+  return (decl, built)
+end
+
+let genSumDecl(ctx: Ctx, index: Integer) -> (String, Ctx) do
+  let sum = "FuzzShape${index}"
+  let function = "fuzzMeasure${index}"
+  let (result, ctx2) = pickType(ctx)
+  let bare = withEnv(ctx2, emptyEnv())
+  let (onInt, ctx3) = genTyped(remember(bare, :int, "n"), result, 2)
+  let (onText, ctx4) = genTyped(remember(withEnv(ctx3, emptyEnv()), :string, "t"), result, 2)
+  let (onNone, ctx5) = genTyped(withEnv(ctx4, emptyEnv()), result, 2)
+  let decl = [
+    "type ${sum} = FuzzA${index}(Integer) | FuzzB${index}(String) | FuzzC${index}",
+    "",
+    "${function} : ${sum} -> ${typeName(result)}",
+    "let ${function}(FuzzA${index}(n)) = ${onInt}",
+    "let ${function}(FuzzB${index}(t)) = ${onText}",
+    "let ${function}(FuzzC${index}) = ${onNone}",
+    ""
+  ].join("\n")
+  let (which, ctx6) = draw(withEnv(ctx5, ctx.env), 3)
+  let (argument, ctx7) = match which do
+    0 => genTyped(ctx6, :int, 1)
+    1 => genTyped(ctx6, :string, 1)
+    _ => ("", ctx6)
+  end
+  let value = match which do
+    0 => "FuzzA${index}(${argument})"
+    1 => "FuzzB${index}(${argument})"
+    _ => "FuzzC${index}"
+  end
+  return (decl, remember(ctx7, result, "${function}(${value})"))
+end
+
+let genModuleDecl(ctx: Ctx, index: Integer) -> (String, Ctx) do
+  let moduleName = "FuzzMod${index}"
+  let function = "fuzzRead${index}"
+  let (result, ctx2) = pickType(ctx)
+  let (relative, ctx3) = draw(ctx2, 2)
+  # From its module (`make Inner.Cell`) or by its whole path (kexhq/kex#620).
+  let target = relative == 0 then "Inner.Cell" else "${moduleName}.Inner.Cell"
+  let fields = remember(withEnv(ctx3, emptyEnv()), :int, "@value")
+  let (body, ctx4) = genTyped(fields, result, 2)
+  let decl = [
+    "module ${moduleName} do",
+    "  module Inner do",
+    "    record Cell do",
+    "      value : Integer = 0",
+    "    end",
+    "",
+    "    let cell(value: Integer) -> Cell = Cell { value: value }",
+    "  end",
+    "",
+    "  make ${target} do",
+    "    let ${function} -> ${typeName(result)} = ${body}",
+    "  end",
+    "end",
+    ""
+  ].join("\n")
+  let (value, ctx5) = genTyped(withEnv(ctx4, ctx.env), :int, 1)
+  return (decl, remember(ctx5, result, "${moduleName}.Inner.cell(${value}).${function}"))
+end
+
 # 0-3 lets, then prints. Half the programs print every binding; the other
 # half print only the final expression, leaving dead lets behind — dead
 # bindings lower differently, so both shapes are worth covering. Each binding
@@ -664,7 +893,8 @@ end
 
 let genProgram(seed: Integer) -> String do
   let empty = Env { ints: [], floats: [], strings: [], bools: [] }
-  let ctx = Ctx { rng: Rng { seed: normalizeSeed(seed) }, counter: 0, env: empty }
+  let start = Ctx { rng: Rng { seed: normalizeSeed(seed) }, counter: 0, env: empty }
+  let (decls, ctx) = genDecls(start)
   let (nlets, ctx2) = draw(ctx, 4)
   let (lets, ctx3) = genLets(ctx2, nlets, "")
   let (ncols, ctx4) = draw(ctx3, 3)
@@ -682,7 +912,7 @@ let genProgram(seed: Integer) -> String do
   let condition = if branch == 0 then "true" else "false" end
   let probe = "IO.printLine(${condition} && fuzzMark(true))\nIO.printLine(${condition} || fuzzMark(false))\nif ${condition}\n  IO.printLine(\"then\")\nelse\n  IO.printLine(\"else\")\nend\n"
   let helper = "foul fuzzMark(value: Bool) -> Bool do\n  IO.printLine(\"evaluated\")\n  return value\nend\n"
-  return "${helper}main do\n${lets}${cols}${prints}IO.printLine(${last})\n${probe}end\n"
+  return "${helper}${decls}main do\n${lets}${cols}${prints}IO.printLine(${last})\n${probe}end\n"
 end
 
 # Stderr is retained for diagnosis, but successful executions compare stdout

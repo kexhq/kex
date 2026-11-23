@@ -26,6 +26,28 @@ describe("fuzzer regression checks") do
     assert(genProgram(42) != genProgram(43))
   end
 
+  # Every declaration kind and way of calling it, and every block walk,
+  # within the first few hundred seeds: what the differential runs reach.
+  it("generates declarations, their calls and blocks") do
+    let sources = (1..300).items.map { |seed| genProgram(seed) }
+    let wanted = [
+      "let fuzzFn0(a: ", "b: ", ").fuzzFn",
+      "record FuzzBox0 do", "make FuzzBox0 do", ".fuzzGet0", "FuzzBox0 { label: ",
+      "type FuzzShape0 = ", "fuzzMeasure0 : FuzzShape0 -> ", "fuzzMeasure0(FuzzC0)",
+      "module FuzzMod0 do", "make FuzzMod0.Inner.Cell do", "make Inner.Cell do",
+      "FuzzMod0.Inner.cell(",
+      ".map { |item", ".filter { |item", ".reduce(0) { |total", ".any? { |item", ".all? { |item"
+    ]
+    wanted.each do |text|
+      assert(sources.any? { |source| source.contains?(text) }, "never generated: ${text}")
+    end
+  end
+
+  it("keeps quotes out of interpolation holes") do
+    let empty = Env { ints: ["fuzzFn0(1, \"x\")", "v0"], floats: [], strings: [], bools: [] }
+    assert(quoteFree(empty).ints == ["v0"])
+  end
+
   it("generates empty lists, bound heads and deliberate literal misses") do
     let empty = Env { ints: [], floats: [], strings: [], bools: [] }
     var emptyList = false
