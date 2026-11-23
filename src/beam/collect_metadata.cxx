@@ -553,6 +553,40 @@ void collectFromFunctionDef(
     iface.exports.push_back(std::move(exp));
 }
 
+// Whether an annotation writes a type letter (`Result<A, String>`): `This`
+// and the other names the checker substitutes are not letters.
+auto writesLetter(const kex::ast::TypeExpr& written) -> bool {
+    const auto any = [](const auto& children) {
+        return std::any_of(children.begin(), children.end(), [](const auto& child) {
+            return child && writesLetter(*child);
+        });
+    };
+    return std::visit(
+        [&](const auto& node) -> bool {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, kex::ast::GenericVar>) {
+                return true;
+            } else if constexpr (std::is_same_v<T, kex::ast::TypeName>) {
+                return node.parts.size() == 1 && node.parts[0].size() == 1 &&
+                       std::isupper(static_cast<unsigned char>(node.parts[0][0]));
+            } else if constexpr (std::is_same_v<T, kex::ast::GenericType>) {
+                return any(node.args);
+            } else if constexpr (std::is_same_v<T, kex::ast::TupleType>) {
+                return any(node.elements);
+            } else if constexpr (std::is_same_v<T, kex::ast::ListType>) {
+                return node.element && writesLetter(*node.element);
+            } else if constexpr (std::is_same_v<T, kex::ast::OptionalType>) {
+                return node.inner && writesLetter(*node.inner);
+            } else if constexpr (std::is_same_v<T, kex::ast::MapType>) {
+                return (node.key && writesLetter(*node.key)) ||
+                       (node.value && writesLetter(*node.value));
+            } else {
+                return false;
+            }
+        },
+        written.kind);
+}
+
 auto receiverFunctionFromDef(
     const kex::ast::FunctionDef& fd,
     KexiTypePtr receiverType,
@@ -605,10 +639,32 @@ auto receiverFunctionFromDef(
                 clause < signatures->size() ? (*signatures)[clause] : signatures->front();
             // Same rule as collectFromFunctionDef: the type follows
             // inference, the arity follows the annotations the emitter reads.
+            // A position still holding one of the receiver's own letters (`A` of
+            // `make Type<A>`) is an inference variable to the checker, which no
+            // letter can be written for; the annotation spells it as the
+            // receiver does.
+            const auto open = [](const kex::semantic::TypePtr& type) {
+                return kex::semantic::anyType(type, [](const kex::semantic::TypePtr& node) {
+                    const auto* var = std::get_if<kex::semantic::TypeVar>(&node->kind);
+                    return var && var->id >= 0;
+                });
+            };
+            const auto& written =
+                fd.clauses.empty() ? nullptr : &fd.clauses[std::min(clause, fd.clauses.size() - 1)];
             for (size_t i = skipParams; i < signature.params.size(); i++) {
-                receiverFunction.paramTypes.push_back(convertSemanticType(signature.params[i]));
+                const auto* param =
+                    written && i < written->params.size() ? &written->params[i] : nullptr;
+                receiverFunction.paramTypes.push_back(
+                    open(signature.params[i]) && param && param->type && *param->type &&
+                            writesLetter(**param->type)
+                        ? convertTypeExpr(*param->type)
+                        : convertSemanticType(signature.params[i]));
             }
-            receiverFunction.returnType = convertSemanticType(signature.result);
+            receiverFunction.returnType =
+                open(signature.result) && written && written->returnAnnotation &&
+                        *written->returnAnnotation && writesLetter(**written->returnAnnotation)
+                    ? convertTypeExpr(*written->returnAnnotation)
+                    : convertSemanticType(signature.result);
             receiverFunction.isFoul = signature.isFoul || fd.isFoul;
         }
     }

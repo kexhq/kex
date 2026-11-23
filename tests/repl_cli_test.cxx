@@ -1528,12 +1528,16 @@ int main() {
         it("accesses parsed JSON values in the BEAM REPL", []() {
             auto out = runBeamRepl(
                 "let source = `{ \"active\": true }`\n"
-                "let config = JSON.parse(source)\n"
-                "config.try[\"active\"]\n"
-                "config.try[\"missing\"]\n");
+                // A parsed value is an `Any` until a type pattern narrows it.
+                "let config = match JSON.parse(source).try do\n"
+                "  fields: {String: Any} => fields\n"
+                "  _ => {}\n"
+                "end\n"
+                "config[\"active\"]\n"
+                "config[\"missing\"]\n");
             assertTrue(out.find("if_clause") == std::string::npos, out);
             assertTrue(out.find("Just(true)") != std::string::npos, out);
-            assertTrue(out.find("None : Option") != std::string::npos, out);
+            assertTrue(out.find("None : Optional") != std::string::npos, out);
         });
 
         it("exposes parser combinators on BEAM", []() {

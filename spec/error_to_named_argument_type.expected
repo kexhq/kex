@@ -8,7 +8,7 @@ to : Measure<A> -> Type<String> -> String?
 
 to : Showable -> Type<String> -> String?
 
-to : Type -> Type<String> -> String?
+to : Type<A> -> Type<String> -> String?
 
 to : Date -> Type<String> -> Culture.Culture -> String?
 

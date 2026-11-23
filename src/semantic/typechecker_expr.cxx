@@ -505,10 +505,14 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr, const std::vector<TypeP
                 // as a concrete one. Replaced by a fresh variable, `[a].reduce(b)
                 // { |x, y| x + y }` gave `+` no `X` to refuse, though `a + b`
                 // was (kexhq/kex#777).
+                // A written `Any` (an element of `[Any]`) is the top type, which
+                // the block must narrow before use (decision 7), not an unknown
+                // its body may settle.
                 const auto rigid = typeVariableId(hint);
+                const auto* unknown = std::get_if<UnknownType>(&hint->kind);
                 if ((!std::holds_alternative<TypeVar>(hint->kind) ||
                      (rigid && m_rigidVars.contains(*rigid))) &&
-                    !std::holds_alternative<UnknownType>(hint->kind)) {
+                    (!unknown || unknown->written)) {
                     pt = hint;
                 } else {
                     pt = freshTypeVar();
@@ -4403,9 +4407,11 @@ auto TypeChecker::declaredBindingType(
         noteFloatLiteral(*value, declared);
         return declared;
     }
-    if (!std::holds_alternative<UnknownType>(actual->kind) &&
-        !std::holds_alternative<TypeVar>(actual->kind) && !unsubstitutedThis &&
-        !argMatchesParam(actual, declared)) {
+    // A written `Any` is no gradual value: it is the top type, and a binding
+    // declared narrower takes it only through a type pattern (decision 7).
+    const auto* unknown = std::get_if<UnknownType>(&actual->kind);
+    if ((!unknown || unknown->written) && !std::holds_alternative<TypeVar>(actual->kind) &&
+        !unsubstitutedThis && !argMatchesParam(actual, declared)) {
         mismatch(actual);
     }
     return declared;
@@ -4674,6 +4680,13 @@ auto TypeChecker::argMatchesParam(const TypePtr& writtenArg, const TypePtr& writ
     }
     if (const auto expanded = expandedAlias(argType)) {
         return argMatchesParam(expanded, paramType);
+    }
+    // A written `Any` is the top type (decision 7): passed on, it fits only a
+    // parameter that takes any value (a variable, `Any`, a trait every value
+    // has), never a concrete one until a type pattern narrows it (#764).
+    if (const auto* top = std::get_if<UnknownType>(&argType->kind); top && top->written) {
+        const auto param = resolve(paramType);
+        return isUndetermined(param) || std::holds_alternative<ConstrainedType>(param->kind);
     }
     auto isPermissive = [](const TypePtr& t) { return isUndetermined(t); };
     if (isPermissive(argType) || isPermissive(paramType)) {
@@ -5558,7 +5571,10 @@ auto TypeChecker::checkCall(
             argExprs[i] == methodCall->args.front().get()) {
             std::unordered_map<std::string, TypePtr> generics;
             named = resolveTypeExpr(*methodCall->targetType, generics);
-        } else {
+        } else if (const auto* written = std::get_if<ast::UpperIdentifier>(&argExprs[i]->kind);
+                   written && namesKnownType(written->name)) {
+            // Only a name that IS a type: a constant (`EARLIEST_YEAR`) passed
+            // where a `Type<X>` may go is a value, not an unknown type.
             named = typeNameReference(*argExprs[i]);
         }
         return named ? Type::named(kex::names::kTypeRecord, {named}) : nullptr;
@@ -7852,7 +7868,28 @@ auto TypeChecker::checkCall(
                     });
                 const auto owner = ownerOfCall(argTypes, name, target.backendModule, competing);
                 switch (owner.owner) {
-                    case CallOwner::Winner: m_resolvedCalls[methodCall] = std::move(target); break;
+                    case CallOwner::Winner: {
+                        // A receiver whose type is erased (an `Any`) is no type to pick
+                        // a per-type implementation for (`showValue/Showable`, the
+                        // trait default): its module's dispatcher decides by the
+                        // value, as the walker does.
+                        const auto erased =
+                            !argTypes.empty() && isUndetermined(resolve(argTypes[0]));
+                        if (erased && target.backendFunction.starts_with(name + "/")) {
+                            const auto dispatcher = std::find_if(
+                                importedFunctions.begin(), importedFunctions.end(),
+                                [&](const ImportedFunction* candidate) {
+                                    return candidate->backendModule == target.backendModule &&
+                                           candidate->backendFunction == name;
+                                });
+                            if (dispatcher != importedFunctions.end()) {
+                                m_resolvedCalls[methodCall] = dispatcherTarget(**dispatcher);
+                                break;
+                            }
+                        }
+                        m_resolvedCalls[methodCall] = std::move(target);
+                        break;
+                    }
                     case CallOwner::ReceiverType:
                         // The receiver's own type answers; lowering reaches it.
                         if (callExpr) {
@@ -8701,6 +8738,15 @@ auto TypeChecker::checkCall(
                 }
                 return Type::unknown();
             }
+        }
+    }
+    // The value a dot call goes through is an `Any` the program has not
+    // narrowed: that is the mistake, not which overload it missed.
+    if (argumentOff && isMethodCall && offIndex == 0 && !argTypes.empty()) {
+        if (const auto* top = std::get_if<UnknownType>(&resolve(argTypes[0])->kind);
+            top && top->written) {
+            error(diag::Code::AnyNotNarrowed, loc, {{"name", sourceName(name)}});
+            return Type::unknown();
         }
     }
     if (argumentOff) {

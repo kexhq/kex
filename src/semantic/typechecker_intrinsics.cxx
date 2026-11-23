@@ -85,7 +85,7 @@ auto TypeChecker::checkTypeOf(const ast::Expr& expr, const ast::MethodCall& call
     if (auto referenced = typeNameReference(*node.args[0])) {
         if (auto structured = structuredTypeOf(referenced)) {
             m_staticTypeOfCalls[&node] = {std::move(*structured), /*evaluateArgument=*/false};
-            return Type::named(kex::names::kTypeRecord);
+            return Type::named(kex::names::kTypeRecord, {referenced});
         }
     }
     // An imported nullary constructor is also represented by a

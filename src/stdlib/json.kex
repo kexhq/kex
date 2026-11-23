@@ -178,7 +178,10 @@ private do
       :bool => return value == true then "true" else "false"
       :integer => return "${value}"
       :float => return "${value}"
-      :string => return encodeString(value)
+      :string => match value do
+        text: String => return encodeString(text)
+        _ => return "null"
+      end
       :char => return encodeString("${value}")
       :atom => return encodeString(objectKey(value))
       :tuple => do

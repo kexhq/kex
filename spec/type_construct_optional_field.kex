@@ -9,10 +9,16 @@ record Finding do
   endLine : Integer?
 end
 
+# A parsed value is an `Any` until a type pattern narrows it.
+let fieldsOf(text: String) -> {String: Any} = match JSON.parse(text).or({}) do
+  fields: {String: Any} => fields
+  _ => {}
+end
+
 main do
   let finding = Type.named("Finding")
-  IO.printLine(finding.construct(JSON.parse("{\"file\": \"a\", \"endLine\": 3}").or({})))
-  IO.printLine(finding.construct(JSON.parse("{\"file\": \"b\"}").or({})))
-  IO.printLine(finding.construct(JSON.parse("{\"file\": \"c\", \"endLine\": null}").or({})))
-  IO.printLine(finding.construct(JSON.parse("{\"file\": \"d\", \"endLine\": \"x\"}").or({})))
+  IO.printLine(finding.construct(fieldsOf("{\"file\": \"a\", \"endLine\": 3}")))
+  IO.printLine(finding.construct(fieldsOf("{\"file\": \"b\"}")))
+  IO.printLine(finding.construct(fieldsOf("{\"file\": \"c\", \"endLine\": null}")))
+  IO.printLine(finding.construct(fieldsOf("{\"file\": \"d\", \"endLine\": \"x\"}")))
 end

@@ -16,7 +16,7 @@ spec/error_any_not_narrowed.kex:12:44: [KEXET-0509]: Error, `id` is not defined 
    |                                    ^^^^^^^^
 spec/error_any_not_narrowed.kex:30:32: [KEXET-0491]: Error, `construct` expects argument 2 to be {String: Any}, but got Integer
 
-construct : Type -> {String: Any} -> Result<Any, String>
+construct : Type<A> -> {String: Any} -> Result<A, String>
    |
 30 |   IO.printLine(users.construct(5))
    |                                ^ this has type Integer

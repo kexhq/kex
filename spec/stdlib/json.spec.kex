@@ -8,7 +8,11 @@ describe("JSON.parse") do
     assert(JSON.parse("-12") == Ok(-12))
     assert(JSON.parse("1.25e2") == Ok(125.0))
     assert(JSON.parse("\"Kex\"") == Ok("Kex"))
-    let array = JSON.parse("[1,\"two\",false]").try
+    # A parsed value is an `Any` until a type pattern narrows it.
+    let array = match JSON.parse("[1,\"two\",false]").try do
+      items: [Any] => items
+      _ => []
+    end
     assert(array[0] == Just(1))
     assert(array[1] == Just("two"))
     assert(array[2] == Just(false))
@@ -16,9 +20,12 @@ describe("JSON.parse") do
   end
 
   it("returns ordinary maps and lists that use their normal APIs") do
-    let config = JSON.parse(
+    let config = match JSON.parse(
       "{\"active\":true,\"items\":[1]}"
-    ).try
+    ).try do
+      fields: {String: Any} => fields
+      _ => {}
+    end
 
     assert(config["active"] == Just(true))
     assert(config["missing"] == None)

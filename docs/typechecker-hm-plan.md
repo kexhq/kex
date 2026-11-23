@@ -191,6 +191,21 @@ Done:
   parameter) and its receiver-side twin (`anyUnknownParamCandidate` returning
   Unknown). With KexI giving every stdlib function its types, neither fired
   for anything but a mistake (`spec/error_any_not_narrowed.kex`).
+- A written `Any` is the top type everywhere (decision 7), not only as a
+  receiver: passed to a concrete parameter, bound by a typed `let`, or
+  handed to a block (an element of `[Any]`) it must first be narrowed by a
+  type pattern; a dot call on one says so (KEXET-0509). The stdlib had one
+  such use (JSON's String arm), now narrowed, and the JSON and reflection
+  specs narrow what `JSON.parse` and `Type.construct` give back. A call on
+  an `Any` reaches its module's dispatcher, so the value decides on BEAM as
+  on the walker (`spec/any_interpolation_parity.kex`: an interpolated None
+  printed "None" on BEAM). `Type<T>` is a parameterised record: `Type.of(User)`
+  is a `Type<User>`, `Type.of(value)` the type of the value as checked
+  (`Type.of(Public)` a `Type<Access>`), and `construct`, `variant` and `parse`
+  answer `Result<T, String>`; a type found by name at run time (`Type.named`) leaves `T` to
+  the call. KexI writes a receiver function's annotation where its position
+  holds one of the receiver's letters, which the checked signature cannot
+  name.
 
 Not done: everything else in §12, in that order.
 

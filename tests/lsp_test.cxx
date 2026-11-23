@@ -1226,10 +1226,10 @@ int main() {
                 result.find("module String") == std::string::npos,
                 "to(String) hover incorrectly identified String as a module");
             assertTrue(
-                result.find("record Type do") != std::string::npos,
+                result.find("record Type<T> do") != std::string::npos,
                 "Type.of receiver hover did not identify the Type record");
             assertTrue(
-                result.find("of : Any -> Type") != std::string::npos,
+                result.find("of : Integer -> Type<Integer>") != std::string::npos,
                 "Type.of hover leaked the checker's internal unknown type");
         });
         it("keeps Type.of result types on local bindings", []() {
