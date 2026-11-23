@@ -1,0 +1,12 @@
+spec/error_arithmetic_on_non_number.kex:7:23: [KEXET-0497]: Error, operator '-' requires numbers, got Atom and Integer
+  |
+7 |   IO.printLine(:kex - 7)
+  |                ^^^^^^^^
+spec/error_arithmetic_on_non_number.kex:8:23: [KEXET-0497]: Error, operator '*' requires numbers, got Bool and Atom
+  |
+8 |   IO.printLine(true * :kex)
+  |                ^^^^^^^^^^^
+spec/error_arithmetic_on_non_number.kex:9:20: [KEXET-0497]: Error, operator '/' requires numbers, got Integer and Bool
+  |
+9 |   IO.printLine(7 / true)
+  |                ^^^^^^^^

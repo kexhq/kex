@@ -1,0 +1,24 @@
+spec/error_unrelated_never_equal.kex:9:5: [KEXET-0499]: Error, the pattern `"one"` never matches a value of type Integer
+  |
+9 |     "one" => "1"
+  |     ^^^^^
+spec/error_unrelated_never_equal.kex:10:5: [KEXET-0499]: Error, the pattern `true` never matches a value of type Integer
+   |
+10 |     true => "t"
+   |     ^^^^
+spec/error_unrelated_never_equal.kex:11:5: [KEXET-0499]: Error, the pattern `:kex` never matches a value of type Integer
+   |
+11 |     :kex => "k"
+   |     ^^^^
+spec/error_unrelated_never_equal.kex:21:5: [KEXET-0499]: Error, the pattern `7` never matches a value of type String
+   |
+21 |     7 => "seven"
+   |     ^
+spec/error_unrelated_never_equal.kex:29:21: [KEXET-0498]: Error, `Integer` and `String` are never equal: values of unrelated types
+   |
+29 |   IO.printLine(1 == "1")
+   |                ^^^^^^^^
+spec/error_unrelated_never_equal.kex:30:24: [KEXET-0498]: Error, `Atom` and `Bool` are never equal: values of unrelated types
+   |
+30 |   IO.printLine(:kex == true)
+   |                ^^^^^^^^^^^^

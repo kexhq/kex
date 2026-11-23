@@ -1,0 +1,13 @@
+# kex: check-only
+# A `!` function rewrites the `var` it is called on. On a literal or a
+# call's result there is none: both backends failed at run time with "'!'
+# requires a variable binding as the receiver" (kexhq/kex#770). On a `let`
+# it is refused already (KEXET-0425).
+
+main do
+  IO.printLine([3, 1].sort!)
+  IO.printLine([3, 1].map { |n| n + 1 }.sort!)
+  var items = [3, 1]
+  items.sort!
+  IO.printLine(items)
+end

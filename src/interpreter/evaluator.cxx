@@ -1075,6 +1075,7 @@ auto Evaluator::execModule(const ast::ModuleDef& mod, const std::string& parentM
     // own interface, not a patch of someone else's (see execMakeDefFor).
     kex::collectDeclaredTypeNames(mod.body, m_moduleDeclaredTypes[moduleName]);
     kex::collectDeclaredRecordNames(mod.body, m_moduleDeclaredRecords[moduleName]);
+    kex::collectNestedRecordPaths(mod.body, m_moduleDeclaredRecords[moduleName], moduleName);
     if (mod.isCapability) {
         auto& members = m_capabilityMembers[moduleName];
         for (const auto& item : mod.body) {
@@ -4925,6 +4926,17 @@ auto Evaluator::makeCurriedCall(
         }
         if (isOp && boundArgs.size() >= 2) {
             return evalBinaryOp(opToken, boundArgs[0], boundArgs[1], {});
+        }
+        // `~done` on a record with a `done` field reads the field, as BEAM
+        // does and the checker types it: no function named `done` exists, so
+        // the call below failed with "Undefined function: done" (kexhq/kex#775).
+        if (boundArgs.size() == 1 && boundArgs[0] && !m_functionDefs.contains(fnName) &&
+            !m_env->get(fnName)) {
+            if (const auto* record = std::get_if<RecordValue>(&boundArgs[0]->data)) {
+                if (const auto field = record->fields.find(fnName); field != record->fields.end()) {
+                    return field->second;
+                }
+            }
         }
         return callFunction(fnName, std::move(boundArgs), {}, {});
     }

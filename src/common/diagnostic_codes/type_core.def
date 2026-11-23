@@ -18,6 +18,7 @@ KEX_DIAGNOSTIC(PatternConstructorOfOtherType, "KEXET-0113", "`{name}` is a const
 KEX_DIAGNOSTIC(ConstructorPatternArity, "KEXET-0114", "`{name}` constructor takes {count} value(s), but the pattern destructures {given}")
 KEX_DIAGNOSTIC(PatternNotAConstructorOf, "KEXET-0115", "`{name}` is not a constructor of `{type}` (it has {constructors}). This pattern can never match")
 KEX_DIAGNOSTIC(RecordPatternArity, "KEXET-0116", "`{name}` record takes {count} value(s), but the pattern destructures {given}")
+KEX_DIAGNOSTIC(TuplePatternArity, "KEXET-0496", "the tuple has {count} value(s), but the pattern destructures {given}: `{type}`")
 KEX_DIAGNOSTIC(NotARecordType, "KEXET-0117", "`{name}` is not a record type")
 KEX_DIAGNOSTIC(RecordPatternUnknownField, "KEXET-0118", "record `{record}` has no field `{field}`")
 KEX_DIAGNOSTIC(DestructureConstructorMismatch, "KEXET-0119", "cannot match `{name}`: expected {expected}, got {actual}")

@@ -1,0 +1,21 @@
+# kex: check-only
+# A map literal of values of several types is data, a map of `Any`: reading
+# a value gives back an `Any`, not the type of the first one. It took the
+# type of its first entry, so `{ "ada": 36, "bob": "old" }` was a
+# `{String: Integer}` holding a String. And the functions on a map
+# (declared in `make Map<K, V>`) bound neither `K` nor `V` from a `{K: V}`
+# receiver, so any key or value went in (kexhq/kex#771).
+
+main do
+  let ages = { "ada": 36, "bob": "old" }
+  let bob: Integer = ages.get("bob").or(0)
+  IO.printLine(bob)
+  let m: {String: Integer} = { "a": 1 }
+  IO.printLine(m.put("bob", "old"))
+  IO.printLine(m.get(7))
+  IO.printLine(m.has?(7))
+  IO.printLine(m.merge({ "b": "x" }))
+  IO.printLine(m.put("b", 2))
+  IO.printLine(m.merge({ "c": 3 }))
+  IO.printLine({ "a": 1, "b": 2 })
+end

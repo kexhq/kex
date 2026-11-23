@@ -500,7 +500,14 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr, const std::vector<TypeP
                 pt = resolveTypeExpr(**lam->params[i].type, genericVars);
             } else if (i < spreadHints.size()) {
                 auto hint = resolve(spreadHints[i]);
-                if (!std::holds_alternative<TypeVar>(hint->kind) &&
+                // A type variable the function's own signature writes (`X` in
+                // `combine(a: X, b: X)`) is one fixed type here, as good a hint
+                // as a concrete one. Replaced by a fresh variable, `[a].reduce(b)
+                // { |x, y| x + y }` gave `+` no `X` to refuse, though `a + b`
+                // was (kexhq/kex#777).
+                const auto rigid = typeVariableId(hint);
+                if ((!std::holds_alternative<TypeVar>(hint->kind) ||
+                     (rigid && m_rigidVars.contains(*rigid))) &&
                     !std::holds_alternative<UnknownType>(hint->kind)) {
                     pt = hint;
                 } else {
@@ -763,6 +770,17 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                             return result;
                         }
                     }
+                }
+                // Declared, but only private to a module this code is not in:
+                // `using Config` does not bring `Config`'s private `secret` in,
+                // and the walker could not find it while BEAM could
+                // (kexhq/kex#781). Known only by an unknown type, not by a
+                // binding of its own.
+                if (!boundLocally &&
+                    (!type || std::holds_alternative<UnknownType>(resolve(type)->kind)) &&
+                    !bareFunctionReachable(node.name) && privateElsewhere(node.name)) {
+                    reportUndefined("name", node.name, expr.location);
+                    return Type::unknown();
                 }
                 // A sibling function of the `make` block being checked, named
                 // bare: called on `this`, as the call form is (bareMethodCall).
@@ -1370,10 +1388,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     // Unary negation requires a numeric operand.
                     if (auto* tv = std::get_if<TypeVar>(&resolved->kind)) {
                         unifyVar(tv->id, Type::constrained("N", "Number"));
-                    } else if (lacksBuiltinOperator(resolved, "-")) {
+                    } else if (
+                        lacksBuiltinOperator(resolved, "-") ||
+                        (std::holds_alternative<PrimitiveType>(resolved->kind) &&
+                         !isNumericType(resolved))) {
                         // Negation is numbers only, on both backends: a record or ADT
                         // reached "Cannot negate" on the walker and `badarith` on
-                        // BEAM, with nothing said while checking.
+                        // BEAM, with nothing said while checking, and so did a
+                        // String, Bool or Atom (`-"5"`, kexhq/kex#769).
                         error(
                             diag::Code::NegateRequiresNumber, expr.location,
                             {{"type", typeToString(resolved)}});
@@ -1515,13 +1537,18 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     node.tag, {Type::list(Type::string()), Type::list(Type::unknown())},
                     expr.location, false, nullptr, &expr);
             } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
-                // `x.push!(v)` rebinds `x`, so `x` has to be a `var`.
+                // `x.push!(v)` rebinds `x`, so `x` has to be a `var`. A receiver
+                // that is no name at all (`[3, 1].sort!`, `xs.map(f).sort!`) has
+                // nothing to rebind: both backends failed it at run time with
+                // "'!' requires a variable binding" (kexhq/kex#770).
                 if (const auto* ident = node.mutating && node.receiver
                                             ? std::get_if<ast::Identifier>(&node.receiver->kind)
                                             : nullptr) {
                     if (const auto* binding = bindingOf(ident->name); binding && !binding->isVar) {
                         error(diag::Code::BangOnImmutable, expr.location, {{"name", ident->name}});
                     }
+                } else if (node.mutating && node.receiver) {
+                    error(diag::Code::BangOnNonVariable, expr.location, {{"name", node.method}});
                 }
                 // Local module constructors use the same namespace syntax as
                 // module constants. Imported constructors are ordinary typed
@@ -2354,6 +2381,23 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     foldedHere();
                 }
 
+                // A Float range has bounds but no values to walk: every function
+                // of a Range but `contains?` failed at run time with "Float
+                // ranges cannot be enumerated", its own and its traits' defaults
+                // (`sum`) alike (kexhq/kex#778). What only shows it stays.
+                static const std::unordered_set<std::string> floatRangeFunctions = {
+                    "contains?", "showValue", "to", "inspect"};
+                if (!isNamespaceCall && !argTypes.empty() &&
+                    !floatRangeFunctions.contains(callName)) {
+                    const auto receiver = resolve(argTypes[0]);
+                    const auto* range = std::get_if<NamedType>(&receiver->kind);
+                    if (range && range->name == "Range" && range->typeArgs.size() == 1 &&
+                        std::holds_alternative<SizedFloatType>(resolve(range->typeArgs[0])->kind)) {
+                        error(diag::Code::FloatRangeNotWalked, expr.location, {{"name", callName}});
+                        return Type::unknown();
+                    }
+                }
+
                 // `or` is what leaves the optional (or result) world, so its default
                 // is the plain unwrapped value. `.or(None)` / `.or(Just(x))` passed
                 // anyway — `None` is accepted wherever an optional could go — and
@@ -2398,7 +2442,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     // when the value is one.
                     // A bare `~f` is typed only in the deferred, hinted pass, so
                     // its type is not known yet here; its signatures say whether
-                    // it captures a function (a parameterless one is its value).
+                    // it captures a function. One of no parameters is a function
+                    // too (`() -> T`, as the capture is typed below), not its
+                    // value: `.or(~fallback)` answered the function itself
+                    // (kexhq/kex#776).
                     const auto capturesFunction = [&](const ast::Expr* e) {
                         if (!isBareCapture(e)) {
                             return false;
@@ -2409,9 +2456,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                             user != m_userSignatures.end()) {
                             signatures = user->second;
                         }
-                        return std::any_of(
-                            signatures.begin(), signatures.end(),
-                            [](const Signature& signature) { return !signature.params.empty(); });
+                        return !signatures.empty();
                     };
                     const bool functionFallback =
                         argument && ((node.args.empty() && node.block) ||
@@ -2555,36 +2600,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 TypePtr elemType = Type::unknown();
                 for (const auto& elem : node.elements) {
                     if (elem) {
-                        auto t = inferExpr(*elem);
-                        bool elemPermissive = isUndetermined(elemType);
-                        bool tPermissive =
-                            isUndetermined(t) || std::holds_alternative<FuncType>(t->kind);
-                        bool elemFuncPermissive =
-                            elemPermissive || std::holds_alternative<FuncType>(elemType->kind);
-                        if (elemPermissive) {
-                            elemType = t; // adopt the concrete type if we have one
-                        } else if (
-                            !tPermissive && !elemFuncPermissive && !argMatchesParam(t, elemType) &&
-                            !argMatchesParam(elemType, t)) {
-                            // Before erroring, check if both types share a common trait.
-                            // If so, widen the element type to that trait.
-                            std::string common = m_traits.commonTrait(elemType, t);
-                            if (!common.empty()) {
-                                elemType = Type::named(common);
-                            } else {
-                                // Sibling variants share their ADT as a natural
-                                // element type: `[Less, Equal, Greater]` is a
-                                // `[Comparison]`, not a mistake.
-                                if (auto joined = siblingConstructorJoin(elemType, t)) {
-                                    elemType = std::move(joined);
-                                } else {
-                                    error(
-                                        diag::Code::ListElementMismatch, expr.location,
-                                        {{"expected", typeToString(elemType)},
-                                         {"actual", typeToString(t)}});
-                                }
-                            }
-                        }
+                        elemType = joinElementType(
+                            elemType, inferExpr(*elem), diag::Code::ListElementMismatch,
+                            expr.location);
                     }
                 }
                 // `[x | rest]`: the tail is a list of the same elements.
@@ -2611,21 +2629,52 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
                 return Type::list(elemType);
             } else if constexpr (std::is_same_v<T, ast::MapExpr>) {
+                // Keys and values join as a list's elements do, and where they
+                // share nothing the map holds `Any`: `{"id": "u1", "width": 3}`
+                // is ordinary data (a decoder's input, a `{String: Any}`). The
+                // first of each was taken and the rest never looked at, so
+                // `{ "ada": 36, "bob": "old" }` was a `{String: Integer}` holding
+                // a String, and reading `"bob"` as an Integer passed
+                // (kexhq/kex#771).
+                // A map keyed by atoms is a set of named fields, not a
+                // collection: a serving slot's `{ new, reply: new.count }`
+                // holds the state and the reply. Its values keep their own
+                // types. A spread's value is the spread map, not one value.
+                const bool atomKeyed =
+                    std::any_of(node.entries.begin(), node.entries.end(), [](const auto& entry) {
+                        return entry.key &&
+                               std::holds_alternative<ast::AtomLiteral>(entry.key->kind);
+                    });
                 TypePtr keyType = Type::unknown();
                 TypePtr valueType = Type::unknown();
+                // Widened once, a map stays `Any`: an unknown is also what
+                // adopts the next type, so `{"a": 1, "b": "x", "c": 2}` would
+                // narrow back to Integer.
+                bool keysWide = false;
+                bool valuesWide = false;
+                const auto widen = [&](TypePtr& joined, bool& wide, const TypePtr& next) {
+                    if (wide) {
+                        return;
+                    }
+                    const bool before = !isUndetermined(joined);
+                    joined = joinElementType(joined, next, std::nullopt, expr.location);
+                    wide = before && isUndetermined(joined);
+                };
                 for (const auto& entry : node.entries) {
                     if (entry.key) {
-                        auto k = inferExpr(*entry.key);
-                        if (std::holds_alternative<UnknownType>(keyType->kind)) {
-                            keyType = k;
-                        }
+                        widen(keyType, keysWide, inferExpr(*entry.key));
                     }
-                    if (entry.value) {
-                        auto v = inferExpr(*entry.value);
-                        if (std::holds_alternative<UnknownType>(valueType->kind)) {
-                            valueType = v;
-                        }
+                    if (!entry.value) {
+                        continue;
                     }
+                    auto value = inferExpr(*entry.value);
+                    if (atomKeyed || entry.spread) {
+                        if (isUndetermined(valueType) && !entry.spread) {
+                            valueType = value;
+                        }
+                        continue;
+                    }
+                    widen(valueType, valuesWide, value);
                 }
                 return Type::map(keyType, valueType);
             } else if constexpr (std::is_same_v<T, ast::TupleExpr>) {
@@ -3661,7 +3710,17 @@ auto TypeChecker::inferBinaryOp(
         }
     }
 
-    auto isFloat = [](const TypePtr& t) { return std::holds_alternative<SizedFloatType>(t->kind); };
+    // A `Float` parameter is typed by the `Float` bound, not a concrete float.
+    // Read as neither, `count * price` on `count: Integer, price: Float` fell to
+    // `return lhs` and was typed Integer, and `count + price` was refused as
+    // two different types, though arithmetic promotes (docs/language-spec.md
+    // §23.6) and `3 * 2.5` between bindings is a Float (kexhq/kex#766).
+    auto isFloat = [](const TypePtr& t) {
+        if (const auto* bound = std::get_if<ConstrainedType>(&t->kind)) {
+            return bound->traitName == "Float";
+        }
+        return std::holds_alternative<SizedFloatType>(t->kind);
+    };
     auto isIntegerLike = [](const TypePtr& t) {
         if (auto* prim = std::get_if<PrimitiveType>(&t->kind)) {
             return prim->kind == PrimitiveType::Integer;
@@ -3722,6 +3781,21 @@ auto TypeChecker::inferBinaryOp(
             if (leftIsString || rightIsString) {
                 error(diag::Code::ArithmeticOnString, loc);
                 return Type::integer();
+            }
+            // A Bool, Atom, Char or Unit has no arithmetic either: `:kex - 7` and
+            // `true * :kex` were typed as their left operand and failed on both
+            // backends (found by `make metamorphic-search`).
+            if (const auto nonNumber =
+                    [](const TypePtr& t) {
+                        return std::holds_alternative<PrimitiveType>(t->kind) && !isNumericType(t);
+                    };
+                nonNumber(lhs) || nonNumber(rhs)) {
+                error(
+                    diag::Code::ArithmeticRequiresNumbers, loc,
+                    {{"op", std::string(tokenTypeName(op))},
+                     {"left", typeToString(lhs)},
+                     {"right", typeToString(rhs)}});
+                return Type::unknown();
             }
             return lhs;
 
@@ -5222,6 +5296,22 @@ auto TypeChecker::checkCall(
     const ast::Expr* callExpr,
     const std::vector<const ast::Expr*>* argumentExprs) -> TypePtr {
     auto argTypes = suppliedArgTypes;
+    // A call on an unannotated parameter is what its function asks of the
+    // arguments passed for it; a call to a function of this program is judged
+    // against what it asks, once every function has been checked
+    // (reportUnmetDemands, kexhq/kex#782).
+    if (isMethodCall && !argTypes.empty()) {
+        if (const auto* var = std::get_if<TypeVar>(&resolve(argTypes[0])->kind)) {
+            if (const auto owner = m_unannotatedParamOwner.find(var->id);
+                owner != m_unannotatedParamOwner.end()) {
+                m_parameterDemands[owner->second.first][owner->second.second].insert(name);
+            }
+        }
+    }
+    if (m_userSignatures.contains(name)) {
+        m_demandedCalls.push_back(
+            {name, name + "/" + std::to_string(argTypes.size()), argTypes, loc});
+    }
     // A receiver whose type is a variable the function's signature writes is
     // any type: only a function taking any receiver applies (`a.showValue`),
     // not String's `upperCase` on `a: A` (kexhq/kex#644).
@@ -7659,7 +7749,19 @@ auto TypeChecker::checkCall(
                     if (auto* owner =
                             std::get_if<NamedType>(&resolve(matched.params.front())->kind)) {
                         auto hidden = m_privateMakeMethods.find(owner->name + "#" + name);
-                        if (hidden != m_privateMakeMethods.end() && !withinModule(hidden->second)) {
+                        // A top-level `make` belongs to no module, and every caller
+                        // is "within" the empty one: `User { ... }.secret` from
+                        // `main` passed (kexhq/kex#780). There, only a `make`
+                        // block of the same type may call it.
+                        const auto* inMake =
+                            m_inMakeBlock && m_currentMakeType
+                                ? std::get_if<NamedType>(&resolve(m_currentMakeType)->kind)
+                                : nullptr;
+                        const bool permitted =
+                            hidden != m_privateMakeMethods.end() &&
+                            (hidden->second.empty() ? inMake && inMake->name == owner->name
+                                                    : withinModule(hidden->second));
+                        if (hidden != m_privateMakeMethods.end() && !permitted) {
                             error(
                                 hidden->second.empty() ? diag::Code::PrivateMakeMethod
                                                        : diag::Code::PrivateMakeMethodInModule,
@@ -8672,6 +8774,34 @@ auto TypeChecker::genericConflict(
             return it->second;
         }
         const auto both = [&](const TypePtr& p, const TypePtr& a) { return conflict(p, a); };
+        // A map is `{K: V}`, and the stdlib's functions on it are declared in
+        // `make Map<K, V>`: read as no match, the receiver bound neither, and
+        // `m.put("b", "x")` on a `{String: Integer}` passed (kexhq/kex#771).
+        const auto* am = std::get_if<MapType>(&actual->kind);
+        // What a map pattern had to be, its generics as the arguments bound them.
+        const auto boundTo = [&](const TypePtr& p) -> TypePtr {
+            int generic = 0;
+            if (const auto* tv = std::get_if<TypeVar>(&p->kind)) {
+                generic = tv->id;
+            } else if (const auto* c = std::get_if<ConstrainedType>(&p->kind)) {
+                generic = c->genericId;
+            }
+            const auto it = bound.find(generic);
+            return generic < 0 && it != bound.end() ? it->second : p;
+        };
+        const auto mapConflict = [&](const TypePtr& key, const TypePtr& value) -> TypePtr {
+            if (both(key, am->key) || both(value, am->value)) {
+                return Type::map(boundTo(key), boundTo(value));
+            }
+            return nullptr;
+        };
+        if (const auto* pn = std::get_if<NamedType>(&pattern->kind);
+            am && pn && pn->name == "Map" && pn->typeArgs.size() == 2) {
+            return mapConflict(pn->typeArgs[0], pn->typeArgs[1]);
+        }
+        if (const auto* pm = std::get_if<MapType>(&pattern->kind); am && pm) {
+            return mapConflict(pm->key, pm->value);
+        }
         if (const auto* pn = std::get_if<NamedType>(&pattern->kind)) {
             const auto* an = std::get_if<NamedType>(&actual->kind);
             if (!an || pn->name != an->name || pn->typeArgs.size() != an->typeArgs.size()) {
@@ -9089,6 +9219,7 @@ auto TypeChecker::registerDeclaredAliases(const ast::Program& program) -> void {
     m_declarationsRegistered = false;
     kex::collectDeclaredTypeNames(program.items, m_declaredTypeNames);
     kex::collectDeclaredTraitNames(program.items, m_declaredTypeNames);
+    m_declaredBeforeMakes = m_declaredTypeNames;
     kex::collectMakeTargetNames(program.items, m_declaredTypeNames);
     kex::forEachTypeDef(program.items, [&](const ast::TypeDef& def, const std::string& module) {
         if (!module.empty()) {
@@ -9235,8 +9366,62 @@ auto TypeChecker::typeIdentity(const std::string& scope, const std::string& name
 
 namespace kex::semantic {
 
+auto TypeChecker::joinElementType(
+    TypePtr joined, const TypePtr& next, std::optional<diag::Code> code, SourceLocation loc)
+    -> TypePtr {
+    if (isUndetermined(joined)) {
+        return next; // adopt the concrete type if there is one
+    }
+    const bool nextPermissive =
+        isUndetermined(next) || std::holds_alternative<FuncType>(next->kind);
+    if (nextPermissive || std::holds_alternative<FuncType>(joined->kind) ||
+        argMatchesParam(next, joined) || argMatchesParam(joined, next)) {
+        return joined;
+    }
+    // Two types that share a trait widen to it.
+    if (const auto common = m_traits.commonTrait(joined, next); !common.empty()) {
+        return Type::named(common);
+    }
+    // Sibling variants share their ADT as a natural element type: `[Less,
+    // Equal, Greater]` is a `[Comparison]`, not a mistake.
+    if (auto sibling = siblingConstructorJoin(joined, next)) {
+        return sibling;
+    }
+    if (!code) {
+        return Type::unknown();
+    }
+    error(*code, loc, {{"expected", typeToString(joined)}, {"actual", typeToString(next)}});
+    return joined;
+}
+
 auto TypeChecker::checkNeverEqual(const TypePtr& lhs, const TypePtr& rhs, SourceLocation loc)
     -> void {
+    // Two primitives of different kinds are never equal: `1 == "1"` and
+    // `:kex == true` were accepted and always false (kexhq/kex#773). Integer
+    // and Float are one numeric tower (docs/language-spec.md §23.6), so
+    // `0 == 0.0` stays. So does a Char against a String: `c == "e"` is false
+    // by design, and spec/char_type.kex teaches it beside `letters == "hi"`
+    // (a `[Char]` and a String), which this rule does not reach.
+    const auto* leftPrimitive = std::get_if<PrimitiveType>(&lhs->kind);
+    const auto* rightPrimitive = std::get_if<PrimitiveType>(&rhs->kind);
+    const auto textual = [](const PrimitiveType* p) {
+        return p && (p->kind == PrimitiveType::Char || p->kind == PrimitiveType::String);
+    };
+    const auto number = [](const TypePtr& t) {
+        const auto* bound = std::get_if<ConstrainedType>(&t->kind);
+        return isNumericType(t) || (bound && primitiveNumberTrait(bound->traitName));
+    };
+    const auto scalar = [&](const TypePtr& t) {
+        return std::holds_alternative<PrimitiveType>(t->kind) || number(t);
+    };
+    if ((leftPrimitive || rightPrimitive) && scalar(lhs) && scalar(rhs) &&
+        !(number(lhs) && number(rhs)) && !(textual(leftPrimitive) && textual(rightPrimitive)) &&
+        !(leftPrimitive && rightPrimitive && leftPrimitive->kind == rightPrimitive->kind)) {
+        error(
+            diag::Code::UnrelatedNeverEqual, loc,
+            {{"left", typeToString(lhs)}, {"right", typeToString(rhs)}});
+        return;
+    }
     const auto wrapper = [](const TypePtr& t) -> std::string {
         if (std::holds_alternative<OptionalType>(t->kind)) {
             return "Optional";

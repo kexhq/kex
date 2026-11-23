@@ -13,10 +13,10 @@
 # make test-metamorphic gates the relations that pass. make
 # metamorphic-search runs the relations and the mutations from a seed: a
 # fresh one from the clock unless METAMORPHIC_SEED is given, printed first so
-# a run replays. It leaves out the relations whose failure is an open bug
-# (knownOpen), so a failing search is always news; METAMORPHIC_MODE=search-all
-# runs them too. Every case and what each step answered are saved under the
-# output directory; a finding also writes finding.txt there.
+# a run replays. It skips nothing: a relation or mutation that finds a bug
+# fails the search until the bug is fixed. Every case and what each step
+# answered are saved under the output directory; a finding also writes
+# finding.txt there.
 #
 # The runner uses the walker so a BEAM lowering bug cannot break the test
 # driver itself.
@@ -54,35 +54,10 @@ record Run do
   files  : [String] = []
 end
 
-let modes -> [String] = ["search", "search-all", "gate", "relations"]
+let modes -> [String] = ["search", "gate", "relations"]
 
-# The relations the gate runs, by seed: every one but the known-open ones.
+# The relations the gate runs, by seed.
 let gateSeeds -> [Integer] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-
-# Relations whose failure is an open bug, left out of `search` so a failing
-# search is always news; `search-all` and `relations` run them too. Each
-# leaves this list with the fix for its bug.
-let knownOpen -> [Integer] = [
-  11, 12, # a `make` target written from its module (kexhq/kex#620)
-  13,     # an argument beside an `Any` parameter (kexhq/kex#764)
-  14,     # Integer and Float mixed in arithmetic (kexhq/kex#766)
-  15, 16, # `==` and literal arms across unrelated types (kexhq/kex#773)
-  17,     # unary minus on what is no number (kexhq/kex#769)
-  18,     # a map's values of two types (kexhq/kex#771)
-  19,     # a tuple pattern of another arity (kexhq/kex#767)
-  20,     # `return Error(...)` from a plain type (kexhq/kex#768)
-  21,     # a `!` function on no `var` (kexhq/kex#770)
-  22,     # `make` for an undeclared type (kexhq/kex#772)
-  23,     # `return n` refused where a final `n` is taken (kexhq/kex#774)
-  24,     # a field captured with `~` (kexhq/kex#775)
-  25,     # `.or(~f)` with a function of no parameters (kexhq/kex#776)
-  26,     # an operator on a type parameter inside a block (kexhq/kex#777)
-  27,     # walking a Float range (kexhq/kex#778)
-  28,     # a keyword as a function's name (kexhq/kex#779)
-  29,     # a top-level `make`'s private function (kexhq/kex#780)
-  30,     # a private name after `using` (kexhq/kex#781)
-  31      # a function on an unannotated parameter (kexhq/kex#782)
-]
 
 # Runs +count+ cases from +seed+ and answers the exit status: 0 when every
 # case held, 1 on a finding, 2 when the run could not start.
@@ -121,20 +96,10 @@ end
 # mutations by turns.
 foul caseHolds?(run: Run, caseSeed: Integer, index: Integer, mode: String) -> Bool do
   return relationHolds?(run, gateSeeds.at(index).or(1)) if mode == "gate"
-  # Every relation seed in turn, the known-open ones too: what a relation
-  # still finds, without the mutations between.
+  # Every relation seed in turn, without the mutations between.
   return relationHolds?(run, caseSeed) if mode == "relations"
   return mutationHandled?(run, caseSeed / 2) if caseSeed % 2 == 1
-  relationHolds?(run, searchedRelation(caseSeed / 2, mode == "search-all"))
-end
-
-# The relation seed a search case runs. Leaving the known-open relations
-# out, each seed maps to its own relation seed whose relation is one of the
-# others, so no two cases of a run repeat one.
-let searchedRelation(seed: Integer, all: Bool) -> Integer do
-  return seed if all
-  let allowed = (0..relationCount - 1).items.reject { |r| knownOpen.contains?(r) }
-  seed / allowed.count * relationCount + allowed.at(seed % allowed.count).or(1)
+  relationHolds?(run, caseSeed / 2)
 end
 
 # --- Relations ---------------------------------------------------------------
@@ -424,21 +389,26 @@ end
 
 let operators -> [String] = ["+", "-", "*", "/"]
 
-# `a * b` of an Integer and a Float was typed Integer while `a + b` was
-# refused (kexhq/kex#766).
+# Arithmetic on two samples. Integer and Float promote (docs/language-spec.md
+# §23.6), so with bindings and with annotated parameters it must check and
+# run alike: on parameters, `a * b` was typed Integer and `a + b` refused
+# (kexhq/kex#766). Any other pair has no arithmetic, and must be refused.
 let mixedArithmetic(seed: Integer, pair: (Sample, Sample)) -> Relation do
   let (first, second) = pair
   let op = operators.at(variantOf(seed, operators.count)).or("+")
-  let lines = [
-    "let a = ${first.value}",
-    "let b = ${second.value}",
-    "IO.printLine(a ${op} b)"
-  ]
-  confusion(
+  let bound = ["let a = ${first.value}", "let b = ${second.value}", "IO.printLine(a ${op} b)"]
+  return confusion(
     "${first.type} ${op} ${second.type}",
     program(["let a = 7", "let b = 3", "IO.printLine(a ${op} b)"]),
-    program(lines)
-  )
+    program(bound)
+  ) if !numeric?(first) || !numeric?(second)
+  let combine = "let combine(a: ${first.type}, b: ${second.type}) -> Float = a ${op} b"
+  Relation {
+    name: "${first.type} ${op} ${second.type} on parameters and bindings",
+    original: program(bound),
+    changed: program(["IO.printLine(combine(${first.value}, ${second.value}))"],
+                     declarations: [combine, ""])
+  }
 end
 
 # `==` between unrelated types can never hold (kexhq/kex#773).
@@ -494,18 +464,24 @@ let nonNumeric(first: Sample, second: Sample) -> Sample do
   stringSample
 end
 
-# A map's values of two types, in a literal or through `put`, as a list's
-# elements are refused (kexhq/kex#771).
+# A map's values of two types. A literal of them is data, a map of `Any`, and
+# must check and run alike whether it is printed as written or bound first.
+# `put` of another type on a map whose values are one type must be refused:
+# the functions on a map bound neither its key nor its value type, so any
+# went in (kexhq/kex#771).
 let mixedMapValues(seed: Integer, pair: (Sample, Sample)) -> Relation do
   let (first, given) = pair
   let second = unrelatedTo(first, given)
-  let throughPut = variantOf(seed, 2) == 1
-  let mixed = throughPut then "{\"x\": ${first.value}}.put(\"y\", ${second.value})"
-              else "{\"x\": ${first.value}, \"y\": ${second.value}}"
+  let mixed = "{\"x\": ${first.value}, \"y\": ${second.value}}"
+  return Relation {
+    name: "map of ${first.type} and ${second.type}",
+    original: program(["IO.printLine(${mixed})"]),
+    changed: program(["let mixed = ${mixed}", "IO.printLine(mixed)"])
+  } if variantOf(seed, 2) == 0
   confusion(
-    "map of ${first.type} and ${second.type}${throughPut then " through put" else ""}",
-    program(["IO.printLine({\"x\": ${first.value}, \"y\": ${first.value}})"]),
-    program(["IO.printLine(${mixed})"])
+    "map of ${first.type} and ${second.type} through put",
+    program(["IO.printLine({\"x\": ${first.value}}.put(\"y\", ${first.value}))"]),
+    program(["IO.printLine({\"x\": ${first.value}}.put(\"y\", ${second.value}))"])
   )
 end
 
@@ -696,8 +672,8 @@ end
 # (kexhq/kex#779). Only declared: a call would not even parse.
 let keywordAsFunctionName(seed: Integer) -> Relation do
   let (keyword, foulForm) = [
-    ("match", false), ("loop", false), ("next", true), ("match", true), ("loop", true)
-  ].at(variantOf(seed, 5)).or(("match", false))
+    ("match", false), ("next", false), ("next", true), ("match", true)
+  ].at(variantOf(seed, 4)).or(("match", false))
   let declared = { |name|
     foulForm then "foul ${name} -> Void = IO.printLine(\"x\")" else "let ${name}(n: Integer) -> Integer = n"
   }
@@ -849,9 +825,12 @@ foul writeRelation(root: String, item: Relation) -> Void or! FS.FileError do
   FS.File.write("${root}/metamorphichelper.kex", item.moduleSource)
 end
 
+# A program the checker must refuse may be refused by the parser instead
+# (`let match(n) = n`), so only the others have to parse.
 let wellFormed?(item: Relation) -> Bool do
   let helperOk = item.moduleSource.empty? || syntaxOk(item.moduleSource, "Program")
-  let programs = syntaxOk(item.original, "Program") && syntaxOk(item.changed, "Program")
+  let changedOk = item.rejectChanged || syntaxOk(item.changed, "Program")
+  let programs = syntaxOk(item.original, "Program") && changedOk
   helperOk && programs && item.eligibleSites > 0
 end
 
@@ -1162,8 +1141,16 @@ let typeCrashMarkers -> [String] = [
 ]
 
 typeCrash? : Outcome -> Bool
-let typeCrash?(Ok(value)) = value.exitCode != 0 && crashText?(value.stdout + value.stderr)
+let typeCrash?(Ok(value)) do
+  let text = value.stdout + value.stderr
+  value.exitCode != 0 && crashText?(text) && !ownFailure?(text)
+end
 let typeCrash?(Error(_))  = false
+
+# A failing `assert` of the program itself: a mutation can make one fail
+# (`Just(None)` as `None`), which says nothing about the checker. It prints
+# as "Internal error: assertion failed" on both backends.
+let ownFailure?(text: String) -> Bool = text.contains?("assertion failed")
 
 let crashText?(text: String) -> Bool = typeCrashMarkers.any? { |marker| text.contains?(marker) }
 

@@ -1,10 +1,12 @@
 describe("metamorphic") do
+  # A program the checker must refuse may be one the parser refuses.
   it("emits every relation as two losslessly parsed programs") do
     var seed = 0
     while seed < relationCount * 8 do
       let item = relation(seed)
       assert(syntaxOk(item.original, "Program"), "original seed ${seed}: ${item.name}")
-      assert(syntaxOk(item.changed, "Program"), "changed seed ${seed}: ${item.name}")
+      let changedOk = item.rejectChanged || syntaxOk(item.changed, "Program")
+      assert(changedOk, "changed seed ${seed}: ${item.name}")
       seed += 1
     end
   end
@@ -18,7 +20,7 @@ describe("metamorphic") do
       "module into its own file (make Tcp.Conn)",
       "argument beside extra: Any = :none",
       "argument beside extra: Any = :none in a make",
-      "Integer * Float",
+      "Integer * Float on parameters and bindings",
       "Integer == String",
       "String arm in a match on Integer",
       "unary - on String",
@@ -135,12 +137,5 @@ describe("metamorphic") do
       assert(mutationCase(seed, files).set?, "no site for mutation ${seed}")
       seed += 1
     end
-  end
-
-  it("leaves known-open relations out without repeating a case") do
-    let seeds = (0..43).items.map { |seed| searchedRelation(seed, false) }
-    assert(!seeds.any? { |seed| knownOpen.contains?(seed % relationCount) })
-    assert(seeds.uniq.count == seeds.count)
-    assert(searchedRelation(11, true) == 11)
   end
 end

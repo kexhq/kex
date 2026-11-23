@@ -1,0 +1,11 @@
+# kex: check-only
+# `match` and `next` cannot name a top-level function: a call to `match`
+# reads as the keyword, so it was declared and could never be called, and
+# `next` was refused only in some forms (kexhq/kex#779). A `make` block's
+# functions may (kexhq/kex#508).
+
+let match(n: Integer) -> Integer = n
+
+main do
+  IO.printLine(1)
+end

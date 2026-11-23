@@ -926,7 +926,8 @@ void collectFromMakeDef(
     KexiTypeInterface& iface,
     KexiStructuralMetadata& meta,
     const kex::semantic::Analyzer* analysis,
-    const std::string& modulePath = {}) {
+    const std::string& modulePath = {},
+    const std::set<std::string>* nestedRecords = nullptr) {
     auto receiverType = convertTypeExpr(md.target);
     auto typeName = makeTargetName(receiverType);
     // Every type declared inside a module — record, opaque type or ADT — is
@@ -941,6 +942,15 @@ void collectFromMakeDef(
         if (owned) {
             receiverType->name = modulePath + "." + receiverType->name;
         }
+    } else if (
+        !modulePath.empty() && receiverType && receiverType->kind == KexiType::Named &&
+        nestedRecords && nestedRecords->contains(receiverType->name)) {
+        // A nested module's record named from this module (`make Tcp.Conn`
+        // in `Wire`) is received by its identity, `Wire.Tcp.Conn`; exported
+        // as written, no call on that record matched it, and one took
+        // another type's function of the same name (kexhq/kex#620).
+        owned = true;
+        receiverType->name = modulePath + "." + receiverType->name;
     }
     // A `make` inside a module for a type declared elsewhere: its methods stay
     // behind a `using` of the module (KexiMethod::foreignTarget).
@@ -1412,6 +1422,8 @@ void collectFromModuleBody(
         }
     };
 
+    std::set<std::string> nestedRecords;
+    kex::collectNestedRecordPaths(body, nestedRecords, modulePath);
     for (const auto& item : body) {
         std::visit(
             [&](const auto& ptr) {
@@ -1424,7 +1436,7 @@ void collectFromModuleBody(
                         addFunction(*ptr, static_cast<size_t>(declared - ptr->clauses.data()));
                     }
                 } else if constexpr (std::is_same_v<T, kex::ast::MakeDef>) {
-                    collectFromMakeDef(*ptr, iface, meta, analysis, modulePath);
+                    collectFromMakeDef(*ptr, iface, meta, analysis, modulePath, &nestedRecords);
                 } else if constexpr (std::is_same_v<T, kex::ast::TraitDef>) {
                     collectFromTraitDef(*ptr, iface, meta, analysis, modulePath);
                 } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
@@ -1564,6 +1576,8 @@ void collectFlattenedModuleBody(
     }
 
     std::unordered_set<std::string> seenImpls;
+    std::set<std::string> nestedRecords;
+    kex::collectNestedRecordPaths(body, nestedRecords, modulePath);
     for (const auto& item : body) {
         std::visit(
             [&](const auto& ptr) {
@@ -1590,7 +1604,7 @@ void collectFlattenedModuleBody(
                         applyInlineTraitConstraints(exp, *ptr, analysis, clause);
                     }
                 } else if constexpr (std::is_same_v<T, kex::ast::MakeDef>) {
-                    collectFromMakeDef(*ptr, iface, meta, analysis, modulePath);
+                    collectFromMakeDef(*ptr, iface, meta, analysis, modulePath, &nestedRecords);
                 } else if constexpr (std::is_same_v<T, kex::ast::TraitDef>) {
                     collectFromTraitDef(*ptr, iface, meta, analysis, modulePath);
                 } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {

@@ -1,0 +1,12 @@
+# kex: check-only
+# Unary minus is for numbers only. A String, Bool or Atom checked clean and
+# failed at run time: "cannot negate String" on the walker, `badarith` on
+# BEAM (kexhq/kex#769).
+
+main do
+  IO.printLine(-"5")
+  IO.printLine(-true)
+  IO.printLine(-:kex)
+  IO.printLine(-7)
+  IO.printLine(-2.5)
+end

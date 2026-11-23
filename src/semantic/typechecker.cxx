@@ -66,6 +66,9 @@ auto TypeChecker::check(
     m_clauseCoverageGaps.clear();
     m_clauseCoverageSites.clear();
     m_makeTargetIdentities.clear();
+    m_unannotatedParamOwner.clear();
+    m_parameterDemands.clear();
+    m_demandedCalls.clear();
     m_nameUses.clear();
     m_scopeNames.clear();
     m_localDefinitions.clear();
@@ -837,6 +840,81 @@ auto TypeChecker::check(
 
     checkClauseCoverage();
     reportUnknownMethods();
+    reportUnmetDemands();
+}
+
+auto TypeChecker::typeHasFunction(const TypePtr& given, const std::string& name) -> bool {
+    const auto type = resolve(given);
+    if (const auto* named = std::get_if<NamedType>(&type->kind)) {
+        if (const auto record = m_recordFields.find(resolveRecordName(named->name));
+            record != m_recordFields.end() && record->second.contains(name)) {
+            return true;
+        }
+        if (m_importedInterfaces) {
+            if (const auto record = m_importedInterfaces->recordFieldNames.find(named->name);
+                record != m_importedInterfaces->recordFieldNames.end() &&
+                record->second.contains(name)) {
+                return true;
+            }
+        }
+    }
+    const auto takes = [&](const std::vector<Signature>& signatures) {
+        return std::any_of(signatures.begin(), signatures.end(), [&](const Signature& sig) {
+            return !sig.params.empty() && argMatchesParam(type, sig.params.front());
+        });
+    };
+    if (const auto methods = m_methodSignatures.find(name);
+        methods != m_methodSignatures.end() && takes(methods->second)) {
+        return true;
+    }
+    if (const auto user = m_userSignatures.find(name);
+        user != m_userSignatures.end() && takes(user->second)) {
+        return true;
+    }
+    return takes(importedCandidateSignatures(name));
+}
+
+auto TypeChecker::reportUnmetDemands() -> void {
+    for (const auto& call : m_demandedCalls) {
+        const auto demands = m_parameterDemands.find(call.key);
+        if (demands == m_parameterDemands.end()) {
+            continue;
+        }
+        // A parameter its function settled on a type (`x.label` binds `x` to the
+        // one record with a `label`) is checked as any typed argument is.
+        const auto signatures = m_userSignatures.find(call.function);
+        const auto stillOpen = [&](std::size_t index) {
+            return signatures == m_userSignatures.end() ||
+                   std::any_of(
+                       signatures->second.begin(), signatures->second.end(),
+                       [&](const Signature& sig) {
+                           return sig.params.size() == call.argTypes.size() &&
+                                  index < sig.params.size() &&
+                                  containsOpenType(resolve(sig.params[index]));
+                       });
+        };
+        for (const auto& [index, functions] : demands->second) {
+            if (index >= call.argTypes.size() || !call.argTypes[index] || !stillOpen(index)) {
+                continue;
+            }
+            // Only an argument whose type is settled: an open one says nothing yet.
+            const auto argument = resolve(call.argTypes[index]);
+            if (containsOpenType(argument) || std::holds_alternative<UnionType>(argument->kind)) {
+                continue;
+            }
+            for (const auto& function : functions) {
+                if (!typeHasFunction(argument, function)) {
+                    error(
+                        diag::Code::ArgumentLacksFunction, call.location,
+                        {{"name", call.function},
+                         {"function", function},
+                         {"index", std::to_string(index + 1)},
+                         {"type", typeToString(argument)}});
+                    break;
+                }
+            }
+        }
+    }
 }
 
 // A method call whose NAME is not defined anywhere — the typo case. Both
@@ -5074,6 +5152,16 @@ auto TypeChecker::bindPatternVars(const ast::Pattern& pat, TypePtr expected) -> 
             } else if constexpr (std::is_same_v<T, ast::TuplePattern>) {
                 const TupleType* tuple =
                     expected ? std::get_if<TupleType>(&expected->kind) : nullptr;
+                // `let (a, b) = (1, 2, 3)` matches nothing: BEAM raised a pattern
+                // mismatch, and the walker bound the first two and dropped the
+                // third (kexhq/kex#767).
+                if (tuple && tuple->elements.size() != node.elements.size()) {
+                    error(
+                        diag::Code::TuplePatternArity, pat.location,
+                        {{"count", std::to_string(tuple->elements.size())},
+                         {"given", std::to_string(node.elements.size())},
+                         {"type", typeToString(expected)}});
+                }
                 for (size_t i = 0; i < node.elements.size(); ++i) {
                     if (node.elements[i]) {
                         bindPatternVars(
@@ -5089,8 +5177,51 @@ auto TypeChecker::bindPatternVars(const ast::Pattern& pat, TypePtr expected) -> 
                 if (node.end) {
                     bindPatternVars(*node.end);
                 }
+            } else if constexpr (std::is_same_v<T, ast::LiteralPattern>) {
+                // A literal of another kind than a primitive scrutinee never
+                // matches: `"one" =>` in a match on an Integer was accepted and
+                // only the fallback arm ever ran (kexhq/kex#773). Integer and
+                // Float literals match each other's values (docs/language-spec.md
+                // §23.6), and anything still open is left alone.
+                const auto* scrutinee =
+                    expected ? std::get_if<PrimitiveType>(&expected->kind) : nullptr;
+                std::optional<PrimitiveType::Kind> literal;
+                switch (node.literal.type) {
+                    case TokenType::String: literal = PrimitiveType::String; break;
+                    case TokenType::Char: literal = PrimitiveType::Char; break;
+                    case TokenType::Atom: literal = PrimitiveType::Atom; break;
+                    case TokenType::True:
+                    case TokenType::False: literal = PrimitiveType::Bool; break;
+                    case TokenType::Integer:
+                    case TokenType::Float: literal = PrimitiveType::Integer; break;
+                    default: break;
+                }
+                const auto shown =
+                    node.literal.type == TokenType::String ? "\"" + node.literal.value + "\""
+                    : node.literal.type == TokenType::Atom && !node.literal.value.starts_with(":")
+                        ? ":" + node.literal.value
+                        : node.literal.value;
+                const bool scrutineeIsNumber = expected && isNumericType(expected);
+                const bool literalIsNumber = literal == PrimitiveType::Integer;
+                const bool knownScrutinee =
+                    scrutinee ||
+                    (expected && std::holds_alternative<SizedFloatType>(expected->kind));
+                if (literal && knownScrutinee && literalIsNumber != scrutineeIsNumber) {
+                    error(
+                        diag::Code::LiteralPatternNeverMatches, pat.location,
+                        {{"literal", shown}, {"type", typeToString(expected)}});
+                } else if (
+                    literal && scrutinee && !literalIsNumber && scrutinee->kind != *literal &&
+                    // A Char against a String, as `==` leaves it (checkNeverEqual).
+                    !((*literal == PrimitiveType::Char || *literal == PrimitiveType::String) &&
+                      (scrutinee->kind == PrimitiveType::Char ||
+                       scrutinee->kind == PrimitiveType::String))) {
+                    error(
+                        diag::Code::LiteralPatternNeverMatches, pat.location,
+                        {{"literal", shown}, {"type", typeToString(expected)}});
+                }
             }
-            // LiteralPattern, WildcardPattern introduce nothing.
+            // WildcardPattern introduces nothing.
         },
         pat.kind);
 }
@@ -5629,6 +5760,14 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 paramType = freshTypeVar();
                 if (auto* var = std::get_if<TypeVar>(&paramType->kind)) {
                     m_unannotatedParamVars.insert(var->id);
+                    // A free function of one clause: what its body calls on this
+                    // parameter is asked of every argument passed for it. Several
+                    // clauses may each take another shape, and a `make`
+                    // function's parameters sit beside an implicit receiver.
+                    if (!m_inMakeBlock && def.clauses.size() == 1 && !def.name.empty()) {
+                        m_unannotatedParamOwner[var->id] = {
+                            def.name + "/" + std::to_string(clause.params.size()), pi};
+                    }
                 }
             }
             paramTypes.push_back(paramType);
@@ -5769,7 +5908,16 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 }
             }
         }
-        if (effectiveReturnType && !def.isSlot && !containsOpenType(effectiveReturnType)) {
+        // `Float` and `Number` are trait bounds, not concrete types, so a
+        // result declared as one counted as open, and no `return` from such a
+        // function was checked at all: `return "kex"` from `-> Float` passed.
+        const auto* numberBound =
+            effectiveReturnType ? std::get_if<ConstrainedType>(&resolve(effectiveReturnType)->kind)
+                                : nullptr;
+        const bool primitiveNumberResult =
+            numberBound && primitiveNumberTrait(numberBound->traitName);
+        if (effectiveReturnType && !def.isSlot &&
+            (!containsOpenType(effectiveReturnType) || primitiveNumberResult)) {
             for (const auto& [returned, type] : clauseReturns) {
                 const auto* value = std::get<ast::ReturnExpr>(returned->kind).value.get();
                 if (const auto* guarded =
@@ -5777,7 +5925,25 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                     value = guarded->expr.get();
                 }
                 const auto actual = resolve(type);
-                if (returned != clause.body.back().get() && !containsOpenType(actual) &&
+                // An open type can still be judged when no choice for its open
+                // parts could make it the declared one: `return Error("bad")` is a
+                // `Result<?, String>` whatever its `?`, and never an `Integer`. It
+                // went unchecked, and the `Error` came out at the caller as an
+                // Integer (kexhq/kex#768).
+                const auto declared = resolve(effectiveReturnType);
+                const bool plainDeclared = std::holds_alternative<PrimitiveType>(declared->kind) ||
+                                           std::holds_alternative<SizedIntType>(declared->kind) ||
+                                           std::holds_alternative<SizedFloatType>(declared->kind) ||
+                                           primitiveNumberResult;
+                const auto* actualNamed = std::get_if<NamedType>(&actual->kind);
+                const bool shapedActual = std::holds_alternative<OptionalType>(actual->kind) ||
+                                          std::holds_alternative<ListType>(actual->kind) ||
+                                          std::holds_alternative<TupleType>(actual->kind) ||
+                                          std::holds_alternative<MapType>(actual->kind) ||
+                                          std::holds_alternative<FuncType>(actual->kind) ||
+                                          (actualNamed && actualNamed->name == "Result");
+                const bool judged = !containsOpenType(actual) || (plainDeclared && shapedActual);
+                if (returned != clause.body.back().get() && judged &&
                     !argMatchesParam(actual, effectiveReturnType) &&
                     !(value && literalCoercesTo(*value, effectiveReturnType))) {
                     error(
@@ -6361,6 +6527,15 @@ auto TypeChecker::withinModule(const std::string& module) const -> bool {
     return m_currentModulePath == module || m_currentModulePath.rfind(module + ".", 0) == 0;
 }
 
+auto TypeChecker::privateElsewhere(const std::string& name) const -> bool {
+    const auto suffix = "\n" + name;
+    return std::any_of(
+        m_privateFreeFunctions.begin(), m_privateFreeFunctions.end(), [&](const std::string& key) {
+            return key.size() > suffix.size() && key.ends_with(suffix) &&
+                   !withinModule(key.substr(0, key.size() - suffix.size()));
+        });
+}
+
 auto TypeChecker::makeModuleVisible(const std::string& module) const -> bool {
     if (module.empty()) {
         return true;
@@ -6449,6 +6624,38 @@ auto TypeChecker::freeFunctionVisible(const std::string& module, const std::stri
         }
     }
     return std::any_of(m_declarationImports.begin(), m_declarationImports.end(), admits);
+}
+
+auto TypeChecker::rejectUndeclaredMakeTarget(const ast::MakeDef& def) -> void {
+    const auto written = kex::writtenMakeTarget(def.target, kex::StructuralTarget::Excluded);
+    if (!written || written->parts.empty()) {
+        return; // `make [T]`, `make {K: V}`, a union: shapes, not names
+    }
+    const auto dotted = written->dotted();
+    const auto& last = written->parts.back();
+    if (builtinType(last) || isPrimitiveTypeName(last) || m_declaredBeforeMakes.count(dotted) ||
+        m_declaredBeforeMakes.count(last) || m_capabilities.count(dotted) ||
+        m_localModules.count(dotted) || m_importedModulePaths.count(dotted) ||
+        m_traits.lookup(dotted)) {
+        return;
+    }
+    // Resolved, the target names a type by its identity: a record or sum type
+    // of a module (`make Tcp.Conn` in `Wire` is `Wire.Tcp.Conn`), an alias,
+    // or an imported one.
+    const auto resolved = m_currentMakeType ? resolve(m_currentMakeType) : nullptr;
+    const auto* named = resolved ? std::get_if<NamedType>(&resolved->kind) : nullptr;
+    if (!named) {
+        return; // a primitive, a list, a function: never a typo of a name
+    }
+    const auto& identity = named->name;
+    if (m_recordFields.count(identity) || m_adtVariants.count(identity) ||
+        m_moduleTypeIdentities.count(identity) || m_declaredAliases.count(identity) ||
+        m_traits.lookup(identity) ||
+        (m_importedInterfaces && (m_importedInterfaces->typeNames.count(identity) ||
+                                  m_importedInterfaces->typeNames.count(last)))) {
+        return;
+    }
+    error(diag::Code::UnknownType, def.target->location, {{"name", dotted}});
 }
 
 // A `make` giving a type a function the prelude already gives it — same name,
@@ -6556,6 +6763,7 @@ auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
     if (def.target) {
         m_currentMakeType = resolveTypeExpr(*def.target, m_currentMakeTargetVars);
         m_makeTargetIdentities[&def] = makeOwnerNames(def.target, resolve(m_currentMakeType));
+        rejectUndeclaredMakeTarget(def);
     }
     rejectRedefinedImports(def);
     for (const auto& item : def.body) {

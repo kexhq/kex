@@ -1,0 +1,16 @@
+spec/error_return_error_from_plain_type.kex:11:3: [KEXET-0124]: Error, `parse` declared to return Integer but returns Result<A, String> here
+   |
+11 |   return Error("bad") if text.empty?
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+spec/error_return_error_from_plain_type.kex:16:3: [KEXET-0124]: Error, `named` declared to return String but returns [Unknown] here
+   |
+16 |   return [] if text.empty?
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^
+spec/error_return_error_from_plain_type.kex:26:3: [KEXET-0124]: Error, `ratio` declared to return Float but returns String here
+   |
+26 |   return "none" if text.empty?
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+spec/error_return_error_from_plain_type.kex:27:3: [KEXET-0124]: Error, `ratio` declared to return Float but returns Result<A, String> here
+   |
+27 |   return Error(text) if text == "bad"
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

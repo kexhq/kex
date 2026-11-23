@@ -174,9 +174,8 @@ auto Parser::rejectReservedBindingName() -> void {
         return;
     }
     // The keywords Kex deliberately lets a declaration use as its name (see
-    // parseFunctionDef's accepted list). `let match = expr` is a legal binding.
-    if (name == TokenType::Loop || name == TokenType::Match || name == TokenType::Spawn ||
-        name == TokenType::After || name == TokenType::Next) {
+    // parseFunctionDef's accepted list).
+    if (name == TokenType::Loop || name == TokenType::Spawn || name == TokenType::After) {
         return;
     }
     const auto after = static_cast<size_t>(m_pos) + 2 < m_tokens.size() ? m_tokens[m_pos + 2].type
@@ -1005,11 +1004,15 @@ auto Parser::parseFunctionDef(bool isFoul) -> std::unique_ptr<ast::FunctionDef> 
         def->name = "%";
     }
     // Function name can be a lower ident, upper ident (static constructors),
-    // keyword-as-name, splice ident, or operator
+    // keyword-as-name, splice ident, or operator. `match` and `next` are not
+    // among the keywords a top-level or module function may use: a call to
+    // `match` reads as the keyword (`match(1)` as a `match`), so it was
+    // declared and could not be called, and `next` was refused only in some
+    // forms, as a variable (kexhq/kex#779). A `make` block's functions are
+    // called through a receiver, and may (kexhq/kex#508).
     else if (
         check(TokenType::LowerIdent) || check(TokenType::UpperIdent) || check(TokenType::Loop) ||
-        check(TokenType::Match) || check(TokenType::Spawn) || check(TokenType::SpliceIdent) ||
-        check(TokenType::After) || check(TokenType::Next) ||
+        check(TokenType::Spawn) || check(TokenType::SpliceIdent) || check(TokenType::After) ||
         (makeMember && isKeywordToken(peek().type))) {
         // A splice keeps its `%` so callers can tell `let %name(...)` (the name
         // is computed at compile time) from an ordinary `let name(...)`. The
@@ -1126,6 +1129,19 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
         }
 
         expect(TokenType::End, diag::Code::ExpectedEndToCloseFunction);
+    }
+
+    // A body's last `return v` is its value `v`. Kept a `return`, it left the
+    // function past what the last value gets: in a `-> Integer?` function, a
+    // final `n` is lifted to `Just(n)`, and `return n` was refused for the
+    // same `n` (kexhq/kex#774). `return v if c` stays a return.
+    if (!clause.body.empty() && clause.body.back()) {
+        if (auto* returned = std::get_if<ast::ReturnExpr>(&clause.body.back()->kind);
+            returned && returned->value &&
+            !std::holds_alternative<ast::TrailingIf>(returned->value->kind)) {
+            ast::ExprPtr value = std::move(returned->value);
+            clause.body.back() = std::move(value);
+        }
     }
 
     return clause;

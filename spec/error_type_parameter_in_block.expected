@@ -1,0 +1,8 @@
+spec/error_type_parameter_in_block.kex:7:73: [KEXET-0462]: Error, `+` is not defined for every `X`, which stands for any type
+  |
+7 | let total(items: [X], start: X) -> X = items.reduce(start) { |a, b| a + b }
+  |                                                                     ^^^^^
+spec/error_type_parameter_in_block.kex:9:65: [KEXET-0462]: Error, `upperCase` is not defined for every `X`, which stands for any type
+  |
+9 | let shout(items: [X]) -> [String] = items.map { |x| x.upperCase }
+  |                                                     ^^^^^^^^^^^

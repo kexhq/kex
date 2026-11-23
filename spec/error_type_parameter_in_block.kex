@@ -1,0 +1,17 @@
+# kex: check-only
+# A type variable the signature writes stands for every type, and has no
+# operator but equality. Written directly, `a + b` on `a: X` was refused;
+# inside a block over the parameter's values, the block's parameters got a
+# fresh type, and `x + y` or `x.upperCase` passed (kexhq/kex#777).
+
+let total(items: [X], start: X) -> X = items.reduce(start) { |a, b| a + b }
+
+let shout(items: [X]) -> [String] = items.map { |x| x.upperCase }
+
+let same(items: [X], first: X) -> Bool = items.any? { |x| x == first }
+
+main do
+  IO.printLine(total([true, false], true))
+  IO.printLine(shout([1]))
+  IO.printLine(same([1, 2], 2))
+end

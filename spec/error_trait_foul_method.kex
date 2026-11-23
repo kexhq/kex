@@ -11,3 +11,7 @@ end
 main do
   IO.printLine("should not reach")
 end
+
+record Record do
+  x : Integer = 0
+end

@@ -1,0 +1,12 @@
+spec/error_private_name_after_using.kex:19:16: [KEXET-0149]: Error, undefined name: `secret`. `Config.secret` is private to `Config`
+   |
+19 |   IO.printLine(secret)
+   |                ^^^^^^
+spec/error_private_name_after_using.kex:20:16: [KEXET-0166]: Error, undefined function: `hidden`. `Config.hidden` is private to `Config`
+   |
+20 |   IO.printLine(hidden())
+   |                ^^^^^^^^
+spec/error_private_name_after_using.kex:21:29: [KEXET-0426]: Error, cannot access private name `secret` from Config
+   |
+21 |   IO.printLine(Config.secret)
+   |                ^^^^^^^^^^^^^

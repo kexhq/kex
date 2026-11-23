@@ -1,0 +1,4 @@
+spec/error_or_nullary_capture.kex:9:33: [KEXET-0435]: Error, `or` needs a fallback of type String, but got a function. `or` never calls it, so the function itself would be the answer; pass a plain default, or `match` on the optional to compute one
+  |
+9 |   IO.printLine(["ada"].first.or(~fallback))
+  |                                 ^^^^^^^^^

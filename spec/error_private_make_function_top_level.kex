@@ -1,0 +1,21 @@
+# kex: check-only
+# A function in a `make` block's `private do` is callable only inside a
+# `make` block of its type. At the top level of a file every caller was
+# "within" the block's module, so `main` could call it (kexhq/kex#780).
+
+record User do
+  name : String
+end
+
+make User do
+  let label -> String = "user ${secret}"
+
+  private do
+    let secret -> String = @name
+  end
+end
+
+main do
+  IO.printLine(User { name: "Ada" }.label)
+  IO.printLine(User { name: "Ada" }.secret)
+end

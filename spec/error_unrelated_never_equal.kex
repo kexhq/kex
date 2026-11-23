@@ -1,0 +1,35 @@
+# kex: check-only
+# Values of unrelated types are never equal, and a literal pattern of another
+# kind than the scrutinee never matches: both were accepted, and only the
+# fallback ever ran (kexhq/kex#773). Integer and Float are one numeric tower
+# (docs/language-spec.md §23.6), so they still compare and match each other.
+
+let name(n: Integer) -> String do
+  match n do
+    "one" => "1"
+    true => "t"
+    :kex => "k"
+    1 => "one"
+    1.0 => "float one"
+    _ => "other"
+  end
+end
+
+let word(s: String) -> String do
+  match s do
+    "a" => "a"
+    7 => "seven"
+    _ => "other"
+  end
+end
+
+main do
+  IO.printLine(name(1))
+  IO.printLine(word("a"))
+  IO.printLine(1 == "1")
+  IO.printLine(:kex == true)
+  IO.printLine(0 == 0.0)
+  IO.printLine("a" == "a")
+  let x: Float = 2.5
+  IO.printLine(x == 2)
+end

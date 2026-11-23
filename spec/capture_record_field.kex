@@ -1,0 +1,20 @@
+# `~done` on a record with a `done` field reads the field, as
+# `{ |item| item.done }` does. The checker took it and BEAM ran it; the walker
+# answered "Undefined function: done" (kexhq/kex#775).
+
+record Item do
+  done : Bool = false
+  size : Integer = 2
+end
+
+make Item do
+  let doubled -> Integer = @size * 2
+end
+
+main do
+  let items = [Item {}, Item { done: true, size: 5 }]
+  IO.printLine(items.all?(~done))
+  IO.printLine(items.any?(~done))
+  IO.printLine(items.map(~size))
+  IO.printLine(items.map(~doubled))
+end

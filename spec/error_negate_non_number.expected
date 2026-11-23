@@ -1,0 +1,12 @@
+spec/error_negate_non_number.kex:7:16: [KEXET-0420]: Error, unary '-' requires a number, got String
+  |
+7 |   IO.printLine(-"5")
+  |                ^^^^
+spec/error_negate_non_number.kex:8:16: [KEXET-0420]: Error, unary '-' requires a number, got Bool
+  |
+8 |   IO.printLine(-true)
+  |                ^^^^^
+spec/error_negate_non_number.kex:9:16: [KEXET-0420]: Error, unary '-' requires a number, got Atom
+  |
+9 |   IO.printLine(-:kex)
+  |                ^^^^^

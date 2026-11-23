@@ -1,0 +1,4 @@
+spec/error_private_make_function_top_level.kex:20:16: [KEXET-0488]: Error, `secret` is private to `make User`. It is only callable inside that block
+   |
+20 |   IO.printLine(User { name: "Ada" }.secret)
+   |                ^^^^

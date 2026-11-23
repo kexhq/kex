@@ -1,0 +1,19 @@
+# kex: check-only
+# A tuple pattern with more or fewer names than the tuple has values matches
+# nothing. `let (a, b) = (1, 2, 3)` checked clean; BEAM raised a pattern
+# mismatch and the walker dropped the third value (kexhq/kex#767).
+
+let first(pair: (Integer, Integer)) -> Integer do
+  match pair do
+    (a, b, c) => a + b + c
+    (a, _) => a
+  end
+end
+
+main do
+  let (a, b) = (1, 2, 3)
+  let (x, y, z) = (1, 2)
+  let (p, q) = (1, 2)
+  IO.printLine(a + b + x + y + z + p + q)
+  IO.printLine(first((1, 2)))
+end

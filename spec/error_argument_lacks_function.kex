@@ -1,0 +1,20 @@
+# kex: check-only
+# What a function calls on an unannotated parameter is asked of every
+# argument passed for it. `let describe(x) = x.upperCase` checked clean, and
+# `describe(1)` failed at run time on both backends: nothing at the call knew
+# that Integer has no `upperCase` (kexhq/kex#782).
+
+record Item do
+  label : String = "item"
+end
+
+let describe(x) = x.upperCase
+
+let named(x) = x.label
+
+main do
+  IO.printLine(describe("ab"))
+  IO.printLine(describe(1))
+  IO.printLine(named(Item {}))
+  IO.printLine(named(7))
+end

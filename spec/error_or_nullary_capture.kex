@@ -1,0 +1,11 @@
+# kex: check-only
+# `or` never calls its fallback, so a captured function there is the answer
+# itself. A function of one parameter was refused (KEXET-0435), one of none
+# was taken as its value and printed `<function>` (kexhq/kex#776).
+
+let fallback -> String = "nobody"
+
+main do
+  IO.printLine(["ada"].first.or(~fallback))
+  IO.printLine([].first.or(fallback))
+end

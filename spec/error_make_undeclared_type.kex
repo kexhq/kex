@@ -1,0 +1,21 @@
+# kex: check-only
+# A `make` names the type it gives functions to, and that type has to exist.
+# `make Usr` for `record User` was accepted, because a `make` declares its
+# target as a type; the mistake only showed at a call, naming the type that
+# does not exist (kexhq/kex#772).
+
+record User do
+  name : String
+end
+
+make Usr do
+  let shout -> String = "hi"
+end
+
+make User do
+  let greet -> String = "hello ${@name}"
+end
+
+main do
+  IO.printLine(User { name: "Ada" }.greet)
+end

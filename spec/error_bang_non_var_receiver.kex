@@ -1,5 +1,8 @@
+# kex: no-check
 # `!` mutating calls only work on a plain variable binding, since the
-# point is to rebind it; a non-variable receiver is a runtime error.
+# point is to rebind it; a non-variable receiver is a runtime error. The
+# checker refuses it first (spec/error_bang_on_non_variable.kex, KEXET-0495);
+# unchecked, the walker still stops at the call.
 main do
   IO.printLine("before")
   [1, 2, 3].push!(4)

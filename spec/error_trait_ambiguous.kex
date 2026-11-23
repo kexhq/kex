@@ -19,3 +19,7 @@ end
 main do
   IO.printLine("should not reach")
 end
+
+record Box do
+  x : Integer = 0
+end
