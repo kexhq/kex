@@ -7170,13 +7170,6 @@ auto TypeChecker::checkCall(
                 return answered;
             }
         }
-        // An unreliable candidate list blocks every route to a mismatch
-        // report, the trait-bound one included: `"5".to(Integer)` finds only
-        // `to : Measure -> ? -> ?` from units.kex when the interfaces come
-        // from source, and String is not a Measure — but String's own `to` is
-        // a native builtin that never appears in these tables at all. The
-        // check is confined to the case where NOTHING matched, so a call that
-        // does match still gets its real result type rather than `?`.
         // A trait default stands in for a method the receiver's type has no
         // signature for. Where the type does have typed methods of this name,
         // only at other arities (Measure's `to(String)` and its overloads,
@@ -7192,9 +7185,8 @@ auto TypeChecker::checkCall(
                 return !std::holds_alternative<TypeVar>(first->kind) &&
                        !mentionsUnknownParam(first) && fits(0, sig.params.front());
             });
-        if (!anyFirstParamPlausible && !typedAtOtherArity &&
-            (anyUnknownParamCandidate ||
-             (!anyConstrainedFirstParam && !hasReceiverRefinementConflict && !provableMismatch))) {
+        if (!anyFirstParamPlausible && !typedAtOtherArity && !anyConstrainedFirstParam &&
+            !hasReceiverRefinementConflict && !provableMismatch) {
             // A default the receiver's type inherits, with no home module to
             // answer for it (`(0..4).map`, Enumerable's on Range): the value
             // picks the body at run time.
@@ -8587,54 +8579,6 @@ auto TypeChecker::checkCall(
     if (!firstPtr) {
         firstPtr = *std::min_element(arityMatches.begin(), arityMatches.end(), signatureOrder);
     }
-    // Same rule as the receiver-mismatch guard above, for the path a
-    // PRIMITIVE receiver takes: when every candidate carries an Unknown
-    // parameter, this candidate list is not the whole truth and no mismatch
-    // follows from it. `"42".to(Integer)` reaches here seeing only Measure's
-    // `to` from units.kex, because String's `to` is a native builtin that
-    // appears in no signature table. The runtime still catches a real mistake.
-    // A method candidate whose receiver is known and refuses this one is not
-    // the function called: its other unknowns say nothing (as above).
-    // An Unknown the source WROTE (`default: Any`, `[Any]`) is no such gap:
-    // it is the declared contract, and the other parameters still hold. Read
-    // as one, a single `Any` parameter let every other argument through
-    // unchecked — `text(:owner, 0)` into a `Bool` — and the BEAM, which
-    // dispatches on those types, then found no `text` to call (kexhq/kex#764,
-    // found by `make metamorphic-search`).
-    const auto unlearnedParam = [](const Signature* sig, std::size_t i) {
-        if (!mentionsUnknownParam(sig->params[i])) {
-            return false;
-        }
-        if (!sig->clause) {
-            return true;
-        }
-        // A `make` method's receiver is in `params` but not in the clause.
-        const auto& written = sig->clause->params;
-        const std::size_t offset =
-            sig->params.size() > written.size() ? sig->params.size() - written.size() : 0;
-        if (i < offset) {
-            return true;
-        }
-        const auto& param = written[i - offset];
-        return !param.type && !param.signatureType;
-    };
-    const bool unreliableCandidates =
-        std::all_of(arityMatches.begin(), arityMatches.end(), [&](const Signature* sig) {
-            if (isMethodCall && !sig->params.empty() && !argTypes.empty() &&
-                !mentionsUnknownParam(sig->params[0]) && !fits(0, sig->params[0])) {
-                return false;
-            }
-            for (std::size_t i = 0; i < sig->params.size(); ++i) {
-                if (unlearnedParam(sig, i)) {
-                    return true;
-                }
-            }
-            return false;
-        });
-    if (unreliableCandidates) {
-        return arityMatches[0]->result;
-    }
-
     const Signature& first = *firstPtr;
     // Which argument is off, when one can be named, and its position.
     std::optional<diag::Args> argumentOff;
@@ -9546,6 +9490,7 @@ auto TypeChecker::registerDeclaredAliases(const ast::Program& program) -> void {
     m_typeDeclaringModules.clear();
     m_declaredTypeNames.clear();
     m_reportedUnknownTypes.clear();
+    m_reportedTypeSplices.clear();
     m_pendingUnknownTypes.clear();
     m_declarationsRegistered = false;
     kex::collectDeclaredTypeNames(program.items, m_declaredTypeNames);

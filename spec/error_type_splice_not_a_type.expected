@@ -1,0 +1,13 @@
+spec/error_type_splice_not_a_type.kex:7:30: [KEXEC-0059]: Error, type splice: `3` is not a type. Splice a type name (`Quantity.Length`) or a String that spells one
+  |
+7 |     let %{name + "Of"}(item: %{element}) -> Integer = 1
+  |                              ^^^^^^^^^^
+spec/error_type_splice_not_a_type.kex:7:30: [KEXEC-0059]: Error, type splice: `integer` is not a type. Splice a type name (`Quantity.Length`) or a String that spells one
+  |
+7 |     let %{name + "Of"}(item: %{element}) -> Integer = 1
+  |                              ^^^^^^^^^^
+spec/error_type_splice_not_a_type.kex:7:30: [KEXEC-0059]: Error, type splice: `[Type { args: [], name: String, pure?: true }]` is not a type. Splice a type name (`Quantity.Length`) or a String that spells one
+  |
+7 |     let %{name + "Of"}(item: %{element}) -> Integer = 1
+  |                              ^^^^^^^^^^
+Aborted: compile-time expansion failed.

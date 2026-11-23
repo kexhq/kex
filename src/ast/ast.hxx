@@ -104,6 +104,14 @@ struct TypeQuery {
     ExprPtr argument;
 };
 
+// A type a `compiled do` loop computes: `-> Measure<%{dimension}>` in a
+// generated declaration, `%name` for a variable. The expression runs when
+// the declaration is generated, and its value names the type, so the node is
+// gone before anything checks the declaration.
+struct TypeSplice {
+    ExprPtr expr;
+};
+
 struct TypeExpr {
     SourceLocation location;
     // Whether the source wrapped this node in its own `(...)`. Grouping
@@ -128,7 +136,8 @@ struct TypeExpr {
         BlockType,
         AtomType,
         GenericVar,
-        TypeQuery>
+        TypeQuery,
+        TypeSplice>
         kind;
 };
 

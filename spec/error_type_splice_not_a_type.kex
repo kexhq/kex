@@ -1,0 +1,9 @@
+# kex: check-only
+# A splice's value must name a type (KEXEC-0059): a type named as a value,
+# or a String spelling one. A number, a lowercase name and a list holding a
+# type are not.
+compiled do
+  [("count", 3), ("lower", "integer"), ("listed", [String])].each do |name, element|
+    let %{name + "Of"}(item: %{element}) -> Integer = 1
+  end
+end

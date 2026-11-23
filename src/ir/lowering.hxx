@@ -287,6 +287,17 @@ struct Lowering {
     // `total(A is Monoid => …)`): each a hidden parameter holding the type's
     // atom, which `A.identity` dispatches on (§12 step 7).
     std::unordered_map<std::string, std::string> typeParameterVars;
+    // One hidden parameter of a function, after its explicit ones. A
+    // function's list keeps the order every call passes them in: trait
+    // dictionaries, types, the capability context (§12 step 7).
+    struct ImplicitParameter {
+        enum class Kind { Dictionary, ReceiverDictionary, Type, Context };
+        Kind kind;
+        // A dictionary's trait, or a type's letter.
+        std::string name;
+        // A Dictionary's explicit parameter, by position.
+        std::size_t parameter = 0;
+    };
     std::unordered_map<std::string, std::vector<ExternalModules::TraitMethod>> traitMethods;
     // ADT/variant type → its tag names (e.g. Optional → {"Just","None"}). Used
     // by the dispatcher to wildcard-match any variant of a type, not just the

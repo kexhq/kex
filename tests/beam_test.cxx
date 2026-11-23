@@ -387,7 +387,7 @@ int main() {
         test::it("round-trips receiver param names (KexI v5)", []() {
             KexiChunk chunk;
             chunk.metadata.moduleAtom = "Kex.Prelude";
-            KexiMethod method;
+            KexiReceiverFunction method;
             method.name = "await";
             method.beamFunction = "await";
             method.beamArity = 2;
@@ -395,12 +395,12 @@ int main() {
             method.paramTypes = {kexiPrimitive("Integer")};
             method.paramNames = {"timeout"};
             method.returnType = kexiUnknown();
-            chunk.typeInterface.methods.push_back(std::move(method));
+            chunk.typeInterface.receiverFunctions.push_back(std::move(method));
 
             auto decoded = deserializeKexi(serializeKexi(chunk));
 
-            test::assertEqual(decoded.typeInterface.methods.size(), size_t(1));
-            const auto& m = decoded.typeInterface.methods[0];
+            test::assertEqual(decoded.typeInterface.receiverFunctions.size(), size_t(1));
+            const auto& m = decoded.typeInterface.receiverFunctions[0];
             test::assertEqual(m.paramNames.size(), size_t(1));
             test::assertEqual(m.paramNames[0], std::string("timeout"));
         });
@@ -436,17 +436,17 @@ int main() {
             chunk.metadata.moduleAtom = "Kex.Contracts";
             KexiTraitDef trait;
             trait.name = "Readable";
-            trait.requiredMethods.push_back({"read", true});
-            trait.requiredMethods.push_back({"name", false});
+            trait.requirements.push_back({"read", true});
+            trait.requirements.push_back({"name", false});
             chunk.metadata.traitDefs.push_back(std::move(trait));
 
             auto decoded = deserializeKexi(serializeKexi(chunk));
 
             test::assertEqual(decoded.metadata.traitDefs.size(), size_t(1));
             test::assertEqual(decoded.metadata.traitDefs[0].name, std::string("Readable"));
-            test::assertEqual(decoded.metadata.traitDefs[0].requiredMethods.size(), size_t(2));
-            test::assertTrue(decoded.metadata.traitDefs[0].requiredMethods[0].isFoul);
-            test::assertTrue(!decoded.metadata.traitDefs[0].requiredMethods[1].isFoul);
+            test::assertEqual(decoded.metadata.traitDefs[0].requirements.size(), size_t(2));
+            test::assertTrue(decoded.metadata.traitDefs[0].requirements[0].isFoul);
+            test::assertTrue(!decoded.metadata.traitDefs[0].requirements[1].isFoul);
         });
 
         test::it("round-trips companion with back-pointer", []() {
@@ -560,7 +560,7 @@ int main() {
         test::it("round-trips methods with receiver types", []() {
             KexiChunk chunk;
             chunk.metadata.moduleAtom = "Kex.BinaryTree";
-            KexiMethod m;
+            KexiReceiverFunction m;
             m.name = "insert";
             m.receiverType = kexiNamed("Tree", {kexiNamed("a")});
             m.beamArity = 2;
@@ -568,14 +568,14 @@ int main() {
             m.paramTypes = {kexiNamed("a")};
             m.returnType = kexiNamed("Tree", {kexiNamed("a")});
             m.beamFunction = "BinaryTree.insert";
-            chunk.typeInterface.methods.push_back(std::move(m));
+            chunk.typeInterface.receiverFunctions.push_back(std::move(m));
             chunk.interfaceHash = computeInterfaceHash(chunk);
 
             auto bytes = serializeKexi(chunk);
             auto decoded = deserializeKexi(bytes);
 
-            test::assertEqual(decoded.typeInterface.methods.size(), size_t(1));
-            auto& dm = decoded.typeInterface.methods[0];
+            test::assertEqual(decoded.typeInterface.receiverFunctions.size(), size_t(1));
+            auto& dm = decoded.typeInterface.receiverFunctions[0];
             test::assertEqual(dm.name, std::string("insert"));
             test::assertEqual(dm.beamArity, 2);
             test::assertEqual(dm.beamFunction, std::string("BinaryTree.insert"));
@@ -720,9 +720,10 @@ int main() {
 
             auto chunk = collectMetadata(program, options);
 
-            test::assertEqual(chunk.typeInterface.methods.size(), size_t(1));
-            test::assertEqual(chunk.typeInterface.methods[0].name, std::string("start"));
-            test::assertEqual(chunk.typeInterface.methods[0].beamFunction, std::string("start"));
+            test::assertEqual(chunk.typeInterface.receiverFunctions.size(), size_t(1));
+            test::assertEqual(chunk.typeInterface.receiverFunctions[0].name, std::string("start"));
+            test::assertEqual(
+                chunk.typeInterface.receiverFunctions[0].beamFunction, std::string("start"));
         });
 
         test::it("collects a nested module companion by qualified name", []() {
@@ -742,10 +743,10 @@ int main() {
             auto chunk = collectMetadata(program, options);
             test::assertEqual(chunk.typeInterface.exports.size(), size_t(1));
             test::assertEqual(chunk.typeInterface.exports[0].name, std::string("text"));
-            test::assertEqual(chunk.typeInterface.methods.size(), size_t(1));
-            test::assertEqual(chunk.typeInterface.methods[0].name, std::string("text"));
+            test::assertEqual(chunk.typeInterface.receiverFunctions.size(), size_t(1));
+            test::assertEqual(chunk.typeInterface.receiverFunctions[0].name, std::string("text"));
             test::assertEqual(
-                chunk.typeInterface.methods[0].receiverType->name, std::string("String"));
+                chunk.typeInterface.receiverFunctions[0].receiverType->name, std::string("String"));
             test::assertEqual(chunk.metadata.sourceModule, std::string("Web.Response"));
         });
 
@@ -856,13 +857,15 @@ int main() {
             options.moduleAtom = "kex_integer_extension";
             options.analysis = &analyzer;
             auto chunk = collectMetadata(program, options);
-            test::assertEqual(chunk.typeInterface.methods.size(), size_t(1));
-            test::assertEqual(chunk.typeInterface.methods[0].name, std::string("doubled"));
-            test::assertEqual(chunk.typeInterface.methods[0].beamFunction, std::string("doubled"));
+            test::assertEqual(chunk.typeInterface.receiverFunctions.size(), size_t(1));
             test::assertEqual(
-                chunk.typeInterface.methods[0].returnType->name, std::string("Integer"));
+                chunk.typeInterface.receiverFunctions[0].name, std::string("doubled"));
             test::assertEqual(
-                chunk.metadata.methodOwnership[0].beamFunction, std::string("doubled"));
+                chunk.typeInterface.receiverFunctions[0].beamFunction, std::string("doubled"));
+            test::assertEqual(
+                chunk.typeInterface.receiverFunctions[0].returnType->name, std::string("Integer"));
+            test::assertEqual(
+                chunk.metadata.functionOwnership[0].beamFunction, std::string("doubled"));
         });
 
         test::it("collects trait default receiver functions", []() {
@@ -879,22 +882,22 @@ int main() {
             options.flattenModules = true;
             auto chunk = collectMetadata(program, options);
 
-            test::assertEqual(chunk.typeInterface.methods.size(), size_t(2));
-            const auto& method = chunk.typeInterface.methods[0];
+            test::assertEqual(chunk.typeInterface.receiverFunctions.size(), size_t(2));
+            const auto& method = chunk.typeInterface.receiverFunctions[0];
             test::assertEqual(method.name, std::string("map"));
             test::assertEqual(method.beamFunction, std::string("map"));
             test::assertEqual(method.beamArity, 2);
             test::assertTrue(method.receiverType->kind == KexiType::Constrained);
             test::assertEqual(method.receiverType->name, std::string("T"));
             test::assertEqual(method.receiverType->traitName, std::string("Enumerable"));
-            test::assertEqual(chunk.metadata.methodOwnership.size(), size_t(1));
-            test::assertEqual(chunk.metadata.methodOwnership[0].methodName, std::string("map"));
+            test::assertEqual(chunk.metadata.functionOwnership.size(), size_t(1));
+            test::assertEqual(chunk.metadata.functionOwnership[0].functionName, std::string("map"));
             test::assertEqual(chunk.metadata.traitDefs.size(), size_t(1));
             test::assertEqual(chunk.metadata.traitDefs[0].name, std::string("Enumerable"));
-            test::assertEqual(chunk.metadata.traitDefs[0].requiredMethods.size(), size_t(1));
+            test::assertEqual(chunk.metadata.traitDefs[0].requirements.size(), size_t(1));
             test::assertEqual(
-                chunk.metadata.traitDefs[0].requiredMethods[0].name, std::string("reduce"));
-            test::assertTrue(chunk.metadata.traitDefs[0].requiredMethods[0].isFoul);
+                chunk.metadata.traitDefs[0].requirements[0].name, std::string("reduce"));
+            test::assertTrue(chunk.metadata.traitDefs[0].requirements[0].isFoul);
         });
     });
 
@@ -978,13 +981,13 @@ int main() {
             chunk.metadata.moduleAtom = "kex_fixture";
             chunk.intrinsicAbiVersion = kex::kIntrinsicAbiVersion;
             chunk.backendRepresentationVersion = kex::kBeamRepresentationVersion;
-            KexiMethod doubled;
+            KexiReceiverFunction doubled;
             doubled.name = "doubled";
             doubled.beamFunction = "doubled";
             doubled.receiverType = kexiPrimitive("Integer");
             doubled.returnType = kexiPrimitive("Integer");
-            chunk.typeInterface.methods.push_back(std::move(doubled));
-            KexiMethod scaled;
+            chunk.typeInterface.receiverFunctions.push_back(std::move(doubled));
+            KexiReceiverFunction scaled;
             scaled.name = "scaled";
             scaled.beamFunction = "scaled";
             scaled.beamArity = 2;
@@ -992,7 +995,7 @@ int main() {
             scaled.paramTypes = {kexiPrimitive("Integer")};
             scaled.paramNames = {"factor"};
             scaled.returnType = kexiPrimitive("Integer");
-            chunk.typeInterface.methods.push_back(std::move(scaled));
+            chunk.typeInterface.receiverFunctions.push_back(std::move(scaled));
             KexiExport answer;
             answer.name = "answer";
             answer.beamFunction = "answer";
@@ -1015,7 +1018,7 @@ int main() {
             KexiRegistry registry;
             test::assertTrue(registry.loadUnit(beamPath).empty());
             test::assertTrue(
-                registry.findMethodsForReceiver("doubled", "Integer").empty(),
+                registry.findReceiverFunctions("doubled", "Integer").empty(),
                 "loaded modules are not implicit receiver providers");
             test::assertTrue(
                 registry.buildExternalModules().receiverFunctions.empty(),
@@ -1031,7 +1034,7 @@ int main() {
             package.receiverProviders = {"Numbers"};
             test::assertTrue(registry.declarePackage(package).empty());
             test::assertEqual(registry.automaticImportModules().size(), size_t(1));
-            auto matches = registry.findMethodsForReceiver("doubled", "Integer");
+            auto matches = registry.findReceiverFunctions("doubled", "Integer");
             test::assertEqual(matches.size(), size_t(1));
             test::assertEqual(matches[0].first, std::string("kex_fixture"));
             auto external = registry.buildExternalModules();
@@ -1091,12 +1094,12 @@ int main() {
             chunk.metadata.package.unitIds = {"stdlib-artifact"};
             chunk.metadata.package.automaticImports = {"Core"};
             chunk.metadata.package.receiverProviders = {"Core"};
-            KexiMethod identity;
+            KexiReceiverFunction identity;
             identity.name = "identity";
             identity.beamFunction = "identity";
             identity.receiverType = kexiPrimitive("Integer");
             identity.returnType = kexiPrimitive("Integer");
-            chunk.typeInterface.methods.push_back(std::move(identity));
+            chunk.typeInterface.receiverFunctions.push_back(std::move(identity));
 
             BeamFile beam;
             beam.setChunk("Code", {1, 2, 3, 4});
@@ -1108,7 +1111,7 @@ int main() {
             test::assertTrue(registry.loadUnit(beamPath).empty());
             test::assertEqual(registry.automaticImportModules().size(), size_t(1));
             test::assertEqual(
-                registry.findMethodsForReceiver("identity", "Integer").size(), size_t(1));
+                registry.findReceiverFunctions("identity", "Integer").size(), size_t(1));
 
             fs::remove_all(root);
         });

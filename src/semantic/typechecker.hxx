@@ -1206,6 +1206,8 @@ private:
     // written names already reported.
     bool m_reportUnknownTypes = true;
     std::unordered_set<const ast::TypeName*> m_reportedUnknownTypes;
+    // Type splices already reported outside a generated declaration (KEXEC-0058).
+    std::unordered_set<const ast::TypeExpr*> m_reportedTypeSplices;
     bool m_declarationsRegistered = false;
     std::vector<std::pair<const ast::TypeName*, SourceLocation>> m_pendingUnknownTypes;
     std::unordered_map<std::string, std::string> m_typeDeclaringModules;
@@ -1449,6 +1451,17 @@ private:
     // The calls of m_demandedCalls whose argument lacks what the function
     // calls on it.
     auto reportUnmetDemands() -> void;
+    // Decision 1: an unannotated function is checked at each call, with the
+    // types that call passes. Its body is checked once with fresh variables
+    // (checkFunctionDef); this checks a copy of it again for each distinct
+    // set of argument types a call settles, keeping only the errors and
+    // leaving every answer as the first check gave it.
+    auto checkUnannotatedCalls(const ast::Program& program) -> void;
+    // The copies those checks ran on: kept, so no later node reuses an
+    // address a table still names.
+    std::vector<std::unique_ptr<ast::FunctionDef>> m_callChecks;
+    // Drops what checking `copy` recorded for its nodes.
+    auto forgetAnswers(const ast::FunctionDef& copy) -> void;
     // Fields without a default whose declared type is not Optional.
     std::unordered_map<std::string, std::unordered_set<std::string>> m_requiredRecordFields;
     auto registerRecordFields(const ast::Program& program, bool namesOnly = false) -> void;

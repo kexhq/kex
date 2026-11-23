@@ -283,6 +283,7 @@ module Kex.AST do
     | ParameterBlockType([TypeRef], TypeRef)
     | AtomType(String)
     | TypeQuery(String, Expression)
+    | TypeSplice(Expression)
     | TypeVar(String)
     | AnyType
     | NoneType
@@ -315,6 +316,7 @@ module Kex.AST do
   let typeRefText(ParameterBlockType(params, result)) -> String = "Block<${params.map { |param| Kex.AST.typeRefText(param) }.join(", ")}, ${Kex.AST.typeRefText(result)}>"
   let typeRefText(AtomType(name)) -> String = ":${name}"
   let typeRefText(TypeQuery(query, _)) -> String = "Type.${query}(<expression>)"
+  let typeRefText(TypeSplice(_)) -> String = "%{<expression>}"
   let typeRefText(TypeVar(name)) -> String = name
   let typeRefText(AnyType) -> String = "Any"
   let typeRefText(NoneType) -> String = "None"
@@ -397,6 +399,7 @@ module Kex.AST do
   let referenceText(ParameterBlockType(params, result)) -> String = Kex.AST.typeRefText(ParameterBlockType(params, result))
   let referenceText(AtomType(name)) -> String = Kex.AST.typeRefText(AtomType(name))
   let referenceText(TypeQuery(query, argument)) -> String = Kex.AST.typeRefText(TypeQuery(query, argument))
+  let referenceText(TypeSplice(expression)) -> String = Kex.AST.typeRefText(TypeSplice(expression))
   let referenceText(TypeVar(name)) -> String = Kex.AST.typeRefText(TypeVar(name))
   let referenceText(AnyType) -> String = "Any"
   let referenceText(NoneType) -> String = "None"

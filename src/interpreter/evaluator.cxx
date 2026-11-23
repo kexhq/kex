@@ -1,5 +1,6 @@
 #include "evaluator.hxx"
 #include "../common/name_case.hxx"
+#include "../ast/type_splices.hxx"
 #include "../semantic/analyzer.hxx"
 #include "../common/utf8.hxx"
 #include "../common/mangle.hxx"
@@ -2821,9 +2822,20 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         m_generatedDeclarations.resize(before);
                     }
                 }
+                // `-> Measure<%{dimension}>`: the type each splice names, now,
+                // while the loop variables it reads are bound.
+                std::vector<ValuePtr> typeSplices;
+                if (const auto* functionTemplate =
+                        std::get_if<std::shared_ptr<ast::FunctionDef>>(&node.function);
+                    functionTemplate && *functionTemplate) {
+                    ast::forEachSignatureTypeSplice(
+                        std::as_const(**functionTemplate), [&](const ast::TypeExpr& type) {
+                            typeSplices.push_back(eval(*std::get<ast::TypeSplice>(type.kind).expr));
+                        });
+                }
                 m_generatedDeclarations.push_back(
                     {std::move(name), node.function, std::move(bindings), expr.location,
-                     std::move(nested)});
+                     std::move(nested), std::move(typeSplices)});
                 return Value::unit();
             } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
                 if (node.parts.empty()) {

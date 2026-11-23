@@ -1553,6 +1553,13 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
         error(diag::Code::LowercaseTypeParameter, {{"upper", upper}, {"name", name}});
     }
 
+    // A type a generated declaration splices in: `%{expr}` or `%name`.
+    if (check(TokenType::SpliceIdent) ||
+        (check(TokenType::Percent) && peekNext().type == TokenType::LBrace)) {
+        type->kind = ast::TypeSplice{parseSpliceName()};
+        return complete(std::move(type));
+    }
+
     // A compiler-computed type: `Type.returnedBy(f)` / `Type.of(expr)`.
     // Written where a type goes, so it parses here rather than as a value.
     if (check(TokenType::UpperIdent) && peek().value == "Type" &&

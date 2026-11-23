@@ -449,7 +449,7 @@ auto termToTypeExport(const TermPtr& term) -> KexiTypeExport {
     return te;
 }
 
-auto methodToTerm(const KexiMethod& m) -> TermPtr {
+auto receiverFunctionToTerm(const KexiReceiverFunction& m) -> TermPtr {
     std::vector<TermPtr> params;
     for (const auto& p : m.paramTypes) {
         params.push_back(typeToTerm(p));
@@ -480,9 +480,9 @@ auto methodToTerm(const KexiMethod& m) -> TermPtr {
     return Term::tuple(std::move(fields));
 }
 
-auto termToMethod(const TermPtr& term) -> KexiMethod {
+auto termToReceiverFunction(const TermPtr& term) -> KexiReceiverFunction {
     auto& t = term->asTuple();
-    KexiMethod m;
+    KexiReceiverFunction m;
     m.name = t[0]->asBinaryStr();
     m.receiverType = termToType(t[1]);
     m.beamArity = static_cast<int>(t[2]->asInt());
@@ -630,11 +630,11 @@ auto termToADT(const TermPtr& term) -> KexiADT {
     return adt;
 }
 
-auto methodOwnershipToTerm(const KexiMethodOwnership& mo) -> TermPtr {
-    return Term::tuple({Term::binary(mo.methodName), Term::binary(mo.beamFunction)});
+auto functionOwnershipToTerm(const KexiFunctionOwnership& mo) -> TermPtr {
+    return Term::tuple({Term::binary(mo.functionName), Term::binary(mo.beamFunction)});
 }
 
-auto termToMethodOwnership(const TermPtr& term) -> KexiMethodOwnership {
+auto termToFunctionOwnership(const TermPtr& term) -> KexiFunctionOwnership {
     auto& t = term->asTuple();
     return {t[0]->asBinaryStr(), t[1]->asBinaryStr()};
 }
@@ -667,12 +667,12 @@ auto termToConformance(const TermPtr& term) -> KexiTraitConformance {
 }
 
 auto traitDefToTerm(const KexiTraitDef& td) -> TermPtr {
-    std::vector<TermPtr> methods;
-    for (const auto& m : td.requiredMethods) {
+    std::vector<TermPtr> receiverFunctions;
+    for (const auto& m : td.requirements) {
         if (m.isFoul) {
-            methods.push_back(Term::tuple({Term::binary(m.name), Term::atom("foul")}));
+            receiverFunctions.push_back(Term::tuple({Term::binary(m.name), Term::atom("foul")}));
         } else {
-            methods.push_back(Term::binary(m.name));
+            receiverFunctions.push_back(Term::binary(m.name));
         }
     }
     std::vector<TermPtr> bodies;
@@ -684,8 +684,8 @@ auto traitDefToTerm(const KexiTraitDef& td) -> TermPtr {
         kinds.push_back(Term::integer(static_cast<int64_t>(kind)));
     }
     return Term::tuple(
-        {Term::binary(td.name), Term::list(std::move(methods)), Term::list(std::move(bodies)),
-         Term::list(std::move(kinds))});
+        {Term::binary(td.name), Term::list(std::move(receiverFunctions)),
+         Term::list(std::move(bodies)), Term::list(std::move(kinds))});
 }
 
 auto termToTraitDef(const TermPtr& term) -> KexiTraitDef {
@@ -694,9 +694,9 @@ auto termToTraitDef(const TermPtr& term) -> KexiTraitDef {
     td.name = t[0]->asBinaryStr();
     for (const auto& m : t[1]->asList()) {
         if (auto* tup = std::get_if<Term::Tuple>(&m->value); tup && tup->elements.size() == 2) {
-            td.requiredMethods.push_back({tup->elements[0]->asBinaryStr(), true});
+            td.requirements.push_back({tup->elements[0]->asBinaryStr(), true});
         } else {
-            td.requiredMethods.push_back({m->asBinaryStr(), false});
+            td.requirements.push_back({m->asBinaryStr(), false});
         }
     }
     if (t.size() > 2) {
@@ -741,7 +741,7 @@ auto termToPackage(const TermPtr& term) -> kex::module::PackageMetadata {
 // Build the full KexI ETF term WITHOUT the hash field, for hashing.
 auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
     // Type interface
-    std::vector<TermPtr> exports, constants, types, methods;
+    std::vector<TermPtr> exports, constants, types, receiverFunctions;
     for (const auto& e : chunk.typeInterface.exports) {
         exports.push_back(exportToTerm(e));
     }
@@ -751,15 +751,15 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
     for (const auto& t : chunk.typeInterface.types) {
         types.push_back(typeExportToTerm(t));
     }
-    for (const auto& m : chunk.typeInterface.methods) {
-        methods.push_back(methodToTerm(m));
+    for (const auto& m : chunk.typeInterface.receiverFunctions) {
+        receiverFunctions.push_back(receiverFunctionToTerm(m));
     }
 
     auto typeIface = Term::map({
         {Term::atom("exports"), Term::list(std::move(exports))},
         {Term::atom("constants"), Term::list(std::move(constants))},
         {Term::atom("types"), Term::list(std::move(types))},
-        {Term::atom("methods"), Term::list(std::move(methods))},
+        {Term::atom("receiver_functions"), Term::list(std::move(receiverFunctions))},
     });
 
     // Structural metadata
@@ -773,8 +773,8 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
     for (const auto& a : chunk.metadata.adts) {
         adts.push_back(adtToTerm(a));
     }
-    for (const auto& mo : chunk.metadata.methodOwnership) {
-        ownership.push_back(methodOwnershipToTerm(mo));
+    for (const auto& mo : chunk.metadata.functionOwnership) {
+        ownership.push_back(functionOwnershipToTerm(mo));
     }
     for (const auto& e : chunk.metadata.publicExports) {
         pubExports.push_back(Term::binary(e));
@@ -789,7 +789,7 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
         {Term::atom("companions"), Term::list(std::move(companions))},
         {Term::atom("records"), Term::list(std::move(records))},
         {Term::atom("adts"), Term::list(std::move(adts))},
-        {Term::atom("method_ownership"), Term::list(std::move(ownership))},
+        {Term::atom("function_ownership"), Term::list(std::move(ownership))},
         {Term::atom("public_exports"), Term::list(std::move(pubExports))},
         {Term::atom("is_capability"),
          chunk.metadata.isCapability ? Term::atom("true") : Term::atom("false")},
@@ -925,9 +925,9 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
             chunk.typeInterface.types.push_back(termToTypeExport(t));
         }
     }
-    if (auto methods = ti->mapGet("methods")) {
-        for (const auto& m : methods->asList()) {
-            chunk.typeInterface.methods.push_back(termToMethod(m));
+    if (auto receiverFunctions = ti->mapGet("receiver_functions")) {
+        for (const auto& m : receiverFunctions->asList()) {
+            chunk.typeInterface.receiverFunctions.push_back(termToReceiverFunction(m));
         }
     }
 
@@ -964,9 +964,9 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
             chunk.metadata.adts.push_back(termToADT(a));
         }
     }
-    if (auto mo = sm->mapGet("method_ownership")) {
+    if (auto mo = sm->mapGet("function_ownership")) {
         for (const auto& o : mo->asList()) {
-            chunk.metadata.methodOwnership.push_back(termToMethodOwnership(o));
+            chunk.metadata.functionOwnership.push_back(termToFunctionOwnership(o));
         }
     }
     if (auto cap = sm->mapGet("is_capability")) {

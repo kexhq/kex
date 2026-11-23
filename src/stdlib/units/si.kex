@@ -207,20 +207,25 @@ compiled do
     ("micro", 0.000001, "μ"),
     ("nano", 0.000000001, "n")
   ]
-  # One line per unit, so each prefixed constructor says its dimension: a
-  # template cannot splice a type, only a name.
+  # Each unit with the dimension its prefixed constructors answer, spelled
+  # as the type the splice writes (a dimension named here is its record).
+  let units = [
+    ("meter", Meter, "Quantity.Length"),
+    ("gram", Gram, "Quantity.Mass"),
+    ("kelvin", Kelvin, "Quantity.Temperature"),
+    ("liter", Liter, "Quantity.Volume"),
+    ("newton", Newton, "Quantity.Force"),
+    ("joule", Joule, "Quantity.Energy"),
+    ("watt", Watt, "Quantity.Power"),
+    ("volt", Volt, "Quantity.Voltage"),
+    ("ampere", Ampere, "Quantity.Current"),
+    ("ohm", Ohm, "Quantity.Resistance"),
+    ("coulomb", Coulomb, "Quantity.Charge")
+  ]
   prefixes.each do |prefixName, factor, notation|
-    let %{prefixName + "meter"}(value: Number) -> Measure<Quantity.Length> = prefixedMeasure(value, factor, notation, Meter)
-    let %{prefixName + "gram"}(value: Number) -> Measure<Quantity.Mass> = prefixedMeasure(value, factor, notation, Gram)
-    let %{prefixName + "kelvin"}(value: Number) -> Measure<Quantity.Temperature> = prefixedMeasure(value, factor, notation, Kelvin)
-    let %{prefixName + "liter"}(value: Number) -> Measure<Quantity.Volume> = prefixedMeasure(value, factor, notation, Liter)
-    let %{prefixName + "newton"}(value: Number) -> Measure<Quantity.Force> = prefixedMeasure(value, factor, notation, Newton)
-    let %{prefixName + "joule"}(value: Number) -> Measure<Quantity.Energy> = prefixedMeasure(value, factor, notation, Joule)
-    let %{prefixName + "watt"}(value: Number) -> Measure<Quantity.Power> = prefixedMeasure(value, factor, notation, Watt)
-    let %{prefixName + "volt"}(value: Number) -> Measure<Quantity.Voltage> = prefixedMeasure(value, factor, notation, Volt)
-    let %{prefixName + "ampere"}(value: Number) -> Measure<Quantity.Current> = prefixedMeasure(value, factor, notation, Ampere)
-    let %{prefixName + "ohm"}(value: Number) -> Measure<Quantity.Resistance> = prefixedMeasure(value, factor, notation, Ohm)
-    let %{prefixName + "coulomb"}(value: Number) -> Measure<Quantity.Charge> = prefixedMeasure(value, factor, notation, Coulomb)
+    units.each do |unitName, unit, dimension|
+      let %{prefixName + unitName}(value: Number) -> Measure<%{dimension}> = prefixedMeasure(value, factor, notation, unit)
+    end
   end
 end
 

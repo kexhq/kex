@@ -154,6 +154,10 @@ public:
         // are captured here rather than at top level because they belong INSIDE
         // this make, and because they only exist once its loop variable does.
         std::vector<GeneratedDeclaration> nested;
+        // The value of each type splice in a generated function's signature,
+        // in ast::forEachSignatureTypeSplice's order: expansion turns each into
+        // the type it names.
+        std::vector<ValuePtr> typeSplices;
     };
     auto generatedDeclarations() const -> const std::vector<GeneratedDeclaration>& {
         return m_generatedDeclarations;

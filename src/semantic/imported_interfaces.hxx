@@ -22,7 +22,7 @@ struct ImportedFunction {
     std::string sourceName;
     std::string backendFunction;
     // The receiver type its module emitted a per-type implementation of this
-    // method for (`Date`, read from KexiMethod::implementation), or "".
+    // method for (`Date`, read from KexiReceiverFunction::implementation), or "".
     std::string implementationHead;
     std::string backendModule;
     int backendArity = 0;
@@ -48,7 +48,7 @@ struct ImportedFunction {
     // build, as it is in a program checked whole. The standard library's
     // stay behind their `using`.
     bool visibleByReceiver = false;
-    // As KexiMethod::foreignTarget: a `make` for a type its module does not
+    // As KexiReceiverFunction::foreignTarget: a `make` for a type its module does not
     // declare, so never visible by its receiver alone.
     bool foreignTarget = false;
     // A receiver method declared for a type alias (`FS.Path.join` over

@@ -1,0 +1,13 @@
+# kex: check-only
+# A type splice outside a generated declaration has no loop to run it
+# (KEXEC-0058), and a spliced type is checked like a written one: the
+# generated `wrongOf` says Time and answers a length.
+using Units.SI
+
+let stray(value: %{kind}) -> Integer = 1
+
+compiled do
+  [("wrong", Quantity.Time)].each do |name, dimension|
+    let %{name + "Of"}(value: Float) -> Measure<%{dimension}> = value.meter
+  end
+end

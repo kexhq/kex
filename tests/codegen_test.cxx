@@ -297,7 +297,7 @@ auto callsPrelude(const std::string& out, const std::string& name) -> bool {
 int main() {
     describe("IR Core Erlang emitter — dispatcher routes", []() {
         // The per-type implementations a value of that type reaches through
-        // its dispatcher: what devirtualization reads (KexiMethod::
+        // its dispatcher: what devirtualization reads (KexiReceiverFunction::
         // implementation), recorded as the dispatcher lays its arms out.
         const auto routesOf = [](const std::string& source) {
             kex::Lexer lexer(source);

@@ -74,6 +74,8 @@ auto clone(const TypeExprPtr& type) -> TypeExprPtr {
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, TypeQuery>) {
                 out->kind = TypeQuery{node.query, clone(node.argument)};
+            } else if constexpr (std::is_same_v<T, TypeSplice>) {
+                out->kind = TypeSplice{clone(node.expr)};
             } else {
                 // TypeName, AtomType, GenericVar — plain values.
                 out->kind = node;

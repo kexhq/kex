@@ -109,7 +109,7 @@ struct KexiTypeExport {
     KexiTypePtr backingType;
 };
 
-struct KexiMethod {
+struct KexiReceiverFunction {
     std::string name;
     KexiTypePtr receiverType;
     int beamArity = 0;
@@ -132,7 +132,7 @@ struct KexiMethod {
     // The per-type implementation the emitter wrote for this receiver
     // (`showValue/Box` at `beamArity`), when it wrote one: read from the
     // emitted module (recordImplementations), never re-derived. "" when the
-    // method is reached only through its dispatcher.
+    // function is reached only through its dispatcher.
     std::string implementation;
     // The capabilities calling it needs, as KexiExport::requiredCapabilities.
     std::vector<std::string> requiredCapabilities;
@@ -149,7 +149,7 @@ struct KexiTypeInterface {
     std::vector<KexiExport> exports;
     std::vector<KexiConstant> constants;
     std::vector<KexiTypeExport> types;
-    std::vector<KexiMethod> methods;
+    std::vector<KexiReceiverFunction> receiverFunctions;
 };
 
 // ── Structural metadata section ──────────────────────────────────────
@@ -207,8 +207,8 @@ struct KexiADT {
     std::vector<KexiConstructor> constructors;
 };
 
-struct KexiMethodOwnership {
-    std::string methodName;
+struct KexiFunctionOwnership {
+    std::string functionName;
     std::string beamFunction;
 };
 
@@ -223,15 +223,15 @@ struct KexiTraitConformance {
     std::vector<std::size_t> holes;
 };
 
-struct KexiTraitRequiredMethod {
+struct KexiTraitRequirement {
     std::string name;
     bool isFoul = false;
 };
 
 struct KexiTraitDef {
     std::string name;
-    std::vector<KexiTraitRequiredMethod> requiredMethods;
-    // The methods the trait's body defines: spliced into every implementor,
+    std::vector<KexiTraitRequirement> requirements;
+    // The functions the trait's body defines: spliced into every implementor,
     // so an implementor's own module emits them. A function over the trait
     // declared elsewhere (`inspected(value: Inspectable)`) is not one.
     std::vector<std::string> defaultBodies;
@@ -251,7 +251,7 @@ struct KexiStructuralMetadata {
     std::vector<KexiCompanion> companions; // for entries: the companion manifest
     std::vector<KexiRecord> records;
     std::vector<KexiADT> adts;
-    std::vector<KexiMethodOwnership> methodOwnership;
+    std::vector<KexiFunctionOwnership> functionOwnership;
     std::vector<KexiTraitConformance> traitConformances;
     std::vector<KexiTraitDef> traitDefs;
     std::vector<std::string> publicExports;

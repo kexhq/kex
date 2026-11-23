@@ -1,5 +1,6 @@
 #include "../ast/function_groups.hxx"
 #include "../common/name_case.hxx"
+#include "../ast/clone.hxx"
 #include "../ast/walk.hxx"
 #include "../common/mangle.hxx"
 #include "typechecker.hxx"
@@ -862,6 +863,7 @@ auto TypeChecker::check(
     checkClauseCoverage();
     reportUnknownMethods();
     reportUnmetDemands();
+    checkUnannotatedCalls(program);
     recordTypeArguments(program);
 }
 
@@ -4506,6 +4508,13 @@ auto TypeChecker::resolveTypeExprNode(
 
             if constexpr (std::is_same_v<T, ast::TypeQuery>) {
                 return resolveTypeQuery(node);
+            } else if constexpr (std::is_same_v<T, ast::TypeSplice>) {
+                // Generation replaces every splice it runs; one left over is
+                // outside a generated declaration.
+                if (m_reportedTypeSplices.insert(&typeExpr).second) {
+                    error(diag::Code::TypeSpliceOutsideGeneration, typeExpr.location, {});
+                }
+                return Type::unknown();
             } else if constexpr (std::is_same_v<T, ast::TypeName>) {
                 if (node.parts.empty()) {
                     return Type::unknown();
@@ -9835,6 +9844,235 @@ auto TypeChecker::recordTypeArguments(const ast::Program& program) -> void {
             m_methodTypeArguments[method] = passed;
         }
     }
+}
+
+auto TypeChecker::checkUnannotatedCalls(const ast::Program& program) -> void {
+    // The functions this applies to: a program's own top-level function of
+    // one clause, with no written result and a plain parameter left
+    // unannotated, the only function of its name.
+    std::unordered_map<std::string, const ast::FunctionDef*> unannotated;
+    for (const auto& item : program.items) {
+        const auto* owned = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
+        if (!owned || !*owned) {
+            continue;
+        }
+        const auto& def = **owned;
+        const auto signatures = m_userSignatures.find(def.name);
+        if (def.clauses.size() != 1 || def.clauses[0].returnAnnotation || def.isSlot ||
+            signatures == m_userSignatures.end() || signatures->second.size() != 1 ||
+            m_scopedDeclaredSignatures.contains("\n" + def.name)) {
+            continue;
+        }
+        const auto& params = def.clauses[0].params;
+        const bool plain = std::all_of(params.begin(), params.end(), [](const ast::Param& p) {
+            return p.name && !p.pattern && !p.defaultValue;
+        });
+        const bool open =
+            std::any_of(params.begin(), params.end(), [](const ast::Param& p) { return !p.type; });
+        if (plain && open) {
+            unannotated.emplace(def.name, &def);
+        }
+    }
+    if (unannotated.empty()) {
+        return;
+    }
+
+    std::set<std::string> checked;
+    const auto said = [](const Diagnostic& diagnostic) {
+        const auto& at = diagnostic.location;
+        return std::string(at.file) + ":" + std::to_string(at.line) + ":" +
+               std::to_string(at.column) + "\n" + diagnostic.message;
+    };
+    const auto place = [](const SourceLocation& at) {
+        return std::string(at.file) + ":" + std::to_string(at.line) + ":" +
+               std::to_string(at.column);
+    };
+    std::set<std::string> reported;
+    // A call already rejected where it is written (an argument that does not
+    // fit, a function its argument lacks) has its error; checking the body
+    // with that argument would say the same thing again.
+    std::vector<SourceLocation> rejectedAt;
+    for (const auto& diagnostic : *m_diagnostics) {
+        reported.insert(said(diagnostic));
+        if (diagnostic.level == Diagnostic::Level::Error) {
+            rejectedAt.push_back(diagnostic.location);
+        }
+    }
+    // Calls a check finds in a body are checked in turn, up to a bound: a
+    // recursive function called with ever larger types would not end.
+    std::vector<DemandedCall> pending = m_demandedCalls;
+    constexpr std::size_t kMaxChecks = 512;
+    for (std::size_t next = 0; next < pending.size() && checked.size() < kMaxChecks; ++next) {
+        const auto call = pending[next];
+        const auto target = unannotated.find(call.function);
+        if (target == unannotated.end()) {
+            continue;
+        }
+        const auto& def = *target->second;
+        const auto within = [&](const SourceLocation& at) {
+            if (at.file != call.location.file) {
+                return false;
+            }
+            if (call.location.startOffset >= 0 && call.location.endOffset > 0 &&
+                at.startOffset >= 0) {
+                return at.startOffset >= call.location.startOffset &&
+                       at.startOffset < call.location.endOffset;
+            }
+            return place(at) == place(call.location);
+        };
+        if (std::any_of(rejectedAt.begin(), rejectedAt.end(), within)) {
+            continue;
+        }
+        const auto& params = def.clauses[0].params;
+        if (call.argTypes.size() != params.size()) {
+            continue;
+        }
+        // A parameter the first check settled (`x + "s"` makes `x` a String) is
+        // checked at the call like a written one; an argument that does not
+        // fit it is that check's error, not the body's.
+        const auto& checkedParams = m_userSignatures.at(def.name).front().params;
+        std::vector<TypePtr> arguments;
+        std::string key = def.name;
+        bool settled = true;
+        for (std::size_t index = 0; index < call.argTypes.size(); ++index) {
+            const auto& argument = call.argTypes[index];
+            auto type = argument ? resolve(argument) : nullptr;
+            if (!type || !isConcreteValue(type) || containsTypeVariable(type) ||
+                std::holds_alternative<UnionType>(type->kind)) {
+                settled = false;
+                break;
+            }
+            if (index < checkedParams.size()) {
+                const auto param = resolve(checkedParams[index]);
+                if (!containsOpenType(param) && !argMatchesParam(type, param)) {
+                    settled = false;
+                    break;
+                }
+            }
+            key += "\n" + typeToString(type);
+            arguments.push_back(std::move(type));
+        }
+        if (!settled || !checked.insert(key).second) {
+            continue;
+        }
+
+        auto copy = ast::clone(def);
+        const auto& clause = copy->clauses[0];
+        std::vector<Diagnostic> found;
+        auto* savedDiagnostics = std::exchange(m_diagnostics, &found);
+        std::vector<int> journal;
+        auto* savedJournal = std::exchange(m_substJournal, &journal);
+        const bool savedRecordsNames = std::exchange(m_recordsNames, false);
+        const auto savedClauseVarMark = std::exchange(m_clauseVarMark, m_nextTypeVar);
+        std::vector<std::pair<SourceLocation, TypePtr>> tries;
+        std::vector<std::pair<const ast::Expr*, TypePtr>> returns;
+        auto* const savedTries = std::exchange(m_clauseTries, &tries);
+        auto* const savedReturns = std::exchange(m_clauseReturns, &returns);
+        const auto marks = std::make_tuple(
+            m_demandedCalls.size(), m_unresolvedMethods.size(), m_unresolvedMethodImports.size(),
+            m_pendingCaptureCalls.size(), m_patternBindings.size(), m_bindingSites.size(),
+            m_scopeContexts.size(), m_typeReferences.size(), m_recordKeys.size(),
+            m_clauseCoverageGaps.size());
+
+        pushScope();
+        std::unordered_map<std::string, TypePtr> genericVars;
+        for (std::size_t index = 0; index < clause.params.size(); ++index) {
+            const auto& param = clause.params[index];
+            defineVar(
+                *param.name,
+                param.type ? resolveTypeExpr(**param.type, genericVars) : arguments[index]);
+        }
+        inferBody(clause.body);
+        popScope();
+
+        // What the copy's check found in its body that the first check did
+        // not: those calls are checked next, and its errors are this call's.
+        for (auto i = std::get<0>(marks); i < m_demandedCalls.size(); ++i) {
+            pending.push_back(m_demandedCalls[i]);
+        }
+        m_demandedCalls.resize(std::get<0>(marks));
+        m_unresolvedMethods.resize(std::get<1>(marks));
+        m_unresolvedMethodImports.resize(std::get<2>(marks));
+        m_pendingCaptureCalls.resize(std::get<3>(marks));
+        m_patternBindings.resize(std::get<4>(marks));
+        m_bindingSites.resize(std::get<5>(marks));
+        m_scopeContexts.resize(std::get<6>(marks));
+        m_typeReferences.resize(std::get<7>(marks));
+        m_recordKeys.resize(std::get<8>(marks));
+        m_clauseCoverageGaps.resize(std::get<9>(marks));
+        forgetAnswers(*copy);
+        for (const int id : journal) {
+            m_subst.erase(id);
+        }
+        m_clauseTries = savedTries;
+        m_clauseReturns = savedReturns;
+        m_clauseVarMark = savedClauseVarMark;
+        m_recordsNames = savedRecordsNames;
+        m_substJournal = savedJournal;
+        m_diagnostics = savedDiagnostics;
+        m_callChecks.push_back(std::move(copy));
+
+        std::string passed;
+        for (const auto& argument : arguments) {
+            passed += (passed.empty() ? "" : ", ") + typeToString(argument);
+        }
+        for (auto& diagnostic : found) {
+            if (diagnostic.level != Diagnostic::Level::Error ||
+                !reported.insert(said(diagnostic)).second) {
+                continue;
+            }
+            diagnostic.notes.push_back(
+                {call.location, "in this call of `" + def.name + "`, with " + passed});
+            m_diagnostics->push_back(std::move(diagnostic));
+        }
+    }
+}
+
+auto TypeChecker::forgetAnswers(const ast::FunctionDef& copy) -> void {
+    std::unordered_set<const ast::Expr*> nodes;
+    std::unordered_set<const ast::MethodCall*> calls;
+    std::function<void(const ast::Expr&)> collect = [&](const ast::Expr& expr) {
+        nodes.insert(&expr);
+        if (const auto* call = std::get_if<ast::MethodCall>(&expr.kind)) {
+            calls.insert(call);
+        }
+        ast::forEachChild(expr, [&](const ast::ExprPtr& child) { collect(*child); });
+    };
+    for (const auto& clause : copy.clauses) {
+        for (const auto& expr : clause.body) {
+            if (expr) {
+                collect(*expr);
+            }
+        }
+    }
+    const auto forget = [](auto& table, const auto& keys) {
+        for (const auto* key : keys) {
+            table.erase(key);
+        }
+    };
+    forget(m_typeMap, nodes);
+    forget(m_assignmentTargetTypes, nodes);
+    forget(m_valueAssignments, nodes);
+    forget(m_decidedCalls, nodes);
+    forget(m_localDefinitions, nodes);
+    forget(m_nameUses, nodes);
+    forget(m_scopeNames, nodes);
+    forget(m_namespaceRoots, nodes);
+    forget(m_captureCalls, nodes);
+    forget(m_calledModules, nodes);
+    forget(m_selectedCallSignatures, nodes);
+    forget(m_captureSignatures, nodes);
+    forget(m_capturesIntoFoul, nodes);
+    forget(m_calledFunctions, nodes);
+    forget(m_referencedConstants, nodes);
+    forget(m_floatLiterals, nodes);
+    forget(m_typeVariableReceivers, nodes);
+    forget(m_typeArguments, nodes);
+    forget(m_importedTypeBindings, nodes);
+    forget(m_successWrappers, nodes);
+    forget(m_resolvedCalls, calls);
+    forget(m_staticTypeOfCalls, calls);
+    forget(m_methodTypeArguments, calls);
 }
 
 } // namespace kex::semantic

@@ -1,0 +1,104 @@
+# kex: check-only
+# The coverage test of docs/typechecker-hm-plan.md §10: every syntax form
+# checks every child it has. Each `("a" + 1)` below sits in a different
+# child slot of a different form, and each must be reported exactly once
+# (KEXET-0463). A form that skipped a child would leave its line silent.
+record Point do
+  x : Integer
+end
+
+let takes(a: Integer) -> Integer = a
+let pass(x) = x
+
+main do
+  let n = 1
+  var v = 0
+  let ok = true
+  let xs = [1, 2]
+  takes(("a" + 1).length)
+  pass(("a" + 1))
+  ("a" + 1).length
+  Point { x: ("a" + 1).length }
+  ("a" + 1).length + 1
+  -(("a" + 1).length)
+  (("a" + 1), 1)
+  [("a" + 1)]
+  IO.printLine({k: ("a" + 1)})
+  1..(("a" + 1).length)
+  ((("a" + 1).length))..2
+  if ("a" + 1).empty?
+    1
+  else
+    2
+  end
+  if ok
+    ("a" + 1)
+  else
+    2
+  end
+  if ok
+    1
+  else
+    ("a" + 1)
+  end
+  if ok
+    1
+  elif ("a" + 1).empty?
+    2
+  else
+    3
+  end
+  match ("a" + 1) do
+    _ => 1
+  end
+  match n do
+    _ => ("a" + 1)
+  end
+  match n do
+    m when ("a" + 1).empty? => m
+    _ => 0
+  end
+  while ("a" + 1).empty? do
+    v = 1
+  end
+  while false do
+    IO.printLine(("a" + 1))
+  end
+  loop do
+    IO.printLine(("a" + 1))
+    break
+  end
+  let bound = ("a" + 1)
+  v = ("a" + 1).length
+  xs.map { |e| ("a" + 1) }
+  xs.map(&.max(("a" + 1).length))
+  IO.printLine(("a" + 1)) if ok
+  IO.printLine(1) if ("a" + 1).empty?
+  ok then ("a" + 1) else "b"
+  ok then "b" else ("a" + 1)
+  ("a" + 1).empty? then 1 else 2
+  "${("a" + 1)}"
+  spawn do
+    IO.printLine(("a" + 1))
+  end
+  Just(("a" + 1))
+  var counter = ("a" + 1)
+  let partial = ~takes(("a" + 1).length)
+  receive do
+    _ => IO.printLine(("a" + 1))
+  end
+end
+
+let early(c: Bool) -> String do
+  return ("a" + 1) if c
+  "x"
+end
+
+let deflt(a: Integer = ("a" + 1).length) -> Integer = a
+
+let attempt(x: Integer?) -> Integer? = trying do
+  let value = x.try
+  value + ("a" + 1).length
+rescue
+  _ => ("a" + 1).length
+end

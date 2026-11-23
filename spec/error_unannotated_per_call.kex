@@ -1,0 +1,19 @@
+# kex: check-only
+# Decision 1 (docs/typechecker-hm-plan.md §5): an unannotated function is
+# checked at each call, with the types that call passes. `shout` is fine for
+# what it is called with in one call and wrong in another; each wrong set of
+# argument types is reported once, at the body, with the call that made it.
+# A call whose argument misses a parameter the body already settled (`suffix`
+# makes its `x` a String) is reported at the argument instead.
+let shout(x) = x.upperCase + 1
+let suffix(x) = x + "s"
+let describe(x) = "${x}!"
+
+main do
+  IO.printLine(shout("a"))
+  IO.printLine(shout("b"))
+  IO.printLine(shout('c'))
+  IO.printLine(suffix(1))
+  IO.printLine(describe(1))
+  IO.printLine(describe("one"))
+end

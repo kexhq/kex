@@ -1,0 +1,22 @@
+spec/error_unannotated_per_call.kex:16:23: [KEXET-0491]: Error, `suffix` expects argument 1 to be String, but got Integer
+
+suffix : String -> String
+   |
+16 |   IO.printLine(suffix(1))
+   |                       ^ this has type Integer
+spec/error_unannotated_per_call.kex:8:30: [KEXET-0463]: Error, cannot add String and Integer
+  |
+8 | let shout(x) = x.upperCase + 1
+  |                ^^^^^^^^^^^^^^^
+spec/error_unannotated_per_call.kex:13:16: note: in this call of `shout`, with String
+   |
+13 |   IO.printLine(shout("a"))
+   |                ----------
+spec/error_unannotated_per_call.kex:8:30: [KEXET-0464]: Error, operator '+' requires matching types, got Char and Integer
+  |
+8 | let shout(x) = x.upperCase + 1
+  |                ^^^^^^^^^^^^^^^
+spec/error_unannotated_per_call.kex:15:16: note: in this call of `shout`, with Char
+   |
+15 |   IO.printLine(shout('c'))
+   |                ----------

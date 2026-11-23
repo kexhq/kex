@@ -98,11 +98,15 @@ auto Lowering::lowerFunctionGroup(
     int explicitArity =
         group[0]->clauses.empty() ? 0 : static_cast<int>(group[0]->clauses[0].params.size());
     auto traitNameOf = [&](const ast::Param& param) { return hir->parameterTraitOf(param); };
-    int dictionaryArity = 0;
+    // Every hidden parameter after the explicit ones, in the one order a
+    // definition and a call share (§12 step 7): trait dictionaries, the
+    // types, then the capability context.
+    std::vector<ImplicitParameter> implicits;
     if (!group[0]->clauses.empty()) {
-        for (const auto& param : group[0]->clauses[0].params) {
-            if (auto trait = traitNameOf(param); !trait.empty()) {
-                ++dictionaryArity;
+        const auto& params = group[0]->clauses[0].params;
+        for (std::size_t index = 0; index < params.size(); ++index) {
+            if (auto trait = traitNameOf(params[index]); !trait.empty()) {
+                implicits.push_back({ImplicitParameter::Kind::Dictionary, trait, index});
                 def.dictionaryTraits.push_back(trait);
             }
         }
@@ -116,7 +120,7 @@ auto Lowering::lowerFunctionGroup(
             traitMethods.at(makeTrait).begin(), traitMethods.at(makeTrait).end(),
             [&](const auto& required) { return required.name == group[0]->name; });
     if (implicitThisDictionary) {
-        ++dictionaryArity;
+        implicits.push_back({ImplicitParameter::Kind::ReceiverDictionary, makeTrait});
         def.dictionaryTraits.push_back(makeTrait);
     }
     // Overloads of a name must share purity, so the group's first clause
@@ -129,10 +133,14 @@ auto Lowering::lowerFunctionGroup(
     // threaded caller — the substitution dispatch passes the context
     // through as well (kexhq/kex#181).
     const bool wantsContext = threadsCapabilities() && foulDef;
-    // The types it needs passed (§12 step 7), after its dictionaries.
-    const auto typeParameters = hir->typeParametersOf(*group[0]);
-    def.arity = explicitArity + dictionaryArity + (implicitThisName.empty() ? 0 : 1) +
-                static_cast<int>(typeParameters.size()) + (wantsContext ? 1 : 0);
+    for (const auto& letter : hir->typeParametersOf(*group[0])) {
+        implicits.push_back({ImplicitParameter::Kind::Type, letter});
+    }
+    if (wantsContext) {
+        implicits.push_back({ImplicitParameter::Kind::Context});
+    }
+    def.arity =
+        explicitArity + (implicitThisName.empty() ? 0 : 1) + static_cast<int>(implicits.size());
     def.hasCapabilityContext = wantsContext;
     auto savedModulePath = currentModulePath;
     auto savedTraitDictionaries = traitDictionaries;
@@ -278,50 +286,39 @@ auto Lowering::lowerFunctionGroup(
                 }
                 fc.params.push_back(lowerParam(p));
             }
-            for (const auto& p : clause.params) {
-                auto trait = traitNameOf(p);
-                if (trait.empty()) {
-                    continue;
-                }
-                if (!p.name) {
-                    throw LowerError(diag::Code::UnnamedDictionaryParameter);
-                }
-                auto dictionary = fresh("Dict_" + *p.name + "_" + trait);
-                auto pat = std::make_unique<Pattern>();
-                pat->kind = PatKind::Var;
-                pat->name = dictionary;
-                fc.params.push_back(std::move(pat));
-                traitDictionaries[*p.name][trait] = dictionary;
-            }
-            if (implicitThisDictionary) {
-                auto dictionary = fresh("Dict_" + implicitThisName + "_" + currentMakeType);
-                auto pat = std::make_unique<Pattern>();
-                pat->kind = PatKind::Var;
-                pat->name = dictionary;
-                fc.params.push_back(std::move(pat));
-                traitDictionaries[implicitThisName][currentMakeType] = dictionary;
-            }
-            for (const auto& letter : typeParameters) {
-                auto passed = fresh("Type_" + letter);
-                auto pat = std::make_unique<Pattern>();
-                pat->kind = PatKind::Var;
-                pat->name = passed;
-                fc.params.push_back(std::move(pat));
-                typeParameterVars[letter] = passed;
-            }
-            // The context is the last parameter, after any trait
-            // dictionaries, and is in scope for the whole body so calls
-            // inside it pass it along (kexhq/kex#181).
+            // The context is in scope for the whole body, so calls inside
+            // it pass it along (kexhq/kex#181).
             auto savedContextVar = currentContextVar;
-            if (wantsContext) {
-                auto contextName = fresh("Ctx");
-                auto contextPat = std::make_unique<Pattern>();
-                contextPat->kind = PatKind::Var;
-                contextPat->name = contextName;
-                fc.params.push_back(std::move(contextPat));
-                currentContextVar = contextName;
-            } else {
-                currentContextVar.clear();
+            currentContextVar.clear();
+            for (const auto& implicit : implicits) {
+                std::string name;
+                switch (implicit.kind) {
+                    case ImplicitParameter::Kind::Dictionary: {
+                        const auto& param = clause.params[implicit.parameter];
+                        if (!param.name) {
+                            throw LowerError(diag::Code::UnnamedDictionaryParameter);
+                        }
+                        name = fresh("Dict_" + *param.name + "_" + implicit.name);
+                        traitDictionaries[*param.name][implicit.name] = name;
+                        break;
+                    }
+                    case ImplicitParameter::Kind::ReceiverDictionary:
+                        name = fresh("Dict_" + implicitThisName + "_" + currentMakeType);
+                        traitDictionaries[implicitThisName][currentMakeType] = name;
+                        break;
+                    case ImplicitParameter::Kind::Type:
+                        name = fresh("Type_" + implicit.name);
+                        typeParameterVars[implicit.name] = name;
+                        break;
+                    case ImplicitParameter::Kind::Context:
+                        name = fresh("Ctx");
+                        currentContextVar = name;
+                        break;
+                }
+                auto pat = std::make_unique<Pattern>();
+                pat->kind = PatKind::Var;
+                pat->name = name;
+                fc.params.push_back(std::move(pat));
             }
             // Overloads discriminated by PARAMETER TYPE need a runtime
             // guard: a declared type is not a Core Erlang pattern, so two

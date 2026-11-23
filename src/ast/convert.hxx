@@ -602,6 +602,8 @@ public:
                                          m_builder.string(node.query),
                                          expressionPtr(node.argument),
                                      });
+                } else if constexpr (std::is_same_v<T, TypeSplice>) {
+                    return variant("TypeSplice", {expressionPtr(node.expr)});
                 }
             },
             expr.kind);

@@ -234,14 +234,14 @@ auto namesAlias(const KexiTypePtr& type, std::string module, const ModuleTypes& 
 }
 
 auto importedReceiverFunction(
-    const KexiMethod& receiver,
+    const KexiReceiverFunction& receiver,
     const std::string& backendModule,
     const std::string& sourceModule,
     const ModuleTypes& types = {}) -> kex::semantic::ImportedFunction {
     kex::semantic::ImportedFunction result;
     result.sourceName = receiver.name;
     result.backendFunction = receiver.beamFunction;
-    // `name/Head` is the BEAM spelling of the method's implementation for
+    // `name/Head` is the BEAM spelling of the function's implementation for
     // `Head`; the interface keeps only which type that is.
     if (const auto prefix = receiver.name + "/"; receiver.implementation.starts_with(prefix)) {
         result.implementationHead = receiver.implementation.substr(prefix.size());
@@ -289,19 +289,19 @@ auto importedTrait(const KexiTraitDef& trait, const KexiTypeInterface& interface
     // keeping the first alone held the Integer implementation to the String
     // one (kexhq/kex#623).
     std::unordered_set<std::string> requiredNames;
-    for (const auto& required : trait.requiredMethods) {
+    for (const auto& required : trait.requirements) {
         if (!requiredNames.insert(required.name).second) {
             continue;
         }
         bool found = false;
-        for (const auto& method : interface.methods) {
-            if (method.name != required.name || !method.receiverType ||
-                method.receiverType->kind != KexiType::Constrained ||
-                method.receiverType->traitName != trait.name) {
+        for (const auto& receiverFunction : interface.receiverFunctions) {
+            if (receiverFunction.name != required.name || !receiverFunction.receiverType ||
+                receiverFunction.receiverType->kind != KexiType::Constrained ||
+                receiverFunction.receiverType->traitName != trait.name) {
                 continue;
             }
             found = true;
-            auto imported = importedReceiverFunction(method, {}, {});
+            auto imported = importedReceiverFunction(receiverFunction, {}, {});
             auto params = std::move(imported.signature.params);
             if (!params.empty()) {
                 params.erase(params.begin());
@@ -344,22 +344,23 @@ auto importedTrait(const KexiTraitDef& trait, const KexiTypeInterface& interface
                     required.name, {}, kex::semantic::Type::unknown(), required.isFoul});
         }
     }
-    // The methods the trait defines a body for are in the interface too,
+    // The functions the trait defines a body for are in the interface too,
     // received by the trait itself. Without them a prebuilt trait had no
     // defaults at all: `Comparable`'s `<`, declared in comparable.kex, was
     // unknown to the checker, which then had to know it by name instead.
-    for (const auto& method : interface.methods) {
-        if (!method.receiverType || method.receiverType->kind != KexiType::Constrained ||
-            method.receiverType->traitName != trait.name) {
+    for (const auto& receiverFunction : interface.receiverFunctions) {
+        if (!receiverFunction.receiverType ||
+            receiverFunction.receiverType->kind != KexiType::Constrained ||
+            receiverFunction.receiverType->traitName != trait.name) {
             continue;
         }
         const bool required = std::any_of(
-            trait.requiredMethods.begin(), trait.requiredMethods.end(),
-            [&](const KexiTraitRequiredMethod& r) { return r.name == method.name; });
-        if (!required &&
-            std::find(result.defaultMethods.begin(), result.defaultMethods.end(), method.name) ==
-                result.defaultMethods.end()) {
-            result.defaultMethods.push_back(method.name);
+            trait.requirements.begin(), trait.requirements.end(),
+            [&](const KexiTraitRequirement& r) { return r.name == receiverFunction.name; });
+        if (!required && std::find(
+                             result.defaultMethods.begin(), result.defaultMethods.end(),
+                             receiverFunction.name) == result.defaultMethods.end()) {
+            result.defaultMethods.push_back(receiverFunction.name);
         }
     }
     return result;
@@ -614,10 +615,10 @@ auto KexiRegistry::automaticImportModules() const -> std::vector<const LoadedMod
     return result;
 }
 
-auto KexiRegistry::findMethodsForReceiver(
-    const std::string& methodName, const std::string& receiverTypeName) const
-    -> std::vector<std::pair<std::string, const KexiMethod*>> {
-    std::vector<std::pair<std::string, const KexiMethod*>> results;
+auto KexiRegistry::findReceiverFunctions(
+    const std::string& functionName, const std::string& receiverTypeName) const
+    -> std::vector<std::pair<std::string, const KexiReceiverFunction*>> {
+    std::vector<std::pair<std::string, const KexiReceiverFunction*>> results;
     for (const auto& [_, package] : m_packages) {
         std::unordered_set<std::string> units(package.unitIds.begin(), package.unitIds.end());
         std::unordered_set<std::string> providers(
@@ -628,10 +629,10 @@ auto KexiRegistry::findMethodsForReceiver(
                     !providers.count(mod.chunk.metadata.sourceModule)) {
                     continue;
                 }
-                for (const auto& method : mod.chunk.typeInterface.methods) {
-                    if (method.name == methodName &&
-                        typeNameStr(method.receiverType) == receiverTypeName) {
-                        results.emplace_back(mod.beamAtom, &method);
+                for (const auto& receiverFunction : mod.chunk.typeInterface.receiverFunctions) {
+                    if (receiverFunction.name == functionName &&
+                        typeNameStr(receiverFunction.receiverType) == receiverTypeName) {
+                        results.emplace_back(mod.beamAtom, &receiverFunction);
                     }
                 }
             }
@@ -681,10 +682,10 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
     for (const auto& [_, unit] : m_units) {
         for (const auto& mod : unit.modules) {
             for (const auto& trait : mod.chunk.metadata.traitDefs) {
-                auto& methods = ext.traitMethods[trait.name];
-                for (const auto& required : trait.requiredMethods) {
+                auto& requirements = ext.traitMethods[trait.name];
+                for (const auto& required : trait.requirements) {
                     int arity = 1;
-                    for (const auto& candidate : mod.chunk.typeInterface.methods) {
+                    for (const auto& candidate : mod.chunk.typeInterface.receiverFunctions) {
                         if (candidate.name == required.name && candidate.receiverType &&
                             candidate.receiverType->kind == KexiType::Constrained &&
                             candidate.receiverType->traitName == trait.name) {
@@ -692,7 +693,7 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                             break;
                         }
                     }
-                    methods.push_back({required.name, arity});
+                    requirements.push_back({required.name, arity});
                 }
             }
         }
@@ -712,19 +713,20 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                 ext.capabilityMembers[shortName].insert(member);
             }
 
-            for (const auto& method : mod.chunk.typeInterface.methods) {
-                if (!method.isSlot || !method.receiverType) {
+            for (const auto& receiverFunction : mod.chunk.typeInterface.receiverFunctions) {
+                if (!receiverFunction.isSlot || !receiverFunction.receiverType) {
                     continue;
                 }
-                const auto type = typeNameStr(method.receiverType);
+                const auto type = typeNameStr(receiverFunction.receiverType);
                 if (type.empty()) {
                     continue;
                 }
                 auto& serving = ext.servingSlots[type];
                 serving.first = mod.beamAtom;
-                if (std::find(serving.second.begin(), serving.second.end(), method.name) ==
+                if (std::find(
+                        serving.second.begin(), serving.second.end(), receiverFunction.name) ==
                     serving.second.end()) {
-                    serving.second.push_back(method.name);
+                    serving.second.push_back(receiverFunction.name);
                 }
             }
 
@@ -760,7 +762,7 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                     !providers.count(mod.chunk.metadata.sourceModule)) {
                     continue;
                 }
-                for (const auto& receiverFn : mod.chunk.typeInterface.methods) {
+                for (const auto& receiverFn : mod.chunk.typeInterface.receiverFunctions) {
                     if (receiverFn.typeOnly) {
                         continue;
                     }
@@ -890,7 +892,7 @@ auto KexiRegistry::buildSemanticInterfaces() const -> kex::semantic::ImportedInt
                     !providers.count(module.chunk.metadata.sourceModule)) {
                     continue;
                 }
-                for (const auto& receiver : module.chunk.typeInterface.methods) {
+                for (const auto& receiver : module.chunk.typeInterface.receiverFunctions) {
                     if (receiver.typeOnly) {
                         continue;
                     }
@@ -1219,14 +1221,14 @@ auto KexiRegistry::generateCompletionStubs(const LoadedUnit& unit) const -> std:
             stubs += ") = ()\n";
         }
 
-        // Methods as module-level functions for completion
+        // Functions as module-level functions for completion
         std::unordered_set<std::string> seen;
-        for (const auto& method : mod.chunk.typeInterface.methods) {
-            if (!seen.insert(method.name).second) {
+        for (const auto& receiverFunction : mod.chunk.typeInterface.receiverFunctions) {
+            if (!seen.insert(receiverFunction.name).second) {
                 continue;
             }
-            stubs += "  let " + method.name + "(";
-            for (int i = 0; i < method.beamArity; i++) {
+            stubs += "  let " + receiverFunction.name + "(";
+            for (int i = 0; i < receiverFunction.beamArity; i++) {
                 if (i) {
                     stubs += ", ";
                 }

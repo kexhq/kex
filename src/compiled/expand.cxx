@@ -4,6 +4,7 @@
 #include "../common/string_utils.hxx"
 #include "../ast/clone.hxx"
 #include "../ast/function_groups.hxx"
+#include "../ast/type_splices.hxx"
 #include "../common/digest.hxx"
 #include "../common/mangle.hxx"
 #include "../common/prelude_loader.hxx"
@@ -735,6 +736,12 @@ struct Substituter {
 // Each nested declaration carries its OWN captured bindings — the inner loop's
 // variable — which the outer make's bindings do not include, so the
 // substitution has to happen here rather than being left to the caller's pass.
+auto spliceTypes(
+    ast::FunctionDef& function,
+    const std::vector<interpreter::ValuePtr>& values,
+    std::vector<semantic::Diagnostic>& diagnostics,
+    bool& ok) -> void;
+
 auto spliceNestedMethods(
     ast::MakeDef& make,
     const interpreter::Evaluator::GeneratedDeclaration& decl,
@@ -767,6 +774,7 @@ auto spliceNestedMethods(
         auto method = ast::clone(**fnTemplate);
         method->name = nested.name;
         method->location = nested.location;
+        spliceTypes(*method, nested.typeSplices, diagnostics, ok);
         Constants captured;
         for (const auto& [bound, value] : nested.bindings) {
             captured.emplace(bound, value);
@@ -782,6 +790,94 @@ auto spliceNestedMethods(
         inner.functionBody(*method);
         make.body.push_back(std::move(method));
     }
+}
+
+// A dotted type name (`Quantity.Length`), or nothing when `text` is not one.
+auto spliceTypeName(const std::string& text) -> std::optional<ast::TypeName> {
+    ast::TypeName name;
+    for (std::size_t start = 0; start <= text.size();) {
+        const auto end = std::min(text.find('.', start), text.size());
+        const auto part = text.substr(start, end - start);
+        start = end + 1;
+        const bool upper = !part.empty() && part.front() >= 'A' && part.front() <= 'Z';
+        const bool word = std::all_of(
+            part.begin(), part.end(), [](unsigned char c) { return std::isalnum(c) || c == '_'; });
+        if (!upper || !word) {
+            return std::nullopt;
+        }
+        name.parts.push_back(part);
+    }
+    return name;
+}
+
+// The type a splice's value names: a type named as a value (the reflection
+// record `Type`, with its arguments) or a String that spells a type name.
+auto spliceTypeOf(const interpreter::ValuePtr& value, SourceLocation location) -> ast::TypeExprPtr {
+    if (!value) {
+        return nullptr;
+    }
+    std::string text;
+    const interpreter::ListValue* args = nullptr;
+    if (const auto* written = std::get_if<interpreter::StringValue>(&value->data)) {
+        text = written->value;
+    } else if (const auto* record = std::get_if<interpreter::RecordValue>(&value->data);
+               record && record->typeName == kex::names::kTypeRecord) {
+        const auto name = record->fields.find("name");
+        const auto arguments = record->fields.find("args");
+        if (name == record->fields.end() || !name->second) {
+            return nullptr;
+        }
+        text = name->second->toString();
+        if (arguments != record->fields.end() && arguments->second) {
+            args = std::get_if<interpreter::ListValue>(&arguments->second->data);
+        }
+    } else {
+        return nullptr;
+    }
+    auto name = spliceTypeName(text);
+    if (!name) {
+        return nullptr;
+    }
+    auto type = std::make_unique<ast::TypeExpr>();
+    type->location = location;
+    if (!args || args->elements.empty()) {
+        type->kind = std::move(*name);
+        return type;
+    }
+    ast::GenericType applied{std::move(*name), {}};
+    for (const auto& argument : args->elements) {
+        auto argumentType = spliceTypeOf(argument, location);
+        if (!argumentType) {
+            return nullptr;
+        }
+        applied.args.push_back(std::move(argumentType));
+    }
+    type->kind = std::move(applied);
+    return type;
+}
+
+// Replaces each type splice of a generated function's signature with the
+// type its value names (`-> Measure<%{dimension}>`). The evaluator recorded
+// the values in the order ast::forEachSignatureTypeSplice visits them.
+auto spliceTypes(
+    ast::FunctionDef& function,
+    const std::vector<interpreter::ValuePtr>& values,
+    std::vector<semantic::Diagnostic>& diagnostics,
+    bool& ok) -> void {
+    std::size_t next = 0;
+    ast::forEachSignatureTypeSplice(function, [&](ast::TypeExpr& type) {
+        const auto value = next < values.size() ? values[next] : nullptr;
+        ++next;
+        auto spliced = spliceTypeOf(value, type.location);
+        if (!spliced) {
+            addError(
+                diagnostics, type.location, diag::Code::TypeSpliceNotAType,
+                {{"text", value ? value->toString() : std::string{}}});
+            ok = false;
+            return;
+        }
+        type.kind = std::move(spliced->kind);
+    });
 }
 
 // Hygiene substitution over every method of a generated `make`.
@@ -4789,6 +4885,7 @@ auto expand(
             auto copy = ast::clone(**fnTemplate);
             copy->name = decl.name;
             copy->location = decl.location;
+            spliceTypes(*copy, decl.typeSplices, diagnostics, ok);
             // A parameter of the generated function must win over a same-named
             // compile-time binding, so drop those from the substitution map.
             Constants captured;

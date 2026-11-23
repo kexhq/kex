@@ -62,8 +62,8 @@ Done:
   variable (KEXET-0509, "narrow it first"). `JSON.stringify` narrows with a
   type pattern where it used a value of a runtime kind. Three specs that test
   the backends' dispatch for an erased receiver run unchecked. An `Any` is no
-  condition and no arithmetic operand either. Still to make strict: a field
-  read on an `Any`.
+  condition and no arithmetic operand either, and a field read on one is
+  KEXET-0509 as well.
 - Dimensions are a library (§8.1): Units.SI declares each product and
   quotient with the dimension it answers (and its mirror), with `times` and
   `per` as the same overloads spelled out, so §11 item 6 is closed and an
@@ -73,8 +73,11 @@ Done:
   declares its own dimension's products (`spec/measure_user_dimension.kex`).
   The coherence rule (fix 2) is KEXET-0510: an overload of a name another
   module declares, told apart from it by its types, needs one of those types
-  to be the program's own (`spec/error_orphan_overload.kex`). Not done:
-  `compiled do` type splicing (fix 4).
+  to be the program's own (`spec/error_orphan_overload.kex`). Fix 4 is done
+  too: a generated function's signature splices a type (`-> Measure<%{dimension}>`,
+  a type named as a value or a String spelling one), so Units.SI writes its
+  prefixed constructors from one table (`spec/compiled_type_splice.kex`,
+  KEXEC-0058/0059 in `spec/error_type_splice*.kex`).
   Fix 3 (no bare generic type) is done: a generic type written without its
   arguments is KEXET-0109/0111, as a wrong count is (#648), for imported
   types too (`ImportedInterfaces::typeArities`). A `make Measure` target still
@@ -155,11 +158,39 @@ Done:
   foul bounded function takes both, and a `with` substitution still reaches
   it (`spec/bound_type_passing_capability.kex`); the types going after the
   context was a real mismatch the shared order fixed. The context still has
-  its own gate (`threadsCapabilities`) and its own variable; folding both
-  into one `ImplicitParameter` list per function is the remaining cleanup.
+  its own gate (`threadsCapabilities`) and its own variable, but a
+  definition builds one `ImplicitParameter` list (dictionaries, types,
+  context) that both its arity and its clauses' parameters come from.
 - Effects through signatures and data (decision 6, option a, #142): see
   decision 6. A program's own record or sum type now wins over an imported
   alias of the same bare name (`record Handler` beside Net.HTTP's alias).
+
+- The coverage test (§10): every syntax form checks every child it has.
+  `spec/check_every_child.kex` puts an ill-typed expression in each child
+  slot of each form (calls, operators, literals, ranges, every conditional
+  and loop, `match` scrutinee, arms and guards, bindings, assignments,
+  lambdas, the `&.` shorthand, interpolation, `spawn`, `receive`, curry,
+  `trying`/`rescue`, `return`, parameter defaults), and each is reported
+  once.
+- Rigid signature variables (#644, §4.1): `let same(a: A) -> A = 1` and a
+  body answering another letter are KEXET-0127/0123. A body nobody calls is
+  checked with fresh variables for its parameters, and a call on one whose
+  candidates all answer one type has that type, so `let g(x) = x.length +
+  "a"` is an error with no caller (decision 1).
+- Decision 1's per-call check (`checkUnannotatedCalls`): an unannotated
+  top-level function is checked again, on a copy, for each distinct set of
+  settled argument types a call passes, the calls its body makes in turn.
+  Each error is reported once, at the body, with a note naming the call
+  (`spec/error_unannotated_per_call.kex`). `let shout(x) = x.upperCase + 1`
+  is accepted by itself and rejected for `shout("a")` and `shout('c')`. A call
+  already rejected where it is written, or whose argument misses a
+  parameter the first check settled, is left to that error. The copies'
+  answers are dropped, so the backends read the first check's.
+- The two escapes that let a call matching no candidate pass (§11 item 11)
+  are deleted: `unreliableCandidates` (every candidate with an unannotated
+  parameter) and its receiver-side twin (`anyUnknownParamCandidate` returning
+  Unknown). With KexI giving every stdlib function its types, neither fired
+  for anything but a mistake (`spec/error_any_not_narrowed.kex`).
 
 Not done: everything else in §12, in that order.
 
@@ -988,7 +1019,7 @@ stdlib's generic `Measure<D>`.
 3. **No bare generic type.** `Measure` written without its argument must not
    silently mean `Measure<anything>`. It is the escape behind §11 item 6, and the
    same class as #648 (type-argument arity).
-4. **Later, optional:** `compiled do` able to splice a *type* into a signature
+4. **Done:** `compiled do` able to splice a *type* into a signature
    (`-> Measure<%{dimension}>`). `units/si.kex` already notes that "a template
    cannot splice a type, only a name". With it, a stdlib generator could write a
    product, its mirror and its inverses (`Energy / Time = Power`,
@@ -1096,6 +1127,14 @@ the single conformance check (§10) fixes.
 ---
 
 ## 11. Known holes
+
+On the branch every item below is fixed, each with a spec (see Status): 1
+(KEXET-0506), 2 (KEXET-0507), 3 (a function value checked against the
+element type), 4 and 5 (`checkCondition`), 6 (dimensions as a library), 7
+and 8 (decision 4, the promotion table), 9 (KEXET-0452 names the record's
+fields), 10 (one join) and 11 (a written `Any` kept apart from an unknown,
+and the `unreliableCandidates` escape deleted). The list stays as the
+record of what the plan was written against.
 
 Accepted by `kex -C`, then misbehaving at run time:
 
@@ -1262,7 +1301,8 @@ but each covers its class, not its repro.
    type of overload sets only.
 9. **HKT argument order** (§8.2): Haskell's last-argument convention or type
    lambdas.
-10. **Type splicing in `compiled do`** (§8.1, fix 4): whether to add it, so a
+10. **Type splicing in `compiled do`** (§8.1, fix 4): decided and built
+   (2026-11-23). It was a question of whether to add it, so a
    stdlib generator can declare a product with its mirror and inverses from
    one line.
 11. **Process:**

@@ -256,7 +256,7 @@ auto staticReceiverHead(
         return std::nullopt;
     }
     // A value of that type reaches `name/Head` through the dispatcher, as its
-    // module recorded when it emitted it (KexiMethod::implementation: the
+    // module recorded when it emitted it (KexiReceiverFunction::implementation: the
     // routes lowering laid out, nothing merged in ahead). That one fact
     // replaces the routing clauses (5), (12), (13b), (DS) and the `''` and
     // module-function vetoes, which re-derived it from the overloads.
