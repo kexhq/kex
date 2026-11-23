@@ -825,16 +825,13 @@ let genSumDecl(ctx: Ctx, index: Integer) -> (String, Ctx) do
   return (decl, remember(ctx7, result, "${function}(${value})"))
 end
 
-# Written from its module (`make Inner.Cell`) the target loses the record on
-# two backends until kexhq/kex#620 is fixed; until then the whole path.
-let relativeMakeTargets -> Bool = false
-
 let genModuleDecl(ctx: Ctx, index: Integer) -> (String, Ctx) do
   let moduleName = "FuzzMod${index}"
   let function = "fuzzRead${index}"
   let (result, ctx2) = pickType(ctx)
   let (relative, ctx3) = draw(ctx2, 2)
-  let target = relativeMakeTargets && relative == 0 then "Inner.Cell" else "${moduleName}.Inner.Cell"
+  # From its module (`make Inner.Cell`) or by its whole path (kexhq/kex#620).
+  let target = relative == 0 then "Inner.Cell" else "${moduleName}.Inner.Cell"
   let fields = remember(withEnv(ctx3, emptyEnv()), :int, "@value")
   let (body, ctx4) = genTyped(fields, result, 2)
   let decl = [
