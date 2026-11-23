@@ -1,5 +1,6 @@
 #include "../ast/function_groups.hxx"
 #include "../common/name_case.hxx"
+#include "../common/well_known.hxx"
 #include <algorithm>
 #include "collect_metadata.hxx"
 #include "../common/type_def_utils.hxx"
@@ -174,6 +175,9 @@ auto convertTypeExprImpl(const kex::ast::TypeExpr& te) -> KexiTypePtr {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, kex::ast::TypeName>) {
                 std::string name = node.dotted();
+                if (name == kex::names::kAnyType) {
+                    return kexiAny(); // as the checker reads it: UnknownType::written
+                }
                 // Primitive exactly when the reader's table knows the name, so
                 // what is written here is what kexi_registry reads back.
                 if (kex::semantic::signatureBuiltinType(name)) {
@@ -282,7 +286,7 @@ auto convertSemanticType(const kex::semantic::TypePtr& type, bool generics = fal
                     case kex::semantic::PrimitiveType::Bool: return kexiPrimitive("Bool");
                     case kex::semantic::PrimitiveType::Atom:
                         return kexiPrimitive(node.atomName.empty() ? "Atom" : ":" + node.atomName);
-                    case kex::semantic::PrimitiveType::Unit: return kexiPrimitive("Void");
+                    case kex::semantic::PrimitiveType::Void: return kexiPrimitive("Void");
                 }
             } else if constexpr (std::is_same_v<T, kex::semantic::SizedIntType>) {
                 return kexiPrimitive(
@@ -347,16 +351,28 @@ auto convertSemanticType(const kex::semantic::TypePtr& type, bool generics = fal
                     types.push_back(convertSemanticType(fieldType, generics));
                 }
                 return kexiRecord(std::move(names), std::move(types));
-            } else if constexpr (std::is_same_v<T, kex::semantic::VoidType>) {
+            } else if constexpr (std::is_same_v<T, kex::semantic::NeverType>) {
                 return kexiNever();
             } else if constexpr (std::is_same_v<T, kex::semantic::ConstrainedType>) {
                 return kexiConstrained(node.varName, node.traitName);
+            } else if constexpr (std::is_same_v<T, kex::semantic::TypeApp>) {
+                std::vector<KexiTypePtr> args;
+                for (const auto& arg : node.args) {
+                    args.push_back(convertSemanticType(arg, generics));
+                }
+                return kexiApp(convertSemanticType(node.head, generics), std::move(args));
             } else if constexpr (std::is_same_v<T, kex::semantic::TypeVar>) {
                 // A generalized generic (`A` is -1, `B` -2, ...) is the
                 // signature's own, numbered per signature: written as its letter,
                 // which the reader turns back into a generic (kexi_registry).
                 if (generics && node.id < 0 && node.id >= -26) {
                     return kexiNamed(std::string(1, static_cast<char>('A' - node.id - 1)));
+                }
+            }
+            // A written `Any` stays what was written (UnknownType::written).
+            if constexpr (std::is_same_v<T, kex::semantic::UnknownType>) {
+                if (node.written) {
+                    return kexiAny();
                 }
             }
             // Unresolved inference variables and Dynamic/Unknown remain unknown
@@ -463,6 +479,8 @@ void collectFromFunctionDef(
     exp.name = fd.name;
     exp.beamFunction = fd.name;
     exp.isFoul = fd.isFoul;
+    exp.requiredCapabilities =
+        analysis ? analysis->capabilitiesToCall(fd) : std::vector<std::string>{};
     if (analysis) {
         if (const auto* signatures = analysis->functionSignatures(&fd);
             signatures && !signatures->empty()) {
@@ -556,6 +574,8 @@ auto receiverFunctionFromDef(
     method.name = fd.name;
     method.receiverType = std::move(receiverType);
     method.isFoul = fd.isFoul;
+    method.requiredCapabilities =
+        analysis ? analysis->capabilitiesToCall(fd) : std::vector<std::string>{};
     method.beamArity = methodBeamArity(fd, firstParamIsReceiver, clause);
     if (receiverNeedsDictionary) {
         ++method.beamArity;
@@ -958,19 +978,31 @@ void collectFromMakeDef(
                                !(receiverType && receiverType->kind == KexiType::Named &&
                                  receiverType->name.starts_with(modulePath + "."));
     const auto firstMethod = iface.methods.size();
+    // What the checker claimed the conformances for: each concrete
+    // instantiation (`Range<Integer>`), and a bounded block's bounds (#651).
+    const auto* conformance = analysis ? analysis->checker().makeConformance(&md) : nullptr;
+    const auto holes = kex::ast::makeTypeLambdaHoles(md);
     for (const auto& trait : md.implements) {
+        const auto traitName = exportedTraitName(trait, modulePath);
+        if (conformance && !conformance->keys.empty() &&
+            (conformance->keys.size() > 1 || conformance->keys.front() != typeName)) {
+            for (const auto& key : conformance->keys) {
+                meta.traitConformances.push_back({key, traitName, conformance->bounds, holes});
+            }
+            continue;
+        }
         if (typeName.empty()) {
             continue;
         }
-        const auto traitName = exportedTraitName(trait, modulePath);
         meta.traitConformances.push_back(
-            {owned ? modulePath + "." + typeName : typeName, traitName});
+            {owned ? modulePath + "." + typeName : typeName, traitName,
+             conformance ? conformance->bounds : decltype(KexiTraitConformance::bounds){}, holes});
         // A make block for a type declared elsewhere may still be naming one
         // of this module's records by a spelling the lookup above missed;
         // the qualified conformance covers it (kexhq/kex#143: `make Files,
         // implement: FS.File` inside `module Mock`).
         if (!owned && !modulePath.empty()) {
-            meta.traitConformances.push_back({modulePath + "." + typeName, traitName});
+            meta.traitConformances.push_back({modulePath + "." + typeName, traitName, {}, holes});
         }
     }
     // Collect standalone type annotations (`:>` sigs) to patch missing
@@ -1068,6 +1100,9 @@ void collectFromMakeDef(
     }
     for (auto i = firstMethod; i < iface.methods.size(); ++i) {
         iface.methods[i].foreignTarget = foreignTarget;
+        if (conformance) {
+            iface.methods[i].receiverBounds = conformance->bounds;
+        }
     }
 }
 
@@ -1081,6 +1116,7 @@ void collectFromTraitDef(
     const auto identity = kex::traitIdentity(modulePath, trait.name);
     KexiTraitDef traitMetadata;
     traitMetadata.name = identity;
+    traitMetadata.paramKinds = trait.typeParamArities;
     for (const auto& item : trait.body) {
         if (auto* ann = std::get_if<std::unique_ptr<kex::ast::TypeAnnotation>>(&item);
             ann && *ann) {

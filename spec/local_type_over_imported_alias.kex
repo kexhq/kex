@@ -1,0 +1,16 @@
+# A program's own type wins over an imported alias of the same bare name.
+# `h: Handler` resolved to Net.HTTP's `Handler` alias, though nothing here
+# imports Net.HTTP, and `run` was then "undefined" on a function type.
+
+record Handler do
+  run : Block<String>
+end
+
+let fire(h: Handler) -> String do
+  let f = h.run
+  f()
+end
+
+main do
+  IO.printLine(fire(Handler { run: { "from the record" } }))
+end

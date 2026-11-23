@@ -6,6 +6,7 @@
 // across several .cxx files does not copy them.
 
 #include "../ast/ast.hxx"
+#include "../common/well_known.hxx"
 #include "imported_interfaces.hxx"
 #include "types.hxx"
 
@@ -239,7 +240,8 @@ inline auto bindRecordTypeParams(
 // operators. Every other trait gives a value exactly the operators the trait
 // itself declares, and nothing more by being named here.
 inline auto primitiveNumberTrait(const std::string& trait) -> bool {
-    return trait == "Number" || trait == "Integer" || trait == "Float";
+    return trait == kex::names::kNumberTrait || trait == kex::names::kIntegerType ||
+           trait == kex::names::kFloatType;
 }
 
 // Whether `known` already offers `function`'s parameters: the prelude serves

@@ -1,0 +1,8 @@
+spec/error_foul_data_in_guard.kex:26:17: [KEXEF-0010]: Error, `fire` runs what it is handed here, and this carries a foul effect: it cannot be called in a guard
+   |
+26 |     1 when fire(noisy) => "noisy"
+   |                 ^^^^^
+spec/error_foul_data_in_guard.kex:27:18: [KEXEF-0010]: Error, `relay` runs what it is handed here, and this carries a foul effect: it cannot be called in a guard
+   |
+27 |     2 when relay(made) => "made"
+   |                  ^^^^

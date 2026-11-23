@@ -1,0 +1,26 @@
+spec/error_if_without_else_value.kex:9:3: [KEXET-0506]: Error, `if` without `else` has no value; add an `else`
+  |
+8 | let small(n: Integer) -> Integer do
+  |                          ------- a value is expected because of this
+9 |   if n > 5
+  |   ^^^^^^^^ this has no value when the condition is false
+spec/error_if_without_else_value.kex:15:3: [KEXET-0506]: Error, `if` without `else` has no value; add an `else`
+   |
+14 | let sign(n: Integer) -> String do
+   |                         ------ a value is expected because of this
+15 |   if n > 0
+   |   ^^^^^^^^ this has no value when the condition is false
+spec/error_if_without_else_value.kex:23:10: [KEXET-0506]: Error, `if` without `else` has no value; add an `else`
+   |
+22 | let guarded(n: Integer) -> Integer? do
+   |                            -------- a value is expected because of this
+23 |   return Just(n) if n > 1
+   |          ^^^^^^^^^^^^^^^^ this has no value when the condition is false
+spec/error_if_without_else_value.kex:27:15: [KEXET-0506]: Error, `if` without `else` has no value; add an `else`
+   |
+27 |   let label = "big" if n > 5
+   |               ^^^^^^^^^^^^^^
+spec/error_if_without_else_value.kex:28:15: [KEXET-0506]: Error, `if` without `else` has no value; add an `else`
+   |
+28 |   var count = 1 if n > 5
+   |               ^^^^^^^^^^

@@ -1,0 +1,69 @@
+# Elements of different types make a list of their union. No shared trait is
+# picked for them (docs/typechecker-hm-plan.md, decision 3): a list was typed
+# by the first trait its elements shared, in iteration order, so a
+# `[Circle, Square]` literal was a `[Shape]` and was rejected where a
+# `[Circle | Square]` was asked for. A function every member has still works on
+# the union, and a trait type is one you write.
+
+trait Shape do
+  area :> Float
+end
+
+record Circle do
+  r : Float
+end
+
+record Square do
+  s : Float
+end
+
+make Circle, implement: Shape do
+  let area = 3.0 * @r * @r
+end
+
+make Square, implement: Shape do
+  let area = @s * @s
+end
+
+let total(shapes: [Circle | Square]) -> Float = shapes.reduce(0.0) { |sum, s| sum + s.area }
+
+let describe(value: Integer | String) -> String do
+  match value do
+    n: Integer => "number ${n}"
+    s: String => "text ${s}"
+  end
+end
+
+# Branches join the same way, in every conditional form, whatever their order.
+let either(c: Bool) = c then 1 else "a"
+let widened(c: Bool, n: Integer, x: Number) = c then n else x
+let swapped(c: Bool, n: Integer, x: Number) = c then x else n
+
+let kind(n: Integer) do
+  match n do
+    0 => "zero"
+    _ => n
+  end
+end
+
+main do
+  let shapes = [Circle { r: 1.0 }, Square { s: 2.0 }]
+  IO.printLine(total(shapes))
+  IO.printLine(shapes.map(&.area))
+
+  let mixed = [1, "a", 2]
+  IO.printLine(mixed.map(~describe))
+
+  let numbers = [1, 2.5]
+  IO.printLine(numbers.count)
+
+  let written: [Shape] = [Circle { r: 1.0 }, Square { s: 3.0 }]
+  IO.printLine(written.map(&.area))
+
+  IO.printLine(describe(either(true)))
+  IO.printLine(describe(either(false)))
+  IO.printLine(widened(false, 1, 2.5))
+  IO.printLine(swapped(true, 1, 2.5))
+  IO.printLine(describe(kind(0)))
+  IO.printLine(describe(kind(7)))
+end

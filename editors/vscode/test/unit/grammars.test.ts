@@ -129,6 +129,20 @@ describe('Kex atoms', () => {
   });
 });
 
+// Bounds (#651): `is` after a type variable is a keyword, and only there.
+describe('Kex bounds', () => {
+  const BOUND = 'keyword.other.bound.kex';
+
+  test('is bounds a type variable', async () => {
+    expect(await scopesOf('source.kex', 'let larger(A is Comparable => a: A) -> A = a', 'is')).toContain(BOUND);
+    expect(await scopesOf('source.kex', 'make A is Discrete => Range<A> do', 'is')).toContain(BOUND);
+  });
+
+  test('a function named is? is an ordinary name', async () => {
+    expect(await scopesOf('source.kex', 'value.is?(Integer)', 'is')).not.toContain(BOUND);
+  });
+});
+
 describe('package.json', () => {
   const manifest = JSON.parse(readFileSync(repoFile('package.json'), 'utf8'));
   const languages: { id: string; extensions?: string[]; configuration?: string }[] = manifest.contributes.languages;

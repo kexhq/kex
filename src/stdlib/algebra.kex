@@ -176,3 +176,39 @@ make [A], implement: Monoid do
   #   groups.reduce([]) { |acc, g| acc.combine(g) }
   let combine(other: This) -> This = this + other
 end
+
+# Containers whose values can be transformed in place: a list's elements, an
+# optional's value, a result's success. One trait over the constructor
+# (docs/typechecker-hm-plan.md §8.2), so a function written once works on any
+# of them:
+#
+#   let bumped(F is Functor => xs: F<Integer>) -> F<Integer> = xs.map { |x| x + 1 }
+#
+#   bumped([1, 2])     # => [2, 3]
+#   bumped(Just(1))    # => Just(2)
+#   bumped(Ok(1))      # => Ok(2)
+#
+# Implemented by +List+, +Optional+ and +Result+ (whose error stays as it is).
+trait Functor<F<_>> do
+  # Applies +f+ to each value the container holds, keeping its shape.
+  #
+  # @param f [A -> B] the transformation
+  # @return [F<B>] the container of results
+  map : F<A> -> (A -> B) -> F<B>
+end
+
+# Containers whose values can each produce another container of the same
+# kind, flattened into one: the chaining step of a list, an optional or a
+# result.
+#
+#   let halves(F is Bindable => xs: F<Integer>, f: Integer -> F<Integer>) -> F<Integer> =
+#     xs.flatMap(f)
+#
+# Implemented by +List+, +Optional+ and +Result+.
+trait Bindable<F<_>> do
+  # Applies +f+ to each value and joins what it answers.
+  #
+  # @param f [A -> F<B>] the step
+  # @return [F<B>] the joined result
+  flatMap : F<A> -> (A -> F<B>) -> F<B>
+end

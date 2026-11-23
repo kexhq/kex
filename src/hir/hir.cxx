@@ -263,6 +263,10 @@ auto Program::referencedConstantOf(const ast::Expr& name) const -> std::string {
     return m_analysis ? m_analysis->referencedConstantOf(name) : std::string{};
 }
 
+auto Program::literalIsFloat(const ast::Expr& literal) const -> bool {
+    return m_analysis && m_analysis->literalIsFloat(literal);
+}
+
 auto Program::recordOf(const ast::Expr& expr) const -> std::string {
     const auto type = typeOf(expr);
     const auto* named = type ? std::get_if<semantic::NamedType>(&type->kind) : nullptr;
@@ -448,6 +452,12 @@ auto ProgramSet::typeOf(const ast::Expr& expr) const -> semantic::TypePtr {
     return newestAnswer<semantic::TypePtr>(
         m_owners, &expr, m_base, nullptr, [&](const Program& p) { return p.typeOf(expr); },
         [](const semantic::TypePtr& t) { return t != nullptr; });
+}
+
+auto ProgramSet::literalIsFloat(const ast::Expr& literal) const -> bool {
+    return newestAnswer<bool>(
+        m_owners, &literal, m_base, false,
+        [&](const Program& p) { return p.literalIsFloat(literal); }, [](bool f) { return f; });
 }
 
 namespace {

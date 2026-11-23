@@ -134,7 +134,7 @@ trait Eitherable do
   either :> (L -> A) -> (R -> A) -> A
 end
 
-make Optional<X>, implement: Optionable do
+make Optional<X>, implement: Optionable, Functor, Bindable do
   # Returns +true+ when a value is present.
   #
   # @return [Bool]
@@ -356,6 +356,12 @@ make Result<X, E>, implement: Resultable do
   error :> E?
   let error(@Ok(_)) = None
   let error(@Error(e)) = Just(e)
+end
+
+# A result maps and chains its success and keeps its error: `Result<_, E>` is
+# the constructor `Functor` and `Bindable` range over (§8.2), and the `map`
+# and `flatMap` above are theirs.
+make Result<_, E>, implement: Functor, Bindable do
 end
 
 # Converts +value+ to the type +t+, or +None+ if it cannot be represented.

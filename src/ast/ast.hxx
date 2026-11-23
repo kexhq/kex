@@ -623,6 +623,10 @@ struct TypeAnnotation {
     SourceLocation location;
     std::string name;
     TypeExprPtr type;
+    // Bounds on its type variables (#651): `larger : A is Comparable => A -> A -> A`.
+    std::vector<std::pair<std::string, TypeName>> typeParamBounds;
+    // Where each bound's trait is written, for tooling.
+    std::vector<SourceLocation> typeParamBoundLocations;
     bool implicitThis;         // :> vs :
     bool implicitFrom = false; // ::>
     bool isFoul = false;
@@ -650,6 +654,11 @@ struct Param {
 
 struct FunctionClause {
     std::vector<Param> params;
+    // Bounds on its type variables, before the parameters (#651):
+    // `let larger(A is Comparable => a: A, b: A) -> A`.
+    std::vector<std::pair<std::string, TypeName>> typeParamBounds;
+    // Where each bound's trait is written, for tooling.
+    std::vector<SourceLocation> typeParamBoundLocations;
     std::vector<ExprPtr> body;
     std::optional<TypeExprPtr> returnAnnotation;
     std::optional<RescueBlock> rescue;
@@ -736,6 +745,9 @@ struct TraitDef {
     SourceLocation location;
     std::string name;
     std::vector<std::string> typeParams;
+    // How many holes each of `typeParams` writes: 0 for a type, 1 for a
+    // constructor `F<_>` (kind `* -> *`), and so on.
+    std::vector<std::size_t> typeParamArities;
     // required method signatures (TypeAnnotation) and optional default
     // implementations (FunctionDef) — mixed order is allowed.
     std::vector<std::variant<std::unique_ptr<TypeAnnotation>, std::unique_ptr<FunctionDef>>> body;
@@ -747,6 +759,12 @@ struct MakeDef {
     bool isFinal = false;
     bool isServing = false;
     std::vector<std::string> implements; // trait names claimed by this block
+    // The bound on a type parameter of the target: `make A is Discrete =>
+    // Range<A>` (#651) applies only where the argument satisfies the trait, so
+    // its functions and `implements` are conditional (a conditional instance).
+    std::vector<std::pair<std::string, TypeName>> typeParamBounds;
+    // Where each bound's trait is written, for tooling.
+    std::vector<SourceLocation> typeParamBoundLocations;
     // Where each of `implements` is written, at its last segment (`Pricing`
     // in `Shop.Pricing`), where a reader points at it.
     std::vector<SourceLocation> implementLocations;
@@ -763,6 +781,42 @@ struct MakeDef {
         ExprPtr>>
         body;
 };
+
+// The positions a type lambda leaves open in a `make` target: `make Tagged<_,
+// E>` is {0} (docs/typechecker-hm-plan.md §8.2).
+inline auto makeTypeLambdaHoles(const MakeDef& make) -> std::vector<std::size_t> {
+    std::vector<std::size_t> holes;
+    const auto* generic = make.target ? std::get_if<GenericType>(&make.target->kind) : nullptr;
+    for (std::size_t i = 0; generic && i < generic->args.size(); ++i) {
+        const auto* name =
+            generic->args[i] ? std::get_if<TypeName>(&generic->args[i]->kind) : nullptr;
+        if (name && name->parts.size() == 1 && name->parts[0] == "_") {
+            holes.push_back(i);
+        }
+    }
+    return holes;
+}
+
+// Each bound of `make A is Discrete => Range<A>` (#651) as the position of the
+// type argument it names and the trait as written: {{0, "Discrete"}}.
+inline auto makeTypeArgBounds(const MakeDef& make)
+    -> std::vector<std::pair<std::size_t, std::string>> {
+    std::vector<std::pair<std::size_t, std::string>> bounds;
+    const auto* generic = make.target ? std::get_if<GenericType>(&make.target->kind) : nullptr;
+    if (!generic) {
+        return bounds;
+    }
+    for (const auto& [variable, trait] : make.typeParamBounds) {
+        for (std::size_t i = 0; i < generic->args.size(); ++i) {
+            const auto* name =
+                generic->args[i] ? std::get_if<TypeName>(&generic->args[i]->kind) : nullptr;
+            if (name && name->parts.size() == 1 && name->parts[0] == variable) {
+                bounds.emplace_back(i, trait.dotted());
+            }
+        }
+    }
+    return bounds;
+}
 
 // Items that can appear inside a compiled do...end block.
 // Mirrors the subset of module items that carry runtime-evaluable semantics.

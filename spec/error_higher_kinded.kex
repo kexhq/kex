@@ -1,0 +1,23 @@
+# kex: check-only
+# A higher-kinded call keeps what the type lambda kept, and takes only what
+# implements the trait (spec/higher_kinded_traits.kex): the tag of a
+# `Tagged<Integer, String>` stays a String, a list is no Mappable here, and
+# `F` takes as many arguments as its bound says (`F<_>`: one).
+
+record Tagged<A, E> do
+  item : A
+  tag : E
+end
+trait Mappable<F<_>> do
+  fmap : F<A> -> (A -> B) -> F<B>
+end
+make Tagged<_, E>, implement: Mappable do
+  let fmap(f) -> Tagged<B, E> = Tagged { item: f(@item), tag: @tag }
+end
+let bumped(F is Mappable => xs: F<Integer>) -> F<Integer> = xs.fmap { |x| x + 1 }
+let pair(F is Mappable => xs: F<Integer, String>) -> Integer = 1
+main do
+  let t = bumped(Tagged { item: 1, tag: "t" })
+  let wrong: Tagged<Integer, Integer> = t
+  IO.printLine(bumped([1, 2]).length)
+end

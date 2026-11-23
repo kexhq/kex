@@ -63,6 +63,10 @@ auto Lowering::lowerNode(const ast::ExprPtr& e) -> ExprPtr {
         [&](const auto& n) -> ExprPtr {
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, ast::IntLiteral>) {
+                // An integer literal a Float takes is a float (decision 2).
+                if (hir->literalIsFloat(*e)) {
+                    return lit(LitKind::Float, n.value + ".0");
+                }
                 return lit(LitKind::Int, n.value);
             } else if constexpr (std::is_same_v<T, ast::FloatLiteral>) {
                 return lit(LitKind::Float, n.value);

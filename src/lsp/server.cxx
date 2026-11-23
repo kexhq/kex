@@ -154,6 +154,14 @@ struct Document {
     };
     mutable std::optional<BareAnswer> bareAnswer;
     std::unordered_map<std::string, std::vector<std::string>> documentation;
+    // What a function needs, shown at the end of its head as an inlay hint:
+    // requirements are written nowhere in the source (§9 of
+    // docs/typechecker-hm-plan.md, kexhq/kex#143).
+    struct CapabilityHint {
+        unsigned int line = 0; // 0-based, of the function's head
+        std::string label;     // "requires Clock, FS.File"
+    };
+    std::vector<CapabilityHint> capabilityHints;
 };
 
 class Iostream final : public ::lsp::io::Stream {
@@ -2003,13 +2011,24 @@ auto functionDetail(
         }
         result += analyzer.displaySignature(function.name, signature);
     }
+    // The parameters it runs: calling it is as foul as what they are handed,
+    // which no signature writes either (#142).
+    if (const auto* runs = analyzer.transparentParams(function.name);
+        runs && !function.clauses.empty()) {
+        const auto& params = function.clauses.front().params;
+        for (const auto index : *runs) {
+            if (index < params.size() && params[index].name) {
+                result += "\nfoul when `" + *params[index].name + "` carries an effect";
+            }
+        }
+    }
     // A capability requirement is written nowhere in the source — that is the
     // point of the feature — so hover is where a reader learns it, together
     // with the chain that explains why this function has it (kexhq/kex#143).
-    if (const auto* capabilities = analyzer.requiredCapabilities(function.name)) {
+    if (const auto* capabilities = analyzer.requiredCapabilities(function)) {
         for (const auto& [capability, _] : *capabilities) {
             result += "\nrequires " + capability;
-            for (const auto& [caller, via] : analyzer.capabilityChain(function.name, capability)) {
+            for (const auto& [caller, via] : analyzer.capabilityChain(function, capability)) {
                 result += via.empty() ? "\n  \u2190 " + caller + " uses " + capability
                                       : "\n  \u2190 " + caller + " calls " + via;
             }
@@ -2573,6 +2592,28 @@ void enrichFunctionSymbols(FileState& state, const semantic::Analyzer& analyzer)
     ast::forEachFunction(state.ast, enrich);
 }
 
+// One inlay hint per function that needs a capability, at its head.
+auto capabilityHintsOf(
+    const ast::Program& program, const semantic::Analyzer& analyzer, const std::string& path)
+    -> std::vector<Document::CapabilityHint> {
+    std::vector<Document::CapabilityHint> hints;
+    ast::forEachFunction(program, [&](const ast::FunctionDef& function) {
+        const auto needs = analyzer.requiredCapabilities(function);
+        const auto& head =
+            function.nameLocation.line > 0 ? function.nameLocation : function.location;
+        // A companion's functions are merged in, and hinted in their own file.
+        if (!needs || head.line <= 0 || head.file != path) {
+            return;
+        }
+        std::string label = "requires";
+        for (const auto& [capability, _] : *needs) {
+            label += (label == "requires" ? " " : ", ") + capability;
+        }
+        hints.push_back({static_cast<unsigned int>(head.line - 1), std::move(label)});
+    });
+    return hints;
+}
+
 // A checked file's record fields as the checker resolved them, in place of
 // the types the declarations wrote.
 void enrichRecordSymbols(FileState& state, const semantic::Analyzer& analyzer) {
@@ -2749,6 +2790,16 @@ void recordNavigation(
             }
         }
     }
+    // A bound's trait (`A is Comparable =>`, #651) reads as a name after
+    // `implement:` does: hover and definition answer the trait it resolved.
+    for (const auto& [where, trait] : analyzer.checker().boundTraitSites()) {
+        if (where.file == document.path && !trait.empty()) {
+            document.implementedTraits.insert_or_assign(
+                Document::receiverKey(
+                    static_cast<unsigned int>(where.line), static_cast<unsigned int>(where.column)),
+                trait);
+        }
+    }
     for (const auto& [name, where] : analyzer.checker().bindingSites()) {
         if (where.file != document.path) {
             continue;
@@ -2829,6 +2880,7 @@ private:
                     .definitionProvider = true,
                     .referencesProvider = true,
                     .renameProvider = ::lsp::RenameOptions{.prepareProvider = true},
+                    .inlayHintProvider = true,
                 },
             .serverInfo =
                 ::lsp::ServerInfo{
@@ -3353,6 +3405,7 @@ private:
                 m_db.ensureModule(module);
             }
             enrichFunctionSymbols(*state, analyzer);
+            document.capabilityHints = capabilityHintsOf(state->ast, analyzer, document.path);
             enrichRecordSymbols(*state, analyzer);
             recordNavigation(document, analyzer, state->ast, analyzed);
             document.hoverEntries.clear();
@@ -5782,6 +5835,44 @@ private:
         return answer;
     }
 
+    // What each function in view needs, at the end of its head: the inferred
+    // capability requirements no source line writes (§9 fix 3).
+    auto inlayHints(::lsp::InlayHintParams&& params)
+        -> ::lsp::requests::TextDocument_InlayHint::Result {
+        verifyInitialized();
+        const auto found = m_documents.find(params.textDocument.uri.toString());
+        // A `.ket` template's lines are not the analyzed text's.
+        if (found == m_documents.end() || !found->second.ketOriginalText.empty()) {
+            return nullptr;
+        }
+        const auto& document = found->second;
+        ::lsp::Array<::lsp::InlayHint> hints;
+        for (const auto& hint : document.capabilityHints) {
+            if (hint.line < params.range.start.line || hint.line > params.range.end.line) {
+                continue;
+            }
+            size_t start = 0;
+            for (unsigned int line = 0; line < hint.line && start != std::string::npos; ++line) {
+                start = document.text.find('\n', start);
+                start = start == std::string::npos ? start : start + 1;
+            }
+            if (start == std::string::npos) {
+                continue;
+            }
+            auto end = document.text.find('\n', start);
+            end = end == std::string::npos ? document.text.size() : end;
+            const auto column = utf16Column(
+                document.text, static_cast<int>(hint.line + 1), static_cast<int>(end - start + 1));
+            hints.push_back(
+                ::lsp::InlayHint{
+                    .position = {.line = hint.line, .character = static_cast<unsigned int>(column)},
+                    .label = hint.label,
+                    .paddingLeft = true,
+                });
+        }
+        return hints;
+    }
+
     auto references(::lsp::ReferenceParams&& params)
         -> ::lsp::requests::TextDocument_References::Result {
         verifyInitialized();
@@ -6135,6 +6226,8 @@ private:
                 [this](::lsp::DefinitionParams&& params) { return definition(std::move(params)); })
             .add<::lsp::requests::TextDocument_References>(
                 [this](::lsp::ReferenceParams&& params) { return references(std::move(params)); })
+            .add<::lsp::requests::TextDocument_InlayHint>(
+                [this](::lsp::InlayHintParams&& params) { return inlayHints(std::move(params)); })
             .add<::lsp::requests::TextDocument_PrepareRename>(
                 [this](::lsp::PrepareRenameParams&& params) {
                     return prepareRename(std::move(params));

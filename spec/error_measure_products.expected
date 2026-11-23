@@ -1,0 +1,60 @@
+spec/error_measure_products.kex:15:21: [KEXET-0491]: Error, `+` expects argument 2 to be Measure<A>, but got Measure<Quantity.Time>
+
++ : Binary -> Binary -> Binary
+
++ : Date -> Measure<Quantity.Time> -> Date
+
++ : Date -> Period -> Date
+
++ : DateTime -> Measure<Quantity.Time> -> DateTime
+
++ : DateTime -> Period -> DateTime
+
++ : Measure<A> -> Measure<A> -> Measure<A>
+
++ : Period -> Period -> Period
+
++ : Time -> Measure<Quantity.Time> -> Time
+   |
+15 |   let bad = speed + 5.second
+   |             ^^^^^^^^^^^^^^^^
+spec/error_measure_products.kex:16:31: [KEXET-0491]: Error, `*` expects argument 2 to be Measure<Quantity.Force>, but got Measure<Quantity.Length>
+
+* : Measure<Quantity.Acceleration> -> Measure<Quantity.Mass> -> Measure<Quantity.Force>
+
+* : Measure<Quantity.Current> -> Measure<Quantity.Resistance> -> Measure<Quantity.Voltage>
+
+* : Measure<Quantity.Current> -> Measure<Quantity.Time> -> Measure<Quantity.Charge>
+
+* : Measure<Quantity.Current> -> Measure<Quantity.Voltage> -> Measure<Quantity.Power>
+
+* : Measure<Quantity.Force> -> Measure<Quantity.Length> -> Measure<Quantity.Energy>
+
+* : Measure<Quantity.Length> -> Measure<Quantity.Force> -> Measure<Quantity.Energy>
+
+* : Measure<Quantity.Mass> -> Measure<Quantity.Acceleration> -> Measure<Quantity.Force>
+
+* : Measure<Quantity.Power> -> Measure<Quantity.Time> -> Measure<Quantity.Energy>
+
+* : Measure<Quantity.Resistance> -> Measure<Quantity.Current> -> Measure<Quantity.Voltage>
+
+* : Measure<Quantity.Time> -> Measure<Quantity.Current> -> Measure<Quantity.Charge>
+
+* : Measure<Quantity.Time> -> Measure<Quantity.Power> -> Measure<Quantity.Energy>
+
+* : Measure<Quantity.Time> -> Number -> Measure<Quantity.Time>
+
+* : Measure<Quantity.Voltage> -> Measure<Quantity.Current> -> Measure<Quantity.Power>
+
+* : Period -> Integer -> Period
+
+* : Units.SI.SIUnit -> Any -> UnitDefinition
+   |
+16 |   let t: Duration = 2.meter * 3.meter
+   |                     ^^^^^^^^^^^^^^^^^
+spec/error_measure_products.kex:16:31: [KEXET-0001]: Error, type mismatch: expected Measure<Quantity.Time>, got Period
+   |
+16 |   let t: Duration = 2.meter * 3.meter
+   |          --------   ^^^^^^^^^^^^^^^^^ this has type Period
+   |          |
+   |          expected because of this annotation

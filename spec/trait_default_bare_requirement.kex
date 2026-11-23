@@ -1,0 +1,21 @@
+# A requirement named bare in a trait's default is the requirement, called on
+# `this`, as `this.label` is. It was found only when some type already
+# implemented the trait, and then lowered on BEAM as a variable ("unbound
+# variable 'Label'"); with no implementer it was an undefined name
+# (docs/typechecker-hm-plan.md §11, item 9).
+trait Named do
+  label :> String
+  let shout = label.upperCase
+end
+
+record User do
+  name : String
+end
+
+make User, implement: Named do
+  let label = @name
+end
+
+main do
+  IO.printLine(User { name: "ada" }.shout)
+end

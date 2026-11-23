@@ -59,7 +59,7 @@ make [[Y]] do
   let flatten = Kex.Intrinsic.List.flatten(this)
 end
 
-make [X], implement: Enumerable, Foldable do
+make [X], implement: Enumerable, Foldable, Functor, Bindable do
   # Returns the first element wrapped in +Just+, or +None+ if the list is empty.
   #
   # @return [X?]

@@ -1,0 +1,58 @@
+# kex: check-only
+# A conditional without `else` has no value (#809). It was typed Never, the
+# bottom type, so it fitted any declared result: `-> Integer` returned None on
+# the walker and :ok on BEAM, and a `.upperCase` on the result crashed both.
+# Where a value is expected it is an error naming the missing `else`; as a
+# statement it stays allowed.
+
+let small(n: Integer) -> Integer do
+  if n > 5
+    1
+  end
+end
+
+let sign(n: Integer) -> String do
+  if n > 0
+    "pos"
+  elif n < 0
+    "neg"
+  end
+end
+
+let guarded(n: Integer) -> Integer? do
+  return Just(n) if n > 1
+end
+
+foul bindings(n: Integer) -> Void do
+  let label = "big" if n > 5
+  var count = 1 if n > 5
+  IO.printLine("${label} ${count}")
+end
+
+# Statements: no value is needed, so none of these is an error.
+foul statements(n: Integer) -> Void do
+  if n > 5
+    IO.printLine("big")
+  end
+  IO.printLine("positive") if n > 0
+  if let Just(x) = [n].first
+    IO.printLine("first ${x}")
+  end
+end
+
+let early(n: Integer) -> Integer do
+  return 0 if n < 0
+  if n > 100
+    return 100
+  end
+  n
+end
+
+main do
+  IO.printLine(small(1))
+  IO.printLine(sign(0).upperCase)
+  IO.printLine(guarded(0))
+  bindings(1)
+  statements(1)
+  IO.printLine(early(5))
+end

@@ -18,11 +18,13 @@ record FakeFiles do
 end
 
 # A stand-in must provide everything the capability declares — the capability's
-# members ARE the interface, so a fake cannot quietly omit one.
+# members ARE the interface, so a fake cannot quietly omit one. That includes
+# each arity: `open` with a block is a member of its own (#793).
 make FakeFiles, implement: FS.File do
   foul read(path) = Ok(@canned)
   foul readBytes(path) = Ok(@canned.to(Binary).try)
   foul open(path, mode) = Error(OpenFailed(path))
+  foul open(path, mode, block) = Error(OpenFailed(path))
   foul write(path, content) = Error(WriteFailed(path))
   foul writeBytes(path, content) = Error(WriteFailed(path))
   foul append(path, content) = Error(WriteFailed(path))

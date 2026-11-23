@@ -6,7 +6,7 @@ module Haversine do
 
   type Coordinate = (Number, Number)
 
-  distanceBetween : Coordinate -> Coordinate -> Measure
+  distanceBetween : Coordinate -> Coordinate -> Measure<Quantity.Length>
   let distanceBetween((lat1, lon1), (lat2, lon2)) do
     let halfLat = Math.sin(Math.deg2Rad(lat2 - lat1) / 2.0)
     let halfLon = Math.sin(Math.deg2Rad(lon2 - lon1) / 2.0)
@@ -25,7 +25,7 @@ end
 
 make City do
   # Great-circle distance to another city, by the haversine formula.
-  let distanceTo(other: This) -> Measure do
+  let distanceTo(other: This) -> Measure<Quantity.Length> do
     let p1 = (@latitude, @longitude)
     let p2 = (other.latitude, other.longitude)
     Haversine.distanceBetween(p1, p2)

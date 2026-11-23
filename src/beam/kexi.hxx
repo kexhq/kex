@@ -40,6 +40,8 @@ struct KexiType {
         Constrained,  // varName + traitName
         Never,
         Unknown,
+        Any, // `Any` as written: UnknownType::written
+        App, // a type variable applied, `F<A>` (TypeApp): head in `result`, args in typeArgs
     };
     Kind kind;
     std::string name;
@@ -62,8 +64,10 @@ auto kexiUnion(std::vector<KexiTypePtr> members) -> KexiTypePtr;
 auto kexiIntersection(std::vector<KexiTypePtr> members) -> KexiTypePtr;
 auto kexiRecord(std::vector<std::string> names, std::vector<KexiTypePtr> types) -> KexiTypePtr;
 auto kexiConstrained(const std::string& var, const std::string& trait) -> KexiTypePtr;
+auto kexiApp(KexiTypePtr head, std::vector<KexiTypePtr> args) -> KexiTypePtr;
 auto kexiNever() -> KexiTypePtr;
 auto kexiUnknown() -> KexiTypePtr;
+auto kexiAny() -> KexiTypePtr;
 
 // ── Type interface section ───────────────────────────────────────────
 
@@ -82,6 +86,9 @@ struct KexiExport {
     // caller compiled apart passes the sentinel for a missing argument that
     // has one, and the callee fills it (names::kDefaultArgument).
     std::vector<std::string> defaultSources;
+    // The capabilities calling it needs (docs/typechecker-hm-plan.md §9), by
+    // qualified module name. Absent in chunks written before it existed.
+    std::vector<std::string> requiredCapabilities;
 };
 
 struct KexiConstant {
@@ -125,6 +132,11 @@ struct KexiMethod {
     // emitted module (recordImplementations), never re-derived. "" when the
     // method is reached only through its dispatcher.
     std::string implementation;
+    // The capabilities calling it needs, as KexiExport::requiredCapabilities.
+    std::vector<std::string> requiredCapabilities;
+    // The receiver's type argument bounds, for a function of a bounded
+    // `make` (Signature::receiverBounds).
+    std::vector<std::pair<std::size_t, std::string>> receiverBounds;
     // Declared by a `make` for a type its module does not declare (`Units.SI`'s
     // `to` on `Measure`): reached only where that module is `using`-imported.
     // A `make` for one of the module's own types travels with its values.
@@ -201,6 +213,12 @@ struct KexiMethodOwnership {
 struct KexiTraitConformance {
     std::string typeName;
     std::string traitName;
+    // Where it holds, for a bounded `make` (#651): type argument positions and
+    // the trait each must satisfy. Empty for an unconditional conformance.
+    std::vector<std::pair<std::size_t, std::string>> bounds;
+    // The positions its type lambda leaves open (`make Tagged<_, E>`: {0}), so an
+    // importer can apply the constructor (§8.2). Empty for a whole type.
+    std::vector<std::size_t> holes;
 };
 
 struct KexiTraitRequiredMethod {
@@ -215,6 +233,8 @@ struct KexiTraitDef {
     // so an implementor's own module emits them. A function over the trait
     // declared elsewhere (`inspected(value: Inspectable)`) is not one.
     std::vector<std::string> defaultBodies;
+    // Each type parameter's holes: `Functor<F<_>>` is {1} (TraitDef::paramKinds).
+    std::vector<std::size_t> paramKinds;
 };
 
 struct KexiStructuralMetadata {

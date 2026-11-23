@@ -174,7 +174,8 @@ private do
     end
     match Kex.Intrinsic.Kex.kind(value) do
       :none => return "null"
-      :bool => return value then "true" else "false"
+      # An `Any` is no condition (decision 7); `==` holds of every value.
+      :bool => return value == true then "true" else "false"
       :integer => return "${value}"
       :float => return "${value}"
       :string => return encodeString(value)
@@ -186,7 +187,13 @@ private do
         return "[${Kex.Intrinsic.Tuple.items(value).map(~stringifyValue).join(",")}]"
       end
       :variant => return constructorName(value)
-      :list => return "[${value.map(~stringifyValue).join(",")}]"
+      # An `Any` is narrowed before it is used as a list (decision 7 of
+      # docs/typechecker-hm-plan.md): the kind says it is one, the pattern says
+      # so to the checker.
+      :list => match value do
+        items: [Any] => return "[${items.map(~stringifyValue).join(",")}]"
+        _ => return "[]"
+      end
       :map => do
         let fields = Kex.Intrinsic.Map.entries(value).map do |key, item|
           "${encodeString(objectKey(key))}:${stringifyValue(item)}"

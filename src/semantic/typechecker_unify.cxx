@@ -81,7 +81,23 @@ auto TypeChecker::resolve(TypePtr t) const -> TypePtr {
 // enclosing function's parameter a closure captured, say — and quantifying over
 // it would cut a connection the enclosing inference still needs. Only what this
 // definition itself created and left free is its to generalize.
-auto TypeChecker::generalizeSignature(Signature& signature, int varMark) -> void {
+auto TypeChecker::generalizeSignature(
+    Signature& signature, int varMark, const TypePtr& body, bool declared) -> void {
+    // Decision 4 first, so the generic it makes counts among those used below.
+    // A checked body must answer the parameter's own type, or be one that
+    // cannot be checked (an intrinsic answers Unknown): `scale(x: Number) ->
+    // Number = x * 2.5` answers a Float, and tying it would type `scale(3)` as
+    // an Integer that is 7.5. A declared contract is tied, and its body is
+    // checked against the tie (checkFunctionDef).
+    if (body || declared) {
+        const auto answered = body ? resolve(body) : nullptr;
+        tieTraitResult(
+            signature, [this](const TypePtr& type) { return resolve(type); },
+            [&](const Type* occurrence) {
+                return declared || isUndetermined(answered) || answered.get() == occurrence;
+            });
+    }
+
     // Continue below whatever placeholders the signature already uses, so an
     // inferred generic never collides with an annotated one (`A` is -1).
     int nextGeneric = 0;

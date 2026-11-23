@@ -1,0 +1,12 @@
+spec/error_bare_generic_type.kex:14:13: [KEXET-0109]: Error, `Measure` takes 1 type argument, but 0 are given
+   |
+14 | let half(m: Measure) -> Float = m.canonical / 2.0
+   |             ^^^^^^^
+spec/error_bare_generic_type.kex:15:17: [KEXET-0109]: Error, `Box` takes 1 type argument, but 0 are given
+   |
+15 | let unwrap(box: Box) -> Integer = 1
+   |                 ^^^
+spec/error_bare_generic_type.kex:20:27: [KEXET-0416]: Error, `^` is not defined for Measure<Quantity.Time> and Integer; declare it in a `make Measure<Quantity.Time>` block
+   |
+20 |   IO.printLine(2.second ^ 2)
+   |                ^^^^^^^^^^^^

@@ -294,6 +294,23 @@ trait  true  type  using  var  when  while
 
 Generic parameters are uppercase single letters: `<A>`, `<A, E>`.
 
+`Any` is the type of every value. Anything can be passed where an `Any` is
+taken, and what can be done with an `Any` is what can be done with every
+value: show it (`"${value}"`, `IO.printLine`), compare it with `==`, convert
+it (`.to(T)`). Anything else needs it narrowed first, with a `match` on its
+type:
+
+```kex
+let describe(value: Any) -> String = match value do
+  text: String => text.upperCase
+  n: Integer   => "number ${n}"
+  _            => "${value}"
+end
+```
+
+`value.upperCase` on an `Any` is an error: it is not defined for every value
+an `Any` may hold.
+
 ### Union Types (Algebraic Data Types)
 
 ```kex
@@ -424,6 +441,24 @@ let empty = []
 let consed = [0 | nums]          # prepend → [0, 1, 2, 3, 4, 5]
 ```
 
+Elements of different types make a list of their **union**: every element is
+of that one type, so the list is still homogeneous. Constructors of one ADT
+make a list of that ADT. A trait is never chosen for you: a list of a trait
+type is one you write.
+
+```kex
+let mixed = [1, "a"]                          # [Integer | String]
+let numbers = [1, 2.0]                        # [Integer | Float]
+let shapes = [Circle { r: 1.0 }, Square { s: 2.0 }]   # [Circle | Square]
+let order = [Less, Equal, Greater]            # [Ordering]
+let written: [Shape] = [Circle { r: 1.0 }, Square { s: 2.0 }]
+```
+
+A function every member has works on a union: `shapes.map(&.area)`. Anything
+else is reached through a `match` with type patterns (`n: Integer => …`).
+Where the list's type is expected, each element is checked against it
+instead, so a wrong element is reported where it is.
+
 ### Tuples
 
 Fixed-size, heterogeneous:
@@ -441,6 +476,11 @@ Key-value stores. `{K: V}` is the map type.
 let scores = { alice: 95, bob: 72 }              # atom keys (:alice, :bob)
 let config = { "host": "localhost", "port": 80 }  # string keys
 ```
+
+Keys or values of different types make a map of their union, as list
+elements do: `config` above is a `{String: String | Integer}`, so
+`config.get("port")` is a `(String | Integer)?`, and using it as an `Integer`
+takes a `match`.
 
 ### Sets
 
@@ -704,6 +744,11 @@ count = count + 1 if line.contains?("ERROR")
 break if done
 ```
 
+A trailing conditional is a statement: when its condition is false it produces
+nothing, so it has no value. `let x = 5 if ready?` is an error, and so is one
+as the last line of a function that returns a value. Write both branches with
+`then`/`else` instead.
+
 ---
 
 ## 7. Operators
@@ -747,6 +792,15 @@ if x > 0 then "yes" else "no" end
 if x > 0 then "big" elif x < 0 then "small" else "zero" end
 ```
 
+Every condition, `if` and `elif` alike, must be a `Bool`.
+
+The value of an `if` is the value of the branch that ran. Branches of different
+types give their union, as list elements do (see Lists). An `if` **without
+`else`** has no value, because when no branch runs it produces nothing. As a
+statement that is fine. Where a value is needed (a function's result, a `let`,
+an argument) it is an error: add an `else`. Nothing is wrapped into an optional
+for you. Write `n > 5 then Just(n) else None` when that is what you mean.
+
 ### Then-Else (Ternary)
 
 A standalone ternary expression — no `if`, no `end`. Both branches are required:
@@ -786,6 +840,8 @@ match n do
   _              => "non-positive"
 end
 ```
+
+A guard must be a `Bool`, in a `match` and on a `rescue` arm alike.
 
 A bare `when` (no pattern) acts as a catch-all guarded clause:
 
@@ -1221,6 +1277,29 @@ make [A] do
 end
 ```
 
+### Bounded Make
+
+A bound before the target, closed by `=>`, limits a block to the
+instantiations whose type arguments satisfy it (#651). Its functions apply
+only there, and so does every trait it implements:
+
+```kex
+make A is Discrete => Range<A>, implement: Enumerable, Foldable do
+  # `A` is the element type, as in any `make Range<A>`
+  each :> (A -> Void) -> Void
+  ...
+end
+```
+
+`(1..5).sum` and `('a'..'e').items` work, since Integer and Char are
+`Discrete`. `(0.0..1.0).sum` is a type error (KEXET-0511), and a Float range
+is not `Enumerable`. A block without a bound still applies to every
+instantiation, so `(0.0..1.0).contains?(0.5)` keeps working.
+
+Several variables are bounded with commas, and `&` joins traits on one:
+`make K is Showable & Comparable, V is Showable => Pair<K, V> do`. `is` is a
+bound only in this position, so it is not a reserved word.
+
 ### Final Make
 
 `make final: Type` seals the make block — it cannot be reopened:
@@ -1317,6 +1396,67 @@ Function parameters may be constrained to a trait:
 ```kex
 foul printShape(s: Shape) do
   IO.printLine(s.describe)
+end
+```
+
+Each `s: Shape` is its own type: two such parameters may hold a Circle and a
+Rectangle. To tie positions to one type that satisfies a trait, bound a type
+variable before the parameters with `is`, closed by `=>` (#651):
+
+```kex
+let larger(A is Comparable => a: A, b: A) -> A = a > b then a else b
+
+larger(3, 7)               # => 7, an Integer
+larger("pear", "apple")    # => "pear", a String
+larger(1, "x")             # type error: one A, an Integer and a String
+```
+
+A standalone signature writes the bound the same way, and `&` joins traits
+on one variable:
+
+```kex
+larger : A is Comparable => A -> A -> A
+let show(K is Showable & Comparable, V is Showable => k: K, v: V) -> String = "${k}=${v}"
+```
+
+An unbounded single letter stays implicit: `let identity(a: A) -> A` needs
+no `=>`. A `make` block takes the same bound (Bounded Make, §14).
+
+### Traits Over Type Constructors
+
+A trait may range over a type constructor rather than a type. Its parameter
+writes its holes, `F<_>`, and a requirement names its receiver `F<A>`:
+
+```kex
+trait Functor<F<_>> do
+  fmap : F<A> -> (A -> B) -> F<B>
+end
+
+make Box, implement: Functor do
+  let fmap(f) -> Box<B> = Box { value: f(@value) }
+end
+```
+
+A type of two arguments names the one that varies with `_`, and keeps the
+other: `make Tagged<_, E>, implement: Functor`. A function bounded by the
+trait is written once for every such constructor, and `F` is whichever one it
+is called with:
+
+```kex
+let bumped(F is Functor => xs: F<Integer>) -> F<Integer> = xs.fmap { |x| x + 1 }
+
+bumped(Box { value: 1 })               # a Box<Integer>
+bumped(Tagged { item: 1, tag: "t" })   # a Tagged<Integer, String>
+```
+
+Inside a `make` block, `This<B>` is the target applied again: a whole target
+takes new arguments for its own (`make Box`: `This<B>` is `Box<B>`), and a type
+lambda has its holes filled (`make Tagged<_, E>`: `This<B>` is
+`Tagged<B, E>`):
+
+```kex
+make Box, implement: Functor do
+  let fmap(f) -> This<B> = Box { value: f(@value) }
 end
 ```
 
@@ -1936,8 +2076,9 @@ let safeDiv(_, 0) = Error(DivideByZero)   # also catches a 0.0 divisor
 
 Literal patterns follow `==`, so an integer-literal pattern matches an equal
 `Float` scrutinee and vice versa. Anything else would let `1 <= 1.0` and
-`1 >= 1.0` both hold while `1 == 1.0` was false. Collections stay
-homogeneous — `[1, 2.0]` is still a type error.
+`1 >= 1.0` both hold while `1 == 1.0` was false. Arithmetic promotes, but a
+collection does not: `[1, 2.0]` is an `[Integer | Float]` (see Lists), and a
+`Float` is only what was written as one.
 
 **Integer** (implements `Blankable`, `Monoid`, `Group`):
 

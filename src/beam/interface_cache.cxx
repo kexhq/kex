@@ -27,9 +27,10 @@ using namespace kex::semantic;
 
 constexpr int kMagic = 0x4b584946; // "KXIF"
 // Bump with ANY shape change below, or a change to what an entry holds
-// (6: an imported trait keeps every overload of a required name): old
-// files must read as bad-version, never misparse.
-constexpr int kVersion = 6;
+// (6: an imported trait keeps every overload of a required name; 7: a
+// written `Any` is the atom `any`, UnknownType::written): old files must read
+// as bad-version, never misparse.
+constexpr int kVersion = 7;
 
 // Every tuple shape in the format, named once and shared by the encoder
 // and the decoder. Named shapes (ifaces, fn, signature, ...) go through
@@ -41,12 +42,12 @@ constexpr int kVersion = 6;
 // and extend the round-trip agreement test — the test is what catches a
 // field the decoder silently drops.
 namespace schema {
-constexpr size_t kIfaces = 14;
+constexpr size_t kIfaces = 15;
 constexpr size_t kModulePair = 2;
 constexpr size_t kModuleBody = 6;
-constexpr size_t kSignature = 9;
+constexpr size_t kSignature = 11;
 constexpr size_t kFn = 17;
-constexpr size_t kTrait = 5;
+constexpr size_t kTrait = 6;
 constexpr size_t kAdt = 9;
 constexpr size_t kDistinct = 3;
 } // namespace schema
@@ -63,7 +64,7 @@ auto checkedTuple(std::vector<TermPtr> elems, size_t expected, const char* what)
 // Adding a Type alternative without extending the codec below would
 // silently degrade to "unknown" — fail the build instead.
 static_assert(
-    std::variant_size_v<decltype(Type::kind)> == 16,
+    std::variant_size_v<decltype(Type::kind)> == 17,
     "type gained an alternative: extend typeToTerm/typeFromSax "
     "and the round-trip agreement test");
 
@@ -96,8 +97,9 @@ enum class TypeTag {
     Intersection,
     Record,
     TypeVar,
-    Void,
+    Never,
     Constrained,
+    App,
 };
 
 struct TypeShape {
@@ -120,8 +122,10 @@ constexpr TypeShape kTypeShapes[] = {
     {TypeTag::Intersection, "intersection", 2},
     {TypeTag::Record, "record", 2},
     {TypeTag::TypeVar, "typevar", 2},
-    {TypeTag::Void, "void", 3},
+    {TypeTag::Never, "void",
+     3}, // NeverType; "void" is its serialized name, kept so caches stay valid
     {TypeTag::Constrained, "constrained", 4},
+    {TypeTag::App, "app", 3},
 };
 
 auto shapeOf(TypeTag tag) -> const TypeShape& {
@@ -209,14 +213,17 @@ auto typeToTerm(const TypePtr& t) -> TermPtr {
             } else if constexpr (std::is_same_v<K, TypeVar>) {
                 return typeTuple(TypeTag::TypeVar, {Term::integer(node.id)});
             } else if constexpr (std::is_same_v<K, UnknownType>) {
-                return Term::atom("unknown");
-            } else if constexpr (std::is_same_v<K, VoidType>) {
+                return Term::atom(node.written ? "any" : "unknown");
+            } else if constexpr (std::is_same_v<K, NeverType>) {
                 return typeTuple(
-                    TypeTag::Void, {Term::binary(node.leftRecord), Term::binary(node.rightRecord)});
+                    TypeTag::Never,
+                    {Term::binary(node.leftRecord), Term::binary(node.rightRecord)});
             } else if constexpr (std::is_same_v<K, ConstrainedType>) {
                 return typeTuple(
                     TypeTag::Constrained, {Term::binary(node.varName), Term::binary(node.traitName),
                                            Term::integer(node.genericId)});
+            } else if constexpr (std::is_same_v<K, TypeApp>) {
+                return typeTuple(TypeTag::App, {typeToTerm(node.head), listOf(node.args)});
             }
             return Term::atom("unknown");
         },
@@ -237,6 +244,9 @@ auto typeFromSax(SaxReader& sax) -> TypePtr {
         }
         if (bare == "unknown") {
             return std::make_shared<Type>(Type{UnknownType{}});
+        }
+        if (bare == "any") {
+            return std::make_shared<Type>(Type{UnknownType{true}});
         }
         throw EtfError("type: expected tuple");
     }
@@ -317,10 +327,10 @@ auto typeFromSax(SaxReader& sax) -> TypePtr {
             return make(std::move(record));
         }
         case TypeTag::TypeVar: return make(TypeVar{static_cast<int>(sax.readInt())});
-        case TypeTag::Void: {
+        case TypeTag::Never: {
             auto leftRecord = sax.readBinary();
             auto rightRecord = sax.readBinary();
-            return make(VoidType{std::move(leftRecord), std::move(rightRecord)});
+            return make(NeverType{std::move(leftRecord), std::move(rightRecord)});
         }
         case TypeTag::Constrained: {
             auto varName = sax.readBinary();
@@ -329,11 +339,47 @@ auto typeFromSax(SaxReader& sax) -> TypePtr {
                 ConstrainedType{
                     std::move(varName), std::move(traitName), static_cast<int>(sax.readInt())});
         }
+        case TypeTag::App: {
+            TypeApp application;
+            application.head = typeFromSax(sax);
+            readTypes(application.args);
+            return make(std::move(application));
+        }
     }
     throw EtfError("type: unknown tag " + std::string(shape.atom));
 }
 
 // ---- Signature <-> Term ----------------------------------------------------
+
+auto stringsTerm(const std::vector<std::string>& values) -> TermPtr {
+    std::vector<TermPtr> terms;
+    for (const auto& value : values) {
+        terms.push_back(Term::binary(value));
+    }
+    return Term::list(std::move(terms));
+}
+
+// Type argument bounds (#651), as `[{Index, Trait}]`.
+auto boundsTerm(const kex::semantic::TypeArgBounds& bounds) -> TermPtr {
+    std::vector<TermPtr> terms;
+    for (const auto& [index, trait] : bounds) {
+        terms.push_back(
+            Term::tuple({Term::integer(static_cast<int64_t>(index)), Term::binary(trait)}));
+    }
+    return Term::list(std::move(terms));
+}
+
+auto boundsFromSax(SaxReader& sax) -> kex::semantic::TypeArgBounds {
+    kex::semantic::TypeArgBounds bounds;
+    const auto count = sax.beginList();
+    for (size_t i = 0; i < count; ++i) {
+        sax.beginTuple();
+        const auto index = static_cast<std::size_t>(sax.readInt());
+        bounds.emplace_back(index, sax.readBinary());
+    }
+    sax.endList();
+    return bounds;
+}
 
 auto signatureToTerm(const kex::semantic::Signature& sig) -> TermPtr {
     std::vector<TermPtr> params;
@@ -350,7 +396,8 @@ auto signatureToTerm(const kex::semantic::Signature& sig) -> TermPtr {
     return checkedTuple(
         {Term::atom("signature"), Term::binary(sig.name), Term::list(std::move(params)),
          typeToTerm(sig.result), Term::boolean(sig.isFoul), required, Term::list(std::move(names)),
-         Term::binary(sig.makeModule), Term::binary(sig.declaringModule)},
+         Term::binary(sig.makeModule), Term::binary(sig.declaringModule),
+         stringsTerm(sig.requiredCapabilities), boundsTerm(sig.receiverBounds)},
         schema::kSignature, "signature");
 }
 
@@ -385,6 +432,12 @@ auto signatureFromSax(SaxReader& sax) -> kex::semantic::Signature {
     sax.endList();
     sig.makeModule = sax.readBinary();
     sig.declaringModule = sax.readBinary();
+    const auto capabilityCount = sax.beginList();
+    for (size_t i = 0; i < capabilityCount; ++i) {
+        sig.requiredCapabilities.push_back(sax.readBinary());
+    }
+    sax.endList();
+    sig.receiverBounds = boundsFromSax(sax);
     return sig;
 }
 
@@ -464,9 +517,14 @@ auto traitToTerm(const kex::semantic::TraitDef& trait) -> TermPtr {
     for (const auto& name : trait.defaultBodies) {
         bodies.push_back(Term::binary(name));
     }
+    std::vector<TermPtr> kinds;
+    for (const auto kind : trait.paramKinds) {
+        kinds.push_back(Term::integer(static_cast<int64_t>(kind)));
+    }
     return checkedTuple(
         {Term::atom("trait"), Term::binary(trait.name), Term::list(std::move(required)),
-         Term::list(std::move(defaults)), Term::list(std::move(bodies))},
+         Term::list(std::move(defaults)), Term::list(std::move(bodies)),
+         Term::list(std::move(kinds))},
         schema::kTrait, "trait");
 }
 
@@ -495,6 +553,11 @@ auto traitFromSax(SaxReader& sax) -> kex::semantic::TraitDef {
     const auto bodyCount = sax.beginList();
     for (size_t i = 0; i < bodyCount; ++i) {
         trait.defaultBodies.push_back(sax.readBinary());
+    }
+    sax.endList();
+    const auto kindCount = sax.beginList();
+    for (size_t i = 0; i < kindCount; ++i) {
+        trait.paramKinds.push_back(static_cast<std::size_t>(sax.readInt()));
     }
     sax.endList();
     return trait;
@@ -680,7 +743,14 @@ auto serializeImportedInterfaces(const kex::semantic::ImportedInterfaces& ifaces
 
     std::vector<TermPtr> conformances;
     for (const auto& c : ifaces.traitConformances) {
-        conformances.push_back(Term::tuple({Term::binary(c.typeName), Term::binary(c.traitName)}));
+        std::vector<TermPtr> holes;
+        for (const auto hole : c.holes) {
+            holes.push_back(Term::integer(static_cast<int64_t>(hole)));
+        }
+        conformances.push_back(
+            Term::tuple(
+                {Term::binary(c.typeName), Term::binary(c.traitName), boundsTerm(c.bounds),
+                 Term::list(std::move(holes))}));
     }
 
     std::vector<TermPtr> adts;
@@ -722,6 +792,11 @@ auto serializeImportedInterfaces(const kex::semantic::ImportedInterfaces& ifaces
     for (const auto& name : ifaces.typeNames) {
         typeNames.push_back(Term::binary(name));
     }
+    std::vector<TermPtr> typeArities;
+    for (const auto& [name, arity] : ifaces.typeArities) {
+        typeArities.push_back(
+            Term::tuple({Term::binary(name), Term::integer(static_cast<int64_t>(arity))}));
+    }
 
     std::vector<TermPtr> distinctTypes;
     for (const auto& [name, distinct] : ifaces.distinctTypes) {
@@ -749,6 +824,7 @@ auto serializeImportedInterfaces(const kex::semantic::ImportedInterfaces& ifaces
             Term::list(std::move(typeNames)),
             Term::list(std::move(distinctTypes)),
             Term::list(std::move(traits)),
+            Term::list(std::move(typeArities)),
         },
         schema::kIfaces, "ifaces");
     return encodeEtf(root);
@@ -841,10 +917,20 @@ auto deserializeImportedInterfaces(const std::vector<uint8_t>& bytes, CacheMissR
         const auto conformanceCount = sax.beginList();
         ifaces.traitConformances.reserve(conformanceCount);
         for (size_t i = 0; i < conformanceCount; ++i) {
-            sax.beginTuple();
+            const auto fields = sax.beginTuple();
             auto typeName = sax.readBinary();
             auto traitName = sax.readBinary();
-            ifaces.traitConformances.push_back({std::move(typeName), std::move(traitName)});
+            auto bounds = fields > 2 ? boundsFromSax(sax) : kex::semantic::TypeArgBounds{};
+            std::vector<std::size_t> holes;
+            if (fields > 3) {
+                const auto holeCount = sax.beginList();
+                for (size_t h = 0; h < holeCount; ++h) {
+                    holes.push_back(static_cast<std::size_t>(sax.readInt()));
+                }
+                sax.endList();
+            }
+            ifaces.traitConformances.push_back(
+                {std::move(typeName), std::move(traitName), std::move(bounds), std::move(holes)});
         }
         sax.endList();
 
@@ -928,6 +1014,15 @@ auto deserializeImportedInterfaces(const std::vector<uint8_t>& bytes, CacheMissR
         ifaces.traits.reserve(traitCount);
         for (size_t i = 0; i < traitCount; ++i) {
             ifaces.traits.push_back(traitFromSax(sax));
+        }
+        sax.endList();
+
+        const auto arityCount = sax.beginList();
+        ifaces.typeArities.reserve(arityCount);
+        for (size_t i = 0; i < arityCount; ++i) {
+            sax.beginTuple();
+            auto name = sax.readBinary();
+            ifaces.typeArities[std::move(name)] = static_cast<std::size_t>(sax.readInt());
         }
         sax.endList();
 

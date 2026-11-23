@@ -1,0 +1,28 @@
+spec/error_condition_not_bool.kex:11:8: [KEXET-0504]: Error, elif condition must be Bool, got Integer
+   |
+11 |   elif n
+   |        ^
+spec/error_condition_not_bool.kex:20:12: [KEXET-0505]: Error, `when` guard must be Bool, got Integer
+   |
+20 |     m when m => "guarded"
+   |            ^
+spec/error_condition_not_bool.kex:26:9: [KEXET-0448]: Error, while condition must be Bool, got Integer
+   |
+26 |   while n do
+   |         ^
+spec/error_condition_not_bool.kex:31:34: [KEXET-0458]: Error, then/else condition must be Bool, got Integer
+   |
+31 | let pick(n: Integer) -> String = n then "yes" else "no"
+   |                                  ^
+spec/error_condition_not_bool.kex:34:31: [KEXET-0443]: Error, if condition must be Bool, got Integer
+   |
+34 |   IO.printLine("trailing") if n
+   |                               ^
+spec/error_condition_not_bool.kex:43:10: [KEXET-0401]: Error, collection-block guard requires Bool, got Integer
+   |
+43 |     2 if n
+   |          ^
+spec/error_condition_not_bool.kex:50:10: [KEXET-0505]: Error, `when` guard must be Bool, got Integer
+   |
+50 |   e when n => "guarded"
+   |          ^

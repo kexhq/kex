@@ -18,7 +18,7 @@ struct PrimitiveType {
     // String is its OWN kind, not `[Char]`. Modelling it as a list of Char
     // made the two indistinguishable to the checker, so `contains? : String ->
     // Bool` silently accepted a Char and `[Char]` reported itself as "String".
-    enum Kind { Integer, Char, String, Bool, Atom, Unit }; // Integer = arbitrary precision
+    enum Kind { Integer, Char, String, Bool, Atom, Void }; // Integer = arbitrary precision
     Kind kind;
     // For Atom only, and for DISPLAY only: the literal an atom type was
     // written as (`:macos`), empty for a plain `Atom`. Without it a union of
@@ -93,12 +93,21 @@ struct TypeVar {
     int id;
 };
 
-struct UnknownType {};
+// A type the checker does not know. `written` marks one the source wrote as
+// `Any`: a declared contract, not a gap in inference, so a parameter of it is
+// one the checker learned (mentionsUnknown), and an interface carries it as
+// `any`. Every other comparison treats the two alike for now; `Any` becomes
+// the top type rule by rule (docs/typechecker-hm-plan.md, decision 7).
+struct UnknownType {
+    bool written = false;
+};
 
-// Bottom type — for expressions that never return (infinite loop, panic, exit).
-// Unifies with any type as a universal subtype: a Never-typed branch is compatible
-// with any other branch type because it never actually produces a value at runtime.
-struct VoidType {
+// The source's `Never`: the bottom type, for expressions that never return
+// (`return`, an infinite loop, `die`). Unifies with any type as a universal
+// subtype: a Never-typed branch is compatible with any other branch type because
+// it never produces a value at run time. Not the source's `Void`, which is
+// PrimitiveType::Void ("produces nothing useful") and fits nothing else.
+struct NeverType {
     // Empty for ordinary non-returning expressions. Set when Never is the
     // normalization of an intersection of two different nominal records, so
     // a diagnostic can still name them.
@@ -119,6 +128,16 @@ struct ConstrainedType {
     int genericId = 0;
 };
 
+// A type applied to arguments whose head is not a declared type but a type
+// variable: `F<A>` under `trait Functor<F<_>>` (docs/typechecker-hm-plan.md
+// §8.2). Once the head is known (`Box`, `Result<_, E>`), the application is
+// the type it names (applyConstructor); `[X]`, `X?` and `Map<K, V>` read
+// back as applications through applicationOf.
+struct TypeApp {
+    TypePtr head;
+    std::vector<TypePtr> args;
+};
+
 struct Type {
     std::variant<
         PrimitiveType,
@@ -135,8 +154,9 @@ struct Type {
         RecordType,
         TypeVar,
         UnknownType,
-        VoidType,
-        ConstrainedType>
+        NeverType,
+        ConstrainedType,
+        TypeApp>
         kind;
 
     static auto integer() -> TypePtr; // arbitrary precision
@@ -144,9 +164,11 @@ struct Type {
     static auto string() -> TypePtr;
     static auto boolean() -> TypePtr;
     static auto atom(std::string atomName = "") -> TypePtr;
-    static auto unit() -> TypePtr;
+    static auto voidType() -> TypePtr;
     static auto unknown() -> TypePtr;
-    static auto voidType(std::string leftRecord = {}, std::string rightRecord = {}) -> TypePtr;
+    // `Any` as written: an UnknownType the source declared (see UnknownType).
+    static auto any() -> TypePtr;
+    static auto never(std::string leftRecord = {}, std::string rightRecord = {}) -> TypePtr;
     static auto named(const std::string& name, std::vector<TypePtr> args = {}) -> TypePtr;
     // The type of the nullary variant `variant` of the ADT `adt` (NamedType::variant).
     static auto variantOf(const std::string& adt, const std::string& variant) -> TypePtr;
@@ -160,6 +182,9 @@ struct Type {
     static auto intersection(std::vector<TypePtr> members) -> TypePtr;
     static auto record(std::vector<std::pair<std::string, TypePtr>> fields) -> TypePtr;
     static auto typeVar(int id) -> TypePtr;
+    static auto app(TypePtr head, std::vector<TypePtr> args) -> TypePtr;
+    // The hole of a type lambda: `_` in `make Result<_, E>`.
+    static auto hole() -> TypePtr;
     static auto
     constrained(const std::string& varName, const std::string& traitName, int genericId = 0)
         -> TypePtr;
@@ -183,6 +208,19 @@ struct Type {
 };
 
 auto typeToString(const TypePtr& type) -> std::string;
+// A type as a constructor applied to arguments (§8.2, #342): `[X]` is `List`
+// applied to X, `X?` `Optional`, `Map<K, V>` `Map`, `Box<A>` `Box`, and a
+// `TypeApp` its own head. None for a type that applies nothing.
+struct Application {
+    TypePtr head;
+    std::vector<TypePtr> args;
+};
+auto applicationOf(const TypePtr& type) -> std::optional<Application>;
+// `head` applied to `args`: a constructor's holes filled (`Result<_, E>`), or
+// its arguments given, as the type that names (`[X]` for `List`). A head that
+// is still a variable stays a TypeApp.
+auto applyConstructor(const TypePtr& head, std::vector<TypePtr> args) -> TypePtr;
+auto isTypeHole(const TypePtr& type) -> bool;
 // The name a primitive kind is written with in Kex and printed with by
 // typeToString (`Void` for the unit kind), and the kind a name is. One
 // table, which the interface cache reads too rather than keeping its own.
@@ -300,6 +338,10 @@ auto isFullyConcrete(const TypePtr& type) -> bool;
 // type somewhere inside. Checks that would otherwise report a mismatch use
 // this to stay quiet rather than invent an error from incomplete information.
 auto containsOpenType(const TypePtr& type) -> bool;
+// A type variable or an unknown somewhere inside: a hole inference has not
+// filled. Unlike containsOpenType, a trait constraint does not count, since a
+// bound is a type a value has, not a missing one.
+auto containsUnsolved(const TypePtr& type) -> bool;
 // A type variable or a trait constraint somewhere inside: a generic type.
 // Unlike containsOpenType, an unknown (`Any`) does not count.
 auto containsTypeVariable(const TypePtr& type) -> bool;

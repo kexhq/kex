@@ -1,0 +1,4 @@
+spec/error_required_declared_return.kex:14:15: [KEXET-0507]: Error, `area` is required to return Float, but is declared to return String
+   |
+14 |   let area -> String = "not a number"
+   |               ^^^^^^

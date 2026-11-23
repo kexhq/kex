@@ -1,0 +1,10 @@
+spec/error_trait_default_types.kex:7:41: [KEXET-0127]: Error, `shout` declared to return Integer but body returns String
+  |
+7 |   let shout -> Integer = label.upperCase
+  |                -------   ^^^^^^^^^^^^^^^ this has type String
+  |                |
+  |                expected because of this return type
+spec/error_trait_default_types.kex:11:33: [KEXET-0463]: Error, cannot add String and Integer
+   |
+11 |   let shout = label.upperCase + 1
+   |               ^^^^^^^^^^^^^^^^^^^

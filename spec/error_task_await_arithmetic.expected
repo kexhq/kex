@@ -1,4 +1,4 @@
-spec/error_task_await_arithmetic.kex:4:20: [KEXET-0464]: Error, operator '+' requires matching types, got Integer and Result<A, Unknown>
+spec/error_task_await_arithmetic.kex:4:20: [KEXET-0464]: Error, operator '+' requires matching types, got Integer and Result<A, Any>
   |
 4 |   IO.printLine(3 + value)
   |                ^^^^^^^^^

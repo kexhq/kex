@@ -21,6 +21,8 @@
       "name": "keyword.control.kex", "match": "(?<![.\\w])or!?(?![\\w(])" },
     { "comment": "`make Something, implement: Showable, Comparable do` (parser.cxx:643). The label is part of the declaration, not a record field's colon.",
       "name": "entity.other.attribute-name.kex", "match": "\\b(implement)\\s*(?=:)" },
+    { "comment": "`make A is Discrete =>`, `let larger(A is Comparable =>` (#651): `is` bounds a type variable, and only there, so a function named `is?` stays an ordinary name.",
+      "match": "(?<=\\b[A-Z])\\s+(is)(?=\\s+[A-Z])", "captures": { "1": { "name": "keyword.other.bound.kex" } } },
     { "comment": "A `name :> Type` or `name ::> Type` declaration names a method or slot.",
       "name": "entity.name.function.kex",
       "match": "^\\s*[a-z_][A-Za-z0-9_?!]*(?=\\s*::?>)" },

@@ -11,7 +11,7 @@
 using Units.SI
 
 module Celsius do
-  let measure(degrees: Number) -> Measure do
+  let measure(degrees: Number) -> Measure<Quantity.Temperature> do
   return Measure {
     canonical: degrees + 273.15,
     value: degrees,
@@ -25,11 +25,11 @@ module Celsius do
 end
 
 make Integer | Float do
-  let celsius -> Measure = Celsius.measure(this * 1.0)
+  let celsius -> Measure<Quantity.Temperature> = Celsius.measure(this * 1.0)
 end
 
 # make Float do
-#   let celsius -> Measure = Celsius.measure(this)
+#   let celsius -> Measure<Quantity.Temperature> = Celsius.measure(this)
 # end
 
 main do

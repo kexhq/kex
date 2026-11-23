@@ -135,11 +135,19 @@ trait_item
 (* ===== Make Blocks ===== *)
 
 make_def
-  = MAKE make_target ( COMMA IMPLEMENT COLON trait_list )? DO make_body END
+  = MAKE ( make_bounds FAT_ARROW )? make_target ( COMMA IMPLEMENT COLON trait_list )? DO make_body END
   | MAKE FINAL COLON make_target DO make_body END
   ;
 
 trait_list = UPPER_IDENT ( COMMA UPPER_IDENT )* ;
+
+(* `make A is Discrete => Range<A>` and `let larger(A is Comparable => a: A,
+   b: A)` (#651): a bounded type variable is one type satisfying its traits.
+   A bounded `make` block, its functions and its conformances hold only where
+   each bounded type argument does. `is` is a bound only here, after a single uppercase letter, so it
+   reserves no name; `&` joins traits on one variable. *)
+make_bounds = make_bound ( COMMA make_bound )* ;
+make_bound = UPPER_IDENT "is" type_name ( AMP type_name )* ;
 
 make_target = type_expr ;
 
@@ -175,7 +183,7 @@ function_clauses
    spell that annotation `: type_expr` instead, which is how a binding reads:
    `foul lines : Feed<String> = …`. A clause WITH parameters requires `->`. *)
 function_clause
-  = LPAREN params RPAREN return_annotation? clause_body
+  = LPAREN ( make_bounds FAT_ARROW )? params? RPAREN return_annotation? clause_body
   | return_annotation? clause_body
   | COLON type_expr EQUALS expr                   (* parameterless binding *)
   ;
@@ -212,9 +220,9 @@ param
 (*   A signature may span lines: after an ARROW, or with the ARROW leading
      the next line. *)
 type_annotation
-  = LOWER_IDENT TYPE_ANNOTATION type_expr
+  = LOWER_IDENT TYPE_ANNOTATION ( make_bounds FAT_ARROW )? type_expr
   | LOWER_IDENT SLOT_ANNOTATION type_expr
-  | LOWER_IDENT COLON type_expr
+  | LOWER_IDENT COLON ( make_bounds FAT_ARROW )? type_expr
   | binary_op TYPE_ANNOTATION type_expr           (* operator signatures, e.g. == :> This -> Bool *)
   | binary_op COLON type_expr                     (* e.g. == : This -> This -> Bool *)
   ;

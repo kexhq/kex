@@ -198,7 +198,7 @@ int main() {
         });
         it("rejects atom literals, unit, and sized numerics", []() {
             assertFalse(writtenTargetHead(Type::atom("ok")).has_value());
-            assertFalse(writtenTargetHead(Type::unit()).has_value());
+            assertFalse(writtenTargetHead(Type::voidType()).has_value());
             assertFalse(writtenTargetHead(Type::int64()).has_value());
             assertFalse(writtenTargetHead(Type::uint8()).has_value());
             assertFalse(writtenTargetHead(Type::float64()).has_value());
@@ -237,7 +237,7 @@ int main() {
             assertTrue(receiverCoversHead(Type::integer(), "Integer", ifaces));
             assertFalse(receiverCoversHead(Type::integer(), "String", ifaces));
             assertTrue(receiverCoversHead(Type::atom("ok"), "Atom", ifaces));
-            assertFalse(receiverCoversHead(Type::unit(), "Void", ifaces));
+            assertFalse(receiverCoversHead(Type::voidType(), "Void", ifaces));
             assertFalse(receiverCoversHead(Type::int64(), "Int64", ifaces));
         });
         it("matches nominals exactly or by last segment", []() {

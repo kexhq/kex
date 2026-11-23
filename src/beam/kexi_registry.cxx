@@ -159,10 +159,22 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
             }
             return Type::constrained(type->name, type->traitName, genericId);
         }
-        case KexiType::Never: return Type::voidType();
+        case KexiType::Never: return Type::never();
         case KexiType::Unknown: return Type::unknown();
+        case KexiType::Any: return Type::any();
+        case KexiType::App:
+            return Type::app(semanticType(type->result, vars), convertAll(type->typeArgs));
     }
     return Type::unknown();
+}
+
+// An interface writes a tied `Number` (decision 4) as the `Number` it was
+// written as, so it is tied again here, by the rule the checker used: the
+// signature was checked against the tie where it was compiled.
+auto tieImportedTraitResult(kex::semantic::Signature& signature) -> void {
+    kex::semantic::tieTraitResult(
+        signature, [](const kex::semantic::TypePtr& type) { return type; },
+        [](const kex::semantic::Type*) { return true; });
 }
 
 auto importedFunction(
@@ -183,7 +195,9 @@ auto importedFunction(
     }
     result.signature = {
         exported.name, std::move(params), semanticType(exported.returnType, vars), exported.isFoul};
+    tieImportedTraitResult(result.signature);
     result.signature.paramNames = exported.paramNames;
+    result.signature.requiredCapabilities = exported.requiredCapabilities;
     if (exported.defaultedParams > 0) {
         result.signature.requiredParams = result.signature.params.size() - exported.defaultedParams;
     }
@@ -253,7 +267,10 @@ auto importedReceiverFunction(
     }
     result.signature = {
         receiver.name, std::move(params), semanticType(receiver.returnType, vars), receiver.isFoul};
+    tieImportedTraitResult(result.signature);
     result.signature.paramNames = receiver.paramNames;
+    result.signature.requiredCapabilities = receiver.requiredCapabilities;
+    result.signature.receiverBounds = receiver.receiverBounds;
     if (receiver.defaultedParams > 0) {
         result.signature.requiredParams = result.signature.params.size() - receiver.defaultedParams;
     }
@@ -265,6 +282,7 @@ auto importedTrait(const KexiTraitDef& trait, const KexiTypeInterface& interface
     kex::semantic::TraitDef result;
     result.name = trait.name;
     result.defaultBodies = trait.defaultBodies;
+    result.paramKinds = trait.paramKinds;
     // Every overload the trait received under a required name: a capability
     // can require `take(text: String)` beside `take(count: Integer)`, and
     // keeping the first alone held the Integer implementation to the String
@@ -287,9 +305,37 @@ auto importedTrait(const KexiTraitDef& trait, const KexiTypeInterface& interface
             if (!params.empty()) {
                 params.erase(params.begin());
             }
+            auto requiredResult = imported.signature.result;
+            // Under `trait Functor<F<_>>` an `F<A>` reads back as a type named
+            // F: it is the trait's parameter applied (§8.2), one variable per
+            // letter across the signature.
+            if (!trait.paramKinds.empty()) {
+                std::unordered_map<std::string, kex::semantic::TypePtr> heads;
+                int next = -1000;
+                std::function<kex::semantic::TypePtr(const kex::semantic::TypePtr&)> applied =
+                    [&](const kex::semantic::TypePtr& type) -> kex::semantic::TypePtr {
+                    auto rebuilt = kex::semantic::mapTypeChildren(type, applied);
+                    const auto* named =
+                        rebuilt ? std::get_if<kex::semantic::NamedType>(&rebuilt->kind) : nullptr;
+                    if (!named || named->name.size() != 1 || named->typeArgs.empty() ||
+                        !kex::startsUppercase(named->name)) {
+                        return rebuilt;
+                    }
+                    auto head = heads.find(named->name);
+                    if (head == heads.end()) {
+                        head =
+                            heads.emplace(named->name, kex::semantic::Type::typeVar(next--)).first;
+                    }
+                    return kex::semantic::Type::app(head->second, named->typeArgs);
+                };
+                for (auto& param : params) {
+                    param = applied(param);
+                }
+                requiredResult = applied(requiredResult);
+            }
             result.requiredMethods.push_back(
                 kex::semantic::Signature{
-                    required.name, std::move(params), imported.signature.result, required.isFoul});
+                    required.name, std::move(params), requiredResult, required.isFoul});
         }
         if (!found) {
             result.requiredMethods.push_back(
@@ -863,7 +909,7 @@ auto KexiRegistry::buildSemanticInterfaces() const -> kex::semantic::ImportedInt
                                 ? kex::semantic::Type::named(
                                       "Result", {reply->typeArgs.front(),
                                                  kex::semantic::Type::named("CallError")})
-                                : kex::semantic::Type::unit();
+                                : kex::semantic::Type::voidType();
                         signature.isFoul = true;
                         remote.remoteSlot = true;
                         interfaces.receiverFunctions[receiver.name].push_back(std::move(remote));
@@ -958,6 +1004,7 @@ auto KexiRegistry::buildSemanticInterfaces() const -> kex::semantic::ImportedInt
                 }
                 for (const auto& name : names) {
                     interfaces.typeNames.insert(name);
+                    interfaces.typeArities[name] = te.genericParams.size();
                     if (te.isDistinct && te.backingType) {
                         TypeVarMap vars;
                         interfaces.distinctTypes[name] = {
@@ -1014,7 +1061,8 @@ auto KexiRegistry::buildSemanticInterfaces() const -> kex::semantic::ImportedInt
     for (const auto& [_, unit] : m_units) {
         for (const auto& module : unit.modules) {
             for (const auto& c : module.chunk.metadata.traitConformances) {
-                interfaces.traitConformances.push_back({c.typeName, c.traitName});
+                interfaces.traitConformances.push_back(
+                    {c.typeName, c.traitName, c.bounds, c.holes});
                 if (auto it = adtConstructors.find(c.typeName); it != adtConstructors.end()) {
                     for (const auto& ctorName : it->second) {
                         interfaces.traitConformances.push_back({ctorName, c.traitName});

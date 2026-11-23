@@ -32,6 +32,9 @@ public:
     // `params:` frontmatter entry's `: Type` half) needs an entry point
     // that isn't the whole program.
     auto parseTypeExpr() -> ast::TypeExprPtr;
+    auto parseTypeBounds(
+        std::vector<std::pair<std::string, ast::TypeName>>& into,
+        std::vector<SourceLocation>& traitLocations) -> void;
     auto diagnostics() const -> const std::vector<ParseDiagnostic>&;
 
     // Every node the parser completed, as its kind and byte span, in the order

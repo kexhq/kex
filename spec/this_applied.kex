@@ -1,0 +1,37 @@
+# `This<B>` in a make block (#651 open question 3, docs/typechecker-hm-plan.md
+# §8.2): the target's constructor applied again. A whole target (`make Box`,
+# `make [A]`) takes new arguments for all of its own; a type lambda
+# (`make Tagged<_, E>`) fills its holes and keeps the rest.
+
+trait Functor<F<_>> do
+  fmap : F<A> -> (A -> B) -> F<B>
+end
+
+record Box<A> do
+  value : A
+end
+
+make Box, implement: Functor do
+  let fmap(f) -> This<B> = Box { value: f(@value) }
+end
+
+make [A] do
+  let pairUp -> This<(A, A)> = this.map { |x| (x, x) }
+end
+
+record Tagged<A, E> do
+  item : A
+  tag : E
+end
+
+make Tagged<_, E> do
+  let swap(f) -> This<B> = Tagged { item: f(@item), tag: @tag }
+end
+
+main do
+  let b: Box<String> = Box { value: 2 }.fmap { |n| "n=${n}" }
+  IO.printLine(b.value)
+  IO.printLine([1, 2].pairUp)
+  let t: Tagged<Float, String> = Tagged { item: 1, tag: "x" }.swap { |n| n * 2.5 }
+  IO.printLine(t.item)
+end

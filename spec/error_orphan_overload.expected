@@ -1,0 +1,4 @@
+spec/error_orphan_overload.kex:13:5: [KEXET-0510]: Error, `/` on `Measure<Quantity.Power>` adds an overload to another module's `/`, and none of its types is declared here: an overload of another module's function belongs in a module that declares one of its operand types
+   |
+13 |     let /(other: Measure<Quantity.Length>) -> Measure<Quantity.Speed> = Measure {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

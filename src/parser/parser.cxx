@@ -770,11 +770,22 @@ auto Parser::parseTraitDef() -> std::unique_ptr<ast::TraitDef> {
         rejectSingleLetterTypeName(tok.value, diag::Code::SingleLetterTypeNameForTrait);
         def->name = tok.value;
     }
-    // Optional type params: `trait Functor<F> do ...`
+    // Optional type params: `trait Functor<F> do ...`. A parameter that is
+    // itself a type constructor writes its holes, `F<_>` or `F<_, _>`: its
+    // kind, `* -> *` for one (docs/typechecker-hm-plan.md §8.2).
     if (match(TokenType::LessThan)) {
         while (!check(TokenType::GreaterThan) && !atEnd()) {
             def->typeParams.push_back(
                 expect(TokenType::UpperIdent, diag::Code::ExpectedTypeParam).value);
+            std::size_t holes = 0;
+            if (match(TokenType::LessThan)) {
+                do {
+                    expect(TokenType::Underscore, diag::Code::ExpectedToken, {{"expected", "'_'"}});
+                    ++holes;
+                } while (match(TokenType::Comma));
+                expect(TokenType::GreaterThan, diag::Code::ExpectedToken, {{"expected", "'>'"}});
+            }
+            def->typeParamArities.push_back(holes);
             if (!check(TokenType::GreaterThan)) {
                 expect(TokenType::Comma, diag::Code::ExpectedToken, {{"expected", "','"}});
             }
@@ -827,6 +838,12 @@ auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
         def->isFinal = true;
     }
 
+    // Bounds on the target's type variables, before it and closed by `=>`
+    // (#651): `make A is Discrete => Range<A>, implement: Enumerable`. The
+    // block applies where each bound holds, its conformances too. `is` is
+    // read as a bound only here, after an uppercase name, so no name is
+    // reserved; `&` joins traits on one variable.
+    parseTypeBounds(def->typeParamBounds, def->typeParamBoundLocations);
     def->target = parseTypeExpr();
     // `make T do ... end` attaches methods to a type parameter, which names no
     // type at all. Caught here rather than left to the checker, where it
@@ -841,6 +858,33 @@ auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
     parseMakeImplements(*def);
     parseMakeBody(*def);
     return complete(std::move(def));
+}
+
+// `A is Comparable, K is Showable & Hashable =>` (#651), when one opens here:
+// an uppercase name followed by `is`. Only in this position is `is` a bound,
+// so it reserves no name.
+auto Parser::parseTypeBounds(
+    std::vector<std::pair<std::string, ast::TypeName>>& into,
+    std::vector<SourceLocation>& traitLocations) -> void {
+    if (!check(TokenType::UpperIdent) || peekNext().type != TokenType::LowerIdent ||
+        peekNext().value != "is") {
+        return;
+    }
+    do {
+        const auto variable = advance().value;
+        advance(); // `is`
+        // Each trait at its last segment (`Pricing` in `Shop.Pricing`), as
+        // `implement:` records it: where a reader points at it.
+        const auto boundTrait = [&] {
+            into.emplace_back(variable, parseTypeName());
+            traitLocations.push_back(m_tokens[m_pos - 1].location);
+        };
+        boundTrait();
+        while (match(TokenType::Amp)) {
+            boundTrait();
+        }
+    } while (match(TokenType::Comma));
+    expect(TokenType::FatArrow, diag::Code::ExpectedToken, {{"expected", "'=>'"}});
 }
 
 auto Parser::parseServingDef() -> std::unique_ptr<ast::MakeDef> {
@@ -1055,6 +1099,7 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
     bool hasParamList = false;
     if (match(TokenType::LParen)) {
         hasParamList = true;
+        parseTypeBounds(clause.typeParamBounds, clause.typeParamBoundLocations);
         if (!check(TokenType::RParen)) {
             clause.params = parseParams();
         }
@@ -1278,6 +1323,8 @@ auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
 
     const bool savedInSignature = m_inTypeSignature;
     m_inTypeSignature = true;
+    // `larger : A is Comparable => A -> A -> A` (#651).
+    parseTypeBounds(ann->typeParamBounds, ann->typeParamBoundLocations);
     ann->type = parseTypeExpr();
     m_inTypeSignature = savedInSignature;
     return complete(std::move(ann));
@@ -1400,6 +1447,13 @@ auto Parser::parseTypePostfix() -> ast::TypeExprPtr {
 auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
     auto type = std::make_unique<ast::TypeExpr>();
     type->location = currentLocation();
+
+    // `_`: the hole a type lambda leaves, `make Result<_, E>, implement:
+    // Functor` (docs/typechecker-hm-plan.md §8.2).
+    if (match(TokenType::Underscore)) {
+        type->kind = ast::TypeName{{"_"}};
+        return complete(std::move(type));
+    }
 
     // List type: [A]
     if (match(TokenType::LBracket)) {

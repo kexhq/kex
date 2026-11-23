@@ -1,0 +1,8 @@
+spec/error_foul_block_in_guard.kex:16:33: [KEXEF-0005]: Error, cannot call foul function 'IO.printLine' in a guard
+   |
+16 |     x when holds? { IO.printLine("side effect"); true } => "yes ${x}"
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+spec/error_foul_block_in_guard.kex:17:20: [KEXEF-0009]: Error, cannot capture foul function 'greet' in a guard: what it is handed to may call it
+   |
+17 |     _ when xs.any?(~greet) => "greeted"
+   |                    ^^^^^^

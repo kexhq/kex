@@ -1,0 +1,20 @@
+# kex: check-only
+# A trait default with a type error reports that error, not "undefined name"
+# for the requirement it names bare (docs/typechecker-hm-plan.md §11, item 9).
+
+trait Named do
+  label :> String
+  let shout -> Integer = label.upperCase
+end
+trait Named2 do
+  label :> String
+  let shout = label.upperCase + 1
+end
+trait Named3 do
+  label :> String
+  let shout -> String = label.upperCase
+end
+
+main do
+  IO.printLine(1)
+end

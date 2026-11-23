@@ -1,3 +1,8 @@
+# kex: no-check
+# Run unchecked: calling a function on a value erased to `Any` is a type
+# error now (decision 7 of docs/typechecker-hm-plan.md), and this tests the
+# backends' dispatch for exactly such a value, which a trait-typed value and
+# an unchecked program still reach.
 # A `foul` make-block method whose name is also a prelude receiver method
 # (kexhq/kex#143).
 #

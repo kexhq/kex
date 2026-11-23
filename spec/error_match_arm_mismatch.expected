@@ -1,5 +1,5 @@
-spec/error_match_arm_mismatch.kex:3:3: [KEXET-0446]: Error, match arm type mismatch: expected String but arm returns Integer
+spec/error_match_arm_mismatch.kex:7:10: [KEXET-0001]: Error, type mismatch: expected String, got Integer
   |
-3 |   match n do
-  |   ^^^^^^^^^^
+7 |     _ => 99
+  |          ^^
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

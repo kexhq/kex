@@ -1,0 +1,21 @@
+# Bounds on a function's type variables (#651): `A is Comparable =>` before the
+# parameters, or before a standalone signature's type. Every `A` is one type,
+# so `larger(3, 7)` is an Integer and `larger("pear", "apple")` a String, and
+# the bound is checked where it is called (spec/error_function_bound_unmet.kex).
+
+let larger(A is Comparable => a: A, b: A) -> A = a > b then a else b
+
+let describe(K is Showable, V is Showable => key: K, value: V) -> String = "${key}=${value}"
+
+smaller : A is Comparable => A -> A -> A
+let smaller(a, b) = a < b then a else b
+
+main do
+  let n: Integer = larger(3, 7)
+  IO.printLine(n)
+  let s: String = larger("pear", "apple")
+  IO.printLine(s)
+  IO.printLine(larger(2.5, 1.0))
+  IO.printLine(describe(:a, 1))
+  IO.printLine(smaller(3, 7))
+end

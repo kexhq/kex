@@ -1,0 +1,17 @@
+# kex: check-only
+# Products and quotients of measures carry their dimension
+# (docs/typechecker-hm-plan.md §8.1): a speed plus a time, or an area typed
+# as a Duration, was accepted, because `*`, `/` and `per` answered a bare
+# `Measure` that fitted any dimension. A product Units.SI does not declare is
+# a type error.
+
+using Units.SI
+
+main do
+  let speed = 100.meter.per(10.second)
+  IO.printLine(speed.to(String).or(""))
+  IO.printLine((2.newton * 3.meter).to(String).or(""))
+  IO.printLine((31544.watt * 1.hour).to(String, in: Mega(Joule)).or(""))
+  let bad = speed + 5.second
+  let t: Duration = 2.meter * 3.meter
+end

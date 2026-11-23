@@ -1,0 +1,35 @@
+# kex: check-only
+# Effects carried by data (#142, decision 6 option a): a record built with a
+# foul block carries a foul effect, and a function that runs a block read out
+# of its parameter (`fire`) is as foul as what it is handed, through another
+# function too (`relay`). A guard must not run an effect, so handing it one
+# is an error. A record built with a pure block is pure.
+
+record Hook do
+  run : Block<Bool>
+end
+
+let fire(h: Hook) -> Bool do
+  let f = h.run
+  f()
+end
+
+let relay(h: Hook) -> Bool = fire(h)
+
+foul loud -> Hook = Hook { run: { IO.printLine("effect"); true } }
+
+foul check(n: Integer) -> String do
+  let noisy = Hook { run: { IO.printLine("side"); true } }
+  let quiet = Hook { run: { true } }
+  let made = loud
+  match n do
+    1 when fire(noisy) => "noisy"
+    2 when relay(made) => "made"
+    3 when fire(quiet) => "quiet"
+    _ => "none"
+  end
+end
+
+main do
+  IO.printLine(check(3))
+end

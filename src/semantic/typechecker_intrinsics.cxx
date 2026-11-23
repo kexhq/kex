@@ -237,7 +237,7 @@ auto TypeChecker::checkAs(const ast::Expr& expr, const ast::MethodCall& node) ->
     // so only from text the compiler can see. Atoms are never freed;
     // run-time text goes through `Atom.from` (makes one) or
     // `.to(Atom)` (finds an existing one), both explicit about it.
-    if (typeToString(target) == "Atom") {
+    if (typeToString(target) == kex::names::kAtomType) {
         const auto* literal =
             node.receiver ? std::get_if<ast::StringLiteral>(&node.receiver->kind) : nullptr;
         if (!literal || !literal->values.empty()) {

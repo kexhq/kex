@@ -1,0 +1,58 @@
+# kex: check-only
+# Every place the language decides on a Bool requires one, and the error is
+# reported at the condition itself. An `elif` condition and a `when` guard
+# were only inferred: `elif n` and `m when m` with an Integer were accepted,
+# and the walker treated them as true (docs/typechecker-hm-plan.md §11, items 4
+# and 5).
+
+let describe(n: Integer) -> String do
+  if n > 5
+    "big"
+  elif n
+    "small"
+  else
+    "zero"
+  end
+end
+
+let classify(n: Integer) -> String do
+  match n do
+    m when m => "guarded"
+    _ => "other"
+  end
+end
+
+foul loop(n: Integer) -> Void do
+  while n do
+    IO.printLine("never")
+  end
+end
+
+let pick(n: Integer) -> String = n then "yes" else "no"
+
+foul announce(n: Integer) -> Void do
+  IO.printLine("trailing") if n
+end
+
+collect : Block<[Integer]> -> [Integer]
+let collect(block) = block()
+
+let guarded(n: Integer) -> [Integer] do
+  collect do
+    1
+    2 if n
+  end
+end
+
+let rescued(n: Integer) -> String = trying do
+  Error("boom").try
+rescue
+  e when n => "guarded"
+  _ => "fallback"
+end
+
+main do
+  IO.printLine(describe(1))
+  IO.printLine(classify(1))
+  IO.printLine(pick(1))
+end

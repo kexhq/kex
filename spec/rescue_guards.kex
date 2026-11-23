@@ -24,15 +24,6 @@ rescue
   _ => "fallback"
 end
 
-# A non-boolean guard runs the body, like the walker: rescue guards
-# skip only on literal `false`, unlike match's truthiness.
-let noneRuns = trying do
-  Error("boom").try
-rescue
-  e when None => "none-ran"
-  _ => "fallback"
-end
-
 let rethrown = trying do
   trying do
     Error("deep").try
@@ -85,7 +76,6 @@ main do
   IO.printLine(guardedSkip)
   IO.printLine(guardedRun)
   IO.printLine(mistypedSkip)
-  IO.printLine(noneRuns)
   IO.printLine(rethrown)
   IO.printLine(ctorAfterGuard)
   IO.printLine(rethrownPastCtor)

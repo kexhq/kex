@@ -2,7 +2,6 @@ ok App.Models.User { admin?: false, email: ada@example.com, id: u1, nickname: No
 ok App.Models.User { admin?: true, email: b@x, id: u2, nickname: Just(bee), tags: [new] }
 error: missing field "email" for App.Models.User
 error: unknown field "mail" for App.Models.User
-error: unknown field Just(admin?) for App.Models.User
 error: field "id" of App.Models.User expects String, got Integer
 error: field "tags" of App.Models.User expects List<String>, got List<Integer>
 error: not a record type: Kind

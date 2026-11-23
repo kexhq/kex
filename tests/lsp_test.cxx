@@ -2584,5 +2584,113 @@ int main() {
             fs::remove_all(root);
         });
     });
+    // A describe of its own: one more test in the one above passes the size
+    // at which clang-format 20 re-lays out the whole call.
+    describe("Kex LSP capability requirements", []() {
+        it("hints a function's requirements at the end of its head", []() {
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-hints.kex","languageId":"kex","version":1,"text":"capability Clock do\n  foul now() -> Integer = 42\nend\nfoul stamp() -> Integer = Clock.now()\nlet pure(x: Integer) -> Integer = x\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-hints.kex"},"range":{"start":{"line":0,"character":0},"end":{"line":5,"character":0}}}})");
+            messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto hints = responseForId(output.str(), 2);
+            // `stamp` on line 3, after its 37 characters; `pure` needs nothing,
+            // and `now` is a member of Clock itself, so needs nothing more.
+            assertTrue(
+                hints.find(R"("label":"requires Clock")") != std::string::npos,
+                "the requirement was not hinted");
+            assertTrue(
+                hints.find(R"("position":{"character":37,"line":3})") != std::string::npos,
+                "the hint was not at the end of the function's head");
+            assertEqual(occurrences(hints, "requires"), size_t{1});
+        });
+        it("follows a capability through make functions and imported interfaces", []() {
+            // The requirement follows the function each call reaches, as the
+            // checker decided it: `stamp` is a `make` function (the old
+            // syntactic graph never looked inside a `make`), `FS.File` is a
+            // capability nested in a module, and `Time.now` needs
+            // `Time.Clock` only as its KexI interface says.
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-caps2.kex","languageId":"kex","version":1,"text":"capability Clock do\n  foul now() -> Integer = 42\nend\nrecord Stamper do\n  prefix : String\nend\nmake Stamper do\n  foul stamp -> String = \"${@prefix} ${Clock.now()}\"\nend\nfoul viaMake -> String = Stamper { prefix: \"at\" }.stamp\nfoul viaFile -> String = FS.File.read(\"x\").or(\"\")\nfoul viaTime -> String = Time.now.to(String).or(\"\")\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-caps2.kex"},"position":{"line":9,"character":7}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-caps2.kex"},"position":{"line":10,"character":7}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":4,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-caps2.kex"},"position":{"line":11,"character":7}}})");
+            messages += frame(R"({"jsonrpc":"2.0","id":5,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto result = output.str();
+            assertTrue(
+                result.find("viaMake calls stamp") != std::string::npos,
+                "hover did not follow the call into the make function");
+            assertTrue(
+                result.find("stamp uses Clock") != std::string::npos,
+                "hover did not reach the capability from the make function");
+            assertTrue(
+                result.find("requires FS.File") != std::string::npos,
+                "hover did not name the nested capability module");
+            // `Time.now` needs the clock only through what it calls: a
+            // compiled interface carries that, the stdlib read from source
+            // does not.
+            if (!testRuntimeBeamDir().empty()) {
+                assertTrue(
+                    result.find("requires Time.Clock") != std::string::npos,
+                    "hover did not read the requirement from the imported interface");
+            }
+        });
+    });
+    describe("Kex LSP bounds", []() {
+        // A bound's trait (#651) hovers as the trait the checker resolved,
+        // as a name after `implement:` does: here not the record `Pricing`.
+        const std::string source =
+            "module Shop do\n  trait Pricing do\n    price :> Integer\n  end\nend\n\n"
+            "record Pricing do\n  amount : Integer\nend\n\n"
+            "let cost(A is Shop.Pricing => item: A) -> Integer = item.price\n\n"
+            "record Box<T> do\n  item : T\nend\n\n"
+            "make T is Shop.Pricing => Box<T> do\n  let total -> Integer = .price\nend\n";
+        it("hovers a function bound's trait as the trait it resolved", [source]() {
+            const auto reply = askAt("file:///tmp/kex-lsp-bound-fn.kex", source, "hover", 10, 20);
+            assertTrue(
+                reply.find("trait Shop.Pricing") != std::string::npos,
+                "not the trait the bound names: " + reply);
+        });
+        it("hovers a make bound's trait as the trait it resolved", [source]() {
+            const auto reply = askAt("file:///tmp/kex-lsp-bound-make.kex", source, "hover", 16, 16);
+            assertTrue(
+                reply.find("trait Shop.Pricing") != std::string::npos,
+                "not the trait the bound names: " + reply);
+        });
+    });
+    describe("Kex LSP effects", []() {
+        it("hovers a function that runs its parameter as foul when it carries an effect", []() {
+            // Nothing in `fire`'s signature says it runs `h`'s block (#142).
+            const auto reply = askAt(
+                "file:///tmp/kex-lsp-transparent.kex",
+                "record Hook do\n  run : Block<Bool>\nend\n\n"
+                "let fire(h: Hook) -> Bool do\n  let f = h.run\n  f()\nend\n",
+                "hover", 4, 5);
+            assertTrue(
+                reply.find("foul when `h` carries an effect") != std::string::npos,
+                "the transparent parameter was not shown: " + reply);
+        });
+    });
     return runAll();
 }

@@ -122,12 +122,22 @@ auto typesExactlyEqual(const TypePtr& a, const TypePtr& b) -> bool {
             } else if constexpr (std::is_same_v<AT, TypeVar>) {
                 return at.id == bt->id;
             } else if constexpr (std::is_same_v<AT, UnknownType>) {
-                return true;
-            } else if constexpr (std::is_same_v<AT, VoidType>) {
+                return at.written == bt->written; // a written `Any` stays one
+            } else if constexpr (std::is_same_v<AT, NeverType>) {
                 return at.leftRecord == bt->leftRecord && at.rightRecord == bt->rightRecord;
             } else if constexpr (std::is_same_v<AT, ConstrainedType>) {
                 return at.varName == bt->varName && at.traitName == bt->traitName &&
                        at.genericId == bt->genericId;
+            } else if constexpr (std::is_same_v<AT, TypeApp>) {
+                if (!typesExactlyEqual(at.head, bt->head) || at.args.size() != bt->args.size()) {
+                    return false;
+                }
+                for (size_t i = 0; i < at.args.size(); i++) {
+                    if (!typesExactlyEqual(at.args[i], bt->args[i])) {
+                        return false;
+                    }
+                }
+                return true;
             } else {
                 static_assert(std::is_void_v<AT>, "unhandled Type alternative");
                 return false;
@@ -385,7 +395,7 @@ auto buildAgreementFixture() -> ImportedInterfaces {
         Type::string(),
         Type::boolean(),
         Type::atom(":macos"),
-        Type::unit(),
+        Type::voidType(),
         Type::int32(),
         Type::uint8(),
         Type::float32(),
@@ -400,8 +410,10 @@ auto buildAgreementFixture() -> ImportedInterfaces {
         Type::record({{"x", Type::integer()}, {"y", Type::string()}}),
         Type::typeVar(-1),
         Type::unknown(),
-        Type::voidType("uninhabited"),
+        Type::any(),
+        Type::never("uninhabited"),
         Type::constrained("T", "Number", -1),
+        Type::app(Type::constrained("F", "Functor", -2), {Type::integer()}),
     };
     sig.result = Type::named("Outcome");
     sig.isFoul = true;

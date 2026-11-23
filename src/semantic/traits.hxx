@@ -16,6 +16,10 @@ namespace kex::semantic {
 
 // A named function/method signature — used for trait required methods
 // (TraitDef::requiredMethods) and imported interface signatures.
+// Bounds on a generic type's arguments, by position: `make A is Discrete =>
+// Range<A>` (#651) is {{0, "Discrete"}}.
+using TypeArgBounds = std::vector<std::pair<std::size_t, std::string>>;
+
 struct Signature {
     std::string name;
     std::vector<TypePtr> params;
@@ -46,10 +50,39 @@ struct Signature {
     // table holds every module's functions, so a plain call keeps only the
     // ones its module may see (kexhq/kex#496, #494).
     std::string declaringModule;
+    // The capabilities a call to it needs, for one known only through an
+    // imported interface (KexI). A function of this program has its
+    // requirements computed from its body instead
+    // (Analyzer::computeCapabilityRequirements).
+    std::vector<std::string> requiredCapabilities;
+    // For a function of a bounded `make` (`make A is Discrete => Range<A>`,
+    // #651): each receiver type argument, by position, and the trait it must
+    // satisfy for the function to apply.
+    TypeArgBounds receiverBounds;
     // The clause it was made from, for a signature of a FunctionDef: lowering
     // places a call's arguments into it (hir::Program::selectedSignatureOf).
     const ast::FunctionClause* clause = nullptr;
 };
+
+// Decision 4 of docs/typechecker-hm-plan.md: a bare `Number` written as the
+// result is the type the one parameter written as `Number` received.
+// `twice(x: Number) -> Number` on an Integer answers an Integer, and on
+// `make [Number]`, `sum :> Number` answers the element's type. Ties the
+// parameter's and the result's `Number` into one per-call generic (below
+// every generic the signature already uses), which call sites bind as they
+// bind any. With no such parameter, or several, it leaves the signature as it
+// is: with several, what the result is remains open (the plan's §14).
+//
+// `resolveType` sees through inference variables (identity for a signature
+// read from an interface). `justified` is asked with the parameter's
+// occurrence before tying: a checked body must answer that type, while a
+// declared or imported signature is tied unconditionally, its body being
+// checked against the tie. The single rule, for the checker's own signatures
+// and for those an interface brings in, so the two agree.
+auto tieTraitResult(
+    Signature& signature,
+    const std::function<TypePtr(const TypePtr&)>& resolveType,
+    const std::function<bool(const Type* occurrence)>& justified) -> void;
 
 // By call: each argument position given for a `Showable` parameter with a
 // value of a distinct type, and that type (TypeChecker::shownThroughDistinct).
@@ -74,6 +107,10 @@ struct TraitDef {
     // emitted with each implementor (KexiTraitDef::defaultBodies). The rest
     // are functions over the trait, implemented once where they are declared.
     std::vector<std::string> defaultBodies;
+    // How many holes each type parameter writes: `Functor<F<_>>` is {1}, the
+    // kind of what implements it (docs/typechecker-hm-plan.md §8.2). Last, so
+    // the aggregate initializers above keep their meaning.
+    std::vector<std::size_t> paramKinds;
 };
 
 // Open, name-keyed registry of traits and which types implement them.
@@ -105,11 +142,9 @@ public:
     // dispatch needs to resolve to exactly one implementation with no
     // priority/ordering rule to fall back on.
     auto registerImplementation(const std::string& typeName, const std::string& traitName) -> void;
-
-    // Returns the name of the first non-structural trait both types share,
-    // or "" if they have no common user-defined trait. Used to widen
-    // heterogeneous list elements to their common trait type.
-    auto commonTrait(const TypePtr& a, const TypePtr& b) const -> std::string;
+    // `typeName` implements `traitName` where its arguments satisfy `bounds`.
+    auto registerConditionalImplementation(
+        const std::string& typeName, const std::string& traitName, TypeArgBounds bounds) -> void;
 
     // Does any trait `type` implements declare `method` — as a requirement or
     // as a default body? An inherited default has no per-type signature, so
@@ -149,8 +184,14 @@ public:
 private:
     std::unordered_map<std::string, TraitDef> m_traits;
     std::unordered_map<std::string, std::set<std::string>> m_implementations;
+    // typeName -> trait -> each conditional claim's bounds.
+    std::unordered_map<std::string, std::unordered_map<std::string, std::vector<TypeArgBounds>>>
+        m_conditionalImplementations;
 
     auto satisfiesStructurally(const TypePtr& type, const std::string& traitName) const -> bool;
+    // Whether each argument `bounds` names satisfies its trait; an argument
+    // not known yet is not judged against.
+    auto boundsHold(const NamedType& type, const TypeArgBounds& bounds) const -> bool;
 };
 
 } // namespace kex::semantic

@@ -103,6 +103,8 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
     // Foulness through the call graph, so a guard rejects a transitively
     // foul call.
     computeTransitiveEffects(program);
+    computeCapabilityRequirements(program);
+    checkEffectFlow(program);
     m_diagnostics.insert(
         m_diagnostics.end(), std::make_move_iterator(checked.begin()),
         std::make_move_iterator(checked.end()));
@@ -454,12 +456,13 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
     // Which modules are capabilities has to be known before the walk, so a
     // call into one can be recorded as a requirement (kexhq/kex#143).
     m_capabilityModules.clear();
-    m_requiredCapabilities.clear();
+
     {
-        std::function<void(const ast::ModuleDef&)> collectCapabilities =
-            [&](const ast::ModuleDef& module) {
+        std::function<void(const ast::ModuleDef&, const std::string&)> collectCapabilities =
+            [&](const ast::ModuleDef& module, const std::string& parent) {
+                const auto qualified = ast::nestedModulePath(parent, module.name);
                 if (module.isCapability) {
-                    m_capabilityModules.insert(module.name);
+                    m_capabilityModules.insert(qualified);
                 }
                 for (const auto& mi : module.body) {
                     std::visit(
@@ -467,7 +470,7 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                             using MT = std::decay_t<decltype(mn)>;
                             if constexpr (std::is_same_v<MT, std::unique_ptr<ast::ModuleDef>>) {
                                 if (mn) {
-                                    collectCapabilities(*mn);
+                                    collectCapabilities(*mn, qualified);
                                 }
                             }
                         },
@@ -480,7 +483,7 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                     using T = std::decay_t<decltype(n)>;
                     if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                         if (n) {
-                            collectCapabilities(*n);
+                            collectCapabilities(*n, "");
                         }
                     }
                 },
@@ -515,12 +518,6 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                     if (!receiverName.empty() &&
                         isQualifiedCallFoul(receiverName, method->method)) {
                         hasFoulOp = true;
-                    }
-                    // "" marks a requirement this function reaches itself,
-                    // as opposed to one inherited from a callee below.
-                    if (m_capabilityTarget && !receiverName.empty() &&
-                        m_capabilityModules.count(receiverName)) {
-                        m_capabilityTarget->emplace(receiverName, "");
                     }
                 }
             } else if (
@@ -571,7 +568,6 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
     auto processFn = [&](const ast::FunctionDef& def) {
         std::set<std::string> calls;
         bool hasFoulOp = def.isFoul;
-        m_capabilityTarget = &m_requiredCapabilities[def.name];
         for (const auto& clause : def.clauses) {
             for (const auto& ex : clause.body) {
                 if (ex) {
@@ -579,7 +575,6 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                 }
             }
         }
-        m_capabilityTarget = nullptr;
         calls.erase(def.name);
         m_callGraph[def.name] = std::move(calls);
         if (hasFoulOp) {
@@ -635,43 +630,6 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
         }
     }
 
-    // Requirements propagate the same way foulness does, but each one keeps
-    // the callee that carried it in so the chain can be printed later.
-    {
-        bool spread = true;
-        while (spread) {
-            spread = false;
-            for (const auto& [fn, callees] : m_callGraph) {
-                for (const auto& callee : callees) {
-                    auto found = m_requiredCapabilities.find(callee);
-                    if (found == m_requiredCapabilities.end()) {
-                        continue;
-                    }
-                    for (const auto& [capability, _] : found->second) {
-                        auto& mine = m_requiredCapabilities[fn];
-                        if (mine.count(capability)) {
-                            continue;
-                        }
-                        mine.emplace(capability, callee);
-                        spread = true;
-                    }
-                }
-            }
-        }
-        // A name defined more than once in the unit cannot be attributed
-        // precisely, and over-reporting a requirement is worse than staying
-        // quiet about it.
-        for (const auto& [name, count] : definitionCount) {
-            if (count > 1) {
-                m_requiredCapabilities.erase(name);
-            }
-        }
-        // A function that needs nothing should not appear at all.
-        for (auto it = m_requiredCapabilities.begin(); it != m_requiredCapabilities.end();) {
-            it = it->second.empty() ? m_requiredCapabilities.erase(it) : std::next(it);
-        }
-    }
-
     // Re-walk guard expressions to reject foul calls, direct and transitive.
     std::function<void(const ast::Expr&)> checkGuard = [&](const ast::Expr& e) {
         std::visit(
@@ -694,6 +652,12 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                         if (a) {
                             checkGuard(*a);
                         }
+                    }
+                    // A block handed over in a guard may be run there: its effects
+                    // are the guard's (#142). `holds? { IO.printLine(x); true }`
+                    // printed while the arms were being matched.
+                    if (n.block && *n.block) {
+                        checkGuard(**n.block);
                     }
                 } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
                     for (const auto& value : n.values) {
@@ -742,6 +706,9 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                             checkGuard(*a);
                         }
                     }
+                    if (n.block && *n.block) {
+                        checkGuard(**n.block);
+                    }
                 } else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
                     if (n.left) {
                         checkGuard(*n.left);
@@ -752,6 +719,18 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                 } else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
                     if (n.operand) {
                         checkGuard(*n.operand);
+                    }
+                } else if constexpr (std::is_same_v<T, ast::Lambda>) {
+                    // Its body runs if what it is handed to calls it.
+                    for (const auto& expr : n.body) {
+                        if (expr) {
+                            checkGuard(*expr);
+                        }
+                    }
+                } else if constexpr (std::is_same_v<T, ast::CurryExpr>) {
+                    // `xs.any?(~greet)`: a captured foul function, run the same way.
+                    if (m_topLevelFoul.contains(n.name) || m_transitivelyFoul.count(n.name)) {
+                        error(diag::Code::FoulCaptureInGuard, e.location, {{"name", n.name}});
                     }
                 }
             },
@@ -1091,6 +1070,376 @@ auto Analyzer::checkLoopControl(SourceLocation loc, const std::string& keyword) 
 
 auto Analyzer::error(diag::Code code, SourceLocation loc, diag::Args args) -> void {
     m_diagnostics.push_back(makeDiagnostic(Diagnostic::Level::Error, code, loc, std::move(args)));
+}
+
+// Which capabilities each function needs, from the checker's decisions
+// (docs/typechecker-hm-plan.md §9). Every function counts, a `make` block's
+// too, and a call is followed to the clause the checker selected for it: the
+// `stamp` a `Stamper {…}.stamp` reaches, the overload a call chose, either of
+// two functions of one name in different modules. A function of a
+// `capability` module is one a caller needs that capability for. The
+// syntactic call graph this replaced keyed functions by bare name, never
+// looked inside `make` blocks, and dropped any name defined twice.
+auto Analyzer::computeCapabilityRequirements(const ast::Program& program) -> void {
+    m_requiredCapabilities.clear();
+    // Every function, with the capability module it is a member of ("" if none).
+    std::unordered_map<const ast::FunctionDef*, std::string> functions;
+    std::unordered_map<const ast::FunctionClause*, const ast::FunctionDef*> ofClause;
+    const auto addFunction = [&](const ast::FunctionDef& def, const std::string& capability) {
+        functions[&def] = capability;
+        for (const auto& clause : def.clauses) {
+            ofClause[&clause] = &def;
+        }
+    };
+    const auto addMake = [&](const ast::MakeDef& make) {
+        for (const auto& item : make.body) {
+            if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item); fn && *fn) {
+                addFunction(**fn, "");
+            } else if (const auto* block =
+                           std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item);
+                       block && *block) {
+                for (const auto& inner : (*block)->items) {
+                    if (const auto* innerFn =
+                            std::get_if<std::unique_ptr<ast::FunctionDef>>(&inner);
+                        innerFn && *innerFn) {
+                        addFunction(**innerFn, "");
+                    }
+                }
+            }
+        }
+    };
+    const auto walkItems = [&](auto& self, const auto& items, const std::string& capability,
+                               const std::string& path) -> void {
+        for (const auto& item : items) {
+            std::visit(
+                [&](const auto& node) {
+                    using T = std::decay_t<decltype(node)>;
+                    if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                        if (node) {
+                            addFunction(*node, capability);
+                        }
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                        if (node) {
+                            addMake(*node);
+                        }
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                        if (node) {
+                            const auto qualified = ast::nestedModulePath(path, node->name);
+                            self(
+                                self, node->body, node->isCapability ? qualified : capability,
+                                qualified);
+                        }
+                    }
+                },
+                item);
+        }
+    };
+    walkItems(walkItems, program.items, "", "");
+
+    // Every function has an entry before any is filled: references into the
+    // map must survive the walk below.
+    m_capabilityOf.clear();
+    for (const auto& [def, capability] : functions) {
+        m_requiredCapabilities[def];
+        if (!capability.empty()) {
+            m_capabilityOf[def] = capability;
+        }
+    }
+    const auto& selected = m_checker.selectedCallSignatures();
+    std::unordered_map<const ast::FunctionDef*, std::set<const ast::FunctionDef*>> callees;
+    for (const auto& [def, ownCapability] : functions) {
+        auto& needs = m_requiredCapabilities[def];
+        auto& calls = callees[def];
+        std::function<void(const ast::Expr&)> visit = [&](const ast::Expr& e) {
+            if (const auto found = selected.find(&e); found != selected.end()) {
+                const auto& signature = found->second;
+                const auto clause =
+                    signature.clause ? ofClause.find(signature.clause) : ofClause.end();
+                if (clause != ofClause.end()) {
+                    const auto* callee = clause->second;
+                    if (const auto& capability = functions.at(callee);
+                        !capability.empty() && capability != ownCapability) {
+                        needs.emplace(capability, CapabilityReason{});
+                    } else if (callee != def) {
+                        calls.insert(callee);
+                    }
+                } else {
+                    // Another unit's function: its module, when a capability.
+                    for (const auto* module : {&signature.declaringModule, &signature.makeModule}) {
+                        if (!module->empty() && m_capabilityModules.count(*module)) {
+                            needs.emplace(*module, CapabilityReason{});
+                        }
+                    }
+                    // and what its interface says it needs, carried in by it.
+                    for (const auto& capability : signature.requiredCapabilities) {
+                        if (capability != ownCapability) {
+                            needs.emplace(capability, CapabilityReason{signature.name, nullptr});
+                        }
+                    }
+                }
+            }
+            // A call into a capability by its name (`Clock.now()`), as written.
+            if (const auto* method = std::get_if<ast::MethodCall>(&e.kind);
+                method && method->receiver) {
+                const auto receiver = receiverModuleName(*method->receiver);
+                if (!receiver.empty() && receiver != ownCapability &&
+                    m_capabilityModules.count(receiver)) {
+                    needs.emplace(receiver, CapabilityReason{});
+                }
+            }
+            ast::forEachChild(e, [&](const ast::ExprPtr& child) {
+                if (child) {
+                    visit(*child);
+                }
+            });
+        };
+        for (const auto& clause : def->clauses) {
+            for (const auto& expr : clause.body) {
+                if (expr) {
+                    visit(*expr);
+                }
+            }
+        }
+    }
+    // A requirement travels from callee to caller, each keeping the callee
+    // that brought it, so hover can print the chain.
+    for (bool spread = true; spread;) {
+        spread = false;
+        for (const auto& [def, called] : callees) {
+            auto& mine = m_requiredCapabilities.at(def);
+            for (const auto* callee : called) {
+                for (const auto& [capability, _] : m_requiredCapabilities.at(callee)) {
+                    if (!mine.count(capability)) {
+                        mine.emplace(capability, CapabilityReason{callee->name, callee});
+                        spread = true;
+                    }
+                }
+            }
+        }
+    }
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// Effects carried by data and passed through parameters (#142, decision 6 of
+// docs/typechecker-hm-plan.md; the hidden effect parameter, option a). A block
+// that runs something foul is a foul value, and so is a capture of a foul
+// function, and a record, list or tuple holding one: the record's hidden
+// effect is instantiated by what it was built with. A function that calls one
+// of its parameters, or a block read out of one (`let f = h.run; f()`), is
+// effect-transparent in it: calling it is as foul as what it is handed. A
+// pure function only ever holds such a value through a parameter, so the place
+// this decides something is a guard, which must not run an effect however the
+// effect gets there.
+auto Analyzer::checkEffectFlow(const ast::Program& program) -> void {
+    // Whether running `e` may perform an effect: a foul call anywhere in it.
+    std::function<bool(const ast::Expr&)> runsFoul = [&](const ast::Expr& e) -> bool {
+        if (callsFoul(e)) {
+            return true;
+        }
+        if (const auto* call = std::get_if<ast::FunctionCall>(&e.kind);
+            call && (m_topLevelFoul.contains(call->name) || m_transitivelyFoul.count(call->name))) {
+            return true;
+        }
+        if (const auto* method = std::get_if<ast::MethodCall>(&e.kind)) {
+            if (m_topLevelFoul.contains(method->method) ||
+                m_transitivelyFoul.count(method->method)) {
+                return true;
+            }
+            const auto module =
+                method->receiver ? receiverModuleName(*method->receiver) : std::string{};
+            if (!module.empty() && isQualifiedCallFoul(module, method->method)) {
+                return true;
+            }
+        }
+        if (std::holds_alternative<ast::SpawnExpr>(e.kind) ||
+            std::holds_alternative<ast::ReceiveExpr>(e.kind)) {
+            return true;
+        }
+        bool found = false;
+        ast::forEachChild(
+            e, [&](const ast::ExprPtr& child) { found = found || (child && runsFoul(*child)); });
+        return found;
+    };
+
+    auto& transparent = m_transparentParams;
+    transparent.clear();
+    std::unordered_set<std::string> returnsFoulValue;
+
+    // Whether `e`, given the local names known to carry one, is a value that
+    // carries an effect.
+    const auto carries = [&](const auto& self, const ast::Expr& e,
+                             const std::unordered_set<std::string>& carriers) -> bool {
+        if (const auto* lambda = std::get_if<ast::Lambda>(&e.kind)) {
+            return std::any_of(lambda->body.begin(), lambda->body.end(), [&](const auto& body) {
+                return body && runsFoul(*body);
+            });
+        }
+        if (const auto* capture = std::get_if<ast::CurryExpr>(&e.kind)) {
+            return m_topLevelFoul.contains(capture->name) ||
+                   m_transitivelyFoul.count(capture->name) > 0;
+        }
+        if (const auto* name = std::get_if<ast::Identifier>(&e.kind)) {
+            // A local that holds one, or a function called by its bare name
+            // (`let made = loud`) whose result is one.
+            return carriers.contains(name->name) || returnsFoulValue.contains(name->name);
+        }
+        if (const auto* call = std::get_if<ast::FunctionCall>(&e.kind)) {
+            if (returnsFoulValue.contains(call->name)) {
+                return true;
+            }
+        }
+        if (std::holds_alternative<ast::RecordConstruction>(e.kind) ||
+            std::holds_alternative<ast::ListExpr>(e.kind) ||
+            std::holds_alternative<ast::TupleExpr>(e.kind) ||
+            std::holds_alternative<ast::MapExpr>(e.kind)) {
+            bool found = false;
+            ast::forEachChild(e, [&](const ast::ExprPtr& child) {
+                found = found || (child && self(self, *child, carriers));
+            });
+            return found;
+        }
+        return false;
+    };
+
+    // One function's names: which carry an effect, which hold a parameter or
+    // a value read out of one (by the parameter's position).
+    struct Scope {
+        std::unordered_set<std::string> carriers;
+        std::unordered_map<std::string, std::size_t> fromParam;
+    };
+    const auto scopeOf = [&](const ast::FunctionClause& clause) {
+        Scope scope;
+        for (std::size_t i = 0; i < clause.params.size(); ++i) {
+            if (clause.params[i].name) {
+                scope.fromParam[*clause.params[i].name] = i;
+            }
+        }
+        std::function<void(const ast::Expr&)> bind = [&](const ast::Expr& e) {
+            if (const auto* let = std::get_if<ast::LetExpr>(&e.kind); let && let->value) {
+                const auto* var =
+                    let->pattern ? std::get_if<ast::VarPattern>(&let->pattern->kind) : nullptr;
+                if (var) {
+                    if (carries(carries, *let->value, scope.carriers)) {
+                        scope.carriers.insert(var->name);
+                    }
+                    // `let f = h` or `let f = h.run`: still the parameter's.
+                    const ast::Expr* source = let->value.get();
+                    if (const auto* read = std::get_if<ast::MethodCall>(&source->kind);
+                        read && read->receiver && read->args.empty() && !read->block) {
+                        source = read->receiver.get();
+                    }
+                    if (const auto* name = std::get_if<ast::Identifier>(&source->kind)) {
+                        if (const auto param = scope.fromParam.find(name->name);
+                            param != scope.fromParam.end()) {
+                            scope.fromParam[var->name] = param->second;
+                        }
+                    }
+                }
+            }
+            ast::forEachChild(e, [&](const ast::ExprPtr& child) {
+                if (child) {
+                    bind(*child);
+                }
+            });
+        };
+        for (const auto& expr : clause.body) {
+            if (expr) {
+                bind(*expr);
+            }
+        }
+        return scope;
+    };
+
+    // Transparency and foul results, to a fixpoint: each pass may let another
+    // function see through a callee decided in the last.
+    for (bool changed = true; changed;) {
+        changed = false;
+        ast::forEachFunction(program, [&](const ast::FunctionDef& function) {
+            for (const auto& clause : function.clauses) {
+                const auto scope = scopeOf(clause);
+                auto& mine = transparent[function.name];
+                std::function<void(const ast::Expr&)> visit = [&](const ast::Expr& e) {
+                    if (const auto* call = std::get_if<ast::FunctionCall>(&e.kind)) {
+                        // Calling the parameter, or a block read from it.
+                        if (const auto param = scope.fromParam.find(call->name);
+                            param != scope.fromParam.end() && mine.insert(param->second).second) {
+                            changed = true;
+                        }
+                        // Handing it on to a parameter another function calls.
+                        if (const auto callee = transparent.find(call->name);
+                            callee != transparent.end()) {
+                            for (std::size_t i = 0; i < call->args.size(); ++i) {
+                                const auto* name =
+                                    call->args[i]
+                                        ? std::get_if<ast::Identifier>(&call->args[i]->kind)
+                                        : nullptr;
+                                if (!name || !callee->second.contains(i)) {
+                                    continue;
+                                }
+                                if (const auto param = scope.fromParam.find(name->name);
+                                    param != scope.fromParam.end() &&
+                                    mine.insert(param->second).second) {
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                    ast::forEachChild(e, [&](const ast::ExprPtr& child) {
+                        if (child) {
+                            visit(*child);
+                        }
+                    });
+                };
+                for (const auto& expr : clause.body) {
+                    if (expr) {
+                        visit(*expr);
+                    }
+                }
+                if (!clause.body.empty() && clause.body.back() &&
+                    carries(carries, *clause.body.back(), scope.carriers) &&
+                    returnsFoulValue.insert(function.name).second) {
+                    changed = true;
+                }
+            }
+        });
+    }
+
+    // A guard handing an effect to a parameter its callee runs.
+    ast::forEachFunction(program, [&](const ast::FunctionDef& function) {
+        for (const auto& clause : function.clauses) {
+            const auto scope = scopeOf(clause);
+            std::function<void(const ast::Expr&)> inGuard = [&](const ast::Expr& e) {
+                if (const auto* call = std::get_if<ast::FunctionCall>(&e.kind)) {
+                    if (const auto callee = transparent.find(call->name);
+                        callee != transparent.end()) {
+                        for (std::size_t i = 0; i < call->args.size(); ++i) {
+                            if (call->args[i] && callee->second.contains(i) &&
+                                !std::holds_alternative<ast::Lambda>(call->args[i]->kind) &&
+                                !std::holds_alternative<ast::CurryExpr>(call->args[i]->kind) &&
+                                carries(carries, *call->args[i], scope.carriers)) {
+                                error(
+                                    diag::Code::FoulValueInGuard, call->args[i]->location,
+                                    {{"name", call->name}});
+                            }
+                        }
+                    }
+                }
+                ast::forEachChild(e, [&](const ast::ExprPtr& child) {
+                    if (child) {
+                        inGuard(*child);
+                    }
+                });
+            };
+            for (const auto& expr : clause.body) {
+                if (expr) {
+                    ast::forEachGuard(*expr, inGuard);
+                }
+            }
+        }
+    });
 }
 
 } // namespace kex::semantic

@@ -556,7 +556,13 @@ let presented(value: Showable) -> String = "${value}"
 let owner(id: UserId) -> String = "owner ${id}"
 
 let tokenBlank(token: Token) -> Bool = token.blank?
-let joined(value: Any) -> String = value.join(", ")
+# Narrowed first: a call on an `Any` is a type error (decision 7 of
+# docs/typechecker-hm-plan.md). The narrowed list's `join` is still the
+# prelude's, beside `Paths.join`.
+let joined(value: Any) -> String = match value do
+  items: [String] => items.join(", ")
+  _ => ""
+end
 let either(left: Cond, right: Cond) -> Cond = left || right
 let both(left: Cond, right: Cond) -> Cond = left && right
 

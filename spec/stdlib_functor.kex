@@ -1,0 +1,31 @@
+# The stdlib's `Functor` and `Bindable` (docs/typechecker-hm-plan.md §8.2): one
+# trait over List, Optional and Result (whose error stays), so a function is
+# written once for all of them, and for a program's own type that implements
+# it (`Box`). A list's own `map` still answers a list.
+
+record Box<A> do
+  value : A
+end
+
+make Box, implement: Functor do
+  let map(f) -> This<B> = Box { value: f(@value) }
+end
+
+let bumped(F is Functor => xs: F<Integer>) -> F<Integer> = xs.map { |x| x + 1 }
+
+let halved(F is Bindable => xs: F<Integer>, f: Integer -> F<Integer>) -> F<Integer> = xs.flatMap(f)
+
+let half(n: Integer) -> Integer? = n % 2 == 0 then Just(n / 2) else None
+
+main do
+  IO.printLine(bumped(Box { value: 1 }).value)
+  IO.printLine(bumped([1, 2]))
+  IO.printLine(bumped(Just(1)))
+  let r: Result<Integer, String> = Ok(1)
+  IO.printLine(bumped(r))
+  let e: Result<Integer, String> = Error("no")
+  IO.printLine(bumped(e))
+  IO.printLine(halved(Just(4), ~half))
+  IO.printLine(halved([1, 2], { |n| [n, n * 10] }))
+  IO.printLine([1, 2, 3].map { |x| x * 2 })
+end

@@ -425,6 +425,10 @@ module Mock do
     # the honest answer and the useful one: a test that did not expect a
     # write sees it fail rather than silently succeed.
     foul open(path, mode) = Error(FS.OpenFailed(path))
+    # The block form fails the same way, and a failure to open never runs the
+    # block. Without it the stand-in lacked a member FS.File requires, and
+    # `FS.File.open(path, mode) { … }` under it failed at run time (#793).
+    foul open(path, mode, block) = Error(FS.OpenFailed(path))
     foul write(path, content) = Error(FS.WriteFailed(path))
     foul writeBytes(path, content) = Error(FS.WriteFailed(path))
     foul append(path, content) = Error(FS.WriteFailed(path))

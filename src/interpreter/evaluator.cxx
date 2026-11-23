@@ -2726,6 +2726,10 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             using T = std::decay_t<decltype(node)>;
 
             if constexpr (std::is_same_v<T, ast::IntLiteral>) {
+                // An integer literal a Float takes is a float (decision 2).
+                if (m_programs.literalIsFloat(expr)) {
+                    return Value::floating(std::stod(node.value));
+                }
                 try {
                     return Value::integer(std::stoll(node.value));
                 } catch (const std::out_of_range&) {

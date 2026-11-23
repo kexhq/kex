@@ -13,7 +13,7 @@
 # Erlang error report against a Kex diagnostic — not because BEAM gets it
 # wrong.
 
-type Msg = | Ping(Process)
+type Msg = | Ping(Process<Integer>)
 
 main do
   let worker = spawn do

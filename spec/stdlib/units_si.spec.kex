@@ -90,8 +90,8 @@ describe("Units.SI") do
     assert(acceleration.value == 5.0)
   end
 
-  it("raises SI measures with ^") do
-    let area = 3.meter ^ 2
+  it("squares an SI length into an area") do
+    let area = 3.meter.squared
     assert(area.canonical == 9.0)
     assert(area.value == 9.0)
     assert(area.unit.notation == "m^2")
@@ -126,7 +126,7 @@ describe("Units.SI") do
   end
 
   it("provides times and per helpers") do
-    let voltage = Units.SI.times(2.ampere, 100.ohm)
+    let voltage = times(2.ampere, 100.ohm)
     let speed = per(100.meter, 10.second)
     assert(voltage.value == 200.0)
     assert(speed.kind == :speed)

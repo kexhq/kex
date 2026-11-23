@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ast/ast.hxx"
+#include "../common/well_known.hxx"
 #include "types.hxx"
 
 #include <cctype>
@@ -30,15 +31,15 @@ inline auto structuredTypeOfDeclared(const ast::TypeExpr& type) -> StructuredTyp
             }
             joined += part;
         }
-        if (joined == "Int" || joined == "Byte" ||
+        if (joined == kex::names::kIntAlias || joined == kex::names::kByteType ||
             (joined.size() > 3 && (joined.rfind("Int", 0) == 0 || joined.rfind("UInt", 0) == 0) &&
              std::isdigit(static_cast<unsigned char>(joined.back())))) {
             return std::string("Integer");
         }
-        if (joined == "Float32" || joined == "Float64") {
+        if (joined == kex::names::kFloat32Type || joined == kex::names::kFloat64Type) {
             return std::string("Float");
         }
-        if (joined == "Optional") {
+        if (joined == kex::names::kOptionalType) {
             return std::string("Option");
         }
         return joined;
@@ -93,7 +94,7 @@ inline auto structuredTypeOfDeclared(const ast::TypeExpr& type) -> StructuredTyp
                 // any other union has no single name.
                 const auto left = of(t.left);
                 const auto right = of(t.right);
-                if (left.name == "Atom" && right.name == "Atom") {
+                if (left.name == kex::names::kAtomType && right.name == kex::names::kAtomType) {
                     return left;
                 }
                 return {"Any", {}};

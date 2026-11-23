@@ -145,6 +145,9 @@ public:
     // The module constant a bare name (`LIMIT`) names, as resolved in its
     // scope; "" otherwise, and for a loaded program.
     auto referencedConstantOf(const ast::Expr& name) const -> std::string;
+    // Whether an integer literal is a Float (`let x: Float = 1`, decision 2):
+    // both backends emit it as a float.
+    auto literalIsFloat(const ast::Expr& literal) const -> bool;
     // The record `expr` builds (a construction), as the checker typed it; "".
     auto recordOf(const ast::Expr& expr) const -> std::string;
     auto recordOfPattern(const ast::RecordPattern& pattern) const -> std::string;
@@ -255,6 +258,7 @@ public:
     auto typeOf(const ast::Expr& expr) const -> semantic::TypePtr;
     auto typeValueOf(const ast::Expr& expr) const -> std::optional<semantic::StructuredType>;
     auto receiverTypeOf(const ast::Expr& call) const -> std::string;
+    auto literalIsFloat(const ast::Expr& literal) const -> bool;
     auto typeOfAnswer(const ast::MethodCall& call) const -> const semantic::StaticTypeAnswer*;
     auto selectedSignatureOf(const ast::Expr& call) const -> const semantic::Signature*;
     auto shownThroughOf(const ast::Expr& call, std::size_t index) const -> const std::string*;

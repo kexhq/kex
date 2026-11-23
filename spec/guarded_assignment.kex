@@ -5,8 +5,10 @@
 # the accumulator below end as None rather than 2, and it is the shape every
 # running total in a loop wants.
 #
-# A `let` is unchanged: a binding must produce something, so a guarded
-# initializer still yields None when the condition fails.
+# A `let` is different: a binding must produce something, and a guarded
+# initializer has nothing when its condition fails, so `let x = v if c` is a
+# type error (#809, spec/error_if_without_else_value.kex). It used to bind
+# None on one backend and an empty value on the other.
 
 main do
   var total = 0
@@ -24,9 +26,6 @@ main do
     last = name if name != "a"
   end
   IO.printLine("last ${last}")
-
-  let missing = "value" if false
-  IO.printLine("let ${missing}")
 
   # Inside a `loop` and a `while`, where the mutable variable has to survive
   # the branch that did not run.

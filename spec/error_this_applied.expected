@@ -1,0 +1,10 @@
+spec/error_this_applied.kex:11:14: [KEXET-0109]: Error, `This` takes 1 type argument, but 2 are given
+   |
+11 |   let bad -> This<Integer, String> = this
+   |              ^^^^^^^^^^^^^^^^^^^^^
+spec/error_this_applied.kex:16:53: [KEXET-0001]: Error, type mismatch: expected Box<Integer>, got Box<String>
+   |
+16 |   let wrong: Box<Integer> = Box { value: 1 }.relabel("x")
+   |              ------------   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this has type Box<String>
+   |              |
+   |              expected because of this annotation

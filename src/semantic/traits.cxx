@@ -1,8 +1,88 @@
 #include "traits.hxx"
+#include "../common/well_known.hxx"
 #include <cassert>
-#include <unordered_set>
 
 namespace kex::semantic {
+
+auto tieTraitResult(
+    Signature& signature,
+    const std::function<TypePtr(const TypePtr&)>& resolveType,
+    const std::function<bool(const Type* occurrence)>& justified) -> void {
+    if (!signature.result) {
+        return;
+    }
+    // A `Number` as written: not yet a generic, and not one inference made
+    // (that one is named `N`, and already relates the positions it shares).
+    const auto writtenNumber = [](const TypePtr& type) {
+        const auto* constrained = std::get_if<ConstrainedType>(&type->kind);
+        return constrained && constrained->genericId == 0 &&
+               constrained->varName == constrained->traitName &&
+               constrained->traitName == kex::names::kNumberTrait;
+    };
+    std::vector<const Type*> inParams;
+    std::function<void(const TypePtr&)> collect = [&](const TypePtr& type) {
+        if (!type) {
+            return;
+        }
+        const auto resolved = resolveType(type);
+        if (writtenNumber(resolved)) {
+            inParams.push_back(resolved.get());
+        }
+        forEachTypeChild(resolved, collect);
+    };
+    for (const auto& param : signature.params) {
+        collect(param);
+    }
+    bool inResult = false;
+    std::function<void(const TypePtr&)> findInResult = [&](const TypePtr& type) {
+        if (!type || inResult) {
+            return;
+        }
+        const auto resolved = resolveType(type);
+        inResult = writtenNumber(resolved);
+        forEachTypeChild(resolved, findInResult);
+    };
+    findInResult(signature.result);
+    if (!inResult || inParams.size() != 1 || !justified(inParams.front())) {
+        return;
+    }
+    // Below every generic the signature already uses, so it collides with none.
+    int lowest = 0;
+    std::function<void(const TypePtr&)> lowestGeneric = [&](const TypePtr& type) {
+        if (!type) {
+            return;
+        }
+        const auto resolved = resolveType(type);
+        if (const auto* variable = std::get_if<TypeVar>(&resolved->kind)) {
+            lowest = std::min(lowest, variable->id);
+        } else if (const auto* constrained = std::get_if<ConstrainedType>(&resolved->kind)) {
+            lowest = std::min(lowest, constrained->genericId);
+        }
+        forEachTypeChild(resolved, lowestGeneric);
+    };
+    for (const auto& param : signature.params) {
+        lowestGeneric(param);
+    }
+    lowestGeneric(signature.result);
+    // Keeps the written name, so an interface still writes `Number` and its
+    // reader ties the signature again by this same rule.
+    const auto tied =
+        Type::constrained(kex::names::kNumberTrait, kex::names::kNumberTrait, lowest - 1);
+    std::function<TypePtr(const TypePtr&)> tie = [&](const TypePtr& type) -> TypePtr {
+        if (!type) {
+            return type;
+        }
+        const auto resolved = resolveType(type);
+        if (writtenNumber(resolved)) {
+            return tied;
+        }
+        return mapTypeChildren(resolved, tie);
+    };
+    for (auto& param : signature.params) {
+        param = tie(param);
+    }
+    signature.result = tie(signature.result);
+}
 
 auto sameParameters(const Signature& left, const Signature& right) -> bool {
     if (left.params.size() != right.params.size()) {
@@ -53,6 +133,28 @@ auto TraitRegistry::registerImplementation(
     m_implementations[typeName].insert(traitName);
 }
 
+auto TraitRegistry::registerConditionalImplementation(
+    const std::string& typeName, const std::string& traitName, TypeArgBounds bounds) -> void {
+    m_conditionalImplementations[typeName][traitName].push_back(std::move(bounds));
+}
+
+auto TraitRegistry::boundsHold(const NamedType& type, const TypeArgBounds& bounds) const -> bool {
+    for (const auto& [index, bound] : bounds) {
+        if (index >= type.typeArgs.size()) {
+            continue;
+        }
+        const auto& argument = type.typeArgs[index];
+        if (std::holds_alternative<TypeVar>(argument->kind) ||
+            std::holds_alternative<UnknownType>(argument->kind)) {
+            continue;
+        }
+        if (!satisfies(argument, bound)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 auto TraitRegistry::implementorKey(const TypePtr& type) const -> std::string {
     if (auto* named = std::get_if<NamedType>(&type->kind)) {
         return named->name;
@@ -62,35 +164,32 @@ auto TraitRegistry::implementorKey(const TypePtr& type) const -> std::string {
 
 auto TraitRegistry::satisfiesStructurally(const TypePtr& type, const std::string& traitName) const
     -> bool {
-    bool isInt = std::holds_alternative<SizedIntType>(type->kind) ||
-                 (std::holds_alternative<PrimitiveType>(type->kind) &&
-                  std::get<PrimitiveType>(type->kind).kind == PrimitiveType::Integer);
-    if (!isInt) {
-        // NamedType("Integer") and friends — produced by Type::named(m_currentMakeType)
-        // inside make blocks or by user type annotations that spell "Integer" as a name.
-        if (auto* named = std::get_if<NamedType>(&type->kind)) {
-            static const std::unordered_set<std::string> kIntNames = {
-                "Int",   "Integer", "Byte",   "Int8",   "Int16", "Int32",
-                "Int64", "UInt8",   "UInt16", "UInt32", "UInt64"};
-            isInt = kIntNames.count(named->name) > 0;
+    // A built-in type can arrive spelled as a name: Type::named(m_currentMakeType)
+    // inside a `make Integer` block, or an annotation that wrote `Int64`. It is
+    // the type the one built-in table gives that name, so no second list of
+    // integer and float names is kept here. `Float` is the one numeric name the
+    // table has no entry for, because it is a bound over the float types
+    // (docs/typechecker-hm-plan.md §6.3).
+    auto resolved = type;
+    bool namedFloat = false;
+    if (const auto* named = std::get_if<NamedType>(&type->kind)) {
+        namedFloat = named->name == kex::names::kFloatType;
+        if (auto builtin = builtinType(named->name)) {
+            resolved = builtin;
         }
     }
-    bool isFloat = std::holds_alternative<SizedFloatType>(type->kind);
-    if (!isFloat) {
-        if (auto* named = std::get_if<NamedType>(&type->kind)) {
-            static const std::unordered_set<std::string> kFloatNames = {
-                "Float", "Float32", "Float64", "Double"};
-            isFloat = kFloatNames.count(named->name) > 0;
-        }
-    }
+    const bool isInt = std::holds_alternative<SizedIntType>(resolved->kind) ||
+                       (std::holds_alternative<PrimitiveType>(resolved->kind) &&
+                        std::get<PrimitiveType>(resolved->kind).kind == PrimitiveType::Integer);
+    const bool isFloat = namedFloat || std::holds_alternative<SizedFloatType>(resolved->kind);
 
-    if (traitName == "Integer") {
+    if (traitName == kex::names::kIntegerType) {
         return isInt;
     }
-    if (traitName == "Float") {
+    if (traitName == kex::names::kFloatType) {
         return isFloat;
     }
-    if (traitName == "Number") {
+    if (traitName == kex::names::kNumberTrait) {
         return isInt || isFloat;
     }
     return false;
@@ -102,7 +201,7 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
     }
     // Every runtime value has structural inspect and plain show fallbacks.
     // Concrete make blocks may still override either presentation.
-    if (traitName == "Inspectable" || traitName == "Showable") {
+    if (traitName == kex::names::kInspectableTrait || traitName == kex::names::kShowableTrait) {
         return true;
     }
 
@@ -122,7 +221,8 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
         if (ct->traitName == traitName) {
             return true;
         }
-        if (traitName == "Number" && (ct->traitName == "Integer" || ct->traitName == "Float")) {
+        if (traitName == kex::names::kNumberTrait && (ct->traitName == kex::names::kIntegerType ||
+                                                      ct->traitName == kex::names::kFloatType)) {
             return true;
         }
         return false;
@@ -144,14 +244,15 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
         return true;
     }
 
-    if (traitName == "Number" || traitName == "Integer" || traitName == "Float") {
+    if (traitName == kex::names::kNumberTrait || traitName == kex::names::kIntegerType ||
+        traitName == kex::names::kFloatType) {
         return satisfiesStructurally(type, traitName);
     }
 
     // Compound types recurse into their component types for Equatable/
     // Showable — ordering compound types isn't supported structurally
     // here, so Comparable doesn't get this treatment.
-    if (traitName == "Equatable" || traitName == "Showable") {
+    if (traitName == kex::names::kEquatableTrait || traitName == kex::names::kShowableTrait) {
         if (auto* list = std::get_if<ListType>(&type->kind)) {
             return satisfies(list->element, traitName);
         }
@@ -174,6 +275,31 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
     auto it = m_implementations.find(implementorKey(type));
     if (it != m_implementations.end() && it->second.count(traitName) > 0) {
         return true;
+    }
+    // What a bounded `make` claims (#651): `make A is Discrete => Range<A>,
+    // implement: Enumerable` makes a `Range<X>` Enumerable where X is
+    // Discrete. An argument not known yet is not judged against.
+    if (const auto* named = std::get_if<NamedType>(&type->kind)) {
+        if (const auto byType = m_conditionalImplementations.find(named->name);
+            byType != m_conditionalImplementations.end()) {
+            if (const auto claims = byType->second.find(traitName);
+                claims != byType->second.end()) {
+                for (const auto& bounds : claims->second) {
+                    if (boundsHold(*named, bounds)) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    // What one instantiation claims: `make Range<Integer>, implement:
+    // Enumerable` makes `Range<Integer>` Enumerable, and not `Range<Float>`.
+    if (const auto* named = std::get_if<NamedType>(&type->kind);
+        named && !named->typeArgs.empty()) {
+        const auto instance = m_implementations.find(typeToString(type));
+        if (instance != m_implementations.end() && instance->second.count(traitName) > 0) {
+            return true;
+        }
     }
 
     // The family it belongs to claims it too: a list, map or optional what
@@ -291,30 +417,6 @@ auto TraitRegistry::requiredOverloads(const TypePtr& type, const std::string& me
         }
     }
     return overloads;
-}
-
-auto TraitRegistry::commonTrait(const TypePtr& a, const TypePtr& b) const -> std::string {
-    auto keyA = implementorKey(a);
-    auto keyB = implementorKey(b);
-    auto itA = m_implementations.find(keyA);
-    auto itB = m_implementations.find(keyB);
-    if (itA == m_implementations.end() || itB == m_implementations.end()) {
-        return "";
-    }
-    // Skip structural/primitive traits — only return user-defined ones.
-    static const std::set<std::string> kBuiltin = {
-        "Number",    "Integer",    "Float",      "Equatable", "Comparable", "Showable",
-        "Blankable", "Truthyable", "Enumerable", "Monoid",    "Group",      "Errorable",
-    };
-    for (const auto& t : itA->second) {
-        if (kBuiltin.count(t)) {
-            continue;
-        }
-        if (itB->second.count(t)) {
-            return t;
-        }
-    }
-    return "";
 }
 
 auto TraitRegistry::withBuiltins() -> TraitRegistry {

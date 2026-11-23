@@ -1,0 +1,14 @@
+# kex: check-only
+# Where a list's type is expected (a typed `let`, a declared result), each
+# element is checked against the element type, and a wrong one is reported
+# where it is, not as the whole list's `[Integer | String]`
+# (docs/typechecker-hm-plan.md, decision 3).
+
+let ids -> [Integer] = [1, "two", 3]
+main do
+  let xs: [Integer] = [1, "two"]
+  let ys: [String] = ["a", 2.5]
+  let ok: [Number] = [1, 2.5]
+  let bytes: [UInt8] = [1, 255]
+  IO.printLine(xs)
+end

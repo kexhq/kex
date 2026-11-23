@@ -1,5 +1,7 @@
-# Match arms that return incompatible types are a compile-time error.
-let describe(n) do
+# A match arm that does not fit the declared result is an error at that arm.
+# Without a declared result the arms join into their union instead
+# (spec/union_join.kex).
+let describe(n: Integer) -> String do
   match n do
     0 => "zero"
     _ => 99

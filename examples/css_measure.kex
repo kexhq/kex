@@ -66,7 +66,7 @@ make Measure do
   let css -> String = "${this.value}${this.symbol}"
 end
 
-let declaration(property: String, length: Result<Measure, String>) -> String do
+let declaration(property: String, length: Result<Measure<Css.Length>, String>) -> String do
   match length do
     Ok(measure) => return "  ${property}: ${measure.css};"
     Error(reason) => return "  /* ${property}: ${reason} */"
