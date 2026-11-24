@@ -230,7 +230,7 @@ int main() {
     });
 
     describe("the algebra traits in a file and the REPL", []() {
-        // Applicable's `with`, Validation, traverse, Monad's `wrap` and `tie`,
+        // Applicable's `with`, Validation, traverse, Monad's `wrap` and `into`,
         // `is?`, and a trait parameter's typed default: the same answers
         // entered statement by statement as run as a file, on both backends.
         it("answers as a file does", []() {
@@ -240,7 +240,7 @@ int main() {
                 "IO.printLine(traverse([\"1\", \"2\"]) { |s| s.to(Integer) }.inspected)\n",
                 "IO.printLine(\"${3.is?(Discrete)} ${Optional.wrap(1).inspected}\")\n",
                 "IO.printLine(\"hey\".find { |c| c == 'e' }.inspected)\n",
-                "IO.printLine([1, 2].tie { |x| [x, x * 10] }.inspected)\n",
+                "IO.printLine([1, 2].into { |x| [x, x * 10] }.inspected)\n",
             };
             for (const auto& body : bodies) {
                 const auto file = "main do\n" + body + "end\n";

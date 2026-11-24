@@ -2712,31 +2712,31 @@ int main() {
     });
 
     describe("Kex LSP algebra traits", []() {
-        // Applicable's `with`, Monad's `tie` and `wrap`, Foldable<T>'s `find`
+        // Applicable's `with`, Monad's `into` and `wrap`, Foldable<T>'s `find`
         // and `is?`, as an editor sees them.
         const std::string source =
             "let combined(a: Integer?, b: Integer?) -> Integer? = a.with(b) { |x, y| x + y }\n"
             "let firstVowel(word: String) -> Char? = word.find { |c| c == 'e' }\n"
             "let pairs(xs: [Integer], ys: [String]) -> [(Integer, String)] do\n"
-            "  xs.tie { |x| ys.tie { |y| [(x, y)] } }\n"
+            "  xs.into { |x| ys.into { |y| [(x, y)] } }\n"
             "end\n"
-            "let halves(xs: [Integer]) -> [Integer] = xs.tie { |x| [x / 2] }\n"
-            "let half(n: Integer?) -> Integer? = n.tie { |x| Just(x / 2) }\n"
+            "let halves(xs: [Integer]) -> [Integer] = xs.into { |x| [x / 2] }\n"
+            "let half(n: Integer?) -> Integer? = n.into { |x| Just(x / 2) }\n"
             "let discrete(v: Any) -> Bool = v.is?(Discrete)\n"
             "let bumped(M is Monad => xs: M<Integer>) -> M<Integer> = xs.flatMap { |x| M.wrap(x + "
             "1) }\n";
-        it("hovers a `tie` block's parameters as the elements", [source]() {
-            const auto first = askAt("file:///tmp/kex-lsp-tie.kex", source, "hover", 3, 12);
+        it("hovers an `into` block's parameters as the elements", [source]() {
+            const auto first = askAt("file:///tmp/kex-lsp-into.kex", source, "hover", 3, 13);
             assertTrue(first.find("x : Integer") != std::string::npos, "x: " + first);
-            const auto second = askAt("file:///tmp/kex-lsp-tie.kex", source, "hover", 3, 25);
+            const auto second = askAt("file:///tmp/kex-lsp-into.kex", source, "hover", 3, 27);
             assertTrue(second.find("y : String") != std::string::npos, "y: " + second);
         });
-        it("hovers `tie` as a function", [source]() {
-            const auto reply = askAt("file:///tmp/kex-lsp-tie-fn.kex", source, "hover", 3, 6);
-            assertTrue(reply.find("tie : [Integer]") != std::string::npos, "tie: " + reply);
+        it("hovers `into` as a function", [source]() {
+            const auto reply = askAt("file:///tmp/kex-lsp-into-fn.kex", source, "hover", 3, 6);
+            assertTrue(reply.find("into : [Integer]") != std::string::npos, "into: " + reply);
             // The inner call on the same line is its own: `ys` is a [String].
-            const auto inner = askAt("file:///tmp/kex-lsp-tie-fn.kex", source, "hover", 3, 19);
-            assertTrue(inner.find("tie : [String]") != std::string::npos, "inner tie: " + inner);
+            const auto inner = askAt("file:///tmp/kex-lsp-into-fn.kex", source, "hover", 3, 19);
+            assertTrue(inner.find("into : [String]") != std::string::npos, "inner into: " + inner);
         });
         it("types a block through a bounded constructor letter", [source]() {
             // `xs: M<Integer>`: the requirement's `F<A>` makes the block's x an
@@ -2756,10 +2756,10 @@ int main() {
             const auto reply = askAt("file:///tmp/kex-lsp-find.kex", source, "hover", 1, 46);
             assertTrue(reply.find("-> Char?") != std::string::npos, "find: " + reply);
         });
-        it("completes `with`, `wrap`, `tie` and `is?` on a list", [source]() {
+        it("completes `with`, `wrap`, `into` and `is?` on a list", [source]() {
             const auto reply =
                 askAt("file:///tmp/kex-lsp-complete.kex", source, "completion", 3, 5);
-            for (const auto* label : {"with", "wrap", "tie", "is?"}) {
+            for (const auto* label : {"with", "wrap", "into", "is?"}) {
                 assertTrue(
                     reply.find(std::string("\"label\":\"") + label + "\"") != std::string::npos,
                     std::string("no ") + label + ": " + reply);

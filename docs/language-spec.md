@@ -1525,14 +1525,14 @@ traverse(["1", "2"]) { |s| s.to(Integer) }   # Just([1, 2])
 sequence([Ok(1), Error("no")])               # Error("no")
 ```
 
-`tie` is a Monad's bind, a function like `flatMap`: `xs.tie { |x| ... }`
+`into` is a Monad's bind, a function like `flatMap`: `xs.into { |x| ... }`
 applies the block to each value and joins what it answers. A list gives
 every combination, an `Optional` stops at `None`, a `Result` at its first
 `Error`:
 
 ```kex
-[1, 2].tie { |x| ["a", "b"].tie { |y| [(x, y)] } }   # [(1, "a"), (1, "b"), (2, "a"), (2, "b")]
-Just(8).tie { |n| n.even? then Just(n / 2) else None }   # Just(4)
+[1, 2].into { |x| ["a", "b"].into { |y| [(x, y)] } }   # [(1, "a"), (1, "b"), (2, "a"), (2, "b")]
+Just(8).into { |n| n.even? then Just(n / 2) else None }   # Just(4)
 ```
 
 `.try` is the early exit for what can fail, usable anywhere.

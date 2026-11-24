@@ -1,0 +1,22 @@
+# `into` is Monad's bind, a function like `flatMap`: `xs.into { |x| ... }`
+# applies the block to each value and joins what it answers. A list gives
+# every combination, an Optional stops at None, a Result at its first Error.
+
+let pairs(xs: [Integer], ys: [String]) -> [(Integer, String)] = xs.into { |x| ys.into { |y| [(x, y)] } }
+
+let spread(xs: [Integer]) -> [Integer] = xs.into { |x| [x * 2, x * 2 + 1] }
+
+let halved(n: Integer) -> Integer? = n.even? then Just(n / 2) else None
+
+let doubled(r: Result<Integer, String>) -> Result<Integer, String> = r.into { |v| v > 0 then Ok(v * 2) else Error("not positive") }
+
+main do
+  IO.printLine(pairs([1, 2], ["a", "b"]).inspected)
+  IO.printLine(spread([1, 5]).inspected)
+  IO.printLine(Just(8).into { |n| halved(n) }.inspected)
+  IO.printLine(Just(3).into { |n| halved(n) }.inspected)
+  IO.printLine(None.into { |n| halved(n) }.inspected)
+  IO.printLine(doubled(Ok(4)).inspected)
+  IO.printLine(doubled(Ok(-1)).inspected)
+  IO.printLine(doubled(Error("no")).inspected)
+end

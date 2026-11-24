@@ -147,5 +147,5 @@ let Just(first) = names.first
 
 
 `.try` is for what can fail. To chain over any Monad, a list's every element
-for instance, `tie` is its bind (`xs.tie { |x| ... }`, see the language
+for instance, `into` is its bind (`xs.into { |x| ... }`, see the language
 spec's higher-kinded traits).

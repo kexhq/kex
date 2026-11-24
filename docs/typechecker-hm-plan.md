@@ -364,8 +364,8 @@ After it (2026-11-24):
   from the higher-kinded requirements (`spec/applicable_with.kex`,
   `spec/validation_signup.kex`, `spec/traverse_sequence.kex`, LSP and REPL
   tests).
-- `tie`, the monadic bind (decided 2026-11-24), is a plain function:
-  `xs.tie { |x| ... }` is `flatMap`, on List, Optional and Result (`spec/monad_tie.kex`). It is not yet a `Monad`
+- `into`, the monadic bind (decided 2026-11-24), is a plain function:
+  `xs.into { |x| ... }` is `flatMap`, on List, Optional and Result (`spec/monad_into.kex`). It is not yet a `Monad`
   default: a default over a higher-kinded `F` does not tie `F` to its
   receiver. `.try` on Result and Optional is the checker's own
   (`tryPayload`): there is no Tryable trait.
