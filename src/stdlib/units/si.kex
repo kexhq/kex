@@ -330,6 +330,8 @@ end
 #   (100.meter / 10.second).to(String)      # => Just("10.0 m/s")
 #   100.meter.per(10.second).to(String)     # => Just("10.0 m/s")
 #   (12.volt * 2.ampere).to(String)         # => Just("24.0 W")
+#   (40.meter * 51.meter).to(String)        # => Just("2040.0 m^2")
+#   (2.meter * (3.meter * 4.meter)).to(String)   # => Just("24.0 m^3")
 make Measure<Quantity.Mass> do
   let *(other: Measure<Quantity.Acceleration>) -> Measure<Quantity.Force> = multiplyMeasures(this, other)
   let times(other: Measure<Quantity.Acceleration>) -> Measure<Quantity.Force> = this * other
@@ -350,8 +352,17 @@ end
 make Measure<Quantity.Length> do
   let *(other: Measure<Quantity.Force>) -> Measure<Quantity.Energy> = multiplyMeasures(other, this)
   let times(other: Measure<Quantity.Force>) -> Measure<Quantity.Energy> = this * other
+  let *(other: Measure<Quantity.Length>) -> Measure<Quantity.Area> = multiplyMeasures(this, other)
+  let times(other: Measure<Quantity.Length>) -> Measure<Quantity.Area> = this * other
+  let *(other: Measure<Quantity.Area>) -> Measure<Quantity.Volume> = multiplyMeasures(this, other)
+  let times(other: Measure<Quantity.Area>) -> Measure<Quantity.Volume> = this * other
   let /(other: Measure<Quantity.Time>) -> Measure<Quantity.Speed> = divideMeasures(this, other)
   let per(other: Measure<Quantity.Time>) -> Measure<Quantity.Speed> = this / other
+end
+
+make Measure<Quantity.Area> do
+  let *(other: Measure<Quantity.Length>) -> Measure<Quantity.Volume> = multiplyMeasures(this, other)
+  let times(other: Measure<Quantity.Length>) -> Measure<Quantity.Volume> = this * other
 end
 
 make Measure<Quantity.Speed> do
@@ -486,6 +497,17 @@ private do
   let productKind(:current, :resistance) = :voltage
   let productKind(:power, :time) = :energy
   let productKind(:current, :time) = :charge
+  let productKind(:length, :length) = :area
+  let productKind(:length, :area) = :volume
+  let productKind(:area, :length) = :volume
+  # Either order: whichever of a type's `*` clauses runs, the operands'
+  # dimensions decide the product.
+  let productKind(:acceleration, :mass) = :force
+  let productKind(:length, :force) = :energy
+  let productKind(:current, :voltage) = :power
+  let productKind(:resistance, :current) = :voltage
+  let productKind(:time, :power) = :energy
+  let productKind(:time, :current) = :charge
   let productKind(left, _) = left
 
   let quotientKind(:length, :time) = :speed
@@ -500,6 +522,8 @@ private do
   let productSymbol(:power, _, _) = "W"
   let productSymbol(:voltage, _, _) = "V"
   let productSymbol(:charge, _, _) = "C"
+  let productSymbol(:area, _, _) = "m^2"
+  let productSymbol(:volume, _, _) = "m^3"
   let productSymbol(_, left, right) = "${left}·${right}"
 
   let quotientSymbol(:speed, left, _) = "${left}/s"

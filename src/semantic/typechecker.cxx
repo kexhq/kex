@@ -7508,25 +7508,10 @@ auto TypeChecker::checkMainBlock(const ast::MainBlock& block) -> void {
 auto TypeChecker::inferBody(const std::vector<ast::ExprPtr>& body, const TypePtr& expected)
     -> TypePtr {
     TypePtr lastType = Type::voidType();
-    // The first `let x = xs.tie`, and what it binds in: the statements after
-    // it are that bind's step.
-    std::optional<std::size_t> bindAt;
-    TypePtr bindContainer;
-    std::string bindName;
-    for (std::size_t index = 0; index < body.size(); ++index) {
-        const auto& expr = body[index];
+    for (const auto& expr : body) {
         if (!expr) {
             continue;
         }
-        const auto* let = std::get_if<ast::LetExpr>(&expr->kind);
-        const auto* bindCall =
-            let && let->value ? std::get_if<ast::MethodCall>(&let->value->kind) : nullptr;
-        const auto* bound = bindCall && let->pattern && bindCall->method == "tie" &&
-                                    bindCall->args.empty() && !bindCall->block
-                                ? std::get_if<ast::VarPattern>(&let->pattern->kind)
-                                : nullptr;
-        const auto outerBind =
-            std::exchange(m_letBindValue, bound ? let->value.get() : m_letBindValue);
         // Only the last expression's arms answer to the expectation.
         const bool last = expected && &expr == &body.back() &&
                           (std::holds_alternative<ast::MatchExpr>(expr->kind) ||
@@ -7538,18 +7523,6 @@ auto TypeChecker::inferBody(const std::vector<ast::ExprPtr>& body, const TypePtr
         if (last) {
             m_branchExpectation = outer;
         }
-        m_letBindValue = outerBind;
-        if (bound && !bindAt) {
-            if (const auto found = m_monadBinds.find(let->value.get());
-                found != m_monadBinds.end()) {
-                bindAt = index;
-                bindContainer = found->second;
-                bindName = bound->name;
-            }
-        }
-    }
-    if (bindAt) {
-        checkMonadBindRest(body, *bindAt, bindName, bindContainer, lastType);
     }
     return lastType;
 }
@@ -8782,6 +8755,15 @@ auto TypeChecker::memberCompletions(const TypePtr& receiver, const ast::Expr& at
         signature.params = {receiver};
         signature.result = payload;
         offered.push_back({signature.name, signature, payload, false});
+    }
+    // So is `.is?(T)`, on any value: the checker's own call
+    // (findCompileTimeIntrinsic), not a function anything declares.
+    {
+        Signature signature;
+        signature.name = names::kTypeTestCall;
+        signature.params = {receiver, Type::named(names::kTypeRecord)};
+        signature.result = Type::boolean();
+        offered.push_back({signature.name, signature, signature.result, false});
     }
     for (const auto& field : fields) {
         if (auto result = probe(field, 1)) {
@@ -10543,98 +10525,6 @@ auto TypeChecker::answerThroughTypeDispatcher(const ast::Expr& expr, const ast::
             m_resolvedCalls[&call] = dispatcherTarget(provider);
             return;
         }
-    }
-}
-
-} // namespace kex::semantic
-
-namespace kex::semantic {
-
-auto TypeChecker::monadBindOf(const TypePtr& operand) const
-    -> std::optional<std::pair<TypePtr, TypePtr>> {
-    const auto applied = applicationOf(resolve(operand));
-    if (!applied || applied->args.empty()) {
-        return std::nullopt;
-    }
-    const auto head = resolve(applied->head);
-    // A letter bounded by Monad (`M` of `M is Monad => xs: M<Integer>`) is one,
-    // whichever container it turns out to be.
-    const auto boundByMonad = [&](const TypePtr& type) {
-        const auto* bound = std::get_if<ConstrainedType>(&type->kind);
-        return bound && bound->traitName == kex::names::kMonadTrait;
-    };
-    bool monad = boundByMonad(head);
-    if (const auto* both = std::get_if<IntersectionType>(&head->kind)) {
-        monad = std::any_of(both->members.begin(), both->members.end(), [&](const TypePtr& member) {
-            return boundByMonad(resolve(member));
-        });
-    }
-    if (const auto* named = std::get_if<NamedType>(&head->kind); named && !monad) {
-        const auto monads = m_traits.implementorsOf(kex::names::kMonadTrait);
-        monad = std::find(monads.begin(), monads.end(), named->name) != monads.end();
-    }
-    if (!monad) {
-        return std::nullopt;
-    }
-    // The value a step takes: the argument the container varies in, the hole
-    // its claim leaves open (`Result<_, E>` varies in its first), or its only
-    // one.
-    std::size_t varying = applied->args.size() - 1;
-    if (const auto* named = std::get_if<NamedType>(&head->kind)) {
-        for (const auto* holes : {&m_constructorHoles, &m_importedConstructorHoles}) {
-            if (const auto found = holes->find(named->name);
-                found != holes->end() && !found->second.empty() &&
-                found->second.front() < applied->args.size()) {
-                varying = found->second.front();
-                break;
-            }
-        }
-    }
-    return std::pair{applied->head, applied->args[varying]};
-}
-
-auto TypeChecker::checkMonadBindRest(
-    const std::vector<ast::ExprPtr>& body,
-    std::size_t at,
-    const std::string& name,
-    const TypePtr& container,
-    const TypePtr& last) -> void {
-    const auto& bindLocation = body[at]->location;
-    const auto shown = typeToString(container);
-    // `return` in the step leaves the step, which `flatMap` runs, not the
-    // function; a block inside it is a function of its own.
-    for (std::size_t index = at + 1; index < body.size(); ++index) {
-        if (!body[index]) {
-            continue;
-        }
-        bool found = false;
-        std::function<void(const ast::Expr&)> visit = [&](const ast::Expr& e) {
-            if (found || std::holds_alternative<ast::Lambda>(e.kind)) {
-                return;
-            }
-            if (std::holds_alternative<ast::ReturnExpr>(e.kind)) {
-                found = true;
-                error(diag::Code::TieReturn, e.location, {{"name", name}, {"type", shown}});
-                return;
-            }
-            ast::forEachChild(e, [&](const ast::ExprPtr& child) {
-                if (child) {
-                    visit(*child);
-                }
-            });
-        };
-        visit(*body[index]);
-    }
-    const auto rest = at + 1 < body.size() ? resolve(last) : Type::voidType();
-    if (isUndetermined(rest) || std::holds_alternative<NeverType>(rest->kind)) {
-        return;
-    }
-    const auto answered = applicationOf(rest);
-    const auto wanted = applicationOf(resolve(container));
-    if (!answered || !wanted || !typesEqual(resolve(answered->head), resolve(wanted->head))) {
-        error(
-            diag::Code::TieRestType, bindLocation,
-            {{"name", name}, {"type", shown}, {"rest", typeToString(rest)}});
     }
 }
 

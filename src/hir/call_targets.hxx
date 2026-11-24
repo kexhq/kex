@@ -55,8 +55,6 @@ enum class TargetKind {
     FunctionReference,
     // `x.is?(T)`: a type test (owner: the types tested, comma-separated).
     TypeTest,
-    // `let x = xs.tie`: the rest of the block is `xs.flatMap { |x| rest }`.
-    MonadBind,
     // Nothing recorded: lowering and the walker resolve it themselves.
     Undecided,
 };
@@ -80,7 +78,7 @@ inline constexpr TargetKind kTargetKinds[] = {
     TargetKind::TypeReference, TargetKind::Builtin,         TargetKind::Operator,
     TargetKind::OwnMethod,     TargetKind::ModuleFunction,  TargetKind::Hidden,
     TargetKind::Foreign,       TargetKind::Intrinsic,       TargetKind::FunctionReference,
-    TargetKind::TypeTest,      TargetKind::MonadBind,       TargetKind::Undecided,
+    TargetKind::TypeTest,      TargetKind::Undecided,
 };
 
 } // namespace kex::hir

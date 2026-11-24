@@ -146,6 +146,6 @@ let Just(first) = names.first
 ```
 
 
-`.try` is for what can fail. To take values out of any Monad, a list's every
-element for instance, `.tie` binds the rest of the block instead (see the
-language spec's higher-kinded traits).
+`.try` is for what can fail. To chain over any Monad, a list's every element
+for instance, `tie` is its bind (`xs.tie { |x| ... }`, see the language
+spec's higher-kinded traits).

@@ -27,6 +27,10 @@ inline auto moduleAtom(const std::string& path) -> std::string {
 // it applies (TypeChecker::memberCompletions).
 inline const std::string kTryKeyword = "try";
 
+// `value.is?(T)`: the checker's own receiver call
+// (findCompileTimeIntrinsic), offered after a dot on every value.
+inline const std::string kTypeTestCall = "is?";
+
 // `Kex.embed("file")`: the file's contents, read while compiling
 // (compiled/expand.cxx folds it before checking).
 inline const std::string kEmbedFunction = "embed";

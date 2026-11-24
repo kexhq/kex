@@ -228,6 +228,13 @@ make Optional<X>, implement: Optionable, Functor, Bindable, Monad, Applicable do
   let flatMap(@None, _) = None
   let flatMap(@Just(x), f) = f(x)
 
+  # Monad's bind, as +flatMap+: +f+'s optional for the value, or +None+.
+  #
+  # @example
+  #   Just(4).tie { |n| n > 0 then Just(n * 2) else None }   # => Just(8)
+  tie :> (X -> Y?) -> Y?
+  let tie(f) = this.flatMap(f)
+
   # Applies +f+ to this value and +other+'s when both are present
   # (Applicable's +with+).
   #
@@ -331,6 +338,13 @@ make Result<X, E>, implement: Resultable do
   flatMap :> (X -> Result<Y, E>) -> Result<Y, E>
   let flatMap(@Error(e), _) = Error(e)
   let flatMap(@Ok(x), f) = f(x)
+
+  # Monad's bind, as +flatMap+: +f+'s result for the value, or the +Error+.
+  #
+  # @example
+  #   Ok(4).tie { |n| n > 0 then Ok(n * 2) else Error("neg") }   # => Ok(8)
+  tie :> (X -> Result<Y, E>) -> Result<Y, E>
+  let tie(f) = this.flatMap(f)
 
   # Applies +f+ to this success and +other+'s (Applicable's +with+), or
   # answers the first error.

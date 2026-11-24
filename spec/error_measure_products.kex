@@ -14,4 +14,5 @@ main do
   IO.printLine((31544.watt * 1.hour).to(String, in: Mega(Joule)).or(""))
   let bad = speed + 5.second
   let t: Duration = 2.meter * 3.meter
+  let odd = 2.second * 3.meter
 end

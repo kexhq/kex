@@ -364,16 +364,11 @@ After it (2026-11-24):
   from the higher-kinded requirements (`spec/applicable_with.kex`,
   `spec/validation_signup.kex`, `spec/traverse_sequence.kex`, LSP and REPL
   tests).
-- `.tie`, the monadic bind (decided 2026-11-24; first tried as `.try` on a
-  non-failing Monad, which the user rejected: `.try` is for what can fail):
-  `let x = xs.tie` runs the rest of the block once per value, as
-  `xs.flatMap { |x| rest }`, on any Monad (a Result chains like flatMap).
-  A compile-time intrinsic (CallKind::MonadBind on the call; the walker runs
-  the rest as a native step, lowering as a `fun` to the `flatMap`
-  dispatcher). Only as a `let` (KEXET-0517), the block ending in the
-  container again (KEXET-0518), no `return` before its end (KEXET-0519), on
-  a Monad only (KEXET-0520) (`spec/monad_tie.kex`). `.try` on Result and
-  Optional is the checker's own (`tryPayload`): there is no Tryable trait.
+- `tie`, the monadic bind (decided 2026-11-24), is a plain function:
+  `xs.tie { |x| ... }` is `flatMap`, on List, Optional and Result (`spec/monad_tie.kex`). It is not yet a `Monad`
+  default: a default over a higher-kinded `F` does not tie `F` to its
+  receiver. `.try` on Result and Optional is the checker's own
+  (`tryPayload`): there is no Tryable trait.
 
 Nothing in the plan is left undone.
 

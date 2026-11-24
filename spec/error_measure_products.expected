@@ -18,9 +18,17 @@ spec/error_measure_products.kex:15:21: [KEXET-0491]: Error, `+` expects argument
    |
 15 |   let bad = speed + 5.second
    |             ^^^^^^^^^^^^^^^^
-spec/error_measure_products.kex:16:31: [KEXET-0491]: Error, `*` expects argument 2 to be Measure<Quantity.Force>, but got Measure<Quantity.Length>
+spec/error_measure_products.kex:16:31: [KEXET-0001]: Error, type mismatch: expected Measure<Quantity.Time>, got Measure<Quantity.Area>
+   |
+16 |   let t: Duration = 2.meter * 3.meter
+   |          --------   ^^^^^^^^^^^^^^^^^ this has type Measure<Quantity.Area>
+   |          |
+   |          expected because of this annotation
+spec/error_measure_products.kex:17:24: [KEXET-0491]: Error, `*` expects argument 2 to be Measure<Quantity.Current>, but got Measure<Quantity.Length>
 
 * : Measure<Quantity.Acceleration> -> Measure<Quantity.Mass> -> Measure<Quantity.Force>
+
+* : Measure<Quantity.Area> -> Measure<Quantity.Length> -> Measure<Quantity.Volume>
 
 * : Measure<Quantity.Current> -> Measure<Quantity.Resistance> -> Measure<Quantity.Voltage>
 
@@ -30,7 +38,11 @@ spec/error_measure_products.kex:16:31: [KEXET-0491]: Error, `*` expects argument
 
 * : Measure<Quantity.Force> -> Measure<Quantity.Length> -> Measure<Quantity.Energy>
 
+* : Measure<Quantity.Length> -> Measure<Quantity.Area> -> Measure<Quantity.Volume>
+
 * : Measure<Quantity.Length> -> Measure<Quantity.Force> -> Measure<Quantity.Energy>
+
+* : Measure<Quantity.Length> -> Measure<Quantity.Length> -> Measure<Quantity.Area>
 
 * : Measure<Quantity.Mass> -> Measure<Quantity.Acceleration> -> Measure<Quantity.Force>
 
@@ -50,11 +62,5 @@ spec/error_measure_products.kex:16:31: [KEXET-0491]: Error, `*` expects argument
 
 * : Units.SI.SIUnit -> Any -> UnitDefinition
    |
-16 |   let t: Duration = 2.meter * 3.meter
-   |                     ^^^^^^^^^^^^^^^^^
-spec/error_measure_products.kex:16:31: [KEXET-0001]: Error, type mismatch: expected Measure<Quantity.Time>, got Period
-   |
-16 |   let t: Duration = 2.meter * 3.meter
-   |          --------   ^^^^^^^^^^^^^^^^^ this has type Period
-   |          |
-   |          expected because of this annotation
+17 |   let odd = 2.second * 3.meter
+   |             ^^^^^^^^^^^^^^^^^^

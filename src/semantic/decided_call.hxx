@@ -56,9 +56,6 @@ enum class CallKind {
     // `x.is?(T)`: whether the value is of a type, or of a type implementing a
     // trait. owner: the types tested, comma-separated (a trait's implementors).
     TypeTest,
-    // `let x = xs.tie` on a Monad: the rest of the block runs once per value,
-    // as `xs.flatMap { |x| rest }`.
-    MonadBind,
 };
 
 struct DecidedCall {

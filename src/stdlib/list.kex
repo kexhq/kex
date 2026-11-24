@@ -290,6 +290,13 @@ make [X], implement: Enumerable, Foldable<X>, Functor, Bindable, Monad, Applicab
   let find(pred) = Kex.Intrinsic.List.find(this, pred)
   let flatMap(f) = Kex.Intrinsic.List.flatMap(this, f)
 
+  # Monad's bind, as +flatMap+: each value's list, joined.
+  #
+  # @example
+  #   [1, 2].tie { |x| [x, x * 10] }   # => [1, 10, 2, 20]
+  tie :> (X -> [Y]) -> [Y]
+  let tie(f) = this.flatMap(f)
+
   # The list holding just +value+ (Monad's +wrap+): +List.wrap(1)+ is +[1]+.
   let wrap(value: Y) -> [Y] = [value]
 

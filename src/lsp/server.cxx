@@ -111,6 +111,10 @@ struct Document {
     // The same references' identities: the declared name a written one
     // resolved to (`Shapes.Circle` for `Circle` under `using Shapes`).
     std::unordered_map<uint64_t, std::string> typeIdentities;
+    // The written names the checker resolved to a type letter (`B` in
+    // `-> Tagged<B, E>`): the declaration's own parameter, whatever else in
+    // scope shares the spelling (Units.Data's byte unit `B`, Math.E).
+    std::unordered_set<uint64_t> typeLetters;
     // The names after `implement:`, at each: the trait the checker resolved.
     std::unordered_map<uint64_t, std::string> implementedTraits;
     // The modules the `using`s in force bring in, per scope the checker kept,
@@ -2671,6 +2675,7 @@ void recordNavigation(
         document.recordKeys.clear();
         document.typeReferences.clear();
         document.typeIdentities.clear();
+        document.typeLetters.clear();
         document.implementedTraits.clear();
         document.scopeModules.clear();
         document.scopePositions.clear();
@@ -2764,6 +2769,9 @@ void recordNavigation(
             continue;
         }
         document.typeReferences.insert_or_assign(at, semantic::typeToString(reference.type));
+        if (std::holds_alternative<semantic::TypeVar>(reference.type->kind)) {
+            document.typeLetters.insert(at);
+        }
         if (const auto* named = std::get_if<semantic::NamedType>(&reference.type->kind)) {
             document.typeIdentities.insert_or_assign(at, named->name);
         } else if (
@@ -4950,6 +4958,11 @@ private:
             documentation.clear();
         } else if (!thisTypeDetail.empty()) {
             detail = std::move(thisTypeDetail);
+            symbol = nullptr;
+        } else if (document.typeLetters.contains(
+                       Document::receiverKey(params.position.line + 1, word.byteColumn))) {
+            detail = word.text;
+            documentation = "A type parameter.";
             symbol = nullptr;
         } else if (primitiveTypeReference) {
             detail = "type " + word.text;

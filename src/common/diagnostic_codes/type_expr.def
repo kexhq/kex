@@ -103,7 +103,4 @@ KEX_DIAGNOSTIC(DistinctAsTraitValue, "KEXET-0513", "a `{type}` cannot be held as
 KEX_DIAGNOSTIC(ExportedFunctionUnannotated, "KEXET-0514", "`{name}` is exported by `{module}`, so its signature is what other units see: write the types of {what} (decision 1). A standalone signature above it (`{name} : ...`) does too")
 KEX_DIAGNOSTIC(IsNeedsTypeOrTrait, "KEXET-0515", "`is?` tests a value against a type or a trait, named as written (`x.is?(String)`, `x.is?(Discrete)`)")
 KEX_DIAGNOSTIC(IsTraitWithoutImplementors, "KEXET-0516", "`is?({trait})` cannot be tested at run time: `{trait}` holds for a value by its shape, which the types a `make` claims it for do not cover. Test the types themselves (`x.is?(Integer)`)")
-KEX_DIAGNOSTIC(TieNotBound, "KEXET-0517", "`.tie` runs the rest of the block once per value, so it is written as a binding: `let x = value.tie`, with the statements after it in the same block")
-KEX_DIAGNOSTIC(TieRestType, "KEXET-0518", "after `let {name} = ....tie` on a `{type}`, the block runs once per value and answers what `flatMap` joins: a `{type}` again, but it ends in a `{rest}`")
-KEX_DIAGNOSTIC(TieReturn, "KEXET-0519", "`return` after `let {name} = ....tie` on a `{type}` would leave only the step it runs in, not the function: end the block with its value instead")
-KEX_DIAGNOSTIC(TieNotMonad, "KEXET-0520", "`.tie` takes a value out of a Monad (a list, an Optional, a Result, ...), and a `{type}` is not one")
+KEX_DIAGNOSTIC(TraitUsedAsValue, "KEXET-0517", "`{name}` is a trait, not a value: take a value of it as `value: {name}`, or bound a letter by it (`A is {name} => value: A`)")

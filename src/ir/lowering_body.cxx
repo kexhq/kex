@@ -299,29 +299,6 @@ auto Lowering::lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) ->
 
     // let PATTERN = value
     if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
-        // `let x = xs.tie` (the checker's MonadBind): the rest of the block is
-        // the step `flatMap` runs once per value, `xs.flatMap { |x| rest }`,
-        // through the dispatcher for the name (this unit's own, which falls back
-        // to the prelude's).
-        if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind);
-            vp && le->value && hir->targetOf(*le->value).kind == hir::TargetKind::MonadBind) {
-            const auto& operand = std::get<ast::MethodCall>(le->value->kind).receiver;
-            const auto container = fresh("Bound");
-            auto value = lower(operand);
-            const auto param = fresh(vp->name);
-            subst[vp->name] = param;
-            immutableBindings.insert(vp->name);
-            curryOrigin.erase(vp->name);
-            auto step = std::make_unique<Expr>();
-            step->node = Lambda{{param}, isLast ? var(param) : lowerBodyFrom(body, i + 1), false};
-            std::vector<ExprPtr> args;
-            args.push_back(var(container));
-            args.push_back(std::move(step));
-            auto call = localMethodArities.count("flatMap/2")
-                            ? localCallExpr("flatMap", std::move(args))
-                            : callE(names::kPreludeModule, "flatMap", 2, std::move(args));
-            return makeLet(container, std::move(value), std::move(call));
-        }
         if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
             // `let y = f(x = 1)`: the nested assignment is bound first.
             std::vector<Binding> hoisted;

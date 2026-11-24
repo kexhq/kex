@@ -1,0 +1,8 @@
+spec/error_trait_used_as_value.kex:5:14: [KEXET-0517]: Error, `Monad` is a trait, not a value: take a value of it as `value: Monad`, or bound a letter by it (`A is Monad => value: A`)
+  |
+5 |   IO.inspect(Monad)
+  |              ^^^^^
+spec/error_trait_used_as_value.kex:6:24: [KEXET-0517]: Error, `Showable` is a trait, not a value: take a value of it as `value: Showable`, or bound a letter by it (`A is Showable => value: A`)
+  |
+6 |   let shown: Integer = Showable
+  |                        ^^^^^^^^

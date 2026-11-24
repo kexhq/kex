@@ -1525,25 +1525,17 @@ traverse(["1", "2"]) { |s| s.to(Integer) }   # Just([1, 2])
 sequence([Ok(1), Error("no")])               # Error("no")
 ```
 
-`.tie` takes a value out of a Monad for the rest of the block: `let x =
-xs.tie` runs the statements after it once per value, as `xs.flatMap { |x|
-... }` would, and the block answers what `flatMap` joins. It flattens what
-would otherwise nest:
+`tie` is a Monad's bind, a function like `flatMap`: `xs.tie { |x| ... }`
+applies the block to each value and joins what it answers. A list gives
+every combination, an `Optional` stops at `None`, a `Result` at its first
+`Error`:
 
 ```kex
-let pairs(xs: [Integer], ys: [String]) -> [(Integer, String)] do
-  let x = xs.tie
-  let y = ys.tie
-  [(x, y)]
-end
-
-pairs([1, 2], ["a", "b"])   # [(1, "a"), (1, "b"), (2, "a"), (2, "b")]
+[1, 2].tie { |x| ["a", "b"].tie { |y| [(x, y)] } }   # [(1, "a"), (1, "b"), (2, "a"), (2, "b")]
+Just(8).tie { |n| n.even? then Just(n / 2) else None }   # Just(4)
 ```
 
-It stands as a `let` with statements after it in the same block, the block
-ends in the container again, and it has no `return` before its end (which
-would leave only the step). On a `Result` or an `Optional` it chains like
-`flatMap`; `.try` is the early exit for failure, usable anywhere.
+`.try` is the early exit for what can fail, usable anywhere.
 
 The holes may be left out: a parameter's kind follows from how the trait's
 signatures apply it, so `trait Functor<F>` with `fmap : F<A> -> ...` is the

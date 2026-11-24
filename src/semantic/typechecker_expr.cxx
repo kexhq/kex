@@ -923,6 +923,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     }
                     return Type::unknown();
                 }
+                // A trait names what values have, not a value (`IO.inspect(Monad)`).
+                if (const auto trait =
+                        resolveTraitReference(node.name, m_currentModulePath, nullptr, false);
+                    m_traits.get(trait)) {
+                    error(diag::Code::TraitUsedAsValue, expr.location, {{"name", node.name}});
+                    return Type::unknown();
+                }
                 if (!reportConstructorOutOfScope(node.name, expr.location) &&
                     !bareNameDeclared(node.name)) {
                     reportUndefined("constructor or type", node.name, expr.location);

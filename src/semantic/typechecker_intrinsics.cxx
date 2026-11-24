@@ -18,8 +18,7 @@ auto findCompileTimeIntrinsic(std::string_view name, std::size_t arity)
         {"Type.of", 1, &TypeChecker::checkTypeOf, &TypeChecker::foldTypeOf},
         {"Process.spawn", 1, &TypeChecker::checkProcessSpawn, &TypeChecker::foldProcessSpawn},
         {"as", 1, &TypeChecker::checkAs, nullptr},
-        {"is?", 1, &TypeChecker::checkIs, nullptr},
-        {"tie", 0, &TypeChecker::checkTie, nullptr},
+        {names::kTypeTestCall, 1, &TypeChecker::checkIs, nullptr},
     };
     for (const auto& intrinsic : intrinsics) {
         if (intrinsic.name == name && intrinsic.arity == arity) {
@@ -326,36 +325,6 @@ auto TypeChecker::checkIs(const ast::Expr& expr, const ast::MethodCall& node) ->
     }
     m_decidedCalls[&expr] = {CallKind::TypeTest, owner};
     return Type::boolean();
-}
-
-} // namespace kex::semantic
-
-namespace kex::semantic {
-
-// `let x = xs.tie`: takes a value out of a Monad, the rest of the block being
-// the step `flatMap` runs once per value (`xs.flatMap { |x| rest }`). Only as
-// a `let` with statements after it: inferBody checks those. `.try` is the
-// other thing, for what can fail.
-auto TypeChecker::checkTie(const ast::Expr& expr, const ast::MethodCall& node) -> TypePtr {
-    if (!node.receiver || node.block || !node.namedArgs.empty()) {
-        return nullptr;
-    }
-    const auto operand = resolve(inferExpr(*node.receiver));
-    if (isUndetermined(operand)) {
-        return nullptr;
-    }
-    const auto bind = monadBindOf(operand);
-    if (!bind) {
-        error(diag::Code::TieNotMonad, expr.location, {{"type", typeToString(operand)}});
-        return Type::unknown();
-    }
-    if (&expr != m_letBindValue) {
-        error(diag::Code::TieNotBound, expr.location);
-        return Type::unknown();
-    }
-    m_decidedCalls[&expr] = {CallKind::MonadBind, typeToString(bind->first)};
-    m_monadBinds[&expr] = operand;
-    return bind->second;
 }
 
 } // namespace kex::semantic

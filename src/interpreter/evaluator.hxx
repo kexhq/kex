@@ -349,8 +349,6 @@ private:
     // Expressions
     auto eval(const ast::Expr& expr) -> ValuePtr;
     auto evalBody(const std::vector<ast::ExprPtr>& body) -> ValuePtr;
-    // The statements of `body` from `start` on, the step after a monadic bind.
-    auto evalBodyFrom(const std::vector<ast::ExprPtr>& body, std::size_t start) -> ValuePtr;
 
     // Binary/unary ops
     auto evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr& right, SourceLocation loc)

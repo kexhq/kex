@@ -2706,47 +2706,11 @@ auto Evaluator::evalTestBuiltin(
 }
 
 auto Evaluator::evalBody(const std::vector<ast::ExprPtr>& body) -> ValuePtr {
-    return evalBodyFrom(body, 0);
-}
-
-auto Evaluator::evalBodyFrom(const std::vector<ast::ExprPtr>& body, std::size_t start) -> ValuePtr {
     ValuePtr last = Value::none();
-    for (std::size_t index = start; index < body.size(); ++index) {
-        const auto& expr = body[index];
-        if (!expr) {
-            continue;
+    for (const auto& expr : body) {
+        if (expr) {
+            last = eval(*expr);
         }
-        // `let x = xs.tie` (the checker's MonadBind): the rest of the block is
-        // the step `flatMap` runs once per value, `xs.flatMap { |x| rest }`.
-        if (const auto* let = std::get_if<ast::LetExpr>(&expr->kind);
-            let && let->value && let->pattern &&
-            m_programs.targetOf(*let->value).kind == hir::TargetKind::MonadBind) {
-            const auto& name = std::get<ast::VarPattern>(let->pattern->kind).name;
-            const auto& operand = std::get<ast::MethodCall>(let->value->kind).receiver;
-            auto container = eval(*operand);
-            const auto scope = m_env;
-            FunctionValue step;
-            step.arity = 1;
-            step.native = [this, &body, index, scope, name](std::vector<ValuePtr> args) {
-                const auto outer = m_env;
-                m_env = std::make_shared<Environment>(scope);
-                m_env->define(name, args.empty() ? Value::none() : args.front());
-                struct Restore {
-                    Evaluator* self;
-                    std::shared_ptr<Environment> env;
-                    ~Restore() {
-                        self->m_env = env;
-                    }
-                } restore{this, outer};
-                return evalBodyFrom(body, index + 1);
-            };
-            auto stepValue = std::make_shared<Value>();
-            stepValue->data = std::move(step);
-            std::vector<ValuePtr> args{container, stepValue};
-            const auto method = resolveMethodName(container, "flatMap", &args);
-            return callFunction(method, std::move(args), {}, expr->location);
-        }
-        last = eval(*expr);
     }
     return last;
 }

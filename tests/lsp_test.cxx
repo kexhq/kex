@@ -2685,25 +2685,55 @@ int main() {
             assertEqual(occurrences(result, "requires"), size_t{1});
         });
     });
+    describe("Kex LSP type letters", []() {
+        // A letter written as a type is the declaration's own: `B` is not
+        // Units.Data's byte unit, and `E` is not Math.E.
+        const std::string source = "record Tagged<A, E> do\n"
+                                   "  item : A\n"
+                                   "  tag : E\n"
+                                   "end\n"
+                                   "\n"
+                                   "make Tagged<_, E> do\n"
+                                   "  let retag(f) -> Tagged<B, E> = Tagged { item: f(@item), tag: "
+                                   "@tag }\n"
+                                   "end\n";
+        it("hovers a function's own letter as a type parameter", [source]() {
+            const auto reply = askAt("file:///tmp/kex-lsp-letter.kex", source, "hover", 6, 25);
+            assertTrue(reply.find("DataUnit") == std::string::npos, "B: " + reply);
+            assertTrue(reply.find("type parameter") != std::string::npos, "B: " + reply);
+        });
+        it("hovers a make block's letter as a type parameter", [source]() {
+            const auto reply = askAt("file:///tmp/kex-lsp-letter.kex", source, "hover", 6, 28);
+            assertTrue(reply.find("logarithm") == std::string::npos, "E: " + reply);
+            assertTrue(reply.find("type parameter") != std::string::npos, "E: " + reply);
+            const auto declared = askAt("file:///tmp/kex-lsp-letter.kex", source, "hover", 5, 15);
+            assertTrue(declared.find("logarithm") == std::string::npos, "E: " + declared);
+        });
+    });
+
     describe("Kex LSP algebra traits", []() {
-        // Applicable's `with`, Monad's `.tie` and `wrap`, Foldable<T>'s `find`
+        // Applicable's `with`, Monad's `tie` and `wrap`, Foldable<T>'s `find`
         // and `is?`, as an editor sees them.
         const std::string source =
             "let combined(a: Integer?, b: Integer?) -> Integer? = a.with(b) { |x, y| x + y }\n"
             "let firstVowel(word: String) -> Char? = word.find { |c| c == 'e' }\n"
             "let pairs(xs: [Integer], ys: [String]) -> [(Integer, String)] do\n"
-            "  let x = xs.tie\n"
-            "  let y = ys.tie\n"
-            "  [(x, y)]\n"
+            "  xs.tie { |x| ys.tie { |y| [(x, y)] } }\n"
             "end\n"
+            "let halves(xs: [Integer]) -> [Integer] = xs.tie { |x| [x / 2] }\n"
+            "let half(n: Integer?) -> Integer? = n.tie { |x| Just(x / 2) }\n"
             "let discrete(v: Any) -> Bool = v.is?(Discrete)\n"
             "let bumped(M is Monad => xs: M<Integer>) -> M<Integer> = xs.flatMap { |x| M.wrap(x + "
             "1) }\n";
-        it("hovers what `.tie` binds as the element", [source]() {
-            const auto first = askAt("file:///tmp/kex-lsp-tie.kex", source, "hover", 3, 6);
+        it("hovers a `tie` block's parameters as the elements", [source]() {
+            const auto first = askAt("file:///tmp/kex-lsp-tie.kex", source, "hover", 3, 12);
             assertTrue(first.find("x : Integer") != std::string::npos, "x: " + first);
-            const auto second = askAt("file:///tmp/kex-lsp-tie.kex", source, "hover", 4, 6);
+            const auto second = askAt("file:///tmp/kex-lsp-tie.kex", source, "hover", 3, 25);
             assertTrue(second.find("y : String") != std::string::npos, "y: " + second);
+        });
+        it("hovers `tie` as a function", [source]() {
+            const auto reply = askAt("file:///tmp/kex-lsp-tie-fn.kex", source, "hover", 3, 6);
+            assertTrue(reply.find("tie : [Integer]") != std::string::npos, "tie: " + reply);
         });
         it("types a block through a bounded constructor letter", [source]() {
             // `xs: M<Integer>`: the requirement's `F<A>` makes the block's x an
@@ -2723,27 +2753,14 @@ int main() {
             const auto reply = askAt("file:///tmp/kex-lsp-find.kex", source, "hover", 1, 46);
             assertTrue(reply.find("-> Char?") != std::string::npos, "find: " + reply);
         });
-        it("completes `with` and `wrap` on a list", [source]() {
+        it("completes `with`, `wrap`, `tie` and `is?` on a list", [source]() {
             const auto reply =
-                askAt("file:///tmp/kex-lsp-complete.kex", source, "completion", 3, 13);
-            assertTrue(reply.find("\"label\":\"with\"") != std::string::npos, "no with: " + reply);
-            assertTrue(reply.find("\"label\":\"wrap\"") != std::string::npos, "no wrap: " + reply);
-        });
-        it("reports a `.tie` that is not a binding", []() {
-            std::string messages;
-            messages += frame(
-                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
-            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
-            messages += frame(
-                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-tie-error.kex","languageId":"kex","version":1,"text":"let inline(xs: [Integer]) -> Integer = xs.tie + 1\n"}}})");
-            messages += frame(R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
-            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
-            std::istringstream input(messages);
-            std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
-            assertTrue(
-                output.str().find("KEXET-0517") != std::string::npos,
-                "no KEXET-0517 published: " + output.str());
+                askAt("file:///tmp/kex-lsp-complete.kex", source, "completion", 3, 5);
+            for (const auto* label : {"with", "wrap", "tie", "is?"}) {
+                assertTrue(
+                    reply.find(std::string("\"label\":\"") + label + "\"") != std::string::npos,
+                    std::string("no ") + label + ": " + reply);
+            }
         });
     });
     describe("Kex LSP bounds", []() {

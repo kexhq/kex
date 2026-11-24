@@ -1,0 +1,15 @@
+# A length times a length is an area, times an area a volume, in either
+# order; and every SI product reads the same whichever operand comes first.
+using Units.SI
+
+main do
+  IO.printLine((40.meter * 51.meter).to(String))
+  IO.printLine((3.meter * 2.kilometer).canonical)
+  IO.printLine((2.meter * (3.meter * 4.meter)).to(String))
+  IO.printLine(((3.meter * 4.meter) * 2.meter).to(String))
+  IO.printLine((2.newton * 3.meter).to(String))
+  IO.printLine((3.meter * 2.newton).to(String))
+  IO.printLine((10.meter ^ 2) == (10.meter * 10.meter))
+  IO.printLine((12.volt * 2.ampere).to(String))
+  IO.printLine((90.minute * 2).wholeHours)
+end
