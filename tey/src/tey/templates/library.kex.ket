@@ -3,4 +3,4 @@ params: [moduleName: String]
 ---
 module <%= moduleName %>
 
-foul greeting(name: String) = "Hello, ${name}!"
+foul greeting(name: String) -> String = "Hello, ${name}!"

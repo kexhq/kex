@@ -505,7 +505,8 @@ end
 # A `return` of a wrapper (`Error`, `Just`) or another type from a function
 # declared to answer the plain type (kexhq/kex#768).
 let returnedWrapper(seed: Integer, pair: (Sample, Sample)) -> Relation do
-  let (first, second) = pair
+  let (first, given) = pair
+  let second = unrelatedTo(first, given)
   let wrongs = ["Error(${first.value})", "Just(${first.value})", second.value]
   let wrong = wrongs.at(variantOf(seed, wrongs.count)).or(second.value)
   let body = ["IO.printLine(pick(false))"]
