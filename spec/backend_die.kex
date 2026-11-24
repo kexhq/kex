@@ -1,4 +1,3 @@
-# kex: no-check
 # `die` was a walker-only builtin: unknown to the checker (the prelude's own
 # `repeat` calls it) and missing entirely on BEAM, where it raised "Undefined
 # function: die". It now has one declaration both backends share, typed

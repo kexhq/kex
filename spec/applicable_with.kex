@@ -1,0 +1,18 @@
+# Applicable's `with`: two independent containers, a function of both values.
+# A list combines every pair, an Optional or a Result the two values or the
+# first failure, and a Validation every value or every failure. `wrap` is
+# reached on the type, as Monad's is.
+
+main do
+  IO.printLine([1, 2].with([10, 20]) { |a, b| a + b }.inspected)
+  IO.printLine([].with([1]) { |a, b| a + b }.inspected)
+  IO.printLine(Just(2).with(Just(3)) { |a, b| a * b }.inspected)
+  IO.printLine(Just(2).with(None) { |a, b| a * b }.inspected)
+  IO.printLine(Ok(1).with(Ok(2)) { |a, b| "${a}-${b}" }.inspected)
+  IO.printLine(Error("first").with(Error("second")) { |a, b| a + b }.inspected)
+  IO.printLine(Valid(1).with(Valid(2)) { |a, b| a + b }.inspected)
+  IO.printLine(Invalid(["a"]).with(Invalid(["b"])) { |a, b| a + b }.inspected)
+  IO.printLine(Valid(1).with(Invalid(["b"])) { |a, b| a + b }.inspected)
+  IO.printLine(Validation.wrap(5).inspected)
+  IO.printLine(List.wrap(5).inspected)
+end

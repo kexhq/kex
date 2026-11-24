@@ -119,8 +119,8 @@ Done:
   it binds to the argument (`larger(3, 7)` is an Integer). `is` is
   contextual: a bound only after a single capital and before `=>`, in the
   parser, the Vim and VS Code grammars, and LSP hover on the bound's trait.
-  Follow-up: an `is?` type test (`value.is?(Discrete)`), for which the
-  highlighters already leave `is?` an ordinary name.
+  The `is?` type test (`value.is?(Discrete)`) followed; the highlighters
+  leave `is?` an ordinary name.
 - Higher-kinded traits, the first slice of §8.2 and #342: `TypeApp` (a type
   variable applied, `F<A>`), `applicationOf` (`[X]`, `X?`, `Map<K, V>` and
   `Box<A>` read as a head applied to arguments) and `applyConstructor`. A
@@ -237,7 +237,145 @@ Done:
   identifiers bound from them, `.to` whose selector reaches the call
   untyped, `.or`, `.get`, `.try`.
 
-Not done: everything else in §12, in that order.
+§12, where it stands:
+
+- Step 1, the unification core. `unify` exists (`typechecker_unify.cxx`):
+  structural, with an occurs check, binding inference variables only (a
+  generic letter, an unknown and a trait bound match open), never to a type
+  still holding an open one, and binding nothing when it fails. A call binds
+  what its arguments' variables unify with (only the argument's: the
+  callee's own are not the call's to bind), and `fixNestedVariables` is left
+  for what a §4.5 rule accepted. A value flowing into a declared type (a
+  typed `let`, a declared constant, an assignment) unifies with it once
+  accepted, so what it leaves open takes the declared type. The other
+  `argMatchesParam` sites (about 90) rank overload candidates, which a
+  predicate must do without binding; what is left is moving their
+  acceptance itself onto `unify` plus §4.5's rules, so there is one relation.
+  Decided (2026-11-24): incrementally, each of `argMatchesParam`'s
+  acceptances mapped to a §4.5 rule or removed. Done so far: the escape that
+  took any two sized integers (or floats) as one type is gone; a literal
+  adapts to a sized number (rule 2), a sized number widens without loss (to
+  `Integer`, or a wider float), and nothing narrows silently
+  (`spec/error_sized_number_narrowing.kex`). Unknowns left in the specs and
+  examples: 479 (from 987) counted at any visit; counted by each
+  expression's final type, leaving out module-path segments (`Utils.Strings`
+  in `Utils.Strings.shout`), 311, and 292 after annotating Comparable's
+  `max`/`min` and Foldable's `all?`, `any?`, `none?`, `one?`, `count`, and
+  binding a trait function's `This` in the dotless form too (`clamp(15, 0,
+  10)` is `15.clamp(0, 10)`; numbers join across the tower, so `max(1, 2.5)`
+  is `Integer | Float`). A type's declared-only functions reach the
+  checker too (Map's `find :>` and `map :>`, whose bodies are trait
+  defaults): the KexI reader dropped every function without a body, and now
+  drops only a trait's requirements, which the trait itself carries. What remains is a long
+  tail: intrinsics and module namespaces typed unknown on purpose, calls
+  whose candidates answer different types (`upperCase` on a String or a
+  Char), functions of other files reached by name, and what those feed. The
+  last `argMatchesParam` escape (a non-written Unknown matches anything)
+  goes once these are typed.
+  Tried and reverted: §4.5 rule 4's union of the members' results for a
+  call on an unknown receiver. In an unannotated body it reports, at the
+  definition, errors that hold only for some arguments (`shout(s) =
+  s.upperCase` would be `String | Char`), which decision 1 forbids; such a
+  call stays open and is typed per call instead. Decided (2026-11-24):
+  decision 1 wins, and rule 4 now says so; these calls are open by design,
+  not a hole. With that, every acceptance of `argMatchesParam` maps to a
+  §4.5 rule, the non-written-Unknown one to decision 1's open calls and to
+  what is unknown on purpose (intrinsics, module namespaces).
+- Step 2, #342's grammar. Effect sets inside function types (§8.3, decided
+  2026-11-24: inferred, shown only) are built: a block's `FuncType` carries
+  the capabilities its body requires, computed with the requirements, and
+  hover on what holds it shows them (`requires FS.File`); the definer
+  already requires them, so no obligation is added. Inference variables and a
+  signature's generic letters are two kinds: a `TypeVar` carries its
+  `TypeVarKind`, made only by `Type::genericLetter` or
+  `Type::inferenceVariable`, and `isGenericLetter` / `isInferenceVariable`
+  read that kind. Their ids share one space so maps keyed by id stay
+  unambiguous; an id kept bare (a serialized interface,
+  `ConstrainedType::genericId`) is decoded in one place, `typeVarFromId`.
+
+The long tail, where it ended: of the 292, what stays untyped is open by
+design: foreign `BEAM.*` calls, `Kex.Intrinsic.*`, what follows an error in
+an `error_*` spec, calls decision 1 keeps open (`shout(s) = s.upperCase`),
+and what an `Any`-returning helper feeds (`opaque(x).name`). Calls into
+other files by name are typed (their exports are annotated). Closed on the
+way:
+
+- A type's declared-only functions reach the checker (Map's `find :>` and
+  `map :>`, whose bodies are trait defaults). The KexI reader dropped every
+  function without a body; it now drops only a trait's requirements, which
+  the trait itself carries (as functions too, Showable's `showValue :>
+  String` stood beside the prelude's `showValue(value: Showable)` and made
+  every interpolation ambiguous).
+- Trait parameters (decided 2026-11-24, over an associated type and over
+  `Foldable<F<_>>`, which String and Map's entries do not fit): `trait
+  Foldable<T>`, claimed as `implement: Foldable<Char>`, `Foldable<X>`,
+  `Foldable<(K, V)>`. A default written with the parameter answers in what
+  the claim filled in (`"hey".find` is a `Char?`); each implementor's copy
+  of the default reads its letters with the claim, and keeps what the
+  clause writes when the body is checked. KexI carries it as a type-only
+  function per implementor (`spec/trait_parameter_claim.kex`,
+  `spec/error_trait_parameter_claim.kex`). A requirement written with its
+  receiver (`fold : F<T> -> ...` in a higher-kinded trait) no longer counts
+  that receiver twice.
+
+The `is?` type test (decided 2026-11-24: now): `value.is?(T)` is a Bool,
+whether the value is a `T` or, for a trait, of a type that implements it.
+The checker decides it as an intrinsic (`CallKind::TypeTest`): a type tests
+itself, a trait each type a `make` claims it for (`is?(Discrete)` is
+`Integer, Char`), `Number` itself, and a structural trait (`Showable`) is
+refused (KEXET-0516), as is a value where the type goes (KEXET-0515). Both
+backends test as a type pattern does (`runtimeTypeMatches`, `typeGuard`).
+It narrows nothing; a `match` with `x : T` does (`spec/is_type_test.kex`,
+`spec/error_is_type_test.kex`).
+
+After it (2026-11-24):
+
+- Kind inference (§8.2): a trait parameter written without holes takes the
+  kind its signatures apply it with (`trait Mappable<F>` with `F<A>` is
+  `Mappable<F<_>>`), read by the parser so every consumer sees one kind;
+  uses that disagree are KEXEP-0159 (`spec/trait_kind_inference.kex`).
+- The Monad trait: `trait Monad<F>` with `wrap : A -> F<A>` and `flatMap`,
+  implemented by List, Optional and `Result<_, E>`. `wrap`, which has no
+  receiver, is called on the type (decided 2026-11-24): `List.wrap(1)` by
+  name, `M.wrap(x)` through a bounded letter, M passed to the function as
+  its type (§12 step 7, now for constructors too: `xs: M<Integer>` given a
+  `[1]` passes List). Dispatchers of ADT receivers take the type's atom as a
+  record's and a primitive's do. A function whose arguments do not say what
+  M is cannot build one: the result stays `M<...>` (`spec/monad_trait.kex`,
+  `spec/error_monad_trait.kex`).
+- Clauses selected by a literal: a clause that writes its result and takes a
+  literal Integer (`let ^(2) -> Measure<Quantity.Area>`) is chosen only by
+  that literal, so `^` is back on lengths, overloaded on its exponent as `*`
+  and `/` are on dimensions (`spec/measure_power_overload.kex`). A literal
+  is its own type there (`PrimitiveType::literal`, which atoms already
+  used); clauses that leave the result to the body keep their literals
+  Integers (`fib(0) = 0`).
+- Applicable (named so, decided 2026-11-24; its operation `with`, over
+  `map2`): `trait Applicable<F>` with `wrap` and `with : F<A> -> F<B> -> (A
+  -> B -> C) -> F<C>`, implemented by List (every pair), Optional, Result
+  (the first failure) and `Validation<T, E> = Valid(T) | Invalid([E])`
+  (every failure; Applicable but not a Monad). `traverse` and `sequence` in
+  algebra.kex are written once over it. Passing a bounded letter's type now
+  also reads it from the call's result (`traverse`'s `F<[B]>`, where only a
+  block names F), the walker reads a one-letter receiver from its type frame
+  in a prelude function too, a refused call no longer answers its
+  unbound letters, the source-built prelude interface carries a claim's
+  filled defaults as KexI does, and a block through `M<A>` takes its hints
+  from the higher-kinded requirements (`spec/applicable_with.kex`,
+  `spec/validation_signup.kex`, `spec/traverse_sequence.kex`, LSP and REPL
+  tests).
+- `.tie`, the monadic bind (decided 2026-11-24; first tried as `.try` on a
+  non-failing Monad, which the user rejected: `.try` is for what can fail):
+  `let x = xs.tie` runs the rest of the block once per value, as
+  `xs.flatMap { |x| rest }`, on any Monad (a Result chains like flatMap).
+  A compile-time intrinsic (CallKind::MonadBind on the call; the walker runs
+  the rest as a native step, lowering as a `fun` to the `flatMap`
+  dispatcher). Only as a `let` (KEXET-0517), the block ending in the
+  container again (KEXET-0518), no `return` before its end (KEXET-0519), on
+  a Monad only (KEXET-0520) (`spec/monad_tie.kex`). `.try` on Result and
+  Optional is the checker's own (`tryPayload`): there is no Tryable trait.
+
+Nothing in the plan is left undone.
 
 ---
 
@@ -499,8 +637,11 @@ section wins. A new rule is added here first, or it does not exist.
    - A call with a known argument type resolves to the one matching member, and
      its result is that member's declared result.
    - A call whose argument is still unknown constrains it to the **union** of
-     the members' parameter types. The result is the union of the matching
-     members' results.
+     the members' parameter types. Its result is what every matching member
+     answers when they agree; when they do not, the call stays open in the
+     definition and is typed at each call with that call's types (decision 1,
+     which wins here, decided 2026-11-24). A receiver whose type is a union
+     already gets the union of the members' results.
    - A type variable is never solved by picking one member, which was #643's
      bug.
 
@@ -1318,6 +1459,9 @@ but each covers its class, not its repro.
 1. **A parallel core or an in-place refactor** (§12).
 2. **A bare trait result with several parameters** (decision 4, §4.5 rule 7):
    Decided (2026-11-24): b, checked per call.
+   Built: the call is the body's type at its arguments, as for an
+   unannotated function (`combine(1, 2.5)` is a Float),
+   `spec/error_trait_result_several_params.kex`.
    - a. name the type
    - b. check per call
    - c. specify promotion against the join
@@ -1333,13 +1477,23 @@ but each covers its class, not its repro.
    Built: a union of a distinct type and what backs it (or two distinct types
    backed alike) is KEXET-0512, written or joined; a distinct type stored as
    a trait it implements in its own `make` (a typed `let`, a list or optional
-   of the trait) is KEXET-0513 (`spec/error_indistinguishable_types.kex`). A
-   trait-typed parameter is allowed: BEAM passes the dictionary. The walker
-   still dispatches such a call on the value and finds the backing's
-   implementation, a parity gap to close.
+   of the trait, or a trait-typed parameter) is KEXET-0513
+   (`spec/error_indistinguishable_types.kex`). A `Showable` parameter is the
+   exception: the checker routes the value through its own `showValue`, which
+   both backends honour.
 5. **"Exported functions are annotated"** (decision 1): count what it breaks,
    then adopt it or drop it.
-   Decided (2026-11-24): count first, then decide.
+   Decided (2026-11-24): count first, then decide. Counted, then decided
+   (2026-11-24): required. The stdlib's are annotated first, then an
+   unannotated exported function is an error; metro and slick follow.
+   Built: KEXET-0514 for a public function of a file module (`module Name`
+   as a file's header), or of a module in a file other than the entry, that
+   leaves a parameter or its result untyped with no standalone signature;
+   private functions and a program file's own modules are exempt
+   (`spec/error_exported_unannotated.kex`). Counted again with standalone
+   signatures recognised: 14 in the stdlib (now annotated), and none in
+   harmat, metro or slick. Diagnostics print a file under the working
+   directory relative to it.
    Counted: unannotated exported functions are 100 in the stdlib (FS 43, Net
    about 37, Assert 8, URI 6, Control.Retry 3), 0 in harmat, 39 in metro and
    90 in slick.
@@ -1355,6 +1509,11 @@ but each covers its class, not its repro.
 7. **`Float` and `Int`** (§6.3): the concrete-`Float` proposal against the
    original design's umbrella trait, and `Int` as an alias of `Integer` or of
    `Int64`.
+   Decided (2026-11-24): nearly the rule `Integer` follows. A float is a
+   `Float`, and `Float64` shows only where a program wrote it. Built so far:
+   a literal's type prints `Float` (the registry keys floats by size), and a
+   written `Float` is that same concrete type, not a bound over the float
+   types, in programs and imported signatures alike.
 8. **Written intersection types** (§4.5, 5): allowed in programs, or kept as the
    type of overload sets only.
    Decided (2026-11-24): allowed in programs.

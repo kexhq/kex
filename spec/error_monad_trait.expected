@@ -1,0 +1,6 @@
+spec/error_monad_trait.kex:9:22: [KEXET-0001]: Error, type mismatch: expected [Integer], got M<Integer>
+  |
+9 |   let a: [Integer] = unit(1)
+  |          ---------   ^^^^^^^ this has type M<Integer>
+  |          |
+  |          expected because of this annotation

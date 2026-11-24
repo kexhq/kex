@@ -2706,11 +2706,47 @@ auto Evaluator::evalTestBuiltin(
 }
 
 auto Evaluator::evalBody(const std::vector<ast::ExprPtr>& body) -> ValuePtr {
+    return evalBodyFrom(body, 0);
+}
+
+auto Evaluator::evalBodyFrom(const std::vector<ast::ExprPtr>& body, std::size_t start) -> ValuePtr {
     ValuePtr last = Value::none();
-    for (const auto& expr : body) {
-        if (expr) {
-            last = eval(*expr);
+    for (std::size_t index = start; index < body.size(); ++index) {
+        const auto& expr = body[index];
+        if (!expr) {
+            continue;
         }
+        // `let x = xs.tie` (the checker's MonadBind): the rest of the block is
+        // the step `flatMap` runs once per value, `xs.flatMap { |x| rest }`.
+        if (const auto* let = std::get_if<ast::LetExpr>(&expr->kind);
+            let && let->value && let->pattern &&
+            m_programs.targetOf(*let->value).kind == hir::TargetKind::MonadBind) {
+            const auto& name = std::get<ast::VarPattern>(let->pattern->kind).name;
+            const auto& operand = std::get<ast::MethodCall>(let->value->kind).receiver;
+            auto container = eval(*operand);
+            const auto scope = m_env;
+            FunctionValue step;
+            step.arity = 1;
+            step.native = [this, &body, index, scope, name](std::vector<ValuePtr> args) {
+                const auto outer = m_env;
+                m_env = std::make_shared<Environment>(scope);
+                m_env->define(name, args.empty() ? Value::none() : args.front());
+                struct Restore {
+                    Evaluator* self;
+                    std::shared_ptr<Environment> env;
+                    ~Restore() {
+                        self->m_env = env;
+                    }
+                } restore{this, outer};
+                return evalBodyFrom(body, index + 1);
+            };
+            auto stepValue = std::make_shared<Value>();
+            stepValue->data = std::move(step);
+            std::vector<ValuePtr> args{container, stepValue};
+            const auto method = resolveMethodName(container, "flatMap", &args);
+            return callFunction(method, std::move(args), {}, expr->location);
+        }
+        last = eval(*expr);
     }
     return last;
 }
@@ -3118,6 +3154,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             return evalConversion(*node.receiver, target.owner);
                         }
                         break;
+                    case hir::TargetKind::TypeTest:
+                        if (node.receiver) {
+                            return evalTypeTest(eval(*node.receiver), target.owner);
+                        }
+                        break;
                     case hir::TargetKind::Builtin:
                         if (names::isIntrinsicPath(target.owner)) {
                             return evalIntrinsicCall(node, target.owner, expr.location);
@@ -3204,8 +3245,13 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         bool isKnownVariant = m_variantParent.count(upperIdent->name) > 0;
                         // `A.identity`: the type the call passed for A.
                         ValuePtr existing;
+                        // A single capital is a type letter wherever it stands
+                        // (no type is named with one), so a prelude function's
+                        // `F.wrap`, whose program decided it apart, reads its
+                        // frame too.
                         if (!m_typeFrames.empty() &&
-                            m_programs.typeVariableReceiverOf(expr) == upperIdent->name) {
+                            (m_programs.typeVariableReceiverOf(expr) == upperIdent->name ||
+                             upperIdent->name.size() == 1)) {
                             if (const auto passed = m_typeFrames.back().find(upperIdent->name);
                                 passed != m_typeFrames.back().end()) {
                                 existing = passed->second;
@@ -4361,8 +4407,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 }
                 // Some native Optional-returning APIs erase Just on success and
                 // return the payload directly, while retaining None on failure.
-                // Semantic checking still rejects `.try` on a concrete non-Tryable
-                // type; this identity fallback preserves that native ABI.
+                // X                // type; this identity fallback preserves that native ABI.
                 return value;
             } else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
                 try {
@@ -6644,6 +6689,34 @@ auto Evaluator::typeArgumentValue(const semantic::TypeArgument& argument) -> Val
     const auto* named = std::get_if<semantic::NamedType>(&argument.type->kind);
     const auto name = named ? named->name : semantic::typeToString(argument.type);
     return m_env->get(name);
+}
+
+} // namespace kex::interpreter
+
+namespace kex::interpreter {
+
+auto Evaluator::evalTypeTest(const ValuePtr& value, const std::string& tested) const -> ValuePtr {
+    std::size_t start = 0;
+    while (start < tested.size()) {
+        auto end = tested.find(',', start);
+        if (end == std::string::npos) {
+            end = tested.size();
+        }
+        ast::TypeName name;
+        const auto written = tested.substr(start, end - start);
+        for (std::size_t from = 0; from <= written.size();) {
+            const auto dot = std::min(written.find('.', from), written.size());
+            name.parts.push_back(written.substr(from, dot - from));
+            from = dot + 1;
+        }
+        ast::TypeExpr type;
+        type.kind = std::move(name);
+        if (runtimeTypeMatches(value, type)) {
+            return Value::boolean(true);
+        }
+        start = end + 1;
+    }
+    return Value::boolean(false);
 }
 
 } // namespace kex::interpreter

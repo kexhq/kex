@@ -1,5 +1,4 @@
 # Module imports: top-level using, cross-module calls via using
-# kex: no-check
 
 module Math do
   let square(n) = n * n

@@ -1,0 +1,12 @@
+# kex: check-only
+# A trait parameter takes one kind: `F` applied in one signature and bare in
+# another cannot be both (KEXEP-0159).
+
+trait Odd<F> do
+  wrapped : F<A> -> F<A>
+  bare : F -> F
+end
+
+main do
+  IO.printLine("unreached")
+end

@@ -5,4 +5,4 @@ module Chain.Mid
 # where `Leaf` is first read as `Chain.Mid.Leaf`.
 using Chain.Leaf, only: [hello]
 
-let polite(name: String) = "${hello(name)} How are you?"
+let polite(name: String) -> String = "${hello(name)} How are you?"

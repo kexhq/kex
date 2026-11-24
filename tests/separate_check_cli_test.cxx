@@ -158,7 +158,7 @@ let routeSummary(path) = "route ${path}"
 
 using Web.Route, only: [routeSummary]
 
-let summarized() = routeSummary("inside")
+let summarized() -> String = routeSummary("inside")
 )KEX");
         write("lib/kinds.kex", R"KEX(module Kinds
 

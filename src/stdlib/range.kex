@@ -75,7 +75,7 @@ end
 
 # Walking a range takes an element type with a next value: these exist for
 # ranges of a +Discrete+ type only.
-make A is Discrete => Range<A>, implement: Enumerable, Foldable do
+make A is Discrete => Range<A>, implement: Enumerable, Foldable<A> do
   # Folds over the range's elements in order.
   #
   # This is +Range+'s +Enumerable+ primitive; the traversal functions are built

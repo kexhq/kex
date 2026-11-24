@@ -1053,8 +1053,10 @@ int main() {
                 semantic.modules["Numbers"].exports["narrow"][0].signature;
             test::assertEqual(
                 kex::semantic::typeToString(narrowSignature.params[0]), std::string("Int32"));
+            // `Float` is the float type, as `Integer` is the integer one
+            // (docs/typechecker-hm-plan.md §14 item 7), not a bound.
             test::assertTrue(
-                std::holds_alternative<kex::semantic::ConstrainedType>(
+                std::holds_alternative<kex::semantic::SizedFloatType>(
                     narrowSignature.result->kind));
             test::assertEqual(semantic.receiverFunctions["doubled"].size(), size_t(1));
             const auto& receiver = semantic.receiverFunctions["doubled"][0];

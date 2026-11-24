@@ -1217,6 +1217,119 @@ auto Analyzer::computeCapabilityRequirements(const ast::Program& program) -> voi
             }
         }
     }
+
+    // A block's own requirements (docs/typechecker-hm-plan.md §8.3, decided
+    // 2026-11-24: inferred, shown only): what the calls in its body require,
+    // written onto its function type, which hover shows. Its definer requires
+    // the same already, so this adds no obligation.
+    const auto& types = m_checker.typeMap();
+    for (const auto& [def, ownCapability] : functions) {
+        const auto direct = [&](const ast::Expr& e, std::set<std::string>& into) {
+            if (const auto found = selected.find(&e); found != selected.end()) {
+                const auto& signature = found->second;
+                const auto clause =
+                    signature.clause ? ofClause.find(signature.clause) : ofClause.end();
+                if (clause != ofClause.end()) {
+                    const auto* callee = clause->second;
+                    if (const auto& capability = functions.at(callee);
+                        !capability.empty() && capability != ownCapability) {
+                        into.insert(capability);
+                    }
+                    for (const auto& [capability, _] : m_requiredCapabilities.at(callee)) {
+                        into.insert(capability);
+                    }
+                } else {
+                    for (const auto* module : {&signature.declaringModule, &signature.makeModule}) {
+                        if (!module->empty() && m_capabilityModules.count(*module)) {
+                            into.insert(*module);
+                        }
+                    }
+                    for (const auto& capability : signature.requiredCapabilities) {
+                        if (capability != ownCapability) {
+                            into.insert(capability);
+                        }
+                    }
+                }
+            }
+            if (const auto* method = std::get_if<ast::MethodCall>(&e.kind);
+                method && method->receiver) {
+                const auto receiver = receiverModuleName(*method->receiver);
+                if (!receiver.empty() && receiver != ownCapability &&
+                    m_capabilityModules.count(receiver)) {
+                    into.insert(receiver);
+                }
+            }
+        };
+        std::function<void(const ast::Expr&, std::set<std::string>*)> walk =
+            [&](const ast::Expr& e, std::set<std::string>* outer) {
+                const bool block = std::holds_alternative<ast::Lambda>(e.kind);
+                std::set<std::string> own;
+                auto* into = block ? &own : outer;
+                if (into) {
+                    direct(e, *into);
+                }
+                ast::forEachChild(e, [&](const ast::ExprPtr& child) {
+                    if (child) {
+                        walk(*child, into);
+                    }
+                });
+                if (!block) {
+                    return;
+                }
+                if (outer) {
+                    outer->insert(own.begin(), own.end());
+                }
+                const auto type = types.find(&e);
+                if (type != types.end() && type->second) {
+                    if (auto* function = std::get_if<FuncType>(&type->second->kind)) {
+                        function->capabilities.assign(own.begin(), own.end());
+                    }
+                }
+            };
+        // `let task = { … }`: the binding's recorded type is a copy made when
+        // the check finished, before this pass; it carries the block's set too.
+        std::function<void(const ast::Expr&)> bindings = [&](const ast::Expr& e) {
+            if (const auto* let = std::get_if<ast::LetExpr>(&e.kind);
+                let && let->pattern && let->value) {
+                const auto* name = std::get_if<ast::VarPattern>(&let->pattern->kind);
+                const auto block = types.find(let->value.get());
+                const auto* function = block != types.end() && block->second
+                                           ? std::get_if<FuncType>(&block->second->kind)
+                                           : nullptr;
+                if (name && function && !function->capabilities.empty()) {
+                    for (const auto& binding : m_checker.patternBindings()) {
+                        if (binding.name != name->name || !binding.type ||
+                            binding.location.line != let->pattern->location.line ||
+                            binding.location.column != let->pattern->location.column) {
+                            continue;
+                        }
+                        if (auto* bound = std::get_if<FuncType>(&binding.type->kind)) {
+                            bound->capabilities = function->capabilities;
+                        }
+                    }
+                }
+            }
+            ast::forEachChild(e, [&](const ast::ExprPtr& child) {
+                if (child) {
+                    bindings(*child);
+                }
+            });
+        };
+        for (const auto& clause : def->clauses) {
+            for (const auto& expr : clause.body) {
+                if (expr) {
+                    walk(*expr, nullptr);
+                }
+            }
+        }
+        for (const auto& clause : def->clauses) {
+            for (const auto& expr : clause.body) {
+                if (expr) {
+                    bindings(*expr);
+                }
+            }
+        }
+    }
 }
 
 } // namespace kex::semantic

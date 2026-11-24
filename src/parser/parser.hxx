@@ -107,6 +107,10 @@ private:
     auto parseRecordDef() -> std::unique_ptr<ast::RecordDef>;
     auto parseRecordBody(ast::RecordDef& into) -> void;
     auto parseTraitDef() -> std::unique_ptr<ast::TraitDef>;
+    // The kind of each parameter written without holes, from how the trait's
+    // signatures apply it: `trait Functor<F>` with `map : F<A> -> ...` is
+    // `Functor<F<_>>`.
+    auto inferTraitParamKinds(ast::TraitDef& def) -> void;
     auto parseMakeDef() -> std::unique_ptr<ast::MakeDef>;
     auto parseServingDef() -> std::unique_ptr<ast::MakeDef>;
     // The two halves of a `make` that `make %name` generation reuses: it has a

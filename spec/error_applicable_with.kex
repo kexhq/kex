@@ -1,0 +1,13 @@
+# kex: check-only
+# `with` combines two of the same container: a list with an Optional is no
+# pair. `traverse` gathers into the container its step answers, so a step
+# answering a plain Integer has none. `wrap` is a container's, and Integer is
+# not one.
+
+main do
+  let mixed = [1].with(Just(2)) { |a, b| a + b }
+  let plain = traverse([1, 2]) { |n| n + 1 }
+  let wrapped = Integer.wrap(1)
+  let oneArg = Just(1).with(Just(2)) { |a| a }
+  IO.printLine("${mixed} ${plain} ${wrapped} ${oneArg}")
+end

@@ -229,6 +229,39 @@ int main() {
         });
     });
 
+    describe("the algebra traits in a file and the REPL", []() {
+        // Applicable's `with`, Validation, traverse, Monad's `wrap` and `.tie`,
+        // `is?`, and a trait parameter's typed default: the same answers
+        // entered statement by statement as run as a file, on both backends.
+        it("answers as a file does", []() {
+            const std::array<std::string, 6> bodies = {
+                "IO.printLine([1, 2].with([10, 20]) { |a, b| a + b }.inspected)\n",
+                "IO.printLine(Valid(1).with(Invalid([\"b\"])) { |a, b| a + b }.inspected)\n",
+                "IO.printLine(traverse([\"1\", \"2\"]) { |s| s.to(Integer) }.inspected)\n",
+                "IO.printLine(\"${3.is?(Discrete)} ${Optional.wrap(1).inspected}\")\n",
+                "IO.printLine(\"hey\".find { |c| c == 'e' }.inspected)\n",
+                "let pairs(xs: [Integer], ys: [String]) -> [(Integer, String)] do\n"
+                "  let x = xs.tie\n"
+                "  let y = ys.tie\n"
+                "  [(x, y)]\n"
+                "end\n"
+                "IO.printLine(pairs([1, 2], [\"a\"]).inspected)\n",
+            };
+            for (const auto& body : bodies) {
+                const auto file = "main do\n" + body + "end\n";
+                const auto walker = runWalkerFile(file);
+                const auto beam = runBeamFile(file, "");
+                assertEqual(beam, walker, "file backends disagree: " + body);
+                assertTrue(
+                    runRepl(body).find("\n" + walker) != std::string::npos,
+                    "walker REPL differs from file: " + body);
+                assertTrue(
+                    runBeamRepl(body).find("\n" + beam) != std::string::npos,
+                    "BEAM REPL differs from file: " + body);
+            }
+        });
+    });
+
     describe("CLI — qualified source-module discovery", []() {
         it("loads qualified-only dependencies transitively for BEAM", []() {
             namespace fs = std::filesystem;

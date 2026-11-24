@@ -1,0 +1,10 @@
+module Exports.Loose
+
+# Reached from another unit: its types are part of the interface.
+let shout(text) = text.upperCase
+let whisper(text: String) -> String = text.lowerCase
+
+private do
+  # Only this module calls it: nothing outside depends on its types.
+  let trimmed(text) = text.trim
+end

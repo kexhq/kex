@@ -2037,6 +2037,19 @@ auto functionDetail(
     return result;
 }
 
+// What a block a value holds requires (§8.3): one line per capability, for
+// a hover. Empty for anything else.
+auto capabilitiesLine(const semantic::TypePtr& type) -> std::string {
+    const auto* function = type ? std::get_if<semantic::FuncType>(&type->kind) : nullptr;
+    std::string lines;
+    if (function) {
+        for (const auto& capability : function->capabilities) {
+            lines += "\nrequires " + capability;
+        }
+    }
+    return lines;
+}
+
 auto importedAdtScore(const semantic::ImportedADT& adt) -> size_t {
     size_t score = adt.typeParamNames.size() * 8 + adt.constructorParamTypes.size() * 4 +
                    adt.constructorTypeParamSlots.size() * 2;
@@ -3489,7 +3502,13 @@ private:
                                 .byteColumn =
                                     static_cast<unsigned int>(binding->pattern->location.column),
                                 .byteLength = static_cast<unsigned int>(variable->name.size()),
-                                .detail = analyzer.displaySignature(variable->name, display),
+                                .detail = analyzer.displaySignature(variable->name, display) +
+                                          capabilitiesLine([&] {
+                                              const auto own =
+                                                  analyzer.typeMap().find(binding->value.get());
+                                              return own != analyzer.typeMap().end() ? own->second
+                                                                                     : bindingType;
+                                          }()),
                                 .completeDetail = true,
                                 // A `let` in a body binds a local: what it is
                                 // is this, not a same-named declaration's
@@ -3570,6 +3589,7 @@ private:
                         completeDetail = true;
                     }
                 }
+                detail += capabilitiesLine(type);
                 if (!length) {
                     continue;
                 }
@@ -3621,7 +3641,8 @@ private:
                     .line = line,
                     .byteColumn = column,
                     .byteLength = static_cast<unsigned int>(binding.name.size()),
-                    .detail = analyzer.displaySignature(binding.name, display),
+                    .detail = analyzer.displaySignature(binding.name, display) +
+                              capabilitiesLine(binding.type),
                     .completeDetail = true,
                     .localBinding = true,
                 });
@@ -4973,6 +4994,7 @@ private:
                 !std::holds_alternative<semantic::UnknownType>(symbol->type->kind)) {
                 detail = symbol->name + " : " + semantic::typeToString(symbol->type);
             }
+            detail += capabilitiesLine(symbol->type);
             if (const auto* definitionState =
                     m_db.fileState(std::string(symbol->definition.file))) {
                 documentation = documentationBefore(*definitionState, symbol->definition);
@@ -4985,6 +5007,7 @@ private:
                 !std::holds_alternative<semantic::UnknownType>(symbol->type->kind)) {
                 detail = symbol->name + " : " + semantic::typeToString(symbol->type);
             }
+            detail += capabilitiesLine(symbol->type);
             if (const auto* definitionState =
                     m_db.fileState(std::string(symbol->definition.file))) {
                 documentation = documentationBefore(*definitionState, symbol->definition);

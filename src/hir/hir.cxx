@@ -27,6 +27,8 @@ auto kindOf(semantic::CallKind kind) -> TargetKind {
         case Kind::Foreign: return TargetKind::Foreign;
         case Kind::Intrinsic: return TargetKind::Intrinsic;
         case Kind::FunctionReference: return TargetKind::FunctionReference;
+        case Kind::TypeTest: return TargetKind::TypeTest;
+        case Kind::MonadBind: return TargetKind::MonadBind;
     }
     return TargetKind::Undecided;
 }

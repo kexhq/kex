@@ -46,6 +46,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             return names::isIntrinsicPath(target.owner) ? lowerRuntimeCall(n, target.owner)
                                                         : lowerProcessSpawn(n, target.owner);
         case hir::TargetKind::Conversion: return lowerConversion(n, target.owner);
+        case hir::TargetKind::TypeTest: return lowerTypeTest(n, target.owner);
         case hir::TargetKind::Intrinsic:
             if (const auto* answer = hir->typeOfAnswer(n)) {
                 return lowerTypeOf(n, *answer);
@@ -818,6 +819,23 @@ auto Lowering::lowerConversion(const ast::MethodCall& n, const std::string& targ
         }
     }
     return lower(n.receiver);
+}
+
+auto Lowering::lowerTypeTest(const ast::MethodCall& n, const std::string& tested) -> ExprPtr {
+    const auto value = fresh("Tested");
+    ExprPtr test;
+    std::size_t start = 0;
+    while (start < tested.size()) {
+        auto end = tested.find(',', start);
+        if (end == std::string::npos) {
+            end = tested.size();
+        }
+        auto guard = typeGuard(tested.substr(start, end - start), var(value));
+        test = test ? callE("erlang", "or", 2, two(std::move(test), std::move(guard)))
+                    : std::move(guard);
+        start = end + 1;
+    }
+    return makeLet(value, lower(n.receiver), test ? std::move(test) : litBool(false));
 }
 
 // `Process.spawn(state)`, the checker naming the state's type: the server

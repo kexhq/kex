@@ -372,10 +372,10 @@ module Kex.AST do
   let patternRefText(WildcardPattern) -> String = "_"
 
   let patternFieldText(PatternField { name, pattern, stringKey?: stringKey }) -> String = Kex.AST.patternFieldText(name, pattern, stringKey)
-  let patternFieldText(name, None, false) -> String = name
-  let patternFieldText(name, None, true) -> String = "\"${name}\""
-  let patternFieldText(name, Just(pattern), false) -> String = "${name}: ${Kex.AST.patternRefText(pattern)}"
-  let patternFieldText(name, Just(pattern), true) -> String = "\"${name}\": ${Kex.AST.patternRefText(pattern)}"
+  let patternFieldText(name: String, None, false) -> String = name
+  let patternFieldText(name: String, None, true) -> String = "\"${name}\""
+  let patternFieldText(name: String, Just(pattern), false) -> String = "${name}: ${Kex.AST.patternRefText(pattern)}"
+  let patternFieldText(name: String, Just(pattern), true) -> String = "\"${name}\": ${Kex.AST.patternRefText(pattern)}"
 
   # Renders either a type or a pattern back to source.
   #

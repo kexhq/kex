@@ -1,0 +1,6 @@
+spec/error_sized_number_narrowing.kex:10:24: [KEXET-0001]: Error, type mismatch: expected Byte, got Integer
+   |
+10 |   let narrowed: Byte = computed
+   |                 ----   ^^^^^^^^ this has type Integer
+   |                 |
+   |                 expected because of this annotation

@@ -437,6 +437,9 @@ private:
     auto distinctTraitClash(const TypePtr& arg, const TypePtr& param) const -> std::string;
     auto innermostDistinct(const TypePtr& type) const -> TypePtr;
     std::set<std::string> m_reportedIndistinguishable;
+    // While a file module (`module Name` as a file's header) is checked: its
+    // public functions are what other units reach.
+    bool m_inFileModule = false;
     auto resolveDistinctName(const std::string& name) const -> std::string;
     auto representationsCompatible(const TypePtr& from, const TypePtr& to) -> bool;
     auto checkRecordDef(const ast::RecordDef& def) -> void;
@@ -814,7 +817,7 @@ private:
     auto checkNeverEqual(const TypePtr& lhs, const TypePtr& rhs, SourceLocation loc) -> void;
     // Whether `value` is an atom literal that `expected`, a set of atoms
     // (`:ok | :error`), does not admit (kexhq/kex#641).
-    auto atomOutsideSet(const ast::Expr& value, const TypePtr& expected) const -> bool;
+    auto literalOutsideSet(const ast::Expr& value, const TypePtr& expected) const -> bool;
     auto inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr& right, SourceLocation loc)
         -> TypePtr;
 
@@ -915,6 +918,8 @@ private:
     friend auto findCompileTimeIntrinsic(std::string_view, std::size_t)
         -> const CompileTimeIntrinsic*;
     auto checkAs(const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
+    auto checkIs(const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
+    auto checkTie(const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
     auto checkTypeReturnedBy(const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
     auto checkTypeOf(const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
     // Who owns a method call once the overload rules chose its winner — the
@@ -1611,9 +1616,33 @@ private:
     std::unordered_map<std::string, TypePtr> m_bodyTypeVars;
     // Calls through a bounded type variable, and the letter each goes through.
     std::unordered_map<const ast::Expr*, std::string> m_typeVariableReceivers;
+    // The `.tie` a `let` statement of the body being inferred binds to, while
+    // that statement is (`let x = xs.tie`): where `.tie` may stand.
+    const ast::Expr* m_letBindValue = nullptr;
+    // Each `.tie` decided, and the container it binds in.
+    std::unordered_map<const ast::Expr*, TypePtr> m_monadBinds;
+    // A Monad `.tie` takes apart: its container and element, or nullopt for
+    // any other type.
+    auto monadBindOf(const TypePtr& operand) const -> std::optional<std::pair<TypePtr, TypePtr>>;
+    // The statements after a monadic bind at `at`: one step, which must answer
+    // the bind's container again (`last`) and not `return`.
+    auto checkMonadBindRest(
+        const std::vector<ast::ExprPtr>& body,
+        std::size_t at,
+        const std::string& name,
+        const TypePtr& container,
+        const TypePtr& last) -> void;
     // `method` through the type variable `variable` (its bound placeholder):
     // the bound trait's requirement at that type, or none.
     auto boundTypeCall(const TypePtr& variable, const ast::MethodCall& call) -> TypePtr;
+    // `List.wrap(1)`: a receiverless requirement of a trait over constructors,
+    // called on a type named by its constructor; null when it is not one.
+    auto namedConstructorCall(
+        const std::string& name, const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
+    // A call whose receiver is a type, not a value (`A.identity`, `List.wrap(1)`):
+    // dispatched on the type, through the prelude's dispatcher for the name,
+    // which takes a type's atom.
+    auto answerThroughTypeDispatcher(const ast::Expr& expr, const ast::MethodCall& call) -> void;
     // The functions that need their bounded types passed, each with its letters
     // in order, and what every call of one passes.
     std::unordered_map<const ast::FunctionDef*, std::vector<std::string>> m_typeParameters;
@@ -1727,6 +1756,13 @@ private:
     // Record that TypeVar `id` equals `concrete`.
     // No-op if `id` already has a binding (first writer wins).
     auto unifyVar(int id, TypePtr concrete) -> void;
+    // HM unification: binds inference variables so `a` and `b` are one type,
+    // or binds nothing and answers false.
+    // `bindRight`: whether variables in `b` may be bound too; at a call they
+    // are the callee's own, and only the argument's are the call's to bind.
+    auto unify(const TypePtr& a, const TypePtr& b, bool bindRight = true) -> bool;
+    bool m_unifyBindsRight = true;
+    auto unifyStep(const TypePtr& a, const TypePtr& b) -> bool;
     auto fixNestedVariables(const TypePtr& argument, const TypePtr& parameter) -> void;
     auto resolvedThroughout(const TypePtr& type) const -> TypePtr;
 

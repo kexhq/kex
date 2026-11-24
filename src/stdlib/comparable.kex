@@ -63,7 +63,7 @@ trait Comparable do
   #   max(3, 7)             # => 7
   #   1.5.max(2.5)          # => 2.5
   #   "pear".max("apple")   # => "pear"
-  let max(other) = this.compare(other) == Less then other else this
+  let max(other: This) -> This = this.compare(other) == Less then other else this
 
   # Returns the smaller of this value and +other+; this value when they are
   # equal.
@@ -74,7 +74,7 @@ trait Comparable do
   # @example
   #   min(3, 7)             # => 3
   #   "pear".min("apple")   # => "apple"
-  let min(other) = this.compare(other) == Greater then other else this
+  let min(other: This) -> This = this.compare(other) == Greater then other else this
 
   # Returns this value limited to the range +low+ to +high+: +low+ when it is
   # below, +high+ when it is above, and itself otherwise.

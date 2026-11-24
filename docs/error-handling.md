@@ -144,3 +144,8 @@ a fault, not a result:
 ```kex
 let Just(first) = names.first
 ```
+
+
+`.try` is for what can fail. To take values out of any Monad, a list's every
+element for instance, `.tie` binds the rest of the block instead (see the
+language spec's higher-kinded traits).

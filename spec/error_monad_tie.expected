@@ -1,0 +1,31 @@
+spec/error_monad_tie.kex:8:47: [KEXET-0517]: Error, `.tie` runs the rest of the block once per value, so it is written as a binding: `let x = value.tie`, with the statements after it in the same block
+  |
+8 | let inline(xs: [Integer]) -> Integer = xs.tie + 1
+  |                                        ^^^^^^
+spec/error_monad_tie.kex:11:3: [KEXET-0518]: Error, after `let x = ....tie` on a `[Integer]`, the block runs once per value and answers what `flatMap` joins: a `[Integer]` again, but it ends in a `Integer`
+   |
+11 |   let x = xs.tie
+   |   ^^^^^^^^^^^^^^
+spec/error_monad_tie.kex:12:7: [KEXET-0127]: Error, `plain` declared to return [Integer] but body returns Integer
+   |
+10 | let plain(xs: [Integer]) -> [Integer] do
+   |                             --------- expected because of this return type
+  ...
+12 |   x + 1
+   |   ^^^^^ this has type Integer
+spec/error_monad_tie.kex:17:3: [KEXET-0519]: Error, `return` after `let x = ....tie` on a `[Integer]` would leave only the step it runs in, not the function: end the block with its value instead
+   |
+17 |   return [] if x == 0
+   |   ^^^^^^^^^^^^^^^^^^^
+spec/error_monad_tie.kex:22:16: [KEXET-0520]: Error, `.tie` takes a value out of a Monad (a list, an Optional, a Result, ...), and a `Integer` is not one
+   |
+22 |   let x = n.tie
+   |           ^^^^^
+spec/error_monad_tie.kex:27:17: [KEXET-0409]: Error, `.try` expects Result or Optional, got [Integer]
+   |
+27 |   let x = xs.try
+   |           ^^^^^^
+spec/error_monad_tie.kex:27:17: [KEXET-0143]: Error, `.try` can fail, and `failing` returns [Integer], which cannot hold the failure: return a Result or an Optional, or handle it with `trying` or a `rescue`
+   |
+27 |   let x = xs.try
+   |           ^^^^^^

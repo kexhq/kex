@@ -760,6 +760,20 @@ auto Lowering::makeDispatcher(
                 mc.body = std::move(call);
                 m.clauses.push_back(std::move(mc));
             }
+            // And the type's own atom, as a record's and a primitive's clause
+            // take theirs: a call on the type (`Optional.wrap(1)`, or
+            // `M.wrap(x)` with M an Optional) passes it as the receiver.
+            MatchClause byType;
+            byType.patterns.push_back(atomPattern(ty));
+            std::vector<ExprPtr> typeArgs;
+            for (int i = 0; i < arity; i++) {
+                typeArgs.push_back(var("_a" + std::to_string(i)));
+            }
+            auto typeCall = std::make_unique<Expr>();
+            typeCall->node =
+                Call{"", mangleReceiverImplementation(name, ty), arity, std::move(typeArgs), false};
+            byType.body = std::move(typeCall);
+            m.clauses.push_back(std::move(byType));
         } else if (ty == "Char") {
             // A Char is always the 2-tuple {'Char', _} — match it
             // structurally. (An element(1,_) guard would badarg, not

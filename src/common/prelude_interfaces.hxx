@@ -122,7 +122,7 @@ inline auto resolveSourceType(
                     if (it != vars.end()) {
                         return it->second;
                     }
-                    auto tv = Type::typeVar(-(static_cast<int>(vars.size()) + 1));
+                    auto tv = Type::genericLetter(-(static_cast<int>(vars.size()) + 1));
                     vars[name] = tv;
                     return tv;
                 }
@@ -155,7 +155,8 @@ inline auto resolveSourceType(
                     auto head = vars.find(name);
                     if (head == vars.end()) {
                         head =
-                            vars.emplace(name, Type::typeVar(-(static_cast<int>(vars.size()) + 1)))
+                            vars.emplace(
+                                    name, Type::genericLetter(-(static_cast<int>(vars.size()) + 1)))
                                 .first;
                     }
                     return Type::app(head->second, std::move(args));
@@ -791,6 +792,19 @@ inline auto sourceSemanticInterfaces(
         ifaces.receiverFunctions[sig.name].push_back(ifn);
     };
 
+    // Every top-level trait the sources declare, by name: what a claim with
+    // arguments (`implement: Foldable<Char>`) reads the defaults from, as the
+    // KexI writer does for a prebuilt prelude.
+    std::unordered_map<std::string, const ast::TraitDef*> declaredTraits;
+    for (const auto& program : programs) {
+        for (const auto& item : program.items) {
+            if (const auto* trait = std::get_if<std::unique_ptr<ast::TraitDef>>(&item);
+                trait && *trait) {
+                declaredTraits.emplace((*trait)->name, trait->get());
+            }
+        }
+    }
+
     for (auto& program : programs) {
 
         auto makeTargetName = [](const ast::MakeDef& make) { return makeTargetLeaf(make.target); };
@@ -948,6 +962,57 @@ inline auto sourceSemanticInterfaces(
                     }
                 }
             }
+            // What a claim with arguments makes of the trait's defaults: each
+            // one whose result is written, as this type has it (`find -> T?` is
+            // `Char?` on String under `Foldable<Char>`).
+            std::unordered_set<std::string> ownFunctions;
+            for (const auto& item : make.body) {
+                if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
+                    fn && *fn) {
+                    ownFunctions.insert((*fn)->name);
+                }
+            }
+            for (std::size_t claim = 0;
+                 claim < make.implements.size() && claim < make.implementArgs.size(); ++claim) {
+                const auto& args = make.implementArgs[claim];
+                const auto trait = declaredTraits.find(make.implements[claim]);
+                if (args.empty() || trait == declaredTraits.end()) {
+                    continue;
+                }
+                auto letters = tvars;
+                for (std::size_t i = 0; i < args.size() && i < trait->second->typeParams.size();
+                     ++i) {
+                    if (args[i]) {
+                        letters[trait->second->typeParams[i]] =
+                            resolveSourceType(*args[i], letters, &typeAliases, &traitNames);
+                    }
+                }
+                for (const auto& item : trait->second->body) {
+                    const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
+                    if (!fn || !*fn || ownFunctions.contains((*fn)->name) ||
+                        annotatedMembers.contains((*fn)->name)) {
+                        continue;
+                    }
+                    for (const auto* clause : ast::signatureClauses(**fn)) {
+                        if (!clause->returnAnnotation || !*clause->returnAnnotation) {
+                            continue;
+                        }
+                        kex::semantic::Signature sig;
+                        sig.name = (*fn)->name;
+                        sig.params.push_back(selfType ? selfType : kex::semantic::Type::unknown());
+                        for (const auto& param : clause->params) {
+                            sig.params.push_back(
+                                param.type && *param.type
+                                    ? resolveSourceType(
+                                          **param.type, letters, &typeAliases, &traitNames)
+                                    : kex::semantic::Type::unknown());
+                        }
+                        sig.result = resolveSourceType(
+                            **clause->returnAnnotation, letters, &typeAliases, &traitNames);
+                        addReceiverSig(sourceModule, sig, {}, foreignTarget);
+                    }
+                }
+            }
         };
 
         // `type Handler = Type.of(handlerType)`: the argument is ordinary Kex
@@ -1036,7 +1101,7 @@ inline auto sourceSemanticInterfaces(
                 std::unordered_map<std::string, kex::semantic::TypePtr> aliasVars;
                 for (size_t i = 0; i < td.typeParams.size(); ++i) {
                     aliasVars[td.typeParams[i]] =
-                        kex::semantic::Type::typeVar(-static_cast<int>(i + 1));
+                        kex::semantic::Type::genericLetter(-static_cast<int>(i + 1));
                 }
                 std::vector<kex::semantic::TypePtr> parts;
                 for (const auto& v : *td.variants) {
@@ -1104,7 +1169,7 @@ inline auto sourceSemanticInterfaces(
                         std::unordered_map<std::string, kex::semantic::TypePtr> vars;
                         for (size_t i = 0; i < td.typeParams.size(); ++i) {
                             vars[td.typeParams[i]] =
-                                kex::semantic::Type::typeVar(-(static_cast<int>(i) + 1));
+                                kex::semantic::Type::genericLetter(-(static_cast<int>(i) + 1));
                         }
                         for (const auto& arg : generic->args) {
                             function.signature.params.push_back(
@@ -1334,7 +1399,7 @@ inline auto sourceSemanticInterfaces(
                         auto& fieldTypes = ifaces.recordFields[qualified];
                         for (size_t i = 0; i < (*record)->typeParams.size(); ++i) {
                             vars[(*record)->typeParams[i]] =
-                                kex::semantic::Type::typeVar(-static_cast<int>(i + 1));
+                                kex::semantic::Type::genericLetter(-static_cast<int>(i + 1));
                         }
                         for (const auto& field : (*record)->fields) {
                             fields.insert(field.name);
@@ -1424,7 +1489,7 @@ inline auto sourceSemanticInterfaces(
                         std::unordered_map<std::string, kex::semantic::TypePtr> vars;
                         for (size_t i = 0; i < (*td)->typeParams.size(); ++i) {
                             vars[(*td)->typeParams[i]] =
-                                kex::semantic::Type::typeVar(-(static_cast<int>(i) + 1));
+                                kex::semantic::Type::genericLetter(-(static_cast<int>(i) + 1));
                         }
                         for (const auto& arg : gt->args) {
                             adt.constructorParamTypes[gt->name.parts[0]].push_back(
@@ -1467,7 +1532,7 @@ inline auto sourceSemanticInterfaces(
                     auto& fieldTypes = ifaces.recordFields[(*rd)->name];
                     for (size_t i = 0; i < (*rd)->typeParams.size(); ++i) {
                         vars[(*rd)->typeParams[i]] =
-                            kex::semantic::Type::typeVar(-static_cast<int>(i + 1));
+                            kex::semantic::Type::genericLetter(-static_cast<int>(i + 1));
                     }
                     for (const auto& field : (*rd)->fields) {
                         fieldNames.insert(field.name);
@@ -1493,7 +1558,53 @@ inline auto sourceSemanticInterfaces(
                 }
             } else if (const auto* trait = std::get_if<std::unique_ptr<ast::TraitDef>>(&item)) {
                 if (*trait) {
-                    ifaces.traits.push_back(importedTraitFromSource(**trait));
+                    auto imported = importedTraitFromSource(**trait);
+                    // A trait over constructors (`Monad<F>`): its requirements
+                    // typed, `F<A>` the parameter applied, as the KexI reader
+                    // gives them, so a block over an `M<Integer>` is hinted
+                    // without a prebuilt prelude too.
+                    if (!imported.paramKinds.empty() && imported.paramKinds.front() > 0) {
+                        const auto& params = (*trait)->typeParams;
+                        imported.requiredMethods.clear();
+                        for (const auto& member : (*trait)->body) {
+                            const auto* ann =
+                                std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&member);
+                            if (!ann || !*ann) {
+                                continue;
+                            }
+                            auto sig = annotationToSignature(**ann, nullptr);
+                            std::unordered_map<std::string, kex::semantic::TypePtr> heads;
+                            int next = -1000;
+                            std::function<kex::semantic::TypePtr(const kex::semantic::TypePtr&)>
+                                applied = [&](const kex::semantic::TypePtr& type) {
+                                    auto rebuilt = kex::semantic::mapTypeChildren(type, applied);
+                                    const auto* named =
+                                        rebuilt
+                                            ? std::get_if<kex::semantic::NamedType>(&rebuilt->kind)
+                                            : nullptr;
+                                    if (!named || named->typeArgs.empty() ||
+                                        std::find(params.begin(), params.end(), named->name) ==
+                                            params.end()) {
+                                        return rebuilt;
+                                    }
+                                    auto head = heads.find(named->name);
+                                    if (head == heads.end()) {
+                                        head = heads
+                                                   .emplace(
+                                                       named->name,
+                                                       kex::semantic::Type::genericLetter(next--))
+                                                   .first;
+                                    }
+                                    return kex::semantic::Type::app(head->second, named->typeArgs);
+                                };
+                            for (auto& param : sig.params) {
+                                param = applied(param);
+                            }
+                            sig.result = applied(sig.result);
+                            imported.requiredMethods.push_back(std::move(sig));
+                        }
+                    }
+                    ifaces.traits.push_back(std::move(imported));
                 }
             } else if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
                 if (*fn) {

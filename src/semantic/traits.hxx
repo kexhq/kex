@@ -115,6 +115,9 @@ struct TraitDef {
     // kind of what implements it (docs/typechecker-hm-plan.md §8.2). Last, so
     // the aggregate initializers above keep their meaning.
     std::vector<std::size_t> paramKinds;
+    // Their names, as the trait's signatures write them: `T` in `trait
+    // Foldable<T>`, which an implementor's claim fills (`Foldable<Char>`).
+    std::vector<std::string> paramNames;
 };
 
 // Open, name-keyed registry of traits and which types implement them.
@@ -189,6 +192,25 @@ public:
     static auto familyKey(const TypePtr& type) -> std::string;
     auto hasConformances(const std::string& key) const -> bool {
         return m_implementations.count(key) > 0;
+    }
+    // Whether `traitName` holds by a type's shape (satisfiesStructurally)
+    // rather than by the `make` blocks that claim it.
+    static auto isStructural(const std::string& traitName) -> bool;
+    // The types a `make` claims `traitName` for, conditionally or not, by
+    // their implementor keys, sorted.
+    auto implementorsOf(const std::string& traitName) const -> std::vector<std::string> {
+        std::set<std::string> found;
+        for (const auto& [type, traits] : m_implementations) {
+            if (traits.count(traitName)) {
+                found.insert(type);
+            }
+        }
+        for (const auto& [type, traits] : m_conditionalImplementations) {
+            if (traits.count(traitName)) {
+                found.insert(type);
+            }
+        }
+        return {found.begin(), found.end()};
     }
 
 private:

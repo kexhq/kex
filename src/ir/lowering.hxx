@@ -473,6 +473,9 @@ struct Lowering {
     auto lowerValueReceiverCall(const ast::MethodCall& n) -> ExprPtr;
     auto lowerRuntimeCall(const ast::MethodCall& n, const std::string& path) -> ExprPtr;
     auto lowerConversion(const ast::MethodCall& n, const std::string& target) -> ExprPtr;
+    // `x.is?(T)`: x against each of `tested` (comma-separated), as a type
+    // pattern tests it.
+    auto lowerTypeTest(const ast::MethodCall& n, const std::string& tested) -> ExprPtr;
     auto lowerProcessSpawn(const ast::MethodCall& n, const std::string& stateType) -> ExprPtr;
     auto lowerTypeOf(const ast::MethodCall& n, const semantic::StaticTypeAnswer& answer) -> ExprPtr;
     auto lowerTraitDictionaryCall(const ast::MethodCall& n) -> ExprPtr;

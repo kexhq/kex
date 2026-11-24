@@ -1,0 +1,4 @@
+spec/error_trait_kind_inference.kex:7:10: [KEXEP-0159]: Error, `F` of trait `Odd` is written with 0 type argument(s) here and 1 elsewhere: a trait parameter takes one kind, which its uses agree on
+  |
+7 |   bare : F -> F
+  |          ^

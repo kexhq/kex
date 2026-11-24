@@ -1,0 +1,11 @@
+[11, 21, 12, 22]
+[]
+Just(6)
+None
+Ok("1-2")
+Error("first")
+Valid(3)
+Invalid(["a", "b"])
+Invalid(["b"])
+Valid(5)
+[5]

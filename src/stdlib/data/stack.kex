@@ -53,7 +53,7 @@ module Stack do
   let empty -> Stack<A> = Stack { elements: [] }
 end
 
-make Stack<A>, implement: Enumerable, Foldable, Monoid, Showable do
+make Stack<A>, implement: Enumerable, Foldable<A>, Monoid, Showable do
   # Folds from the bottom up to the top: the order +items+ lists them in, so
   # +map+, +each+ and +items+ all agree.
   #

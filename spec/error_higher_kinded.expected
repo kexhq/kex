@@ -17,15 +17,3 @@ bumped : F<Integer> -> F<Integer>
   ...
 22 |   IO.printLine(bumped([1, 2]).length)
    |                       ^^^^^^ this has type [Integer]
-spec/error_higher_kinded.kex:22:16: [KEXET-0491]: Error, `length` expects argument 1 to be Binary, but got F<Integer>
-
-length : Binary -> Integer
-
-length : Range<A> -> Integer
-
-length : String -> Integer
-
-length : [A] -> Integer
-   |
-22 |   IO.printLine(bumped([1, 2]).length)
-   |                ^^^^^^ this has type F<Integer>

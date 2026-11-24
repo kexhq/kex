@@ -1,6 +1,7 @@
 #include "types.hxx"
 #include "../common/well_known.hxx"
 #include <algorithm>
+#include <cassert>
 #include <functional>
 
 namespace kex::semantic {
@@ -21,8 +22,12 @@ auto Type::boolean() -> TypePtr {
     return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::Bool}});
 }
 
-auto Type::atom(std::string atomName) -> TypePtr {
-    return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::Atom, std::move(atomName)}});
+auto Type::atom(std::string literal) -> TypePtr {
+    return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::Atom, std::move(literal)}});
+}
+
+auto Type::integerLiteral(std::string digits) -> TypePtr {
+    return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::Integer, std::move(digits)}});
 }
 
 auto Type::voidType() -> TypePtr {
@@ -119,8 +124,8 @@ auto Type::intersection(std::vector<TypePtr> members) -> TypePtr {
             if (left && right && left->kind != right->kind) {
                 return Type::never();
             }
-            if (left && right && left->kind == PrimitiveType::Atom && !left->atomName.empty() &&
-                !right->atomName.empty() && left->atomName != right->atomName) {
+            if (left && right && left->kind == PrimitiveType::Atom && !left->literal.empty() &&
+                !right->literal.empty() && left->literal != right->literal) {
                 return Type::never();
             }
         }
@@ -148,8 +153,14 @@ auto Type::record(std::vector<std::pair<std::string, TypePtr>> fields) -> TypePt
     return std::make_shared<Type>(Type{RecordType{std::move(fields)}});
 }
 
-auto Type::typeVar(int id) -> TypePtr {
-    return std::make_shared<Type>(Type{TypeVar{id}});
+auto Type::genericLetter(int id) -> TypePtr {
+    assert(id < 0);
+    return std::make_shared<Type>(Type{TypeVar{id, TypeVarKind::GenericLetter}});
+}
+
+auto Type::inferenceVariable(int id) -> TypePtr {
+    assert(id >= 0);
+    return std::make_shared<Type>(Type{TypeVar{id, TypeVarKind::Inference}});
 }
 
 auto Type::byte() -> TypePtr {
@@ -196,6 +207,10 @@ auto Type::float64() -> TypePtr {
     return std::make_shared<Type>(Type{SizedFloatType{64}});
 }
 
+auto Type::float64Written() -> TypePtr {
+    return std::make_shared<Type>(Type{SizedFloatType{64, true}});
+}
+
 auto Type::constrained(const std::string& varName, const std::string& traitName, int genericId)
     -> TypePtr {
     return std::make_shared<Type>(Type{ConstrainedType{varName, traitName, genericId}});
@@ -219,7 +234,7 @@ constexpr BuiltinTypeEntry kBuiltinTypes[] = {
     {"Byte", &Type::byte},       {"Int8", &Type::int8},       {"Int16", &Type::int16},
     {"Int32", &Type::int32},     {"Int64", &Type::int64},     {"UInt8", &Type::uint8},
     {"UInt16", &Type::uint16},   {"UInt32", &Type::uint32},   {"UInt64", &Type::uint64},
-    {"Float32", &Type::float32}, {"Float64", &Type::float64},
+    {"Float", &Type::float64},   {"Float32", &Type::float32}, {"Float64", &Type::float64Written},
 };
 
 } // namespace
@@ -300,8 +315,11 @@ auto typeToString(const TypePtr& type) -> std::string {
             using T = std::decay_t<decltype(t)>;
 
             if constexpr (std::is_same_v<T, PrimitiveType>) {
-                if (t.kind == PrimitiveType::Atom && !t.atomName.empty()) {
-                    return ":" + t.atomName;
+                if (t.kind == PrimitiveType::Atom && !t.literal.empty()) {
+                    return ":" + t.literal;
+                }
+                if (t.kind == PrimitiveType::Integer && !t.literal.empty()) {
+                    return t.literal;
                 }
                 return std::string(primitiveKindName(t.kind));
             } else if constexpr (std::is_same_v<T, SizedIntType>) {
@@ -324,7 +342,7 @@ auto typeToString(const TypePtr& type) -> std::string {
             } else if constexpr (std::is_same_v<T, SizedFloatType>) {
                 switch (t.bits) {
                     case 32: return "Float32";
-                    case 64: return "Float64";
+                    case 64: return t.written ? "Float64" : "Float";
                 }
                 return "?";
             } else if constexpr (std::is_same_v<T, NamedType>) {
@@ -423,7 +441,7 @@ auto typeToString(const TypePtr& type) -> std::string {
                 }
                 return result + "}";
             } else if constexpr (std::is_same_v<T, TypeVar>) {
-                if (t.id < 0) {
+                if (isGenericLetter(t)) {
                     // Table-level generic placeholder: -1 -> 'A', -2 -> 'B', ...
                     int idx = (-t.id - 1) % 26;
                     return std::string(1, static_cast<char>('A' + idx));
@@ -631,6 +649,13 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
             }
 
             if constexpr (std::is_same_v<AT, PrimitiveType>) {
+                // Two Integer literals are two types (`^(2)` and `^(3)` are two
+                // overloads); a literal is still an Integer, and an atom's literal
+                // is for display.
+                if (at.kind == PrimitiveType::Integer && bt->kind == PrimitiveType::Integer &&
+                    !at.literal.empty() && !bt->literal.empty()) {
+                    return at.literal == bt->literal;
+                }
                 return at.kind == bt->kind;
             } else if constexpr (std::is_same_v<AT, SizedIntType>) {
                 return at.bits == bt->bits && at.isSigned == bt->isSigned;
@@ -868,9 +893,12 @@ auto mapTypeChildren(const TypePtr& type, const std::function<TypePtr(const Type
             } else if constexpr (std::is_same_v<Part, FuncType>) {
                 auto params = mappedAll(part.params);
                 auto result = mapped(part.result);
-                return same ? type
-                            : Type::func(
-                                  std::move(params), std::move(result), part.block, part.foul);
+                if (same) {
+                    return type;
+                }
+                auto copy = Type::func(std::move(params), std::move(result), part.block, part.foul);
+                std::get<FuncType>(copy->kind).capabilities = part.capabilities;
+                return copy;
             } else if constexpr (std::is_same_v<Part, NamedType>) {
                 auto args = mappedAll(part.typeArgs);
                 if (same) {

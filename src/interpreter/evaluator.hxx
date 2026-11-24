@@ -349,6 +349,8 @@ private:
     // Expressions
     auto eval(const ast::Expr& expr) -> ValuePtr;
     auto evalBody(const std::vector<ast::ExprPtr>& body) -> ValuePtr;
+    // The statements of `body` from `start` on, the step after a monadic bind.
+    auto evalBodyFrom(const std::vector<ast::ExprPtr>& body, std::size_t start) -> ValuePtr;
 
     // Binary/unary ops
     auto evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr& right, SourceLocation loc)
@@ -536,6 +538,8 @@ private:
     auto decidedModuleFunction(const ast::Expr& expr, const ast::MethodCall& call) const
         -> std::string;
     auto evalConversion(const ast::Expr& receiver, const std::string& target) -> ValuePtr;
+    // `x.is?(T)`, decided as the types `tested` (comma-separated) to test x against.
+    auto evalTypeTest(const ValuePtr& value, const std::string& tested) const -> ValuePtr;
     auto evalIntrinsicCall(
         const ast::MethodCall& call, const std::string& path, const SourceLocation& location)
         -> ValuePtr;

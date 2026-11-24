@@ -652,10 +652,23 @@ end
 # different dimensions are never equal, and ordering them is a type error
 # (+1.second < 1.meter+). A measure whose dimension is known only at run time
 # (one made by unit arithmetic) is compared by its canonical value alone.
-# The powers of a length that name a dimension: there is no generic +^+,
-# since the dimension a power makes must be known to its type. Any other
-# power goes through +Units.Dynamic+'s +pow+, which checks it at run time.
+# The powers of a length that name a dimension, overloaded on the exponent
+# as +*+ and +/+ are on the dimensions: +3.meter ^ 2+ is an area, +2.meter ^
+# 3+ a volume, the literal choosing which. Any other power goes through
+# +Units.Dynamic+'s +pow+, which checks it at run time.
 make Measure<Quantity.Length> do
+  # The length squared, written as a power: +squared+.
+  #
+  # @example
+  #   (3.meter ^ 2).to(String)   # => Just("9.0 m^2")
+  let ^(2) -> Measure<Quantity.Area> = this.squared
+
+  # The length cubed, written as a power: +cubed+.
+  #
+  # @example
+  #   (2.meter ^ 3).canonical   # => 8.0
+  let ^(3) -> Measure<Quantity.Volume> = this.cubed
+
   # The length squared: an area.
   #
   # @return [Measure<Quantity.Area>] the area, displayed as the unit squared

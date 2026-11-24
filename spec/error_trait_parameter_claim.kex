@@ -1,0 +1,29 @@
+# kex: check-only
+# What a default answers follows the claim: on a Word (`Folds<Char>`) it is a
+# `Char?`, so taking it as a `String?` is a mismatch, and so is a String's
+# `find` (Foldable<Char>) taken as an Integer.
+
+trait Folds<T> do
+  fold :> A -> (A -> T -> A) -> A
+
+  let firstWhere(pred) -> T? = this.fold(None) do |acc, item|
+    match acc do
+      Just(_) => acc
+      None    => pred(item) then Just(item) else None
+    end
+  end
+end
+
+record Word do
+  text : String
+end
+
+make Word, implement: Folds<Char> do
+  let fold(acc, f) = this.text.chars.reduce(acc, f)
+end
+
+main do
+  let first: String? = Word { text: "hey" }.firstWhere { |c| c == 'e' }
+  let found: Integer? = "hey".find { |c| c == 'e' }
+  IO.printLine("${first} ${found}")
+end

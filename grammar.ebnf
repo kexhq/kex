@@ -122,7 +122,12 @@ record_field = LOWER_IDENT COLON type_expr ( EQUALS expr )? ;
 
 (* ===== Traits ===== *)
 
-trait_def = TRAIT UPPER_IDENT ( LESS_THAN type_params GREATER_THAN )? DO trait_body END ;
+(* A trait's parameters: a type (`Foldable<T>`, filled by each claim), or a
+   constructor, its holes written (`Functor<F<_>>`) or left to how the
+   trait's signatures apply it (`Functor<F>` with `map : F<A> -> ...`). *)
+trait_def = TRAIT UPPER_IDENT trait_params? DO trait_body END ;
+trait_params = LESS_THAN trait_param ( COMMA trait_param )* GREATER_THAN ;
+trait_param = UPPER_IDENT ( LESS_THAN UNDERSCORE ( COMMA UNDERSCORE )* GREATER_THAN )? ;
 
 trait_body = trait_item* ;
 
@@ -139,7 +144,10 @@ make_def
   | MAKE FINAL COLON make_target DO make_body END
   ;
 
-trait_list = UPPER_IDENT ( COMMA UPPER_IDENT )* ;
+(* A trait that takes type parameters is claimed with what this type fills
+   them with: `implement: Foldable<Char>`. *)
+trait_list = trait_claim ( COMMA trait_claim )* ;
+trait_claim = type_name ( LESS_THAN type_expr ( COMMA type_expr )* GREATER_THAN )? ;
 
 (* `make A is Discrete => Range<A>` and `let larger(A is Comparable => a: A,
    b: A)` (#651): a bounded type variable is one type satisfying its traits.

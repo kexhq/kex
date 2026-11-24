@@ -1,6 +1,7 @@
 #include "parser.hxx"
 #include "../lexer/lexer.hxx"
 #include "../ast/function_groups.hxx"
+#include "../ast/walk.hxx"
 #include "../common/signature_params.hxx"
 #include "../common/utf8.hxx"
 #include <algorithm>
@@ -440,6 +441,7 @@ auto Parser::parseModuleDef(bool allowStandalone, const std::string& parentModul
     if (standalone && !allowStandalone) {
         error(diag::Code::StandaloneModuleNotFirst);
     }
+    mod->fileModule = standalone;
     skipNewlines();
 
     while (!atEnd() && (standalone || !check(TokenType::End))) {
@@ -814,9 +816,13 @@ auto Parser::parseTraitDef() -> std::unique_ptr<ast::TraitDef> {
             }
         } else if (check(TokenType::Let)) {
             def->body.push_back(parseFunctionDef(false));
-        } else if (check(TokenType::LowerIdent) || isOverloadableOperator(peek().type)) {
+        } else if (
+            check(TokenType::LowerIdent) || isOverloadableOperator(peek().type) ||
+            (isKeywordToken(peek().type) && (peekNext().type == TokenType::Colon ||
+                                             peekNext().type == TokenType::TypeAnnotation))) {
             // Required method signature: `methodName : type`, or an operator's,
-            // `+ :> This -> This`, as a make block declares one.
+            // `+ :> This -> This`, as a make block declares one. A keyword may
+            // name one, as in a make block (Applicable's `with`).
             def->body.push_back(parseTypeAnnotation());
         } else {
             error(diag::Code::UnexpectedTokenInTraitBody);
@@ -824,6 +830,7 @@ auto Parser::parseTraitDef() -> std::unique_ptr<ast::TraitDef> {
         skipNewlines();
     }
 
+    inferTraitParamKinds(*def);
     expect(TokenType::End, diag::Code::ExpectedEndToCloseTrait);
     return complete(std::move(def));
 }
@@ -938,10 +945,24 @@ auto Parser::parseMakeImplements(ast::MakeDef& into) -> void {
                 }
                 return name;
             };
+            // `Foldable<Char>`: the trait's parameters, as this type fills them.
+            auto implementArgs = [&] {
+                auto& args = def->implementArgs.emplace_back();
+                if (match(TokenType::LessThan)) {
+                    args.push_back(parseTypeExpr());
+                    while (match(TokenType::Comma)) {
+                        args.push_back(parseTypeExpr());
+                    }
+                    expect(
+                        TokenType::GreaterThan, diag::Code::ExpectedToken, {{"expected", "'>'"}});
+                }
+            };
             def->implements.push_back(implementName());
+            implementArgs();
             while (check(TokenType::Comma) && peekNext().type == TokenType::UpperIdent) {
                 advance(); // ","
                 def->implements.push_back(implementName());
+                implementArgs();
             }
         } else {
             m_pos = savedPos; // not an implement clause, backtrack
@@ -4195,10 +4216,10 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
             // parseExpr() would treat it as a variable lookup instead.
             if (check(TokenType::LowerIdent) && peekNext().type == TokenType::Colon) {
                 auto keyLoc = currentLocation();
-                auto atomName = advance().value; // consume ident
+                auto literal = advance().value; // consume ident
                 key = std::make_unique<ast::Expr>();
                 key->location = keyLoc;
-                key->kind = ast::AtomLiteral{atomName};
+                key->kind = ast::AtomLiteral{literal};
             } else {
                 key = parseExpr();
             }
@@ -4953,6 +4974,73 @@ auto Parser::parseTryingExpr() -> ast::ExprPtr {
 
     expr->kind = ast::TryingExpr{std::move(body), std::move(rescue)};
     return expr;
+}
+
+} // namespace kex
+
+namespace kex {
+
+auto Parser::inferTraitParamKinds(ast::TraitDef& def) -> void {
+    // Every type expression the trait's signatures write: its requirements'
+    // and its defaults' annotations.
+    std::vector<const ast::TypeExpr*> written;
+    const auto add = [&](const ast::TypeExprPtr& type) {
+        if (type) {
+            ast::forEachTypeExpr(
+                *type, [&](const ast::TypeExpr& node) { written.push_back(&node); });
+        }
+    };
+    for (const auto& item : def.body) {
+        if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item);
+            ann && *ann) {
+            add((*ann)->type);
+        } else if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
+                   fn && *fn) {
+            for (const auto& clause : (*fn)->clauses) {
+                for (const auto& param : clause.params) {
+                    if (param.type) {
+                        add(*param.type);
+                    }
+                }
+                if (clause.returnAnnotation) {
+                    add(*clause.returnAnnotation);
+                }
+            }
+        }
+    }
+    for (std::size_t i = 0; i < def.typeParams.size() && i < def.typeParamArities.size(); ++i) {
+        const auto& param = def.typeParams[i];
+        // Written `F<_>`: its kind is what it says, which the checker holds
+        // its uses to.
+        if (def.typeParamArities[i] > 0) {
+            continue;
+        }
+        std::optional<std::size_t> kind;
+        for (const auto* node : written) {
+            std::size_t arguments = 0;
+            if (const auto* generic = std::get_if<ast::GenericType>(&node->kind);
+                generic && generic->name.parts.size() == 1 && generic->name.parts[0] == param) {
+                arguments = generic->args.size();
+            } else if (const auto* name = std::get_if<ast::TypeName>(&node->kind);
+                       !name || name->parts.size() != 1 || name->parts[0] != param) {
+                continue;
+            }
+            if (!kind) {
+                kind = arguments;
+            } else if (*kind != arguments) {
+                report(
+                    diag::Code::TraitParamKindMismatch, node->location,
+                    {{"param", param},
+                     {"trait", def.name},
+                     {"first", std::to_string(arguments)},
+                     {"second", std::to_string(*kind)}});
+                break;
+            }
+        }
+        if (kind) {
+            def.typeParamArities[i] = *kind;
+        }
+    }
 }
 
 } // namespace kex

@@ -1,0 +1,54 @@
+# `.tie` takes a value out of a Monad: `let x = xs.tie` runs the rest of the
+# block once per value, as `xs.flatMap { |x| rest }` would, and the block
+# answers what flatMap joins. On a list that is every combination; on a
+# user's Monad, its own flatMap; through a letter bounded by Monad, whichever
+# container the argument is (an Optional's None stops it, as flatMap does).
+# On a Result it chains like flatMap; `.try` is the early exit for failure.
+
+record Crate<A> do
+  value : A
+end
+
+make Crate, implement: Monad do
+  let wrap(v: B) -> Crate<B> = Crate { value: v }
+  let flatMap(f) -> Crate<B> = f(@value)
+end
+
+let pairs(xs: [Integer], ys: [String]) -> [(Integer, String)] do
+  let x = xs.tie
+  let y = ys.tie
+  [(x, y)]
+end
+
+let spread(xs: [Integer]) -> [Integer] do
+  let x = xs.tie
+  let doubled = x * 2
+  [doubled, doubled + 1]
+end
+
+let bumped(c: Crate<Integer>) -> Crate<Integer> do
+  let v = c.tie
+  Crate { value: v + 1 }
+end
+
+let inc(M is Monad => xs: M<Integer>) -> M<Integer> do
+  let x = xs.tie
+  M.wrap(x + 1)
+end
+
+let checked(r: Result<Integer, String>) -> Result<Integer, String> do
+  let v = r.tie
+  Ok(v * 2)
+end
+
+main do
+  IO.printLine(pairs([1, 2], ["a", "b"]).inspected)
+  IO.printLine(spread([1, 5]).inspected)
+  IO.printLine(bumped(Crate { value: 1 }).value)
+  IO.printLine(inc([1, 2]).inspected)
+  IO.printLine(inc(Crate { value: 5 }).value)
+  IO.printLine(inc(Just(1)).inspected)
+  IO.printLine(inc(None).inspected)
+  IO.printLine(checked(Ok(4)).inspected)
+  IO.printLine(checked(Error("no")).inspected)
+end

@@ -1,4 +1,4 @@
-spec/error_typed_overload_no_match.kex:6:24: [KEXET-0491]: Error, `process` expects argument 1 to be Integer, but got Float64
+spec/error_typed_overload_no_match.kex:6:24: [KEXET-0491]: Error, `process` expects argument 1 to be Integer, but got Float
 
 process : Integer -> Integer
 
@@ -8,5 +8,5 @@ process : String -> String
   |                ------- expected because of this parameter
  ...
 6 |   IO.printLine(process(3.14))
-  |                        ^^^^ this has type Float64
+  |                        ^^^^ this has type Float
 Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

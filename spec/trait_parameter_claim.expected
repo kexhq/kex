@@ -1,0 +1,5 @@
+Just("yy")
+Just('e')
+Just(5)
+Just('e')
+Just(("a", 1))

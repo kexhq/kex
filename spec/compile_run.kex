@@ -1,6 +1,5 @@
 # Compile-run roundtrip: -c produces a .kx.beam that runs correctly
 # kex: compile-run
-# kex: no-check
 
 let greet(name) = "Hello, " + name + "!"
 

@@ -59,7 +59,7 @@ make [[Y]] do
   let flatten = Kex.Intrinsic.List.flatten(this)
 end
 
-make [X], implement: Enumerable, Foldable, Functor, Bindable do
+make [X], implement: Enumerable, Foldable<X>, Functor, Bindable, Monad, Applicable do
   # Returns the first element wrapped in +Just+, or +None+ if the list is empty.
   #
   # @return [X?]
@@ -289,6 +289,17 @@ make [X], implement: Enumerable, Foldable, Functor, Bindable do
 
   let find(pred) = Kex.Intrinsic.List.find(this, pred)
   let flatMap(f) = Kex.Intrinsic.List.flatMap(this, f)
+
+  # The list holding just +value+ (Monad's +wrap+): +List.wrap(1)+ is +[1]+.
+  let wrap(value: Y) -> [Y] = [value]
+
+  # Applies +f+ to every pair of this list's elements and +other+'s
+  # (Applicable's +with+), this list's order outermost.
+  #
+  # 
+  #   [1, 2].with([10, 20]) { |a, b| a + b }   # => [11, 21, 12, 22]
+  let with(other: [Y], f: X -> Y -> Z) -> [Z] = this.flatMap { |a| other.map { |b| f(a, b) } }
+
   let reject(pred) = Kex.Intrinsic.List.reject(this, pred)
   let all?(pred) = Kex.Intrinsic.List.all?(this, pred)
   let any?(pred) = Kex.Intrinsic.List.any?(this, pred)

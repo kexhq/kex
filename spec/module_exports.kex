@@ -1,5 +1,4 @@
 # Module exports: re-export paths and hierarchical access
-# kex: no-check
 
 module Geometry do
   record Circle do

@@ -1,0 +1,4 @@
+spec/lib/exports/loose.kex:4:1: [KEXET-0514]: Error, `shout` is exported by `Exports.Loose`, so its signature is what other units see: write the types of its parameter `text` (decision 1). A standalone signature above it (`shout : ...`) does too
+  |
+4 | let shout(text) = text.upperCase
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

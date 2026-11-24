@@ -1,12 +1,12 @@
-spec/error_make_bound_unmet.kex:38:24: [KEXET-0511]: Error, `low` is defined for Span<Float64> only where Float64 is Countable, and Float64 is not
+spec/error_make_bound_unmet.kex:38:24: [KEXET-0511]: Error, `low` is defined for Span<Float> only where Float is Countable, and Float is not
    |
 38 |   IO.printLine(span.low)
    |                ^^^^^^^^
-spec/error_make_bound_unmet.kex:39:26: [KEXET-0511]: Error, `total` is defined for Span<Float64> only where Float64 is Countable, and Float64 is not
+spec/error_make_bound_unmet.kex:39:26: [KEXET-0511]: Error, `total` is defined for Span<Float> only where Float is Countable, and Float is not
    |
 39 |   IO.printLine(span.total)
    |                ^^^^^^^^^^
-spec/error_make_bound_unmet.kex:40:23: [KEXET-0491]: Error, `sumAll` expects argument 1 to be Walk, but got Span<Float64>
+spec/error_make_bound_unmet.kex:40:23: [KEXET-0491]: Error, `sumAll` expects argument 1 to be Walk, but got Span<Float>
 
 sumAll : Walk -> Integer
    |
@@ -14,4 +14,4 @@ sumAll : Walk -> Integer
    |               ---- expected because of this parameter
   ...
 40 |   IO.printLine(sumAll(span))
-   |                       ^^^^ this has type Span<Float64>
+   |                       ^^^^ this has type Span<Float>

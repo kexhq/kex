@@ -31,7 +31,7 @@
 # the collected interfaces rather than needing to be known to the compiler.
 type Map<K, V> = {K: V}
 
-make Map<K, V>, implement: Enumerable, Foldable, Monoid do
+make Map<K, V>, implement: Enumerable, Foldable<(K, V)>, Monoid do
   # Folds over the map's +(key, value)+ pairs in canonical key order.
   #
   # This is +Map+'s +Enumerable+ primitive: +map+, +filter+, +find+, +any?+

@@ -178,7 +178,7 @@ auto typeToTerm(const TypePtr& t) -> TermPtr {
             if constexpr (std::is_same_v<K, PrimitiveType>) {
                 return typeTuple(
                     TypeTag::Primitive,
-                    {Term::atom(primitiveKindAtom(node.kind)), Term::binary(node.atomName)});
+                    {Term::atom(primitiveKindAtom(node.kind)), Term::binary(node.literal)});
             } else if constexpr (std::is_same_v<K, SizedIntType>) {
                 return typeTuple(
                     TypeTag::SizedInt, {Term::integer(node.bits), Term::boolean(node.isSigned)});
@@ -326,7 +326,7 @@ auto typeFromSax(SaxReader& sax) -> TypePtr {
             sax.endList();
             return make(std::move(record));
         }
-        case TypeTag::TypeVar: return make(TypeVar{static_cast<int>(sax.readInt())});
+        case TypeTag::TypeVar: return make(typeVarFromId(static_cast<int>(sax.readInt())));
         case TypeTag::Never: {
             auto leftRecord = sax.readBinary();
             auto rightRecord = sax.readBinary();

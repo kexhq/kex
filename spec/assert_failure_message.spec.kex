@@ -1,4 +1,3 @@
-# kex: no-check
 # A failing `assert` reports the same message on both backends. The BEAM
 # runtime used to build the default message as an Erlang charlist, which is an
 # ordinary list of integers in Kex — it printed as `[97, 115, ...]` there while

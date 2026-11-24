@@ -3,6 +3,7 @@
 #include "beam_file.hxx"
 #include "../common/artifact_versions.hxx"
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <optional>
 #include <unordered_set>
@@ -71,6 +72,13 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
             if (type->name.size() > 1 && type->name[0] == ':') {
                 return Type::atom(type->name.substr(1));
             }
+            // An Integer literal's digits: what a clause written `let ^(2)` takes.
+            if (!type->name.empty() &&
+                std::all_of(type->name.begin(), type->name.end(), [](unsigned char c) {
+                    return std::isdigit(c) != 0;
+                })) {
+                return Type::integerLiteral(type->name);
+            }
             // The checker's own table, so `Int` reads back as the Integer it was
             // checked as (this reader once made it Int64).
             if (auto builtin = kex::semantic::signatureBuiltinType(type->name)) {
@@ -84,7 +92,7 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
             if (type->typeArgs.empty() && type->name.size() == 1 && type->name[0] >= 'A' &&
                 type->name[0] <= 'Z') {
                 auto [it, _] = vars.try_emplace(type->name, -static_cast<int>(vars.size() + 1));
-                return Type::typeVar(it->second);
+                return Type::genericLetter(it->second);
             }
             // Prelude make targets name these compound types (`make Map<K, V>`,
             // `make Optional<X>`); values of them carry the compound semantic
@@ -325,7 +333,8 @@ auto importedTrait(const KexiTraitDef& trait, const KexiTypeInterface& interface
                     auto head = heads.find(named->name);
                     if (head == heads.end()) {
                         head =
-                            heads.emplace(named->name, kex::semantic::Type::typeVar(next--)).first;
+                            heads.emplace(named->name, kex::semantic::Type::genericLetter(next--))
+                                .first;
                     }
                     return kex::semantic::Type::app(head->second, named->typeArgs);
                 };
@@ -849,7 +858,7 @@ auto KexiRegistry::buildSemanticInterfaces() const -> kex::semantic::ImportedInt
                     std::vector<kex::semantic::TypePtr> typeArgs;
                     for (size_t i = 0; i < adt.typeParams.size(); ++i) {
                         typeArgs.push_back(
-                            kex::semantic::Type::typeVar(-(static_cast<int>(i) + 1)));
+                            kex::semantic::Type::genericLetter(-(static_cast<int>(i) + 1)));
                     }
                     function.signature.result =
                         ctor.arity == 0 ? kex::semantic::Type::named(ctor.name)
@@ -859,7 +868,7 @@ auto KexiRegistry::buildSemanticInterfaces() const -> kex::semantic::ImportedInt
                                              ? ctor.typeParamSlots[i]
                                              : -1;
                         function.signature.params.push_back(
-                            slot >= 0 ? kex::semantic::Type::typeVar(-(slot + 1))
+                            slot >= 0 ? kex::semantic::Type::genericLetter(-(slot + 1))
                                       : kex::semantic::Type::unknown());
                     }
                     function.backendModule = module.beamAtom;
@@ -893,7 +902,17 @@ auto KexiRegistry::buildSemanticInterfaces() const -> kex::semantic::ImportedInt
                     continue;
                 }
                 for (const auto& receiver : module.chunk.typeInterface.receiverFunctions) {
-                    if (receiver.typeOnly) {
+                    // A declared-only function on a type (`find :> (K -> V -> Bool) ->
+                    // (K, V)?` in `make Map<K, V>`, whose body is Foldable's default)
+                    // is part of that type's contract: without it a program typed
+                    // `m.find` by the trait default alone, and left it Unknown. One
+                    // on a trait is that trait's requirement (`showValue :> String`
+                    // in `trait Showable`), which the trait carries (importedTrait);
+                    // as a function too it stood beside the prelude's
+                    // `showValue(value: Showable)` and made every call ambiguous.
+                    // Lowering skips both (buildExternalModules): no body here.
+                    if (receiver.typeOnly && receiver.receiverType &&
+                        receiver.receiverType->kind == KexiType::Constrained) {
                         continue;
                     }
                     auto function = importedReceiverFunction(

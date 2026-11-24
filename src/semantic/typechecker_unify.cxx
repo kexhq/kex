@@ -32,7 +32,7 @@ auto TypeChecker::answerPending(int id, const TypePtr& answer) -> void {
 }
 
 auto TypeChecker::freshTypeVar() -> TypePtr {
-    return Type::typeVar(m_nextTypeVar++);
+    return Type::inferenceVariable(m_nextTypeVar++);
 }
 
 auto TypeChecker::resolve(TypePtr t) const -> TypePtr {
@@ -159,7 +159,7 @@ auto TypeChecker::generalizeSignature(
             }
             auto [entry, inserted] = quantified.emplace(var->id, nullptr);
             if (inserted) {
-                entry->second = Type::typeVar(--nextGeneric);
+                entry->second = Type::genericLetter(--nextGeneric);
             }
             return entry->second;
         }
@@ -191,7 +191,7 @@ auto TypeChecker::fixNestedVariables(const TypePtr& argument, const TypePtr& par
     const auto actual = resolve(argument);
     const auto wanted = resolve(parameter);
     if (const auto* var = std::get_if<TypeVar>(&actual->kind)) {
-        if (var->id >= 0 && !containsOpenType(wanted)) {
+        if (isInferenceVariable(*var) && !containsOpenType(wanted)) {
             unifyVar(var->id, wanted);
         }
         return;
@@ -215,6 +215,103 @@ auto TypeChecker::fixNestedVariables(const TypePtr& argument, const TypePtr& par
     for (std::size_t i = 0; i < given.size(); ++i) {
         fixNestedVariables(given[i], expected[i]);
     }
+}
+
+// Unification (docs/typechecker-hm-plan.md §4.1, §12 step 1): makes `a` and `b`
+// the same type by binding inference variables on either side, or fails and
+// binds nothing. A generic letter (a signature's own `A`, instantiated per
+// call elsewhere), an unknown and a trait bound match without binding: what
+// they admit is §4.5's rules, checked by argMatchesParam.
+auto TypeChecker::unify(const TypePtr& a, const TypePtr& b, bool bindRight) -> bool {
+    const bool savedBindRight = std::exchange(m_unifyBindsRight, bindRight);
+    std::vector<int> journal;
+    auto* const outer = std::exchange(m_substJournal, &journal);
+    const bool unified = unifyStep(a, b);
+    m_substJournal = outer;
+    m_unifyBindsRight = savedBindRight;
+    if (!unified) {
+        for (const int id : journal) {
+            m_subst.erase(id);
+        }
+        return false;
+    }
+    if (outer) {
+        outer->insert(outer->end(), journal.begin(), journal.end());
+    }
+    return true;
+}
+
+auto TypeChecker::unifyStep(const TypePtr& a, const TypePtr& b) -> bool {
+    const auto left = resolve(a);
+    const auto right = resolve(b);
+    if (left == right) {
+        return true;
+    }
+    // Whether inference variable `id` occurs in `type`: binding it there would
+    // make an infinite type.
+    const auto occurs = [&](int id, const TypePtr& type) {
+        return anyType(type, [&](const TypePtr& node) {
+            const auto* var = std::get_if<TypeVar>(&resolve(node)->kind);
+            return var && var->id == id;
+        });
+    };
+    for (const auto& [variable, other] : {std::pair{left, right}, std::pair{right, left}}) {
+        // A variable of the other side (a callee's own, in its parameter) is
+        // not this call's to bind unless asked: it matches as an open type.
+        if (variable == right && !m_unifyBindsRight) {
+            continue;
+        }
+        if (const auto* var = std::get_if<TypeVar>(&variable->kind);
+            var && isInferenceVariable(*var)) {
+            if (const auto* same = std::get_if<TypeVar>(&other->kind);
+                same && same->id == var->id) {
+                return true;
+            }
+            if (occurs(var->id, other)) {
+                return false;
+            }
+            // Not to a type still holding a generic letter or an unknown: a
+            // signature's `A` means nothing outside its own call, and an
+            // unknown says nothing yet.
+            if (containsOpenType(other)) {
+                return true;
+            }
+            unifyVar(var->id, other);
+            return true;
+        }
+    }
+    const auto open = [&](const TypePtr& type) {
+        const auto* var = std::get_if<TypeVar>(&type->kind);
+        return (var && (isGenericLetter(*var) || !m_unifyBindsRight)) ||
+               std::holds_alternative<UnknownType>(type->kind) ||
+               std::holds_alternative<ConstrainedType>(type->kind);
+    };
+    if (open(left) || open(right)) {
+        return true;
+    }
+    if (left->kind.index() != right->kind.index()) {
+        return false;
+    }
+    if (const auto* named = std::get_if<NamedType>(&left->kind);
+        named && std::get<NamedType>(right->kind).name != named->name) {
+        return false;
+    }
+    std::vector<TypePtr> leftChildren;
+    std::vector<TypePtr> rightChildren;
+    forEachTypeChild(left, [&](const TypePtr& child) { leftChildren.push_back(child); });
+    forEachTypeChild(right, [&](const TypePtr& child) { rightChildren.push_back(child); });
+    if (leftChildren.empty() && rightChildren.empty()) {
+        return typesEqual(left, right);
+    }
+    if (leftChildren.size() != rightChildren.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < leftChildren.size(); ++i) {
+        if (!unifyStep(leftChildren[i], rightChildren[i])) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // `type` with every unknown that is known by now replaced, all the way down:
@@ -290,8 +387,9 @@ auto TypeChecker::generalizeTargetVariables(Signature& signature, const TypePtr&
             return;
         }
         const auto resolved = resolve(type);
-        if (const auto* var = std::get_if<TypeVar>(&resolved->kind); var && var->id >= 0) {
-            generic.try_emplace(var->id, Type::typeVar(--next));
+        if (const auto* var = std::get_if<TypeVar>(&resolved->kind);
+            var && isInferenceVariable(*var)) {
+            generic.try_emplace(var->id, Type::genericLetter(--next));
         }
         forEachTypeChild(resolved, collect);
     };

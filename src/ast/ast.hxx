@@ -768,6 +768,9 @@ struct MakeDef {
     bool isFinal = false;
     bool isServing = false;
     std::vector<std::string> implements; // trait names claimed by this block
+    // The type arguments each claim writes, beside `implements`: `Char` in
+    // `make String, implement: Foldable<Char>`. Empty for a bare claim.
+    std::vector<std::vector<TypeExprPtr>> implementArgs;
     // The bound on a type parameter of the target: `make A is Discrete =>
     // Range<A>` (#651) applies only where the argument satisfies the trait, so
     // its functions and `implements` are conditional (a conditional instance).
@@ -903,6 +906,9 @@ struct ModuleDef {
     // later phase treats it as the module it is; only substitution and
     // requirement tracking consult this flag (kexhq/kex#143).
     bool isCapability = false;
+    // Written as a file's header (`module Name`, no `do`): the module is the
+    // file, a unit of its own, so what it exports other units reach.
+    bool fileModule = false;
 };
 
 // The qualified path of a module written as `name` inside `parent` ("" at the

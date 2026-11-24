@@ -149,7 +149,7 @@ auto writtenTargetHead(const TypePtr& type) -> std::optional<TargetHead> {
                     case PrimitiveType::String: return TargetHead{"String"};
                     case PrimitiveType::Bool: return TargetHead{"Bool"};
                     case PrimitiveType::Atom:
-                        if (!node.atomName.empty()) {
+                        if (!node.literal.empty()) {
                             return std::nullopt;
                         }
                         return TargetHead{"Atom"};

@@ -6,7 +6,7 @@ spec/error_list_element_type.kex:9:27: [KEXET-0001]: Error, type mismatch: expec
   |
 9 |   let xs: [Integer] = [1, "two"]
   |                           ^^^^^
-spec/error_list_element_type.kex:10:28: [KEXET-0001]: Error, type mismatch: expected String, got Float64
+spec/error_list_element_type.kex:10:28: [KEXET-0001]: Error, type mismatch: expected String, got Float
    |
 10 |   let ys: [String] = ["a", 2.5]
    |                            ^^^

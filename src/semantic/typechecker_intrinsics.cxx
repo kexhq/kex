@@ -18,6 +18,8 @@ auto findCompileTimeIntrinsic(std::string_view name, std::size_t arity)
         {"Type.of", 1, &TypeChecker::checkTypeOf, &TypeChecker::foldTypeOf},
         {"Process.spawn", 1, &TypeChecker::checkProcessSpawn, &TypeChecker::foldProcessSpawn},
         {"as", 1, &TypeChecker::checkAs, nullptr},
+        {"is?", 1, &TypeChecker::checkIs, nullptr},
+        {"tie", 0, &TypeChecker::checkTie, nullptr},
     };
     for (const auto& intrinsic : intrinsics) {
         if (intrinsic.name == name && intrinsic.arity == arity) {
@@ -260,6 +262,100 @@ auto TypeChecker::checkAs(const ast::Expr& expr, const ast::MethodCall& node) ->
         error(diag::Code::AsNarrowsToByte, expr.location);
     }
     return target;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// `value.is?(T)`: whether the value is a `T`, or, for a trait, of a type that
+// implements it. A trait is known by the types that claim it (`Discrete` is
+// whichever types a `make` says are), so the test is one per implementor,
+// decided here; both backends test those as a type pattern (`_ : T`) would.
+// It narrows nothing: a `match` with a type pattern does that.
+auto TypeChecker::checkIs(const ast::Expr& expr, const ast::MethodCall& node) -> TypePtr {
+    if (!node.args[0] || !node.namedArgs.empty() || node.block) {
+        return nullptr;
+    }
+    if (node.receiver) {
+        inferExpr(*node.receiver);
+    }
+    std::string written;
+    if (const auto* name = std::get_if<ast::UpperIdentifier>(&node.args[0]->kind)) {
+        written = name->name;
+    } else if (const auto* path = std::get_if<ast::MethodCall>(&node.args[0]->kind);
+               path && path->args.empty() && path->receiver && !path->block) {
+        if (const auto scope = ast::writtenModulePath(*path->receiver)) {
+            written = kex::mangle::qualify(*scope, path->method);
+        }
+    }
+    if (written.empty()) {
+        error(diag::Code::IsNeedsTypeOrTrait, node.args[0]->location);
+        return Type::boolean();
+    }
+    std::vector<std::string> tested;
+    const auto traitIdentity = resolveTraitReference(written, m_currentModulePath, nullptr);
+    const auto* trait = m_traits.get(traitIdentity);
+    if (!trait) {
+        trait = m_traits.lookup(written);
+    }
+    // `Integer` and `Float` are types as well as the traits their sized forms
+    // share, and a value is tested against the type. Number has its own test
+    // on both backends.
+    const bool namesType =
+        trait && (trait->name == kex::names::kIntegerType || trait->name == kex::names::kFloatType);
+    if (trait && trait->name == kex::names::kNumberTrait) {
+        tested = {trait->name};
+    } else if (trait && !namesType) {
+        // The other built-in traits hold by a type's shape (every value is
+        // Showable), which the types claiming them in a `make` do not cover.
+        if (TraitRegistry::isStructural(trait->name)) {
+            error(diag::Code::IsTraitWithoutImplementors, expr.location, {{"trait", written}});
+            return Type::boolean();
+        }
+        tested = m_traits.implementorsOf(trait->name);
+    } else if (namesType || typeNamed(written, node.args[0]->location)) {
+        tested = {written};
+    } else {
+        error(diag::Code::IsNeedsTypeOrTrait, node.args[0]->location);
+        return Type::boolean();
+    }
+    std::string owner;
+    for (const auto& type : tested) {
+        owner += (owner.empty() ? "" : ",") + type;
+    }
+    m_decidedCalls[&expr] = {CallKind::TypeTest, owner};
+    return Type::boolean();
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// `let x = xs.tie`: takes a value out of a Monad, the rest of the block being
+// the step `flatMap` runs once per value (`xs.flatMap { |x| rest }`). Only as
+// a `let` with statements after it: inferBody checks those. `.try` is the
+// other thing, for what can fail.
+auto TypeChecker::checkTie(const ast::Expr& expr, const ast::MethodCall& node) -> TypePtr {
+    if (!node.receiver || node.block || !node.namedArgs.empty()) {
+        return nullptr;
+    }
+    const auto operand = resolve(inferExpr(*node.receiver));
+    if (isUndetermined(operand)) {
+        return nullptr;
+    }
+    const auto bind = monadBindOf(operand);
+    if (!bind) {
+        error(diag::Code::TieNotMonad, expr.location, {{"type", typeToString(operand)}});
+        return Type::unknown();
+    }
+    if (&expr != m_letBindValue) {
+        error(diag::Code::TieNotBound, expr.location);
+        return Type::unknown();
+    }
+    m_decidedCalls[&expr] = {CallKind::MonadBind, typeToString(bind->first)};
+    m_monadBinds[&expr] = operand;
+    return bind->second;
 }
 
 } // namespace kex::semantic

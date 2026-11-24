@@ -20,12 +20,14 @@ struct PrimitiveType {
     // Bool` silently accepted a Char and `[Char]` reported itself as "String".
     enum Kind { Integer, Char, String, Bool, Atom, Void }; // Integer = arbitrary precision
     Kind kind;
-    // For Atom only, and for DISPLAY only: the literal an atom type was
+    // For an Integer, the one value a clause's literal parameter takes (`let
+    // ^(2)`): two of them are two types, and either is still an Integer.
+    // For an Atom, and for DISPLAY only: the literal an atom type was
     // written as (`:macos`), empty for a plain `Atom`. Without it a union of
     // atom literals printed as "Atom | Atom | ...", one indistinguishable
     // member per variant. Every comparison ignores it (typesEqual looks at
     // `kind` alone), so `:macos` stays interchangeable with any other atom.
-    std::string atomName;
+    std::string literal;
 };
 
 struct SizedIntType {
@@ -35,6 +37,10 @@ struct SizedIntType {
 
 struct SizedFloatType {
     int bits; // 32, 64
+    // Whether the program wrote `Float64`. A 64-bit float is a `Float`, as
+    // an integer is an `Integer`: the sized name shows only where it was
+    // written. Display only; equality ignores it.
+    bool written = false;
 };
 
 struct NamedType {
@@ -58,6 +64,11 @@ struct FuncType {
     // in pure code may be passed only where one is expected (#640). Not part
     // of the type's identity: two types differing only here unify.
     bool foul = false;
+    // The capabilities what it runs requires (`FS`, `Clock`), inferred for a
+    // block and never written (§8.3, decided 2026-11-24: shown only). The
+    // block's definer requires them too, so it adds no obligation; hover
+    // shows it. Not part of the type's identity either.
+    std::vector<std::string> capabilities;
 };
 
 struct TupleType {
@@ -89,9 +100,32 @@ struct RecordType {
     std::vector<std::pair<std::string, TypePtr>> fields;
 };
 
+// The two things a TypeVar is (docs/typechecker-hm-plan.md §12 step 2): a
+// signature's own letter (`A` of `first : [A] -> A?`), instantiated afresh at
+// each call; or a variable inference makes for one unknown, which unification
+// binds. Made only by `Type::genericLetter` and `Type::inferenceVariable`.
+enum class TypeVarKind { GenericLetter, Inference };
+
+// Both kinds share one id space, so a map keyed by id never confuses them:
+// letters are numbered -1, -2, ... per signature, inference variables 0, 1,
+// ... per checker.
 struct TypeVar {
     int id;
+    TypeVarKind kind;
 };
+
+inline auto isGenericLetter(const TypeVar& var) -> bool {
+    return var.kind == TypeVarKind::GenericLetter;
+}
+inline auto isInferenceVariable(const TypeVar& var) -> bool {
+    return var.kind == TypeVarKind::Inference;
+}
+
+// The TypeVar an id names where only the id was kept (a serialized interface,
+// `ConstrainedType::genericId`). The one place the numbering is read.
+inline auto typeVarFromId(int id) -> TypeVar {
+    return {id, id < 0 ? TypeVarKind::GenericLetter : TypeVarKind::Inference};
+}
 
 // A type the checker does not know. `written` marks one the source wrote as
 // `Any`: a declared contract, not a gap in inference, so a parameter of it is
@@ -163,7 +197,9 @@ struct Type {
     static auto charT() -> TypePtr;
     static auto string() -> TypePtr;
     static auto boolean() -> TypePtr;
-    static auto atom(std::string atomName = "") -> TypePtr;
+    static auto atom(std::string literal = "") -> TypePtr;
+    // The Integer a clause's literal parameter takes (`let ^(2)`): itself only.
+    static auto integerLiteral(std::string digits) -> TypePtr;
     static auto voidType() -> TypePtr;
     static auto unknown() -> TypePtr;
     // `Any` as written: an UnknownType the source declared (see UnknownType).
@@ -181,7 +217,10 @@ struct Type {
     static auto optional(TypePtr inner) -> TypePtr;
     static auto intersection(std::vector<TypePtr> members) -> TypePtr;
     static auto record(std::vector<std::pair<std::string, TypePtr>> fields) -> TypePtr;
-    static auto typeVar(int id) -> TypePtr;
+    // A signature's letter; `id` is negative (-1 for its first letter).
+    static auto genericLetter(int id) -> TypePtr;
+    // An inference variable; `id` is the checker's counter, from 0.
+    static auto inferenceVariable(int id) -> TypePtr;
     static auto app(TypePtr head, std::vector<TypePtr> args) -> TypePtr;
     // The hole of a type lambda: `_` in `make Result<_, E>`.
     static auto hole() -> TypePtr;
@@ -205,6 +244,7 @@ struct Type {
     // (it exists only as a trait name in the TraitRegistry).
     static auto float32() -> TypePtr;
     static auto float64() -> TypePtr;
+    static auto float64Written() -> TypePtr;
 };
 
 auto typeToString(const TypePtr& type) -> std::string;

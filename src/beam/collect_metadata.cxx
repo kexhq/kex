@@ -147,8 +147,41 @@ auto moduleTypeQualifier(
 struct TraitExportScope {
     std::set<std::string> identities;
     std::unordered_map<std::string, std::set<std::string>> usings;
+    // The declarations, by identity: what a claim with arguments
+    // (`Foldable<Char>`) reads the defaults from.
+    std::unordered_map<std::string, const kex::ast::TraitDef*> defs;
 };
 thread_local const TraitExportScope* tTraitExportScope = nullptr;
+
+// The trait this unit declares under `identity`, or null.
+auto exportedTraitDef(const std::string& identity) -> const kex::ast::TraitDef* {
+    if (!tTraitExportScope) {
+        return nullptr;
+    }
+    const auto found = tTraitExportScope->defs.find(identity);
+    return found == tTraitExportScope->defs.end() ? nullptr : found->second;
+}
+
+// `type` with each bare name in `filled` replaced: a trait's parameters as one
+// implementor's claim fills them (`T?` is `Char?` under `Foldable<Char>`).
+auto substituteNamed(
+    const KexiTypePtr& type, const std::unordered_map<std::string, KexiTypePtr>& filled)
+    -> KexiTypePtr {
+    if (!type) {
+        return type;
+    }
+    if (type->kind == KexiType::Named && type->typeArgs.empty()) {
+        if (const auto found = filled.find(type->name); found != filled.end()) {
+            return found->second;
+        }
+    }
+    auto copy = std::make_shared<KexiType>(*type);
+    for (auto& arg : copy->typeArgs) {
+        arg = substituteNamed(arg, filled);
+    }
+    copy->result = substituteNamed(copy->result, filled);
+    return copy;
+}
 
 // A trait this unit declares, by its identity; anything else (a stdlib
 // trait, a capability) exactly as written.
@@ -280,12 +313,15 @@ auto convertSemanticType(const kex::semantic::TypePtr& type, bool generics = fal
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, kex::semantic::PrimitiveType>) {
                 switch (node.kind) {
-                    case kex::semantic::PrimitiveType::Integer: return kexiPrimitive("Integer");
+                    // A literal parameter's Integer (`let ^(2)`) as its digits, the
+                    // way an atom literal is `:name`.
+                    case kex::semantic::PrimitiveType::Integer:
+                        return kexiPrimitive(node.literal.empty() ? "Integer" : node.literal);
                     case kex::semantic::PrimitiveType::Char: return kexiPrimitive("Char");
                     case kex::semantic::PrimitiveType::String: return kexiPrimitive("String");
                     case kex::semantic::PrimitiveType::Bool: return kexiPrimitive("Bool");
                     case kex::semantic::PrimitiveType::Atom:
-                        return kexiPrimitive(node.atomName.empty() ? "Atom" : ":" + node.atomName);
+                        return kexiPrimitive(node.literal.empty() ? "Atom" : ":" + node.literal);
                     case kex::semantic::PrimitiveType::Void: return kexiPrimitive("Void");
                 }
             } else if constexpr (std::is_same_v<T, kex::semantic::SizedIntType>) {
@@ -365,7 +401,7 @@ auto convertSemanticType(const kex::semantic::TypePtr& type, bool generics = fal
                 // A generalized generic (`A` is -1, `B` -2, ...) is the
                 // signature's own, numbered per signature: written as its letter,
                 // which the reader turns back into a generic (kexi_registry).
-                if (generics && node.id < 0 && node.id >= -26) {
+                if (generics && isGenericLetter(node) && node.id >= -26) {
                     return kexiNamed(std::string(1, static_cast<char>('A' - node.id - 1)));
                 }
             }
@@ -642,11 +678,16 @@ auto receiverFunctionFromDef(
             // A position still holding one of the receiver's own letters (`A` of
             // `make Type<A>`) is an inference variable to the checker, which no
             // letter can be written for; the annotation spells it as the
-            // receiver does.
-            const auto open = [](const kex::semantic::TypePtr& type) {
-                return kex::semantic::anyType(type, [](const kex::semantic::TypePtr& node) {
+            // receiver does. So does a position holding the function's own
+            // letter (`Y` of `let wrap(value: Y) -> [Y]`), which converted
+            // alone read back as Unknown. Not a trait's default: its receiver is
+            // exported as the letter `T`, which an element letter written `T`
+            // (Enumerable's `filter -> [T]`) would then name.
+            const bool onTrait = receiverIsTrait;
+            const auto open = [onTrait](const kex::semantic::TypePtr& type) {
+                return kex::semantic::anyType(type, [onTrait](const kex::semantic::TypePtr& node) {
                     const auto* var = std::get_if<kex::semantic::TypeVar>(&node->kind);
-                    return var && var->id >= 0;
+                    return var && (!onTrait || isInferenceVariable(*var));
                 });
             };
             const auto& written =
@@ -1159,6 +1200,46 @@ void collectFromMakeDef(
             for (const auto& sigType : sigs) {
                 iface.receiverFunctions.push_back(
                     receiverFunctionFromSig(name, receiverType, sigType));
+            }
+        }
+    }
+    // What a claim with arguments (`implement: Foldable<Char>`) makes of the
+    // trait's defaults: each one whose result is written, as this type has
+    // it (`find -> T?` is `Char?` on String). Type-only: the body is the
+    // trait's, which lowering splices in as before.
+    for (std::size_t claim = 0; claim < md.implements.size() && claim < md.implementArgs.size();
+         ++claim) {
+        const auto& args = md.implementArgs[claim];
+        const auto* trait = exportedTraitDef(exportedTraitName(md.implements[claim], modulePath));
+        if (args.empty() || !trait) {
+            continue;
+        }
+        std::unordered_map<std::string, KexiTypePtr> filled;
+        for (std::size_t i = 0; i < args.size() && i < trait->typeParams.size(); ++i) {
+            if (args[i]) {
+                filled[trait->typeParams[i]] = convertTypeExpr(args[i]);
+            }
+        }
+        for (const auto& item : trait->body) {
+            const auto* fd = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item);
+            if (!fd || !*fd || seenImpls.count((*fd)->name) || standaloneSigs.count((*fd)->name)) {
+                continue;
+            }
+            for (const auto* clause : kex::ast::signatureClauses(**fd)) {
+                if (!clause->returnAnnotation || !*clause->returnAnnotation) {
+                    continue;
+                }
+                auto sig = std::make_shared<KexiType>();
+                sig->kind = KexiType::Func;
+                for (const auto& param : clause->params) {
+                    sig->typeArgs.push_back(
+                        param.type && *param.type
+                            ? substituteNamed(convertTypeExpr(*param.type), filled)
+                            : kexiUnknown());
+                }
+                sig->result = substituteNamed(convertTypeExpr(*clause->returnAnnotation), filled);
+                iface.receiverFunctions.push_back(
+                    receiverFunctionFromSig((*fd)->name, receiverType, sig));
             }
         }
     }
@@ -1863,6 +1944,7 @@ auto collectMetadata(const kex::ast::Program& program, const CollectOptions& opt
     kex::forEachTraitDef(
         program.items, [&](const ast::TraitDef& trait, const std::string& modulePath) {
             traitScope.identities.insert(kex::traitIdentity(modulePath, trait.name));
+            traitScope.defs[kex::traitIdentity(modulePath, trait.name)] = &trait;
         });
     kex::collectScopeUsings(program.items, traitScope.usings);
     tTraitExportScope = &traitScope;

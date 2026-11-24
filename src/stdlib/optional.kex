@@ -134,7 +134,7 @@ trait Eitherable do
   either :> (L -> A) -> (R -> A) -> A
 end
 
-make Optional<X>, implement: Optionable, Functor, Bindable do
+make Optional<X>, implement: Optionable, Functor, Bindable, Monad, Applicable do
   # Returns +true+ when a value is present.
   #
   # @return [Bool]
@@ -228,6 +228,20 @@ make Optional<X>, implement: Optionable, Functor, Bindable do
   let flatMap(@None, _) = None
   let flatMap(@Just(x), f) = f(x)
 
+  # Applies +f+ to this value and +other+'s when both are present
+  # (Applicable's +with+).
+  #
+  # 
+  #   Just(1).with(Just(2)) { |a, b| a + b }   # => Just(3)
+  #   Just(1).with(None) { |a, b| a + b }      # => None
+  with :> Y? -> (X -> Y -> Z) -> Z?
+  let with(@None, _, _) = None
+  let with(@Just(_), None, _) = None
+  let with(@Just(a), Just(b), f) = Just(f(a, b))
+
+  # +value+ present (Monad's +wrap+): +Optional.wrap(1)+ is +Just(1)+.
+  let wrap(value: Y) -> Y? = Just(value)
+
   # Keeps the value only when +pred+ accepts it.
   #
   # @example
@@ -318,6 +332,17 @@ make Result<X, E>, implement: Resultable do
   let flatMap(@Error(e), _) = Error(e)
   let flatMap(@Ok(x), f) = f(x)
 
+  # Applies +f+ to this success and +other+'s (Applicable's +with+), or
+  # answers the first error.
+  #
+  # 
+  #   Ok(1).with(Ok(2)) { |a, b| a + b }           # => Ok(3)
+  #   Ok(1).with(Error("no")) { |a, b| a + b }     # => Error("no")
+  with :> Result<Y, E> -> (X -> Y -> Z) -> Result<Z, E>
+  let with(@Error(e), _, _) = Error(e)
+  let with(@Ok(_), Error(e), _) = Error(e)
+  let with(@Ok(a), Ok(b), f) = Ok(f(a, b))
+
   # Converts the result to an +Optional+, dropping the error payload.
   #
   # Useful when a caller only needs to know whether there is a value, and
@@ -361,7 +386,63 @@ end
 # A result maps and chains its success and keeps its error: `Result<_, E>` is
 # the constructor `Functor` and `Bindable` range over (§8.2), and the `map`
 # and `flatMap` above are theirs.
-make Result<_, E>, implement: Functor, Bindable do
+make Result<_, E>, implement: Functor, Bindable, Monad, Applicable do
+  # +value+ as a success (Monad's +wrap+): +Result.wrap(1)+ is +Ok(1)+.
+  let wrap(value: Y) -> Result<Y, E> = Ok(value)
+end
+
+# The outcome of several independent checks: +Valid+ with the value, or
+# +Invalid+ with every failure. Where a +Result+ stops at the first error, a
+# +Validation+ combined with +with+ keeps them all, which is what a form or a
+# config file wants reported:
+#
+#   let checkedName(name: String) -> Validation<String, String> do
+#     return name.empty? then Invalid(["name is empty"]) else Valid(name)
+#   end
+#
+#   checkedName("").with(checkedEmail("x")) do |n, e|
+#     Signup { name: n, email: e }
+#   end
+#   # => Invalid(["name is empty", "email has no @"])
+#
+# It is Applicable, not a Monad: a step that needs the value cannot run after
+# a failure, so chaining would have to stop at the first one.
+type Validation<T, E> = Valid(T) | Invalid([E])
+
+make Validation<X, E> do
+  # Applies +f+ to the value when valid; the failures stay as they are.
+  #
+  # @example
+  #   Valid(2).map { |n| n * 10 }   # => Valid(20)
+  map :> (X -> Y) -> Validation<Y, E>
+  let map(@Valid(x), f) = Valid(f(x))
+  let map(@Invalid(errors), _) = Invalid(errors)
+
+  # Applies +f+ to this value and +other+'s when both are valid; otherwise
+  # every failure of either, this one's first (Applicable's +with+).
+  #
+  # @example
+  #   Valid(1).with(Valid(2)) { |a, b| a + b }                   # => Valid(3)
+  #   Invalid(["a"]).with(Invalid(["b"])) { |a, b| a + b }       # => Invalid(["a", "b"])
+  with :> Validation<Y, E> -> (X -> Y -> Z) -> Validation<Z, E>
+  let with(@Valid(a), Valid(b), f) = Valid(f(a, b))
+  let with(@Valid(_), Invalid(theirs), _) = Invalid(theirs)
+  let with(@Invalid(mine), Valid(_), _) = Invalid(mine)
+  let with(@Invalid(mine), Invalid(theirs), _) = Invalid(mine + theirs)
+
+  # The value as a success, or every failure as the error.
+  #
+  # @example
+  #   Invalid(["a", "b"]).toResult   # => Error(["a", "b"])
+  let toResult -> Result<X, [E]> = match this do
+    Valid(x) => Ok(x)
+    Invalid(errors) => Error(errors)
+  end
+end
+
+make Validation<_, E>, implement: Functor, Applicable do
+  # +value+ as valid (Applicable's +wrap+): +Validation.wrap(1)+ is +Valid(1)+.
+  let wrap(value: Y) -> Validation<Y, E> = Valid(value)
 end
 
 # Converts +value+ to the type +t+, or +None+ if it cannot be represented.

@@ -506,7 +506,7 @@ traits through the same `trait`/`make implement:` mechanism as the Type
 Hierarchy section above — not nominal inheritance:
 
 ```kex
-trait Foldable do
+trait Foldable<T> do
   reduce :> A -> (A -> T -> A) -> A
   # defaults: each, all?, any?, find, count(predicate)
 end
@@ -516,11 +516,11 @@ trait Enumerable do
   # defaults: map, filter, flatMap, collect
 end
 
-make Range, implement: Enumerable, Foldable do
+make Range<A>, implement: Enumerable, Foldable<A> do
   let reduce(acc, f) = ...
 end
 
-make [A], implement: Enumerable, Foldable do
+make [A], implement: Enumerable, Foldable<A> do
   let reduce(acc, f) = ...
 end
 ```

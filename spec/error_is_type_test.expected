@@ -1,0 +1,8 @@
+spec/error_is_type_test.kex:9:22: [KEXET-0515]: Error, `is?` tests a value against a type or a trait, named as written (`x.is?(String)`, `x.is?(Discrete)`)
+  |
+9 |   IO.printLine(v.is?(kind))
+  |                      ^^^^
+spec/error_is_type_test.kex:10:21: [KEXET-0516]: Error, `is?(Showable)` cannot be tested at run time: `Showable` holds for a value by its shape, which the types a `make` claims it for do not cover. Test the types themselves (`x.is?(Integer)`)
+   |
+10 |   IO.printLine(v.is?(Showable))
+   |                ^^^^^^^^^^^^^^^

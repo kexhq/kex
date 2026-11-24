@@ -275,6 +275,10 @@ trait  true  type  using  var  when  while
 | `Atom` | Symbolic constant (`:ok`) |
 | `None` | The unit/empty value |
 
+A float literal is a `Float`, as an integer literal is an `Integer`. The sized
+names (`Float32`, `Float64`, `Int32`, ...) are for code that needs a width,
+and show in types only where a program writes them.
+
 ### Type Expressions
 
 | Syntax | Meaning |
@@ -311,6 +315,20 @@ end
 
 `value.upperCase` on an `Any` is an error: it is not defined for every value
 an `Any` may hold.
+
+`value.is?(T)` asks the question without narrowing: a `Bool`, whether the
+value is a `T`, or, when `T` is a trait, of a type that implements it. A
+trait is known by the types a `make` claims it for, so `is?(Discrete)` holds
+for an Integer or a Char:
+
+```kex
+value.is?(String)      # true for "text"
+value.is?(Discrete)    # true for 3 and 'c'
+```
+
+`T` is written as a name, not passed as a value. A trait that holds by a
+type's shape (`Showable`: every value shows) has no such list, so `is?` on it
+is an error; `Number` is tested directly.
 
 An intersection is a value that is every one of its members at once. Of
 traits, it takes any value implementing all of them, and offers what each
@@ -1300,7 +1318,7 @@ instantiations whose type arguments satisfy it (#651). Its functions apply
 only there, and so does every trait it implements:
 
 ```kex
-make A is Discrete => Range<A>, implement: Enumerable, Foldable do
+make A is Discrete => Range<A>, implement: Enumerable, Foldable<A> do
   # `A` is the element type, as in any `make Range<A>`
   each :> (A -> Void) -> Void
   ...
@@ -1438,6 +1456,28 @@ let show(K is Showable & Comparable, V is Showable => k: K, v: V) -> String = "$
 An unbounded single letter stays implicit: `let identity(a: A) -> A` needs
 no `=>`. A `make` block takes the same bound (Bounded Make, §14).
 
+### Trait Parameters
+
+A trait may take type parameters of its own, which each implementing type
+fills when it claims the trait. The trait's signatures use them like any
+type, and a default written with one answers in what that type filled in:
+
+```kex
+trait Foldable<T> do
+  reduce :> A -> (A -> T -> A) -> A
+  let find(pred) -> T? = ...
+end
+
+make [X], implement: Foldable<X> do ... end
+make String, implement: Foldable<Char> do ... end
+make Map<K, V>, implement: Foldable<(K, V)> do ... end
+
+"hey".find { |c| c == 'e' }      # a Char?
+[1, 2].find { |n| n > 1 }        # an Integer?
+```
+
+A claim written without arguments (`implement: Foldable`) leaves them open.
+
 ### Traits Over Type Constructors
 
 A trait may range over a type constructor rather than a type. Its parameter
@@ -1452,6 +1492,63 @@ make Box, implement: Functor do
   let fmap(f) -> Box<B> = Box { value: f(@value) }
 end
 ```
+
+A requirement with no receiver of its own, such as Monad's `wrap : A ->
+F<A>`, is called on the type: by name for a concrete one (`List.wrap(1)` is
+`[1]`, `Optional.wrap(1)` is `Just(1)`), and through the letter in code
+written once for every implementor. That letter is whichever container the
+arguments are, so it must appear in a parameter's type:
+
+```kex
+let incremented(M is Monad => xs: M<Integer>) -> M<Integer> = xs.flatMap { |x| M.wrap(x + 1) }
+
+incremented([1, 2])    # [2, 3]
+incremented(Just(1))   # Just(2)
+```
+
+`Applicable` combines two independent containers: `a.with(b) { |x, y| ... }`
+applies the function to the values of both. A list combines every pair, an
+Optional or a Result the two values or the first failure, and a `Validation`
+(`Valid(T)` or `Invalid([E])`) every value or every failure, which is what
+checking several independent inputs wants:
+
+```kex
+name.checked.with(email.checked) { |n, e| Signup { name: n, email: e } }
+# Invalid(["name is empty", "email has no @"]), not just the first
+```
+
+`traverse` and `sequence` are written once over it: every result gathered,
+or what the container makes of the failures.
+
+```kex
+traverse(["1", "2"]) { |s| s.to(Integer) }   # Just([1, 2])
+sequence([Ok(1), Error("no")])               # Error("no")
+```
+
+`.tie` takes a value out of a Monad for the rest of the block: `let x =
+xs.tie` runs the statements after it once per value, as `xs.flatMap { |x|
+... }` would, and the block answers what `flatMap` joins. It flattens what
+would otherwise nest:
+
+```kex
+let pairs(xs: [Integer], ys: [String]) -> [(Integer, String)] do
+  let x = xs.tie
+  let y = ys.tie
+  [(x, y)]
+end
+
+pairs([1, 2], ["a", "b"])   # [(1, "a"), (1, "b"), (2, "a"), (2, "b")]
+```
+
+It stands as a `let` with statements after it in the same block, the block
+ends in the container again, and it has no `return` before its end (which
+would leave only the step). On a `Result` or an `Optional` it chains like
+`flatMap`; `.try` is the early exit for failure, usable anywhere.
+
+The holes may be left out: a parameter's kind follows from how the trait's
+signatures apply it, so `trait Functor<F>` with `fmap : F<A> -> ...` is the
+same trait. Its uses must agree; `F<A>` in one signature and a bare `F` in
+another is an error.
 
 A type of two arguments names the one that varies with `_`, and keeps the
 other: `make Tagged<_, E>, implement: Functor`. A function bounded by the

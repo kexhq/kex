@@ -1763,9 +1763,11 @@ int main() {
             assertEqual(typeToString(Type::uint64()), std::string("UInt64"));
         });
 
-        it("prints sized float names, with no plain Float type", []() {
+        it("prints a float as Float, and Float64 only where it was written", []() {
             assertEqual(typeToString(Type::float32()), std::string("Float32"));
-            assertEqual(typeToString(Type::float64()), std::string("Float64"));
+            assertEqual(typeToString(Type::float64()), std::string("Float"));
+            assertEqual(typeToString(Type::float64Written()), std::string("Float64"));
+            assertTrue(typesEqual(Type::float64(), Type::float64Written()));
         });
 
         it("prints String and [Char] as the distinct types they are", []() {
@@ -2309,7 +2311,7 @@ int main() {
             interfaces.recordArities["External.Box"] = 1;
             interfaces.recordFieldNames["External.Box"] = {"value"};
             interfaces.recordFields["External.Box"] = {
-                {"value", semantic::Type::typeVar(-1)},
+                {"value", semantic::Type::genericLetter(-1)},
             };
 
             assertTrue(noErrorsWithInterfaces(
@@ -2335,7 +2337,7 @@ int main() {
             audit.backendModule = "external";
             audit.backendArity = 1;
             auto row = semantic::Type::record({{"enabled", semantic::Type::boolean()}});
-            auto shape = semantic::Type::intersection({semantic::Type::typeVar(-1), row});
+            auto shape = semantic::Type::intersection({semantic::Type::genericLetter(-1), row});
             audit.signature = {"audit", {shape}, shape, true};
             external.exports["audit"].push_back(std::move(audit));
             interfaces.modules["External"] = std::move(external);

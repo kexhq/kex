@@ -41,7 +41,7 @@ auto typesExactlyEqual(const TypePtr& a, const TypePtr& b) -> bool {
                 return false;
             }
             if constexpr (std::is_same_v<AT, PrimitiveType>) {
-                return at.kind == bt->kind && at.atomName == bt->atomName;
+                return at.kind == bt->kind && at.literal == bt->literal;
             } else if constexpr (std::is_same_v<AT, SizedIntType>) {
                 return at.bits == bt->bits && at.isSigned == bt->isSigned;
             } else if constexpr (std::is_same_v<AT, SizedFloatType>) {
@@ -408,7 +408,7 @@ auto buildAgreementFixture() -> ImportedInterfaces {
         std::make_shared<Type>(Type{UnionType{{Type::named("A"), Type::named("B")}}}),
         Type::intersection({Type::named("A"), Type::named("B")}),
         Type::record({{"x", Type::integer()}, {"y", Type::string()}}),
-        Type::typeVar(-1),
+        Type::genericLetter(-1),
         Type::unknown(),
         Type::any(),
         Type::never("uninhabited"),
@@ -486,7 +486,7 @@ auto buildAgreementFixture() -> ImportedInterfaces {
     trait.name = "Comparable";
     Signature method;
     method.name = "compare";
-    method.params = {Type::typeVar(-1)};
+    method.params = {Type::genericLetter(-1)};
     method.result = Type::named("Ordering");
     trait.requiredMethods = {method};
     trait.defaultMethods = {"equals"};
@@ -594,7 +594,7 @@ int main() {
             trait.name = "Comparable";
             Signature method;
             method.name = "compare";
-            method.params = {Type::typeVar(-1)};
+            method.params = {Type::genericLetter(-1)};
             method.result = Type::named("Ordering");
             trait.requiredMethods = {method};
             trait.defaultMethods = {"equals"};

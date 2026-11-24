@@ -159,6 +159,11 @@ auto TraitRegistry::implementorKey(const TypePtr& type) const -> std::string {
     if (auto* named = std::get_if<NamedType>(&type->kind)) {
         return named->name;
     }
+    // A float keys by its size, whatever it prints as (`Float`, unless
+    // `Float64` was written): conformances are registered by that name.
+    if (const auto* sized = std::get_if<SizedFloatType>(&type->kind)) {
+        return sized->bits == 32 ? "Float32" : "Float64";
+    }
     return typeToString(type);
 }
 
@@ -425,13 +430,15 @@ auto TraitRegistry::withBuiltins() -> TraitRegistry {
     reg.define(TraitDef{"Number", {}});
     reg.define(TraitDef{"Integer", {}});
     reg.define(TraitDef{"Float", {}});
-    reg.define(TraitDef{"Equatable", {Signature{"==", {Type::typeVar(-1)}, Type::boolean()}}});
+    reg.define(
+        TraitDef{"Equatable", {Signature{"==", {Type::genericLetter(-1)}, Type::boolean()}}});
     // `Ordering` is the type comparable.kex declares and the interpreter
     // builds Less/Equal/Greater from. The result was previously named
     // "Comparison", which no declaration anywhere defines.
     reg.define(
         TraitDef{
-            "Comparable", {Signature{"compare", {Type::typeVar(-1)}, Type::named("Ordering")}}});
+            "Comparable",
+            {Signature{"compare", {Type::genericLetter(-1)}, Type::named("Ordering")}}});
     reg.define(
         TraitDef{"Inspectable", {Signature{"inspectValue", {Type::boolean()}, Type::string()}}});
     reg.define(TraitDef{"Showable", {Signature{"showValue", {}, Type::string()}}});
@@ -459,6 +466,16 @@ auto TraitRegistry::withBuiltins() -> TraitRegistry {
     }
 
     return reg;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto TraitRegistry::isStructural(const std::string& traitName) -> bool {
+    return traitName == kex::names::kNumberTrait || traitName == kex::names::kIntegerType ||
+           traitName == kex::names::kFloatType || traitName == kex::names::kInspectableTrait ||
+           traitName == kex::names::kShowableTrait;
 }
 
 } // namespace kex::semantic

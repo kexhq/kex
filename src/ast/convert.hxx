@@ -307,10 +307,7 @@ public:
     }
 
     auto makeDef(const MakeDef& def, const std::string& filename, const Docs& docs) -> Value {
-        std::vector<Value> implements;
-        for (const auto& name : def.implements) {
-            implements.push_back(namedType(name, {}));
-        }
+        auto implements = claims(def);
 
         std::vector<Value> body;
         for (const auto& item : def.body) {
@@ -1143,10 +1140,7 @@ private:
                     return m_builder.variant(
                         "GeneratedNode", "Kex.AST.GeneratedTemplate", {recordDef(*node, "", "")});
                 } else if constexpr (std::is_same_v<T, MakeDef>) {
-                    std::vector<Value> implements;
-                    for (const auto& name : node->implements) {
-                        implements.push_back(namedType(name, {}));
-                    }
+                    auto implements = claims(*node);
                     std::vector<Value> body;
                     const Docs docs;
                     for (const auto& item : node->body) {
@@ -1203,6 +1197,24 @@ private:
 
     auto variant(std::string tag, std::vector<Value> args) -> Value {
         return m_builder.variant(std::move(tag), "Kex.AST.TypeRef", std::move(args));
+    }
+
+    // A make block's claims, each with the arguments it writes
+    // (`Foldable<Char>`).
+    auto claims(const MakeDef& def) -> std::vector<Value> {
+        std::vector<Value> implements;
+        for (std::size_t i = 0; i < def.implements.size(); ++i) {
+            std::vector<Value> args;
+            if (i < def.implementArgs.size()) {
+                for (const auto& arg : def.implementArgs[i]) {
+                    if (arg) {
+                        args.push_back(typeRef(*arg));
+                    }
+                }
+            }
+            implements.push_back(namedType(def.implements[i], std::move(args)));
+        }
+        return implements;
     }
 
     auto namedType(std::string name, std::vector<Value> args) -> Value {

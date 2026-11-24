@@ -2657,6 +2657,95 @@ int main() {
             }
         });
     });
+    describe("Kex LSP block capabilities", []() {
+        // A block's function type carries what it requires (docs/typechecker-
+        // hm-plan.md §8.3, decided 2026-11-24: inferred, shown only), and hover
+        // on what holds it says so.
+        it("shows what a block requires on its binding", []() {
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-block-caps.kex","languageId":"kex","version":1,"text":"foul run() -> Void do\n  let task = { FS.File.read(\"x\") }\n  let plain = { 1 + 1 }\n  IO.printLine(task())\n  IO.printLine(plain())\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-block-caps.kex"},"position":{"line":1,"character":7}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-block-caps.kex"},"position":{"line":2,"character":7}}})");
+            messages += frame(R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto result = output.str();
+            assertTrue(
+                result.find("requires FS.File") != std::string::npos,
+                "hover did not show what the block requires");
+            assertEqual(occurrences(result, "requires"), size_t{1});
+        });
+    });
+    describe("Kex LSP algebra traits", []() {
+        // Applicable's `with`, Monad's `.tie` and `wrap`, Foldable<T>'s `find`
+        // and `is?`, as an editor sees them.
+        const std::string source =
+            "let combined(a: Integer?, b: Integer?) -> Integer? = a.with(b) { |x, y| x + y }\n"
+            "let firstVowel(word: String) -> Char? = word.find { |c| c == 'e' }\n"
+            "let pairs(xs: [Integer], ys: [String]) -> [(Integer, String)] do\n"
+            "  let x = xs.tie\n"
+            "  let y = ys.tie\n"
+            "  [(x, y)]\n"
+            "end\n"
+            "let discrete(v: Any) -> Bool = v.is?(Discrete)\n"
+            "let bumped(M is Monad => xs: M<Integer>) -> M<Integer> = xs.flatMap { |x| M.wrap(x + "
+            "1) }\n";
+        it("hovers what `.tie` binds as the element", [source]() {
+            const auto first = askAt("file:///tmp/kex-lsp-tie.kex", source, "hover", 3, 6);
+            assertTrue(first.find("x : Integer") != std::string::npos, "x: " + first);
+            const auto second = askAt("file:///tmp/kex-lsp-tie.kex", source, "hover", 4, 6);
+            assertTrue(second.find("y : String") != std::string::npos, "y: " + second);
+        });
+        it("types a block through a bounded constructor letter", [source]() {
+            // `xs: M<Integer>`: the requirement's `F<A>` makes the block's x an
+            // Integer, not whatever `x + 1` alone would.
+            const auto reply = askAt("file:///tmp/kex-lsp-monad-block.kex", source, "hover", 8, 82);
+            assertTrue(reply.find("x : Integer") != std::string::npos, "x: " + reply);
+        });
+        it("hovers `with` as the overload the call selected", [source]() {
+            const auto reply = askAt("file:///tmp/kex-lsp-with.kex", source, "hover", 0, 56);
+            assertTrue(
+                reply.find(
+                    "with : Integer? -> Integer? -> (Integer -> Integer -> Integer) -> "
+                    "Integer?") != std::string::npos,
+                "with: " + reply);
+        });
+        it("hovers a String's `find` as answering a Char", [source]() {
+            const auto reply = askAt("file:///tmp/kex-lsp-find.kex", source, "hover", 1, 46);
+            assertTrue(reply.find("-> Char?") != std::string::npos, "find: " + reply);
+        });
+        it("completes `with` and `wrap` on a list", [source]() {
+            const auto reply =
+                askAt("file:///tmp/kex-lsp-complete.kex", source, "completion", 3, 13);
+            assertTrue(reply.find("\"label\":\"with\"") != std::string::npos, "no with: " + reply);
+            assertTrue(reply.find("\"label\":\"wrap\"") != std::string::npos, "no wrap: " + reply);
+        });
+        it("reports a `.tie` that is not a binding", []() {
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-tie-error.kex","languageId":"kex","version":1,"text":"let inline(xs: [Integer]) -> Integer = xs.tie + 1\n"}}})");
+            messages += frame(R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            assertTrue(
+                output.str().find("KEXET-0517") != std::string::npos,
+                "no KEXET-0517 published: " + output.str());
+        });
+    });
     describe("Kex LSP bounds", []() {
         // A bound's trait (#651) hovers as the trait the checker resolved,
         // as a name after `implement:` does: here not the record `Pricing`.
