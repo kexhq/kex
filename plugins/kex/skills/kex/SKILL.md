@@ -109,7 +109,8 @@ main do
   # Conversion is `to(Type)` and answers an optional.
   IO.printLine("42".to(Integer).or(0) + 1)   # not: "42".to_i, toInteger, parseInt
   IO.printLine(count.to(String).or("") + "!")  # not: to_s, toString
-  IO.printLine(Integer.parse("x").or(-1))    # parse answers Ok(n) or Error(e)
+  IO.printLine(Integer.parse("x").or(-1))    # parse answers Ok(n) or Error(why): NoDigits(0) here
+  IO.inspect(Integer.parse("10 USD"))        # Error(Trailing(10, " USD")): match it to read a number off the front
 
   # Numbers.
   IO.printLine(7 / 2)                        # 3

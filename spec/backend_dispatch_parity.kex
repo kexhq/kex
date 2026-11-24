@@ -11,13 +11,13 @@ record Request do
 end
 
 # Same, for a record whose prelude namesake puts the field at a DIFFERENT
-# position (local `message` is element 2; the prelude ParseError's is element 5).
-record ParseError do
+# position (local `message` is element 2; the prelude PatternError's is element 3).
+record PatternError do
   message : String
 end
 
 # A top-level constant whose name collides with an imported record accessor
-# (`value` is a field of the prelude's Measure and ParseError).
+# (`value` is a field of the prelude's Measure).
 let thunk = { 42 }
 let value = thunk()
 
@@ -56,9 +56,9 @@ main do
   IO.printLine(Request { path: "/admin/users" }.path)
   # ...and the prelude's own record of that name still reads correctly: only
   # the tuple SIZE tells two layouts sharing a tag apart.
-  IO.printLine(ParseError { message: "local" }.message)
-  match Float.parse("abc") do
-    Ok(f)    => IO.printLine(f)
+  IO.printLine(PatternError { message: "local" }.message)
+  match DateFormat.parse("yyyy-QQ") do
+    Ok(_)    => IO.printLine("unexpected ok")
     Error(e) => IO.printLine(e.message)
   end
 

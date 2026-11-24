@@ -629,6 +629,10 @@ auto namedTypesMatch(const std::string& a, const std::string& b) -> bool {
            qualified[qualified.size() - bare.size() - 1] == '.';
 }
 
+auto sameNamedType(const NamedType& a, const NamedType& b) -> bool {
+    return a.shadowsPrelude == b.shadowsPrelude && namedTypesMatch(a.name, b.name);
+}
+
 auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
     if (!a || !b) {
         return false;
@@ -662,7 +666,7 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
             } else if constexpr (std::is_same_v<AT, SizedFloatType>) {
                 return at.bits == bt->bits;
             } else if constexpr (std::is_same_v<AT, NamedType>) {
-                if (!namedTypesMatch(at.name, bt->name)) {
+                if (!sameNamedType(at, *bt)) {
                     return false;
                 }
                 if (at.variant != bt->variant) {
@@ -905,7 +909,7 @@ auto mapTypeChildren(const TypePtr& type, const std::function<TypePtr(const Type
                     return type;
                 }
                 return std::make_shared<Type>(
-                    Type{NamedType{part.name, std::move(args), part.variant}});
+                    Type{NamedType{part.name, std::move(args), part.variant, part.shadowsPrelude}});
             } else if constexpr (std::is_same_v<Part, IntersectionType>) {
                 auto members = mappedAll(part.members);
                 return same ? type : Type::intersection(std::move(members));

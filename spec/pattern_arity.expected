@@ -6,7 +6,7 @@ spec/pattern_arity.kex:17:7: [KEXET-0116]: Error, `Pair` record takes 2 value(s)
    |
 17 |   let Pair(only) = Pair { a: 1, b: 2 }
    |       ^^^^^^^^^^
-spec/pattern_arity.kex:21:13: [KEXET-0116]: Error, `ParseError` record takes 5 value(s), but the pattern destructures 1
+spec/pattern_arity.kex:21:13: [KEXET-0116]: Error, `PatternError` record takes 2 value(s), but the pattern destructures 1
    |
-21 |   let Error(ParseError(err)) = Integer.parse("12x")
-   |             ^^^^^^^^^^^^^^^
+21 |   let Error(PatternError(err)) = DateFormat.parse("yyyy-QQ")
+   |             ^^^^^^^^^^^^^^^^^

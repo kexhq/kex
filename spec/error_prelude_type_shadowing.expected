@@ -1,0 +1,10 @@
+spec/error_prelude_type_shadowing.kex:12:39: [KEXET-0491]: Error, `describe` expects argument 1 to be ParseError, but got ParseError<Integer>
+
+describe : ParseError -> String
+   |
+ 5 | let describe(error: ParseError) -> String = match error do
+   |                     ---------- expected because of this parameter
+  ...
+12 |     Error(e) => IO.printLine(describe(e))
+   |                                       ^ this has type ParseError<Integer>
+Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

@@ -3,8 +3,7 @@
 -module(kex_intrinsic_number).
 -export([sub/3, mul/3, divide/3, pow/3, lt/3, gt/3, lte/3, gte/3, abs/1, sqrt/1, add/2, divide/2, pow/2, eq/2, neq/2,
           floor/1, ceil/1, round/1, toInteger/1,
-          float_parse/1, float_parse_prefix/1,
-          parse/1, to_integer/1, to_float/1]).
+          to_integer/1, to_float/1]).
 
 abs(N)  -> erlang:abs(N).
 sqrt(N) -> math:sqrt(N).
@@ -171,11 +170,6 @@ round(N)      -> erlang:round(N).       %% works on both int and float
 %% toInteger/1 — truncate toward zero (no-op on integers).
 toInteger(N)  -> erlang:trunc(N).
 
-%% ParseError is the tagged tuple {'ParseError', Input, Position, Value, Message, Rest}
-%% (record lowered by src/ir/lower.cxx). Matches src/interpreter/stdlib/number.cxx.
-parse_error(S, Position, Value, Message, Rest) ->
-    {'ParseError', S, Position, Value, Message, Rest}.
-
 %% string:to_float/1 accepts "," as well as "." for the decimal point, but
 %% Kex floats are written with "." only (`1,44` is not a float literal) and
 %% the walker's std::stod stops at the comma. A match that consumed a comma
@@ -212,120 +206,6 @@ strict_to_float(N, S) when is_list(N), is_list(S) ->
             end;
         _ -> error
     end.
-
-%% string:to_float/1 requires a fraction part, so it rejects "1e10" — text the
-%% Kex lexer accepts as a float literal, and which the walker's std::stod
-%% parses fine. Splice in the ".0" so both backends accept exactly the float
-%% texts the language's own grammar defines. The rewrite only ever inserts
-%% characters *before* the exponent, so a Rest returned by the normalized
-%% parse is still a suffix of the original and the trailing-character
-%% positions below stay correct.
-exp_normalized(S) when is_binary(S) ->
-    unicode:characters_to_binary(exp_normalized(unicode:characters_to_list(S)));
-exp_normalized(S) ->
-    case bare_mantissa_exponent(S, []) of
-        {Mantissa, Exponent} -> Mantissa ++ ".0" ++ Exponent;
-        none -> S
-    end.
-
-%% {Mantissa, "e" ++ Rest} when S is digits (with an optional sign) followed
-%% by a well-formed exponent and no ".", else none. Mirrors the lexer's rule
-%% for when `e` starts an exponent at all.
-bare_mantissa_exponent([C | T], Acc) when C >= $0, C =< $9 ->
-    bare_mantissa_exponent(T, [C | Acc]);
-bare_mantissa_exponent([C | T], []) when C =:= $+; C =:= $- ->
-    bare_mantissa_exponent(T, [C]);
-bare_mantissa_exponent([E | T], Acc) when E =:= $e; E =:= $E ->
-    case has_digit(Acc) andalso starts_exponent(T) of
-        true -> {lists:reverse(Acc), [E | T]};
-        false -> none
-    end;
-bare_mantissa_exponent(_, _) -> none.
-
-starts_exponent([C | T]) when C =:= $+; C =:= $- -> starts_exponent(T);
-starts_exponent([D | _]) when D >= $0, D =< $9 -> true;
-starts_exponent(_) -> false.
-
-has_digit(L) -> lists:any(fun(C) -> C >= $0 andalso C =< $9 end, L).
-
-%% Float.parse(s) -> Ok(Float) | Error(ParseError). Full match returns bare
-%% Ok(Flt). Partial (trailing) returns Error(ParseError{value, rest, ...}).
-%% A bare integer like "5" is accepted (to_integer fallback).
-float_parse(S) when is_binary(S) ->
-    case strict_to_float(exp_normalized(S), S) of
-        {ok, Flt, <<>>} -> {'Ok', Flt};
-        {ok, Flt, Rest} ->
-            {'Error', parse_error(S, byte_size(S) - byte_size(Rest), Flt,
-                                  <<"trailing characters after float">>, Rest)};
-        _ ->
-            case string:to_integer(S) of
-                {Int, <<>>} -> {'Ok', float(Int)};
-                {Int, Rest} when is_integer(Int) ->
-                    {'Error', parse_error(S, byte_size(S) - byte_size(Rest), float(Int),
-                                          <<"trailing characters after float">>, Rest)};
-                _ -> {'Error', parse_error(S, 0, 'None', <<"invalid float">>, S)}
-            end
-    end;
-float_parse(S) ->
-    case strict_to_float(exp_normalized(S), S) of
-        {ok, Flt, ""} -> {'Ok', Flt};
-        {ok, Flt, Rest} ->
-            {'Error', parse_error(unicode:characters_to_binary(S),
-                                  length(S) - length(Rest), Flt,
-                                  <<"trailing characters after float">>,
-                                  unicode:characters_to_binary(Rest))};
-        _ ->
-            case string:to_integer(S) of
-                {Int, ""} -> {'Ok', float(Int)};
-                {Int, Rest} when is_integer(Int) ->
-                    {'Error', parse_error(unicode:characters_to_binary(S),
-                                          length(S) - length(Rest), float(Int),
-                                          <<"trailing characters after float">>,
-                                          unicode:characters_to_binary(Rest))};
-                _ -> {'Error', parse_error(unicode:characters_to_binary(S), 0, 'None',
-                                           <<"invalid float">>,
-                                           unicode:characters_to_binary(S))}
-            end
-    end.
-
-%% Float.parsePrefix(s) -> Just({Float, Rest}) | none. Parses a leading float
-%% (or bare integer promoted to float), returning a proper Optional tuple.
-float_parse_prefix(S) when is_binary(S) ->
-    case strict_to_float(exp_normalized(S), S) of
-        {ok, Flt, Rest} -> {'Just', {Flt, Rest}};
-        _ ->
-            case string:to_integer(S) of
-                {Int, Rest} when is_integer(Int) -> {'Just', {float(Int), Rest}};
-                _ -> 'None'
-            end
-    end;
-float_parse_prefix(S) ->
-    case strict_to_float(S, S) of
-        {ok, Flt, Rest} -> {'Just', {Flt, Rest}};
-        _ ->
-            case string:to_integer(S) of
-                {Int, Rest} when is_integer(Int) -> {'Just', {float(Int), Rest}};
-                _ -> 'None'
-            end
-    end.
-
-%% Number.parse(s) -> Ok(Int|Float) | Error(ParseError). Tries Integer first,
-%% then Float (so "42" -> Integer, "3.14" -> Float, "5" -> Integer). When both
-%% fail, returns a generic "invalid number" error (matching the interpreter).
-number_parse(S) when is_binary(S) ->
-    %% Only accept integer full-match; fall through to float otherwise.
-    case kex_intrinsic_integer:integer_parse(S) of
-        {'Ok', Int} = Ok when is_integer(Int) -> Ok;
-        _ ->
-            case float_parse(S) of
-                {'Ok', _} = Ok -> Ok;
-                {'Error', _} -> {'Error', parse_error(S, 0, 'None',
-                                                       <<"invalid number">>, S)}
-            end
-    end;
-number_parse(S) -> number_parse(unicode:characters_to_binary(S)).
-
-parse(S) -> number_parse(S).
 
 %% x.to(Integer) / x.to(Float) — universal numeric conversion, mirroring
 %% src/interpreter/stdlib/list.cxx's `to` builtin exactly: passthrough for

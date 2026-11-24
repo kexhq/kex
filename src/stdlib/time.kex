@@ -559,8 +559,8 @@ module Time do
     return Time.digitsIn(fragment, whole)
   end
 
-  # ASCII digits only: Integer.parse would also take a sign or surrounding
-  # space, and none of those belongs inside an ISO 8601 field.
+  # ASCII digits only: Integer.parse would also take a sign, and that does
+  # not belong inside an ISO 8601 field.
   let digitsToInteger(text: String) -> Result<Integer, TimeError> do
     return Error(InvalidFormat(text)) if text.empty? || text.chars.any? { |c| !c.in?('0'..'9') }
     match Integer.parse(text) do

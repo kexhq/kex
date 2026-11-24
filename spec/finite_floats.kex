@@ -6,9 +6,7 @@
 # message differs by backend (BEAM reports a bare "badarith"), and this suite
 # diffs walker output against BEAM output.
 
-# Text that would parse to NaN or Infinity is invalid input, not a Float.
-# std::stod and Erlang disagree about which spellings they even recognize, so
-# both backends have to reject the whole family explicitly.
+# Text spelling NaN or Infinity is not a number: there are no digits in it.
 ["nan", "NaN", "-nan", "inf", "-inf", "Infinity", "infinity"].each do |t|
   match Float.parse(t) do
     Ok(v) => IO.printLine("${t} -> unexpectedly ok ${v}")
@@ -21,9 +19,8 @@ end
 IO.printLine("nan".to(Float).or(-1.0))
 IO.printLine("inf".to(Float).or(-1.0))
 
-# Exponent text the lexer accepts as a literal must parse the same way — a
-# bare mantissa ("1e10") has no fraction part, which Erlang's string:to_float
-# rejects on its own.
+# Exponent text the lexer accepts as a literal parses the same way, with or
+# without a fraction.
 ["1e10", "1.5e3", "345e-22", "2.5e+2", "-1e3", "5", "1.5"].each do |t|
   match Float.parse(t) do
     Ok(v) => IO.printLine("${t} -> ${v}")
@@ -31,7 +28,7 @@ IO.printLine("inf".to(Float).or(-1.0))
   end
 end
 
-# Text that is not a float at all is still rejected.
+# Text that is not a float at all is rejected.
 ["1e", "e10", "abc", ""].each do |t|
   match Float.parse(t) do
     Ok(v) => IO.printLine("${t} -> unexpectedly ok ${v}")

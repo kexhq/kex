@@ -1,4 +1,12 @@
-spec/error_trait_member_unimplemented.kex:9:30: [KEXET-0101]: Error, undefined method `message` for `Result<Integer, String>`
-  |
-9 |   let m : Integer = r.message
-  |                     ^^^^^^^^^
+spec/error_trait_member_unimplemented.kex:10:21: [KEXET-0491]: Error, `message` expects argument 1 to be ParseError<A>, but got Result<Integer, String>
+
+message : ParseError<A> -> String
+   |
+10 |   let m : Integer = r.message
+   |                     ^ this has type Result<Integer, String>
+spec/error_trait_member_unimplemented.kex:10:30: [KEXET-0001]: Error, type mismatch: expected Integer, got String
+   |
+10 |   let m : Integer = r.message
+   |           -------   ^^^^^^^^^ this has type String
+   |           |
+   |           expected because of this annotation

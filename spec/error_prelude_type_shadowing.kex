@@ -1,0 +1,14 @@
+# The program's own ParseError is not the prelude's: passing the error
+# Integer.parse answers where the program's is expected is a type error.
+type ParseError = Bad(String)
+
+let describe(error: ParseError) -> String = match error do
+  Bad(why) => why
+end
+
+main do
+  match Integer.parse("x") do
+    Ok(n) => IO.printLine(n)
+    Error(e) => IO.printLine(describe(e))
+  end
+end

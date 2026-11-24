@@ -1,7 +1,8 @@
 # kex: check-only
 # A trait's function names vouch for a call only on a receiver that may
-# implement the trait (kexhq/kex#738). `message` is Errorable's; a Result does
-# not implement Errorable, so `r.message` is undefined, as `42.bogusName` is.
+# implement the trait (kexhq/kex#738). `message` is Errorable's, and the
+# prelude's ParseError implements it; a Result is neither, so `r.message` is
+# refused.
 # It checked clean, then died with `if_clause` on BEAM.
 
 main do

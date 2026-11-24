@@ -441,6 +441,42 @@ auto TypeChecker::check(
         }
     }
 
+    // The program's own top-level types that reuse a prelude type's name
+    // (`record ParseError`): its values carry NamedType::shadowsPrelude,
+    // so the two stay different types under one spelling.
+    m_preludeShadows.clear();
+    m_shadowingConstructors.clear();
+    if (m_importedInterfaces) {
+        const auto preludeType = [&](const std::string& name) {
+            return m_importedInterfaces->recordFields.contains(name) ||
+                   m_importedInterfaces->typeAliases.contains(name) ||
+                   m_importedInterfaces->distinctTypes.contains(name) ||
+                   std::any_of(
+                       m_importedInterfaces->adts.begin(), m_importedInterfaces->adts.end(),
+                       [&](const ImportedADT& adt) {
+                           return adt.module.empty() && adt.name == name;
+                       });
+        };
+        for (const auto& item : program.items) {
+            std::visit(
+                [&](const auto& node) {
+                    using T = std::decay_t<decltype(node)>;
+                    if constexpr (
+                        std::is_same_v<T, std::unique_ptr<ast::TypeDef>> ||
+                        std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                        if (node && preludeType(node->name)) {
+                            m_preludeShadows.insert(node->name);
+                            if (const auto fields = m_recordFields.find(node->name);
+                                fields != m_recordFields.end()) {
+                                m_recordFields[preludeRecordKey(node->name)] = fields->second;
+                            }
+                        }
+                    }
+                },
+                item);
+        }
+    }
+
     // The type names the program declares, before anything resolves an
     // annotation (ADT payloads below already do).
     registerDeclaredAliases(program);
@@ -877,7 +913,7 @@ auto TypeChecker::check(
 auto TypeChecker::typeHasFunction(const TypePtr& given, const std::string& name) -> bool {
     const auto type = resolve(given);
     if (const auto* named = std::get_if<NamedType>(&type->kind)) {
-        if (const auto record = m_recordFields.find(resolveRecordName(named->name));
+        if (const auto record = findRecordFields(*named);
             record != m_recordFields.end() && record->second.contains(name)) {
             return true;
         }
@@ -1759,6 +1795,9 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def, const std::string& module
     // constructors stay out of the bare-name owner map: `Kex.Backend`'s
     // `Beam` is reached through the module, never by spelling alone.
     const auto identity = modulePath.empty() ? def.name : modulePath + "." + def.name;
+    if (modulePath.empty() && m_preludeShadows.contains(def.name)) {
+        m_shadowingConstructors.insert(names.begin(), names.end());
+    }
     m_adtVariants[identity] = names;
     m_adtDeclarations[identity] = def.location;
     m_nullaryVariants[identity] = std::move(nullary);
@@ -2139,6 +2178,9 @@ auto TypeChecker::constructorResultType(
         return nullptr;
     }
     const auto& info = *found;
+    // The program's own constructor builds its own type, also when the
+    // prelude has a type of that name.
+    const bool own = scope.empty() && m_shadowingConstructors.contains(name);
 
     std::vector<TypePtr> typeArgs;
     typeArgs.reserve(info.typeParamCount);
@@ -2157,7 +2199,8 @@ auto TypeChecker::constructorResultType(
     if (info.adtName == kex::names::kOptionalType) {
         return Type::optional(typeArgs.empty() ? Type::unknown() : typeArgs[0]);
     }
-    return Type::named(info.adtName, std::move(typeArgs));
+    auto result = Type::named(info.adtName, std::move(typeArgs));
+    return own ? ownType(result) : result;
 }
 
 auto TypeChecker::registerAdtsInModule(const ast::ModuleDef& mod) -> void {
@@ -4654,7 +4697,7 @@ auto TypeChecker::normalizeIntersection(TypePtr type) const -> TypePtr {
     TypePtr concreteRecord;
     for (const auto& member : meet->members) {
         auto* named = std::get_if<NamedType>(&member->kind);
-        if (!named || !m_recordFields.count(resolveRecordName(named->name))) {
+        if (!named || !(findRecordFields(*named) != m_recordFields.end())) {
             continue;
         }
         if (concreteRecord && !typesEqual(concreteRecord, member)) {
@@ -4808,10 +4851,36 @@ auto TypeChecker::atImplementingType(Signature signature, const TypePtr& impleme
     return signature;
 }
 
+auto TypeChecker::ownType(const TypePtr& type) const -> TypePtr {
+    const auto* named = type ? std::get_if<NamedType>(&type->kind) : nullptr;
+    if (!named || named->shadowsPrelude || !m_preludeShadows.contains(named->name)) {
+        return type;
+    }
+    auto own = *named;
+    own.shadowsPrelude = true;
+    return std::make_shared<Type>(Type{std::move(own)});
+}
+
+auto TypeChecker::findRecordFields(const NamedType& named) const
+    -> std::unordered_map<std::string, std::unordered_map<std::string, TypePtr>>::const_iterator {
+    if (!named.shadowsPrelude && m_preludeShadows.contains(named.name)) {
+        return m_recordFields.find(preludeRecordKey(named.name));
+    }
+    return m_recordFields.find(resolveRecordName(named.name));
+}
+
 auto TypeChecker::resolveTypeExprNode(
     const ast::TypeExpr& typeExpr, std::unordered_map<std::string, TypePtr>& genericVars)
     -> TypePtr {
-    return std::visit(
+    // A written name the program declares for itself means its own type,
+    // also when the prelude has a type of that name.
+    const auto* written = std::get_if<ast::TypeName>(&typeExpr.kind);
+    if (const auto* generic = std::get_if<ast::GenericType>(&typeExpr.kind)) {
+        written = &generic->name;
+    }
+    const bool ownName =
+        written && written->parts.size() == 1 && m_preludeShadows.contains(written->parts.front());
+    auto resolved = std::visit(
         [this, &genericVars, &typeExpr](const auto& node) -> TypePtr {
             using T = std::decay_t<decltype(node)>;
 
@@ -5188,6 +5257,7 @@ auto TypeChecker::resolveTypeExprNode(
             }
         },
         typeExpr.kind);
+    return ownName ? ownType(resolved) : resolved;
 }
 
 // Rejects a constructor pattern that destructures the wrong number of values,
@@ -5593,8 +5663,7 @@ auto TypeChecker::bindPatternVars(const ast::Pattern& pat, TypePtr expected) -> 
                     }
                 } else if (expected) {
                     if (auto* named = std::get_if<NamedType>(&expected->kind)) {
-                        if (auto found = m_recordFields.find(resolveRecordName(named->name));
-                            found != m_recordFields.end()) {
+                        if (auto found = findRecordFields(*named); found != m_recordFields.end()) {
                             fields = &found->second;
                         }
                     }
@@ -6242,7 +6311,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         if (m_inMakeBlock && m_currentMakeType) {
             auto receiver = resolve(m_currentMakeType);
             if (auto* named = std::get_if<NamedType>(&receiver->kind);
-                named && m_recordFields.count(resolveRecordName(named->name))) {
+                named && (findRecordFields(*named) != m_recordFields.end())) {
                 defineVar("new", m_currentMakeType, {.isVar = true, .implicit = true});
             }
         }

@@ -1,9 +1,9 @@
-spec/error_optional_receiver.kex:8:23: [KEXET-0491]: Error, `ok?` expects argument 1 to be Result<A, B>, but got Result<Integer, ParseError>?
+spec/error_optional_receiver.kex:8:23: [KEXET-0491]: Error, `ok?` expects argument 1 to be Result<A, B>, but got Result<Integer, ParseError<Integer>>?
 
 ok? : Result<A, B> -> Bool
   |
 8 |   IO.inspect(parsed[1].ok?)
-  |              ^^^^^^^^^ this has type Result<Integer, ParseError>?
+  |              ^^^^^^^^^ this has type Result<Integer, ParseError<Integer>>?
 spec/error_optional_receiver.kex:11:22: [KEXET-0491]: Error, `upperCase` expects argument 1 to be Char, but got String?
 
 upperCase : Char -> Char

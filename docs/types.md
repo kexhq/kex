@@ -252,7 +252,8 @@ Number.format`#.#0`   # error: a required decimal cannot follow an optional one;
 ```
 
 A pattern known only at run time goes through `NumberFormat.parse`, which
-answers a `Result` (`Error(ParseError)` says where the pattern goes wrong).
+answers a `Result` (`Error(PatternError { position, message })` says where the
+pattern goes wrong).
 An interpolating tag (`` Number.format$`#.${zeros}` ``) is not checked during
 compilation; an invalid one renders as `None`.
 

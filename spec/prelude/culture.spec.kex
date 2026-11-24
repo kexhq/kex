@@ -110,11 +110,8 @@ describe("Float.parse with culture") do
     end
   end
 
-  it("rejects dot decimals in HU_HU") do
-    match Float.parse("1.44", culture: huHu) do
-      Error(e) => assert(e.message == "invalid float for culture")
-      Ok(v) => assert(false, "expected Error, got ${v}")
-    end
+  it("stops at a dot decimal in HU_HU") do
+    assert(Float.parse("1.44", culture: huHu) == Error(Trailing(1.0, ".44")))
   end
 
   it("rejects comma decimals without a culture") do
@@ -139,10 +136,8 @@ describe("Float.parse with culture") do
     let bad = Culture {
       numbers: NumberSettings { decimalSeparator: ',', groups: Just((',', [3])) }
     }
-    match Float.parse("1,44", culture: bad) do
-      Error(e) => assert(e.message == "invalid culture")
-      Ok(v) => assert(false, "expected Error, got ${v}")
-    end
+    assert(Float.parse("1,44", culture: bad) == Error(BadCulture))
+    assert(Integer.parse("144", culture: bad) == Error(BadCulture))
   end
 
   it("DEFAULT agrees with no-culture parsing") do
@@ -165,22 +160,30 @@ describe("Integer.parse with culture") do
     end
   end
 
-  it("rejects comma groups in HU_HU") do
-    match Integer.parse("1,500", culture: huHu) do
-      Error(e) => do
-        assert(e.message == "invalid integer for culture")
-        assert(e.position == 1)
-        assert(e.value == None)
-      end
-      Ok(v) => assert(false, "expected Error, got ${v}")
-    end
+  it("reads digits without separators in HU_HU") do
+    assert(Integer.parse("1500", culture: huHu) == Ok(1500))
+    assert(Integer.parse("1500000", culture: huHu) == Ok(1500000))
+  end
+
+  it("stops at a comma in HU_HU, its decimal separator") do
+    assert(Integer.parse("1,500", culture: huHu) == Error(Trailing(1, ",500")))
   end
 
   it("rejects misplaced groups in HU_HU") do
-    match Integer.parse("15 00", culture: huHu) do
-      Error(_) => assert(true)
-      Ok(v) => assert(false, "expected Error, got ${v}")
-    end
+    assert(Integer.parse("15 00", culture: huHu) == Error(BadGrouping(3)))
+    assert(Integer.parse("1 50", culture: huHu) == Error(BadGrouping(2)))
+    assert(Integer.parse("1500 000", culture: huHu) == Error(BadGrouping(0)))
+    assert(Integer.parse("-1 50", culture: huHu) == Error(BadGrouping(3)))
+  end
+
+  it("reads a number off the front in HU_HU") do
+    assert(Integer.parse("1 500 Ft", culture: huHu) == Error(Trailing(1500, " Ft")))
+    assert(Integer.parse("12 Ft", culture: huHu) == Error(Trailing(12, " Ft")))
+  end
+
+  it("reads a radix with the culture's groups") do
+    assert(Integer.parse("ff ff", radix: 16, culture: huHu) == Error(BadGrouping(3)))
+    assert(Integer.parse("f fff", radix: 16, culture: huHu) == Ok(65535))
   end
 
   it("parses a user-assembled culture") do
@@ -221,37 +224,22 @@ describe("Number.parse with culture") do
   end
 
   it("fails on non-numeric input in culture") do
-    match Number.parse("xx", culture: huHu) do
-      Error(e) => assert(e.message == "invalid number for culture")
-      Ok(v) => assert(false, "expected Error, got ${v}")
-    end
+    assert(Number.parse("xx", culture: huHu) == Error(NoDigits(0)))
   end
 end
 
-describe("parsePrefix with culture") do
-  it("parses the longest float prefix in HU_HU") do
-    match Float.parsePrefix("12,34,56", culture: huHu) do
-      Just((f, rest)) => do
-        assert(f == 12.34)
-        assert(rest == ",56")
-      end
-      None => assert(false, "expected Just")
-    end
+describe("Trailing with culture") do
+  it("reads the longest float in HU_HU") do
+    assert(Float.parse("12,34,56", culture: huHu) == Error(Trailing(12.34, ",56")))
   end
 
-  it("parses the longest integer prefix in HU_HU") do
-    match Integer.parsePrefix("12abc", culture: huHu) do
-      Just((n, rest)) => do
-        assert(n == 12)
-        assert(rest == "abc")
-      end
-      None => assert(false, "expected Just")
-    end
+  it("reads the longest integer in HU_HU") do
+    assert(Integer.parse("12abc", culture: huHu) == Error(Trailing(12, "abc")))
   end
 
-  it("answers None when no prefix parses") do
-    assert(Integer.parsePrefix("abc", culture: huHu) == None)
-    assert(Float.parsePrefix("x", culture: huHu) == None)
+  it("answers NoDigits when no number starts the text") do
+    assert(Integer.parse("abc", culture: huHu) == Error(NoDigits(0)))
+    assert(Float.parse("x", culture: huHu) == Error(NoDigits(0)))
   end
 end
 

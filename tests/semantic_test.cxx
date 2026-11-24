@@ -3222,7 +3222,7 @@ int main() {
         it("Ok pattern on Optional value errors", []() {
             assertTrue(hasError(
                 "main do\n"
-                "  let Ok((v, r)) = Integer.parsePrefix(\"42\")\n"
+                "  let Ok(v) = \"42\".to(Integer)\n"
                 "  IO.printLine(v)\n"
                 "end\n",
                 "cannot match `Ok`"));
@@ -3248,7 +3248,7 @@ int main() {
         it("Just pattern on Optional value is ok", []() {
             assertTrue(noErrors(
                 "main do\n"
-                "  let Just((v, r)) = Integer.parsePrefix(\"42\")\n"
+                "  let Just(v) = \"42\".to(Integer)\n"
                 "  IO.printLine(v)\n"
                 "end\n"));
         });

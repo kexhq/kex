@@ -283,14 +283,3 @@ A field read on a receiver whose type is not known checks the runtime record
 layout first. A same-named UFCS function is used only when that record does
 not declare the field, matching the interpreter.
 
-## Interpreter REPL prints a stray continuation prompt
-
-```
-kex> let Error(ParseError(err)) = Integer.parse("12x")
-  ...>
-  error: `ParseError` record takes 5 value(s), but the pattern destructures 1
-```
-
-The diagnostic is correct and appears on both REPLs; the interpreter one also
-emits a `...>` continuation prompt first, so some multi-line heuristic still
-reads the input as an unfinished definition.

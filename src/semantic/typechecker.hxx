@@ -1298,6 +1298,22 @@ private:
     std::vector<ClauseCoverageGap> m_clauseCoverageGaps;
     std::map<ClauseCoverageKey, std::set<ClauseCoverageSite>> m_clauseCoverageSites;
     std::unordered_map<std::string, std::string> m_adtOfConstructor;
+    // The program's own top-level types whose names a prelude type also has,
+    // and the constructors of those that are variant types: their values
+    // carry NamedType::shadowsPrelude.
+    std::unordered_set<std::string> m_preludeShadows;
+    std::unordered_set<std::string> m_shadowingConstructors;
+    // `type` as the program's own when it names one of m_preludeShadows.
+    auto ownType(const TypePtr& type) const -> TypePtr;
+    // The fields of the record `named` is: the program's own, or the
+    // prelude's under a name the program reuses (none for a prelude variant
+    // type). m_recordFields.end() when it is no record.
+    auto findRecordFields(const NamedType& named) const -> std::
+        unordered_map<std::string, std::unordered_map<std::string, TypePtr>>::const_iterator;
+    // Where m_recordFields keeps a shadowed prelude record's fields.
+    static auto preludeRecordKey(const std::string& name) -> std::string {
+        return "<prelude>." + name;
+    }
     // Every imported ADT that declares a constructor spelling. The maps above
     // drop a spelling two ADTs share (`Timeout` is Process.CallError's and
     // Net.NetErrorKind's); this keeps them all, for resolution by scope.

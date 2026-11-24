@@ -1,8 +1,73 @@
 #include "../evaluator.hxx"
 #include <cmath>
+#include <cstdlib>
 #include <stdexcept>
 
 namespace kex::interpreter {
+
+namespace {
+
+// The value of an ASCII digit or letter digit ('a' and 'A' are 10), 99 otherwise.
+auto digitValue(char c) -> int {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'z') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'Z') {
+        return c - 'A' + 10;
+    }
+    return 99;
+}
+
+// How many digits in `radix` `text` holds from `at`.
+auto digitRun(const std::string& text, size_t at, int radix) -> size_t {
+    size_t end = at;
+    while (end < text.size() && digitValue(text[end]) < radix) {
+        ++end;
+    }
+    return end - at;
+}
+
+// An optional "-" then digits in `radix`, and nothing else.
+auto canonicalIntegerText(const std::string& text, int radix) -> bool {
+    const size_t start = !text.empty() && text[0] == '-' ? 1 : 0;
+    const size_t digits = digitRun(text, start, radix);
+    return digits > 0 && start + digits == text.size();
+}
+
+// An optional "-", digits, then optionally ".digits" and "e" or "E" with an
+// optional sign and digits, and nothing else.
+auto canonicalFloatText(const std::string& text) -> bool {
+    size_t at = !text.empty() && text[0] == '-' ? 1 : 0;
+    size_t digits = digitRun(text, at, 10);
+    if (digits == 0) {
+        return false;
+    }
+    at += digits;
+    if (at < text.size() && text[at] == '.') {
+        digits = digitRun(text, at + 1, 10);
+        if (digits == 0) {
+            return false;
+        }
+        at += 1 + digits;
+    }
+    if (at < text.size() && (text[at] == 'e' || text[at] == 'E')) {
+        ++at;
+        if (at < text.size() && (text[at] == '+' || text[at] == '-')) {
+            ++at;
+        }
+        digits = digitRun(text, at, 10);
+        if (digits == 0) {
+            return false;
+        }
+        at += digits;
+    }
+    return at == text.size();
+}
+
+} // namespace
 
 auto Evaluator::registerNumberBuiltins() -> void {
     // asInteger/integerResult (value.hxx) treat IntValue and BigIntValue
@@ -136,27 +201,6 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return Value::integer(0);
     });
 
-    // Float.parse(s) / Integer.parse(s) -> Result<Float|Int, ParseError> —
-    // namespaced under the primitive type, same convention as Math.sqrt
-    // etc. The Error payload is a typed ParseError record {input, position,
-    // value, message, rest} — on a partial match (trailing characters) the
-    // `value` field carries what was parsed so the caller can inspect it
-    // without re-parsing. Complete failure stores Value::none() for value.
-    // Built directly as RecordValue rather than calling the registered
-    // constructors (those aren't wired for native-to-native calls).
-    auto parseError = [](const std::string& input, size_t position, ValuePtr value,
-                         const std::string& message, const std::string& rest) -> ValuePtr {
-        return Value::record(
-            "ParseError", {
-                              {"input", Value::string(input)},
-                              {"position", Value::integer(static_cast<int64_t>(position))},
-                              {"value", value},
-                              {"message", Value::string(message)},
-                              {"rest", Value::string(rest)},
-                          });
-    };
-    auto noVal = []() { return Value::none(); }; // no value parsed
-
     defineModule("Float");
     defineIntrinsic("Float.formatFixed", [](std::vector<ValuePtr> args) -> ValuePtr {
         const auto places = args.size() > 1 ? asInteger(args[1]) : std::nullopt;
@@ -189,163 +233,37 @@ auto Evaluator::registerNumberBuiltins() -> void {
         }
         return Value::string(result);
     });
-    defineIntrinsic("Float.parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
-        auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!s) {
-            return Value::error(parseError("", 0, noVal(), "Float.parse expects a String", ""));
-        }
-        size_t consumed = 0;
-        try {
-            double v = std::stod(s->value, &consumed);
-            // std::stod accepts "nan" and "inf"; Kex has no such Float values
-            // (see nonFiniteFloatError), so they are invalid input here just
-            // as they are for Erlang's binary_to_float.
-            if (auto bad = nonFiniteFloatError(v, "Float.parse")) {
-                return Value::error(parseError(s->value, 0, noVal(), "invalid float", s->value));
-            }
-            if (consumed != s->value.size()) {
-                return Value::error(parseError(
-                    s->value, consumed, Value::floating(v), "trailing characters after float",
-                    s->value.substr(consumed)));
-            }
-            return Value::ok(Value::floating(v));
-        } catch (const std::exception&) {
-            return Value::error(parseError(
-                s->value, consumed, noVal(), "invalid float", s->value.substr(consumed)));
-        }
-    });
 
-    // Float.parsePrefix(s) -> Just((Float, String)) | None
-    defineIntrinsic("Float.parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
-        auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!s) {
+    // Integer.fromDigits(text, radix) and Float.fromDigits(text): the native
+    // half of Integer/Float/Number.parse. They read canonical text only: a
+    // "-" when negative, digits in the radix, and for a Float an optional
+    // ".digits" and "e±digits" (src/stdlib/culture.kex's scanner spells what
+    // it reads that way), answering None for anything else. So the parses
+    // try them on the text itself first and only scan what they refuse:
+    // canonical text reads the same in every culture with a "." decimal
+    // point. A Float is also None when no Float holds it (1e999).
+    defineIntrinsic("Float.fromDigits", [](std::vector<ValuePtr> args) -> ValuePtr {
+        const auto* text = args.size() == 1 ? std::get_if<StringValue>(&args[0]->data) : nullptr;
+        if (!text || !canonicalFloatText(text->value)) {
             return Value::none();
         }
-        size_t consumed = 0;
-        try {
-            double v = std::stod(s->value, &consumed);
-            if (nonFiniteFloatError(v, "Float.parsePrefix")) {
-                return Value::none();
-            }
-            return Value::just(
-                Value::tuple({Value::floating(v), Value::string(s->value.substr(consumed))}));
-        } catch (const std::exception&) {
-            return Value::none();
-        }
+        const double value = std::strtod(text->value.c_str(), nullptr);
+        return std::isfinite(value) ? Value::just(Value::floating(value)) : Value::none();
     });
 
     defineModule("Integer");
-    defineIntrinsic("Integer.parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
-        auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!s) {
-            return Value::error(parseError("", 0, noVal(), "Integer.parse expects a String", ""));
-        }
-
-        // Integer.parse(s, radix: 16) — the whole string in the given base.
-        // Unlike base 10 there is no partial-parse story worth telling here:
-        // in base 16 "12z" has no meaningful numeric prefix to report, so a
-        // bad digit is simply an invalid integer.
-        if (args.size() >= 2) {
-            auto radix = asInteger(args[1]);
-            if (!radix || *radix < 2 || *radix > 36) {
-                return Value::error(
-                    parseError(s->value, 0, noVal(), "radix must be between 2 and 36", s->value));
-            }
-            if (auto parsed = parseIntegerInBase(s->value, static_cast<int>(radix->get_si()))) {
-                return Value::ok(integerResult(*parsed));
-            }
-            return Value::error(parseError(
-                s->value, 0, noVal(), "invalid integer for radix " + radix->get_str(), s->value));
-        }
-
-        size_t consumed = 0;
-        try {
-            int64_t v = std::stoll(s->value, &consumed);
-            if (consumed != s->value.size()) {
-                return Value::error(parseError(
-                    s->value, consumed, Value::integer(v), "trailing characters after integer",
-                    s->value.substr(consumed)));
-            }
-            return Value::ok(Value::integer(v));
-        } catch (const std::out_of_range&) {
-            ValuePtr prefixVal = noVal();
-            if (consumed > 0) {
-                try {
-                    prefixVal = integerResult(mpz_class(s->value.substr(0, consumed)));
-                } catch (...) {}
-            }
-            try {
-                return Value::ok(integerResult(mpz_class(s->value)));
-            } catch (const std::exception&) {
-                return Value::error(parseError(
-                    s->value, consumed, prefixVal, "invalid integer", s->value.substr(consumed)));
-            }
-        } catch (const std::exception&) {
-            return Value::error(parseError(
-                s->value, consumed, noVal(), "invalid integer", s->value.substr(consumed)));
-        }
-    });
-
-    // Integer.parsePrefix(s) -> Just((Integer, String)) | None
-    defineIntrinsic("Integer.parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
-        auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!s) {
+    defineIntrinsic("Integer.fromDigits", [](std::vector<ValuePtr> args) -> ValuePtr {
+        const auto* text = args.size() == 2 ? std::get_if<StringValue>(&args[0]->data) : nullptr;
+        const auto radix = args.size() == 2 ? asInteger(args[1]) : std::nullopt;
+        if (!text || !radix || *radix < 2 || *radix > 36 ||
+            !canonicalIntegerText(text->value, static_cast<int>(radix->get_si()))) {
             return Value::none();
         }
-        size_t consumed = 0;
-        try {
-            int64_t v = std::stoll(s->value, &consumed);
-            return Value::just(
-                Value::tuple({Value::integer(v), Value::string(s->value.substr(consumed))}));
-        } catch (const std::out_of_range&) {
-            size_t i = 0;
-            if (i < s->value.size() && (s->value[i] == '+' || s->value[i] == '-')) {
-                i++;
-            }
-            size_t d = i;
-            while (d < s->value.size() && s->value[d] >= '0' && s->value[d] <= '9') {
-                d++;
-            }
-            if (d == i) {
-                return Value::none();
-            }
-            try {
-                auto big = mpz_class(s->value.substr(0, d));
-                return Value::just(
-                    Value::tuple({integerResult(big), Value::string(s->value.substr(d))}));
-            } catch (const std::exception&) {
-                return Value::none();
-            }
-        } catch (const std::exception&) {
-            return Value::none();
-        }
+        return Value::just(
+            integerResult(mpz_class(text->value, static_cast<int>(radix->get_si()))));
     });
 
     defineModule("Number");
-    defineIntrinsic("Number.parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
-        auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!s) {
-            return Value::error(parseError("", 0, noVal(), "Number.parse expects a String", ""));
-        }
-        size_t consumed = 0;
-        try {
-            int64_t v = std::stoll(s->value, &consumed);
-            if (consumed == s->value.size()) {
-                return Value::ok(Value::integer(v));
-            }
-        } catch (const std::out_of_range&) {
-            try {
-                return Value::ok(integerResult(mpz_class(s->value)));
-            } catch (...) {}
-        } catch (...) {}
-        try {
-            double v = std::stod(s->value, &consumed);
-            if (consumed == s->value.size() && !nonFiniteFloatError(v, "Number.parse")) {
-                return Value::ok(Value::floating(v));
-            }
-        } catch (...) {}
-        return Value::error(parseError(s->value, 0, noVal(), "invalid number", s->value));
-    });
 }
 
 } // namespace kex::interpreter

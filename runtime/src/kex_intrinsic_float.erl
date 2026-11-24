@@ -1,9 +1,66 @@
 %% Kex.Intrinsic.Float — BEAM primitive backend for Float namespace functions.
 -module(kex_intrinsic_float).
--export([parse/1, parsePrefix/1, scaleUnit/3, formatFixed/2]).
+-export([fromDigits/1, scaleUnit/3, formatFixed/2]).
 
-parse(S) -> kex_intrinsic_number:float_parse(S).
-parsePrefix(S) -> kex_intrinsic_number:float_parse_prefix(S).
+%% Float.fromDigits(Text): the native half of Float.parse and Number.parse.
+%% It reads canonical text only, an optional "-", digits, then optionally
+%% ".digits" and an exponent, and answers None for anything else, or for a
+%% value no Float holds (1e999): Kex has no infinities. The parses try it on
+%% the text itself first and leave the rest to the scanner in
+%% src/stdlib/culture.kex. binary_to_float wants a fraction, so a missing one
+%% is written as ".0".
+fromDigits(Text) when is_binary(Text) ->
+    case canonical(Text) of
+        {ok, Whole, Fraction, Exponent} ->
+            try {'Just', binary_to_float(<<Whole/binary, ".", Fraction/binary, Exponent/binary>>)}
+            catch error:badarg -> 'None'
+            end;
+        error -> 'None'
+    end;
+fromDigits(_) -> 'None'.
+
+%% {ok, Whole, Fraction, Exponent} for canonical float text, the fraction
+%% "0" when it has none.
+canonical(Text) ->
+    Start = case Text of <<$-, _/binary>> -> 1; _ -> 0 end,
+    case digit_run(Text, Start) of
+        0 -> error;
+        N ->
+            WholeSize = Start + N,
+            <<Whole:WholeSize/binary, AfterWhole/binary>> = Text,
+            case fraction(AfterWhole) of
+                {ok, Fraction, AfterFraction} ->
+                    case exponent(AfterFraction) of
+                        {ok, Exponent} -> {ok, Whole, Fraction, Exponent};
+                        error -> error
+                    end;
+                error -> error
+            end
+    end.
+
+fraction(<<$., Rest/binary>>) ->
+    case digit_run(Rest, 0) of
+        0 -> error;
+        N -> <<Fraction:N/binary, After/binary>> = Rest, {ok, Fraction, After}
+    end;
+fraction(Rest) -> {ok, <<"0">>, Rest}.
+
+exponent(<<>>) -> {ok, <<>>};
+exponent(<<E, Rest/binary>> = Exponent) when E =:= $e; E =:= $E ->
+    Start = case Rest of <<S, _/binary>> when S =:= $+; S =:= $- -> 1; _ -> 0 end,
+    case digit_run(Rest, Start) of
+        N when N > 0, Start + N =:= byte_size(Rest) -> {ok, Exponent};
+        _ -> error
+    end;
+exponent(_) -> error.
+
+%% How many ASCII digits Bin holds from byte At.
+digit_run(Bin, At) when At < byte_size(Bin) ->
+    case binary:at(Bin, At) of
+        C when C >= $0, C =< $9 -> 1 + digit_run(Bin, At + 1);
+        _ -> 0
+    end;
+digit_run(_, _) -> 0.
 
 formatFixed(Value, Places)
   when is_float(Value), is_integer(Places), Places >= 0, Places =< 15 ->

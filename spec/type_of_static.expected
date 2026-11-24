@@ -1,5 +1,5 @@
 Result<Date, TimeError>
-Result<Integer, ParseError>
+Result<Integer, ParseError<Integer>>
 [Shade]
 String
 Integer -> Integer

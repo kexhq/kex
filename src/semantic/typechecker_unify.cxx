@@ -202,7 +202,7 @@ auto TypeChecker::fixNestedVariables(const TypePtr& argument, const TypePtr& par
         return;
     }
     if (const auto* named = std::get_if<NamedType>(&actual->kind);
-        named && std::get<NamedType>(wanted->kind).name != named->name) {
+        named && !sameNamedType(std::get<NamedType>(wanted->kind), *named)) {
         return;
     }
     std::vector<TypePtr> given;
@@ -293,7 +293,7 @@ auto TypeChecker::unifyStep(const TypePtr& a, const TypePtr& b) -> bool {
         return false;
     }
     if (const auto* named = std::get_if<NamedType>(&left->kind);
-        named && std::get<NamedType>(right->kind).name != named->name) {
+        named && !sameNamedType(std::get<NamedType>(right->kind), *named)) {
         return false;
     }
     std::vector<TypePtr> leftChildren;

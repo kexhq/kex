@@ -74,17 +74,19 @@ IO.printLine(opaque(Light).label)
 IO.printLine(Type.of(42).name)
 IO.printLine(opaque(Type.of("x")).name)
 
-# The same collision on a prelude record reached through a Result — this is
-# the ParseError case, where `rest` and `value` are both fields.
+# The same collision on a prelude record reached through a Result: a
+# PatternError's `message` field shares its name with ParseError's `message`
+# function.
+match DateFormat.parse("yyyy-QQ") do
+  Ok(_) => IO.printLine("unexpected ok")
+  Error(e) => do
+    IO.printLine(e.position)
+    IO.printLine(e.message)
+  end
+end
 match Float.parse("1.5xy") do
   Ok(v) => IO.printLine("unexpected ok ${v}")
-  Error(e) => do
-    IO.printLine(e.input)
-    IO.printLine(e.position)
-    IO.printLine(e.value)
-    IO.printLine(e.message)
-    IO.printLine(e.rest)
-  end
+  Error(e) => IO.printLine(e.message)
 end
 
 # A USER record whose field shares a name with a PRELUDE receiver method, read

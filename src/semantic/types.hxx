@@ -51,6 +51,11 @@ struct NamedType {
     // `FileMode.Write` written as a type. Empty for the ADT itself; code that
     // ignores it sees the ADT, which every variant value is.
     std::string variant;
+    // A program's own type whose name a prelude type also has (its
+    // `record ParseError` beside the prelude's `ParseError<T>`): the two
+    // are different types with one spelling, kept apart by this mark. The
+    // prelude's keeps the bare identity every imported signature names.
+    bool shadowsPrelude = false;
 };
 
 struct FuncType {
@@ -375,6 +380,9 @@ auto signatureBuiltinType(std::string_view name) -> TypePtr;
 // matches any qualified name ending in that segment rather than spuriously
 // mismatching against the qualified spelling of the same type.
 auto namedTypesMatch(const std::string& a, const std::string& b) -> bool;
+// Whether two named types are one type: the same name (namedTypesMatch) and
+// both the program's own or both not (NamedType::shadowsPrelude).
+auto sameNamedType(const NamedType& a, const NamedType& b) -> bool;
 auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool;
 
 // True when a type is fully determined — no Unknown, no type variable, and no

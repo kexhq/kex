@@ -430,122 +430,41 @@ let valid?(culture) do
   end
 end
 
-# Validates +text+ as an integer in +culture+, answering the normalized
-# dot-form text a strict parse delegates to.
+# Reads the number +text+ holds, as +Integer.parse+, +Float.parse+ and
+# +Number.parse+ do: the one grammar every number parse uses, on both
+# backends.
 #
-# The grammar is strict: an optional sign, digits with validated grouping,
-# nothing else. Group separators must match the culture and land on group
-# boundaries; anything else fails at its exact position with +value: None+.
+# An optional sign, then digits in +radix+ (letters above 9 in either case),
+# grouped as +culture+ groups them once a group separator appears: digits
+# with no separator read in every culture. When +fractional+, the culture's
+# decimal separator with digits after it, and an exponent (+e3+, +E-2+), may
+# follow.
 #
-# This is plumbing shared by the typed parses — most callers want
-# +Integer.parse(s, culture:)+ instead.
+# +convert+ makes the value from what was read: the sign and digits without
+# separators (+"-1500"+), then the fraction and exponent spelled canonically
+# (+".5e3"+, +".0e3"+ for an exponent alone, +""+ for neither). Its +None+ is
+# +OutOfRange+. A number followed by more text is +Trailing+.
 #
-# @param text [String] the text to validate
-# @param culture [Culture] the culture to validate against
-# @return [Result<String, ParseError>] the normalized text, or the failure
+# This is plumbing for the typed parses: most callers want those.
 #
-# @example
-#   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
-#   Culture.validateInteger("1 500", hu)              # => Ok("1500")
-validateInteger : String -> Culture -> Result<String, ParseError>
-let validateInteger(text, culture: Culture) do
-  if !valid?(culture)
-    return Error(parseErrorAt(text, 0, "invalid culture"))
-  end
-  if text.empty?
-    return Error(parseErrorAt(text, 0, "invalid integer for culture"))
-  end
-  let (sign, body) = splitSign(text)
-  if body.empty?
-    return Error(parseErrorAt(text, 1, "invalid integer for culture"))
-  end
-  let base = text.count - body.count
-  let decimal = culture.numbers.decimalSeparator
-  let badDecimal = firstFailure(body) { |c| c != decimal }
-  match badDecimal do
-    Just(i) => return Error(parseErrorAt(text, base + i, "invalid integer for culture"))
-    None => None
-  end
-  match validateIntPart(text, base, body, culture, "invalid integer for culture") do
-    Ok(digits) => Ok(sign + digits)
-    Error(e) => Error(e)
-  end
-end
-
-# Validates +text+ as a float in +culture+, answering the normalized
-# dot-form text a strict parse delegates to.
-#
-# The grammar is strict: an optional sign, grouped integer digits, an
-# optional decimal separator with required fraction digits, and an optional
-# exponent. The decimal separator and exponent marker follow the culture
-# only in shape — the normalized text always uses +.+ and +e+.
-#
-# This is plumbing shared by the typed parses — most callers want
-# +Float.parse(s, culture:)+ instead.
-#
-# @param text [String] the text to validate
-# @param culture [Culture] the culture to validate against
-# @return [Result<String, ParseError>] the normalized text, or the failure
+# @param text [String] the text to read
+# @param culture [Culture] whose separators to accept
+# @param radix [Integer] the base of the digits, 2 to 36
+# @param fractional [Bool] whether a fraction and an exponent may follow
+# @param convert [String -> String -> T?] the value of the digits read
+# @return [Result<T, ParseError<T>>] the value, or why not
 #
 # @example
 #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
-#   Culture.validateFloat("1,44", hu)              # => Ok("1.44")
-validateFloat : String -> Culture -> Result<String, ParseError>
-let validateFloat(text, culture: Culture) do
-  if !valid?(culture)
-    return Error(parseErrorAt(text, 0, "invalid culture"))
-  end
-  if text.empty?
-    return Error(parseErrorAt(text, 0, "invalid float for culture"))
-  end
-  let (sign, body) = splitSign(text)
-  if body.empty?
-    return Error(parseErrorAt(text, 1, "invalid float for culture"))
-  end
-  let base = text.count - body.count
-  let decimal = culture.numbers.decimalSeparator
-  var mantissa = body
-  var exponent = ""
-  let eFound = firstFailure(body) { |c| c != 'e' && c != 'E' }
-  match eFound do
-    Just(ei) => do
-      mantissa = body.take(ei)
-      exponent = body.drop(ei + 1)
+#   Culture.readNumber("1 500 Ft", hu, 10, false) { |digits, _| digits.to(Integer) }
+#   # => Error(Trailing(1500, " Ft"))
+let readNumber(text: String, culture: Culture, radix: Integer, fractional: Bool, convert: String -> String -> T?) -> Result<T, ParseError<T>> do
+  match scanNumber(text, culture, radix, fractional) do
+    Ok((digits, tail, length)) => match convert(digits, tail) do
+      Just(value) => length == text.count then Ok(value) else Error(Trailing(value, text.drop(length)))
+      None => Error(OutOfRange)
     end
-    None => ()
-  end
-  if exponent.empty? == false
-    let signed = exponent.startsWith?("-") || exponent.startsWith?("+")
-    let tail = signed then exponent.drop(1) else exponent
-    if tail.empty?
-      return Error(parseErrorAt(text, base + body.count, "invalid float for culture"))
-    end
-    let badTail = firstFailure(tail) { |c| c.digit? }
-    match badTail do
-      Just(j) => do
-        let at = base + (body.count - tail.count) + j
-        return Error(parseErrorAt(text, at, "invalid float for culture"))
-      end
-      None => None
-    end
-  end
-  let (intPart, fracPart, hasDecimal, di) = splitDecimal(mantissa, decimal)
-  if intPart.empty?
-    return Error(parseErrorAt(text, base, "invalid float for culture"))
-  end
-  if hasDecimal
-    if fracPart.empty?
-      return Error(parseErrorAt(text, base + di + 1, "invalid float for culture"))
-    end
-    let badFrac = firstFailure(fracPart) { |c| c.digit? }
-    match badFrac do
-      Just(j) => return Error(parseErrorAt(text, base + di + 1 + j, "invalid float for culture"))
-      None => None
-    end
-  end
-  match validateIntPart(text, base, intPart, culture, "invalid float for culture") do
-    Ok(intDigits) => Ok(sign + intDigits + fracText(fracPart, hasDecimal) + expText(exponent))
-    Error(e) => Error(e)
+    Error(problem) => Error(problem)
   end
 end
 
@@ -719,145 +638,133 @@ private do
   # Upper-cases a lookup tag and reads +-+ as +_+, so +"hu-HU"+ finds +HU_HU+.
   let normalizeTag(code: String) -> String = code.upperCase.split("-").join("_")
 
-  # Answers the index of the first character failing +pred+, or +None+ when
-  # every character passes.
-  let firstFailure(text: String, pred: Char -> Bool) -> Integer? do
-    var found: Integer? = None
-    var index = 0
-    text.chars.each do |c|
-      if found.none? && pred(c) == false
-        found = Just(index)
-      end
-      index = index + 1
+  # Reads the number +text+ starts with: an optional sign, digits in
+  # +radix+, grouped as +culture+ groups them once a separator appears and,
+  # when +fractional+, a fraction after the culture's decimal separator and an
+  # exponent. This is the one grammar both backends read numbers with; native
+  # code only converts what it accepts.
+  #
+  # Answers the sign and digits without separators, the canonical rest
+  # (+".5"+, +".0e3"+, +""+ when neither was read), and how many characters
+  # the number took.
+  let scanNumber(text: String, culture: Culture, radix: Integer, fractional: Bool) -> Result<(String, String, Integer), ParseError<A>> do
+    return Error(BadRadix(radix)) if radix < 2 || radix > 36
+    return Error(BadCulture) if !valid?(culture)
+    let (sign, start, afterSign) = match text.chars do
+      ['-' | rest] => ("-", 1, rest)
+      ['+' | rest] => ("", 1, rest)
+      chars => ("", 0, chars)
     end
-    found
-  end
-
-  # Splits leading sign from body, dropping a leading +++. Answers
-  # +(sign, body)+ where sign is +"-"+ or +""+.
-  let splitSign(text: String) -> (String, String) do
-    if text.startsWith?("-")
-      return ("-", text.drop(1))
-    end
-    if text.startsWith?("+")
-      return ("", text.drop(1))
-    end
-    ("", text)
-  end
-
-  # Splits a mantissa on the decimal separator: +(before, after, present,
-  # index)+. Only the first separator splits; a second one is the caller's
-  # error to report.
-  let splitDecimal(text: String, decimal: Char) -> (String, String, Bool, Integer) do
-    match firstFailure(text) { |c| c != decimal } do
-      Just(i) => (text.take(i), text.drop(i + 1), true, i)
-      None => (text, "", false, -1)
-    end
-  end
-
-  # Builds the +ParseError+ for +index+, counting in characters and reporting
-  # byte offsets as +ParseError.position+ requires.
-  let parseErrorAt(text: String, index: Integer, message: String) -> ParseError do
-    ParseError {
-      input: text,
-      position: text.take(index).byteSize,
-      value: None,
-      message: message,
-      rest: text.drop(index)
-    }
-  end
-
-  # Answers +true+ for the space lookalikes: plain space, NBSP (160) and
-  # narrow NBSP (8239).
-  let spaceLike?(c: Char) -> Bool = c.codepoint == 32 || c.codepoint == 160 || c.codepoint == 8239
-
-  # Accepts every space lookalike (plain, NBSP, narrow NBSP) when the group
-  # separator is any of them: keyboards and copy-paste rarely produce NBSP.
-  let unifySpaces(text: String, separator: Char) -> String do
-    if spaceLike?(separator)
-      return text.mapChars { |c| spaceLike?(c) then separator else c }
-    end
-    text
-  end
-
-  # Removes every group separator from already-validated text.
-  let stripSeparator(text: String, separator: Char) -> String = text.split("${separator}").join("")
-
-  # Checks grouping structure: every group non-empty with valid sizes, the
-  # leftmost holding one up to a full group. Answers +None+ when fine, else
-  # the failing group's first character index relative to +part+.
-  let checkGroups(part: String, separator: Char, sizes: [Integer]) -> Integer? do
-    if sizes.count == 0
-      return Just(0)
-    end
-    let parts = part.split("${separator}")
-    var bad: Integer? = None
-    var offset = 0
-    var i = 0
-    parts.each do |piece|
-      if bad.none?
-        if piece.empty?
-          bad = Just(offset)
-        else
-          match firstFailure(piece) { |c| c.digit? } do
-            Just(j) => do
-              bad = Just(offset + j)
-            end
-            None => do
-              let fromRight = parts.count - 1 - i
-              let capped = fromRight < sizes.count then fromRight else sizes.count - 1
-              let want = sizes.at(capped).or(0)
-              if parts.count == 1 || i == 0
-                if piece.count > want
-                  bad = Just(offset)
-                end
-              else
-                if piece.count != want
-                  bad = Just(offset)
-                end
-              end
-            end
-          end
+    let (lead, afterLead) = digitRun(afterSign, radix, [])
+    return Error(NoDigits(start)) if lead.empty?
+    var groups = [lead]
+    var afterWhole = afterLead
+    match culture.numbers.groups do
+      Just((separator, sizes)) => do
+        let (read, after) = groupRun(afterLead, separator, radix, [lead])
+        match misplacedGroup(read, sizes) do
+          Just(at) => return Error(BadGrouping(start + at))
+          None => ()
         end
+        groups = read
+        afterWhole = after
       end
-      offset = offset + piece.count + 1
-      i = i + 1
+      None => ()
+    end
+    let whole = sign + groups.join("")
+    let wholeLength = start + groups.reduce(groups.count - 1) { |sum, group| sum + group.count }
+    return Ok((whole, "", wholeLength)) if !fractional
+    let (fraction, afterFraction) = match afterWhole do
+      [c | rest] => c == culture.numbers.decimalSeparator then digitRun(rest, 10, []) else ("", afterWhole)
+      [] => ("", [])
+    end
+    let fractionLength = fraction.empty? then 0 else fraction.count + 1
+    let exponent = exponentRun(fraction.empty? then afterWhole else afterFraction)
+    let tail = (fraction.empty? && exponent.empty?) then "" else ".${fraction.empty? then "0" else fraction}${exponent}"
+    Ok((whole, tail, wholeLength + fractionLength + exponent.count))
+  end
+
+  # The digits +chars+ starts with in +radix+, and what follows them.
+  let digitRun(chars: [Char], radix: Integer, read: [Char]) -> (String, [Char]) do
+    match chars do
+      [c | rest] => digitValue(c) < radix then digitRun(rest, radix, [c, ...read]) else (read.reverse.join(""), chars)
+      [] => (read.reverse.join(""), [])
+    end
+  end
+
+  # The value of an ASCII digit or letter digit (+'a'+ and +'A'+ are 10),
+  # 99 for anything else.
+  let digitValue(c: Char) -> Integer do
+    let code = c.codepoint
+    return code - 48 if code >= 48 && code <= 57
+    return code - 87 if code >= 97 && code <= 122
+    return code - 55 if code >= 65 && code <= 90
+    99
+  end
+
+  # The digit groups after the first, each behind a separator; a separator
+  # without digits behind it is not part of the number.
+  let groupRun(chars: [Char], separator: Char, radix: Integer, groups: [String]) -> ([String], [Char]) do
+    match chars do
+      [c | rest] => do
+        return (groups, chars) if !separatorLike?(c, separator)
+        let (digits, after) = digitRun(rest, radix, [])
+        digits.empty? then (groups, chars) else groupRun(after, separator, radix, [...groups, digits])
+      end
+      [] => (groups, [])
+    end
+  end
+
+  # The character index of the first group of the wrong size, counted from
+  # the first digit. Digits without separators are any length: +"1500"+
+  # reads in every culture. Sizes apply from the right, the last repeating
+  # (en-IN's +[3, 2]+), and the leftmost group holds one digit up to a full
+  # group.
+  let misplacedGroup(groups: [String], sizes: [Integer]) -> Integer? do
+    return None if groups.count == 1
+    var offset = 0
+    var index = 0
+    var bad: Integer? = None
+    groups.each do |group|
+      let fromRight = groups.count - 1 - index
+      let want = sizes.at(fromRight < sizes.count then fromRight else sizes.count - 1).or(3)
+      let fits = index == 0 then group.count <= want else group.count == want
+      bad = Just(offset) if bad.none? && !fits
+      offset = offset + group.count + 1
+      index = index + 1
     end
     bad
   end
 
+  # The exponent +chars+ starts with, canonically spelled (+"e-3"+), or
+  # +""+ when there is none: an +e+ or +E+, an optional sign, and digits.
+  let exponentRun(chars: [Char]) -> String do
+    match chars do
+      [e | rest] => do
+        return "" if e != 'e' && e != 'E'
+        let (sign, digitsFrom) = match rest do
+          ['-' | after] => ("-", after)
+          ['+' | after] => ("+", after)
+          _ => ("", rest)
+        end
+        let (digits, _) = digitRun(digitsFrom, 10, [])
+        digits.empty? then "" else "e${sign}${digits}"
+      end
+      [] => ""
+    end
+  end
+
+  # Whether +c+ separates digit groups: the culture's separator, or any space
+  # lookalike (plain, NBSP, narrow NBSP) when the separator is one, since
+  # keyboards and copy-paste rarely produce NBSP.
+  let separatorLike?(c: Char, separator: Char) -> Bool = c == separator || (spaceLike?(separator) && spaceLike?(c))
+
+  # Plain space, NBSP (160) and narrow NBSP (8239).
+  let spaceLike?(c: Char) -> Bool = c.codepoint == 32 || c.codepoint == 160 || c.codepoint == 8239
+
   # Answers +true+ for a non-empty list of positive group sizes.
   let validSizes?(sizes: [Integer]) -> Bool do
     return sizes.count > 0 && sizes.filter { |n| n >= 1 }.count == sizes.count
-  end
-
-  # Validates an integer digit string with the culture's grouping, answering
-  # the bare digits. Positions count from +base+ inside +text+.
-  let validateIntPart(
-    text: String,
-    base: Integer,
-    part: String,
-    culture: Culture,
-    message: String
-  ) -> Result<String, ParseError> do
-    match culture.numbers.groups do
-      Just(groups) => do
-        let (separator, sizes) = groups
-        let unified = unifySpaces(part, separator)
-        match checkGroups(unified, separator, sizes) do
-          Just(j) => return Error(parseErrorAt(text, base + j, message))
-          None => None
-        end
-        return Ok(stripSeparator(unified, separator))
-      end
-      None => None
-    end
-    let badDigit = firstFailure(part) { |c| c.digit? }
-    match badDigit do
-      Just(j) => return Error(parseErrorAt(text, base + j, message))
-      None => None
-    end
-    Ok(part)
   end
 
   # Inserts the culture's group separators into integer +digits+.
@@ -888,26 +795,6 @@ private do
       k = k + 1
     end
     parts.join("${separator}")
-  end
-
-  # Renders the fraction tail of normalized text: dot plus digits, or nothing
-  # without a decimal separator.
-  let fracText(frac: String, present: Bool) -> String do
-    if present
-      return "." + frac
-    end
-    ""
-  end
-
-  # Renders the exponent tail of normalized text, dropping a leading +++.
-  let expText(exponent: String) -> String do
-    if exponent.empty?
-      return ""
-    end
-    if exponent.startsWith?("+")
-      return "e" + exponent.drop(1)
-    end
-    "e" + exponent
   end
 
   # Reads one variable, treating missing and empty alike as +None+.

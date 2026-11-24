@@ -30,7 +30,7 @@ ff
 -1
 bad radix
 ok 255
-err invalid integer for radix 16
-err radix must be between 2 and 36
+err unexpected "z" after the number
+err radix 99 is not between 2 and 36
 f09v
 true
