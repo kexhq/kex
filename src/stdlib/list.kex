@@ -288,14 +288,7 @@ make [X], implement: Enumerable, Foldable<X>, Functor, Bindable, Monad, Applicab
   end
 
   let find(pred) = Kex.Intrinsic.List.find(this, pred)
-  let flatMap(f) = Kex.Intrinsic.List.flatMap(this, f)
-
-  # Monad's bind, as +flatMap+: each value's list, joined.
-  #
-  # @example
-  #   [1, 2].into { |x| [x, x * 10] }   # => [1, 10, 2, 20]
-  into :> (X -> [Y]) -> [Y]
-  let into(f) = this.flatMap(f)
+  let into(f) = Kex.Intrinsic.List.flatMap(this, f)
 
   # The list holding just +value+ (Monad's +wrap+): +List.wrap(1)+ is +[1]+.
   let wrap(value: Y) -> [Y] = [value]
@@ -305,7 +298,7 @@ make [X], implement: Enumerable, Foldable<X>, Functor, Bindable, Monad, Applicab
   #
   # 
   #   [1, 2].with([10, 20]) { |a, b| a + b }   # => [11, 21, 12, 22]
-  let with(other: [Y], f: X -> Y -> Z) -> [Z] = this.flatMap { |a| other.map { |b| f(a, b) } }
+  let with(other: [Y], f: X -> Y -> Z) -> [Z] = this.into { |a| other.map { |b| f(a, b) } }
 
   let reject(pred) = Kex.Intrinsic.List.reject(this, pred)
   let all?(pred) = Kex.Intrinsic.List.all?(this, pred)
@@ -468,8 +461,8 @@ make [X], implement: Enumerable, Foldable<X>, Functor, Bindable, Monad, Applicab
   # @return [[Y]]
   #
   # @example
-  #   [1, 2, 3].flatMap { |n| [n, n * 10] }   # => [1, 10, 2, 20, 3, 30]
-  flatMap :> (X -> [Y]) -> [Y]
+  #   [1, 2, 3].into { |n| [n, n * 10] }   # => [1, 10, 2, 20, 3, 30]
+  into :> (X -> [Y]) -> [Y]
 
   # Maps each element through +f+ (which returns an +Optional+), keeping and
   # unwrapping the +Just(y)+ results and dropping +None+. Filter + map fused.

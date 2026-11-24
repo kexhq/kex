@@ -220,7 +220,7 @@ module Status do
   # @return [Result<Status, NetError>] the status, or +Parse+
   #
   # @example Validating a configurable health-check success code
-  #   let code = ENV.get("HEALTH_STATUS").flatMap { |text| text.to(Integer) }.or(204)
+  #   let code = ENV.get("HEALTH_STATUS").into { |text| text.to(Integer) }.or(204)
   #   let expected = Status.from(code).try
   from : Integer -> Result<Status, NetError>
   let from(code) = Kex.Intrinsic.NetHTTP.status(code)

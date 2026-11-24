@@ -260,7 +260,7 @@ end
 # skipped silently: skipping it would make the files it owns look unowned.
 foul all -> [Receipt] do
   let names = FS.Directory.directories(Tey.Programs.directory).or([]).sort
-  return names.flatMap do |name|
+  return names.into do |name|
     let path = Tey.Programs.receiptPath(name)
     match FS.File.read(path) do
       Error(_) => []

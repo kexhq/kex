@@ -14,7 +14,7 @@ module Regex
 #   main do
 #     let line = "order #4271 shipped"
 #     IO.printLine(line.matches?(re`#\d+`))                     # => true
-#     IO.printLine(line.matches(re`#(\d+)`).flatMap { |m| m.get(1) }.or(""))  # => 4271
+#     IO.printLine(line.matches(re`#(\d+)`).into { |m| m.get(1) }.or(""))  # => 4271
 #   end
 #
 # The call form takes a pattern built at run time and answers a +Result+,
@@ -33,7 +33,7 @@ module Regex
 # Create one with a +re+ tagged literal or +regex(source)+.
 #
 #   let digits = re`[0-9]+`
-#   "item 42".matches(digits).flatMap { |m| m.get(0) }   # => Just("42")
+#   "item 42".matches(digits).into { |m| m.get(0) }   # => Just("42")
 record Regex do
   # The pattern text this regex was built from.
   source : String
@@ -262,12 +262,12 @@ make Match do
   #
   # @example
   #   let found = "order #4271".matches(re`#(\d+)`)
-  #   found.flatMap { |m| m.get(0) }   # => Just("#4271")
-  #   found.flatMap { |m| m.get(1) }   # => Just("4271")
+  #   found.into { |m| m.get(0) }   # => Just("#4271")
+  #   found.into { |m| m.get(1) }   # => Just("4271")
   #
   # @example Named groups
   #   "2026-07-04".matches(re`(?<year>\d{4})-(?<month>\d{2})`)
-  #     .flatMap { |m| m.get(:year) }
+  #     .into { |m| m.get(:year) }
   #   # => Just("2026")
   get :> (Atom | Integer) -> String?
   let get(key) = Kex.Intrinsic.Map.get(this.captures, key)
@@ -300,7 +300,7 @@ end
 # @return [Match?] the first match, or +None+
 #
 # @example
-#   "order #4271".matches(re`#(\d+)`).flatMap { |m| m.get(1) }   # => Just("4271")
+#   "order #4271".matches(re`#(\d+)`).into { |m| m.get(1) }   # => Just("4271")
 #   "no number here".matches(re`#(\d+)`)                          # => None
 #
 # @example Pulling a version out of a line

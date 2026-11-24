@@ -202,7 +202,7 @@ end
 # result.
 #
 #   let halves(F is Bindable => xs: F<Integer>, f: Integer -> F<Integer>) -> F<Integer> =
-#     xs.flatMap(f)
+#     xs.into(f)
 #
 # Implemented by +List+, +Optional+ and +Result+.
 trait Bindable<F<_>> do
@@ -210,16 +210,16 @@ trait Bindable<F<_>> do
   #
   # @param f [A -> F<B>] the step
   # @return [F<B>] the joined result
-  flatMap : F<A> -> (A -> F<B>) -> F<B>
+  into : F<A> -> (A -> F<B>) -> F<B>
 end
 
 # A container that can also be made from one plain value: +wrap+, beside
-# +flatMap+. Code written once for every such container reaches its
+# +into+. Code written once for every such container reaches its
 # constructor through the type, +M.wrap(x)+, as a concrete one is reached by
 # name: +List.wrap(1)+ is +[1]+, +Optional.wrap(1)+ is +Just(1)+, and
 # +Result.wrap(1)+ is +Ok(1)+.
 #
-#   let incremented(M is Monad => xs: M<Integer>) -> M<Integer> = xs.flatMap { |x| M.wrap(x + 1) }
+#   let incremented(M is Monad => xs: M<Integer>) -> M<Integer> = xs.into { |x| M.wrap(x + 1) }
 #
 #   incremented([1, 2])   # => [2, 3]
 #   incremented(Just(1))  # => Just(2)
@@ -236,7 +236,7 @@ trait Monad<F> do
   #
   # @param f [A -> F<B>] the step
   # @return [F<B>] the joined result
-  flatMap : F<A> -> (A -> F<B>) -> F<B>
+  into : F<A> -> (A -> F<B>) -> F<B>
 end
 
 # Containers whose values can be combined with another's when neither depends

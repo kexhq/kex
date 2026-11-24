@@ -7,7 +7,7 @@ type Result<A, E> = Ok(A) | Error(E)
 
 type Either<A, B> = Left(A) | Right(B)
 
-# Option/Result methods (map, flatMap, present?, none?, ok?, error?, or) come from
+# Option/Result methods (map, into, present?, none?, ok?, error?, or) come from
 # the sealed stdlib prelude — see src/stdlib/optional.kex.
 
 # User-defined extensions on generic types still work — just not redefinitions
@@ -32,7 +32,7 @@ type Enumerable do
 end
 
 # Specialized make
-# List's size/each/reduce/flatMap/contains?/find/reject/take/drop all come from
+# List's size/each/reduce/into/contains?/find/reject/take/drop all come from
 # the sealed stdlib (via the Enumerable trait) — no need to define them here.
 
 # Map's get/put/delete/has?/keys/values/size/merge/map/filter all come from the

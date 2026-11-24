@@ -15,11 +15,11 @@ module Tey.Docgen.Nav do
   # it lives on. Nested modules are entries of their own (the sidebar nests
   # them by name).
   let buildModules(pages: [SourcePage]) -> [ModuleIndexEntry] do
-    return pages.flatMap { |p| modulesOnPage(p.entities, p.urlPath) }
+    return pages.into { |p| modulesOnPage(p.entities, p.urlPath) }
   end
 
   let modulesOnPage(entities: [Entity], urlPath: String) -> [ModuleIndexEntry] do
-    return entities.flatMap { |e|
+    return entities.into { |e|
       match e do
         ModuleDecl(entry) => [moduleEntry(entry, urlPath)] + modulesOnPage(entry.children, urlPath)
         _ => []
@@ -93,7 +93,7 @@ module Tey.Docgen.Nav do
   # two different entities answer "Request", the simple spelling stops
   # linking and only the spelled-out names do.
   let buildLinks(pages: [SourcePage]) -> [LinkEntry] do
-    let entries = pages.flatMap { |p| linkEntriesOnPage(p.entities, p.urlPath) }
+    let entries = pages.into { |p| linkEntriesOnPage(p.entities, p.urlPath) }
     return entries.filter { |e| uniqueTarget?(entries, e) }
   end
 
@@ -111,7 +111,7 @@ module Tey.Docgen.Nav do
   end
 
   let linkEntriesOnPage(entities: [Entity], urlPath: String) -> [LinkEntry] do
-    return entities.flatMap { |e|
+    return entities.into { |e|
       let own = linkableNames(e).map { |n|
         LinkEntry { name: n, urlPath: urlPath, anchor: anchorOf(e), kind: kindOf(e) }
       }

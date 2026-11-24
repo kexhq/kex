@@ -149,7 +149,7 @@ module Tey.Docgen.Markdown do
     match Tey.Docgen.Relations.typeFactsFor(model, name) do
       None => return ""
       Just(facts) => do
-        let own = facts.extensions.flatMap { |x| x.names }
+        let own = facts.extensions.into { |x| x.names }
         return facts.traits.map { |t| providedFromMd(t, own, page, model) }.reject { |x| x.empty? }.join("\n\n")
       end
     end
@@ -262,7 +262,7 @@ module Tey.Docgen.Markdown do
   end
 
   let traitTagsMd(name: String, implements: [String], page: SourcePage, model: PackageModel) -> String do
-    let hits = implements.flatMap { |t|
+    let hits = implements.into { |t|
       match Tey.Docgen.Relations.traitFactsFor(model, t) do
         None => []
         Just(facts) => match Tey.Docgen.Relations.traitEntryFor(model, facts) do

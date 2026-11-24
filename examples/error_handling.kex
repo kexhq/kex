@@ -53,15 +53,15 @@ end
 
 # An Optional turned into a Result once a missing value becomes an error
 let userEmail(users: [User], name: String) -> Result<String, AppError> do
-  match findUser(users, name).flatMap { |user| user.email } do
+  match findUser(users, name).into { |user| user.email } do
     Just(email) => Ok(email)
     None => Error(NoEmail(name))
   end
 end
 
-# flatMap for Optional chaining
+# into for Optional chaining
 let firstAdultEmail(users: [User]) -> String? do
-  users.find { |u| u.age >= 18 }.flatMap { |u| u.email }
+  users.find { |u| u.age >= 18 }.into { |u| u.email }
 end
 
 main do

@@ -1500,7 +1500,7 @@ written once for every implementor. That letter is whichever container the
 arguments are, so it must appear in a parameter's type:
 
 ```kex
-let incremented(M is Monad => xs: M<Integer>) -> M<Integer> = xs.flatMap { |x| M.wrap(x + 1) }
+let incremented(M is Monad => xs: M<Integer>) -> M<Integer> = xs.into { |x| M.wrap(x + 1) }
 
 incremented([1, 2])    # [2, 3]
 incremented(Just(1))   # Just(2)
@@ -1525,8 +1525,8 @@ traverse(["1", "2"]) { |s| s.to(Integer) }   # Just([1, 2])
 sequence([Ok(1), Error("no")])               # Error("no")
 ```
 
-`into` is a Monad's bind, a function like `flatMap`: `xs.into { |x| ... }`
-applies the block to each value and joins what it answers. A list gives
+`into` is a Monad's bind, what other languages call `flatMap`:
+`xs.into { |x| ... }` applies the block to each value and joins what it answers. A list gives
 every combination, an `Optional` stops at `None`, a `Result` at its first
 `Error`:
 
@@ -2034,7 +2034,7 @@ The prelude is loaded automatically. Prelude functions are **sealed** — user c
 can extend types with new functions but cannot redefine prelude functions.
 
 The prelude is built on several core traits. `Enumerable` provides `map`,
-`filter`, `each`, `reduce`, `find`, `any?`, `all?`, `flatMap`, `collect`, and
+`filter`, `each`, `reduce`, `find`, `any?`, `all?`, `into`, `collect`, and
 `count(pred)` to any type that supplies a `reduce`. `Blankable` provides
 `blank?`/`present?`. `Truthyable` provides `truthy?`/`falsy?`.
 
@@ -2089,7 +2089,7 @@ List implements `Enumerable`, `Blankable`. Numeric lists (`[Number]`) have
 | `map(f)` | `(X -> Y) -> [Y]` | |
 | `filter(pred)` | `(X -> Bool) -> [X]` | |
 | `reject(pred)` | `(X -> Bool) -> [X]` | Inverse of filter |
-| `flatMap(f)` | `(X -> [Y]) -> [Y]` | Map + concat |
+| `into(f)` | `(X -> [Y]) -> [Y]` | Map + concat |
 | `each(f)` | `(X -> Unit) -> Unit` | Side-effect loop |
 | `find(pred)` | `(X -> Bool) -> X?` | First match |
 | `any?(pred)`, `all?(pred)` | `(X -> Bool) -> Bool` | Quantifiers |
@@ -2152,7 +2152,7 @@ Either<L, R> = Left(L) | Right(R)   # sugar: L or R
 | `present?` | Same presence test through `Blankable` |
 | `or(default)` | Unwrap or `default` |
 | `map(f)` | `Just(x).map(f) = Just(f(x))`; `None` passes through |
-| `flatMap(f)` | Chain Optional-returning functions |
+| `into(f)` | Chain Optional-returning functions |
 
 **Result:**
 
@@ -2161,7 +2161,7 @@ Either<L, R> = Left(L) | Right(R)   # sugar: L or R
 | `ok?`, `error?` | Variant tests |
 | `or(default)` | Unwrap `Ok` or `default` |
 | `map(f)` | Apply to `Ok` value; `Error` passes through |
-| `flatMap(f)` | Chain Result-returning functions |
+| `into(f)` | Chain Result-returning functions |
 | `toOptional` | `Ok(x)` → `Just(x)`; `Error(_)` → `None` |
 
 **Either:** marker type; no functions beyond construction and pattern matching.
@@ -2560,7 +2560,7 @@ Conformances: String, List, Map, Range, Stream.
 ```
 trait Enumerable do
   reduce :> A -> (A -> T -> A) -> A     # required
-  # defaults: map, filter, each, find, any?, all?, flatMap, collect, count(pred)
+  # defaults: map, filter, each, find, any?, all?, into, collect, count(pred)
 end
 ```
 

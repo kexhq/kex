@@ -37,7 +37,7 @@ end
 let grants(plugin: Plugin, workspaceRoot: String) -> Grants do
   let values = do |kind|
     plugin.pluginCapabilities.filter { |resource| resource.capabilityKind == kind }
-      .flatMap { |resource| resource.capabilityValues }
+      .into { |resource| resource.capabilityValues }
   end
   return Grants {
     workspaceRoot: workspaceRoot,

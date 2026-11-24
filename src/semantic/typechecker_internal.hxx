@@ -357,7 +357,7 @@ auto bindHintVars(
     } else if (auto* app = std::get_if<TypeApp>(&sigP->kind)) {
         // A higher-kinded requirement's `F<A>` against what the receiver
         // applies: `M<Integer>` (or a `[Integer]`) makes the block's A an
-        // Integer, where `xs.flatMap { |x| ... }` had left it to the body.
+        // Integer, where `xs.into { |x| ... }` had left it to the body.
         if (const auto applied = applicationOf(argT);
             applied && applied->args.size() == app->args.size()) {
             for (size_t i = 0; i < app->args.size(); i++) {

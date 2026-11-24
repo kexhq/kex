@@ -334,7 +334,7 @@ After it (2026-11-24):
   kind its signatures apply it with (`trait Mappable<F>` with `F<A>` is
   `Mappable<F<_>>`), read by the parser so every consumer sees one kind;
   uses that disagree are KEXEP-0159 (`spec/trait_kind_inference.kex`).
-- The Monad trait: `trait Monad<F>` with `wrap : A -> F<A>` and `flatMap`,
+- The Monad trait: `trait Monad<F>` with `wrap : A -> F<A>` and `into`,
   implemented by List, Optional and `Result<_, E>`. `wrap`, which has no
   receiver, is called on the type (decided 2026-11-24): `List.wrap(1)` by
   name, `M.wrap(x)` through a bounded letter, M passed to the function as
@@ -364,11 +364,10 @@ After it (2026-11-24):
   from the higher-kinded requirements (`spec/applicable_with.kex`,
   `spec/validation_signup.kex`, `spec/traverse_sequence.kex`, LSP and REPL
   tests).
-- `into`, the monadic bind (decided 2026-11-24), is a plain function:
-  `xs.into { |x| ... }` is `flatMap`, on List, Optional and Result (`spec/monad_into.kex`). It is not yet a `Monad`
-  default: a default over a higher-kinded `F` does not tie `F` to its
-  receiver. `.try` on Result and Optional is the checker's own
-  (`tryPayload`): there is no Tryable trait.
+- `into`, the monadic bind (decided 2026-11-24), is `Monad`'s and `Bindable`'s
+  requirement and `Enumerable`'s map-and-flatten: the one name for what other
+  languages call `flatMap` (`spec/monad_into.kex`). `.try` on Result and
+  Optional is the checker's own (`tryPayload`): there is no Tryable trait.
 
 Nothing in the plan is left undone.
 
@@ -1235,7 +1234,7 @@ Design points:
   chosen by receiver type (§4.5, 4).
 - Under HM there is no variance question: `F<Integer>` and `F<Number>` are
   related only by unifying `F` and the arguments.
-- Motivation: one `Functor`/`Monad` in place of the `map`/`flatMap` copies in
+- Motivation: one `Functor`/`Monad` in place of the `map`/`into` copies in
   `optional`, `list` and `result`, and the typing of the planned `Bindable`/
   `within`. `examples/typesystem_audit/08_hkt_attempt.kex` becomes its spec.
 

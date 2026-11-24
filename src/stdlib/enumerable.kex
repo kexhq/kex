@@ -262,12 +262,12 @@ trait Enumerable do
   # @return [[B]] all the results, concatenated
   #
   # @example
-  #   [[1, 2], [3]].flatMap { |xs| xs }            # => [1, 2, 3]
-  #   ["a b", "c"].flatMap { |s| s.split(" ") }    # => ["a", "b", "c"]
+  #   [[1, 2], [3]].into { |xs| xs }            # => [1, 2, 3]
+  #   ["a b", "c"].into { |s| s.split(" ") }    # => ["a", "b", "c"]
   #
   # @example Every tag used across a list of posts
-  #   posts.flatMap { |p| p.tags }
-  let flatMap(f: T -> [B]) -> [B] = this.reduce([]) do |acc, item|
+  #   posts.into { |p| p.tags }
+  let into(f: T -> [B]) -> [B] = this.reduce([]) do |acc, item|
     acc + Kex.Intrinsic.Fun.applyItem(f, item)
   end
 

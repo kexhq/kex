@@ -69,7 +69,7 @@ module Binary do
   #   Binary.fromHex("a")      # => None
   #
   # @example Reading a compact identifier from configuration
-  #   let key = env.get("CACHE_KEY").flatMap(~Binary.fromHex)
+  #   let key = env.get("CACHE_KEY").into(~Binary.fromHex)
   #   let cacheEnabled? = key.present?
   fromHex : String -> Binary?
   let fromHex(text) = Kex.Intrinsic.Binary.fromHex(text)
@@ -90,7 +90,7 @@ module Binary do
   #   Binary.fromBase64("AGhp/w")     # => None
   #
   # @example Loading binary key material from an environment variable
-  #   let signingKey = ENV.get("SIGNING_KEY").flatMap(~Binary.fromBase64)
+  #   let signingKey = ENV.get("SIGNING_KEY").into(~Binary.fromBase64)
   fromBase64 : String -> Binary?
   let fromBase64(text) = Kex.Intrinsic.Binary.fromBase64(text)
 end

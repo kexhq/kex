@@ -182,7 +182,7 @@ auto TypeChecker::resolveBlockHints(
     }
     // A receiver typed by a bounded constructor letter (`xs: M<Integer>` under
     // `M is Monad`) is answered by the higher-kinded traits' requirements
-    // alone, as the call itself is (§8.2): `xs.flatMap { |x| ... }` takes an
+    // alone, as the call itself is (§8.2): `xs.into { |x| ... }` takes an
     // Integer.
     if (isMethodCall && !nonBlockArgTypes.empty()) {
         const auto receiver = resolve(nonBlockArgTypes.front());

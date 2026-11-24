@@ -1,4 +1,4 @@
-# `into` is Monad's bind, a function like `flatMap`: `xs.into { |x| ... }`
+# `into` is Monad's bind (other languages' `flatMap`): `xs.into { |x| ... }`
 # applies the block to each value and joins what it answers. A list gives
 # every combination, an Optional stops at None, a Result at its first Error.
 

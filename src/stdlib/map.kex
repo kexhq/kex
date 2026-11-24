@@ -17,7 +17,7 @@
 #
 # A map is +Enumerable+ and +Foldable+, and every traversal block takes the
 # key and value as two parameters: +each+, +map+, +filter+, +reject+, +find+,
-# +any?+, +all?+, +none?+, +one?+, +count+, +collect+ and +flatMap+, with
+# +any?+, +all?+, +none?+, +one?+, +count+, +collect+ and +into+, with
 # +mapIndexed+ adding the index as a third. Only +reduce+, the primitive, hands
 # over the pair as one value.
 #
@@ -91,7 +91,7 @@ make Map<K, V>, implement: Enumerable, Foldable<(K, V)>, Monoid do
   #   user.get(:missing)   # => None
   #
   # @example Chaining through a nested map
-  #   settings.get(:server).flatMap { |s| s.get(:port) }.or(8080)
+  #   settings.get(:server).into { |s| s.get(:port) }.or(8080)
   get :> K -> V?
   let get(key) = Kex.Intrinsic.Map.get(this, key)
 

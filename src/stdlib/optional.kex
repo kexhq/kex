@@ -208,32 +208,25 @@ make Optional<X>, implement: Optionable, Functor, Bindable, Monad, Applicable do
   # Applies +f+, which itself returns an optional, and flattens the result.
   #
   # Use it instead of +map+ when the step can also fail: +map+ would give you
-  # a doubly wrapped +Just(Just(x))+, +flatMap+ gives a single layer. A +None+
+  # a doubly wrapped +Just(Just(x))+, +into+ gives a single layer. A +None+
   # anywhere in the chain short-circuits the rest.
   #
   # @param f [X -> Y?] the next optional-returning step
   # @return [Y?] the result of +f+, or +None+
   #
   # @example
-  #   Just(4).flatMap { |x| x > 0 then Just(x * 2) else None }   # => Just(8)
-  #   Just(-4).flatMap { |x| x > 0 then Just(x * 2) else None }  # => None
-  #   None.flatMap { |x| Just(x * 2) }                           # => None
+  #   Just(4).into { |x| x > 0 then Just(x * 2) else None }   # => Just(8)
+  #   Just(-4).into { |x| x > 0 then Just(x * 2) else None }  # => None
+  #   None.into { |x| Just(x * 2) }                           # => None
   #
   # @example Chaining lookups that may each come up empty
   #   users.get(id)
-  #     .flatMap { |user| user.address }
-  #     .flatMap { |address| address.postcode }
+  #     .into { |user| user.address }
+  #     .into { |address| address.postcode }
   #     .or("unknown")
-  flatMap :> (X -> Y?) -> Y?
-  let flatMap(@None, _) = None
-  let flatMap(@Just(x), f) = f(x)
-
-  # Monad's bind, as +flatMap+: +f+'s optional for the value, or +None+.
-  #
-  # @example
-  #   Just(4).into { |n| n > 0 then Just(n * 2) else None }   # => Just(8)
   into :> (X -> Y?) -> Y?
-  let into(f) = this.flatMap(f)
+  let into(@None, _) = None
+  let into(@Just(x), f) = f(x)
 
   # Applies +f+ to this value and +other+'s when both are present
   # (Applicable's +with+).
@@ -328,23 +321,16 @@ make Result<X, E>, implement: Resultable do
   # @return [Result<Y, E>] the result of +f+, or the original +Error+
   #
   # @example
-  #   Ok(4).flatMap { |x| x > 0 then Ok(x * 2) else Error("neg") }    # => Ok(8)
-  #   Ok(-4).flatMap { |x| x > 0 then Ok(x * 2) else Error("neg") }   # => Error("neg")
+  #   Ok(4).into { |x| x > 0 then Ok(x * 2) else Error("neg") }    # => Ok(8)
+  #   Ok(-4).into { |x| x > 0 then Ok(x * 2) else Error("neg") }   # => Error("neg")
   #
   # @example A pipeline where each stage may fail
   #   Integer.parse(raw)
-  #     .flatMap { |n| n > 0 then Ok(n) else Error("must be positive") }
-  #     .flatMap { |n| n < 65536 then Ok(n) else Error("out of range") }
-  flatMap :> (X -> Result<Y, E>) -> Result<Y, E>
-  let flatMap(@Error(e), _) = Error(e)
-  let flatMap(@Ok(x), f) = f(x)
-
-  # Monad's bind, as +flatMap+: +f+'s result for the value, or the +Error+.
-  #
-  # @example
-  #   Ok(4).into { |n| n > 0 then Ok(n * 2) else Error("neg") }   # => Ok(8)
+  #     .into { |n| n > 0 then Ok(n) else Error("must be positive") }
+  #     .into { |n| n < 65536 then Ok(n) else Error("out of range") }
   into :> (X -> Result<Y, E>) -> Result<Y, E>
-  let into(f) = this.flatMap(f)
+  let into(@Error(e), _) = Error(e)
+  let into(@Ok(x), f) = f(x)
 
   # Applies +f+ to this success and +other+'s (Applicable's +with+), or
   # answers the first error.
@@ -399,7 +385,7 @@ end
 
 # A result maps and chains its success and keeps its error: `Result<_, E>` is
 # the constructor `Functor` and `Bindable` range over (§8.2), and the `map`
-# and `flatMap` above are theirs.
+# and `into` above are theirs.
 make Result<_, E>, implement: Functor, Bindable, Monad, Applicable do
   # +value+ as a success (Monad's +wrap+): +Result.wrap(1)+ is +Ok(1)+.
   let wrap(value: Y) -> Result<Y, E> = Ok(value)
@@ -482,7 +468,7 @@ end
 #   "3.5".to(Float)      # => Just(3.5)
 #
 # @example Closing the conversion immediately
-#   let port = env.get("PORT").flatMap { |s| s.to(Integer) }.or(8080)
+#   let port = env.get("PORT").into { |s| s.to(Integer) }.or(8080)
 to : A -> Type<T> -> T?
 let to(value, String) = Just(value.showValue)
 let to(value, t) = Kex.Intrinsic.Fun.convertTo(value, t)

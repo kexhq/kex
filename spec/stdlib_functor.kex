@@ -13,7 +13,7 @@ end
 
 let bumped(F is Functor => xs: F<Integer>) -> F<Integer> = xs.map { |x| x + 1 }
 
-let halved(F is Bindable => xs: F<Integer>, f: Integer -> F<Integer>) -> F<Integer> = xs.flatMap(f)
+let halved(F is Bindable => xs: F<Integer>, f: Integer -> F<Integer>) -> F<Integer> = xs.into(f)
 
 let half(n: Integer) -> Integer? = n % 2 == 0 then Just(n / 2) else None
 

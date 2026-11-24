@@ -48,17 +48,17 @@ Integer.parse("invalid").or(8080)   # => 8080
 
 ## Chaining fallible steps
 
-Use `map` when the next step returns a plain value. Use `flatMap` when it
+Use `map` when the next step returns a plain value. Use `into` when it
 returns another result or optional, to avoid nested wrappers:
 
 ```kex
 Integer.parse("21").map { |n| n * 2 }   # => Ok(42)
 
-Integer.parse("21").flatMap { |n|
+Integer.parse("21").into { |n|
   n > 0 then Ok(n) else Error("must be positive")
 }   # => Ok(21)
 
-Just("42").flatMap { |text| Integer.parse(text).optional }   # => Just(42)
+Just("42").into { |text| Integer.parse(text).optional }   # => Just(42)
 ```
 
 An `Error` or `None` skips the remaining callbacks in its chain.
@@ -80,7 +80,7 @@ main do
 end
 ```
 
-Use `match`, `or`, or `flatMap` when handling a single missing value or failure
+Use `match`, `or`, or `into` when handling a single missing value or failure
 is clearer at the call site.
 
 A failure that nothing handles leaves the function with the failure as the

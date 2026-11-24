@@ -1516,7 +1516,7 @@ auto expandEmbedDispatch(
 //
 // Supported control regions: `if`/`elif`/`else`, `let`/`var`, and any
 // block-taking call (`<%= expr do |params| %> ... <% end %>` — most
-// commonly `.map`/`.mapIndexed`/`.flatMap`), nested to any depth. Anything
+// commonly `.map`/`.mapIndexed`/`.into`), nested to any depth. Anything
 // else (`match`, `loop`, `while`, `receive`, `spawn`, `with`, `trying`) is
 // not specially recognized, and — because every one of those ALSO ends its
 // opening line in `do` — falls into the block-taking-call path, which wraps

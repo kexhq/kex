@@ -347,7 +347,7 @@ module Tey.Docgen.Model do
 
   # Identifier-ish runs of a type text: letters, digits, `_`, `?`, `!`.
   let wordsOf(text: String) -> [String] do
-    return text.split(" ").flatMap { |part| wordSplit(part, "", []) }.reject { |w| w.empty? }
+    return text.split(" ").into { |part| wordSplit(part, "", []) }.reject { |w| w.empty? }
   end
 
   let wordSplit(rest: String, word: String, out: [String]) -> [String] do

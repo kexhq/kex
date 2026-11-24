@@ -92,7 +92,7 @@ module Tey.Docgen.Index do
   # at ../../<package>/<version>/ from this unit's version directory. A file
   # that cannot be read is reported and skipped — links are an extra.
   foul externalLinks(paths: String) -> [LinkEntry] do
-    return paths.split(",").map { |p| p.trim }.reject { |p| p.empty? }.flatMap { |path|
+    return paths.split(",").map { |p| p.trim }.reject { |p| p.empty? }.into { |path|
       match FS.File.read(path) do
         Error(_) => do
           IO.printError("${Console.YELLOW}warning:${Console.RESET} cannot read --link-model ${path}; skipped")
@@ -137,8 +137,8 @@ module Tey.Docgen.Index do
   # returning `Number?`). The page shows the signature's type; this says
   # where the tag disagrees so the comment can be fixed.
   foul reportDocDrift(pages: [SourcePage]) -> () do
-    let drifts = pages.flatMap { |page|
-      Tey.Docgen.Relations.allFunctions(page.entities).flatMap { |f|
+    let drifts = pages.into { |page|
+      Tey.Docgen.Relations.allFunctions(page.entities).into { |f|
         let documented = match f.doc.returns do
           Just(r) => r.typeName
           None => ""

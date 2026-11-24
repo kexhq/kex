@@ -2723,7 +2723,7 @@ int main() {
             "let halves(xs: [Integer]) -> [Integer] = xs.into { |x| [x / 2] }\n"
             "let half(n: Integer?) -> Integer? = n.into { |x| Just(x / 2) }\n"
             "let discrete(v: Any) -> Bool = v.is?(Discrete)\n"
-            "let bumped(M is Monad => xs: M<Integer>) -> M<Integer> = xs.flatMap { |x| M.wrap(x + "
+            "let bumped(M is Monad => xs: M<Integer>) -> M<Integer> = xs.into { |x| M.wrap(x + "
             "1) }\n";
         it("hovers an `into` block's parameters as the elements", [source]() {
             const auto first = askAt("file:///tmp/kex-lsp-into.kex", source, "hover", 3, 13);
@@ -2741,7 +2741,7 @@ int main() {
         it("types a block through a bounded constructor letter", [source]() {
             // `xs: M<Integer>`: the requirement's `F<A>` makes the block's x an
             // Integer, not whatever `x + 1` alone would.
-            const auto reply = askAt("file:///tmp/kex-lsp-monad-block.kex", source, "hover", 8, 82);
+            const auto reply = askAt("file:///tmp/kex-lsp-monad-block.kex", source, "hover", 8, 79);
             assertTrue(reply.find("x : Integer") != std::string::npos, "x: " + reply);
         });
         it("hovers `with` as the overload the call selected", [source]() {

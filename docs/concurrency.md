@@ -93,7 +93,7 @@ main do
   let user  = task1.await(timeout: 5000)
   let posts = task2.await(timeout: 5000)
   # `await` returns Result<User, TaskError> / Result<[Post], TaskError> —
-  # handle with match or flatMap rather than short-circuiting syntax.
+  # handle with match or into rather than short-circuiting syntax.
 end
 ```
 

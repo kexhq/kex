@@ -88,7 +88,7 @@ module Tey.Docgen.Extract do
   # Preference order: a single top-level module, then a single top-level
   # type/record/trait, then the file name title-cased.
   let pageTitle(source: String, entities: [Entity]) -> String do
-    let tops = entities.flatMap { |e|
+    let tops = entities.into { |e|
       match e do
         ModuleDecl(entry) => [entry]
         _ => []
@@ -100,7 +100,7 @@ module Tey.Docgen.Extract do
         None => return ""
       end
     end
-    let primaries = entities.flatMap { |e|
+    let primaries = entities.into { |e|
       match e do
         TypeDecl(entry) => [entry.name]
         RecordDecl(entry) => [entry.name]
@@ -506,7 +506,7 @@ module Tey.Docgen.Extract do
   end
 
   let returnTypeText(info: Kex.AST.FunctionInfo) -> String do
-    let declared = info.clauses.flatMap { |clause|
+    let declared = info.clauses.into { |clause|
       match clause.returnType do
         Just(ref) => [signatureTypeText(ref)]
         None => []
@@ -781,7 +781,7 @@ module Tey.Docgen.Extract do
 
   let withPeerType(p: ParamSig, index: Integer, peers: [[ParamSig]]) -> ParamSig do
     return p if !p.typeName.empty?
-    let typed = peers.flatMap { |list|
+    let typed = peers.into { |list|
       match list.at(index) do
         Just(q) => q.typeName.empty? then [] else [q.typeName]
         None => []

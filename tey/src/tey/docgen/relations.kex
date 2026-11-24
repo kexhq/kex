@@ -12,13 +12,13 @@ module Tey.Docgen.Relations do
   using Tey.Docgen.Model, only: [Entity, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, TypeDecl, RecordDecl, ConstDecl, TraitEntry, MakeEntry, FunctionEntry, SourcePage, PackageModel, Extension, TypeFacts, TraitFacts, anchorOf, baseTypeOf]
 
   let build(pages: [SourcePage]) -> ([TypeFacts], [TraitFacts]) do
-    let traitNames = pages.flatMap { |page| traitEntries(page.entities) }.flatMap { |t| [t.name, t.qualifiedName] }
-    let extensions = pages.flatMap { |page| pageExtensions(page, page.entities) }
+    let traitNames = pages.into { |page| traitEntries(page.entities) }.into { |t| [t.name, t.qualifiedName] }
+    let extensions = pages.into { |page| pageExtensions(page, page.entities) }
     # `make Inspectable do` gives every Inspectable a default method: it
     # belongs to the trait (traitMethods), not to a type of that name.
     let bases = extensions.map { |e| baseTypeOf(e.target) }.uniq.reject { |b| traitNames.contains?(b) }
     let types = bases.map { |base| typeFacts(base, extensions, pages) }
-    let traits = pages.flatMap { |page| pageTraits(page, page.entities, extensions) }
+    let traits = pages.into { |page| pageTraits(page, page.entities, extensions) }
     return (types, traits)
   end
 
@@ -28,7 +28,7 @@ module Tey.Docgen.Relations do
   # implementing type. Done on the pages, before anything renders them, so
   # every output states the same signature.
   let withTraitSignatures(pages: [SourcePage]) -> [SourcePage] do
-    let traits = pages.flatMap { |p| traitEntries(p.entities) }
+    let traits = pages.into { |p| traitEntries(p.entities) }
     return pages.map { |p| SourcePage { ...p, entities: p.entities.map { |e| typedByTraits(e, traits) } } }
   end
 
@@ -43,8 +43,8 @@ module Tey.Docgen.Relations do
   let typedByTrait(f: FunctionEntry, m: MakeEntry, traits: [TraitEntry]) -> FunctionEntry do
     return f if !f.signatures.all? { |s| s == f.name }
     let implemented = m.implements.map { |i| baseTypeOf(i) }
-    let declared = traits.filter { |t| implemented.contains?(t.name) || implemented.contains?(t.qualifiedName) }.flatMap { |t| t.functions }
-    let signatures = declared.filter { |g| g.name == f.name }.flatMap { |g| g.signatures }.map { |s| asImplementor(s, m.target) }.uniq
+    let declared = traits.filter { |t| implemented.contains?(t.name) || implemented.contains?(t.qualifiedName) }.into { |t| t.functions }
+    let signatures = declared.filter { |g| g.name == f.name }.into { |g| g.signatures }.map { |s| asImplementor(s, m.target) }.uniq
     return signatures.empty? then f else FunctionEntry { ...f, signatures: signatures }
   end
 
@@ -53,7 +53,7 @@ module Tey.Docgen.Relations do
   end
 
   let pageExtensions(page: SourcePage, entities: [Entity]) -> [Extension] do
-    return entities.flatMap { |e|
+    return entities.into { |e|
       match e do
         MakeDecl(entry) => [extensionOf(page, e, entry)]
         ModuleDecl(entry) => pageExtensions(page, entry.children)
@@ -81,7 +81,7 @@ module Tey.Docgen.Relations do
       homePath: home,
       homeAnchor: homeAnchorOf(base, home, mine, pages),
       extensions: mine,
-      traits: mine.flatMap { |e| e.implements }.uniq
+      traits: mine.into { |e| e.implements }.uniq
     }
   end
 
@@ -111,7 +111,7 @@ module Tey.Docgen.Relations do
   end
 
   let homeAnchorOf(base: String, home: String, mine: [Extension], pages: [SourcePage]) -> String do
-    let declared = pages.filter { |p| p.urlPath == home }.flatMap { |p| declarationAnchors(p.entities, base) }
+    let declared = pages.filter { |p| p.urlPath == home }.into { |p| declarationAnchors(p.entities, base) }
     match declared.first do
       Just(anchor) => return anchor
       None => ()
@@ -123,7 +123,7 @@ module Tey.Docgen.Relations do
   end
 
   let declarationAnchors(entities: [Entity], base: String) -> [String] do
-    return entities.flatMap { |e|
+    return entities.into { |e|
       match e do
         TypeDecl(entry) => entry.name == base then [anchorOf(e)] else []
         RecordDecl(entry) => entry.name == base then [anchorOf(e)] else []
@@ -154,7 +154,7 @@ module Tey.Docgen.Relations do
   end
 
   let pageTraits(page: SourcePage, entities: [Entity], extensions: [Extension]) -> [TraitFacts] do
-    return entities.flatMap { |e|
+    return entities.into { |e|
       match e do
         TraitDecl(entry) => [TraitFacts {
           name: entry.name,
@@ -187,12 +187,12 @@ module Tey.Docgen.Relations do
 
   # The declaration of a trait, for its method list.
   let traitEntryFor(model: PackageModel, facts: TraitFacts) -> TraitEntry? do
-    let found = model.pages.flatMap { |p| traitEntries(p.entities) }
+    let found = model.pages.into { |p| traitEntries(p.entities) }
     return found.find { |t| t.qualifiedName == facts.qualifiedName }
   end
 
   let traitEntries(entities: [Entity]) -> [TraitEntry] do
-    return entities.flatMap { |e|
+    return entities.into { |e|
       match e do
         TraitDecl(entry) => [entry]
         ModuleDecl(entry) => traitEntries(entry.children)
@@ -206,7 +206,7 @@ module Tey.Docgen.Relations do
   # or a default from a `make <Trait>` block in any file — plus methods such
   # a block adds that the trait never declared.
   let traitMethods(model: PackageModel, entry: TraitEntry) -> ([FunctionEntry], [FunctionEntry]) do
-    let defaults = model.pages.flatMap { |p| traitDefaults(p.entities, entry) }
+    let defaults = model.pages.into { |p| traitDefaults(p.entities, entry) }
     let defaultNames = defaults.map { |f| f.name }
     let declaredNames = entry.functions.map { |f| f.name }
     let required = entry.functions.filter { |f| required?(f) && !defaultNames.contains?(f.name) }
@@ -215,7 +215,7 @@ module Tey.Docgen.Relations do
   end
 
   let traitDefaults(entities: [Entity], entry: TraitEntry) -> [FunctionEntry] do
-    return entities.flatMap { |e|
+    return entities.into { |e|
       match e do
         MakeDecl(m) => do
           let base = baseTypeOf(m.target)
@@ -236,7 +236,7 @@ module Tey.Docgen.Relations do
   # Every function documented anywhere in these entities: top-level and
   # module functions, trait methods, make members.
   let allFunctions(entities: [Entity]) -> [FunctionEntry] do
-    return entities.flatMap { |e|
+    return entities.into { |e|
       match e do
         FuncDecl(entry) => [entry]
         TraitDecl(entry) => entry.functions

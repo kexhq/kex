@@ -1,13 +1,13 @@
-# The Monad trait: `wrap` beside `flatMap`. A concrete one is reached by name
+# The Monad trait: `wrap` beside `into`. A concrete one is reached by name
 # (`List.wrap(1)` is `[1]`); code written once for every Monad reaches it
 # through its letter (`M.wrap(x)`), M being whichever container the arguments
 # are, passed to the function as its type.
 
-let incremented(M is Monad => xs: M<Integer>) -> M<Integer> = xs.flatMap { |x| M.wrap(x + 1) }
+let incremented(M is Monad => xs: M<Integer>) -> M<Integer> = xs.into { |x| M.wrap(x + 1) }
 
 let pairs(M is Monad => xs: M<Integer>, ys: M<Integer>) -> M<(Integer, Integer)> do
-  return xs.flatMap do |x|
-    ys.flatMap { |y| M.wrap((x, y)) }
+  return xs.into do |x|
+    ys.into { |y| M.wrap((x, y)) }
   end
 end
 

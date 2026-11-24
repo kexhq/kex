@@ -513,7 +513,7 @@ end
 
 trait Enumerable do
   reduce :> A -> (A -> T -> A) -> A
-  # defaults: map, filter, flatMap, collect
+  # defaults: map, filter, into, collect
 end
 
 make Range<A>, implement: Enumerable, Foldable<A> do
