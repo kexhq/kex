@@ -1175,6 +1175,11 @@ private:
     // Each trait's default definitions, by trait identity: a type implementing
     // the trait has them as its own methods (registerMakeSignature).
     std::unordered_map<std::string, std::vector<const ast::FunctionDef*>> m_traitDefaults;
+    // A trait default written with its requirement (`into : F<A> -> (A -> F<B>)
+    // -> F<B>` beside `let into(f) = ...`), by trait and name: the declaration
+    // types each implementor's copy, its `F<A>` being the implementing type.
+    std::map<std::pair<std::string, std::string>, const ast::TypeAnnotation*>
+        m_traitDefaultDeclarations;
     // An inherited default's result, per implementing type, left for the
     // trait's body to answer: that type, and the result's variable.
     std::unordered_multimap<const ast::FunctionClause*, std::pair<TypePtr, int>>

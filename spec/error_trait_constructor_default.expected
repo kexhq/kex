@@ -1,0 +1,8 @@
+spec/error_trait_constructor_default.kex:20:58: [KEXET-0491]: Error, `upperCase` expects argument 1 to be Char, but got Integer
+
+upperCase : Char -> Char
+
+upperCase : String -> String
+   |
+20 |   IO.printLine(Box { value: 1 }.twice { |x| Box { value: x.upperCase } }.value)
+   |                                                          ^ this has type Integer

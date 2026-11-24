@@ -1,0 +1,41 @@
+# A trait over a type constructor gives a requirement a body: written beside
+# its declaration, it is a default, and the declaration types it, `F<A>`
+# being the implementing type. Implementors may still write their own.
+
+trait Stepper<F> do
+  wrap : A -> F<A>
+  into : F<A> -> (A -> F<B>) -> F<B>
+
+  # Two steps: written once, for every implementor.
+  twice : F<A> -> (A -> F<A>) -> F<A>
+  let twice(f) = this.into(f).into(f)
+end
+
+record Box<A> do
+  value : A
+end
+
+make Box, implement: Stepper do
+  let wrap(v: B) -> Box<B> = Box { value: v }
+  let into(f) -> Box<B> = f(@value)
+end
+
+record Pair<A> do
+  first : A
+  second : A
+end
+
+# Its own `twice`, which wins over the default.
+make Pair, implement: Stepper do
+  let wrap(v: B) -> Pair<B> = Pair { first: v, second: v }
+  let into(f) -> Pair<B> = f(@first)
+  let twice(f) -> Pair<A> = this
+end
+
+let doubledTwice(S is Stepper => s: S<Integer>) -> S<Integer> = s.twice { |x| S.wrap(x * 2) }
+
+main do
+  IO.printLine(Box { value: 1 }.twice { |x| Box { value: x + 1 } }.value)
+  IO.printLine(doubledTwice(Box { value: 3 }).value)
+  IO.printLine(Pair { first: 1, second: 2 }.twice { |x| Pair { first: x, second: x } }.second)
+end

@@ -1,0 +1,21 @@
+# kex: check-only
+# The declaration types a default's block: on a Box<Integer>, `twice`'s
+# block takes an Integer.
+
+trait Stepper<F> do
+  into : F<A> -> (A -> F<B>) -> F<B>
+  twice : F<A> -> (A -> F<A>) -> F<A>
+  let twice(f) = this.into(f).into(f)
+end
+
+record Box<A> do
+  value : A
+end
+
+make Box, implement: Stepper do
+  let into(f) -> Box<B> = f(@value)
+end
+
+main do
+  IO.printLine(Box { value: 1 }.twice { |x| Box { value: x.upperCase } }.value)
+end

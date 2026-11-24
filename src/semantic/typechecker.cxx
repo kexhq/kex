@@ -98,6 +98,7 @@ auto TypeChecker::check(
     m_capturesIntoFoul.clear();
     m_traitDefaultClauses.clear();
     m_traitDefaults.clear();
+    m_traitDefaultDeclarations.clear();
     m_inheritedPendingResults.clear();
     m_shownThroughDistinct.clear();
     m_referencedModules.clear();
@@ -2664,6 +2665,15 @@ auto TypeChecker::registerTraits(const ast::Program& program) -> void {
                     },
                     bodyItem);
             }
+            // A requirement with a body is a default its declaration types.
+            for (const auto& bodyItem : node.body) {
+                const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&bodyItem);
+                if (ann && *ann &&
+                    std::find(td.defaultBodies.begin(), td.defaultBodies.end(), (*ann)->name) !=
+                        td.defaultBodies.end()) {
+                    m_traitDefaultDeclarations[{td.name, (*ann)->name}] = ann->get();
+                }
+            }
             m_traits.define(std::move(td));
         });
 }
@@ -3519,8 +3529,114 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def, const std::stri
             if (ownsKey(key) || inheritedKeys.contains(key)) {
                 continue;
             }
-            for (const auto* clause : ast::signatureClauses(*inherited)) {
-                preRegister(*inherited, *clause, true, &letters);
+            if (const auto declared =
+                    m_traitDefaultDeclarations.find({traitIdentity, inherited->name});
+                declared != m_traitDefaultDeclarations.end()) {
+                // The declaration types the copy: its receiver, `F<A>`, is this
+                // type, which binds `F` and `A` for the rest of it.
+                const int varMark = m_nextTypeVar;
+                // `make Box` is every instantiation: as `Box<V>`, the receiver can
+                // match the declaration's `F<A>`.
+                auto applied = receiver;
+                if (const auto* named = std::get_if<NamedType>(&receiver->kind);
+                    named && named->typeArgs.empty()) {
+                    std::size_t arity = 0;
+                    if (const auto declaredArity = m_declaredTypeArity.find(named->name);
+                        declaredArity != m_declaredTypeArity.end()) {
+                        arity = declaredArity->second;
+                    } else if (m_importedInterfaces) {
+                        if (const auto imported =
+                                m_importedInterfaces->typeArities.find(named->name);
+                            imported != m_importedInterfaces->typeArities.end()) {
+                            arity = imported->second;
+                        }
+                    }
+                    if (arity > 0) {
+                        std::vector<TypePtr> args;
+                        for (std::size_t i = 0; i < arity; ++i) {
+                            args.push_back(freshTypeVar());
+                        }
+                        applied = Type::named(named->name, std::move(args));
+                    }
+                }
+                auto declaredLetters = letters;
+                auto signature = annotationToSignature(*declared->second, &declaredLetters);
+                const auto* declaredReceiver =
+                    signature && !signature->params.empty()
+                        ? std::get_if<TypeApp>(&signature->params.front()->kind)
+                        : nullptr;
+                const auto* head = declaredReceiver
+                                       ? std::get_if<TypeVar>(&declaredReceiver->head->kind)
+                                       : nullptr;
+                const auto implementing = applicationOf(applied);
+                if (head && implementing &&
+                    implementing->args.size() == declaredReceiver->args.size()) {
+                    // `F` is the implementing type's constructor, and the
+                    // receiver's letters its arguments, wherever the
+                    // declaration writes them.
+                    std::unordered_map<int, TypePtr> filled;
+                    for (std::size_t i = 0; i < declaredReceiver->args.size(); ++i) {
+                        if (const auto* letter =
+                                std::get_if<TypeVar>(&declaredReceiver->args[i]->kind)) {
+                            filled[letter->id] = implementing->args[i];
+                        }
+                    }
+                    const int headId = head->id;
+                    std::function<TypePtr(const TypePtr&)> fill =
+                        [&](const TypePtr& type) -> TypePtr {
+                        if (!type) {
+                            return type;
+                        }
+                        if (const auto* app = std::get_if<TypeApp>(&type->kind)) {
+                            const auto* appHead = std::get_if<TypeVar>(&app->head->kind);
+                            if (appHead && appHead->id == headId) {
+                                std::vector<TypePtr> args;
+                                for (const auto& arg : app->args) {
+                                    args.push_back(fill(arg));
+                                }
+                                return applyConstructor(implementing->head, std::move(args));
+                            }
+                        }
+                        if (const auto* letter = std::get_if<TypeVar>(&type->kind)) {
+                            if (const auto found = filled.find(letter->id); found != filled.end()) {
+                                return found->second;
+                            }
+                        }
+                        return mapTypeChildren(type, fill);
+                    };
+                    for (auto& param : signature->params) {
+                        param = fill(param);
+                    }
+                    signature->params.front() = applied;
+                    signature->result = fill(signature->result);
+                    signature->name = inherited->name;
+                    signature->isFoul = inherited->isFoul;
+                    signature->clause = &inherited->clauses.front();
+                    for (const auto& param : inherited->clauses.front().params) {
+                        signature->paramNames.push_back(param.name.value_or(""));
+                    }
+                    signature->makeModule = modulePath;
+                    signature->receiverBounds = receiverBounds;
+                    // Its letters are each call's own.
+                    generalizeSignature(*signature, varMark, nullptr, true);
+                    // The declaration is this type's contract for it, as a `:>` of
+                    // its own would be: checking the body does not retype it.
+                    m_annotatedReceiverKeys[inherited->name].insert(annotatedReceiverKey(applied));
+                    // In place of an untyped one an earlier pass registered.
+                    auto& existing = m_methodSignatures[inherited->name];
+                    if (const auto same = std::find_if(
+                            existing.begin(), existing.end(),
+                            [&](const Signature& other) { return sameMethod(other, *signature); });
+                        same != existing.end()) {
+                        *same = std::move(*signature);
+                    } else {
+                        existing.push_back(std::move(*signature));
+                    }
+                }
+            } else {
+                for (const auto* clause : ast::signatureClauses(*inherited)) {
+                    preRegister(*inherited, *clause, true, &letters);
+                }
             }
             if (!inherited->clauses[0].body.empty()) {
                 inherit(inherited->name);
@@ -6720,6 +6836,13 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                     if (isThisPlaceholder(inheritor)) {
                         continue;
                     }
+                    // A default written with its requirement keeps what the
+                    // declaration made of it for this type.
+                    if (const auto trait = m_traitDefaultClauses.find(signature.clause);
+                        trait != m_traitDefaultClauses.end() &&
+                        m_traitDefaultDeclarations.contains({trait->second, def.name})) {
+                        continue;
+                    }
                     auto bound = withReceiver;
                     for (auto& param : bound.params) {
                         param = bindThis(param, inheritor);
@@ -7400,6 +7523,12 @@ auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
                 // implement: Functor do end` only says which argument varies,
                 // and the `map` of `make Result<X, E>` is the one it means.
                 if (definedElsewhere(req.name)) {
+                    continue;
+                }
+                // A requirement the trait gives a body (`into : ...` beside `let
+                // into(f) = ...`) is a default.
+                if (std::find(trait->defaultBodies.begin(), trait->defaultBodies.end(), req.name) !=
+                    trait->defaultBodies.end()) {
                     continue;
                 }
                 error(
