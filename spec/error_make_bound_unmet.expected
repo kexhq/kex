@@ -1,8 +1,8 @@
-spec/error_make_bound_unmet.kex:38:24: [KEXET-0511]: Error, `low` is defined for Span<Float> only where Float is Countable, and Float is not
+spec/error_make_bound_unmet.kex:38:24: [KEXET-0511]: Error, `low` only works on Span<Float> when Float is Countable, and Float isn't
    |
 38 |   IO.printLine(span.low)
    |                ^^^^^^^^
-spec/error_make_bound_unmet.kex:39:26: [KEXET-0511]: Error, `total` is defined for Span<Float> only where Float is Countable, and Float is not
+spec/error_make_bound_unmet.kex:39:26: [KEXET-0511]: Error, `total` only works on Span<Float> when Float is Countable, and Float isn't
    |
 39 |   IO.printLine(span.total)
    |                ^^^^^^^^^^

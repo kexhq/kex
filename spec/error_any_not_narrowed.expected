@@ -1,8 +1,8 @@
-spec/error_any_not_narrowed.kex:8:50: [KEXET-0509]: Error, `upperCase` is not defined for every value an `Any` may hold: narrow it first, with a `match` on its type (`n: Integer => ...`) or with `.to(T)`
+spec/error_any_not_narrowed.kex:8:50: [KEXET-0509]: Error, `upperCase` doesn't work on every value an `Any` can hold: check the type first with a `match` (`n: Integer => ...`), or convert it with `.to(T)`
   |
 8 | let shout(value: Any) -> String = value.upperCase
   |                                   ^^^^^^^^^^^^^^^
-spec/error_any_not_narrowed.kex:9:46: [KEXET-0509]: Error, `*` is not defined for every value an `Any` may hold: narrow it first, with a `match` on its type (`n: Integer => ...`) or with `.to(T)`
+spec/error_any_not_narrowed.kex:9:46: [KEXET-0509]: Error, `*` doesn't work on every value an `Any` can hold: check the type first with a `match` (`n: Integer => ...`), or convert it with `.to(T)`
   |
 9 | let doubled(value: Any) -> Integer = value * 2
   |                                      ^^^^^^^^^
@@ -10,7 +10,7 @@ spec/error_any_not_narrowed.kex:10:34: [KEXET-0458]: Error, then/else condition 
    |
 10 | let flag(value: Any) -> String = value then "yes" else "no"
    |                                  ^^^^^
-spec/error_any_not_narrowed.kex:12:44: [KEXET-0509]: Error, `id` is not defined for every value an `Any` may hold: narrow it first, with a `match` on its type (`n: Integer => ...`) or with `.to(T)`
+spec/error_any_not_narrowed.kex:12:44: [KEXET-0509]: Error, `id` doesn't work on every value an `Any` can hold: check the type first with a `match` (`n: Integer => ...`), or convert it with `.to(T)`
    |
 12 | let width(value: Any) -> Integer = value.id.length
    |                                    ^^^^^^^^

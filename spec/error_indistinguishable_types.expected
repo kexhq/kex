@@ -1,18 +1,18 @@
-spec/error_indistinguishable_types.kex:24:23: [KEXET-0512]: Error, `BookId` and `Integer` cannot be told apart at run time, so they cannot share a union: `BookId` is represented as `Integer`. Convert one first (`.as(Integer)`)
+spec/error_indistinguishable_types.kex:24:23: [KEXET-0512]: Error, `BookId` and `Integer` look the same at run time, so one union can't hold both: convert one first (`.as(Integer)`)
    |
 24 | let pick(id: BookId | Integer) -> String = "${id}"
    |              ^^^^^^^^^^^^^^^^
-spec/error_indistinguishable_types.kex:30:24: [KEXET-0513]: Error, a `BookId` cannot be held as a `Labeled`: at run time it is `Integer`, so its own `Labeled` implementation would not be found from the value. Take it as a `BookId`, or convert it first (`.as(Integer)`)
+spec/error_indistinguishable_types.kex:30:24: [KEXET-0513]: Error, a `BookId` can't be passed as a `Labeled`: at run time it is just a `Integer`, so its own `Labeled` code would never be found. Pass it as a `BookId`, or convert it first (`.as(Integer)`)
    |
 30 |   IO.printLine(labelOf(id))
    |                        ^^
-spec/error_indistinguishable_types.kex:31:25: [KEXET-0513]: Error, a `BookId` cannot be held as a `Labeled`: at run time it is `Integer`, so its own `Labeled` implementation would not be found from the value. Take it as a `BookId`, or convert it first (`.as(Integer)`)
+spec/error_indistinguishable_types.kex:31:25: [KEXET-0513]: Error, a `BookId` can't be passed as a `Labeled`: at run time it is just a `Integer`, so its own `Labeled` code would never be found. Pass it as a `BookId`, or convert it first (`.as(Integer)`)
    |
 31 |   let single: Labeled = id
    |               -------   ^^ this has type BookId
    |               |
    |               expected because of this annotation
-spec/error_indistinguishable_types.kex:32:25: [KEXET-0513]: Error, a `BookId` cannot be held as a `Labeled`: at run time it is `Integer`, so its own `Labeled` implementation would not be found from the value. Take it as a `BookId`, or convert it first (`.as(Integer)`)
+spec/error_indistinguishable_types.kex:32:25: [KEXET-0513]: Error, a `BookId` can't be passed as a `Labeled`: at run time it is just a `Integer`, so its own `Labeled` code would never be found. Pass it as a `BookId`, or convert it first (`.as(Integer)`)
    |
 32 |   let all: [Labeled] = [id]
    |                         ^^

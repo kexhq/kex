@@ -1,12 +1,12 @@
-spec/error_float_range_walk.kex:9:32: [KEXET-0511]: Error, `count` is defined for Range<Float> only where Float is Discrete, and Float is not
+spec/error_float_range_walk.kex:9:32: [KEXET-0511]: Error, `count` only works on Range<Float> when Float is Discrete, and Float isn't
   |
 9 |   IO.printLine((1.0..5.0).count)
   |                ^^^^^^^^^^^^^^^^
-spec/error_float_range_walk.kex:10:31: [KEXET-0511]: Error, `map` is defined for Range<Float> only where Float is Discrete, and Float is not
+spec/error_float_range_walk.kex:10:31: [KEXET-0511]: Error, `map` only works on Range<Float> when Float is Discrete, and Float isn't
    |
 10 |   IO.printLine((1.0..5.0).map { |x| x })
    |                ^^^^^^^^^^^^^^^^^^^^^^^^
-spec/error_float_range_walk.kex:11:30: [KEXET-0511]: Error, `sum` is defined for Range<Float> only where Float is Discrete, and Float is not
+spec/error_float_range_walk.kex:11:30: [KEXET-0511]: Error, `sum` only works on Range<Float> when Float is Discrete, and Float isn't
    |
 11 |   IO.printLine((1.0..5.0).sum)
    |                ^^^^^^^^^^^^^^
