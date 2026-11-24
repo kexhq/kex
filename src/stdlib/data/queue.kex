@@ -199,7 +199,7 @@ make Queue<A>, implement: Enumerable, Foldable, Monoid, Showable do
   # @example
   #   Queue.from([1, 2, 3]).showValue   # => "Queue(1, 2, 3)"
   showValue :> String
-  let showValue = "Queue(${this.items.map { |x| x.showValue }.join(", ")})"
+  let showValue -> String = "Queue(${this.items.map { |x| x.showValue }.join(", ")})"
 end
 
 make Queue<A>, implement: Blankable do

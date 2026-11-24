@@ -847,7 +847,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // annotations resolve against: as a value it is still a type name.
                 const bool builtinName =
                     type && type == m_globals.get(node.name) && builtinType(node.name) != nullptr;
-                if (type && !builtinName) {
+                // A binding that says nothing (a module of the same name, `Binary`)
+                // does not hide the type the name also is.
+                const auto* unknownBinding =
+                    type ? std::get_if<UnknownType>(&resolve(type)->kind) : nullptr;
+                const bool saysNothing =
+                    unknownBinding && !unknownBinding->written && namesKnownType(node.name);
+                if (type && !builtinName && !saysNothing) {
                     return type;
                 }
                 // A bare TYPE NAME used as a value (`x.to(Integer)`, `let t =
@@ -2969,6 +2975,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     }
                 }
                 return resultType;
+            } else if constexpr (
+                std::is_same_v<T, ast::BreakExpr> || std::is_same_v<T, ast::NextExpr>) {
+                // Leaves the loop: no value reaches what follows (decision 9).
+                return Type::never();
             } else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
                 auto value = node.value ? inferExpr(*node.value) : Type::voidType();
                 // `return x if cond` is a ReturnExpr around TrailingIf{x, cond}.
@@ -5442,6 +5452,139 @@ auto TypeChecker::reachableFreeFunctions(
 
 auto TypeChecker::checkCall(
     const std::string& name,
+    const std::vector<TypePtr>& argTypes,
+    SourceLocation loc,
+    bool isMethodCall,
+    const ast::MethodCall* methodCall,
+    const ast::Expr* callExpr,
+    const std::vector<const ast::Expr*>* argumentExprs) -> TypePtr {
+    auto result =
+        checkCallCore(name, argTypes, loc, isMethodCall, methodCall, callExpr, argumentExprs);
+    // Decision 1: an unannotated function's call is its body at these
+    // arguments (`shout("a")` is a String when `shout(s) = s.upperCase`).
+    if (const auto* open = result ? std::get_if<UnknownType>(&result->kind) : nullptr;
+        open && !open->written) {
+        if (auto atCall = callResultAt(name, argTypes)) {
+            return atCall;
+        }
+    }
+    // A call on a value whose type is not known yet answers what every
+    // function it may reach answers, when they all agree on one concrete
+    // type: `"${x}"` is a String whatever `x` turns out to be. Not a written
+    // `Any`, on which a call needs narrowing first (decision 7).
+    if (isMethodCall && !argTypes.empty() && result) {
+        const auto* gap = std::get_if<UnknownType>(&result->kind);
+        const auto receiver = resolve(argTypes.front());
+        const auto* writtenAny = std::get_if<UnknownType>(&receiver->kind);
+        if (gap && !gap->written && isUndetermined(receiver) &&
+            !(writtenAny && writtenAny->written)) {
+            if (auto common = commonCandidateResult(name, argTypes)) {
+                return common;
+            }
+        }
+    }
+    return result;
+}
+
+auto TypeChecker::commonCandidateResult(
+    const std::string& name, const std::vector<TypePtr>& argTypes) -> TypePtr {
+    const auto arity = argTypes.size();
+    // A field of that name may be what is read: its type is the record's.
+    for (const auto& [record, fields] : m_recordFields) {
+        if (fields.count(name)) {
+            return nullptr;
+        }
+    }
+    if (m_importedInterfaces) {
+        for (const auto& [record, fields] : m_importedInterfaces->recordFieldNames) {
+            if (fields.count(name)) {
+                return nullptr;
+            }
+        }
+    }
+    TypePtr common;
+    bool any = false;
+    bool agree = true;
+    const auto consider = [&](const Signature& signature) {
+        const auto required = signature.requiredParams.value_or(signature.params.size());
+        if (arity < required || arity > signature.params.size()) {
+            return;
+        }
+        // Only a candidate the other arguments fit is one this call may reach,
+        // and its letters are what they bind (`to(String)` is a `String?`).
+        std::unordered_map<int, TypePtr> bound;
+        std::function<void(const TypePtr&, const TypePtr&)> bind = [&](const TypePtr& param,
+                                                                       const TypePtr& arg) {
+            const auto p = resolve(param);
+            const auto a = resolve(arg);
+            if (const auto* var = std::get_if<TypeVar>(&p->kind); var && var->id < 0) {
+                bound.try_emplace(var->id, a);
+                return;
+            }
+            const auto* pn = std::get_if<NamedType>(&p->kind);
+            const auto* an = std::get_if<NamedType>(&a->kind);
+            if (pn && an && pn->typeArgs.size() == an->typeArgs.size()) {
+                for (std::size_t i = 0; i < pn->typeArgs.size(); ++i) {
+                    bind(pn->typeArgs[i], an->typeArgs[i]);
+                }
+            }
+        };
+        for (std::size_t i = 1; i < arity && i < signature.params.size(); ++i) {
+            if (!argTypes[i] || !argMatchesParam(argTypes[i], signature.params[i])) {
+                return;
+            }
+            bind(signature.params[i], argTypes[i]);
+        }
+        any = true;
+        std::function<TypePtr(const TypePtr&)> substitute = [&](const TypePtr& type) -> TypePtr {
+            if (const auto* var = std::get_if<TypeVar>(&type->kind); var && var->id < 0) {
+                const auto found = bound.find(var->id);
+                return found == bound.end() ? type : found->second;
+            }
+            return mapTypeChildren(type, substitute);
+        };
+        const auto result = signature.result ? resolve(substitute(signature.result)) : nullptr;
+        if (!result || !isConcreteValue(result) || containsTypeVariable(result) ||
+            anyType(result, [&](const TypePtr& node) { return isThisPlaceholder(node); })) {
+            agree = false;
+        } else if (!common) {
+            common = result;
+        } else if (!typesEqual(common, result)) {
+            agree = false;
+        }
+    };
+    for (const auto* table : {&m_methodSignatures, &m_userSignatures}) {
+        if (const auto found = table->find(name); found != table->end()) {
+            for (const auto& signature : found->second) {
+                consider(signature);
+            }
+        }
+    }
+    // What a trait requires of a value it may hold, the value as receiver:
+    // `combine : This -> This` follows the value, `to : Type<T> -> T?` does
+    // not.
+    for (const auto& [_, trait] : m_traits.all()) {
+        for (const auto& required : trait.requiredMethods) {
+            if (required.name != name) {
+                continue;
+            }
+            auto withReceiver = required;
+            withReceiver.params.insert(
+                withReceiver.params.begin(), Type::named(kex::names::kThisType));
+            if (withReceiver.requiredParams) {
+                withReceiver.requiredParams = *withReceiver.requiredParams + 1;
+            }
+            consider(withReceiver);
+        }
+    }
+    for (const auto* imported : importedCandidates(name)) {
+        consider(imported->signature);
+    }
+    return any && agree ? common : nullptr;
+}
+
+auto TypeChecker::checkCallCore(
+    const std::string& name,
     const std::vector<TypePtr>& suppliedArgTypes,
     SourceLocation loc,
     bool isMethodCall,
@@ -5579,7 +5722,16 @@ auto TypeChecker::checkCall(
         }
         return named ? Type::named(kex::names::kTypeRecord, {named}) : nullptr;
     };
-    const auto fits = [&](std::size_t i, const TypePtr& param) {
+    const auto fits = [&](std::size_t i, const TypePtr& writtenParam) {
+        // A trait default's `This` past the receiver is the receiver's type at
+        // this call: `15.clamp(0, 10)` takes Integers.
+        auto param = writtenParam;
+        if (isMethodCall && i > 0 && !argTypes.empty() && isThisPlaceholder(resolve(param))) {
+            const auto receiver = resolve(argTypes[0]);
+            if (!isUndetermined(receiver)) {
+                param = receiver;
+            }
+        }
         if (auto selected = selectedType(i, param)) {
             return argMatchesParam(selected, param);
         }
@@ -5650,6 +5802,19 @@ auto TypeChecker::checkCall(
                     return required.result;
                 }
             }
+            // A requirement called on `this` answers what it is required to:
+            // `this.price * 2` under `price :> Integer` is an Integer.
+            for (const auto& required : m_currentTrait->requiredMethods) {
+                if (required.name == name && argTypes.size() == required.params.size() + 1 &&
+                    required.result && isConcreteValue(resolve(required.result)) &&
+                    !containsTypeVariable(resolve(required.result)) &&
+                    !isThisPlaceholder(resolve(required.result))) {
+                    if (callExpr) {
+                        m_decidedCalls[callExpr] = {CallKind::TraitMethod, m_currentTrait->name};
+                    }
+                    return required.result;
+                }
+            }
         }
         std::string receiverTrait;
         if (auto* constrained = std::get_if<ConstrainedType>(&receiver->kind)) {
@@ -5677,6 +5842,34 @@ auto TypeChecker::checkCall(
                 if (std::find(trait->defaultMethods.begin(), trait->defaultMethods.end(), name) !=
                     trait->defaultMethods.end()) {
                     viaTrait(receiverTrait);
+                    // What the default answers, when its body says one type that
+                    // does not follow the value (`doubled` is an Integer).
+                    if (const auto methods = m_methodSignatures.find(name);
+                        methods != m_methodSignatures.end()) {
+                        for (const auto& signature : methods->second) {
+                            const auto owner = signature.clause
+                                                   ? m_traitDefaultClauses.find(signature.clause)
+                                                   : m_traitDefaultClauses.end();
+                            if (owner == m_traitDefaultClauses.end() ||
+                                owner->second != trait->name ||
+                                signature.params.size() != argTypes.size() || !signature.result) {
+                                continue;
+                            }
+                            const auto result = resolve(signature.result);
+                            // Not decided yet (its body comes later): the pending
+                            // result, which the checks of its uses wait for.
+                            if (const auto pending = typeVariableId(result);
+                                pending && m_pendingResultVars.contains(*pending)) {
+                                return result;
+                            }
+                            if (isConcreteValue(result) && !containsTypeVariable(result) &&
+                                !anyType(result, [&](const TypePtr& node) {
+                                    return isThisPlaceholder(node);
+                                })) {
+                                return result;
+                            }
+                        }
+                    }
                     return Type::unknown();
                 }
                 for (const auto& required : trait->requiredMethods) {
@@ -9212,8 +9405,10 @@ namespace kex::semantic {
 // record, an ADT or an alias. What a type name in value position, or a
 // parameter written as one, has to be to stand for the type.
 auto TypeChecker::namesKnownType(const std::string& name) const -> bool {
+    // A type the imported sources declare counts too: `Binary`, `List`.
     return isPrimitiveTypeName(name) || m_recordFields.count(resolveRecordName(name)) ||
-           m_adtVariants.count(name) || m_typeAliases.count(name);
+           m_adtVariants.count(name) || m_typeAliases.count(name) ||
+           (m_importedInterfaces && m_importedInterfaces->typeNames.count(name));
 }
 
 } // namespace kex::semantic

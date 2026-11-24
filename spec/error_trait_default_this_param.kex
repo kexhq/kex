@@ -1,0 +1,11 @@
+# kex: check-only
+# A trait default's `This` parameter is the receiver's type at the call:
+# Comparable's `clamp(low: This, high: This) -> This` on an Integer takes
+# Integers and answers one, through the stdlib's imported signature too.
+main do
+  let bounded: Integer = 15.clamp(0, 10)
+  let wrong: String = 15.clamp(0, 10)
+  IO.printLine(15.clamp("a", 10))
+  IO.printLine(bounded)
+  IO.printLine(wrong)
+end

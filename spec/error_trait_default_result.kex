@@ -1,0 +1,20 @@
+# kex: check-only
+# A trait default is typed: a requirement called on `this` answers what it is
+# required to (`this.price * 2` under `price :> Integer` is an Integer), and
+# the default answers that both on a type that inherits it and through the
+# trait, even where the call is checked before the default's body.
+trait Pricing do
+  price :> Integer
+  let doubled = this.price * 2
+end
+record Box do
+  size : Integer
+end
+make Box, implement: Pricing do
+  let price = @size
+end
+let viaTrait(item: Pricing) -> String = item.doubled
+main do
+  let direct: String = Box { size: 2 }.doubled
+  IO.printLine(viaTrait(Box { size: 1 }))
+end

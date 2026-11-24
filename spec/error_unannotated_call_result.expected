@@ -1,0 +1,12 @@
+spec/error_unannotated_call_result.kex:10:23: [KEXET-0001]: Error, type mismatch: expected Integer, got String
+   |
+10 |   let loud: Integer = shout("hi")
+   |             -------   ^^^^^^^^^^^ this has type String
+   |             |
+   |             expected because of this annotation
+spec/error_unannotated_call_result.kex:11:25: [KEXET-0001]: Error, type mismatch: expected String, got Integer
+   |
+11 |   let doubled: String = twice(3)
+   |                ------   ^^^^^^^^ this has type Integer
+   |                |
+   |                expected because of this annotation

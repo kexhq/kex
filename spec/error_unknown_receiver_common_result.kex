@@ -1,0 +1,24 @@
+# kex: check-only
+# A call on a value whose type is not known yet answers what every function
+# it may reach answers, when they all agree: `"${x}"` is a String whatever `x`
+# is, so it is no Integer (docs/typechecker-hm-plan.md §4.1, fail closed).
+# A loop's `break` leaves it, so it is Never and adds nothing to a join.
+let echo(value) = value
+
+let greeting(name: String) -> Integer = "${echo(name)}!"
+
+let firstEven(xs: [Integer]) -> Integer do
+  var found = 0
+  var index = 0
+  while index < xs.count do
+    found = xs[index].or(0)
+    break if found % 2 == 0
+    index = index + 1
+  end
+  found
+end
+
+main do
+  IO.printLine(greeting("Ada"))
+  IO.printLine(firstEven([1, 2]))
+end

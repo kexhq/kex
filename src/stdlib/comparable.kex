@@ -87,7 +87,7 @@ trait Comparable do
   #   15.clamp(0, 10)      # => 10
   #   (-3).clamp(0, 10)    # => 0
   #   0.5.clamp(0.0, 1.0)  # => 0.5
-  let clamp(low, high) = this.max(low).min(high)
+  let clamp(low: This, high: This) -> This = this.max(low).min(high)
 
   # The ordering operators, from +compare+ alone: whatever is +Comparable+
   # can be written with +<+ and +>+, a record as much as a number. The

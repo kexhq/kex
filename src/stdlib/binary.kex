@@ -258,5 +258,5 @@ make Binary, implement: Showable, Inspectable do
   #     Just(text) => IO.printLine(text)
   #     None       => IO.printLine("received ${response.body.length} bytes")
   #   end
-  let to(String) = Kex.Intrinsic.Fun.convertTo(this, String)
+  let to(String) -> String? = Kex.Intrinsic.Fun.convertTo(this, String)
 end

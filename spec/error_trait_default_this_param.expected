@@ -1,0 +1,12 @@
+spec/error_trait_default_this_param.kex:7:31: [KEXET-0001]: Error, type mismatch: expected String, got Integer
+  |
+7 |   let wrong: String = 15.clamp(0, 10)
+  |              ------   ^^^^^^^^^^^^^^^ this has type Integer
+  |              |
+  |              expected because of this annotation
+spec/error_trait_default_this_param.kex:8:25: [KEXET-0491]: Error, `clamp` expects argument 2 to be This, but got String
+
+clamp : Comparable -> This -> This -> This
+  |
+8 |   IO.printLine(15.clamp("a", 10))
+  |                         ^^^ this has type String

@@ -56,12 +56,12 @@ end
 # users care about (Time, Date, and DateTime do so in their own files).
 make Showable do
   let showValue -> String = Kex.Intrinsic.Kex.show(this)
-  let to(String) = Just(this.showValue)
+  let to(String) -> String? = Just(this.showValue)
 end
 
 make Optional<Showable>, implement: Showable do
-  let showValue(@Just(x)) = x.showValue
-  let showValue(@None) = ""
+  let showValue(@Just(x)) -> String = x.showValue
+  let showValue(@None) -> String = ""
 end
 
 # The same for Result, with one deliberate asymmetry: SHOWING a result shows
@@ -79,8 +79,8 @@ end
 # What functions RETURN is unchanged: `Integer.parse` still answers with a
 # Result, `IO.inspect` still shows `Ok(42)`, and both arms are still matchable.
 make Result<X, E>, implement: Showable do
-  let showValue(@Ok(x)) = x.showValue
-  let showValue(@Error(e)) = "Error(${e.showValue})"
+  let showValue(@Ok(x)) -> String = x.showValue
+  let showValue(@Error(e)) -> String = "Error(${e.showValue})"
 end
 
 # The running toolchain, which backend, which version, which features.

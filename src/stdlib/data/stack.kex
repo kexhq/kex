@@ -174,7 +174,7 @@ make Stack<A>, implement: Enumerable, Foldable, Monoid, Showable do
   # @example
   #   Stack.from([1, 2, 3]).showValue   # => "Stack(1, 2, 3)"
   showValue :> String
-  let showValue = "Stack(${this.items.map { |x| x.showValue }.join(", ")})"
+  let showValue -> String = "Stack(${this.items.map { |x| x.showValue }.join(", ")})"
 end
 
 make Stack<A>, implement: Blankable do

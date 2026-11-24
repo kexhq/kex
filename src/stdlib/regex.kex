@@ -48,7 +48,7 @@ make Regex, implement: Showable do
   # @example
   #   "${re`\d+`}"   # => "re`\d+`"
   showValue :> String
-  let showValue = "re`${@source}`"
+  let showValue -> String = "re`${@source}`"
 end
 
 # A pattern that failed to compile.

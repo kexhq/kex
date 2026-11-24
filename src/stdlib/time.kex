@@ -745,5 +745,5 @@ make TimeError, implement: Showable do
   # @example
   #   "${InvalidDate(2026, 13, 1)}"   # => "not a calendar date: 2026-13-1"
   showValue :> String
-  let showValue = Time.errorMessage(this)
+  let showValue -> String = Time.errorMessage(this)
 end

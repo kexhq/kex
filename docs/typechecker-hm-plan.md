@@ -186,6 +186,13 @@ Done:
   already rejected where it is written, or whose argument misses a
   parameter the first check settled, is left to that error. The copies'
   answers are dropped, so the backends read the first check's.
+  A call's type is that check's body type, computed at the call during
+  inference (memoised by argument types, a recursive call left to its
+  signature): `shout("hi")` is a String (`spec/error_unannotated_call_result.kex`).
+- A trait default is typed: a requirement called on `this` answers its
+  required result, and the default's result is what an implementor and a
+  trait-typed value get, the pending result while its body is still to come
+  (`spec/error_trait_default_result.kex`).
 - The two escapes that let a call matching no candidate pass (§11 item 11)
   are deleted: `unreliableCandidates` (every candidate with an unannotated
   parameter) and its receiver-side twin (`anyUnknownParamCandidate` returning
@@ -206,6 +213,29 @@ Done:
   the call. KexI writes a receiver function's annotation where its position
   holds one of the receiver's letters, which the checked signature cannot
   name.
+
+- Failing closed on `Unknown` (§4.1, §10), first slices. Measured on the
+  specs and examples: an unwritten Unknown reached a concrete parameter about
+  4,600 times in 168 files, from a few producers. A call on a value not known
+  yet now answers what every function it may reach answers when they agree
+  on one concrete type and no record has a field of that name: `"${x}"` is a
+  String (the largest producer, `showValue`, 187 sites, once every stdlib
+  `showValue` declares its `String`). The candidates are those the other
+  arguments fit, their letters bound by them, so `x.to(String)` is a
+  `String?`. A trait's requirement is a candidate too, the value as its
+  receiver: one answering `This` (`combine`) follows the value and leaves the
+  call open. Three stdlib `to(String)` declarations now say `String?`. `break` and `next` are `Never` (decision 9). The
+  stdlib's intrinsic constants (`Console.GREEN`, `System.BITWIDTH`) declare
+  their types. A type the imported sources declare, named as a value, is its
+  `Type<X>` (`to(Binary)`), as a program's own already was.
+  The ENV capability's functions declare the types their docs state. A
+  trait default's `This` parameter is the receiver's type at the call, so
+  Comparable's `clamp(low: This, high: This) -> This` is typed
+  (`spec/error_trait_default_this_param.kex`).
+  `spec/error_unknown_receiver_common_result.kex`. Unknowns left
+  in the specs and examples: 987 before, 718 now. Next producers:
+  identifiers bound from them, `.to` whose selector reaches the call
+  untyped, `.or`, `.get`, `.try`.
 
 Not done: everything else in §12, in that order.
 
@@ -1287,6 +1317,7 @@ but each covers its class, not its repro.
 
 1. **A parallel core or an in-place refactor** (§12).
 2. **A bare trait result with several parameters** (decision 4, §4.5 rule 7):
+   Decided (2026-11-24): b, checked per call.
    - a. name the type
    - b. check per call
    - c. specify promotion against the join
@@ -1298,8 +1329,10 @@ but each covers its class, not its repro.
    (decisions 3 and 5). For example, `BookId | Integer`, or a `BookId` in a
    `[Shape]`. Proposed: an error. The alternative is values that carry their
    type or implementation explicitly, which is a second dispatch mechanism.
+   Decided (2026-11-24): an error.
 5. **"Exported functions are annotated"** (decision 1): count what it breaks,
    then adopt it or drop it.
+   Decided (2026-11-24): count first, then decide.
 
 **Other open questions:**
 
@@ -1314,6 +1347,7 @@ but each covers its class, not its repro.
    `Int64`.
 8. **Written intersection types** (§4.5, 5): allowed in programs, or kept as the
    type of overload sets only.
+   Decided (2026-11-24): allowed in programs.
 9. **HKT argument order** (§8.2): Haskell's last-argument convention or type
    lambdas.
 10. **Type splicing in `compiled do`** (§8.1, fix 4): decided and built

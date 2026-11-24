@@ -74,6 +74,7 @@ module System do
   # @example
   #   System.BITWIDTH   # => 64
   BITWIDTH : Integer
+  BITWIDTH : Integer
   let BITWIDTH = Kex.Intrinsic.System.bitWidth()
 
   # Returns +true+ when running on macOS.

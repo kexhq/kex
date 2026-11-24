@@ -824,6 +824,18 @@ private:
         // A call with neither node (`&.to(Float)`): its arguments,
         // receiver slot first when `isMethodCall`.
         const std::vector<const ast::Expr*>* argumentExprs = nullptr) -> TypePtr;
+    auto checkCallCore(
+        const std::string& name,
+        const std::vector<TypePtr>& argTypes,
+        SourceLocation loc,
+        bool isMethodCall,
+        const ast::MethodCall* methodCall,
+        const ast::Expr* callExpr,
+        const std::vector<const ast::Expr*>* argumentExprs) -> TypePtr;
+    // The one concrete result every function `name` may reach at `arity`
+    // declares (`showValue` is a String whatever it is called on), or null.
+    auto commonCandidateResult(const std::string& name, const std::vector<TypePtr>& argTypes)
+        -> TypePtr;
     auto argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool;
     // Whether `value` is a literal written straight into a distinct type it
     // backs: `1` as a `BookId`, `"t1"` as a `TeamId`, `[1, 2]` as `[BookId]`.
@@ -1457,6 +1469,24 @@ private:
     // set of argument types a call settles, keeping only the errors and
     // leaving every answer as the first check gave it.
     auto checkUnannotatedCalls(const ast::Program& program) -> void;
+    // Decision 1 at the call: the function a call reaches, when it is one
+    // checked per call, and the type its body has for these arguments.
+    auto unannotatedFunction(const std::string& name) -> const ast::FunctionDef*;
+    auto settledArguments(const ast::FunctionDef& def, const std::vector<TypePtr>& argTypes)
+        -> std::optional<std::vector<TypePtr>>;
+    struct BodyCheck {
+        TypePtr type;
+        std::vector<Diagnostic> diagnostics;
+        std::vector<DemandedCall> calls;
+    };
+    auto checkBodyAt(const ast::FunctionDef& def, const std::vector<TypePtr>& arguments)
+        -> BodyCheck;
+    auto callResultAt(const std::string& name, const std::vector<TypePtr>& argTypes) -> TypePtr;
+    const ast::Program* m_checkedProgram = nullptr;
+    bool m_unannotatedFunctionsReady = false;
+    std::unordered_map<std::string, const ast::FunctionDef*> m_unannotatedFunctions;
+    std::unordered_map<std::string, TypePtr> m_callResults;
+    std::set<std::string> m_bodiesInProgress;
     // The copies those checks ran on: kept, so no later node reuses an
     // address a table still names.
     std::vector<std::unique_ptr<ast::FunctionDef>> m_callChecks;
