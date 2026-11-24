@@ -241,7 +241,9 @@ let braceAndDoBlock(value: String) -> Relation do
 end
 
 let movedIntoModule(value: String) -> Relation do
-  let double = "let double(value: Integer) = value * 2"
+  # Written with its result: an exported function's signature is what other
+  # units see, so it says what it answers (KEXET-0514).
+  let double = "let double(value: Integer) -> Integer = value * 2"
   Relation {
     name: "move function into module",
     original: program(["IO.printLine(double(${value}))"], declarations: [double]),

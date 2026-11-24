@@ -101,8 +101,8 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
                 return Type::optional(semanticType(type->typeArgs[0], vars));
             }
             if (type->name == kex::names::kMapType && type->typeArgs.size() == 2) {
-                return Type::map(
-                    semanticType(type->typeArgs[0], vars), semanticType(type->typeArgs[1], vars));
+                auto key = semanticType(type->typeArgs[0], vars);
+                return Type::map(std::move(key), semanticType(type->typeArgs[1], vars));
             }
             if (type->name == kex::names::kListType && type->typeArgs.size() == 1) {
                 return Type::list(semanticType(type->typeArgs[0], vars));
@@ -130,7 +130,12 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
             }
             return Type::named(type->name, convertAll(type->typeArgs));
         case KexiType::Func: {
-            auto func = Type::func(convertAll(type->typeArgs), semanticType(type->result, vars));
+            // Each read in order, left to right as the type is written: a letter's
+            // id is the order it is first read in, and the order a call's
+            // arguments are evaluated in is the compiler's choice (GCC's and
+            // Clang's differ), which named `B` `C` on Linux.
+            auto params = convertAll(type->typeArgs);
+            auto func = Type::func(std::move(params), semanticType(type->result, vars));
             std::get<kex::semantic::FuncType>(func->kind).foul = type->foul;
             return func;
         }
@@ -138,11 +143,13 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
         case KexiType::List:
             return Type::list(
                 type->typeArgs.empty() ? Type::unknown() : semanticType(type->typeArgs[0], vars));
-        case KexiType::Map:
+        case KexiType::Map: {
+            auto key =
+                type->typeArgs.size() > 0 ? semanticType(type->typeArgs[0], vars) : Type::unknown();
             return Type::map(
-                type->typeArgs.size() > 0 ? semanticType(type->typeArgs[0], vars) : Type::unknown(),
-                type->typeArgs.size() > 1 ? semanticType(type->typeArgs[1], vars)
-                                          : Type::unknown());
+                std::move(key), type->typeArgs.size() > 1 ? semanticType(type->typeArgs[1], vars)
+                                                          : Type::unknown());
+        }
         case KexiType::Optional:
             return Type::optional(
                 type->typeArgs.empty() ? Type::unknown() : semanticType(type->typeArgs[0], vars));
@@ -170,8 +177,10 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
         case KexiType::Never: return Type::never();
         case KexiType::Unknown: return Type::unknown();
         case KexiType::Any: return Type::any();
-        case KexiType::App:
-            return Type::app(semanticType(type->result, vars), convertAll(type->typeArgs));
+        case KexiType::App: {
+            auto head = semanticType(type->result, vars);
+            return Type::app(std::move(head), convertAll(type->typeArgs));
+        }
     }
     return Type::unknown();
 }

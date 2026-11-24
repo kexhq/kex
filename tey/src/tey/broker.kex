@@ -93,14 +93,14 @@ private do
   end
 
   let text(request: Any, key: String) -> String do
-    match request[key] do
+    match JSON.fields(request)[key] do
       Just(value) => return Kex.Intrinsic.Kex.kind(value) == :string then "${value}" else ""
       None => return ""
     end
   end
 
   let words(request: Any, key: String) -> [String] do
-    match request[key] do
+    match JSON.fields(request)[key] do
       Just(values) => do
         return [] if Kex.Intrinsic.Kex.kind(values) != :list
         return values.map { |value| "${value}" }

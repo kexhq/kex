@@ -83,6 +83,32 @@ let parse(text: String) -> Result<Any, JSONError> = parseWithOptions(text, {})
 parse : String -> {Atom: Bool} -> Result<Any, JSONError>
 let parse(text: String, options: {Atom: Bool}) -> Result<Any, JSONError> = parseWithOptions(text, options)
 
+# The fields of a parsed object, or none for any other value. +parse+ answers
+# +Any+, which has no fields to read until it is narrowed: this is that step.
+#
+# @param value [Any] a parsed value
+# @return [{String: Any}] its fields, or +{}+ when it is no object
+#
+# @example
+#   JSON.fields(JSON.parse("{\"a\": 1}").or({}))["a"]   # => Just(1)
+#   JSON.fields(JSON.parse("[1]").or({}))                # => {}
+let fields(value: Any) -> {String: Any} = match value do
+  object: {String: Any} => object
+  _ => {}
+end
+
+# The elements of a parsed array, or none for any other value.
+#
+# @param value [Any] a parsed value
+# @return [[Any]] its elements, or +[]+ when it is no array
+#
+# @example
+#   JSON.items(JSON.parse("[1, 2]").or([]))   # => [1, 2]
+let items(value: Any) -> [Any] = match value do
+  list: [Any] => list
+  _ => []
+end
+
 private do
   # Camel-case atom literals are represented by map-field syntax today.
   # Derive the key from that syntax so the compiler has no JSON-specific

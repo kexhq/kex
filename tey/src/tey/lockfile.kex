@@ -84,20 +84,21 @@ end
 let decode(text: String) -> LockState or! String do
   let root = match JSON.parse(text) do
     Error(_) => return Error("invalid tey.lock JSON")
-    Ok(value) => value
+    Ok(value) => JSON.fields(value)
   end
   let version = Tey.Lockfile.lockText(root["version"])
   return Error("unsupported tey.lock version '${version}'") if version != "1"
   let workspace = match root["workspace"] do
-    Just(value) => value
+    Just(value) => JSON.fields(value)
     None => return Error("tey.lock is missing workspace metadata")
   end
   let toolchain = match root["toolchain"] do
-    Just(value) => value
+    Just(value) => JSON.fields(value)
     None => return Error("tey.lock is missing toolchain metadata")
   end
   let dependencies = match root["packages"] do
-    Just(value) => value.entries.map do |name, raw|
+    Just(value) => JSON.fields(value).entries.map do |name, entry|
+      let raw = JSON.fields(entry)
       Tey.Lockfile.Dependency {
         name: "${name}",
         version: Tey.Lockfile.lockText(raw["version"]),

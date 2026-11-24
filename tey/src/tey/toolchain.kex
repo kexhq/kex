@@ -226,12 +226,12 @@ foul activeInfo -> ToolchainInfo or! String do
       match JSON.parse(result.stdout) do
         Error(_) => return Error("selected Kex returned invalid --info JSON")
         Ok(info) => do
-          let version = match info["version"] do
+          let version = match JSON.fields(info)["version"] do
             None => ""
             Just(value) => "${value}"
           end
           return Error("selected Kex --info is missing its version") if version == ""
-          let floor = match info["runtime_otp_floor"] do
+          let floor = match JSON.fields(info)["runtime_otp_floor"] do
             None => None
             Just(value) => match Integer.parse("${value}") do
               Ok(number) => Just(number)

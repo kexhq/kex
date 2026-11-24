@@ -103,10 +103,11 @@ module Tey.Docgen.Index do
             IO.printError("${Console.YELLOW}warning:${Console.RESET} --link-model ${path} is not JSON; skipped")
             []
           end
-          Ok(root) => do
+          Ok(document) => do
+            let root = JSON.fields(document)
             let prefix = "../../${jsonText(root["package"])}/${jsonText(root["version"])}/"
             match root["links"] do
-              Just(list) => list.map { |l| LinkEntry {
+              Just(list) => JSON.items(list).map(~JSON.fields).map { |l| LinkEntry {
                 name: jsonText(l["name"]),
                 urlPath: prefix + jsonText(l["urlPath"]),
                 anchor: jsonText(l["anchor"]),
@@ -410,8 +411,8 @@ module Tey.Docgen.Index do
         match JSON.parse(text) do
           Error(_) => []
           Ok(root) => do
-            match root["versions"] do
-              Just(list) => list.map { |v| parseVersionEntry(v) }
+            match JSON.fields(root)["versions"] do
+              Just(list) => JSON.items(list).map { |v| parseVersionEntry(v) }
               None => []
             end
           end
@@ -420,7 +421,8 @@ module Tey.Docgen.Index do
     end
   end
 
-  let parseVersionEntry(v: Any) -> VersionEntry do
+  let parseVersionEntry(value: Any) -> VersionEntry do
+    let v = JSON.fields(value)
     return VersionEntry {
       id: jsonText(v["id"]),
       label: jsonText(v["label"]),

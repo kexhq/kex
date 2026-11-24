@@ -2734,6 +2734,9 @@ int main() {
         it("hovers `tie` as a function", [source]() {
             const auto reply = askAt("file:///tmp/kex-lsp-tie-fn.kex", source, "hover", 3, 6);
             assertTrue(reply.find("tie : [Integer]") != std::string::npos, "tie: " + reply);
+            // The inner call on the same line is its own: `ys` is a [String].
+            const auto inner = askAt("file:///tmp/kex-lsp-tie-fn.kex", source, "hover", 3, 19);
+            assertTrue(inner.find("tie : [String]") != std::string::npos, "inner tie: " + inner);
         });
         it("types a block through a bounded constructor letter", [source]() {
             // `xs: M<Integer>`: the requirement's `F<A>` makes the block's x an

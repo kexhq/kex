@@ -187,7 +187,7 @@ end
 let decode(text: String) -> Receipt or! String do
   let root = match JSON.parse(text) do
     Error(_) => return Error("invalid receipt JSON")
-    Ok(value) => value
+    Ok(value) => JSON.fields(value)
   end
   let name = Tey.Programs.text(root["name"])
   return Error("receipt has no package name") if name == ""

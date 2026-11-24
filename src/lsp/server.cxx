@@ -1221,6 +1221,12 @@ auto callNameLocation(
     if (expression.location.line < 1 || name.empty()) {
         return std::nullopt;
     }
+    // A method call knows where its name is written: two calls of one name on
+    // one line (`xs.tie { |x| ys.tie { ... } }`) are told apart by it.
+    if (const auto* call = std::get_if<ast::MethodCall>(&expression.kind);
+        method && call && call->method == name && call->methodLocation.line > 0) {
+        return call->methodLocation;
+    }
     size_t lineStart = 0;
     for (int line = 1; line < expression.location.line; ++line) {
         const auto newline = source.find('\n', lineStart);
