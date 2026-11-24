@@ -61,7 +61,7 @@ module Queue do
   let empty -> Queue<A> = Queue { front: [], back: [] }
 end
 
-make Queue<A>, implement: Enumerable, Foldable<A>, Monoid, Showable do
+make Queue<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   # Folds from front to back.
   #
   # This is +Queue+'s +Enumerable+/+Foldable+ primitive.

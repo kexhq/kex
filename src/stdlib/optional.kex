@@ -470,8 +470,8 @@ end
 # @example Closing the conversion immediately
 #   let port = env.get("PORT").into { |s| s.to(Integer) }.or(8080)
 to : A -> Type<T> -> T?
-let to(value, String) = Just(value.showValue)
-let to(value, t) = Kex.Intrinsic.Fun.convertTo(value, t)
+let to(value: Any, String) = Just(value.showValue)
+let to(value: Any, t) = Kex.Intrinsic.Fun.convertTo(value, t)
 
 # Converts between +Integer+ and +String+ in the given base, 2 through 36.
 #
@@ -492,7 +492,7 @@ let to(value, t) = Kex.Intrinsic.Fun.convertTo(value, t)
 #   "FF".to(Integer, radix: 16)    # => Just(255)
 #   "ff".to(Integer, radix: 10)    # => None
 to : A -> Type<T> -> Integer -> T?
-let to(value, t, radix: Integer) = Kex.Intrinsic.Fun.convertTo(value, t, radix)
+let to(value: Any, t, radix: Integer) = Kex.Intrinsic.Fun.convertTo(value, t, radix)
 
 # Renders a number as +String+ in an explicit culture: the decimal separator
 # is substituted and digit groups are inserted per the culture's group sizes.
@@ -510,7 +510,7 @@ let to(value, t, radix: Integer) = Kex.Intrinsic.Fun.convertTo(value, t, radix)
 # @example
 #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
 #   (1500.5).to(String, culture: hu)              # => Just("1\u{A0}500,5")
-let to(value, t, culture: Culture) = Culture.renderNumber(value.showValue, culture)
+let to(value: Any, t, culture: Culture) = Culture.renderNumber(value.showValue, culture)
 
 # Renders a number with a digit pattern and a culture's separators. The
 # pattern controls precision exactly as +to(String, format)+; the culture
@@ -528,7 +528,7 @@ let to(value, t, culture: Culture) = Culture.renderNumber(value.showValue, cultu
 # @example
 #   let hu = Culture.of("HU_HU").or(Culture.DEFAULT)
 #   (1234.5).to(String, Number.format`#.00`, culture: hu)              # => Just("1\u{A0}234,50")
-let to(value, t, format: NumberFormat, culture: Culture) do
+let to(value: Any, t: Type<String>, format: NumberFormat, culture: Culture) -> String? do
   match value.to(String, format) do
     Just(text) => Culture.renderNumber(text, culture)
     None => None

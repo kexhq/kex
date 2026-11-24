@@ -12,6 +12,8 @@ spec/error_make_generic_shared_parameter.kex:23:32: [KEXET-0491]: Error, `<` exp
 < : Measure<A> -> Measure<A> -> Bool
 
 < : Qty<A> -> Qty<A> -> Bool
+
+< : Comparable -> This -> Bool
    |
 23 |   let ordered = seconds(1.0) < meters(2.0)
    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^

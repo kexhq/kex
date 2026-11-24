@@ -11,6 +11,8 @@ spec/error_operator_overload_argument.kex:18:27: [KEXET-0491]: Error, `<` expect
 < : Col -> String -> Cond
 
 < : Measure<A> -> Measure<A> -> Bool
+
+< : Comparable -> This -> Bool
    |
 18 |   IO.printLine("${email < email}")
    |                   ^^^^^^^^^^^^^

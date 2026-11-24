@@ -196,6 +196,9 @@ struct KexiConstructor {
     // `Just(1)` from the prelude typed as Unknown, so `Just(1) + Just(2)`
     // passed the checker. Absent in chunks written before it existed.
     std::vector<int> typeParamSlots;
+    // Each payload's type as declared (`Assign(String, Expression)`), for one
+    // that is not a type parameter. Absent in chunks written before it existed.
+    std::vector<KexiTypePtr> payloadTypes;
 };
 
 struct KexiADT {

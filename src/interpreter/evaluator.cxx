@@ -2607,9 +2607,27 @@ auto Evaluator::decidedFunction(const ast::Expr& expr, const ast::MethodCall& ca
         return module;
     }
     // A receiver function the checker chose by the receiver's type (the
-    // prelude's `List.map` for a list): that type's implementation.
+    // prelude's `List.map` for a list): that type's implementation, when it
+    // has one at this call's arity. A Map's `count(pred)` is declared on Map
+    // but its body is Foldable's, while `Map.count` is the zero-argument one:
+    // the value decides that call, as BEAM's dispatcher does.
     if (const auto owner = m_programs.receiverTypeOf(expr); !owner.empty()) {
-        return ownMethodName(owner, call.method);
+        const auto name = ownMethodName(owner, call.method);
+        const auto given = call.args.size() + call.namedArgs.size() + (call.block ? 1 : 0);
+        const auto defs = m_functionDefs.find(name);
+        const bool atThisArity =
+            defs == m_functionDefs.end() ||
+            std::any_of(defs->second.begin(), defs->second.end(), [&](const ast::FunctionDef* def) {
+                return std::any_of(
+                    def->clauses.begin(), def->clauses.end(), [&](const ast::FunctionClause& c) {
+                        std::size_t required = c.params.size();
+                        while (required > 0 && c.params[required - 1].defaultValue) {
+                            --required;
+                        }
+                        return given >= required && given <= c.params.size();
+                    });
+            });
+        return atThisArity ? name : std::string{};
     }
     return {};
 }

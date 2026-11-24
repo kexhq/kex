@@ -168,7 +168,10 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
         }
         case KexiType::Constrained: {
             int genericId = 0;
-            if (type->name.size() == 1 && type->name[0] >= 'A' && type->name[0] <= 'Z') {
+            // A letter, or `_`: a trait's receiver, named so no written letter
+            // is taken for it.
+            if (type->name == "_" ||
+                (type->name.size() == 1 && type->name[0] >= 'A' && type->name[0] <= 'Z')) {
                 auto [it, _] = vars.try_emplace(type->name, -static_cast<int>(vars.size() + 1));
                 genericId = it->second;
             }
@@ -876,9 +879,18 @@ auto KexiRegistry::buildSemanticInterfaces() const -> kex::semantic::ImportedInt
                         const int slot = i < static_cast<int>(ctor.typeParamSlots.size())
                                              ? ctor.typeParamSlots[i]
                                              : -1;
+                        // A payload that is no type parameter has the type it was
+                        // declared with (`Assign(String, Expression)`).
+                        TypeVarMap payloadVars;
+                        for (std::size_t p = 0; p < adt.typeParams.size(); ++p) {
+                            payloadVars.emplace(adt.typeParams[p], -(static_cast<int>(p) + 1));
+                        }
+                        const auto declared =
+                            i < static_cast<int>(ctor.payloadTypes.size()) && ctor.payloadTypes[i]
+                                ? semanticType(ctor.payloadTypes[i], payloadVars)
+                                : kex::semantic::Type::unknown();
                         function.signature.params.push_back(
-                            slot >= 0 ? kex::semantic::Type::genericLetter(-(slot + 1))
-                                      : kex::semantic::Type::unknown());
+                            slot >= 0 ? kex::semantic::Type::genericLetter(-(slot + 1)) : declared);
                     }
                     function.backendModule = module.beamAtom;
                     function.backendFunction = ctor.name;

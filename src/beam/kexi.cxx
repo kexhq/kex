@@ -581,9 +581,13 @@ auto constructorToTerm(const KexiConstructor& c) -> TermPtr {
     for (const auto slot : c.typeParamSlots) {
         slots.push_back(Term::integer(slot));
     }
+    std::vector<TermPtr> payloads;
+    for (const auto& payload : c.payloadTypes) {
+        payloads.push_back(typeToTerm(payload));
+    }
     return Term::tuple(
         {Term::binary(c.name), Term::binary(c.tagAtom), Term::list(std::move(fieldNames)),
-         Term::integer(c.arity), Term::list(std::move(slots))});
+         Term::integer(c.arity), Term::list(std::move(slots)), Term::list(std::move(payloads))});
 }
 
 auto termToConstructor(const TermPtr& term) -> KexiConstructor {
@@ -598,6 +602,11 @@ auto termToConstructor(const TermPtr& term) -> KexiConstructor {
     if (t.size() > 4) {
         for (const auto& slot : t[4]->asList()) {
             c.typeParamSlots.push_back(static_cast<int>(slot->asInt()));
+        }
+    }
+    if (t.size() > 5) {
+        for (const auto& payload : t[5]->asList()) {
+            c.payloadTypes.push_back(termToType(payload));
         }
     }
     return c;

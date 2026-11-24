@@ -161,7 +161,7 @@ make [A], implement: Monoid do
   #
   # @example
   #   [1].combine(List.identity)   # => [1]
-  let identity = []
+  let identity -> This = []
 
   # Concatenates +other+ onto this list. Concatenation is the monoid
   # operation for +List+.

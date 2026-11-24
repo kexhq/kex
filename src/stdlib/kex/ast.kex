@@ -302,6 +302,7 @@ module Kex.AST do
   #   # => Ok("[Integer]")
   #   Kex.AST.parseType("String?").map { |t| Kex.AST.typeRefText(t) }
   #   # => Ok("String?")
+  typeRefText : TypeRef -> String
   let typeRefText(NamedType(name, [])) -> String = name
   let typeRefText(NamedType(name, args)) -> String = "${name}<${args.map { |arg| Kex.AST.typeRefText(arg) }.join(", ")}>"
   let typeRefText(FunctionType(params, result)) -> String = "(${params.map { |param| Kex.AST.typeRefText(param) }.join(", ")}) -> ${Kex.AST.typeRefText(result)}"
@@ -358,6 +359,7 @@ module Kex.AST do
   # @example
   #   Kex.AST.patternRefText(WildcardPattern)             # => "_"
   #   Kex.AST.patternRefText(BindPattern("n"))            # => "n"
+  patternRefText : PatternRef -> String
   let patternRefText(BindPattern(name)) -> String = name
   let patternRefText(LiteralPattern(value)) -> String = value
   let patternRefText(ConstructorPattern(name, [])) -> String = name
@@ -371,6 +373,8 @@ module Kex.AST do
   let patternRefText(ThisPattern(inner)) -> String = "@${Kex.AST.patternRefText(inner)}"
   let patternRefText(WildcardPattern) -> String = "_"
 
+  patternFieldText : PatternField -> String
+  patternFieldText : String -> PatternRef? -> Bool -> String
   let patternFieldText(PatternField { name, pattern, stringKey?: stringKey }) -> String = Kex.AST.patternFieldText(name, pattern, stringKey)
   let patternFieldText(name: String, None, false) -> String = name
   let patternFieldText(name: String, None, true) -> String = "\"${name}\""
@@ -388,6 +392,7 @@ module Kex.AST do
   # @example
   #   Kex.AST.referenceText(WildcardPattern)   # => "_"
   #   Kex.AST.referenceText(AnyType)           # => "Any"
+  referenceText : (TypeRef | PatternRef) -> String
   let referenceText(NamedType(name, args)) -> String = Kex.AST.typeRefText(NamedType(name, args))
   let referenceText(FunctionType(params, result)) -> String = Kex.AST.typeRefText(FunctionType(params, result))
   let referenceText(TupleType(elements)) -> String = Kex.AST.typeRefText(TupleType(elements))

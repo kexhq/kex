@@ -591,6 +591,8 @@ void collectFromFunctionDef(
 
 // Whether an annotation writes a type letter (`Result<A, String>`): `This`
 // and the other names the checker substitutes are not letters.
+auto mentionsGeneric(const KexiTypePtr& type) -> bool;
+
 auto writesLetter(const kex::ast::TypeExpr& written) -> bool {
     const auto any = [](const auto& children) {
         return std::any_of(children.begin(), children.end(), [](const auto& child) {
@@ -603,10 +605,29 @@ auto writesLetter(const kex::ast::TypeExpr& written) -> bool {
             if constexpr (std::is_same_v<T, kex::ast::GenericVar>) {
                 return true;
             } else if constexpr (std::is_same_v<T, kex::ast::TypeName>) {
-                return node.parts.size() == 1 && node.parts[0].size() == 1 &&
-                       std::isupper(static_cast<unsigned char>(node.parts[0][0]));
+                // `This` is the receiver's type, its letters included.
+                return node.parts.size() == 1 &&
+                       ((node.parts[0].size() == 1 &&
+                         std::isupper(static_cast<unsigned char>(node.parts[0][0]))) ||
+                        node.parts[0] == kex::names::kThisType);
             } else if constexpr (std::is_same_v<T, kex::ast::GenericType>) {
-                return any(node.args);
+                // `F<B>`, `This<B>`: an applied letter is one too.
+                return (node.name.parts.size() == 1 &&
+                        ((node.name.parts[0].size() == 1 &&
+                          std::isupper(static_cast<unsigned char>(node.name.parts[0][0]))) ||
+                         node.name.parts[0] == kex::names::kThisType)) ||
+                       any(node.args);
+            } else if constexpr (std::is_same_v<T, kex::ast::FunctionType>) {
+                // `f: X -> Y -> Z`: a block's letters are the signature's.
+                return (node.param && writesLetter(*node.param)) ||
+                       (node.result && writesLetter(*node.result));
+            } else if constexpr (std::is_same_v<T, kex::ast::BlockType>) {
+                return (node.inner && writesLetter(*node.inner)) || any(node.params);
+            } else if constexpr (
+                std::is_same_v<T, kex::ast::UnionType> ||
+                std::is_same_v<T, kex::ast::IntersectionType>) {
+                return (node.left && writesLetter(*node.left)) ||
+                       (node.right && writesLetter(*node.right));
             } else if constexpr (std::is_same_v<T, kex::ast::TupleType>) {
                 return any(node.elements);
             } else if constexpr (std::is_same_v<T, kex::ast::ListType>) {
@@ -680,18 +701,27 @@ auto receiverFunctionFromDef(
             // letter can be written for; the annotation spells it as the
             // receiver does. So does a position holding the function's own
             // letter (`Y` of `let wrap(value: Y) -> [Y]`), which converted
-            // alone read back as Unknown. Not a trait's default: its receiver is
-            // exported as the letter `T`, which an element letter written `T`
-            // (Enumerable's `filter -> [T]`) would then name.
-            const bool onTrait = receiverIsTrait;
-            const auto open = [onTrait](const kex::semantic::TypePtr& type) {
-                return kex::semantic::anyType(type, [onTrait](const kex::semantic::TypePtr& node) {
-                    const auto* var = std::get_if<kex::semantic::TypeVar>(&node->kind);
-                    return var && (!onTrait || isInferenceVariable(*var));
-                });
+            // alone read back as Unknown.
+            // A trait inside a module keeps the checked types: its annotation
+            // names its module's types bare (`FilePath` in FS.File), which a
+            // reader elsewhere cannot resolve. A top-level trait's names need no
+            // module (Foldable's `find -> T?`).
+            const bool moduleTrait =
+                receiverIsTrait && receiverTrait.find('.') != std::string::npos;
+            const auto open = [moduleTrait](const kex::semantic::TypePtr& type) {
+                return kex::semantic::anyType(
+                    type, [moduleTrait](const kex::semantic::TypePtr& node) {
+                        const auto* var = std::get_if<kex::semantic::TypeVar>(&node->kind);
+                        return var && (!moduleTrait || isInferenceVariable(*var));
+                    });
             };
             const auto& written =
                 fd.clauses.empty() ? nullptr : &fd.clauses[std::min(clause, fd.clauses.size() - 1)];
+            // A receiver writing no letters of its own (a record) leaves none to
+            // clash with: the checked letters are written as letters, so a
+            // stand-in's `bind(address, block)`, typed by its requirement, keeps
+            // `(TCPListener -> A) -> Result<A, NetError>`.
+            const bool letterFree = !mentionsGeneric(receiverFunction.receiverType);
             for (size_t i = skipParams; i < signature.params.size(); i++) {
                 const auto* param =
                     written && i < written->params.size() ? &written->params[i] : nullptr;
@@ -699,13 +729,13 @@ auto receiverFunctionFromDef(
                     open(signature.params[i]) && param && param->type && *param->type &&
                             writesLetter(**param->type)
                         ? convertTypeExpr(*param->type)
-                        : convertSemanticType(signature.params[i]));
+                        : convertSemanticType(signature.params[i], letterFree));
             }
             receiverFunction.returnType =
                 open(signature.result) && written && written->returnAnnotation &&
                         *written->returnAnnotation && writesLetter(**written->returnAnnotation)
                     ? convertTypeExpr(*written->returnAnnotation)
-                    : convertSemanticType(signature.result);
+                    : convertSemanticType(signature.result, letterFree);
             receiverFunction.isFoul = signature.isFoul || fd.isFoul;
         }
     }
@@ -1279,7 +1309,10 @@ void collectFromTraitDef(
     }
     meta.traitDefs.push_back(std::move(traitMetadata));
 
-    auto receiverType = kexiConstrained("T", identity);
+    // Named `_`, which no signature can write: a default written with the
+    // trait's own `T` (Foldable's `find -> T?`) keeps it, where a receiver
+    // named `T` took it over.
+    auto receiverType = kexiConstrained("_", identity);
     std::unordered_map<std::string, std::vector<KexiTypePtr>> standaloneSigs;
     for (const auto& item : trait.body) {
         if (auto* ann = std::get_if<std::unique_ptr<kex::ast::TypeAnnotation>>(&item);
@@ -1449,6 +1482,7 @@ void collectFromTypeDef(
                             }
                         }
                         ctor.typeParamSlots.push_back(slot);
+                        ctor.payloadTypes.push_back(arg ? convertTypeExpr(arg) : kexiUnknown());
                     }
                     adt.constructors.push_back(std::move(ctor));
                     te.constructors.push_back(gt->name.parts.back());
@@ -1688,6 +1722,22 @@ void collectFromTopLevel(
             // receiver stays as declared: a generic one made another unit's
             // `to/2` ambiguous with it at run time (spec/stdlib/ast.spec).
             auto& receiverFunction = iface.receiverFunctions.back();
+            // A first parameter written as a pattern (`referenceText(NamedType(n,
+            // args))`) names no type: a declaration of the clause's arity does,
+            // its first type the receiver.
+            if (!(first.type && *first.type) && it != standaloneSigs.end()) {
+                const auto arity = fd.clauses[clause].params.size();
+                for (const auto& sig : it->second) {
+                    if (sig && sig->kind == KexiType::Func && sig->typeArgs.size() == arity &&
+                        !mentionsUnknown(sig)) {
+                        receiverFunction.receiverType = sig->typeArgs.front();
+                        receiverFunction.paramTypes.assign(
+                            sig->typeArgs.begin() + 1, sig->typeArgs.end());
+                        receiverFunction.returnType = sig->result;
+                        break;
+                    }
+                }
+            }
             if (it != standaloneSigs.end()) {
                 for (const auto& sig : it->second) {
                     if (sig && sig->kind == KexiType::Func &&

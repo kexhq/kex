@@ -10,9 +10,13 @@ map : Result<A, B> -> (A -> C) -> Result<C, B>
 
 map : Stream<A> -> (A -> B) -> Stream<B>
 
+map : String -> (Char -> A) -> [A]
+
 map : Validation<A, B> -> (A -> C) -> Validation<C, B>
 
 map : [A] -> (A -> B) -> [B]
+
+map : Enumerable -> (A -> B) -> [B]
 
 map : {A: B} -> (A -> B -> C) -> [C]
    |
@@ -30,9 +34,13 @@ map : Result<A, B> -> (A -> C) -> Result<C, B>
 
 map : Stream<A> -> (A -> B) -> Stream<B>
 
+map : String -> (Char -> A) -> [A]
+
 map : Validation<A, B> -> (A -> C) -> Validation<C, B>
 
 map : [A] -> (A -> B) -> [B]
+
+map : Enumerable -> (A -> B) -> [B]
 
 map : {A: B} -> (A -> B -> C) -> [C]
    |
@@ -50,9 +58,13 @@ map : Result<A, B> -> (A -> C) -> Result<C, B>
 
 map : Stream<A> -> (A -> B) -> Stream<B>
 
+map : String -> (Char -> A) -> [A]
+
 map : Validation<A, B> -> (A -> C) -> Validation<C, B>
 
 map : [A] -> (A -> B) -> [B]
+
+map : Enumerable -> (A -> B) -> [B]
 
 map : {A: B} -> (A -> B -> C) -> [C]
    |

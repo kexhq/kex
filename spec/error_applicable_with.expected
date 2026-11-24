@@ -6,15 +6,13 @@ with : Result<A, B> -> Result<C, B> -> (A -> C -> D) -> Result<D, B>
 
 with : Validation<A, B> -> Validation<C, B> -> (A -> C -> D) -> Validation<D, B>
 
-with : [A] -> [B] -> (Unknown -> Unknown -> Unknown) -> [C]
+with : [A] -> [B] -> (A -> B -> C) -> [C]
   |
 8 |   let mixed = [1].with(Just(2)) { |a, b| a + b }
   |                        ^^^^^^^ this has type Integer?
-spec/error_applicable_with.kex:9:15: [KEXET-0491]: Error, `traverse` expects argument 2 to be A -> F<C>, but got N -> Integer
+spec/error_applicable_with.kex:9:15: [KEXET-0491]: Error, `traverse` expects argument 2 to be A -> F<B>, but got Integer -> Integer
 
 traverse : [A] -> (A -> F<B>) -> F<[B]>
-
-traverse : [A] -> (Unknown -> F<Unknown>) -> F<[B]>
   |
 9 |   let plain = traverse([1, 2]) { |n| n + 1 }
   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -30,7 +28,7 @@ with : Result<A, B> -> Result<C, B> -> (A -> C -> D) -> Result<D, B>
 
 with : Validation<A, B> -> Validation<C, B> -> (A -> C -> D) -> Validation<D, B>
 
-with : [A] -> [B] -> (Unknown -> Unknown -> Unknown) -> [C]
+with : [A] -> [B] -> (A -> B -> C) -> [C]
    |
 11 |   let oneArg = Just(1).with(Just(2)) { |a| a }
    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

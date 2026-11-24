@@ -17,7 +17,7 @@
 #
 #   let name = "Ada"
 #   "hello, ${name}"                  # => "hello, Ada"
-make String, implement: Enumerable, Foldable<Char> do
+make String, implement: Enumerable<Char>, Foldable<Char> do
   # Folds the string from the left, one +Char+ at a time.
   #
   # This is +String+'s +Enumerable+ primitive: +map+, +filter+, +find+, +any?+
