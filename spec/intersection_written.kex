@@ -1,0 +1,11 @@
+# Intersections written in a program (docs/typechecker-hm-plan.md §14 item 8,
+# decided 2026-11-24): `Showable & Comparable` takes a value implementing both
+# traits and offers what each does, and passes on as either one.
+let shown(value: Showable) -> String = "<${value}>"
+let describe(value: Showable & Comparable) -> String = "${shown(value)} ${value > value}"
+
+main do
+  let n: Showable & Comparable = 4
+  IO.printLine(describe(n))
+  IO.printLine(describe("a"))
+end

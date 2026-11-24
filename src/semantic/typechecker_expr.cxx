@@ -2675,6 +2675,18 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         elemType = joinElementType(elemType, type);
                     }
                 }
+                // An element of a distinct type held as a trait it implements
+                // itself (`[Labeled]` holding a `BookId`): what dispatches on it
+                // later finds its backing's implementation (§14 item 4).
+                if (const auto* wantedList =
+                        expected ? std::get_if<ListType>(&resolve(expected)->kind) : nullptr) {
+                    for (const auto& [element, type] : written) {
+                        if (const auto trait = distinctTraitClash(type, wantedList->element);
+                            !trait.empty()) {
+                            typeMismatch(element->location, wantedList->element, type);
+                        }
+                    }
+                }
                 // Where the list's type is expected (a typed `let`, a declared
                 // result), each element is checked against the element type and
                 // a wrong one is reported where it is, rather than the whole list
@@ -4417,6 +4429,12 @@ auto TypeChecker::declaredBindingType(
         noteFloatLiteral(*value, declared);
         return declared;
     }
+    // A distinct type bound as a trait it implements itself: a later call
+    // dispatches on the value, which is its backing (§14 item 4).
+    if (const auto trait = distinctTraitClash(actual, declared); !trait.empty()) {
+        mismatch(actual);
+        return declared;
+    }
     // A written `Any` is no gradual value: it is the top type, and a binding
     // declared narrower takes it only through a type pattern (decision 7).
     const auto* unknown = std::get_if<UnknownType>(&actual->kind);
@@ -4694,6 +4712,13 @@ auto TypeChecker::argMatchesParam(const TypePtr& writtenArg, const TypePtr& writ
     // A written `Any` is the top type (decision 7): passed on, it fits only a
     // parameter that takes any value (a variable, `Any`, a trait every value
     // has), never a concrete one until a type pattern narrows it (#764).
+    // A distinct type held as a trait it implements itself: the run time
+    // would find its backing's implementation instead (§14 item 4).
+    if ((std::holds_alternative<ListType>(argType->kind) ||
+         std::holds_alternative<OptionalType>(argType->kind)) &&
+        !distinctTraitClash(argType, paramType).empty()) {
+        return false;
+    }
     if (const auto* top = std::get_if<UnknownType>(&argType->kind); top && top->written) {
         const auto param = resolve(paramType);
         return isUndetermined(param) || std::holds_alternative<ConstrainedType>(param->kind);
@@ -5460,6 +5485,17 @@ auto TypeChecker::checkCall(
     const std::vector<const ast::Expr*>* argumentExprs) -> TypePtr {
     auto result =
         checkCallCore(name, argTypes, loc, isMethodCall, methodCall, callExpr, argumentExprs);
+    // Decision 4 with several parameters of a bare trait result: the call's
+    // type is the body's at these arguments (`combine(1, 2.5)` is a Float).
+    if (result && (std::holds_alternative<ConstrainedType>(result->kind) ||
+                   (std::holds_alternative<NamedType>(result->kind) &&
+                    m_traits.lookup(std::get<NamedType>(result->kind).name)))) {
+        if (traitResultFunction(name)) {
+            if (auto atCall = callResultAt(name, argTypes)) {
+                return atCall;
+            }
+        }
+    }
     // Decision 1: an unannotated function's call is its body at these
     // arguments (`shout("a")` is a String when `shout(s) = s.upperCase`).
     if (const auto* open = result ? std::get_if<UnknownType>(&result->kind) : nullptr;
@@ -8933,6 +8969,20 @@ auto TypeChecker::checkCallCore(
             }
         }
     }
+    // A distinct type given for a trait it implements itself.
+    if (argumentOff && offIndex < argTypes.size() && offIndex < firstPtr->params.size() &&
+        !std::holds_alternative<NamedType>(resolve(argTypes[offIndex])->kind)) {
+        if (const auto trait = distinctTraitClash(argTypes[offIndex], firstPtr->params[offIndex]);
+            !trait.empty()) {
+            const auto value = resolve(argTypes[offIndex]);
+            error(
+                diag::Code::DistinctAsTraitValue, loc,
+                {{"type", typeToString(value)},
+                 {"trait", trait},
+                 {"backing", typeToString(distinctBacking(value))}});
+            return Type::unknown();
+        }
+    }
     // The value a dot call goes through is an `Any` the program has not
     // narrowed: that is the mistake, not which overload it missed.
     if (argumentOff && isMethodCall && offIndex == 0 && !argTypes.empty()) {
@@ -9964,6 +10014,9 @@ auto TypeChecker::joinBranches(const std::vector<Branch>& branches, const TypePt
     TypePtr joined = Type::never();
     for (const auto& branch : branches) {
         joined = joinBranchType(joined, branch.type);
+    }
+    if (!branches.empty()) {
+        reportIndistinguishable(joined, branches.front().location);
     }
     return joined;
 }

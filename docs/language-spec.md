@@ -286,6 +286,7 @@ trait  true  type  using  var  when  while
 | `[X]` | List type |
 | `{K: V}` | Map type |
 | `A \| B` | Union type |
+| `A & B` | Intersection type: a value that is both |
 | `T?` | Optional sugar — `Optional<T> = Just(T) \| None` |
 | `T or! E` | Result sugar — `Result<T, E> = Ok(T) \| Error(E)` |
 | `A or B` | Either sugar — `Either<A, B> = Left(A) \| Right(B)` |
@@ -310,6 +311,21 @@ end
 
 `value.upperCase` on an `Any` is an error: it is not defined for every value
 an `Any` may hold.
+
+An intersection is a value that is every one of its members at once. Of
+traits, it takes any value implementing all of them, and offers what each
+one does:
+
+```kex
+let describe(value: Showable & Comparable) -> String = "${value} ${value > value}"
+
+describe(3)     # an Integer is both
+describe([1])   # error: a list is not Comparable
+```
+
+Of record types, it has every field of each: `{x: Integer} & {y: Integer}` is
+`{x: Integer, y: Integer}`. An overloaded function's type is the
+intersection of its signatures, which is how the checker shows one.
 
 ### Union Types (Algebraic Data Types)
 

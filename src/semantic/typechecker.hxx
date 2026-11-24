@@ -426,6 +426,17 @@ private:
     auto registerTypeAliasesInModule(const ast::ModuleDef& mod) -> void;
     auto typeDefToType(const ast::TypeDef& def) -> TypePtr;
     auto distinctBacking(const TypePtr& type) const -> TypePtr;
+    // Two members of `type` (a union) the run time cannot tell apart: a
+    // distinct type and what backs it, or two distinct types backed alike
+    // (§14 item 4, decided: an error).
+    auto indistinguishableMembers(const TypePtr& type) const
+        -> std::optional<std::pair<TypePtr, TypePtr>>;
+    auto reportIndistinguishable(const TypePtr& type, SourceLocation location) -> void;
+    // The trait a distinct type implements in its own `make` that `param`
+    // asks for as a value: empty when `arg` is no such case (§14 item 4).
+    auto distinctTraitClash(const TypePtr& arg, const TypePtr& param) const -> std::string;
+    auto innermostDistinct(const TypePtr& type) const -> TypePtr;
+    std::set<std::string> m_reportedIndistinguishable;
     auto resolveDistinctName(const std::string& name) const -> std::string;
     auto representationsCompatible(const TypePtr& from, const TypePtr& to) -> bool;
     auto checkRecordDef(const ast::RecordDef& def) -> void;
@@ -1482,6 +1493,8 @@ private:
     auto checkBodyAt(const ast::FunctionDef& def, const std::vector<TypePtr>& arguments)
         -> BodyCheck;
     auto callResultAt(const std::string& name, const std::vector<TypePtr>& argTypes) -> TypePtr;
+    auto traitParameter(const ast::Param& param) const -> bool;
+    auto traitResultFunction(const std::string& name) -> const ast::FunctionDef*;
     const ast::Program* m_checkedProgram = nullptr;
     bool m_unannotatedFunctionsReady = false;
     std::unordered_map<std::string, const ast::FunctionDef*> m_unannotatedFunctions;

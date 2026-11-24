@@ -65,6 +65,7 @@ auto TypeChecker::check(
     m_diagnostics = &diagnostics;
     m_entryFiles = entryFiles;
     m_checkedProgram = &program;
+    m_reportedIndistinguishable.clear();
     m_unannotatedFunctionsReady = false;
     m_unannotatedFunctions.clear();
     m_callResults.clear();
@@ -2263,6 +2264,101 @@ auto TypeChecker::resolveDistinctName(const std::string& name) const -> std::str
         scope.resize(dot);
     }
     return name;
+}
+
+auto TypeChecker::indistinguishableMembers(const TypePtr& type) const
+    -> std::optional<std::pair<TypePtr, TypePtr>> {
+    const auto* members = type ? std::get_if<UnionType>(&resolve(type)->kind) : nullptr;
+    if (!members) {
+        return std::nullopt;
+    }
+    // What a value of `member` is at run time: its backing, through every
+    // distinct type that wraps another.
+    const auto runtime = [&](TypePtr member) {
+        member = resolve(member);
+        for (int depth = 0; depth < 8; ++depth) {
+            auto backing = distinctBacking(member);
+            if (!backing || typesEqual(backing, member)) {
+                break;
+            }
+            member = resolve(backing);
+        }
+        return member;
+    };
+    const auto distinct = [&](const TypePtr& member) {
+        const auto backing = distinctBacking(resolve(member));
+        return backing && !typesEqual(backing, resolve(member));
+    };
+    for (std::size_t i = 0; i < members->members.size(); ++i) {
+        for (std::size_t j = i + 1; j < members->members.size(); ++j) {
+            const auto& left = members->members[i];
+            const auto& right = members->members[j];
+            if ((distinct(left) || distinct(right)) && typesEqual(runtime(left), runtime(right))) {
+                return distinct(left) ? std::make_pair(left, right) : std::make_pair(right, left);
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+auto TypeChecker::innermostDistinct(const TypePtr& type) const -> TypePtr {
+    const auto value = resolve(type);
+    if (const auto* list = std::get_if<ListType>(&value->kind)) {
+        return innermostDistinct(list->element);
+    }
+    if (const auto* optional = std::get_if<OptionalType>(&value->kind)) {
+        return innermostDistinct(optional->inner);
+    }
+    return value;
+}
+
+auto TypeChecker::distinctTraitClash(const TypePtr& arg, const TypePtr& param) const
+    -> std::string {
+    const auto value = resolve(arg);
+    // Through a container both sides share: `[BookId]` held as `[Labeled]`.
+    if (const auto* list = std::get_if<ListType>(&value->kind)) {
+        if (const auto* wantedList = std::get_if<ListType>(&resolve(param)->kind)) {
+            return distinctTraitClash(list->element, wantedList->element);
+        }
+    }
+    if (const auto* optional = std::get_if<OptionalType>(&value->kind)) {
+        if (const auto* wantedOptional = std::get_if<OptionalType>(&resolve(param)->kind)) {
+            return distinctTraitClash(optional->inner, wantedOptional->inner);
+        }
+    }
+    const auto* named = std::get_if<NamedType>(&value->kind);
+    if (!named) {
+        return {};
+    }
+    const auto backing = distinctBacking(value);
+    if (!backing || typesEqual(backing, value)) {
+        return {};
+    }
+    const auto wanted = resolve(param);
+    std::string trait;
+    if (const auto* bound = std::get_if<ConstrainedType>(&wanted->kind)) {
+        trait = bound->traitName;
+    } else if (const auto* traitNamed = std::get_if<NamedType>(&wanted->kind);
+               traitNamed && m_traits.lookup(traitNamed->name)) {
+        trait = traitNamed->name;
+    }
+    if (trait.empty() || !m_traits.implementsDirectly(named->name, trait)) {
+        return {};
+    }
+    return trait;
+}
+
+auto TypeChecker::reportIndistinguishable(const TypePtr& type, SourceLocation location) -> void {
+    if (const auto pair = indistinguishableMembers(type)) {
+        const auto where = std::string(location.file) + ":" + std::to_string(location.line) + ":" +
+                           std::to_string(location.column);
+        if (!m_reportedIndistinguishable.insert(where).second) {
+            return;
+        }
+        error(
+            diag::Code::UnionMembersIndistinguishable, location,
+            {{"left", typeToString(pair->first)}, {"right", typeToString(pair->second)}});
+    }
 }
 
 auto TypeChecker::distinctBacking(const TypePtr& type) const -> TypePtr {
@@ -4846,7 +4942,9 @@ auto TypeChecker::resolveTypeExprNode(
                     node.left ? resolveTypeExpr(*node.left, genericVars) : Type::unknown());
                 members.push_back(
                     node.right ? resolveTypeExpr(*node.right, genericVars) : Type::unknown());
-                return std::make_shared<Type>(Type{UnionType{std::move(members)}});
+                auto written = std::make_shared<Type>(Type{UnionType{std::move(members)}});
+                reportIndistinguishable(written, typeExpr.location);
+                return written;
             } else if constexpr (std::is_same_v<T, ast::IntersectionType>) {
                 std::vector<TypePtr> members;
                 members.push_back(
@@ -7834,6 +7932,14 @@ auto TypeChecker::hasNoValue(const ast::Expr* expr) -> bool {
 
 auto TypeChecker::typeMismatch(SourceLocation loc, const TypePtr& expected, const TypePtr& actual)
     -> void {
+    if (const auto trait = distinctTraitClash(actual, expected); !trait.empty()) {
+        error(
+            diag::Code::DistinctAsTraitValue, loc,
+            {{"type", typeToString(innermostDistinct(actual))},
+             {"trait", trait},
+             {"backing", typeToString(distinctBacking(innermostDistinct(actual)))}});
+        return;
+    }
     diag::Args args = {{"expected", typeToString(expected)}, {"actual", typeToString(actual)}};
     if (const auto* never = std::get_if<NeverType>(&expected->kind);
         never && !never->leftRecord.empty()) {
@@ -9954,8 +10060,9 @@ auto TypeChecker::checkBodyAt(const ast::FunctionDef& def, const std::vector<Typ
     for (std::size_t index = 0; index < clause.params.size(); ++index) {
         const auto& param = clause.params[index];
         defineVar(
-            *param.name,
-            param.type ? resolveTypeExpr(**param.type, genericVars) : arguments[index]);
+            *param.name, !param.type || traitParameter(param)
+                             ? arguments[index]
+                             : resolveTypeExpr(**param.type, genericVars));
     }
     checked.type = resolvedThroughout(inferBody(clause.body));
     popScope();
@@ -9993,8 +10100,75 @@ auto TypeChecker::checkBodyAt(const ast::FunctionDef& def, const std::vector<Typ
     return checked;
 }
 
+auto TypeChecker::traitParameter(const ast::Param& param) const -> bool {
+    const auto* written =
+        param.type && *param.type ? std::get_if<ast::TypeName>(&(*param.type)->kind) : nullptr;
+    return written && written->parts.size() == 1 && m_traits.lookup(written->parts.front());
+}
+
+auto TypeChecker::traitResultFunction(const std::string& name) -> const ast::FunctionDef* {
+    if (!m_checkedProgram) {
+        return nullptr;
+    }
+    for (const auto& item : m_checkedProgram->items) {
+        const auto* owned = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
+        if (!owned || !*owned || (*owned)->name != name || (*owned)->clauses.size() != 1) {
+            continue;
+        }
+        const auto& clause = (*owned)->clauses.front();
+        const auto* result = clause.returnAnnotation && *clause.returnAnnotation
+                                 ? std::get_if<ast::TypeName>(&(*clause.returnAnnotation)->kind)
+                                 : nullptr;
+        if (!result || result->parts.size() != 1 || !m_traits.lookup(result->parts.front())) {
+            return nullptr;
+        }
+        // Several parameters of the result's trait (decision 4, §4.5 rule 7,
+        // decided: checked per call). With one, the result is tied to it.
+        std::size_t sharing = 0;
+        for (const auto& param : clause.params) {
+            const auto* written = param.type && *param.type
+                                      ? std::get_if<ast::TypeName>(&(*param.type)->kind)
+                                      : nullptr;
+            if (written && written->dotted() == result->dotted()) {
+                ++sharing;
+            }
+        }
+        return sharing > 1 ? owned->get() : nullptr;
+    }
+    return nullptr;
+}
+
 auto TypeChecker::callResultAt(const std::string& name, const std::vector<TypePtr>& argTypes)
     -> TypePtr {
+    if (const auto* bare = traitResultFunction(name)) {
+        std::vector<TypePtr> arguments;
+        std::string key = "\n" + name;
+        for (const auto& argument : argTypes) {
+            const auto type = argument ? resolve(argument) : nullptr;
+            if (!type || !isConcreteValue(type) || containsTypeVariable(type)) {
+                return nullptr;
+            }
+            key += "\n" + typeToString(type);
+            arguments.push_back(type);
+        }
+        if (arguments.size() != bare->clauses.front().params.size()) {
+            return nullptr;
+        }
+        if (const auto known = m_callResults.find(key); known != m_callResults.end()) {
+            return known->second;
+        }
+        if (!m_bodiesInProgress.insert(key).second) {
+            return nullptr;
+        }
+        auto checked = checkBodyAt(*bare, arguments);
+        m_bodiesInProgress.erase(key);
+        auto result =
+            checked.type && isConcreteValue(checked.type) && !containsTypeVariable(checked.type)
+                ? checked.type
+                : nullptr;
+        m_callResults.emplace(std::move(key), result);
+        return result;
+    }
     const auto* def = unannotatedFunction(name);
     if (!def) {
         return nullptr;

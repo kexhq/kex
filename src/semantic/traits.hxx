@@ -157,6 +157,12 @@ public:
     // claims requires, or a default from that trait's body.
     auto implementsInHome(const std::string& type, const std::string& method) const -> bool;
     auto declaresMethod(const std::string& type, const std::string& method) const -> bool;
+    // Whether `type` implements `trait` in a `make` of its own, not through
+    // what backs it or a trait it gets structurally.
+    auto implementsDirectly(const std::string& type, const std::string& trait) const -> bool {
+        const auto found = m_implementations.find(type);
+        return found != m_implementations.end() && found->second.count(trait) > 0;
+    }
     // The method a trait `type` claims requires under `method`'s name, and
     // that trait; nulls when no claimed trait requires one.
     auto requiredMethod(const TypePtr& type, const std::string& method) const

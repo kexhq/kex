@@ -1,0 +1,9 @@
+spec/error_intersection_written.kex:7:25: [KEXET-0491]: Error, `describe` expects argument 1 to be Showable & Comparable, but got [Integer]
+
+describe : Showable & Comparable -> String
+  |
+4 | let describe(value: Showable & Comparable) -> String = "${value} ${value > value}"
+  |                     --------------------- expected because of this parameter
+ ...
+7 |   IO.printLine(describe([1]))
+  |                         ^^^ this has type [Integer]

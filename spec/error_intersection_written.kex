@@ -1,0 +1,8 @@
+# kex: check-only
+# A value given for an intersection must be every member: a list is Showable
+# but not Comparable.
+let describe(value: Showable & Comparable) -> String = "${value} ${value > value}"
+
+main do
+  IO.printLine(describe([1]))
+end

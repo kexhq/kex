@@ -1330,9 +1330,19 @@ but each covers its class, not its repro.
    `[Shape]`. Proposed: an error. The alternative is values that carry their
    type or implementation explicitly, which is a second dispatch mechanism.
    Decided (2026-11-24): an error.
+   Built: a union of a distinct type and what backs it (or two distinct types
+   backed alike) is KEXET-0512, written or joined; a distinct type stored as
+   a trait it implements in its own `make` (a typed `let`, a list or optional
+   of the trait) is KEXET-0513 (`spec/error_indistinguishable_types.kex`). A
+   trait-typed parameter is allowed: BEAM passes the dictionary. The walker
+   still dispatches such a call on the value and finds the backing's
+   implementation, a parity gap to close.
 5. **"Exported functions are annotated"** (decision 1): count what it breaks,
    then adopt it or drop it.
    Decided (2026-11-24): count first, then decide.
+   Counted: unannotated exported functions are 100 in the stdlib (FS 43, Net
+   about 37, Assert 8, URI 6, Control.Retry 3), 0 in harmat, 39 in metro and
+   90 in slick.
 
 **Other open questions:**
 
@@ -1348,6 +1358,10 @@ but each covers its class, not its repro.
 8. **Written intersection types** (§4.5, 5): allowed in programs, or kept as the
    type of overload sets only.
    Decided (2026-11-24): allowed in programs.
+   Built: `A & B` parses, checks (a value must be every member) and runs on
+   both backends, and record intersections merge their fields
+   (`spec/intersection_written.kex`, `spec/error_intersection_written.kex`,
+   language spec §3).
 9. **HKT argument order** (§8.2): Haskell's last-argument convention or type
    lambdas.
 10. **Type splicing in `compiled do`** (§8.1, fix 4): decided and built
