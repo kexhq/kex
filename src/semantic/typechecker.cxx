@@ -3535,80 +3535,12 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def, const std::stri
                 // The declaration types the copy: its receiver, `F<A>`, is this
                 // type, which binds `F` and `A` for the rest of it.
                 const int varMark = m_nextTypeVar;
-                // `make Box` is every instantiation: as `Box<V>`, the receiver can
-                // match the declaration's `F<A>`.
-                auto applied = receiver;
-                if (const auto* named = std::get_if<NamedType>(&receiver->kind);
-                    named && named->typeArgs.empty()) {
-                    std::size_t arity = 0;
-                    if (const auto declaredArity = m_declaredTypeArity.find(named->name);
-                        declaredArity != m_declaredTypeArity.end()) {
-                        arity = declaredArity->second;
-                    } else if (m_importedInterfaces) {
-                        if (const auto imported =
-                                m_importedInterfaces->typeArities.find(named->name);
-                            imported != m_importedInterfaces->typeArities.end()) {
-                            arity = imported->second;
-                        }
-                    }
-                    if (arity > 0) {
-                        std::vector<TypePtr> args;
-                        for (std::size_t i = 0; i < arity; ++i) {
-                            args.push_back(freshTypeVar());
-                        }
-                        applied = Type::named(named->name, std::move(args));
-                    }
-                }
                 auto declaredLetters = letters;
-                auto signature = annotationToSignature(*declared->second, &declaredLetters);
-                const auto* declaredReceiver =
-                    signature && !signature->params.empty()
-                        ? std::get_if<TypeApp>(&signature->params.front()->kind)
-                        : nullptr;
-                const auto* head = declaredReceiver
-                                       ? std::get_if<TypeVar>(&declaredReceiver->head->kind)
-                                       : nullptr;
-                const auto implementing = applicationOf(applied);
-                if (head && implementing &&
-                    implementing->args.size() == declaredReceiver->args.size()) {
-                    // `F` is the implementing type's constructor, and the
-                    // receiver's letters its arguments, wherever the
-                    // declaration writes them.
-                    std::unordered_map<int, TypePtr> filled;
-                    for (std::size_t i = 0; i < declaredReceiver->args.size(); ++i) {
-                        if (const auto* letter =
-                                std::get_if<TypeVar>(&declaredReceiver->args[i]->kind)) {
-                            filled[letter->id] = implementing->args[i];
-                        }
-                    }
-                    const int headId = head->id;
-                    std::function<TypePtr(const TypePtr&)> fill =
-                        [&](const TypePtr& type) -> TypePtr {
-                        if (!type) {
-                            return type;
-                        }
-                        if (const auto* app = std::get_if<TypeApp>(&type->kind)) {
-                            const auto* appHead = std::get_if<TypeVar>(&app->head->kind);
-                            if (appHead && appHead->id == headId) {
-                                std::vector<TypePtr> args;
-                                for (const auto& arg : app->args) {
-                                    args.push_back(fill(arg));
-                                }
-                                return applyConstructor(implementing->head, std::move(args));
-                            }
-                        }
-                        if (const auto* letter = std::get_if<TypeVar>(&type->kind)) {
-                            if (const auto found = filled.find(letter->id); found != filled.end()) {
-                                return found->second;
-                            }
-                        }
-                        return mapTypeChildren(type, fill);
-                    };
-                    for (auto& param : signature->params) {
-                        param = fill(param);
-                    }
-                    signature->params.front() = applied;
-                    signature->result = fill(signature->result);
+                auto declaredSignature = annotationToSignature(*declared->second, &declaredLetters);
+                if (auto signature = declaredSignature
+                                         ? atImplementingType(*declaredSignature, receiver)
+                                         : std::nullopt) {
+                    const auto applied = signature->params.front();
                     signature->name = inherited->name;
                     signature->isFoul = inherited->isFoul;
                     signature->clause = &inherited->clauses.front();
@@ -4277,6 +4209,14 @@ auto TypeChecker::checkUnionCoverage(
 auto TypeChecker::checkPatternMatrix(
     const ast::MatchExpr& node, const TypePtr& subject, SourceLocation loc) -> void {
     using exhaustiveness::Space;
+    // Whatever the value, arms that are all guarded may all refuse it.
+    if (!node.clauses.empty() &&
+        std::all_of(node.clauses.begin(), node.clauses.end(), [](const auto& clause) {
+            return clause.guard && *clause.guard;
+        })) {
+        error(diag::Code::MatchArmsAllGuarded, loc);
+        return;
+    }
     // A value the checker knows nothing of proves nothing missing: its arms
     // may be the cases it can take (`(:updated, n)`, `(:error, reason)`).
     if (!subject || isUndetermined(resolve(subject))) {
@@ -4737,6 +4677,76 @@ auto TypeChecker::resolveTypeExpr(
         }
     }
     return resolved;
+}
+
+auto TypeChecker::atImplementingType(Signature signature, const TypePtr& implementingType)
+    -> std::optional<Signature> {
+    // `make Box` is every instantiation: as `Box<V>`, it can match `F<A>`.
+    auto applied = implementingType;
+    if (const auto* named = std::get_if<NamedType>(&implementingType->kind);
+        named && named->typeArgs.empty()) {
+        std::size_t arity = 0;
+        if (const auto declaredArity = m_declaredTypeArity.find(named->name);
+            declaredArity != m_declaredTypeArity.end()) {
+            arity = declaredArity->second;
+        } else if (m_importedInterfaces) {
+            if (const auto imported = m_importedInterfaces->typeArities.find(named->name);
+                imported != m_importedInterfaces->typeArities.end()) {
+                arity = imported->second;
+            }
+        }
+        if (arity > 0) {
+            std::vector<TypePtr> args;
+            for (std::size_t i = 0; i < arity; ++i) {
+                args.push_back(freshTypeVar());
+            }
+            applied = Type::named(named->name, std::move(args));
+        }
+    }
+    const auto* declaredReceiver =
+        signature.params.empty() ? nullptr : std::get_if<TypeApp>(&signature.params.front()->kind);
+    const auto* head =
+        declaredReceiver ? std::get_if<TypeVar>(&declaredReceiver->head->kind) : nullptr;
+    const auto implementing = applicationOf(applied);
+    if (!head || !implementing || implementing->args.size() != declaredReceiver->args.size()) {
+        return std::nullopt;
+    }
+    // `F` is the implementing type's constructor, and the receiver's letters
+    // its arguments, wherever the signature writes them.
+    std::unordered_map<int, TypePtr> filled;
+    for (std::size_t i = 0; i < declaredReceiver->args.size(); ++i) {
+        if (const auto* letter = std::get_if<TypeVar>(&declaredReceiver->args[i]->kind)) {
+            filled[letter->id] = implementing->args[i];
+        }
+    }
+    const int headId = head->id;
+    std::function<TypePtr(const TypePtr&)> fill = [&](const TypePtr& type) -> TypePtr {
+        if (!type) {
+            return type;
+        }
+        if (const auto* app = std::get_if<TypeApp>(&type->kind)) {
+            const auto* appHead = std::get_if<TypeVar>(&app->head->kind);
+            if (appHead && appHead->id == headId) {
+                std::vector<TypePtr> args;
+                for (const auto& arg : app->args) {
+                    args.push_back(fill(arg));
+                }
+                return applyConstructor(implementing->head, std::move(args));
+            }
+        }
+        if (const auto* letter = std::get_if<TypeVar>(&type->kind)) {
+            if (const auto found = filled.find(letter->id); found != filled.end()) {
+                return found->second;
+            }
+        }
+        return mapTypeChildren(type, fill);
+    };
+    for (auto& param : signature.params) {
+        param = fill(param);
+    }
+    signature.params.front() = applied;
+    signature.result = fill(signature.result);
+    return signature;
 }
 
 auto TypeChecker::resolveTypeExprNode(
@@ -6303,12 +6313,6 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                                        ? resolveTypeExpr(**clause.returnAnnotation, genericVars)
                                    : inlineReturnType ? inlineReturnType
                                                       : requiredResult;
-        // The declared result is what a `match` or `if` ending the body must
-        // produce, as a `let` annotation is for its value: each arm fits it,
-        // not the first arm's type. Not a generic result, which every arm
-        // would fit.
-        const bool expectsResult =
-            effectiveReturnType && !containsTypeVariable(effectiveReturnType);
         // The variables this clause's own annotations write stand for every
         // type while its body is checked.
         const auto outerRigid = m_rigidVars;
@@ -6321,6 +6325,16 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 }
             }
         }
+        // The declared result is what a `match` or `if` ending the body must
+        // produce, as a `let` annotation is for its value: each arm fits it,
+        // not the first arm's type. Not a result with a letter any type fills,
+        // which every arm would fit; one of this clause's own letters fits only
+        // itself (`-> A?` for `then x else None`).
+        const bool expectsResult =
+            effectiveReturnType && !anyType(effectiveReturnType, [&](const TypePtr& part) {
+                const auto id = typeVariableId(resolve(part));
+                return id && !m_rigidVars.contains(*id);
+            });
         // `A.identity` in the body goes through the clause's own A.
         const auto outerBodyTypeVars = std::exchange(m_bodyTypeVars, genericVars);
         auto bodyType = inferBody(clause.body, expectsResult ? effectiveReturnType : nullptr);

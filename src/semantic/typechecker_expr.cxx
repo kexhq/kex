@@ -4805,6 +4805,35 @@ auto TypeChecker::argMatchesParam(const TypePtr& writtenArg, const TypePtr& writ
         const auto param = resolve(paramType);
         return isUndetermined(param) || std::holds_alternative<ConstrainedType>(param->kind);
     }
+    // A letter the function being checked writes (`x: A`) is one fixed type
+    // in its body: it fits only itself, or what takes any type, and nothing
+    // else fits it. Open, `x` passed for an `A?` and `then x else None` made
+    // an optional nothing had wrapped.
+    const auto rigidLetter = [&](const TypePtr& type) {
+        const auto id = typeVariableId(resolve(type));
+        return id && m_rigidVars.contains(*id) ? id : std::nullopt;
+    };
+    const auto takesAnyType = [&](const TypePtr& type) {
+        const auto resolved = resolve(type);
+        const auto id = typeVariableId(resolved);
+        return (id && !m_rigidVars.contains(*id)) || isUndetermined(resolved) ||
+               std::holds_alternative<ConstrainedType>(resolved->kind);
+    };
+    if (const auto letter = rigidLetter(argType)) {
+        const auto param = resolve(paramType);
+        if (rigidLetter(param) == letter || takesAnyType(param)) {
+            return true;
+        }
+        if (const auto* members = std::get_if<UnionType>(&param->kind)) {
+            return std::any_of(
+                members->members.begin(), members->members.end(),
+                [&](const TypePtr& member) { return argMatchesParam(argType, member); });
+        }
+        return false;
+    }
+    if (rigidLetter(paramType) && !takesAnyType(argType)) {
+        return false;
+    }
     auto isPermissive = [](const TypePtr& t) { return isUndetermined(t); };
     if (isPermissive(argType) || isPermissive(paramType)) {
         return true;
@@ -5939,6 +5968,44 @@ auto TypeChecker::checkCallCore(
                 if (required.name == name &&
                     missesRequiredArity(required, argTypes.size(), name, loc)) {
                     return required.result;
+                }
+            }
+            // One of the trait's own defaults takes what one of its clauses
+            // does: `this.repeat()` beside `let repeat(n: Integer)` is a
+            // missing argument, which went through to the run time.
+            if (const auto defaults = m_traitDefaults.find(m_currentTrait->name);
+                defaults != m_traitDefaults.end()) {
+                bool defined = false;
+                bool fits = false;
+                std::size_t most = 0;
+                for (const auto* function : defaults->second) {
+                    if (!function || function->name != name) {
+                        continue;
+                    }
+                    for (const auto& clause : function->clauses) {
+                        defined = true;
+                        const bool explicitReceiver = !clause.params.empty() &&
+                                                      clause.params.front().pattern &&
+                                                      std::holds_alternative<ast::ThisPattern>(
+                                                          (*clause.params.front().pattern)->kind);
+                        const std::size_t receivers = explicitReceiver ? 0 : 1;
+                        std::size_t least = clause.params.size();
+                        while (least > 0 && clause.params[least - 1].defaultValue) {
+                            least--;
+                        }
+                        const auto upper = clause.params.size() + receivers;
+                        most = std::max(most, upper);
+                        fits = fits ||
+                               (argTypes.size() >= least + receivers && argTypes.size() <= upper);
+                    }
+                }
+                if (defined && !fits) {
+                    error(
+                        diag::Code::WrongArgumentCount, loc,
+                        {{"name", sourceName(name)},
+                         {"expected", std::to_string(most)},
+                         {"actual", std::to_string(argTypes.size())}});
+                    return Type::unknown();
                 }
             }
             // A requirement called on `this` answers what it is required to:
@@ -10109,6 +10176,21 @@ auto TypeChecker::joinBranchType(const TypePtr& joined, const TypePtr& next) con
     if (std::holds_alternative<NeverType>(a->kind)) {
         return b;
     }
+    // A letter of the function being checked is a known type, not a hole:
+    // `then x else None` for `x: A` is `A` or an optional, never `A?`.
+    const auto rigid = [&](const TypePtr& type) {
+        const auto id = typeVariableId(type);
+        return id && m_rigidVars.contains(*id);
+    };
+    if (rigid(a) || rigid(b)) {
+        if (argMatchesParam(b, a)) {
+            return a;
+        }
+        if (argMatchesParam(a, b)) {
+            return b;
+        }
+        return unionOf(a, b);
+    }
     if (isUndetermined(a)) {
         return b;
     }
@@ -10149,7 +10231,9 @@ auto TypeChecker::joinBranches(const std::vector<Branch>& branches, const TypePt
     if (expected) {
         for (const auto& branch : branches) {
             const auto type = resolve(branch.type);
-            if (std::holds_alternative<NeverType>(type->kind) || isUndetermined(type)) {
+            if (std::holds_alternative<NeverType>(type->kind) ||
+                (isUndetermined(type) &&
+                 !(typeVariableId(type) && m_rigidVars.contains(*typeVariableId(type))))) {
                 continue;
             }
             if (!argMatchesParam(type, expected)) {

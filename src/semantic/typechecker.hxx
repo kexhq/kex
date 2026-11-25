@@ -1180,6 +1180,12 @@ private:
     // types each implementor's copy, its `F<A>` being the implementing type.
     std::map<std::pair<std::string, std::string>, const ast::TypeAnnotation*>
         m_traitDefaultDeclarations;
+    // `signature`, whose receiver is a constructor applied (`F<A>`), at the
+    // implementing type (`[X]`, `Box`): `F` its constructor and the
+    // receiver's letters its arguments throughout. None when it is no such
+    // signature.
+    auto atImplementingType(Signature signature, const TypePtr& implementingType)
+        -> std::optional<Signature>;
     // An inherited default's result, per implementing type, left for the
     // trait's body to answer: that type, and the result's variable.
     std::unordered_multimap<const ast::FunctionClause*, std::pair<TypePtr, int>>
