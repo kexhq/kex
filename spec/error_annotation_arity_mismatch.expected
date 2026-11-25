@@ -1,15 +1,5 @@
-spec/error_annotation_arity_mismatch.kex:4:1: [KEXWT-0001]: Warning, type annotation for 'add' declares 1 parameter(s) but definition has 2
+spec/error_annotation_arity_mismatch.kex:5:1: [KEXET-0189]: Error, `add` is declared with one tuple parameter, (Integer, Integer), but takes 2: for 2 parameters, write `add : Integer -> Integer -> Integer`
   |
-4 | let add(a, b) = a + b
+5 | let add(a, b) = a + b
   | ^^^^^^^^^^^^^^^^^^^^^
-spec/error_annotation_arity_mismatch.kex:4:21: [KEXET-0415]: Error, `+` is not defined for (Integer, Integer) and A
-  |
-4 | let add(a, b) = a + b
-  |                 ^^^^^
-spec/error_annotation_arity_mismatch.kex:7:20: [KEXET-0491]: Error, `add` expects argument 1 to be (Integer, Integer), but got Integer
-
-add : (Integer, Integer) -> A -> Integer
-  |
-7 |   IO.printLine(add(1, 2))
-  |                    ^ this has type Integer
-Aborted: 2 type errors. Fix them before running, or skip the check with --no-check.
+Aborted: 1 type error. Fix them before running, or skip the check with --no-check.

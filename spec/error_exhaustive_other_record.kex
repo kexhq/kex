@@ -4,7 +4,7 @@
 # A match on a Qt whose only arm names Pt covers nothing, and owes a fallback.
 #
 # It was accepted, and failed at run time with no matching clause for the Qt
-# (found by `make metamorphic-search` dropping the `_` arm of
+# (found by `make fuzz-metamorphic` dropping the `_` arm of
 # spec/named_record_pattern.kex).
 record Pt do
   x : Integer

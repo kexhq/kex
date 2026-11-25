@@ -1,0 +1,8 @@
+# A capture qualified by a type (`~String.upperCase`) is that type's own
+# function, typed as one: bound to a name, then passed or called.
+main do
+  let f = ~String.upperCase
+  IO.printLine(["a", "b"].map(f))
+  IO.printLine(f("x"))
+  IO.printLine(["a"].map(~String.upperCase))
+end

@@ -284,7 +284,23 @@ auto Lowering::lowerFunctionGroup(
                         continue;
                     }
                 }
-                fc.params.push_back(lowerParam(p));
+                auto lowered = lowerParam(p);
+                // A receiver matched by its shape (`let same(@B(n), m)`) is
+                // still `this` in the body: bound beside its parts, or the
+                // body's `this` was an unbound variable on BEAM
+                // (kexhq/kex#803). Only the first parameter is the receiver;
+                // a later `@Hour` is an argument's shape.
+                if (&p == &clause.params.front() && implicitThisName.empty() && p.pattern &&
+                    *p.pattern && std::holds_alternative<ast::ThisPattern>((*p.pattern)->kind)) {
+                    if (lowered->kind == PatKind::Wild) {
+                        lowered->kind = PatKind::Var;
+                        lowered->name = "this";
+                    } else if (lowered->kind != PatKind::Var) {
+                        lowered->alias = "this";
+                    }
+                    subst["this"] = lowered->kind == PatKind::Var ? lowered->name : "this";
+                }
+                fc.params.push_back(std::move(lowered));
             }
             // The context is in scope for the whole body, so calls inside
             // it pass it along (kexhq/kex#181).

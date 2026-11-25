@@ -5,7 +5,7 @@
 # TimeUnit). On BEAM they were reached through a dispatcher that picked
 # between them by argument type and raised `function_clause` for anything
 # else, while the walker fell through to the generic radix conversion and
-# answered None (found by `make metamorphic-search` on
+# answered None (found by `make fuzz-metamorphic` on
 # spec/prelude_to_string_dispatch.kex).
 using Units.SI
 

@@ -4,7 +4,7 @@
 #
 # A module's constructors stay out of the checker's bare-name table, so both
 # matches below were accepted and failed at run time with no matching clause
-# for `Light` (found by `make metamorphic-search` on
+# for `Light` (found by `make fuzz-metamorphic` on
 # spec/using_type_brings_constructors.kex).
 module Shades do
   type Shade = Light | Tint(Integer)

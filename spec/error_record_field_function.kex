@@ -1,0 +1,15 @@
+# kex: check-only
+# A function held in a record field is checked like any function: a block
+# written for it takes what the field's type says, and a call through it
+# passes what it takes.
+record Deps do
+  fetch : String -> String
+end
+
+main do
+  let real = Deps { fetch: { |u| "real:" + u } }
+  IO.printLine(real.fetch("/x", 0))
+  IO.printLine(real.fetch(1))
+  let mock = Deps { fetch: { |u| 7 + u } }
+  IO.printLine(mock.fetch("/x"))
+end

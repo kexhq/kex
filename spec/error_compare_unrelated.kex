@@ -3,7 +3,7 @@
 # a guard and out of one, and both backends then failed with "Cannot compare
 # Integer and String"; a stream's `take` with no count checked clean too,
 # because `Stream.from` had no signature to give the stream a type (found by
-# `make metamorphic-search`).
+# `make fuzz-metamorphic`).
 
 main do
   let i = 5

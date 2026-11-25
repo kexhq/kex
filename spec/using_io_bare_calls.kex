@@ -1,0 +1,15 @@
+# IO is reached by its name without a `using`, and bare where one brings it
+# in: at the top of the file, or for a block (`using IO do ... end`).
+# Without either, a bare `printLine` is no function (error_bare_module_function).
+using IO
+
+foul greet(name: String) do
+  printLine("hello ${name}")
+end
+
+main do
+  greet("ada")
+  print("no newline")
+  printLine("")
+  IO.printLine("qualified")
+end

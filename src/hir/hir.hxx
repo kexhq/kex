@@ -83,6 +83,7 @@ public:
     auto targetOf(const ast::MethodCall& call) const -> const Target&;
     auto targetOf(const ast::FunctionCall& call) const -> const Target&;
     auto targetOf(const ast::BinaryOp& op) const -> const Target&;
+    auto targetOf(const ast::UnaryOp& op) const -> const Target&;
     // Whether a block has no effect a fused loop could reorder (the analysis'
     // pureBlocks); false for a program loaded rather than analysed here.
     auto pureBlock(const ast::Lambda& block) const -> bool;
@@ -263,6 +264,7 @@ public:
     auto targetOf(const ast::MethodCall& call) const -> const Target&;
     auto targetOf(const ast::FunctionCall& call) const -> const Target&;
     auto targetOf(const ast::BinaryOp& op) const -> const Target&;
+    auto targetOf(const ast::UnaryOp& op) const -> const Target&;
     auto typeOf(const ast::Expr& expr) const -> semantic::TypePtr;
     auto typeValueOf(const ast::Expr& expr) const -> std::optional<semantic::StructuredType>;
     auto receiverTypeOf(const ast::Expr& call) const -> std::string;

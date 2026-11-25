@@ -1,0 +1,4 @@
+spec/error_make_letter_call.kex:17:29: [KEXET-0462]: Error, `pretty` is not defined for every `T`, which stands for any type
+   |
+17 |   let pretty = "Box(${@item.pretty})"
+   |                       ^^^^^^^^^^^^

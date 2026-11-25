@@ -1,0 +1,8 @@
+spec/error_trait_constructor_implementation.kex:14:27: [KEXET-0472]: Error, `f` expects 1 argument(s), got 2
+   |
+14 |   let into(f) -> Box<B> = f(@value, 0)
+   |                           ^^^^^^^^^^^^
+spec/error_trait_constructor_implementation.kex:22:28: [KEXET-0472]: Error, `f` expects 1 argument(s), got 0
+   |
+22 |   let into(f) -> Pair<B> = f()
+   |                            ^^^

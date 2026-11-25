@@ -1,0 +1,22 @@
+spec/error_block_expected_type.kex:6:48: [KEXET-0463]: Error, cannot add String and Integer
+  |
+6 | let build() -> (String -> Integer) = { |s| s + 1 }
+  |                                            ^^^^^
+spec/error_block_expected_type.kex:13:40: [KEXET-0463]: Error, cannot add String and Integer
+   |
+13 |   let f: String -> Integer = { |s| s + 1 }
+   |                                    ^^^^^
+spec/error_block_expected_type.kex:14:30: [KEXET-0001]: Error, type mismatch: expected String -> Integer, got String -> String
+   |
+14 |   let g: String -> Integer = ~String.upperCase
+   |          -----------------   ^^^^^^^^^^^^^^^^^ this has type String -> String
+   |          |
+   |          expected because of this annotation
+spec/error_block_expected_type.kex:17:30: [KEXET-0491]: Error, `upperCase` expects argument 1 to be Char, but got Integer
+
+upperCase : Char -> Char
+
+upperCase : String -> String
+   |
+17 |   IO.printLine(d.visit { |n| n.upperCase })
+   |                              ^ this has type Integer

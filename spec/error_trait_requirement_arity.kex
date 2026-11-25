@@ -3,7 +3,7 @@
 # answers it and wherever the call is: a default's `this.combine()` and an
 # implementer's `word.combine()` both lack the value `combine` requires.
 # Both were accepted, and failed at run time (found by
-# `make metamorphic-search`).
+# `make fuzz-metamorphic`).
 
 trait Joinable do
   combine : This -> This

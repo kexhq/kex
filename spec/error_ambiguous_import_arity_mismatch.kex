@@ -1,3 +1,4 @@
+# kex: check-only
 # Companion case for kexhq/kex#343's fix: a same-NAME declaration only
 # shadows the ambiguous imported pair when it also matches the call's
 # ARITY (`declaredShadowsImport` in typechecker.cxx). A two-argument `parse`
@@ -5,6 +6,11 @@
 # error_ambiguous_import_without_declaration.kex for which modules and why
 # the message names the pair it does) is still reported ambiguous.
 foul parse(a: String, b: String) -> String = "${a}${b}"
+
+# Brought in bare by `using`: an automatic module is reached by its name
+# alone, so without these `parse` is no function here at all.
+using Date
+using DateFormat
 
 main do
   IO.printLine(parse("x"))

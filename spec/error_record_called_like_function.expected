@@ -1,0 +1,8 @@
+spec/error_record_called_like_function.kex:10:11: [KEXET-0520]: Error, `Point` is a record, not a function: build one by writing its fields in braces after the name
+   |
+10 |   let p = Point(x: 1, y: 2)
+   |           ^^^^^^^^^^^^^^^^^
+spec/error_record_called_like_function.kex:11:11: [KEXET-0520]: Error, `Point` is a record, not a function: build one by writing its fields in braces after the name
+   |
+11 |   let q = Point(z: "no")
+   |           ^^^^^^^^^^^^^^

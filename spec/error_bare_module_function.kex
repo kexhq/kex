@@ -1,0 +1,9 @@
+# kex: check-only
+# A module's function is reached through its module: `IO.printLine`, or bare
+# under `using IO`. Bare without one, `printLine("a")` checked clean and was
+# undefined on both backends.
+main do
+  printLine("a")
+  IO.printLine printLine("b")
+  IO.printLine("c")
+end

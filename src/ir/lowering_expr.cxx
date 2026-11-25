@@ -705,6 +705,21 @@ auto Lowering::lowerNode(const ast::ExprPtr& e) -> ExprPtr {
                 }
                 return wrapLets(binds, builtinOp(std::move(l), std::move(r)));
             } else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
+                // A type's own unary `-` (`let -()`), as the checker decided it.
+                if (const auto& decision = hir->targetOf(n);
+                    decision.kind == hir::TargetKind::Operator ||
+                    decision.kind == hir::TargetKind::Dispatch) {
+                    std::vector<Binding> binds;
+                    auto operand = atomize(n.operand, binds);
+                    auto call = std::make_unique<Expr>();
+                    call->node =
+                        decision.kind == hir::TargetKind::Operator && !decision.module.empty()
+                            ? Call{decision.module, decision.function, 1, one(std::move(operand)), false}
+                            : Call{
+                                  std::string{}, std::string(tokenTypeName(n.op)), 1,
+                                  one(std::move(operand)), false};
+                    return wrapLets(binds, std::move(call));
+                }
                 std::vector<Binding> binds;
                 auto a = atomize(n.operand, binds);
                 Op op = (n.op == TokenType::Minus) ? Op::Neg

@@ -129,6 +129,9 @@ struct Pattern {
     std::vector<PatternPtr> args;
     // List: the `| rest` tail pattern, if any (else a proper list).
     PatternPtr rest;
+    // Any kind: a variable bound to the whole matched value as well
+    // (`This = {'B', N}` for a receiver matched as `@B(n)`). Empty for none.
+    std::string alias;
     // List: takes a String (a UTF-8 binary) apart into its characters, as
     // the checker decided (hir::Program::destructuresString). The elements
     // bind Chars, the tail the rest of the String.

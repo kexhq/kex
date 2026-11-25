@@ -1,0 +1,4 @@
+spec/error_export_short_name.kex:15:16: [KEXET-0423]: Error, `Shapes` has no function `area`
+   |
+15 |   IO.printLine(Shapes.area(1.0))
+   |                ^^^^^^

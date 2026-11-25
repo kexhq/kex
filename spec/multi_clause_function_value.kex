@@ -1,0 +1,11 @@
+# The clauses of one function, each matching a constructor, take that type:
+# passed as a block, `area` is a `Shape -> Float`, and the map a [Float].
+type Shape = Circle(Float) | Square(Float)
+
+let area(Circle(r)) = 3.0 * r * r
+let area(Square(s)) = s * s
+
+main do
+  let areas = [Circle(1.0), Square(2.0)].map(area)
+  IO.printLine(areas.sum)
+end

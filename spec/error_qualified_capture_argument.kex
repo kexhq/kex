@@ -1,0 +1,14 @@
+# kex: check-only
+# `~String.upperCase` is a String's function: what a call passes it must be
+# a String, whichever of its overloads would answer.
+main do
+  IO.printLine(["x", "y"].map(~String.upperCase))
+  IO.printLine([1, 2].map(~String.upperCase))
+  IO.printLine(["x", 7].map(~String.upperCase))
+end
+
+# Bound to a name first, it is still String's `upperCase`.
+let shout() -> [String] do
+  let f = ~String.upperCase
+  [1, 2].map(f)
+end

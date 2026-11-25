@@ -1,0 +1,28 @@
+# A `-` taking only `this` is the unary one; one taking another value is
+# binary. A type may declare both, and `-x` calls the unary one.
+type Direction = North | South
+
+make Direction do
+  let -() -> Direction = match this do
+    North => South
+    South => North
+  end
+end
+
+record Vec do
+  x : Integer
+  y : Integer
+end
+
+make Vec do
+  let -() -> Vec = Vec { x: -@x, y: -@y }
+  let -(other: Vec) -> Vec = Vec { x: @x - other.x, y: @y - other.y }
+end
+
+main do
+  IO.printLine(-North)
+  IO.printLine((-Vec { x: 1, y: 2 }).y)
+  IO.printLine((Vec { x: 5, y: 5 } - Vec { x: 1, y: 2 }).x)
+  IO.printLine(-(3))
+  IO.printLine((-Complex.from(1, 2)).im)
+end

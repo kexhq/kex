@@ -1,3 +1,4 @@
+# kex: check-only
 # Companion/control case for kexhq/kex#343's fix
 # (declared_function_shadows_ambiguous_import.kex): with no program-declared
 # `parse` to shadow it, the collision is still reported ambiguous. The fix
@@ -14,6 +15,11 @@
 # and 'Kex.Integer' until CI's wasm build, whose prelude interface is built
 # from source rather than a prebuilt registry, showed 'Kex.Date' colliding
 # too).
+# Brought in bare by `using`: an automatic module is reached by its name
+# alone, so without these `parse` is no function here at all.
+using Date
+using DateFormat
+
 main do
   IO.printLine(parse("x"))
 end

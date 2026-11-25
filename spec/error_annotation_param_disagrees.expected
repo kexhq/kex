@@ -1,0 +1,4 @@
+spec/error_annotation_param_disagrees.kex:5:15: [KEXET-0188]: Error, the annotation of `double` says `n` is Integer, but its definition says String
+  |
+5 | let double(n: String) = 7
+  |               ^^^^^^

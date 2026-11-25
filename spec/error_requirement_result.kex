@@ -2,7 +2,7 @@
 # A member that declares no result answers to the result the trait it
 # implements requires: a fake `getChar` answering "c" for IO's `String?` was
 # accepted, and failed at its caller's first `.or` (found by
-# `make metamorphic-search`). A requirement with no result to give, such as
+# `make fuzz-metamorphic`). A requirement with no result to give, such as
 # `printLine`, leaves the member's own alone.
 
 record Canned do

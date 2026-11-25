@@ -15,6 +15,7 @@
 #include "exhaustiveness.hxx"
 #include "resolve_core.hxx"
 #include <cctype>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -111,6 +112,7 @@ auto TypeChecker::check(
     m_nullaryVariants.clear();
     m_methodSignatures.clear();
     m_higherKindedRequirements.clear();
+    m_traitParameterLetters.clear();
     m_importedTypeBindings.clear();
     m_slotMethodNames.clear();
     m_makeMethodNames.clear();
@@ -464,7 +466,12 @@ auto TypeChecker::check(
                     if constexpr (
                         std::is_same_v<T, std::unique_ptr<ast::TypeDef>> ||
                         std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
-                        if (node && preludeType(node->name)) {
+                        // Not the standard library's own: checked as a unit of a
+                        // program (`using Date` on BEAM), its `record Date` is the
+                        // prelude's, and as a shadow every `Date` in date.kex meant
+                        // two types ("declared to return Date but body returns Date").
+                        if (node && preludeType(node->name) &&
+                            !kex::isStandardLibrarySource(node->location.file)) {
                             m_preludeShadows.insert(node->name);
                             if (const auto fields = m_recordFields.find(node->name);
                                 fields != m_recordFields.end()) {
@@ -1439,6 +1446,112 @@ auto TypeChecker::traitDeclaresOperator(const TypePtr& type, const std::string& 
                trait->defaultMethods.end();
     }
     return m_traits.declaresMethod(m_traits.implementorKey(type), op);
+}
+
+auto TypeChecker::constructorPatternType(const ast::Pattern& pattern) const -> std::string {
+    const auto* ctor = std::get_if<ast::ConstructorPattern>(&pattern.kind);
+    const auto owner = ctor ? m_adtOfConstructor.find(ctor->name) : m_adtOfConstructor.end();
+    if (owner == m_adtOfConstructor.end()) {
+        return {};
+    }
+    // Only a type without parameters: `Just(x)` says nothing of the `T` in
+    // `T?`, which a bare name would lose.
+    if (const auto arity = m_declaredTypeArity.find(owner->second);
+        arity != m_declaredTypeArity.end() && arity->second > 0) {
+        return {};
+    }
+    if (m_importedInterfaces) {
+        if (const auto arity = m_importedInterfaces->typeArities.find(owner->second);
+            arity != m_importedInterfaces->typeArities.end() && arity->second > 0) {
+            return {};
+        }
+    }
+    return owner->second;
+}
+
+auto TypeChecker::traitOperatorResult(
+    const TypePtr& receiver, const std::string& op, const TypePtr& right, SourceLocation loc)
+    -> TypePtr {
+    const auto* bound = std::get_if<ConstrainedType>(&receiver->kind);
+    const auto* named = std::get_if<NamedType>(&receiver->kind);
+    const auto* trait = bound   ? m_traits.lookup(bound->traitName)
+                        : named ? m_traits.lookup(named->name)
+                                : nullptr;
+    if (!trait) {
+        return nullptr;
+    }
+    for (const auto& required : trait->requiredMethods) {
+        if (required.name != op || requirementArity(required) != 2 || !required.result) {
+            continue;
+        }
+        const auto taken = resolve(bindThis(required.params.back(), receiver));
+        if (isConcreteOrBound(taken) && !argMatchesParam(right, taken)) {
+            error(
+                diag::Code::NoOverloadArgumentMismatch, loc,
+                {{"name", op},
+                 {"index", "2"},
+                 {"expected", typeToString(taken)},
+                 {"actual", typeToString(resolve(right))},
+                 {"signatures", ""}});
+            return Type::unknown();
+        }
+        return bindThis(required.result, receiver);
+    }
+    return nullptr;
+}
+
+auto TypeChecker::unaryOperatorResult(const ast::Expr& expr, const TypePtr& operand) -> TypePtr {
+    const std::string op = "-";
+    if (std::holds_alternative<TypeVar>(operand->kind) ||
+        std::holds_alternative<UnknownType>(operand->kind) ||
+        (std::holds_alternative<PrimitiveType>(operand->kind) && isNumericType(operand))) {
+        return nullptr;
+    }
+    // Only the receiver: `let -()`, or `- : This -> This`.
+    const auto unary = [&](const Signature& signature) {
+        if (signature.params.size() != 1) {
+            return false;
+        }
+        const auto receiver = resolve(signature.params.front());
+        return !std::holds_alternative<TypeVar>(receiver->kind) &&
+               !std::holds_alternative<UnknownType>(receiver->kind) &&
+               argMatchesParam(operand, receiver);
+    };
+    const auto decide = [&](const Signature& signature, const ImportedFunction* imported) {
+        DecidedCall decided{CallKind::Operator, typeToString(operand), op};
+        if (imported) {
+            decided.backendModule = imported->backendModule;
+            decided.function = imported->backendFunction;
+        }
+        m_decidedCalls[&expr] = std::move(decided);
+        return signature.result ? bindThis(signature.result, operand) : Type::unknown();
+    };
+    if (const auto local = m_methodSignatures.find(op); local != m_methodSignatures.end()) {
+        for (const auto& signature : local->second) {
+            if (unary(signature)) {
+                return decide(signature, nullptr);
+            }
+        }
+    }
+    for (const auto* imported : importedCandidates(op, operand)) {
+        if (unary(imported->signature)) {
+            return decide(imported->signature, imported);
+        }
+    }
+    // A trait's requirement, answered by the value's type when it runs.
+    const auto* bound = std::get_if<ConstrainedType>(&operand->kind);
+    const auto* named = std::get_if<NamedType>(&operand->kind);
+    if (const auto* trait = bound   ? m_traits.lookup(bound->traitName)
+                            : named ? m_traits.lookup(named->name)
+                                    : nullptr) {
+        for (const auto& required : trait->requiredMethods) {
+            if (required.name == op && requirementArity(required) == 1) {
+                m_decidedCalls[&expr] = {CallKind::Dispatch, {}, op};
+                return required.result ? bindThis(required.result, operand) : Type::unknown();
+            }
+        }
+    }
+    return nullptr;
 }
 
 auto TypeChecker::declaresOperatorFor(const TypePtr& type, const std::string& op) const -> bool {
@@ -2732,9 +2845,21 @@ auto TypeChecker::registerTraits(const ast::Program& program) -> void {
                                 return;
                             }
                             const int varMark = m_nextTypeVar;
-                            auto sig = annotationToSignature(*bi);
+                            std::unordered_map<std::string, TypePtr> written;
+                            auto sig = annotationToSignature(*bi, &written);
                             if (sig) {
                                 sig->isFoul = bi->isFoul;
+                                // Which of its letters are the trait's own parameters
+                                // (`T` in `Folds<T>`), for the defaults that share them.
+                                for (const auto& parameter : node.typeParams) {
+                                    if (const auto found = written.find(parameter);
+                                        found != written.end()) {
+                                        if (const auto id = typeVariableId(found->second)) {
+                                            m_traitParameterLetters[{td.name, sig->name}]
+                                                                   [parameter] = *id;
+                                        }
+                                    }
+                                }
                                 // A trait over a constructor (`Functor<F<_>>`) writes its
                                 // receiver, `F<A>`: the requirement is a function on any
                                 // `F<…>` its bound allows, called on a value known only by
@@ -4006,7 +4131,7 @@ auto TypeChecker::uncoveredConstructors(
     // being matched: `Tint(n)` against a `Shades.Shade` is its `Tint`,
     // however it is written. Dropping the `Light` arm of such a match was
     // accepted, and failed at run time with no matching clause (found by
-    // `make metamorphic-search`).
+    // `make fuzz-metamorphic`).
     std::string subjectAdt;
     if (subject) {
         if (const auto* named = std::get_if<NamedType>(&resolve(subject)->kind);
@@ -4187,7 +4312,7 @@ auto TypeChecker::checkClauseCoverage() -> void {
 // (`Safe { html }`) or a type pattern (`s : String`) takes one whole. Any
 // other kind of arm leaves the question to checkMatchExhaustiveness (see
 // kexhq/kex#645). Dropping the `Redirect` arm was accepted, and failed at run
-// time with no matching clause (found by `make metamorphic-search`).
+// time with no matching clause (found by `make fuzz-metamorphic`).
 auto TypeChecker::unionMemberNames(const TypePtr& subject) -> std::vector<std::string> {
     const auto nameOf = [](const TypePtr& type) {
         const auto* named = std::get_if<NamedType>(&type->kind);
@@ -4482,7 +4607,7 @@ auto TypeChecker::checkPatternMatrix(
     // (spec/named_record_pattern.kex). Against a subject of one record type,
     // a pattern naming another covers what a literal does, and a fallback is
     // still owed. Dropping the `_` beside such an arm was accepted, and failed
-    // at run time with no matching clause (found by `make metamorphic-search`).
+    // at run time with no matching clause (found by `make fuzz-metamorphic`).
     std::string subjectRecord;
     if (const auto* named = std::get_if<NamedType>(&resolve(subject)->kind)) {
         if (const auto name = resolveRecordName(named->name); m_recordFields.contains(name)) {
@@ -4848,6 +4973,87 @@ auto TypeChecker::atImplementingType(Signature signature, const TypePtr& impleme
     }
     signature.params.front() = applied;
     signature.result = fill(signature.result);
+    return signature;
+}
+
+auto TypeChecker::constructorRequirementAt(
+    const Signature& required, const TypePtr& implementingType) -> std::optional<Signature> {
+    if (required.params.empty() || !required.params.front() ||
+        !std::holds_alternative<TypeApp>(required.params.front()->kind)) {
+        return std::nullopt;
+    }
+    // Each implementation's own letters, never the trait's.
+    std::unordered_map<int, TypePtr> fresh;
+    std::function<TypePtr(const TypePtr&)> freshen = [&](const TypePtr& type) -> TypePtr {
+        if (const auto* letter = type ? std::get_if<TypeVar>(&type->kind) : nullptr) {
+            auto [found, added] = fresh.try_emplace(letter->id);
+            if (added) {
+                found->second = freshTypeVar();
+            }
+            return found->second;
+        }
+        if (const auto* app = type ? std::get_if<TypeApp>(&type->kind) : nullptr) {
+            // The head stays the trait's `F`, which atImplementingType replaces.
+            std::vector<TypePtr> args;
+            for (const auto& arg : app->args) {
+                args.push_back(freshen(arg));
+            }
+            return Type::app(app->head, std::move(args));
+        }
+        return type ? mapTypeChildren(type, freshen) : type;
+    };
+    auto signature = required;
+    for (auto& param : signature.params) {
+        param = freshen(param);
+    }
+    signature.result = freshen(signature.result);
+    auto applied = atImplementingType(std::move(signature), implementingType);
+    if (applied) {
+        applied->params.erase(applied->params.begin());
+    }
+    return applied;
+}
+
+auto TypeChecker::traitRequirementInDefault(const Signature& required) -> Signature {
+    const int varMark = m_nextTypeVar;
+    const auto letters = m_currentTrait
+                             ? m_traitParameterLetters.find({m_currentTrait->name, required.name})
+                             : m_traitParameterLetters.end();
+    // The trait's parameters are the default's own letters; the rest are this
+    // call's.
+    std::unordered_map<int, TypePtr> renamed;
+    if (letters != m_traitParameterLetters.end()) {
+        for (const auto& [parameter, id] : letters->second) {
+            if (const auto own = m_bodyTypeVars.find(parameter); own != m_bodyTypeVars.end()) {
+                renamed.emplace(id, own->second);
+            }
+        }
+    }
+    std::function<TypePtr(const TypePtr&)> rename = [&](const TypePtr& type) -> TypePtr {
+        if (const auto* letter = type ? std::get_if<TypeVar>(&type->kind) : nullptr) {
+            auto [found, added] = renamed.try_emplace(letter->id);
+            if (added) {
+                found->second = freshTypeVar();
+            }
+            return found->second;
+        }
+        return type ? mapTypeChildren(type, rename) : type;
+    };
+    auto signature = required;
+    signature.params = requirementParams(required);
+    for (auto& param : signature.params) {
+        param = rename(param);
+    }
+    signature.result = rename(signature.result);
+    // The receiver is `this`, the default's `This`: put before the rest, or in
+    // place of the `F<A>` a trait over a constructor writes.
+    if (implicitReceivers(required) == 1) {
+        signature.params.insert(signature.params.begin(), m_currentMakeType);
+    } else if (!signature.params.empty()) {
+        signature.params.front() = m_currentMakeType;
+    }
+    // Its own letters are each call's: one `A` for the seed and the block.
+    generalizeSignature(signature, varMark, nullptr, true);
     return signature;
 }
 
@@ -6001,7 +6207,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     // Pre-registered provisional sigs (for forward-reference/recursion) are
     // in m_userSignatures but NOT in m_annotationDeclared, so they don't
     // affect param-type selection or return-type verification here.
-    const auto scopedDeclared = m_scopedDeclaredSignatures.find(declarationKey);
+    auto scopedDeclared = m_scopedDeclaredSignatures.find(declarationKey);
     // A function another unit reaches through the module's interface is
     // annotated (decision 1, §14 item 5): KexI carries its signature, not
     // its body. Only a module in a file other than the entry's is one.
@@ -6075,6 +6281,79 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         }
         return match;
     }();
+    // A binding written without a parameter list holds the function its
+    // annotation describes: `doubled : Step -> Step` over `let doubled =
+    // around { ... }` is a value of that type, not a function of a Step. In
+    // a module, the arrow was read as the binding's own parameter
+    // (kexhq/kex#763).
+    // Unless another definition takes what the annotation says:
+    // `printLine : Showable -> Void` is `printLine(msg)`'s, beside a bare
+    // `foul printLine = ...`.
+    const auto definedWithArity = [&](std::size_t arity) {
+        for (const auto& key :
+             {def.name, m_currentModulePath.empty()
+                            ? def.name
+                            : kex::mangle::qualify(m_currentModulePath, def.name)}) {
+            if (const auto found = m_userSignatures.find(key); found != m_userSignatures.end()) {
+                for (const auto& signature : found->second) {
+                    if (signature.clause && signature.params.size() == arity) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    };
+    std::optional<Signature> valueContract;
+    if (declared && !declared->params.empty() && !def.clauses.empty() &&
+        !def.clauses.front().hasParamList && def.clauses.front().params.empty() &&
+        !definedWithArity(declared->params.size())) {
+        valueContract = *declared;
+        valueContract->result = Type::func(valueContract->params, valueContract->result);
+        valueContract->params.clear();
+        valueContract->requiredParams.reset();
+        declared = &*valueContract;
+    }
+    // `(Integer, Integer) -> Integer` is a function of one tuple. Over a
+    // definition of two parameters it almost certainly meant two, and applied
+    // anyway it typed `a` as the tuple and invented a `B`, so the body and
+    // every right call were errors (kexhq/kex#785). Said once, and not
+    // applied: the definition is checked, and called, as written.
+    if (declared && declared->params.size() == 1 && !def.clauses.empty()) {
+        const auto arity = def.clauses.front().params.size();
+        const auto* tuple = std::get_if<TupleType>(&resolve(declared->params.front())->kind);
+        if (tuple && arity > 1 && tuple->elements.size() == arity) {
+            std::string curried;
+            for (const auto& element : tuple->elements) {
+                curried += typeToString(element) + " -> ";
+            }
+            curried += typeToString(declared->result);
+            error(
+                diag::Code::AnnotationTupleForParameters, def.location,
+                {{"name", def.name},
+                 {"tuple", typeToString(declared->params.front())},
+                 {"count", std::to_string(arity)},
+                 {"curried", curried}});
+            const auto wrong = *declared;
+            declared = nullptr;
+            const auto isWrong = [&](const Signature& signature) {
+                return !signature.clause && signature.params.size() == 1 &&
+                       typesEqual(signature.params.front(), wrong.params.front());
+            };
+            for (const auto& key :
+                 {def.name, m_currentModulePath.empty()
+                                ? def.name
+                                : kex::mangle::qualify(m_currentModulePath, def.name)}) {
+                if (const auto found = m_userSignatures.find(key);
+                    found != m_userSignatures.end()) {
+                    std::erase_if(found->second, isWrong);
+                }
+            }
+            m_scopedDeclaredSignatures.erase(declarationKey);
+            scopedDeclared = m_scopedDeclaredSignatures.end();
+            m_annotationDeclared.erase(def.name);
+        }
+    }
 
     // A `:>` declaration inside `make` is the method's contract just as a
     // standalone annotation is for a top-level function. The registered
@@ -6130,7 +6409,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     // A member that declares no result answers to the result a trait its
     // type claims requires of it: `foul getChar = "c"` implementing IO's
     // `getChar :> String?` was accepted, and failed at its caller's first
-    // `.or` (found by `make metamorphic-search`). A result bounded by a trait
+    // `.or` (found by `make fuzz-metamorphic`). A result bounded by a trait
     // binds too: `area :> Float` takes any Float, never a String
     // (kexhq/kex#642).
     // Its parameters, where they are annotated, must take what the
@@ -6140,6 +6419,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     // the first, the Integer overload was "required to take String"
     // (kexhq/kex#623).
     const Signature* requirement = nullptr;
+    std::deque<Signature> ownedRequirements;
     // A clause written with its receiver as a pattern (`let kind(@Kilo(unit))`)
     // answers a requirement with the parameters after it.
     std::size_t requirementOffset = 0;
@@ -6164,6 +6444,13 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             return true;
         };
         for (const auto* required : m_traits.requiredOverloads(m_currentMakeType, def.name)) {
+            // A requirement over a constructor (`into : F<A> -> (A -> F<B>) ->
+            // F<B>`) writes its receiver: at this type, and without it, it
+            // types the parameters an implementation writes (`let into(f)`).
+            if (const auto applied = constructorRequirementAt(*required, m_currentMakeType)) {
+                ownedRequirements.push_back(*applied);
+                required = &ownedRequirements.back();
+            }
             if (required->params.size() + requirementOffset == params.size() &&
                 (!requirement || (!answers(*requirement) && answers(*required)))) {
                 requirement = required;
@@ -6376,6 +6663,14 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 paramType = Type::named(
                     m_adtOfConstructor.at(std::get<ast::ConstructorPattern>(at.inner->kind).name));
             } else if (
+                !param.type && param.pattern && !(pi == 0 && receiverIsFirstParam) &&
+                !constructorPatternType(**param.pattern).empty()) {
+                // A parameter matched by a constructor (`area(Circle(r))`) is of
+                // the type the constructor builds. Left a fresh variable, the
+                // clauses generalized to `A -> Float`, and `xs.map(area)` was
+                // typed from nothing (kexhq/kex#753).
+                paramType = Type::named(constructorPatternType(**param.pattern));
+            } else if (
                 !param.type && pi == 0 && receiverIsFirstParam && m_currentMakeType &&
                 param.pattern &&
                 (std::holds_alternative<ast::RecordPattern>((*param.pattern)->kind) ||
@@ -6390,6 +6685,27 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 paramType = m_currentMakeType;
             } else if (param.type) {
                 paramType = resolveTypeExpr(**param.type, genericVars);
+                // A separate annotation is what callers are checked against:
+                // the definition must take what it lets them pass. `double :
+                // Integer -> Integer` over `let double(n: String)` was called
+                // with 4 (kexhq/kex#791).
+                if (declared && def.clauses.size() == 1 && pi < declared->params.size() &&
+                    declared->params.size() == clause.params.size() &&
+                    scopedDeclared != m_scopedDeclaredSignatures.end() &&
+                    scopedDeclared->second.size() == 1) {
+                    const auto said = resolve(declared->params[pi]);
+                    const auto written = resolve(paramType);
+                    if (isConcreteValue(said) && !containsTypeVariable(said) &&
+                        isConcreteValue(written) && !containsTypeVariable(written) &&
+                        !argMatchesParam(said, written)) {
+                        error(
+                            diag::Code::AnnotationParamDisagrees, (*param.type)->location,
+                            {{"name", def.name},
+                             {"param", param.name.value_or("_")},
+                             {"declared", typeToString(said)},
+                             {"written", typeToString(written)}});
+                    }
+                }
                 if (requirement && pi >= requirementOffset &&
                     pi - requirementOffset < requirement->params.size()) {
                     if (const auto passed = resolve(bindThis(
@@ -6458,7 +6774,11 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             if (it != m_annotationArities.end()) {
                 hasMatchingAnnotation = it->second.count(clause.params.size()) > 0;
             }
-            if (!hasMatchingAnnotation && m_diagnostics) {
+            // A clause of the declared arity elsewhere makes this one an
+            // overload the declaration does not describe (`printLine` beside
+            // `printLine(msg)`), not a declaration that disagrees with it.
+            if (!hasMatchingAnnotation && !definedWithArity(declared->params.size()) &&
+                m_diagnostics) {
                 warning(
                     diag::Code::AnnotationArityMismatch, def.location,
                     {{"name", def.name},
@@ -7830,11 +8150,12 @@ auto TypeChecker::inferBody(const std::vector<ast::ExprPtr>& body, const TypePtr
             continue;
         }
         // Only the last expression's arms answer to the expectation.
-        const bool last = expected && &expr == &body.back() &&
-                          (std::holds_alternative<ast::MatchExpr>(expr->kind) ||
-                           std::holds_alternative<ast::IfExpr>(expr->kind) ||
-                           std::holds_alternative<ast::ThenElseExpr>(expr->kind) ||
-                           std::holds_alternative<ast::ListExpr>(expr->kind));
+        const bool last =
+            expected && &expr == &body.back() &&
+            (std::holds_alternative<ast::MatchExpr>(expr->kind) ||
+             std::holds_alternative<ast::IfExpr>(expr->kind) ||
+             std::holds_alternative<ast::ThenElseExpr>(expr->kind) ||
+             std::holds_alternative<ast::ListExpr>(expr->kind) || writtenFunction(*expr));
         const auto outer = last ? std::exchange(m_branchExpectation, expected) : nullptr;
         lastType = inferExpr(*expr);
         if (last) {
@@ -7993,7 +8314,7 @@ auto TypeChecker::moduleMemberImported(
         // A module nested in the one brought in is one of its names
         // (`Path` under `using FS`), reached by it: its members are not
         // bare names (`separator`), which the checker and BEAM took and
-        // the walker refused (`make lsp-sweep`).
+        // the walker refused (`make fuzz-lsp`).
         if (bare && prefixMatch && module != import.module) {
             return false;
         }
@@ -8167,7 +8488,7 @@ auto TypeChecker::zeroArgBindingResult(const std::string& name) -> TypePtr {
 // narrower path does not attempt (mirrors zeroArgBindingResult).
 auto TypeChecker::functionValueType(const std::string& name) -> TypePtr {
     auto it = m_userSignatures.find(name);
-    if (it == m_userSignatures.end() || it->second.size() != 1) {
+    if (it == m_userSignatures.end() || it->second.empty()) {
         return nullptr;
     }
     const auto& signature = it->second.front();
@@ -8179,6 +8500,23 @@ auto TypeChecker::functionValueType(const std::string& name) -> TypePtr {
         params.push_back(resolve(param));
     }
     auto result = resolve(signature.result);
+    // The clauses of one function (`area(Circle(r))` beside `area(Square(s))`)
+    // take the same parameters: one function of them, answering what every
+    // clause does (kexhq/kex#753). Overloads by type stay ambiguous.
+    for (auto other = std::next(it->second.begin()); other != it->second.end(); ++other) {
+        if (!other->result || other->params.size() != params.size()) {
+            return nullptr;
+        }
+        for (std::size_t i = 0; i < params.size(); ++i) {
+            if (!typesEqual(resolve(other->params[i]), params[i])) {
+                return nullptr;
+            }
+        }
+        result = joinBranchType(result, resolve(other->result));
+        if (!result) {
+            return nullptr;
+        }
+    }
     if (containsOpenType(result) || std::any_of(params.begin(), params.end(), [](const TypePtr& p) {
             return containsOpenType(p);
         })) {
@@ -10791,7 +11129,7 @@ auto TypeChecker::namedConstructorCall(
         const bool required = std::any_of(
             trait.requiredMethods.begin(), trait.requiredMethods.end(), [&](const auto& r) {
                 return r.name == call.method && implicitReceivers(r) == 1 &&
-                       r.params.size() == call.args.size();
+                       requirementParams(r).size() == call.args.size();
             });
         if (!required) {
             continue;
