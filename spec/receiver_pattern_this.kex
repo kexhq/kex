@@ -1,0 +1,18 @@
+# A receiver matched by its shape (`@B(n)`) is still `this` in the body, on
+# both backends: BEAM left `this` unbound there.
+type Thing = A | B(Integer)
+
+make Thing do
+  same :> Integer -> This
+  let same(@A, _) = A
+  let same(@B(n), m) do
+    return B(m) if m > n
+    this
+  end
+end
+
+main do
+  IO.printLine(B(1).same(0) == B(1))
+  IO.printLine(B(1).same(5) == B(5))
+  IO.printLine(A.same(3) == A)
+end

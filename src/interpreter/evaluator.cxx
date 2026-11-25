@@ -1880,6 +1880,7 @@ auto Evaluator::execFunctionDef(
                 return true;
             };
             bool preferTypeMatched = false;
+            const ast::FunctionDef* typeMatchedDef = nullptr;
             if (dispatchByParamType) {
                 for (const auto* funcDef : m_functionDefs.at(regName)) {
                     if (!funcDef) {
@@ -1888,6 +1889,7 @@ auto Evaluator::execFunctionDef(
                     for (const auto& clause : funcDef->clauses) {
                         if (fullyTypeMatches(clause)) {
                             preferTypeMatched = true;
+                            typeMatchedDef = funcDef;
                             break;
                         }
                     }
@@ -1970,7 +1972,15 @@ auto Evaluator::execFunctionDef(
                     // sibling shadows it and `repeat(0)` runs the general
                     // clause's negative-count guard.
                     if (preferTypeMatched) {
-                        bool uninformative = true;
+                        // One taking only the receiver, written beside the typed
+                        // one, says so by its arity: `let -()` next to `let
+                        // -(other: Vec)` is what `-v` calls, and stepping aside
+                        // ran the binary one with `v` as `other` and no `this`.
+                        // The prelude's untyped `sum` beside a block's own
+                        // `sum(books: [Book])` still steps aside.
+                        bool uninformative =
+                            !clause.params.empty() || args.size() != 1 || !typeMatchedDef ||
+                            funcDef->location.file != typeMatchedDef->location.file;
                         for (const auto& param : clause.params) {
                             if ((param.pattern && *param.pattern) || dispatchParamType(param)) {
                                 uninformative = false;
@@ -3067,6 +3077,18 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 return evalBinaryOp(node.op, left, right, expr.location);
             } else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
                 auto operand = node.operand ? eval(*node.operand) : Value::none();
+                // A type's own unary `-` (`let -()`), as the checker decided it:
+                // resolved on the operand like a method taking only `this`.
+                if (const auto& target = m_programs.targetOf(node);
+                    target.kind == hir::TargetKind::Operator ||
+                    target.kind == hir::TargetKind::Dispatch) {
+                    std::vector<ValuePtr> operatorArgs{operand};
+                    const std::string symbol(tokenTypeName(node.op));
+                    if (auto method = resolveMethodName(operand, symbol, &operatorArgs);
+                        method != symbol) {
+                        return callFunction(method, {operand}, {}, expr.location);
+                    }
+                }
                 return evalUnaryOp(node.op, operand, expr.location);
             } else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
                 if (const auto builtin = testBuiltinCalled(node)) {

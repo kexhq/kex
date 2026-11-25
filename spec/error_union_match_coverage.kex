@@ -1,7 +1,7 @@
 # kex: check-only
 # A match over a union of types takes each member: a record pattern binding
 # its fields, or a type pattern. Dropping one was accepted, and failed at run
-# time with no matching clause (found by `make metamorphic-search`). A guarded
+# time with no matching clause (found by `make fuzz-metamorphic`). A guarded
 # arm takes nothing for certain; a catch-all takes the rest.
 
 module Web do

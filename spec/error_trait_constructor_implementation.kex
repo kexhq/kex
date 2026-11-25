@@ -1,0 +1,23 @@
+# kex: check-only
+# A requirement over a type constructor types the parameters its
+# implementation leaves unwritten: `f` in `into(f)` is the requirement's
+# `A -> Box<B>`, so it takes one argument.
+trait Stepper<F> do
+  into : F<A> -> (A -> F<B>) -> F<B>
+end
+
+record Box<A> do
+  value : A
+end
+
+make Box, implement: Stepper do
+  let into(f) -> Box<B> = f(@value, 0)
+end
+
+record Pair<A> do
+  first : A
+end
+
+make Pair, implement: Stepper do
+  let into(f) -> Pair<B> = f()
+end

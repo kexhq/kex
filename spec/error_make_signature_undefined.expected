@@ -1,0 +1,4 @@
+spec/error_make_signature_undefined.kex:10:3: [KEXET-0187]: Error, `shout` is declared here but never defined: give it a body, `let shout(...) = ...`
+   |
+10 |   shout :> String -> String
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,14 @@
+spec/error_record_field_function.kex:11:26: [KEXET-0472]: Error, `fetch` expects 2 argument(s), got 3
+   |
+11 |   IO.printLine(real.fetch("/x", 0))
+   |                ^^^^^^^^^^^^^^^^^^^
+spec/error_record_field_function.kex:12:27: [KEXET-0491]: Error, `fetch` expects argument 2 to be String, but got Integer
+
+fetch : Deps -> String -> String
+   |
+12 |   IO.printLine(real.fetch(1))
+   |                           ^ this has type Integer
+spec/error_record_field_function.kex:13:38: [KEXET-0463]: Error, cannot add Integer and String
+   |
+13 |   let mock = Deps { fetch: { |u| 7 + u } }
+   |                                  ^^^^^

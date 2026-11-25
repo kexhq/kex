@@ -32,7 +32,7 @@ auto kindOf(semantic::CallKind kind) -> TargetKind {
     return TargetKind::Undecided;
 }
 
-// The call node inside `expr` — the MethodCall, FunctionCall or BinaryOp a
+// The call node inside `expr` — the MethodCall, FunctionCall, BinaryOp or UnaryOp a
 // pass holding only the node looks a target up by — or null.
 auto callNodeOf(const ast::Expr& expr) -> const void* {
     if (const auto* call = std::get_if<ast::MethodCall>(&expr.kind)) {
@@ -42,6 +42,9 @@ auto callNodeOf(const ast::Expr& expr) -> const void* {
         return call;
     }
     if (const auto* op = std::get_if<ast::BinaryOp>(&expr.kind)) {
+        return op;
+    }
+    if (const auto* op = std::get_if<ast::UnaryOp>(&expr.kind)) {
         return op;
     }
     return nullptr;
@@ -177,6 +180,11 @@ auto Program::targetOf(const ast::FunctionCall& call) const -> const Target& {
 }
 
 auto Program::targetOf(const ast::BinaryOp& op) const -> const Target& {
+    const auto found = m_targets.find(&op);
+    return found == m_targets.end() ? kUndecided : found->second;
+}
+
+auto Program::targetOf(const ast::UnaryOp& op) const -> const Target& {
     const auto found = m_targets.find(&op);
     return found == m_targets.end() ? kUndecided : found->second;
 }
@@ -462,6 +470,12 @@ auto ProgramSet::targetOf(const ast::FunctionCall& call) const -> const Target& 
 }
 
 auto ProgramSet::targetOf(const ast::BinaryOp& op) const -> const Target& {
+    return *newestAnswer<const Target*>(
+        m_owners, &op, m_base, &kUndecided, [&](const Program& p) { return &p.targetOf(op); },
+        [](const Target* t) { return t->kind != TargetKind::Undecided; });
+}
+
+auto ProgramSet::targetOf(const ast::UnaryOp& op) const -> const Target& {
     return *newestAnswer<const Target*>(
         m_owners, &op, m_base, &kUndecided, [&](const Program& p) { return &p.targetOf(op); },
         [](const Target* t) { return t->kind != TargetKind::Undecided; });

@@ -105,3 +105,5 @@ KEX_DIAGNOSTIC(IsNeedsTypeOrTrait, "KEXET-0515", "`is?` takes a type or trait na
 KEX_DIAGNOSTIC(IsTraitWithoutImplementors, "KEXET-0516", "`is?({trait})` can't be checked at run time, because a value can be `{trait}` just by having the right functions: check for specific types instead, like `x.is?(Integer)`")
 KEX_DIAGNOSTIC(TraitUsedAsValue, "KEXET-0517", "`{name}` is a trait, not a value: to take any value that is a `{name}`, write `value: {name}`")
 KEX_DIAGNOSTIC(MatchArmsAllGuarded, "KEXET-0518", "every arm of this `match` has a `when` guard, so a value no guard accepts matches nothing: add an arm without a guard (`_ => ...`)")
+KEX_DIAGNOSTIC(BlockResultMismatch, "KEXET-0519", "the block given to `{name}` must return {expected}, but it returns {actual}")
+KEX_DIAGNOSTIC(RecordCalledLikeFunction, "KEXET-0520", "`{name}` is a record, not a function: build one by writing its fields in braces after the name")

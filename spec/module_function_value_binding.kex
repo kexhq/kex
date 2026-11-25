@@ -1,0 +1,17 @@
+# A binding without a parameter list holds the function its annotation
+# describes, in a module as at the top level: `doubled : Wrapper` is a value
+# of that type, not a function of a Step.
+module Wrap do
+  type Step = Integer -> Integer
+  type Wrapper = Step -> Step
+
+  around : (Step -> Integer -> Integer) -> Wrapper
+  let around(body) = { |inner| { |n| body(inner, n) } }
+
+  doubled : Wrapper
+  let doubled = around { |inner, n| inner(n) * 2 }
+end
+
+main do
+  IO.printLine(Wrap.doubled({ |n| n + 1 })(3))
+end

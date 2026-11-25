@@ -1,0 +1,12 @@
+spec/error_block_result_mismatch.kex:5:48: [KEXET-0519]: Error, the block given to `reduce` must return Integer, but it returns String
+  |
+5 | let total(xs: [Integer]) -> Integer = xs.reduce(0) { |acc, item| "no" }
+  |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+spec/error_block_result_mismatch.kex:7:47: [KEXET-0519]: Error, the block given to `reduce` must return T, but it returns Integer
+  |
+7 | let firstOf(xs: [T], seed: T) -> T = xs.reduce(seed) { |acc, item| 5 }
+  |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+spec/error_block_result_mismatch.kex:13:41: [KEXET-0519]: Error, the block given to `fold` must return A?, but it returns T | B?
+   |
+13 |   let firstWhere(pred) -> T? = this.fold(None) do |acc, item|
+   |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,5 +1,6 @@
 # A tuple-style type annotation (A, B) -> C declares 1 parameter (a tuple),
-# not 2. The typechecker warns when this mismatches the definition's arity.
+# not 2. Over a two-parameter definition that is one error, naming the
+# curried form, and the annotation is not applied.
 add : (Integer, Integer) -> Integer
 let add(a, b) = a + b
 

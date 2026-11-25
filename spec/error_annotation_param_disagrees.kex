@@ -1,0 +1,13 @@
+# kex: check-only
+# A separate annotation is what calls are checked against, so the definition
+# must take what it lets callers pass.
+double : Integer -> Integer
+let double(n: String) = 7
+
+shout : String -> String
+let shout(text: String) = text.upperCase
+
+main do
+  IO.printLine(double(4))
+  IO.printLine(shout("a"))
+end

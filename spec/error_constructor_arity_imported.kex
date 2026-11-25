@@ -2,7 +2,7 @@
 # A constructor takes as many values as it declares, wherever it is
 # declared: the prelude's `Just` and `Ok` too, not only a type of this
 # program. `Just()` was accepted, and failed on BEAM with a pattern mismatch
-# (found by `make metamorphic-search`).
+# (found by `make fuzz-metamorphic`).
 
 type Shape = Circle(Float) | Dot
 

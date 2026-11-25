@@ -39,6 +39,32 @@ inline auto literalParameterType(const ast::FunctionClause& clause, const ast::P
     return Type::integerLiteral(literal->literal.value);
 }
 
+// A block or a capture: what takes its parameter types from where it is
+// written, a function expected there (`{ |s| s + 1 }`, `&.name`, `~f`).
+inline auto writtenFunction(const ast::Expr& e) -> bool {
+    if (const auto* lambda = std::get_if<ast::Lambda>(&e.kind)) {
+        return !lambda->params.empty();
+    }
+    if (const auto* capture = std::get_if<ast::CurryExpr>(&e.kind)) {
+        return capture->argGroups.empty() && !capture->isOperator;
+    }
+    return std::holds_alternative<ast::ShorthandLambda>(e.kind);
+}
+
+// `Void`, however it is written (`()`, the name): a result nothing reads.
+inline auto isVoidLike(const TypePtr& t) -> bool {
+    if (auto* p = std::get_if<PrimitiveType>(&t->kind)) {
+        return p->kind == PrimitiveType::Void;
+    }
+    if (auto* tup = std::get_if<TupleType>(&t->kind)) {
+        return tup->elements.empty();
+    }
+    if (auto* n = std::get_if<NamedType>(&t->kind)) {
+        return n->typeArgs.empty() && n->name == kex::names::kVoidType;
+    }
+    return false;
+}
+
 // The receivers a call adds to a trait requirement's parameters: none for a
 // higher-kinded trait's, which writes its receiver (`map : F<A> -> (A -> B) ->
 // F<B>`), one for any other, whose receiver is implicit (`price :> Integer`).
@@ -46,6 +72,22 @@ inline auto implicitReceivers(const Signature& required) -> std::size_t {
     const bool written = !required.params.empty() && required.params.front() &&
                          std::holds_alternative<TypeApp>(required.params.front()->kind);
     return written ? 0 : 1;
+}
+
+// The parameters of a trait requirement a call passes besides its receiver:
+// none for `describe : () -> String`, which takes nothing but the receiver.
+inline auto requirementParams(const Signature& required) -> std::vector<TypePtr> {
+    if (required.params.size() == 1 && required.params.front() &&
+        isVoidLike(required.params.front())) {
+        return {};
+    }
+    return required.params;
+}
+
+// How many arguments a call of a trait requirement passes, its receiver
+// included.
+inline auto requirementArity(const Signature& required) -> std::size_t {
+    return requirementParams(required).size() + implicitReceivers(required);
 }
 
 // The name in `candidates` a misspelt `name` most likely meant: one differing

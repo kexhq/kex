@@ -1,5 +1,6 @@
 #include "declaration_validator.hxx"
 
+#include "../common/runtime_dir.hxx"
 #include "../common/type_def_utils.hxx"
 #include "../common/well_known.hxx"
 #include "analyzer.hxx"
@@ -157,8 +158,15 @@ private:
             // A `:>` contract with no body in sight is the stdlib's normal
             // way of declaring a method the RUNTIME provides — `collect :>
             // (X -> Y?) -> [Y]` on `make List` has no Kex definition and
-            // never will. Only the plain-colon spelling is judged here.
+            // never will. Nothing provides one anywhere else: `shout :>
+            // String -> String` in a program's own `make User` checked clean
+            // and was undefined at run time (kexhq/kex#795).
             if (!contract.plainColon) {
+                if (!isStandardLibrarySource(contract.location.file)) {
+                    diagnostics.push_back(makeDiagnostic(
+                        Diagnostic::Level::Error, diag::Code::MakeSignatureUndefined,
+                        contract.location, {{"name", contract.name}}));
+                }
                 continue;
             }
             auto fields = recordFieldNames.find(contract.target);

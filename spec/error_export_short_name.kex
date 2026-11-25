@@ -1,0 +1,16 @@
+# kex: check-only
+# A module re-exported by `export` is reached through its own name:
+# `Shapes.Geometry.area`. The short `Shapes.area` was accepted, and neither
+# backend found it.
+module Geometry do
+  let area(r: Float) -> Float = Math.PI * r * r
+end
+
+module Shapes do
+  export Geometry
+end
+
+main do
+  IO.printLine(Shapes.Geometry.area(1.0))
+  IO.printLine(Shapes.area(1.0))
+end

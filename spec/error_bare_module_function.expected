@@ -1,0 +1,8 @@
+spec/error_bare_module_function.kex:6:3: [KEXET-0163]: Error, undefined function: `printLine`
+  |
+6 |   printLine("a")
+  |   ^^^^^^^^^^^^^^
+spec/error_bare_module_function.kex:7:16: [KEXET-0163]: Error, undefined function: `printLine`
+  |
+7 |   IO.printLine printLine("b")
+  |                ^^^^^^^^^^^^^^

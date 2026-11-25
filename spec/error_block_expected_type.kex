@@ -1,0 +1,18 @@
+# kex: check-only
+# A block or a capture written where a function is expected takes its
+# parameter types from there, as one passed as an argument does: a typed
+# `let`, a declared result, a record field, a block given to the function
+# a field holds. The error is the one inside the block, said once.
+let build() -> (String -> Integer) = { |s| s + 1 }
+
+record Deps do
+  visit : (Integer -> Integer) -> Integer
+end
+
+main do
+  let f: String -> Integer = { |s| s + 1 }
+  let g: String -> Integer = ~String.upperCase
+  let d = Deps { visit: { |step| step(1) } }
+  IO.printLine(d.visit { |n| n + 1 })
+  IO.printLine(d.visit { |n| n.upperCase })
+end

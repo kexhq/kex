@@ -71,7 +71,17 @@ auto TypeChecker::resolveBlockHints(
         sigs = &user->second;
     }
     auto methodIt = isMethodCall ? m_methodSignatures.find(name) : m_methodSignatures.end();
-    if (!sigs && imported.empty() && methodIt == m_methodSignatures.end()) {
+    // The function a record field holds, called with the block, when nothing
+    // else answers the name: the call's candidate as checkCallCore matches it.
+    const auto field = [&]() -> std::optional<std::pair<Signature, std::string>> {
+        if (!isMethodCall) {
+            return std::nullopt;
+        }
+        auto withBlock = nonBlockArgTypes;
+        withBlock.push_back(Type::unknown());
+        return calledFieldSignature(name, withBlock);
+    }();
+    if (!sigs && imported.empty() && methodIt == m_methodSignatures.end() && !field) {
         return {};
     }
 
@@ -194,6 +204,29 @@ auto TypeChecker::resolveBlockHints(
                 for (const auto& sig : requirements->second) {
                     hintsFrom(sig);
                 }
+            }
+        }
+    }
+
+    if (field && candidates.empty()) {
+        hintsFrom(field->first);
+    }
+    // `this` in a trait's default is answered by the trait's requirement, in
+    // the default's own letters: `this.fold(None) do |acc, item|` under
+    // `fold :> A -> (A -> T -> A) -> A` hands `item` the default's `T`, which
+    // stands for every type, not a fresh one any type fills.
+    if (isMethodCall && m_currentTrait && !nonBlockArgTypes.empty() &&
+        isThisPlaceholder(resolve(nonBlockArgTypes.front()))) {
+        std::vector<Signature> own;
+        for (const auto& required : m_currentTrait->requiredMethods) {
+            if (required.name == name) {
+                own.push_back(traitRequirementInDefault(required));
+            }
+        }
+        if (!own.empty()) {
+            candidates.clear();
+            for (const auto& sig : own) {
+                hintsFrom(sig);
             }
         }
     }
@@ -324,7 +357,9 @@ auto TypeChecker::resolveArgHints(
         sigs = &user->second;
     }
     auto methodIt = isMethodCall ? m_methodSignatures.find(name) : m_methodSignatures.end();
-    if (!sigs && imported.empty() && methodIt == m_methodSignatures.end()) {
+    // The function a record field holds, when nothing else answers the name.
+    const auto field = isMethodCall ? calledFieldSignature(name, argTypes) : std::nullopt;
+    if (!sigs && imported.empty() && methodIt == m_methodSignatures.end() && !field) {
         return {};
     }
 
@@ -405,6 +440,9 @@ auto TypeChecker::resolveArgHints(
             consider(sig);
         }
     }
+    if (field && hintSets.empty()) {
+        consider(field->first);
+    }
     // A receiver typed by a bounded constructor letter (`xs: M<Integer>` under
     // `M is Monad`) is answered by the higher-kinded traits' requirements
     // alone, as the call itself is (§8.2): their `F<A>` makes the block's A
@@ -441,8 +479,7 @@ static auto isBareCapture(const ast::Expr* e) -> bool {
     if (!e) {
         return false;
     }
-    const auto* ce = std::get_if<ast::CurryExpr>(&e->kind);
-    return ce && ce->argGroups.empty() && !ce->isOperator && ce->module.empty();
+    return std::holds_alternative<ast::CurryExpr>(e->kind) && writtenFunction(*e);
 }
 
 // While it lives, the `.try`s written directly in one block's body (not in a
@@ -683,6 +720,46 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr, const std::vector<TypeP
         }
         return Type::func(std::move(paramTypes), resolve(resultType));
     }
+    // A qualified capture is the call it names, made with what it is passed:
+    // `~String.upperCase` is `x.upperCase` on a String `x`, `~Mod.fn` is
+    // `Mod.fn(x)`. Typed by nothing, `[1, 2].map(~String.upperCase)` was left
+    // to run time while String's and Char's overloads disagreed.
+    if (auto* ce = std::get_if<ast::CurryExpr>(&blockExpr.kind);
+        ce && ce->argGroups.empty() && !ce->isOperator && !ce->module.empty()) {
+        // What it decides on its own, as written alone.
+        const auto reported = m_diagnostics ? m_diagnostics->size() : 0;
+        const auto captured = inferExpr(blockExpr);
+        // One naming nothing is reported as that, once.
+        if (hintParams.empty() || (m_diagnostics && m_diagnostics->size() > reported)) {
+            return captured;
+        }
+        std::vector<TypePtr> paramTypes;
+        for (const auto& hint : hintParams) {
+            const auto passed = resolve(hint);
+            paramTypes.push_back(isOpenType(passed) ? freshTypeVar() : passed);
+        }
+        const bool ofType = namesKnownType(ce->module);
+        // A type's own function takes a value of that type, whichever other
+        // type has a function of the name.
+        if (const auto owner = ofType ? typeNamed(ce->module, blockExpr.location) : nullptr;
+            owner && !containsOpenType(paramTypes.front()) &&
+            !argMatchesParam(paramTypes.front(), owner)) {
+            error(
+                diag::Code::NoOverloadArgumentMismatch, blockExpr.location,
+                {{"name", ce->module + "." + ce->name},
+                 {"index", "1"},
+                 {"expected", typeToString(owner)},
+                 {"actual", typeToString(paramTypes.front())},
+                 {"signatures", ""}});
+            return Type::func(std::move(paramTypes), Type::unknown());
+        }
+        const auto result =
+            ofType ? checkCall(ce->name, paramTypes, blockExpr.location, /*isMethodCall=*/true)
+                   : checkCall(
+                         kex::mangle::qualify(ce->module, ce->name), paramTypes, blockExpr.location,
+                         /*isMethodCall=*/false);
+        return Type::func(std::move(paramTypes), resolve(result));
+    }
     // `&.method(args)`: the lambda it means.
     if (auto* sl = std::get_if<ast::ShorthandLambda>(&blockExpr.kind)) {
         auto type = inferBlock(*sl->lambda, hintParams);
@@ -734,6 +811,63 @@ auto TypeChecker::checkCondition(const ast::Expr& condition, diag::Code code) ->
     error(code, condition.location, {{"type", typeToString(resolved)}});
 }
 
+auto TypeChecker::calledFieldSignature(
+    const std::string& name, const std::vector<TypePtr>& argTypes)
+    -> std::optional<std::pair<Signature, std::string>> {
+    const auto receiver = argTypes.empty() ? nullptr : resolve(argTypes.front());
+    const auto* named = receiver ? std::get_if<NamedType>(&receiver->kind) : nullptr;
+    if (!named) {
+        return std::nullopt;
+    }
+    const auto record = findRecordFields(*named);
+    if (record == m_recordFields.end()) {
+        return std::nullopt;
+    }
+    const auto field = record->second.find(name);
+    if (field == record->second.end()) {
+        return std::nullopt;
+    }
+    // `A -> B -> C` called with two arguments takes both.
+    Signature signature;
+    signature.name = name;
+    signature.params.push_back(receiver);
+    auto type = resolve(substituteInterfaceGenerics(field->second, named->typeArgs));
+    while (signature.params.size() < argTypes.size()) {
+        const auto* function = std::get_if<FuncType>(&type->kind);
+        if (!function) {
+            break;
+        }
+        signature.params.insert(
+            signature.params.end(), function->params.begin(), function->params.end());
+        type = resolve(function->result);
+    }
+    if (signature.params.size() == 1) {
+        return std::nullopt;
+    }
+    signature.result = type;
+    return std::pair{std::move(signature), resolveRecordName(named->name)};
+}
+
+auto TypeChecker::expectedBlockHints(const ast::Expr& expr) -> std::vector<TypePtr> {
+    if (!m_branchExpectation || !writtenFunction(expr)) {
+        return {};
+    }
+    const auto expected = resolve(std::exchange(m_branchExpectation, nullptr));
+    const auto* function = std::get_if<FuncType>(&expected->kind);
+    const auto* lambda = std::get_if<ast::Lambda>(&expr.kind);
+    // A block of another shape is reported where its type is compared.
+    if (!function || function->params.empty() ||
+        (lambda && lambda->params.size() != function->params.size())) {
+        return {};
+    }
+    std::vector<TypePtr> hints;
+    for (const auto& param : function->params) {
+        const auto taken = resolve(param);
+        hints.push_back(containsOpenType(taken) ? freshTypeVar() : taken);
+    }
+    return hints;
+}
+
 auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
     if (m_recordsNames) {
         recordNames(expr);
@@ -747,6 +881,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             m_valueAssignments.insert(operand.get());
         }
     });
+    // A block or a capture where a function is expected (a typed `let`, a
+    // declared result, a record field) takes its parameters from it, as one
+    // passed as an argument does: `let f: String -> Integer = { |s| s + 1 }`
+    // adds 1 to a String.
+    if (const auto hints = expectedBlockHints(expr); !hints.empty()) {
+        auto type = inferBlock(expr, hints);
+        m_typeMap[&expr] = type;
+        return type;
+    }
     auto result = std::visit(
         [this, &expr](const auto& node) -> TypePtr {
             using T = std::decay_t<decltype(node)>;
@@ -1049,7 +1192,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     (std::holds_alternative<ast::IfExpr>(node.value->kind) ||
                      std::holds_alternative<ast::MatchExpr>(node.value->kind) ||
                      std::holds_alternative<ast::ThenElseExpr>(node.value->kind) ||
-                     std::holds_alternative<ast::ListExpr>(node.value->kind))) {
+                     std::holds_alternative<ast::ListExpr>(node.value->kind) ||
+                     writtenFunction(*node.value))) {
                     // Muted: declaredBindingType below reports a bad annotation.
                     std::vector<Diagnostic> muted;
                     auto* const reported = std::exchange(m_diagnostics, &muted);
@@ -1127,7 +1271,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (auto* varPat = node.pattern ? std::get_if<ast::VarPattern>(&node.pattern->kind)
                                                 : nullptr) {
                     // At the name as written (`var p`): the statement starts at `var`,
-                    // and definition led there (`make lsp-sweep`).
+                    // and definition led there (`make fuzz-lsp`).
                     declareVar(
                         varPat->name, declared ? declared : valueType,
                         /*isVar=*/true, expr.location, node.pattern->location);
@@ -1191,7 +1335,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         !(node.value && literalCoercesTo(*node.value, field->second))) {
                         typeMismatch(expr.location, field->second, valueType);
                     }
-                    if (node.value) {
+                    // Only a field the record has: past the end there is no type
+                    // to read, and reading one crashed the checker on a garbled
+                    // `new.balance = 1` (found by `make fuzz-lsp`).
+                    if (node.value && field != record->second.end()) {
                         noteFloatLiteral(*node.value, field->second);
                     }
                     // The updated record, as both backends answer it.
@@ -1417,6 +1564,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     // trait default (`let +(other: This)` in the trait) is
                     // declared for every implementor, but has no signature
                     // of its own for `owned` to find.
+                    // One the receiver's trait requires answers what the trait
+                    // says: `first + second` under `+ :> This -> Integer` is an
+                    // Integer, not the trait (kexhq/kex#796).
+                    if (const auto answered =
+                            traitOperatorResult(receiver, operatorName, rightType, expr.location)) {
+                        return answered;
+                    }
                     const bool arithmeticOrOrder =
                         node.op == TokenType::Plus || node.op == TokenType::Minus ||
                         node.op == TokenType::Star || node.op == TokenType::Slash ||
@@ -1482,6 +1636,12 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     return Type::boolean();
                 }
                 if (node.op == TokenType::Minus) {
+                    // A type's own unary `-`: one taking only the receiver
+                    // (`let -()`, `- : This -> This`), as `-(other)` is the
+                    // binary one (kexhq/kex#798).
+                    if (auto own = unaryOperatorResult(expr, resolved)) {
+                        return own;
+                    }
                     // Unary negation requires a numeric operand.
                     if (auto* tv = std::get_if<TypeVar>(&resolved->kind)) {
                         unifyVar(tv->id, Type::constrained("N", "Number"));
@@ -1503,6 +1663,23 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
                 return Type::unknown();
             } else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
+                // A record is built with braces, not called: `Point(x: 1, y: 2)`
+                // was accepted with any arguments, and neither backend runs it.
+                if (!node.reifiedConstructor && recordCalledLikeFunction(node.name)) {
+                    for (const auto& arg : node.args) {
+                        if (arg) {
+                            inferExpr(*arg);
+                        }
+                    }
+                    for (const auto& [_, arg] : node.namedArgs) {
+                        if (arg) {
+                            inferExpr(*arg);
+                        }
+                    }
+                    error(
+                        diag::Code::RecordCalledLikeFunction, expr.location, {{"name", node.name}});
+                    return Type::unknown();
+                }
                 std::vector<TypePtr> argTypes;
                 // First pass: infer concrete args; defer lambdas with parameters
                 // until the selected signature can provide contextual types.
@@ -3190,7 +3367,21 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     if (!val) {
                         continue;
                     }
+                    // A field's declared type is what its value is written for: a
+                    // block there takes what the field says it takes (`Deps {
+                    // fetch: { |u| 7 + u } }` for `fetch : String -> String` adds
+                    // a String to 7).
+                    TypePtr fieldExpectation;
+                    if (!entry.spread && record != m_recordFields.end() && writtenFunction(*val)) {
+                        if (const auto field = record->second.find(fieldName);
+                            field != record->second.end()) {
+                            fieldExpectation = field->second;
+                        }
+                    }
+                    const auto outerExpectation =
+                        std::exchange(m_branchExpectation, fieldExpectation);
                     auto valueType = resolve(inferExpr(*val));
+                    m_branchExpectation = outerExpectation;
                     if (entry.spread) {
                         hasSpread = true;
                         // `Box { ...other, items: … }` keeps whatever `other`
@@ -3488,6 +3679,35 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                 [&](const ImportedFunction& function) {
                                     return onType(function.signature);
                                 });
+                        }
+                    }
+                    // `~String.upperCase` is the type's own function: the ones
+                    // taking a String, never Char's. Typed by nothing, a capture
+                    // bound to a name (`let f = ~String.upperCase`) took any list.
+                    if (candidates.empty() && typeHasIt) {
+                        if (const auto own = m_methodSignatures.find(node.name);
+                            own != m_methodSignatures.end()) {
+                            std::copy_if(
+                                own->second.begin(), own->second.end(),
+                                std::back_inserter(candidates), onType);
+                        }
+                        if (candidates.empty() && m_importedInterfaces) {
+                            if (const auto imported =
+                                    m_importedInterfaces->receiverFunctions.find(node.name);
+                                imported != m_importedInterfaces->receiverFunctions.end()) {
+                                for (const auto& function : imported->second) {
+                                    if (onType(function.signature)) {
+                                        candidates.push_back(function.signature);
+                                    }
+                                }
+                            }
+                        }
+                        // Its receiver is that type: the call it stands for is
+                        // decided here, as one a known receiver flows into is.
+                        if (!candidates.empty() && node.argGroups.empty()) {
+                            if (const auto owner = typeNamed(node.module, expr.location)) {
+                                decideCaptureAsCall(expr, node, owner);
+                            }
                         }
                     }
                     if (candidates.empty() && knownModule && !typeHasIt) {
@@ -3880,12 +4100,14 @@ auto TypeChecker::inferBinaryOp(
                 error(
                     diag::Code::CannotAdd, loc,
                     {{"left", typeToString(lhs)}, {"right", typeToString(rhs)}});
-                return Type::string();
+                return Type::unknown();
             }
             if (!argMatchesParam(lhs, rhs) && !argMatchesParam(rhs, lhs)) {
                 error(
                     diag::Code::PlusOperandsDiffer, loc,
                     {{"left", typeToString(lhs)}, {"right", typeToString(rhs)}});
+                // Said once: a guess at the sum would be reported again where it goes.
+                return Type::unknown();
             }
             return lhs;
 
@@ -3906,11 +4128,11 @@ auto TypeChecker::inferBinaryOp(
             }
             if (leftIsString || rightIsString) {
                 error(diag::Code::ArithmeticOnString, loc);
-                return Type::integer();
+                return Type::unknown();
             }
             // A Bool, Atom, Char or Void has no arithmetic either: `:kex - 7` and
             // `true * :kex` were typed as their left operand and failed on both
-            // backends (found by `make metamorphic-search`).
+            // backends (found by `make fuzz-metamorphic`).
             if (const auto nonNumber =
                     [](const TypePtr& t) {
                         return std::holds_alternative<PrimitiveType>(t->kind) && !isNumericType(t);
@@ -3937,7 +4159,7 @@ auto TypeChecker::inferBinaryOp(
             } else if (!isNumeric(lhs) || !isNumeric(rhs)) {
                 // Two values of unrelated types have no order: `i > "kex"` was
                 // accepted and failed on both backends with the message
-                // reported here (found by `make metamorphic-search`).
+                // reported here (found by `make fuzz-metamorphic`).
                 if (!containsOpenType(lhs) && !containsOpenType(rhs) &&
                     !argMatchesParam(lhs, rhs) && !argMatchesParam(rhs, lhs)) {
                     error(
@@ -4078,10 +4300,13 @@ auto TypeChecker::namespaceCallProblem(
     // `export Prelude, only: [...]` re-namespaces a module under its parent;
     // its members are the original module's, so a path through one is left
     // alone rather than checked against the parent.
+    // Only a path THROUGH one: `Shapes.Geometry.area`, not `Shapes.area`
+    // beside `export Geometry`, which neither backend finds (kexhq/kex#792).
     const auto reexported = [&](const std::string& path) {
         return std::any_of(
-            m_moduleReexports.begin(), m_moduleReexports.end(),
-            [&](const auto& entry) { return relatedTo(path, entry.first); });
+            m_moduleReexports.begin(), m_moduleReexports.end(), [&](const auto& entry) {
+                return path == entry.first || path.rfind(entry.first + ".", 0) == 0;
+            });
     };
     const auto moduleKnown = [&](const std::string& path) {
         for (const auto& module : m_localModules) {
@@ -5055,18 +5280,6 @@ auto TypeChecker::argMatchesParam(const TypePtr& writtenArg, const TypePtr& writ
         }
         return false;
     }
-    auto isVoidLike = [](const TypePtr& t) -> bool {
-        if (auto* p = std::get_if<PrimitiveType>(&t->kind)) {
-            return p->kind == PrimitiveType::Void;
-        }
-        if (auto* tup = std::get_if<TupleType>(&t->kind)) {
-            return tup->elements.empty();
-        }
-        if (auto* n = std::get_if<NamedType>(&t->kind)) {
-            return n->typeArgs.empty() && n->name == kex::names::kVoidType;
-        }
-        return false;
-    };
     auto isStringType = [](const TypePtr& t) -> bool {
         if (auto* n = std::get_if<NamedType>(&t->kind)) {
             return n->typeArgs.empty() &&
@@ -5308,6 +5521,75 @@ auto TypeChecker::argMatchesParam(const TypePtr& writtenArg, const TypePtr& writ
     }
 
     return typesEqual(argType, paramType);
+}
+
+auto TypeChecker::recordCalledLikeFunction(const std::string& name) const -> bool {
+    // The name's own last part is the type's: `Kex.Intrinsic.Kex.backend()`
+    // is a function of a module, whatever its first letter.
+    const auto last = name.substr(name.rfind('.') + 1);
+    if (last.empty() || !std::isupper(static_cast<unsigned char>(last.front()))) {
+        return false;
+    }
+    NamedType written;
+    written.name = name;
+    if (findRecordFields(written) == m_recordFields.end()) {
+        return false;
+    }
+    // Unless something callable has that name: a constructor, a function.
+    return !m_adtOfConstructor.contains(name) && !m_userSignatures.contains(name) &&
+           importedCandidates(name).empty();
+}
+
+auto TypeChecker::withWrittenLetters(const TypePtr& type) const -> TypePtr {
+    std::function<TypePtr(const TypePtr&)> written = [&](const TypePtr& part) -> TypePtr {
+        const auto resolved = resolve(part);
+        if (const auto id = typeVariableId(resolved)) {
+            if (const auto letter = m_rigidVars.find(*id); letter != m_rigidVars.end()) {
+                return Type::named(letter->second);
+            }
+            return resolved;
+        }
+        return mapTypeChildren(resolved, written);
+    };
+    return type ? written(type) : type;
+}
+
+auto TypeChecker::blockResultMismatch(const TypePtr& expected, const TypePtr& given) const
+    -> std::optional<std::pair<TypePtr, TypePtr>> {
+    // `(A, B) -> C` and `A -> B -> C` are one shape: the result is what is
+    // left after every parameter.
+    const auto flatten = [&](TypePtr type) {
+        std::size_t params = 0;
+        while (const auto* function = std::get_if<FuncType>(&resolve(type)->kind)) {
+            params += function->params.size();
+            type = function->result;
+        }
+        return std::pair{params, resolvedThroughout(type)};
+    };
+    const auto [wantedParams, wanted] = flatten(expected);
+    const auto [givenParams, produced] = flatten(given);
+    // A result still open (a letter this call did not fix, an unknown, a
+    // bound), or one nothing reads, says nothing yet.
+    const auto open = [&](const TypePtr& type) {
+        if (const auto id = typeVariableId(type)) {
+            return !m_rigidVars.contains(*id);
+        }
+        return isUndetermined(type) || std::holds_alternative<ConstrainedType>(type->kind);
+    };
+    if (wantedParams != givenParams || !wanted || !produced || open(wanted) || open(produced) ||
+        isVoidLike(wanted) || std::holds_alternative<NeverType>(produced->kind) ||
+        argMatchesParam(produced, wanted)) {
+        return std::nullopt;
+    }
+    // A seed narrower than what the block makes of it is no mistake: the
+    // letter is their join. `reduce(Empty) { |tree, x| tree.insert(x) }`
+    // seeds with the one variant and folds into the whole Tree. Not into a
+    // union the block made up: `then item else None` on an `T?` seed is a
+    // `T` where the seed's `T?` is matched.
+    if (!std::holds_alternative<UnionType>(produced->kind) && argMatchesParam(wanted, produced)) {
+        return std::nullopt;
+    }
+    return std::pair{wanted, produced};
 }
 
 auto TypeChecker::hasAnnotatedSignatureForReceiver(
@@ -5781,7 +6063,18 @@ auto TypeChecker::checkCallCore(
         const auto receiver = resolve(argTypes.front());
         const auto* var = std::get_if<TypeVar>(&receiver->kind);
         const auto* unknown = std::get_if<UnknownType>(&receiver->kind);
-        const bool rigid = var && m_rigidVars.contains(var->id);
+        // The letters of a generic `make Box<T>` too: its bodies are written
+        // for every `T`, and `@item.pretty` failed at run time for a
+        // `Box<String>` (kexhq/kex#646).
+        std::string makeLetter;
+        if (var && m_inMakeBlock && !m_currentTrait) {
+            for (const auto& [written, variable] : m_currentMakeTargetVars) {
+                if (const auto id = typeVariableId(resolve(variable)); id && *id == var->id) {
+                    makeLetter = written;
+                }
+            }
+        }
+        const bool rigid = var && (m_rigidVars.contains(var->id) || !makeLetter.empty());
         const bool writtenAny = unknown && unknown->written;
         if (rigid || writtenAny) {
             const auto takesAny = [&](const Signature& signature) {
@@ -5810,7 +6103,8 @@ auto TypeChecker::checkCallCore(
                 if (rigid) {
                     error(
                         diag::Code::NotDefinedForEveryType, loc,
-                        {{"name", sourceName(name)}, {"type", m_rigidVars.at(var->id)}});
+                        {{"name", sourceName(name)},
+                         {"type", makeLetter.empty() ? m_rigidVars.at(var->id) : makeLetter}});
                 } else {
                     error(diag::Code::AnyNotNarrowed, loc, {{"name", sourceName(name)}});
                 }
@@ -6013,8 +6307,7 @@ auto TypeChecker::checkCallCore(
             // A requirement called on `this` answers what it is required to:
             // `this.price * 2` under `price :> Integer` is an Integer.
             for (const auto& required : m_currentTrait->requiredMethods) {
-                if (required.name == name &&
-                    argTypes.size() == required.params.size() + implicitReceivers(required) &&
+                if (required.name == name && argTypes.size() == requirementArity(required) &&
                     required.result && isConcreteValue(resolve(required.result)) &&
                     !containsTypeVariable(resolve(required.result)) &&
                     !isThisPlaceholder(resolve(required.result))) {
@@ -6043,8 +6336,7 @@ auto TypeChecker::checkCallCore(
         if (!receiverTrait.empty()) {
             if (const TraitDef* trait = m_traits.get(receiverTrait)) {
                 for (const auto& required : trait->requiredMethods) {
-                    if (required.name == name &&
-                        argTypes.size() == required.params.size() + implicitReceivers(required)) {
+                    if (required.name == name && argTypes.size() == requirementArity(required)) {
                         viaTrait(receiverTrait);
                         return substituteThis(required.result, receiver);
                     }
@@ -6104,8 +6396,7 @@ auto TypeChecker::checkCallCore(
                 if (const TraitDef* trait = m_traits.get(traitName)) {
                     for (const auto& required : trait->requiredMethods) {
                         if (required.name == name &&
-                            argTypes.size() ==
-                                required.params.size() + implicitReceivers(required)) {
+                            argTypes.size() == requirementArity(required)) {
                             viaTrait(traitName);
                             return substituteThis(required.result, receiver);
                         }
@@ -6485,6 +6776,9 @@ auto TypeChecker::checkCallCore(
 
     std::vector<const ImportedFunction*> importedFunctions;
     std::string qualifiedModule;
+    // Of those, how many a bare call reaches only as functions of a type,
+    // through UFCS (`even?(x)` for `x.even?`).
+    std::size_t throughReceiverOnly = 0;
     if (m_importedInterfaces) {
         if (kex::mangle::hasScope(name)) {
             qualifiedModule = kex::mangle::scopeOf(name);
@@ -6553,8 +6847,14 @@ auto TypeChecker::checkCallCore(
                                     return signature.params.size() == argTypes.size();
                                 }));
             if (!declaredShadowsImport) {
-                for (const auto& [_, module] : m_importedInterfaces->modules) {
-                    if (!module.automaticImport) {
+                for (const auto& [moduleName, module] : m_importedInterfaces->modules) {
+                    // Only the file-level prelude's functions are called bare, and
+                    // a module's where a `using` brings it in. The other automatic
+                    // imports (IO, ...) are there by name: `printLine("a")` checked
+                    // clean and was undefined on both backends, which reach it only
+                    // as `IO.printLine`.
+                    if (!module.automaticImport ||
+                        (moduleName != kFileLevelPreludeModule && !makeModuleVisible(moduleName))) {
                         continue;
                     }
                     if (auto functions = module.exports.find(name);
@@ -6578,6 +6878,7 @@ auto TypeChecker::checkCallCore(
                 for (const auto& function : functions->second) {
                     if (importedFunctionVisible(function, /*throughReceiver=*/false)) {
                         importedFunctions.push_back(&function);
+                        ++throughReceiverOnly;
                     }
                 }
             }
@@ -6980,6 +7281,66 @@ auto TypeChecker::checkCallCore(
             }
         }
     }
+    bool answeredByRequirement = false;
+    // The candidates are the call's own target, not guesses among same-named
+    // functions: a mismatch with them is an error, never a reason to let the
+    // call through.
+    bool authoritative = false;
+    // A call typed by a signature that is not its target (a trait's requirement
+    // on `this`, the function a record field holds) keeps the decision it had:
+    // whatever the match below decides is not kept, and `decision`, when set,
+    // is.
+    struct Undecided {
+        TypeChecker& checker;
+        const ast::Expr* call = nullptr;
+        const ast::MethodCall* method = nullptr;
+        std::optional<DecidedCall> decision;
+        ~Undecided() {
+            if (call) {
+                checker.m_decidedCalls.erase(call);
+                checker.m_selectedCallSignatures.erase(call);
+                if (decision) {
+                    checker.m_decidedCalls[call] = *decision;
+                }
+            }
+            if (method) {
+                checker.m_resolvedCalls.erase(method);
+            }
+        }
+    } undecided{*this};
+    // A requirement called on `this` in its trait's default: the requirement
+    // answers, in the default's own letters (`item` in `this.fold(None) do
+    // |acc, item|` is the default's `T`, which `acc` cannot hold).
+    if (isMethodCall && m_currentTrait && !argTypes.empty() &&
+        isThisPlaceholder(resolve(argTypes.front()))) {
+        std::vector<Signature> own;
+        for (const auto& required : m_currentTrait->requiredMethods) {
+            if (required.name == name) {
+                own.push_back(traitRequirementInDefault(required));
+            }
+        }
+        if (!own.empty()) {
+            merged = std::move(own);
+            sigs = &merged;
+            answeredByRequirement = true;
+            authoritative = true;
+            undecided.call = callExpr;
+            undecided.method = methodCall;
+        }
+    }
+    // A field holding a function, called (`route.handler(request)`): that
+    // function is the call's one candidate, matched as any other is, its
+    // receiver the record. Lowered as the field read it is.
+    if (!sigs && isMethodCall && argTypes.size() > 1) {
+        if (auto field = calledFieldSignature(name, argTypes)) {
+            merged = {std::move(field->first)};
+            sigs = &merged;
+            undecided.call = callExpr;
+            undecided.method = methodCall;
+            undecided.decision = DecidedCall{CallKind::FieldRead, field->second};
+            authoritative = true;
+        }
+    }
     if (!sigs) {
         // Record field access: `user.name` desugars to checkCall("name", [User]).
         // Look up the field type in the record registry before giving up.
@@ -6992,17 +7353,18 @@ auto TypeChecker::checkCallCore(
                 if (ri != m_recordFields.end()) {
                     auto fi = ri->second.find(name);
                     if (fi != ri->second.end()) {
-                        // A field holding a function is APPLIED when arguments
-                        // follow it: `route.handler(request)` is a call, and
-                        // its type is the handler's result, not the handler.
+                        // A field holding a function, called, is the call's candidate
+                        // above (calledFieldSignature). Here a field is read, or one
+                        // holding no function is called: an error unless what it
+                        // holds is not known yet.
                         auto fieldType = substituteInterfaceGenerics(fi->second, named->typeArgs);
-                        for (size_t applied = 1; applied < argTypes.size();) {
-                            auto* fn = std::get_if<FuncType>(&fieldType->kind);
-                            if (!fn) {
-                                break;
-                            }
-                            applied += std::max<size_t>(fn->params.size(), 1);
-                            fieldType = fn->result;
+                        if (argTypes.size() > 1 && !isUndetermined(resolve(fieldType))) {
+                            error(
+                                diag::Code::WrongArgumentCount, loc,
+                                {{"name", sourceName(name)},
+                                 {"expected", "1"},
+                                 {"actual", std::to_string(argTypes.size())}});
+                            return Type::unknown();
                         }
                         if (callExpr) {
                             m_decidedCalls[callExpr] = {
@@ -7378,7 +7740,7 @@ auto TypeChecker::checkCallCore(
     // mismatch against the wrong (imported or unrelated) candidate would be
     // actively misleading, so bail out rather than guess.
     for (const auto& argType : argTypes) {
-        if (isThisPlaceholder(argType)) {
+        if (isThisPlaceholder(argType) && !answeredByRequirement) {
             return Type::unknown();
         }
     }
@@ -7603,8 +7965,8 @@ auto TypeChecker::checkCallCore(
                 return !std::holds_alternative<TypeVar>(first->kind) &&
                        !mentionsUnknownParam(first) && fits(0, sig.params.front());
             });
-        if (!anyFirstParamPlausible && !typedAtOtherArity && !anyConstrainedFirstParam &&
-            !hasReceiverRefinementConflict && !provableMismatch) {
+        if (!authoritative && !anyFirstParamPlausible && !typedAtOtherArity &&
+            !anyConstrainedFirstParam && !hasReceiverRefinementConflict && !provableMismatch) {
             // A default the receiver's type inherits, with no home module to
             // answer for it (`(0..4).map`, Enumerable's on Range): the value
             // picks the body at run time.
@@ -7846,7 +8208,12 @@ auto TypeChecker::checkCallCore(
         bool typedCandidates = false;
         for (size_t left = 0; left < distinct.size() && !typedCandidates; ++left) {
             for (size_t right = left + 1; right < distinct.size() && !typedCandidates; ++right) {
-                for (size_t i = 0; i < distinct[left]->params.size(); ++i) {
+                // The parameters both have: a defaulted one (`string(prefix =
+                // "#")` beside URI's `string`) gives one more, and reading past
+                // the other's end crashed the checker (found by `make fuzz-lsp`).
+                const auto shared =
+                    std::min(distinct[left]->params.size(), distinct[right]->params.size());
+                for (size_t i = 0; i < shared; ++i) {
                     const auto& a = distinct[left]->params[i];
                     const auto& b = distinct[right]->params[i];
                     if (typesEqual(a, b)) {
@@ -8658,6 +9025,18 @@ auto TypeChecker::checkCallCore(
                 continue;
             }
             const auto instantiated = resolvedThroughout(applyGenerics(param));
+            // What it returns, too, once the other arguments fixed it: the
+            // block of `xs.reduce(0) { |acc, x| "no" }` must give the Integer
+            // its seed made `A`, and was let through as one.
+            if (const auto mismatch = blockResultMismatch(instantiated, actual)) {
+                const ast::Expr* argument = i < argExprs.size() ? argExprs[i] : nullptr;
+                error(
+                    diag::Code::BlockResultMismatch, argument ? argument->location : loc,
+                    {{"name", sourceName(name)},
+                     {"expected", typeToString(withWrittenLetters(mismatch->first))},
+                     {"actual", typeToString(withWrittenLetters(mismatch->second))}});
+                continue;
+            }
             const auto* want = std::get_if<FuncType>(&instantiated->kind);
             const auto& got = std::get<FuncType>(actual->kind);
             if (!want || want->params.size() != got.params.size()) {
@@ -8884,6 +9263,20 @@ auto TypeChecker::checkCallCore(
                     {{"name", sourceName(name)}, {"receiver", typeToString(receiver)}});
                 return Type::unknown();
             }
+        }
+        // A bare call whose only candidates are other types' functions,
+        // offered through UFCS, none taking its first argument as their
+        // receiver: no function of that name is in scope. `printLine("a")`
+        // was blamed for its argument count against a type's two-parameter
+        // `printLine`.
+        if (!isMethodCall && !argTypes.empty() && !kex::mangle::hasScope(name) && !hasUser &&
+            throughReceiverOnly == sigs->size() &&
+            std::none_of(sigs->begin(), sigs->end(), [&](const Signature& signature) {
+                return !signature.params.empty() &&
+                       argMatchesParam(resolve(argTypes.front()), signature.params.front());
+            })) {
+            error(diag::Code::UndefinedFunction, loc, {{"name", sourceName(name)}});
+            return Type::unknown();
         }
         error(
             diag::Code::WrongArgumentCount, loc,
@@ -9269,8 +9662,16 @@ auto TypeChecker::checkCallCore(
     // of its own; a letter this call never bound (`F<[C]>` of a `traverse`
     // whose step answered no container) would only be reported again where
     // the result is used.
+    // Nor one its candidates disagree on (Char's `upperCase` answers a Char,
+    // String's a String): which one it is is not known.
     const auto declared = arityMatches[0]->result;
-    return declared && containsOpenType(resolve(declared)) ? Type::unknown() : declared;
+    const bool agreed =
+        std::all_of(arityMatches.begin(), arityMatches.end(), [&](const auto* other) {
+            return other->result && declared &&
+                   typesEqual(resolve(other->result), resolve(declared));
+        });
+    return !agreed || (declared && containsOpenType(resolve(declared))) ? Type::unknown()
+                                                                        : declared;
 }
 
 } // namespace kex::semantic
@@ -9446,15 +9847,14 @@ auto TypeChecker::claimedTraitAnswers(
 
 // A requirement fixes how many values its call takes, whichever type answers
 // it: `w.combine()` for `combine : This -> This` lacks its argument, and was
-// waved through to fail at run time (found by `make metamorphic-search`).
+// waved through to fail at run time (found by `make fuzz-metamorphic`).
 auto TypeChecker::missesRequiredArity(
     const Signature& required, std::size_t given, const std::string& name, SourceLocation loc)
     -> bool {
     // `describe : () -> String` takes nothing but its receiver.
-    const bool none = required.params.size() == 1 &&
-                      typesEqual(resolve(required.params.front()), Type::voidType());
+    const bool none = requirementParams(required).size() != required.params.size();
     const auto receivers = implicitReceivers(required);
-    const auto most = (none ? 0 : required.params.size()) + receivers;
+    const auto most = requirementArity(required);
     const auto least =
         (none ? 0 : required.requiredParams.value_or(required.params.size())) + receivers;
     if (given >= least && given <= most) {

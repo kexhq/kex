@@ -1,0 +1,12 @@
+spec/error_qualified_capture_argument.kex:13:14: [KEXET-0491]: Error, `map` expects argument 2 to be Integer -> String, but got String -> String
+   |
+13 |   [1, 2].map(f)
+   |              ^
+spec/error_qualified_capture_argument.kex:6:27: [KEXET-0491]: Error, `String.upperCase` expects argument 1 to be String, but got Integer
+  |
+6 |   IO.printLine([1, 2].map(~String.upperCase))
+  |                           ^^^^^^^^^^^^^^^^^
+spec/error_qualified_capture_argument.kex:7:29: [KEXET-0491]: Error, `String.upperCase` expects argument 1 to be String, but got String | Integer
+  |
+7 |   IO.printLine(["x", 7].map(~String.upperCase))
+  |                             ^^^^^^^^^^^^^^^^^

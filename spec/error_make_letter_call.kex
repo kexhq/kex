@@ -1,0 +1,22 @@
+# kex: check-only
+# A generic `make Box<T>` is written for every `T`: a function only some
+# types have is not called on a `T`.
+trait Pretty do
+  pretty :> String
+end
+
+make Integer, implement: Pretty do
+  let pretty = "#${this}"
+end
+
+record Box<T> do
+  item : T
+end
+
+make Box<T>, implement: Pretty do
+  let pretty = "Box(${@item.pretty})"
+end
+
+make Box<T> do
+  let described = "Box of ${@item}"
+end

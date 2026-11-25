@@ -73,7 +73,7 @@ auto encodePattern(const PatternPtr& p) -> TermPtr {
     return Term::tuple(
         {integer(static_cast<int64_t>(p->kind)), integer(static_cast<int64_t>(p->litKind)),
          str(p->litText), boolean(p->litBool), str(p->name), str(p->tag), patterns(p->args),
-         encodePattern(p->rest), boolean(p->ofString)});
+         encodePattern(p->rest), boolean(p->ofString), str(p->alias)});
 }
 
 auto encodeExpr(const ExprPtr& e) -> TermPtr {
@@ -243,6 +243,9 @@ auto decodePattern(const TermPtr& t) -> PatternPtr {
     p->args = decodePatterns(at(f, 6));
     p->rest = decodePattern(at(f, 7));
     p->ofString = flag(at(f, 8));
+    if (f.size() > 9) {
+        p->alias = text(at(f, 9));
+    }
     return p;
 }
 

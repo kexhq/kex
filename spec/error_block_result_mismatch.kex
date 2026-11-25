@@ -1,0 +1,34 @@
+# kex: check-only
+# A block returns what the parameter it is passed for asks, once the other
+# arguments fixed that: the seed of `reduce` makes `A`, and the block must
+# give an `A` back. A wider type than the seed's is their join.
+let total(xs: [Integer]) -> Integer = xs.reduce(0) { |acc, item| "no" }
+
+let firstOf(xs: [T], seed: T) -> T = xs.reduce(seed) { |acc, item| 5 }
+
+trait Folds<T> do
+  fold :> A -> (A -> T -> A) -> A
+
+  # `item` is this default's own `T`: unwrapped, it is no `T?`.
+  let firstWhere(pred) -> T? = this.fold(None) do |acc, item|
+    match acc do
+      Just(_) => acc
+      None    => pred(item) then item else None
+    end
+  end
+end
+
+record Bag<X> do
+  items : [X]
+end
+
+make Bag<X>, implement: Folds<X> do
+  let fold(acc, f) = this.items.reduce(acc, f)
+end
+
+type Tree = Empty | Node(Integer, Tree, Tree)
+
+let insert(tree: Tree, value: Integer) -> Tree = Node(value, tree, Empty)
+
+# Seeded with the one variant, folded into the whole Tree: fine.
+let fromList(values: [Integer]) -> Tree = values.reduce(Empty) { |tree, value| insert(tree, value) }

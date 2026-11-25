@@ -1,0 +1,22 @@
+# An operator a trait requires answers what the trait says it does: `+`
+# here gives an Integer, not the trait.
+trait Priced do
+  price :> Integer
+  + :> This -> Integer
+end
+
+record Book do
+  cost : Integer
+end
+
+make Book, implement: Priced do
+  let price = @cost
+  let +(other: Book) -> Integer = @cost + other.cost
+end
+
+let total(first: Priced, second: Priced) -> Integer = first + second
+
+main do
+  let sum: Integer = total(Book { cost: 2 }, Book { cost: 3 })
+  IO.printLine(sum)
+end

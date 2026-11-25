@@ -442,6 +442,14 @@ struct Emitter {
     }
 
     auto emitPattern(const Pattern& p) -> std::string {
+        // `This = {'B', N}`: the whole value bound beside its parts.
+        if (!p.alias.empty()) {
+            return erlVar(p.alias) + " = " + emitPatternShape(p);
+        }
+        return emitPatternShape(p);
+    }
+
+    auto emitPatternShape(const Pattern& p) -> std::string {
         switch (p.kind) {
             case PatKind::Wild: return freshWild();
             case PatKind::Var: return erlVar(p.name);

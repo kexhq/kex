@@ -851,6 +851,25 @@ private:
     auto commonCandidateResult(const std::string& name, const std::vector<TypePtr>& argTypes)
         -> TypePtr;
     auto argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool;
+    // Where a function passed for `expected` returns what it may not, once
+    // the other arguments fixed that: the result wanted, then the one given.
+    // The parameters a block or capture takes from the function the position it
+    // is written in expects (m_branchExpectation), which it consumes. Empty
+    // when none is expected there.
+    auto expectedBlockHints(const ast::Expr& expr) -> std::vector<TypePtr>;
+    // The function a record field `name` holds, as the signature a call through
+    // it is matched against (the record first), and the record's name. None
+    // when the receiver has no such field holding a function.
+    auto calledFieldSignature(const std::string& name, const std::vector<TypePtr>& argTypes)
+        -> std::optional<std::pair<Signature, std::string>>;
+    auto blockResultMismatch(const TypePtr& expected, const TypePtr& given) const
+        -> std::optional<std::pair<TypePtr, TypePtr>>;
+    // `type` for a message: the letters the function being checked writes by
+    // their written names (`T`), not as a renamed variable.
+    auto withWrittenLetters(const TypePtr& type) const -> TypePtr;
+    // `name` is a record's, and nothing callable has it: `Point(x: 1)` means
+    // `Point { x: 1 }`.
+    auto recordCalledLikeFunction(const std::string& name) const -> bool;
     // Whether `value` is a literal written straight into a distinct type it
     // backs: `1` as a `BookId`, `"t1"` as a `TeamId`, `[1, 2]` as `[BookId]`.
     // Fresh where the type is in view, so it needs no `.as`.
@@ -1180,12 +1199,26 @@ private:
     // types each implementor's copy, its `F<A>` being the implementing type.
     std::map<std::pair<std::string, std::string>, const ast::TypeAnnotation*>
         m_traitDefaultDeclarations;
+    // Per trait and requirement, the variable each trait parameter is in its
+    // signature (`T` in `fold :> A -> (A -> T -> A) -> A`): a default calling
+    // the requirement on `this` passes its own `T` there.
+    std::map<std::pair<std::string, std::string>, std::unordered_map<std::string, int>>
+        m_traitParameterLetters;
     // `signature`, whose receiver is a constructor applied (`F<A>`), at the
     // implementing type (`[X]`, `Box`): `F` its constructor and the
     // receiver's letters its arguments throughout. None when it is no such
     // signature.
     auto atImplementingType(Signature signature, const TypePtr& implementingType)
         -> std::optional<Signature>;
+    // A requirement over a constructor at the implementing type, in fresh
+    // letters and without its receiver: what an implementation's parameters
+    // take. None for any other requirement.
+    auto constructorRequirementAt(const Signature& required, const TypePtr& implementingType)
+        -> std::optional<Signature>;
+    // A requirement of the trait whose default is being checked, as called on
+    // `this` there: the trait's parameters in the default's own letters, the
+    // rest fresh, and the receiver first.
+    auto traitRequirementInDefault(const Signature& required) -> Signature;
     // An inherited default's result, per implementing type, left for the
     // trait's body to answer: that type, and the result's variable.
     std::unordered_multimap<const ast::FunctionClause*, std::pair<TypePtr, int>>
@@ -1559,6 +1592,18 @@ private:
     // Whether such a type gets `op` from a trait: one it implements, or the
     // trait it is typed as, requiring or defaulting it.
     auto traitDeclaresOperator(const TypePtr& type, const std::string& op) const -> bool;
+    // What an operator the receiver's trait requires answers (`+ :> This ->
+    // Integer`), its right operand checked against it. None when the trait
+    // requires no such operator.
+    // The type a parameter matched by a constructor (`Circle(r)`) is of: the
+    // ADT it builds, when that takes no type parameters. Empty otherwise.
+    auto constructorPatternType(const ast::Pattern& pattern) const -> std::string;
+    // A unary `-` the operand's type declares (taking only the receiver), its
+    // call decided on `expr`; None for any other operand.
+    auto unaryOperatorResult(const ast::Expr& expr, const TypePtr& operand) -> TypePtr;
+    auto traitOperatorResult(
+        const TypePtr& receiver, const std::string& op, const TypePtr& right, SourceLocation loc)
+        -> TypePtr;
     // Whether anything declares `op` for `type`: its own make block, an
     // imported one, or a trait.
     auto declaresOperatorFor(const TypePtr& type, const std::string& op) const -> bool;

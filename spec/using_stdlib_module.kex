@@ -1,0 +1,11 @@
+# `using` a standard-library module whose types the prelude also names:
+# built unit by unit (BEAM), the module's own `record Date` was taken for a
+# program type shadowing the prelude's, and every `Date` in date.kex meant
+# two types ("declared to return Date but body returns Date").
+using Date
+
+main do
+  let day = Date.fromEpochDay(0)
+  IO.printLine(day.year)
+  IO.printLine(day.month)
+end

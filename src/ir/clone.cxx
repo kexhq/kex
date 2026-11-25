@@ -31,6 +31,7 @@ struct Cloner {
             out->rest = pattern(*p.rest);
         }
         out->ofString = p.ofString;
+        out->alias = p.alias.empty() ? p.alias : renamed(p.alias);
         return out;
     }
 
@@ -159,6 +160,9 @@ auto clonePattern(const Pattern& p, const Rename& rename) -> PatternPtr {
 auto bindPattern(const Pattern& p, std::set<std::string>& bound) -> void {
     if (p.kind == PatKind::Var) {
         bound.insert(p.name);
+    }
+    if (!p.alias.empty()) {
+        bound.insert(p.alias);
     }
     for (const auto& a : p.args) {
         if (a) {

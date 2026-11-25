@@ -165,6 +165,12 @@ make Complex, implement: Showable do
     }
   end
 
+  # Negates both components: the unary +-+, taking only the number itself.
+  #
+  # @example
+  #   (-Complex.from(1, 2)).im   # => -2
+  let -() -> Complex = New { re: -@re, im: -@im }
+
   # Multiplies two complex numbers.
   #
   # @example

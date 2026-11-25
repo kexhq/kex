@@ -1,0 +1,17 @@
+# kex: check-only
+# A `:>` line with no body in a program's own `make` block: nothing defines
+# it, and the call failed at run time. Only the standard library's runtime
+# provides functions declared that way.
+record User do
+  name : String
+end
+
+make User do
+  shout :> String -> String
+  greet :> String
+  let greet = "hi ${@name}"
+end
+
+main do
+  IO.printLine(User { name: "Ada" }.greet)
+end
