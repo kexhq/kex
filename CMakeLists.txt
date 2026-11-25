@@ -1113,6 +1113,12 @@ add_test(NAME cluster_beam_test COMMAND cluster_beam_test WORKING_DIRECTORY ${CM
 option(KEX_WERROR "Treat compiler warnings as errors" ON)
 if(NOT MSVC)
     set(KEX_WARNING_FLAGS -Wall -Wextra -Wno-missing-field-initializers)
+    # GCC's -Wmaybe-uninitialized is unreliable under -fsanitize=address (its
+    # manual says so): GCC 15 flags libstdc++'s own <regex> there. Sanitizer
+    # builds drop it; after -Wall, which would turn it back on.
+    if(KEX_SANITIZE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        list(APPEND KEX_WARNING_FLAGS -Wno-maybe-uninitialized)
+    endif()
     if(KEX_WERROR)
         list(APPEND KEX_WARNING_FLAGS -Werror)
     endif()

@@ -9,8 +9,13 @@
 #ifndef __EMSCRIPTEN__
 #include <unistd.h>
 #include <cstdlib>
-#include <execinfo.h>
 #include <signal.h>
+#endif
+// glibc and macOS have backtrace(); musl (Alpine) does not, and there
+// KEX_BACKTRACE prints the report without one.
+#if !defined(__EMSCRIPTEN__) && __has_include(<execinfo.h>)
+#include <execinfo.h>
+#define KEX_HAS_BACKTRACE 1
 #endif
 
 namespace kex::crash {
@@ -107,11 +112,13 @@ extern "C" void onFatalSignal(int sig) {
             break;
         }
     }
+#ifdef KEX_HAS_BACKTRACE
     if (g_printBacktrace) {
         std::array<void*, 64> frames{};
         const int depth = ::backtrace(frames.data(), static_cast<int>(frames.size()));
         ::backtrace_symbols_fd(frames.data(), depth, STDERR_FILENO);
     }
+#endif
     // Back to the default action, and again: the process ends as it would
     // have without this handler.
     std::signal(sig, SIG_DFL);
