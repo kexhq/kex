@@ -88,8 +88,19 @@ auto setFloor(std::uintptr_t lowest) -> void {
 auto nearEnd(std::size_t slack) -> bool {
     thread_local const std::uintptr_t ownFloor = threadFloor();
     const auto limit = t_fiberFloor != 0 ? t_fiberFloor : ownFloor;
+    // The frame's own address, not a local's: under ASan's
+    // detect_stack_use_after_return (on by default on Linux) locals live on a
+    // heap-allocated fake stack, far below any stack floor, and every check
+    // said the stack was spent.
+    // Emscripten's floor is its shadow stack's, where locals live, and it has
+    // no ASan.
+#if defined(__EMSCRIPTEN__)
     char probe = 0;
-    return limit > slack && reinterpret_cast<std::uintptr_t>(&probe) < limit - slack;
+    const auto here = reinterpret_cast<std::uintptr_t>(&probe);
+#else
+    const auto here = reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
+#endif
+    return limit > slack && here < limit - slack;
 }
 
 } // namespace kex::stack

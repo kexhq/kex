@@ -4,7 +4,10 @@
 #include "../src/ast/function_groups.hxx"
 #include "../src/ast/convert.hxx"
 #include "../src/ast/syntax.hxx"
+#include "../src/common/stack_guard.hxx"
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -1870,6 +1873,15 @@ int main() {
                 "end\n"));
             assertTrue(refusedAsTooDeep(
                 "let x: " + repeated("[", 5000) + "Integer" + repeated("]", 5000) + " = 1\n"));
+        });
+        // The stack check refusing an item at its first token (a `let`, where
+        // recovery stops): it was parsed again, forever, adding a diagnostic
+        // each time. ASan's fake stacks made every check refuse on Linux.
+        it("moves on when the stack check refuses a whole item", [&]() {
+            kex::stack::setFloor(std::numeric_limits<std::uintptr_t>::max() / 2);
+            const bool refused = refusedAsTooDeep("let x = 1\nlet y = 2\n");
+            kex::stack::setFloor(0);
+            assertTrue(refused);
         });
         it("refuses an operator chain as deep as it is long", [&]() {
             assertTrue(refusedAsTooDeep("let x = " + repeated("1 + ", 5000) + "1\n"));
