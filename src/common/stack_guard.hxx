@@ -25,4 +25,9 @@ auto nearEnd(std::size_t slack = 0) -> bool;
 auto floor() -> std::uintptr_t;
 auto setFloor(std::uintptr_t lowest) -> void;
 
+// Where on the stack the caller runs, give or take this function's own frame.
+// Every measure of the stack goes through it: under ASan a local's address is
+// not on the stack at all (see its definition).
+auto here() -> std::uintptr_t;
+
 } // namespace kex::stack

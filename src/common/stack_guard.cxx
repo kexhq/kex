@@ -85,22 +85,26 @@ auto setFloor(std::uintptr_t lowest) -> void {
     t_fiberFloor = lowest;
 }
 
+// The frame's own address, not a local's: under ASan's
+// detect_stack_use_after_return (on by default on Linux) locals live on a
+// heap-allocated fake stack, far from the real one. A check probing a local
+// said the stack was spent; a fiber marking its top by one put its floor
+// somewhere in the heap.
+// Emscripten's floor is its shadow stack's, where locals live, and it has no
+// ASan.
+__attribute__((noinline)) auto here() -> std::uintptr_t {
+#if defined(__EMSCRIPTEN__)
+    char probe = 0;
+    return reinterpret_cast<std::uintptr_t>(&probe);
+#else
+    return reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
+#endif
+}
+
 auto nearEnd(std::size_t slack) -> bool {
     thread_local const std::uintptr_t ownFloor = threadFloor();
     const auto limit = t_fiberFloor != 0 ? t_fiberFloor : ownFloor;
-    // The frame's own address, not a local's: under ASan's
-    // detect_stack_use_after_return (on by default on Linux) locals live on a
-    // heap-allocated fake stack, far below any stack floor, and every check
-    // said the stack was spent.
-    // Emscripten's floor is its shadow stack's, where locals live, and it has
-    // no ASan.
-#if defined(__EMSCRIPTEN__)
-    char probe = 0;
-    const auto here = reinterpret_cast<std::uintptr_t>(&probe);
-#else
-    const auto here = reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
-#endif
-    return limit > slack && here < limit - slack;
+    return limit > slack && here() < limit - slack;
 }
 
 } // namespace kex::stack

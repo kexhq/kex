@@ -43,8 +43,7 @@ constexpr std::size_t kStackMargin = 512 * 1024;
 // The body runs near the top of its stack, which grows down on every target
 // Kex runs on (native and wasm alike).
 auto Fiber::markStackTop() -> void {
-    char top = 0;
-    const auto here = reinterpret_cast<std::uintptr_t>(&top);
+    const auto here = kex::stack::here();
     const auto margin = std::min(kStackMargin, m_stackSize / 4);
     m_stackLimit = here > m_stackSize ? here - m_stackSize + margin : 0;
 }
