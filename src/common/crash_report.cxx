@@ -8,6 +8,9 @@
 
 #ifndef __EMSCRIPTEN__
 #include <unistd.h>
+#include <cstdlib>
+#include <execinfo.h>
+#include <signal.h>
 #endif
 
 namespace kex::crash {
@@ -92,6 +95,10 @@ std::array<
     kFatalSignals.size()> // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
     g_crashMessages;
 
+// Set from KEX_BACKTRACE when the handlers are installed: the native stack
+// follows the report, for whoever chases a crash a fuzzer found.
+bool g_printBacktrace = false; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+
 extern "C" void onFatalSignal(int sig) {
     for (size_t i = 0; i < kFatalSignals.size(); ++i) {
         if (kFatalSignals[i] == sig) {
@@ -99,6 +106,11 @@ extern "C" void onFatalSignal(int sig) {
             [[maybe_unused]] auto written = ::write(STDERR_FILENO, message.data(), message.size());
             break;
         }
+    }
+    if (g_printBacktrace) {
+        std::array<void*, 64> frames{};
+        const int depth = ::backtrace(frames.data(), static_cast<int>(frames.size()));
+        ::backtrace_symbols_fd(frames.data(), depth, STDERR_FILENO);
     }
     // Back to the default action, and again: the process ends as it would
     // have without this handler.
@@ -154,6 +166,7 @@ auto internalErrorReport(std::string_view what) -> std::string {
 
 auto installCrashHandlers() -> void {
 #ifndef __EMSCRIPTEN__
+    g_printBacktrace = std::getenv("KEX_BACKTRACE") != nullptr;
     using namespace kex::color;
     for (size_t i = 0; i < kFatalSignals.size(); ++i) {
         const std::string name = signalName(kFatalSignals[i]);
@@ -162,8 +175,19 @@ auto installCrashHandlers() -> void {
         message += std::string(apply(bold)) + apply(red) + "kex crashed:" + apply(reset) + " " +
                    name + "\n";
         message += reportLines("Crash: " + name, "kex crashed with " + name);
-        std::signal(kFatalSignals[i], onFatalSignal);
+        // On a stack of its own: a stack overflow left none to report on,
+        // and the process died without a word (exit 132).
+        struct sigaction action{};
+        action.sa_handler = onFatalSignal;
+        action.sa_flags = SA_ONSTACK;
+        sigemptyset(&action.sa_mask);
+        sigaction(kFatalSignals[i], &action, nullptr);
     }
+    static std::array<char, 64 * 1024> alternateStack{};
+    stack_t alternate{};
+    alternate.ss_sp = alternateStack.data();
+    alternate.ss_size = alternateStack.size();
+    sigaltstack(&alternate, nullptr);
 #endif
 }
 

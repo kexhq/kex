@@ -1,0 +1,83 @@
+let answer(exitCode: Integer, stderr: String = "") -> Result<ProcessResult, String> do
+  Ok(ProcessResult { exitCode: exitCode, stdout: "", stderr: stderr })
+end
+
+let step(name: String, outcome: Result<ProcessResult, String>) -> Step do
+  Step { name: name, outcome: outcome }
+end
+
+let emptyRun -> Run do
+  Run { kex: "kex", outDir: "/tmp", budget: 1, corpus: ["spec/additional_improvements.kex"] }
+end
+
+describe("garbage inputs") do
+  it("makes the same input from the same seed") do
+    var seed = 0
+    while seed < 12 do
+      assert(inputFor(emptyRun, seed).bytes == inputFor(emptyRun, seed).bytes, "seed ${seed}")
+      seed += 1
+    end
+  end
+
+  it("makes token soup, cut programs, raw bytes and REPL sessions by turns") do
+    assert(inputFor(emptyRun, 0).kind == "token soup")
+    assert(inputFor(emptyRun, 1).kind.contains?("spec/additional_improvements.kex"))
+    let rawSeeds = (0..31).items.filter { |seed| seed % 4 == 2 }
+    let raw = rawSeeds.map { |seed| inputFor(emptyRun, seed).kind }
+    assert(raw.any?(&.contains?("deep")))
+    let session = inputFor(emptyRun, 3)
+    assert(session.kind == "REPL session")
+    assert(!session.entries.empty?)
+    assert(session.bytes.to(String) == Just(session.entries.join("\n")))
+  end
+
+  it("writes bytes no String holds") do
+    let kinds = (0..80).items.map { |seed| rawBytes(rngOf(seed)) }
+    let invalid = kinds.find { |input| input.kind == "invalid UTF-8" }
+    assert(invalid.set?)
+    assert(invalid.into { |input| input.bytes.to(String) } == None)
+  end
+end
+
+describe("the garbage oracle") do
+  it("finds a diagnostic without a place") do
+    assert(unlocated?("  [KEXEP-0074]: Error, unexpected token: &&"))
+    assert(!unlocated?("a.kex:3:5: [KEXET-0001]: Error, type mismatch"))
+    assert(!unlocated?("/tmp/x y/a.kex:12:1: [KEXEL-0017]: Error, unterminated string"))
+    assert(!unlocated?("no diagnostic here"))
+  end
+
+  it("lets a clean refusal and a clean pass through") do
+    let refused = answer(1, "a.kex:1:1: [KEXEP-0074]: Error, unexpected token")
+    assert(problemOf(step("check", refused)) == None)
+    assert(problemOf(step("check", answer(0))) == None)
+  end
+
+  it("reports a crash, a hang, a strange exit and an unlocated diagnostic") do
+    assert(problemOf(step("check", answer(139))).set?)
+    assert(problemOf(step("check", Error("timed out"))).set?)
+    assert(problemOf(step("check", answer(1, "Internal error: boom"))).set?)
+    assert(problemOf(step("check", answer(1, "unimplemented expr node N3kex3ast7LetExprE"))).set?)
+    assert(problemOf(step("check", answer(2))).set?)
+    assert(problemOf(step("check", answer(1, "  [KEXEP-0074]: Error, x"))).set?)
+  end
+
+  it("takes the REPL's diagnostics as placed on the line typed") do
+    assert(problemOf(step("repl", answer(1, "  [KEXEP-0074]: Error, x"))) == None)
+    assert(problemOf(step("beam repl", answer(1, "  [KEXEP-0074]: Error, x"))) == None)
+    assert(problemOf(step("repl", answer(1, "Internal error: boom"))).set?)
+  end
+
+  it("reports codegen refusing what the check passed") do
+    let refused = answer(1, "a.kex:1:1: [KEXEB-0030]: Error, x")
+    let steps = [step("check", answer(0)), step("codegen", refused)]
+    assert(caseProblem(steps) == Just("codegen failed on what --check passed"))
+    assert(caseProblem([step("check", answer(0)), step("codegen", answer(0))]) == None)
+  end
+
+  it("names a problem without its particulars") do
+    let segfault = problemKind("check: killed by a signal (exit 139)")
+    assert(segfault == problemKind("check: killed by a signal (exit 134)"))
+    assert(problemKind("check: Internal error") != problemKind("codegen: Internal error"))
+  end
+end

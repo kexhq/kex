@@ -1,4 +1,5 @@
 #include "fiber.hxx"
+#include "../common/stack_guard.hxx"
 
 #include <algorithm>
 
@@ -14,6 +15,16 @@
 // purpose-built for this (the comment above covers why plain ucontext
 // was rejected).
 #include <boost/context/fiber.hpp>
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#include <sanitizer/asan_interface.h>
+#include <sanitizer/common_interface_defs.h>
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__)
+#include <sanitizer/asan_interface.h>
+#include <sanitizer/common_interface_defs.h>
+#endif
 #endif
 
 namespace kex::interpreter {
@@ -38,13 +49,9 @@ auto Fiber::markStackTop() -> void {
     m_stackLimit = here > m_stackSize ? here - m_stackSize + margin : 0;
 }
 
+// One guard for every stack: a fiber's floor is set while it runs (below).
 auto Fiber::stackExhausted() -> bool {
-    const Fiber* self = g_currentFiber;
-    if (!self || self->m_stackLimit == 0) {
-        return false;
-    }
-    char probe = 0;
-    return reinterpret_cast<std::uintptr_t>(&probe) < self->m_stackLimit;
+    return kex::stack::nearEnd();
 }
 
 #ifndef __EMSCRIPTEN__
@@ -73,7 +80,75 @@ struct Fiber::Impl {
     // silently corrupting memory, which is how this got found instead of
     // shipped.)
     ctx::fiber* selfSlot = nullptr;
+    // For AddressSanitizer, told of every switch (see Asan below): this
+    // fiber's own stack, the stack it was last entered from, and the fake
+    // stack it keeps while switched away.
+    void* stackBottom = nullptr;
+    std::size_t stackSize = 0;
+    const void* callerBottom = nullptr;
+    std::size_t callerSize = 0;
+    void* fakeStack = nullptr;
 };
+
+namespace {
+// AddressSanitizer keeps one notion of "the current stack" per thread. A fiber
+// switch it is not told of leaves it reading stale poison on the new stack
+// as a stack-buffer-underflow. Each switch is announced: start before it,
+// finish once on the other side. Nothing outside an ASan build.
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define KEX_FIBER_ASAN 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__)
+#define KEX_FIBER_ASAN 1
+#endif
+struct Asan {
+    static auto startSwitch(void** fakeStack, const void* bottom, std::size_t size) -> void {
+#ifdef KEX_FIBER_ASAN
+        __sanitizer_start_switch_fiber(fakeStack, bottom, size);
+#else
+        (void)fakeStack, (void)bottom, (void)size;
+#endif
+    }
+    static auto finishSwitch(void* fakeStack, const void** oldBottom, std::size_t* oldSize)
+        -> void {
+#ifdef KEX_FIBER_ASAN
+        __sanitizer_finish_switch_fiber(fakeStack, oldBottom, oldSize);
+#else
+        (void)fakeStack, (void)oldBottom, (void)oldSize;
+#endif
+    }
+    static auto unpoison(void* bottom, std::size_t size) -> void {
+#ifdef KEX_FIBER_ASAN
+        __asan_unpoison_memory_region(bottom, size);
+#else
+        (void)bottom, (void)size;
+#endif
+    }
+};
+
+// Boost.Context's fixed-size stack, its bounds written down for Asan.
+struct RecordingStack {
+    ctx::fixedsize_stack inner;
+    void** bottom;
+    std::size_t* size;
+    // Clean in both directions: a stack a finished fiber left keeps its frames'
+    // redzones poisoned, and the next fiber given the same memory read them as
+    // a stack-buffer-underflow.
+    auto allocate() -> ctx::stack_context {
+        auto context = inner.allocate();
+        *bottom = static_cast<char*>(context.sp) - context.size;
+        *size = context.size;
+        Asan::unpoison(*bottom, *size);
+        return context;
+    }
+    auto deallocate(ctx::stack_context& context) noexcept -> void {
+        Asan::unpoison(static_cast<char*>(context.sp) - context.size, context.size);
+        inner.deallocate(context);
+    }
+};
+} // namespace
 
 namespace {
 // A pointer to the currently-running fiber's own `callerSlot` local (see
@@ -88,11 +163,28 @@ auto g_yieldSlot() -> ctx::fiber*& {
 
 Fiber::Fiber(EntryFn entry, std::size_t stackSize)
     : m_entry(std::move(entry)), m_impl(std::make_unique<Impl>()) {
+#ifdef KEX_FIBER_ASAN
+    // ASan's frames are several times larger: the same program needs a
+    // larger stack to reach the same depth.
+    stackSize *= 4;
+#endif
     m_stackSize = stackSize;
     Impl* implPtr = m_impl.get();
     m_impl->intoFiber = ctx::fiber(
-        std::allocator_arg, ctx::fixedsize_stack(stackSize),
+        std::allocator_arg,
+        RecordingStack{ctx::fixedsize_stack(stackSize), &implPtr->stackBottom, &implPtr->stackSize},
         [this, implPtr](ctx::fiber&& caller) -> ctx::fiber {
+            // Landed on this fiber's stack for the first time.
+            Asan::finishSwitch(nullptr, &implPtr->callerBottom, &implPtr->callerSize);
+            // Leaving for good, however it leaves (a return, or the forced unwind
+            // of a fiber destroyed unfinished): announced on the way out, and
+            // its fake stack goes with it.
+            struct Leaving {
+                Impl* impl;
+                ~Leaving() {
+                    Asan::startSwitch(nullptr, impl->callerBottom, impl->callerSize);
+                }
+            } leaving{implPtr};
             // `caller` is the continuation representing "the scheduler,
             // ready to be resumed" — it needs to live for this fiber's
             // entire lifetime (every yieldToScheduler() call, however deep
@@ -109,7 +201,16 @@ Fiber::Fiber(EntryFn entry, std::size_t stackSize)
         });
 }
 
-Fiber::~Fiber() = default;
+Fiber::~Fiber() {
+    // An unfinished fiber is unwound as its continuation is destroyed: Boost
+    // resumes it once more to do it, a switch ASan must be told of.
+    if (m_started && !m_finished && m_impl && m_impl->intoFiber) {
+        void* callerFake = nullptr;
+        Asan::startSwitch(&callerFake, m_impl->stackBottom, m_impl->stackSize);
+        m_impl->intoFiber = ctx::fiber{};
+        Asan::finishSwitch(callerFake, nullptr, nullptr);
+    }
+}
 
 auto Fiber::resume() -> void {
     if (m_finished) {
@@ -135,7 +236,12 @@ auto Fiber::resume() -> void {
         g_yieldSlot() = m_impl->selfSlot;
     }
 
+    const auto callerFloor = kex::stack::floor();
+    void* callerFake = nullptr;
+    Asan::startSwitch(&callerFake, m_impl->stackBottom, m_impl->stackSize);
     m_impl->intoFiber = std::move(m_impl->intoFiber).resume();
+    Asan::finishSwitch(callerFake, nullptr, nullptr);
+    kex::stack::setFloor(callerFloor);
 
     g_currentFiber = prevFiber;
     g_yieldSlot() = prevSlot;
@@ -150,11 +256,23 @@ auto Fiber::yieldToScheduler() -> void {
     if (!slot) {
         return;
     }
-    *slot = std::move(*slot).resume();
+    auto& impl = *self->m_impl;
+    Asan::startSwitch(&impl.fakeStack, impl.callerBottom, impl.callerSize);
+    try {
+        *slot = std::move(*slot).resume();
+    } catch (...) {
+        // Back on this stack to be unwound (the fiber destroyed unfinished).
+        Asan::finishSwitch(impl.fakeStack, &impl.callerBottom, &impl.callerSize);
+        throw;
+    }
+    // Resumed, perhaps from another caller: back on this fiber's own stack.
+    Asan::finishSwitch(impl.fakeStack, &impl.callerBottom, &impl.callerSize);
+    kex::stack::setFloor(self->m_stackLimit);
 }
 
 auto Fiber::trampolineBody() -> void {
     markStackTop();
+    kex::stack::setFloor(m_stackLimit);
     m_entry();
     m_finished = true;
 }
@@ -244,7 +362,9 @@ auto Fiber::resume() -> void {
     g_currentFiber = this;
     m_started = true;
 
+    const auto callerFloor = kex::stack::floor();
     emscripten_fiber_swap(caller, &m_impl->ctx);
+    kex::stack::setFloor(callerFloor);
     m_impl->callerContext = nullptr;
     g_currentFiber = prevFiber;
 }
@@ -259,10 +379,12 @@ auto Fiber::yieldToScheduler() -> void {
         return;
     }
     emscripten_fiber_swap(&self->m_impl->ctx, caller);
+    kex::stack::setFloor(self->m_stackLimit);
 }
 
 auto Fiber::trampolineBody() -> void {
     markStackTop();
+    kex::stack::setFloor(m_stackLimit);
     m_entry();
     m_finished = true;
     if (m_impl->callerContext) {

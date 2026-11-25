@@ -78,7 +78,7 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
         return std::string::npos;
     };
     // Back over white space, and over the comment ending a line above: a
-    // `.` that ends `# ... a note.` continues no chain (`make lsp-sweep`).
+    // `.` that ends `# ... a note.` continues no chain (`make fuzz-lsp`).
     const auto skipSpaceBack = [&](size_t i) {
         for (;;) {
             bool crossedLine = false;
@@ -280,7 +280,7 @@ auto checkedReceiver(
         const auto better = [plainName](const ast::Expr* held, const ast::Expr& candidate) {
             // An operator is recorded where its right operand is: in `n !=
             // args.` the comparison shared `args`'s position, and when it came
-            // first the receiver was a Bool (`make lsp-sweep`). It is never the
+            // first the receiver was a Bool (`make fuzz-lsp`). It is never the
             // receiver.
             const bool candidateOperator = std::holds_alternative<ast::BinaryOp>(candidate.kind);
             if (held && std::holds_alternative<ast::BinaryOp>(held->kind)) {

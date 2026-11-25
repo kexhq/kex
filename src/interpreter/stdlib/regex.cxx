@@ -378,7 +378,7 @@ auto Evaluator::registerRegexBuiltins() -> void {
 
         CompileFailure failure;
         if (!compilePattern(source, failure)) {
-            throw std::runtime_error("invalid regex `" + source + "`: " + failure.message);
+            throw ProgramError("invalid regex `" + source + "`: " + failure.message);
         }
         return Value::record("Regex.Regex", {{"source", Value::string(source)}});
     });

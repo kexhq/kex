@@ -30,6 +30,7 @@ auto structuredToTerm(const semantic::StructuredType& type) -> TermPtr {
 }
 
 auto structuredFromSax(SaxReader& sax) -> semantic::StructuredType {
+    beam::ensureStackForDecoding();
     sax.beginTuple();
     semantic::StructuredType type;
     type.name = sax.readBinary();

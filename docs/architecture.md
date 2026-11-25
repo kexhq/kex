@@ -210,11 +210,11 @@ stdlib loader.
 ```
 make test-all     # unit tests, spec/, examples/, stdlib specs
 make spec-beam    # every spec through the BEAM
-make fuzz         # 400 generated programs + targeted ones, walker vs BEAM
+make fuzz-differential         # 400 generated programs + targeted ones, walker vs BEAM
 make test-metamorphic   # program changes that must keep behaviour, or be refused
-make metamorphic-search # those, plus spec programs broken the way a type error
+make fuzz-metamorphic # those, plus spec programs broken the way a type error
                         # would: refused, or run alike without crashing (fresh seed)
-make lsp-sweep     # the language server asked about every name of examples/;
+make fuzz-lsp     # the language server asked about every name of examples/;
                   # each answer held to the checker's (hover type, completion,
                   # diagnostics, definition)
 make test-devirt  # devirtualized names exist in the emitted modules

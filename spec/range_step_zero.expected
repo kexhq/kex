@@ -1,2 +1,2 @@
 before
-Internal error: a range's step cannot be 0
+Error: a range's step cannot be 0

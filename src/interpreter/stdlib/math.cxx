@@ -23,7 +23,7 @@ auto toDouble(const ValuePtr& val) -> double {
 // RuntimeError, because an intrinsic has no source location to attach.
 auto finite(double v, const char* what) -> ValuePtr {
     if (auto error = nonFiniteFloatError(v, what)) {
-        throw std::runtime_error(*error);
+        throw ProgramError(*error);
     }
     return Value::floating(v);
 }
@@ -42,7 +42,7 @@ auto Evaluator::registerMathBuiltins() -> void {
         const auto high = toDouble(args.at(1));
         const auto unit = toDouble(args.at(2));
         if (!std::isfinite(low) || !std::isfinite(high) || !(low < high)) {
-            throw std::runtime_error("Random.float: bounds must be finite and strictly ascending");
+            throw ProgramError("Random.float: bounds must be finite and strictly ascending");
         }
         const auto value = low * (1.0 - unit) + high * unit;
         return Value::floating(

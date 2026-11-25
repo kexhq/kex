@@ -1,4 +1,5 @@
 #include "value.hxx"
+#include "../common/stack_guard.hxx"
 #include "../common/well_known.hxx"
 #include "../common/color.hxx"
 #include "../common/name_case.hxx"
@@ -350,6 +351,7 @@ static auto atomKeyName(const ValuePtr& key) -> const std::string* {
 }
 
 auto Value::toString() const -> std::string {
+    ensureStackFor("print");
     return std::visit(
         [](const auto& v) -> std::string {
             using T = std::decay_t<decltype(v)>;
@@ -525,6 +527,7 @@ auto Value::toString() const -> std::string {
 }
 
 auto Value::toRepr() const -> std::string {
+    ensureStackFor("show");
     return std::visit(
         [](const auto& v) -> std::string {
             using T = std::decay_t<decltype(v)>;
@@ -626,6 +629,7 @@ auto Value::toRepr() const -> std::string {
 }
 
 auto Value::typeName() const -> std::string {
+    ensureStackFor("name its type");
     return std::visit(
         [](const auto& v) -> std::string {
             using T = std::decay_t<decltype(v)>;
@@ -749,7 +753,7 @@ auto rangeLength(const RangeValue& range) -> int64_t {
 
 auto rangeElements(const RangeValue& range) -> std::vector<ValuePtr> {
     if (range.lower || range.upper) {
-        throw std::runtime_error("Float ranges cannot be enumerated");
+        throw ProgramError("Float ranges cannot be enumerated");
     }
     std::vector<ValuePtr> elements;
     const auto n = rangeLength(range);
@@ -763,6 +767,7 @@ auto rangeElements(const RangeValue& range) -> std::vector<ValuePtr> {
 }
 
 auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
+    ensureStackFor("compare");
     if (!a && !b) {
         return true;
     }
@@ -969,6 +974,7 @@ auto Value::inspect() const -> std::string {
     auto c = [](const char* code) -> const char* { return apply(code); };
 
     std::function<std::string(const Value&)> rec = [&](const Value& v) -> std::string {
+        ensureStackFor("inspect");
         return std::visit(
             [&](const auto& node) -> std::string {
                 using T = std::decay_t<decltype(node)>;
@@ -1229,6 +1235,77 @@ auto clampedCount(const ValuePtr& count, size_t size) -> size_t {
         return sgn(big->value) <= 0 ? 0 : size;
     }
     return 0;
+}
+
+} // namespace kex::interpreter
+
+namespace kex::interpreter {
+
+namespace {
+
+// The values being freed by the outermost destructor running on this
+// thread: each one dying while it drains hands its children here rather than
+// freeing them inside its own destructor.
+thread_local std::vector<ValuePtr>* t_dying = nullptr;
+
+auto releaseChildren(Value& value, std::vector<ValuePtr>& into) -> void {
+    const auto take = [&](std::vector<ValuePtr>& children) {
+        for (auto& child : children) {
+            if (child) {
+                into.push_back(std::move(child));
+            }
+        }
+    };
+    std::visit(
+        [&](auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, ListValue> || std::is_same_v<T, TupleValue>) {
+                take(node.elements);
+            } else if constexpr (std::is_same_v<T, VariantValue>) {
+                take(node.args);
+            } else if constexpr (std::is_same_v<T, MapValue>) {
+                for (auto& [key, entry] : node.entries) {
+                    into.push_back(std::move(key));
+                    into.push_back(std::move(entry));
+                }
+            } else if constexpr (std::is_same_v<T, RecordValue>) {
+                for (auto& [_, field] : node.fields) {
+                    into.push_back(std::move(field));
+                }
+            }
+        },
+        value.data);
+}
+
+} // namespace
+
+Value::~Value() {
+    if (t_dying) {
+        releaseChildren(*this, *t_dying);
+        return;
+    }
+    std::vector<ValuePtr> dying;
+    t_dying = &dying;
+    releaseChildren(*this, dying);
+    while (!dying.empty()) {
+        // Freed here when this was its last owner, its own children joining
+        // the list instead of being freed beneath it.
+        auto next = std::move(dying.back());
+        dying.pop_back();
+        next.reset();
+    }
+    t_dying = nullptr;
+}
+
+} // namespace kex::interpreter
+
+namespace kex::interpreter {
+
+auto ensureStackFor(const char* what) -> void {
+    // Past a call's own check, which names the function (src/common/stack_guard.hxx).
+    if (kex::stack::nearEnd(128 * 1024)) {
+        throw ProgramError(std::string("runtime error: a value nested too deeply to ") + what);
+    }
 }
 
 } // namespace kex::interpreter

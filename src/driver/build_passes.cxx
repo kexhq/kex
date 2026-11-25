@@ -15,6 +15,7 @@
 #include "../common/well_known.hxx"
 #include "../compiled/expand.hxx"
 #include "../ir/lower.hxx"
+#include "../ir/verify.hxx"
 #include "../module/discovery.hxx"
 #include "../pass/options.hxx"
 #include "../semantic/analyzer.hxx"
@@ -925,8 +926,27 @@ auto EmitCorePass::run(Unit& unit, UnitAnalysisManager&) -> pass::PreservedAnaly
         return preservesAll();
     }
     unit.emitted.clear();
-    for (const auto& module : unit.modules) {
-        unit.emitted.push_back(ir::emitCore(module));
+    try {
+        // What lowering and the passes after it made, checked before it is
+        // emitted (src/ir/verify.hxx): a bug said by name, not by erlc.
+        for (const auto& module : unit.modules) {
+            if (const auto problems = ir::verify(module); !problems.empty()) {
+                throw ir::LowerError(
+                    diag::Code::InvalidLoweredModule, {{"problem", problems.front()}});
+            }
+        }
+        for (const auto& module : unit.modules) {
+            unit.emitted.push_back(ir::emitCore(module));
+        }
+    } catch (const ir::LowerError& error) {
+        // Too deep to emit (src/common/stack_guard.hxx): said as lowering says it.
+        std::cerr << diagnostics::formatFileDiagnostic(
+            module::shownPath(unit.files().front()),
+            semantic::makeDiagnostic(
+                semantic::Diagnostic::Level::Error, error.code, error.location, error.args));
+        unit.emitted.clear();
+        unit.lowered = false;
+        return preservesAll();
     }
     writeSeparateCore(unit.emitted);
     if (unit.program().onEmitted) {

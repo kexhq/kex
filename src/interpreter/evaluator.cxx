@@ -1,4 +1,5 @@
 #include "evaluator.hxx"
+#include "../common/stack_guard.hxx"
 #include "../common/name_case.hxx"
 #include "../ast/type_splices.hxx"
 #include "../semantic/analyzer.hxx"
@@ -232,8 +233,7 @@ auto Evaluator::evaluateLoadedFunction(
         // ordinary validator crash during compilation, never terminate the
         // compiler process.
         auto blockedTermination = [](std::vector<ValuePtr>) -> ValuePtr {
-            throw std::runtime_error(
-                "process termination is not allowed during compile-time evaluation");
+            throw ProgramError("process termination is not allowed during compile-time evaluation");
         };
         definePublic("die", blockedTermination);
         defineIntrinsic("System.die", blockedTermination);
@@ -264,8 +264,7 @@ auto Evaluator::runCompileTime(
     m_deadline = std::chrono::steady_clock::now() + timeout;
     try {
         auto blockedTermination = [](std::vector<ValuePtr>) -> ValuePtr {
-            throw std::runtime_error(
-                "process termination is not allowed during compile-time evaluation");
+            throw ProgramError("process termination is not allowed during compile-time evaluation");
         };
         definePublic("die", blockedTermination);
         defineIntrinsic("System.die", blockedTermination);
@@ -953,7 +952,7 @@ auto Evaluator::requireMocksAllowed(const std::string& api) const -> void {
     if (m_mocksAllowed) {
         return;
     }
-    throw std::runtime_error(
+    throw ProgramError(
         api + " is test-only — Mock.* runs in spec files (*.spec.kex), the "
               "REPL, or with --allow-mocks");
 }
@@ -2745,6 +2744,12 @@ auto Evaluator::evalBody(const std::vector<ast::ExprPtr>& body) -> ValuePtr {
 
 auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
     checkDeadline();
+    // An expression nested past what the stack holds (src/common/stack_guard.hxx),
+    // a little past where a call's own check (callFunction) says which
+    // function recursed too deeply.
+    if (kex::stack::nearEnd(128 * 1024)) [[unlikely]] {
+        throw RuntimeError("stack overflow: nested too deeply", expr.location);
+    }
     if (m_sandbox && ++m_sandboxSteps > m_sandbox->maxSteps) [[unlikely]] {
         throw SandboxViolation(
             "Evaluator sandbox: step limit reached (maxSteps: " +
@@ -5925,6 +5930,9 @@ auto Evaluator::autoCallZeroArgConstant(const std::string& name, const ValuePtr&
 
 auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value, bool isMutable)
     -> bool {
+    if (Fiber::stackExhausted()) [[unlikely]] {
+        throw RuntimeError("stack overflow: pattern nested too deeply", pattern.location);
+    }
     return std::visit(
         [this, &pattern, &value, isMutable](const auto& pat) -> bool {
             using T = std::decay_t<decltype(pat)>;

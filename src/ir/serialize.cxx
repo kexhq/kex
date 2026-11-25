@@ -229,6 +229,7 @@ auto decodeClauses(const TermPtr& t) -> std::vector<MatchClause> {
 }
 
 auto decodePattern(const TermPtr& t) -> PatternPtr {
+    beam::ensureStackForDecoding();
     if (isAbsent(t)) {
         return nullptr;
     }
@@ -250,6 +251,7 @@ auto decodePattern(const TermPtr& t) -> PatternPtr {
 }
 
 auto decodeExpr(const TermPtr& t) -> ExprPtr {
+    beam::ensureStackForDecoding();
     if (isAbsent(t)) {
         return nullptr;
     }

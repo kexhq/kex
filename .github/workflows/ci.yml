@@ -325,7 +325,7 @@ jobs:
     runs-on: macos-latest
     steps: *test-steps
 
-  # Differential fuzzer (tools/fuzz.kex via `make fuzz`): generates
+  # Differential fuzzer (tools/fuzz.kex via `make fuzz-differential`): generates
   # correct-by-construction programs and fails on any walker/BEAM
   # disagreement. PR-only: it is a probabilistic hunt, so it gates pull
   # requests without also gating the post-merge record on main. Findings
@@ -355,12 +355,12 @@ jobs:
         run: make -o build test-devirt
 
       # Fresh programs each workflow run; reruns keep the seed for replay.
-      # Local `make fuzz` still defaults to 42. The fuzzer logs the seed and
+      # Local `make fuzz-differential` still defaults to 42. The fuzzer logs the seed and
       # includes failing seeds in artifact filenames (kexhq/kex#306).
       - name: Differential fuzz (walker vs BEAM)
         env:
           FUZZ_SEED: ${{ github.run_id }}
-        run: make -o build fuzz
+        run: make -o build fuzz-differential
 
       # The same for the metamorphic search: relations and type-breaking
       # mutations of the spec programs, from this run's seed. Known-open
@@ -369,7 +369,7 @@ jobs:
         env:
           METAMORPHIC_SEED: ${{ github.run_id }}
           METAMORPHIC_CASES: "40"
-        run: make -o build metamorphic-search
+        run: make -o build fuzz-metamorphic
 
       - name: Upload findings
         if: failure()
@@ -382,6 +382,60 @@ jobs:
             /tmp/kex-metamorphic/*/finding.txt
             /tmp/kex-metamorphic/*/*.kex
             /tmp/kex-metamorphic/run.txt
+
+  # The compiler built with AddressSanitizer and UBSan (`make test-sanitize`):
+  # the C++ tests and the spec suites on both backends, then a short run of
+  # the garbage, metamorphic and language-server fuzzers. A read past the end
+  # of a vector or a use-after-free is reported where it happens; the release
+  # build crashed on them only sometimes, or not at all (kexhq/kex#709).
+  # PR-only, like the fuzz job, with fresh fuzz seeds from the run id.
+  sanitize:
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.extension-only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libgmp-dev libpcre2-dev libreadline-dev libssl-dev libboost-context-dev
+
+      - uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: sanitize-${{ runner.os }}
+          max-size: 500MB
+          evict-old-files: job
+
+      - name: Build with AddressSanitizer and UBSan
+        run: |
+          cmake -B build-sanitize -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DKEX_SANITIZE=address,undefined \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build-sanitize --parallel "$(getconf _NPROCESSORS_ONLN)"
+
+      - name: Tests, specs and fuzzers under the sanitizers
+        env:
+          GARBAGE_SEED: ${{ github.run_id }}
+          METAMORPHIC_SEED: ${{ github.run_id }}
+        run: make -o build-sanitize test-sanitize
+
+      - name: Upload findings
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kex-sanitize-findings
+          path: |
+            /tmp/kex-garbage/garbage_*
+            /tmp/kex-metamorphic/*/finding.txt
+            /tmp/kex-metamorphic/*/*.kex
+            /tmp/kex-lsp-sweep/findings.txt
+            /tmp/kex-lsp-sweep/garbage_*
 
   # musl is a supported platform, and glibc passing says nothing about it:
   # the spec suite pins float formatting, and that is exactly where libm

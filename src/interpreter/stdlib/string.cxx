@@ -147,66 +147,66 @@ auto Evaluator::registerStringBuiltins() -> void {
     // `false` — "hello".digit? or 5.digit? are caller bugs, not "no".
     regCharPredicate("digit?", "is_digit", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) {
-            throw std::runtime_error("digit? expects a Char, got no argument");
+            throw ProgramError("digit? expects a Char, got no argument");
         }
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) {
-            throw std::runtime_error("digit? expects a Char, got " + args[0]->typeName());
+            throw ProgramError("digit? expects a Char, got " + args[0]->typeName());
         }
         return Value::boolean(c->value >= '0' && c->value <= '9');
     });
 
     regCharPredicate("alpha?", "is_alpha", [isLetter](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) {
-            throw std::runtime_error("alpha? expects a Char, got no argument");
+            throw ProgramError("alpha? expects a Char, got no argument");
         }
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) {
-            throw std::runtime_error("alpha? expects a Char, got " + args[0]->typeName());
+            throw ProgramError("alpha? expects a Char, got " + args[0]->typeName());
         }
         return Value::boolean(isLetter(c->value));
     });
 
     regCharPredicate("letter?", "is_letter", [isLetter](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) {
-            throw std::runtime_error("letter? expects a Char, got no argument");
+            throw ProgramError("letter? expects a Char, got no argument");
         }
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) {
-            throw std::runtime_error("letter? expects a Char, got " + args[0]->typeName());
+            throw ProgramError("letter? expects a Char, got " + args[0]->typeName());
         }
         return Value::boolean(isLetter(c->value));
     });
 
     regCharPredicate("upper?", "is_upper", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) {
-            throw std::runtime_error("upper? expects a Char, got no argument");
+            throw ProgramError("upper? expects a Char, got no argument");
         }
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) {
-            throw std::runtime_error("upper? expects a Char, got " + args[0]->typeName());
+            throw ProgramError("upper? expects a Char, got " + args[0]->typeName());
         }
         return Value::boolean(utf8::categories::inRanges(utf8::categories::upperRanges, c->value));
     });
 
     regCharPredicate("lower?", "is_lower", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) {
-            throw std::runtime_error("lower? expects a Char, got no argument");
+            throw ProgramError("lower? expects a Char, got no argument");
         }
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) {
-            throw std::runtime_error("lower? expects a Char, got " + args[0]->typeName());
+            throw ProgramError("lower? expects a Char, got " + args[0]->typeName());
         }
         return Value::boolean(utf8::categories::inRanges(utf8::categories::lowerRanges, c->value));
     });
 
     regCharPredicate("space?", "is_space", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) {
-            throw std::runtime_error("space? expects a Char, got no argument");
+            throw ProgramError("space? expects a Char, got no argument");
         }
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) {
-            throw std::runtime_error("space? expects a Char, got " + args[0]->typeName());
+            throw ProgramError("space? expects a Char, got " + args[0]->typeName());
         }
         return Value::boolean(utf8::categories::inRanges(utf8::categories::spaceRanges, c->value));
     });

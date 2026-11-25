@@ -288,7 +288,7 @@ trait Enumerable<T> do
   #   keys.collect { |k| config.get(k) }
   # Typed in place: its body applies `f` through an intrinsic, so nothing
   # could be inferred from it, and every `xs.collect { ... }` was `Any` to the
-  # checker and to completion (`make lsp-sweep`). (A `name :>` line in a trait
+  # checker and to completion (`make fuzz-lsp`). (A `name :>` line in a trait
   # declares a required function instead.)
   let collect(f: T -> B?) -> [B] do
     let acc = this.reduce([]) do |a, item|

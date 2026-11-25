@@ -63,26 +63,26 @@ private:
     ValuePtr m_error;
 };
 
-class RuntimeError : public std::runtime_error {
+class RuntimeError : public ProgramError {
 public:
     RuntimeError(const std::string& msg, SourceLocation loc)
-        : std::runtime_error(
+        : ProgramError(
               std::string(loc.file) + ":" + std::to_string(loc.line) + ":" +
               std::to_string(loc.column) + ": runtime error: " + msg) {}
 };
 
-class EvaluationTimeout : public std::runtime_error {
+class EvaluationTimeout : public ProgramError {
 public:
-    EvaluationTimeout() : std::runtime_error("compile-time evaluation timed out") {}
+    EvaluationTimeout() : ProgramError("compile-time evaluation timed out") {}
 };
 
 // Code run by `Evaluator.run` went past one of its EvaluatorOptions: a step
 // or depth limit, or a built-in its `allow` list leaves out. Not a
 // RuntimeError, so the evaluated code cannot `rescue` its way past a limit;
 // it ends the whole evaluation, which `Evaluator.run` reports as an Error.
-class SandboxViolation : public std::runtime_error {
+class SandboxViolation : public ProgramError {
 public:
-    using std::runtime_error::runtime_error;
+    using ProgramError::ProgramError;
 };
 
 // What `Evaluator.run` lets the code it evaluates do (EvaluatorOptions).

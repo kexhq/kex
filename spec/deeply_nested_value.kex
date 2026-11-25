@@ -1,0 +1,13 @@
+# A loop can nest a value far deeper than any source does: freeing it must
+# not recurse once per level (the walker's stack ran out, kexhq/kex#709).
+main do
+  var x: Any = []
+  var i = 0
+  while i < 300000 do
+    x = [x]
+    i += 1
+  end
+  IO.printLine(i)
+  x = []
+  IO.printLine("freed")
+end

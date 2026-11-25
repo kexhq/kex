@@ -1,2 +1,2 @@
 before
-Internal error: spec/error_division_by_zero.kex:4:20: runtime error: division by zero
+Error: spec/error_division_by_zero.kex:4:20: runtime error: division by zero

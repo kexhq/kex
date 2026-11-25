@@ -1,5 +1,6 @@
 // Expression lowering methods of Lowering, out of line (see lowering.hxx).
 #include "lowering.hxx"
+#include "../common/stack_guard.hxx"
 #include "../common/name_case.hxx"
 #include "../common/named_arguments.hxx"
 #include "../common/signature_params.hxx"
@@ -33,6 +34,11 @@ auto astNodeName(const std::type_info& type) -> std::string {
 }
 
 auto Lowering::lower(const ast::ExprPtr& e) -> ExprPtr {
+    // Past what the stack holds (src/common/stack_guard.hxx): refused, located
+    // by the handler below.
+    if (kex::stack::nearEnd()) {
+        throw LowerError(diag::Code::NestedTooDeepToCompile);
+    }
     try {
         return lowerNode(e);
     } catch (LowerError& error) {

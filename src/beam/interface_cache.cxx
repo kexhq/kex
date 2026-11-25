@@ -234,6 +234,7 @@ auto typeToTerm(const TypePtr& t) -> TermPtr {
 // straight into the structs (no tree, no second pass).
 // Throws EtfError on any malformed input.
 auto typeFromSax(SaxReader& sax) -> TypePtr {
+    ensureStackForDecoding();
     if (!sax.nextIsTuple()) {
         if (!sax.nextIsAtom()) {
             throw EtfError("type: expected tuple");

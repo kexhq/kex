@@ -4,6 +4,7 @@
 #include "../common/diagnostic_codes.hxx"
 #include <string>
 #include <typeinfo>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -249,6 +250,26 @@ private:
     // name it, since it is only reached after `.` (kexhq/kex#508).
     bool m_makeMemberName = false;
     std::vector<ParseDiagnostic> m_diagnostics;
+    // How deep the expression, type or pattern being parsed is: the parser
+    // and every pass after it recurse once per level, so past kMaxNesting the
+    // program is refused rather than overflowing a stack (kexhq/kex#709). Low
+    // enough for a debug or sanitizer build, whose frames are larger: those
+    // overflowed near 400 levels.
+    int m_nesting = 0;
+    static constexpr int kMaxNesting = 256;
+    // How deep each operator node built so far is: a chain of `+` is a tree
+    // as deep as it is long, though parsing it does not recurse.
+    std::unordered_map<const ast::Expr*, int> m_operatorDepth;
+    struct NestingGuard {
+        Parser& parser;
+        explicit NestingGuard(Parser& owner);
+        ~NestingGuard();
+        NestingGuard(const NestingGuard&) = delete;
+        auto operator=(const NestingGuard&) -> NestingGuard& = delete;
+    };
+    // `left op right`, refused when the tree it makes is too deep.
+    auto binaryNode(ast::ExprPtr left, TokenType op, ast::ExprPtr right, SourceLocation location)
+        -> ast::ExprPtr;
 };
 
 } // namespace kex

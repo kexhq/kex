@@ -37,3 +37,5 @@ KEX_DIAGNOSTIC(UnimplementedTopLevelItem, "KEXEB-0035", "IR lower: unimplemented
 KEX_DIAGNOSTIC(NonMonotonicTierBounds, "KEXEB-0036", "IR lower: non-monotonic prelude tier bounds")
 KEX_DIAGNOSTIC(TierBoundsIncomplete, "KEXEB-0037", "IR lower: tier bounds do not cover the full prelude AST")
 KEX_DIAGNOSTIC(UndecidedCallInCheckedProgram, "KEXEB-0038", "IR lower: the checker left `{name}/{arity}` undecided in a checked program")
+KEX_DIAGNOSTIC(NestedTooDeepToCompile, "KEXEB-0039", "this is nested too deeply to compile: give an inner part a name with `let`, and use the name")
+KEX_DIAGNOSTIC(InvalidLoweredModule, "KEXEB-0040", "IR verify: {problem}. This is a bug in the Kex compiler, not in your program")

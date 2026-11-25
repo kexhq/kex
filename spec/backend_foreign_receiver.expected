@@ -1,2 +1,2 @@
 2
-Internal error: spec/backend_foreign_receiver.kex:11:33: runtime error: undefined method: whiteSpaces for String
+Error: spec/backend_foreign_receiver.kex:11:33: runtime error: undefined method: whiteSpaces for String

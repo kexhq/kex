@@ -4,6 +4,7 @@
 #include "../ast/walk.hxx"
 #include "../common/mangle.hxx"
 #include "typechecker.hxx"
+#include "../common/stack_guard.hxx"
 #include "analyzer.hxx"
 #include "collect_pass.hxx"
 #include "declaration_validator.hxx"
@@ -64,6 +65,7 @@ auto TypeChecker::check(
     std::vector<Diagnostic>& diagnostics,
     const std::vector<std::string>& entryFiles) -> void {
     m_diagnostics = &diagnostics;
+    m_reportedOutOfStack = false;
     m_entryFiles = entryFiles;
     m_checkedProgram = &program;
     m_reportedIndistinguishable.clear();
@@ -1467,6 +1469,18 @@ auto TypeChecker::constructorPatternType(const ast::Pattern& pattern) const -> s
         }
     }
     return owner->second;
+}
+
+auto TypeChecker::outOfStack(SourceLocation location) -> bool {
+    if (!kex::stack::nearEnd()) {
+        return false;
+    }
+    // Once: the frames unwinding past this one would each say it again.
+    if (!m_reportedOutOfStack) {
+        m_reportedOutOfStack = true;
+        error(diag::Code::NestedTooDeepToCheck, location);
+    }
+    return true;
 }
 
 auto TypeChecker::traitOperatorResult(
@@ -5078,6 +5092,9 @@ auto TypeChecker::findRecordFields(const NamedType& named) const
 auto TypeChecker::resolveTypeExprNode(
     const ast::TypeExpr& typeExpr, std::unordered_map<std::string, TypePtr>& genericVars)
     -> TypePtr {
+    if (outOfStack(typeExpr.location)) {
+        return Type::unknown();
+    }
     // A written name the program declares for itself means its own type,
     // also when the prelude has a type of that name.
     const auto* written = std::get_if<ast::TypeName>(&typeExpr.kind);
@@ -5721,6 +5738,9 @@ auto TypeChecker::checkPatternArity(const ast::Pattern& pattern) -> void {
 }
 
 auto TypeChecker::bindPatternVars(const ast::Pattern& pat, TypePtr expected) -> void {
+    if (outOfStack(pat.location)) {
+        return;
+    }
     expected = expected ? resolve(expected) : nullptr;
     checkPatternConstructorOwner(pat, expected);
     std::visit(

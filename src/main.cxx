@@ -984,7 +984,7 @@ auto runOnWalker(
     }
     // A program sets its exit status with `System.exit`, as on BEAM. Taken
     // from `main`'s last value, `3.times do ... end` exited 3 on the walker
-    // and 0 on BEAM (found by `make metamorphic-search`).
+    // and 0 on BEAM (found by `make fuzz-metamorphic`).
     (void)result;
     return 0;
 }
@@ -1280,10 +1280,6 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // Set once the tree-walk interpreter starts running the program: from
-    // then on an exception is the program failing (a runtime error, an
-    // assertion, a built-in refusing its argument), not the compiler.
-    bool runningProgram = false;
     try {
         if (const char* crash = std::getenv("KEX_DEBUG_CRASH");
             crash && std::string_view(crash) == "internal") {
@@ -1445,20 +1441,19 @@ int main(int argc, char* argv[]) {
         }
 
         if (mode == Mode::Run) {
-            runningProgram = true;
             return runOnWalker(options, filepath, program, scriptArgs, expandParsedProgram);
         }
         return checkEntry(options, filepath, program, parser.diagnostics());
     } catch (const std::exception& e) {
+        // The program's own failure is an error of the program: said as one,
+        // as BEAM says it (src/driver/compile.cxx). Anything else is the
+        // compiler's, reported with what to file, even while a program runs:
+        // calling every run-time error internal hid the real ones among them.
+        const bool programFailed = dynamic_cast<const kex::interpreter::ProgramError*>(&e) ||
+                                   dynamic_cast<const kex::interpreter::TryException*>(&e);
         std::cerr << kex::color::apply(kex::color::bold) << kex::color::apply(kex::color::red)
-                  << "Internal error:" << kex::color::apply(kex::color::reset) << " " << e.what()
-                  << "\n";
-        // The program's own failure is not the compiler's bug to report.
-        const bool programFailed = runningProgram ||
-                                   dynamic_cast<const kex::interpreter::RuntimeError*>(&e) ||
-                                   dynamic_cast<const kex::interpreter::TryException*>(&e) ||
-                                   dynamic_cast<const kex::interpreter::EvaluationTimeout*>(&e) ||
-                                   dynamic_cast<const kex::interpreter::SandboxViolation*>(&e);
+                  << (programFailed ? "Error:" : "Internal error:")
+                  << kex::color::apply(kex::color::reset) << " " << e.what() << "\n";
         if (!programFailed) {
             std::cerr << kex::crash::internalErrorReport(e.what());
         }

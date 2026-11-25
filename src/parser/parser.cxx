@@ -1,4 +1,5 @@
 #include "parser.hxx"
+#include "../common/stack_guard.hxx"
 #include "../lexer/lexer.hxx"
 #include "../ast/function_groups.hxx"
 #include "../ast/walk.hxx"
@@ -26,6 +27,37 @@ struct ParseError : std::exception {
 
 Parser::Parser(std::vector<Token> tokens, std::string_view filename)
     : m_tokens(std::move(tokens)), m_filename(filename) {}
+
+Parser::NestingGuard::NestingGuard(Parser& owner) : parser(owner) {
+    // The count is the language's rule; the stack check holds whatever the
+    // build's frames cost (src/common/stack_guard.hxx).
+    if (++parser.m_nesting > kMaxNesting || kex::stack::nearEnd()) {
+        // Not constructed: the destructor that would undo this does not run.
+        --parser.m_nesting;
+        parser.error(diag::Code::NestedTooDeep, {{"limit", std::to_string(kMaxNesting)}});
+    }
+}
+
+Parser::NestingGuard::~NestingGuard() {
+    --parser.m_nesting;
+}
+
+auto Parser::binaryNode(
+    ast::ExprPtr left, TokenType op, ast::ExprPtr right, SourceLocation location) -> ast::ExprPtr {
+    const auto depthOf = [&](const ast::ExprPtr& operand) {
+        const auto found = operand ? m_operatorDepth.find(operand.get()) : m_operatorDepth.end();
+        return found == m_operatorDepth.end() ? 0 : found->second;
+    };
+    const int depth = 1 + std::max(depthOf(left), depthOf(right));
+    if (m_nesting + depth > kMaxNesting) {
+        error(diag::Code::NestedTooDeep, {{"limit", std::to_string(kMaxNesting)}});
+    }
+    auto node = std::make_unique<ast::Expr>();
+    node->location = location;
+    node->kind = ast::BinaryOp{std::move(left), op, std::move(right)};
+    m_operatorDepth[node.get()] = depth;
+    return node;
+}
 
 auto Parser::diagnostics() const -> const std::vector<ParseDiagnostic>& {
     return m_diagnostics;
@@ -1354,6 +1386,7 @@ auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
 // ===== Type Expressions =====
 
 auto Parser::parseTypeExpr() -> ast::TypeExprPtr {
+    const NestingGuard nested(*this);
     return parseTypeUnion();
 }
 
@@ -1632,6 +1665,7 @@ auto Parser::parseTypeName() -> ast::TypeName {
 // ===== Expressions =====
 
 auto Parser::parseExpr() -> ast::ExprPtr {
+    const NestingGuard nested(*this);
     auto expr = parseExprWithoutGuard();
 
     if (match(TokenType::If)) {
@@ -1800,12 +1834,10 @@ auto Parser::parseOr() -> ast::ExprPtr {
         auto startOffset = left->location.startOffset;
         auto opType = peek().type;
         advance();
-        auto op = std::make_unique<ast::Expr>();
-        op->location = currentLocation();
-        op->location.startOffset = startOffset;
+        auto location = currentLocation();
+        location.startOffset = startOffset;
         auto right = parseAnd();
-        op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
-        left = std::move(op);
+        left = binaryNode(std::move(left), opType, std::move(right), location);
     }
 
     return complete(std::move(left));
@@ -1817,12 +1849,10 @@ auto Parser::parseAnd() -> ast::ExprPtr {
     while (check(TokenType::AmpAmp)) {
         auto startOffset = left->location.startOffset;
         advance();
-        auto op = std::make_unique<ast::Expr>();
-        op->location = currentLocation();
-        op->location.startOffset = startOffset;
+        auto location = currentLocation();
+        location.startOffset = startOffset;
         auto right = parseEquality();
-        op->kind = ast::BinaryOp{std::move(left), TokenType::AmpAmp, std::move(right)};
-        left = std::move(op);
+        left = binaryNode(std::move(left), TokenType::AmpAmp, std::move(right), location);
     }
 
     return complete(std::move(left));
@@ -1834,12 +1864,10 @@ auto Parser::parseEquality() -> ast::ExprPtr {
     while (check(TokenType::EqEq) || check(TokenType::NotEq)) {
         auto startOffset = left->location.startOffset;
         auto opType = advance().type;
-        auto op = std::make_unique<ast::Expr>();
-        op->location = currentLocation();
-        op->location.startOffset = startOffset;
+        auto location = currentLocation();
+        location.startOffset = startOffset;
         auto right = parseComparison();
-        op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
-        left = std::move(op);
+        left = binaryNode(std::move(left), opType, std::move(right), location);
     }
 
     return complete(std::move(left));
@@ -1852,12 +1880,10 @@ auto Parser::parseComparison() -> ast::ExprPtr {
            check(TokenType::LessEq) || check(TokenType::GreaterEq)) {
         auto startOffset = left->location.startOffset;
         auto opType = advance().type;
-        auto op = std::make_unique<ast::Expr>();
-        op->location = currentLocation();
-        op->location.startOffset = startOffset;
+        auto location = currentLocation();
+        location.startOffset = startOffset;
         auto right = parseRange();
-        op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
-        left = std::move(op);
+        left = binaryNode(std::move(left), opType, std::move(right), location);
     }
 
     return complete(std::move(left));
@@ -1881,12 +1907,10 @@ auto Parser::parseAddition() -> ast::ExprPtr {
     while (check(TokenType::Plus) || check(TokenType::Minus)) {
         auto startOffset = left->location.startOffset;
         auto opType = advance().type;
-        auto op = std::make_unique<ast::Expr>();
-        op->location = currentLocation();
-        op->location.startOffset = startOffset;
+        auto location = currentLocation();
+        location.startOffset = startOffset;
         auto right = parseMultiplication();
-        op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
-        left = std::move(op);
+        left = binaryNode(std::move(left), opType, std::move(right), location);
     }
 
     return complete(std::move(left));
@@ -1898,12 +1922,10 @@ auto Parser::parseMultiplication() -> ast::ExprPtr {
     while (check(TokenType::Star) || check(TokenType::Slash) || check(TokenType::Percent)) {
         auto startOffset = left->location.startOffset;
         auto opType = advance().type;
-        auto op = std::make_unique<ast::Expr>();
-        op->location = currentLocation();
-        op->location.startOffset = startOffset;
+        auto location = currentLocation();
+        location.startOffset = startOffset;
         auto right = parseUnary();
-        op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
-        left = std::move(op);
+        left = binaryNode(std::move(left), opType, std::move(right), location);
     }
 
     return complete(std::move(left));
@@ -1915,6 +1937,8 @@ auto Parser::parseUnary() -> ast::ExprPtr {
     if (check(TokenType::Minus) || check(TokenType::Bang)) {
         auto loc = currentLocation();
         auto opType = advance().type;
+        // Each `-` or `!` is one level more (`- - - x`).
+        const NestingGuard nested(*this);
         auto operand = parseUnary();
 
         auto expr = std::make_unique<ast::Expr>();
@@ -1941,12 +1965,12 @@ auto Parser::parsePower() -> ast::ExprPtr {
     if (check(TokenType::Caret)) {
         auto startOffset = left->location.startOffset;
         auto opType = advance().type;
-        auto op = std::make_unique<ast::Expr>();
-        op->location = currentLocation();
-        op->location.startOffset = startOffset;
+        auto location = currentLocation();
+        location.startOffset = startOffset;
+        // Right-associative: `2 ^ 2 ^ ...` recurses once per `^`.
+        const NestingGuard nested(*this);
         auto right = parseUnary();
-        op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
-        return complete(std::move(op));
+        return complete(binaryNode(std::move(left), opType, std::move(right), location));
     }
 
     return complete(std::move(left));
@@ -4291,6 +4315,7 @@ auto Parser::parseTupleOrGrouped() -> ast::ExprPtr {
 // ===== Patterns =====
 
 auto Parser::parsePattern() -> ast::PatternPtr {
+    const NestingGuard nested(*this);
     auto loc = currentLocation();
     auto pattern = std::make_unique<ast::Pattern>();
     pattern->location = loc;

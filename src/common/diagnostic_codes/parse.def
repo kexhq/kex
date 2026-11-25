@@ -158,3 +158,4 @@ KEX_DIAGNOSTIC(ExpectedEndToCloseTryingBlock, "KEXEP-0156", "expected 'end' to c
 KEX_DIAGNOSTIC(UnsplicedGenerationForm, "KEXEP-0157", "generating a `{keyword}` inside `compiled do` needs a spliced name: `let %name(...)`, `type %name = ...`, `record %name do ... end` and `make %name do ... end` are the generation forms")
 KEX_DIAGNOSTIC(DoAfterIfCondition, "KEXEP-0158", "use 'then' instead of 'do' in if expression: `if cond then body end`")
 KEX_DIAGNOSTIC(TraitParamKindMismatch, "KEXEP-0159", "`{param}` in trait `{trait}` takes {first} type argument(s) here but {second} elsewhere: use it the same way everywhere")
+KEX_DIAGNOSTIC(NestedTooDeep, "KEXEP-0160", "this is nested more than {limit} levels deep: give an inner part a name with `let`, and use the name")

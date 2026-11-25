@@ -3,6 +3,32 @@ project(kex LANGUAGES CXX)
 
 include(GNUInstallDirs)
 
+# ── Sanitizers ──────────────────────────────────────────────────────────
+# -DKEX_SANITIZE=address,undefined builds every target (the vendored ones
+# too) with those sanitizers, for `make test-sanitize` and the sanitize job
+# in CI. A use-after-end the optimized build tolerated, or that crashed it
+# only sometimes, is reported where it happens (kexhq/kex#709). Frame
+# pointers stay so the reports name their callers.
+set(KEX_SANITIZE "" CACHE STRING "Sanitizers to build with, e.g. address,undefined")
+if(KEX_SANITIZE)
+    add_compile_options(-fsanitize=${KEX_SANITIZE} -fno-omit-frame-pointer
+                        -fno-sanitize-recover=all)
+    add_link_options(-fsanitize=${KEX_SANITIZE})
+    # ASan and UBSan do not see a read of an uninitialized local. Filled
+    # with a pattern instead of whatever the stack held, one shows up as the
+    # same wrong value on every run, where the tests and fuzzers catch it;
+    # Valgrind's memcheck would too, but not on macOS and at 20-50x the cost.
+    include(CheckCXXCompilerFlag)
+    check_cxx_compiler_flag(-ftrivial-auto-var-init=pattern KEX_HAS_AUTO_VAR_INIT)
+    if(KEX_HAS_AUTO_VAR_INIT)
+        add_compile_options(-ftrivial-auto-var-init=pattern)
+    endif()
+    # The interpreter's fibers announce their stack switches to ASan
+    # themselves (src/interpreter/fiber.cxx): Boost.Context's own support
+    # (BOOST_USE_ASAN) covers only its ucontext variant, not the fcontext
+    # one used here.
+endif()
+
 # ── Build revision ──────────────────────────────────────────────────────
 # The commit a build came from, so `kex --version`, the REPL banner and
 # `Kex.VERSION` can all report it. Resolved at CONFIGURE time, with
@@ -193,6 +219,7 @@ add_library(kex_lib
     src/ir/passes/specialize.cxx
     src/ir/passes/fuse.cxx
     src/ir/clone.cxx
+    src/ir/verify.cxx
     src/ir/serialize.cxx
     src/lexer/token.cxx
     src/lexer/lexer.cxx
@@ -271,6 +298,7 @@ add_library(kex_lib
     src/common/build_info.cxx
     src/common/diagnostic_codes.cxx
     src/common/crash_report.cxx
+    src/common/stack_guard.cxx
 )
 
 target_include_directories(kex_lib PUBLIC src)
@@ -831,7 +859,7 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     target_include_directories(lsp_test PRIVATE tests)
     add_test(NAME lsp_test COMMAND lsp_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
-    # A search over the corpus, not a test: `make lsp-sweep`.
+    # A search over the corpus, not a test: `make fuzz-lsp`.
     add_executable(lsp_sweep tests/lsp_sweep.cxx)
     target_link_libraries(lsp_sweep PRIVATE lsp)
 endif()

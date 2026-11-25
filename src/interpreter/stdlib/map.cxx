@@ -9,6 +9,7 @@ namespace {
 // Erlang map order is non-deterministic across VM invocations. Matches Erlang's
 // lists:sort term order for the common homogeneous key types.
 auto mapKeyLess(const ValuePtr& a, const ValuePtr& b) -> bool {
+    ensureStackFor("order");
     if (auto* ai = std::get_if<IntValue>(&a->data)) {
         if (auto* bi = std::get_if<IntValue>(&b->data)) {
             return ai->value < bi->value;

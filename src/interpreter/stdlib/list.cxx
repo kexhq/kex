@@ -244,10 +244,10 @@ auto Evaluator::registerListBuiltins() -> void {
         auto range = std::get<RangeValue>(args.at(0)->data);
         const auto step = std::get<IntValue>(args.at(1)->data).value;
         if (step == 0) {
-            throw std::runtime_error("a range's step cannot be 0");
+            throw ProgramError("a range's step cannot be 0");
         }
         if (range.lower) {
-            throw std::runtime_error("Float ranges cannot be stepped");
+            throw ProgramError("Float ranges cannot be stepped");
         }
         range.step = step;
         auto result = std::make_shared<Value>();
@@ -260,7 +260,7 @@ auto Evaluator::registerListBuiltins() -> void {
     defineIntrinsic("Range.reverse", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto range = std::get<RangeValue>(args.at(0)->data);
         if (range.lower) {
-            throw std::runtime_error("Float ranges cannot be enumerated");
+            throw ProgramError("Float ranges cannot be enumerated");
         }
         if (const auto n = rangeLength(range); n > 0) {
             const auto last = range.start + (n - 1) * range.step;
@@ -609,6 +609,7 @@ auto Evaluator::registerListBuiltins() -> void {
     auto self = std::make_shared<Comparison>();
     auto compareVia = [self](const ValuePtr& a, const ValuePtr& b) { return (*self)(a, b); };
     *self = [this, compareVia](const ValuePtr& a, const ValuePtr& b) -> std::string {
+        ensureStackFor("order");
         // Tuples and lists order lexicographically, a shorter prefix first:
         // the term order BEAM sorts them by. Without this every pair compared
         // Equal and `.sort` left the list alone.

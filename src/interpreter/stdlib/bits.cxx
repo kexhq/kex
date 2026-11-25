@@ -12,11 +12,11 @@ namespace {
 // (`-1 band 255` is 255 on both; `bnot 5` is -6).
 auto operand(const std::vector<ValuePtr>& args, size_t index, const char* what) -> mpz_class {
     if (index >= args.size()) {
-        throw std::runtime_error(std::string(what) + " expects an Integer");
+        throw ProgramError(std::string(what) + " expects an Integer");
     }
     auto value = asInteger(args[index]);
     if (!value) {
-        throw std::runtime_error(
+        throw ProgramError(
             std::string(what) + " expects an Integer, got " + args[index]->typeName());
     }
     return *value;
@@ -29,10 +29,10 @@ auto operand(const std::vector<ValuePtr>& args, size_t index, const char* what) 
 auto position(const std::vector<ValuePtr>& args, size_t index, const char* what) -> unsigned long {
     auto value = operand(args, index, what);
     if (value < 0) {
-        throw std::runtime_error(std::string(what) + ": bit position cannot be negative");
+        throw ProgramError(std::string(what) + ": bit position cannot be negative");
     }
     if (!value.fits_ulong_p()) {
-        throw std::runtime_error(std::string(what) + ": bit position too large");
+        throw ProgramError(std::string(what) + ": bit position too large");
     }
     return value.get_ui();
 }
@@ -114,14 +114,14 @@ auto Evaluator::registerBitsBuiltins() -> void {
     defineIntrinsic("Bits.count", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto value = operand(args, 0, "Bits.count");
         if (value < 0) {
-            throw std::runtime_error("Bits.count is undefined for a negative Integer");
+            throw ProgramError("Bits.count is undefined for a negative Integer");
         }
         return Value::integer(static_cast<int64_t>(mpz_popcount(value.get_mpz_t())));
     });
     defineIntrinsic("Bits.width", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto value = operand(args, 0, "Bits.width");
         if (value < 0) {
-            throw std::runtime_error("Bits.width is undefined for a negative Integer");
+            throw ProgramError("Bits.width is undefined for a negative Integer");
         }
         if (value == 0) {
             return Value::integer(0);
