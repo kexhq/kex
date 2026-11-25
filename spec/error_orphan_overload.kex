@@ -1,0 +1,27 @@
+# kex: check-only
+# Coherence for overloads (docs/typechecker-hm-plan.md §8.1, fix 2): an
+# overload of a name another module declares belongs in a module that
+# declares one of its operand types. `Power / Length` uses only the stdlib's
+# dimensions, so a second library could declare it with another answer. A new
+# name on a stdlib type (`shout`) is ordinary Kex, and a dimension of its own
+# (spec/measure_user_dimension.kex) may add products freely.
+
+using Units.SI
+
+module Orphan do
+  make Measure<Quantity.Power> do
+    let /(other: Measure<Quantity.Length>) -> Measure<Quantity.Speed> = Measure {
+      canonical: 1.0,
+      value: 1.0,
+      unit: UnitDefinition { conversionFactor: 1.0, dimension: :x, notation: "x" }
+    }
+  end
+end
+
+make String do
+  let shout -> String = this.upperCase
+end
+
+main do
+  IO.printLine("a".shout)
+end

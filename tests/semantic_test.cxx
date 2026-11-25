@@ -831,12 +831,21 @@ int main() {
     });
 
     describe("Semantic — Type Checking (Collections)", []() {
-        it("rejects heterogeneous list", []() {
-            assertTrue(hasError(
+        // Elements of different types make a list of their union
+        // (docs/typechecker-hm-plan.md, decision 3).
+        it("accepts a heterogeneous list as a list of the union", []() {
+            assertTrue(noErrors(
                 "main do\n"
                 "  let x = [1, 2, \"three\"]\n"
+                "end\n"));
+        });
+
+        it("rejects an element of the wrong type where the list's type is written", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  let x: [Integer] = [1, \"two\"]\n"
                 "end\n",
-                "same type"));
+                "mismatch"));
         });
 
         it("accepts homogeneous list", []() {
@@ -1609,9 +1618,8 @@ int main() {
     describe("Semantic — Type Checking (Collections)", []() {
         it("accepts empty list", []() { assertTrue(noErrors("main do\n  let x = []\nend\n")); });
 
-        it("rejects [Int, String] mix", []() {
-            assertTrue(hasError("main do\n  let x = [1, \"two\", 3]\nend\n", "same type"));
-        });
+        it("accepts an [Int, String] mix as a list of the union",
+           []() { assertTrue(noErrors("main do\n  let x = [1, \"two\", 3]\nend\n")); });
 
         it("accepts nested homogeneous list",
            []() { assertTrue(noErrors("main do\n  let x = [[1, 2], [3, 4]]\nend\n")); });
@@ -1755,9 +1763,11 @@ int main() {
             assertEqual(typeToString(Type::uint64()), std::string("UInt64"));
         });
 
-        it("prints sized float names, with no plain Float type", []() {
+        it("prints a float as Float, and Float64 only where it was written", []() {
             assertEqual(typeToString(Type::float32()), std::string("Float32"));
-            assertEqual(typeToString(Type::float64()), std::string("Float64"));
+            assertEqual(typeToString(Type::float64()), std::string("Float"));
+            assertEqual(typeToString(Type::float64Written()), std::string("Float64"));
+            assertTrue(typesEqual(Type::float64(), Type::float64Written()));
         });
 
         it("prints String and [Char] as the distinct types they are", []() {
@@ -1806,7 +1816,7 @@ int main() {
                 semantic::Type::record({{"value", semantic::Type::string()}}),
                 semantic::Type::record({{"value", semantic::Type::integer()}}),
             });
-            assertTrue(std::holds_alternative<semantic::VoidType>(impossible->kind));
+            assertTrue(std::holds_alternative<semantic::NeverType>(impossible->kind));
         });
 
         it("merges row members before checking field access", []() {
@@ -1999,9 +2009,9 @@ int main() {
         it("loads measures, durations, and numeric time constructors", []() {
             assertTrue(noErrors(
                 "main do\n"
-                "  let measure: Measure = 2.5.second\n"
+                "  let measure: Duration = 2.5.second\n"
                 "  let duration: Duration = (measure.canonical).second\n"
-                "  let converted: Result<Measure, String> = measure.convert(Millisecond)\n"
+                "  let converted: Result<Duration, String> = measure.convert(Millisecond)\n"
                 "end\n"));
         });
 
@@ -2301,7 +2311,7 @@ int main() {
             interfaces.recordArities["External.Box"] = 1;
             interfaces.recordFieldNames["External.Box"] = {"value"};
             interfaces.recordFields["External.Box"] = {
-                {"value", semantic::Type::typeVar(-1)},
+                {"value", semantic::Type::genericLetter(-1)},
             };
 
             assertTrue(noErrorsWithInterfaces(
@@ -2327,7 +2337,7 @@ int main() {
             audit.backendModule = "external";
             audit.backendArity = 1;
             auto row = semantic::Type::record({{"enabled", semantic::Type::boolean()}});
-            auto shape = semantic::Type::intersection({semantic::Type::typeVar(-1), row});
+            auto shape = semantic::Type::intersection({semantic::Type::genericLetter(-1), row});
             audit.signature = {"audit", {shape}, shape, true};
             external.exports["audit"].push_back(std::move(audit));
             interfaces.modules["External"] = std::move(external);
@@ -3051,14 +3061,26 @@ int main() {
                 "end\n"));
         });
 
-        it("branch type mismatch in inline if-then-else is an error", []() {
-            assertTrue(hasError(
+        // Branches of different types join into their union
+        // (docs/typechecker-hm-plan.md, decision 3); a type written for the
+        // result is checked against each branch.
+        it("inline if-then-else branches of different types join into a union", []() {
+            assertTrue(noErrors(
                 "main do\n"
                 "  let x = 5\n"
                 "  let r = if x > 3 then \"big\" else 42 end\n"
                 "  IO.printLine(r)\n"
+                "end\n"));
+        });
+
+        it("a branch that does not fit the written type is an error", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  let x = 5\n"
+                "  let r: String = if x > 3 then \"big\" else 42 end\n"
+                "  IO.printLine(r)\n"
                 "end\n",
-                "branch type mismatch"));
+                "expected String, got Integer"));
         });
 
         it("mutual recursion with inline if-then-else works", []() {
@@ -3086,11 +3108,10 @@ int main() {
                 "main do IO.printLine(classify(0)) end\n"));
         });
 
-        it("inline elif branch type mismatch is an error", []() {
-            assertTrue(hasError(
+        it("inline elif branches of different types join into a union", []() {
+            assertTrue(noErrors(
                 "let classify(n) = if n > 0 then \"pos\" elif n < 0 then 0 else \"zero\" end\n"
-                "main do IO.printLine(classify(5)) end\n",
-                "branch type mismatch"));
+                "main do IO.printLine(classify(5)) end\n"));
         });
 
         it("if/elif without else need not agree: the conditional is Void", []() {

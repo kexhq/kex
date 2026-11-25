@@ -154,6 +154,10 @@ public:
         // are captured here rather than at top level because they belong INSIDE
         // this make, and because they only exist once its loop variable does.
         std::vector<GeneratedDeclaration> nested;
+        // The value of each type splice in a generated function's signature,
+        // in ast::forEachSignatureTypeSplice's order: expansion turns each into
+        // the type it names.
+        std::vector<ValuePtr> typeSplices;
     };
     auto generatedDeclarations() const -> const std::vector<GeneratedDeclaration>& {
         return m_generatedDeclarations;
@@ -515,6 +519,11 @@ public:
 
 private:
     hir::ProgramSet m_programs;
+    // The types passed to the functions being called, innermost last, by letter:
+    // `A` in `total(A is Monoid => …)` called with a `[Purse]` is Purse's type
+    // value, which `A.identity` dispatches on (§12 step 7).
+    std::vector<std::unordered_map<std::string, ValuePtr>> m_typeFrames;
+    auto typeArgumentValue(const semantic::TypeArgument& argument) -> ValuePtr;
     const semantic::ImportedInterfaces* m_interfaces = nullptr;
     // Every module this evaluator loaded at run time, checked (kept alive for
     // their answers).
@@ -527,6 +536,8 @@ private:
     auto decidedModuleFunction(const ast::Expr& expr, const ast::MethodCall& call) const
         -> std::string;
     auto evalConversion(const ast::Expr& receiver, const std::string& target) -> ValuePtr;
+    // `x.is?(T)`, decided as the types `tested` (comma-separated) to test x against.
+    auto evalTypeTest(const ValuePtr& value, const std::string& tested) const -> ValuePtr;
     auto evalIntrinsicCall(
         const ast::MethodCall& call, const std::string& path, const SourceLocation& location)
         -> ValuePtr;

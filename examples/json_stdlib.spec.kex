@@ -6,7 +6,11 @@ describe("JSON") do
     assert(JSON.parse("true") == Ok(true))
     assert(JSON.parse("-12") == Ok(-12))
     assert(JSON.parse("1.25e2") == Ok(125.0))
-    let values = JSON.parse("[1,\"two\",false]").try
+    # A parsed value is an `Any` until a type pattern narrows it.
+    let values = match JSON.parse("[1,\"two\",false]").try do
+      items: [Any] => items
+      _ => []
+    end
     assert(values[0] == Just(1))
     assert(values[1] == Just("two"))
     assert(values[2] == Just(false))
@@ -15,7 +19,10 @@ describe("JSON") do
   end
 
   it("returns ordinary Kex maps and lists") do
-    let config = JSON.parse("{\"active\":true,\"items\":[1]}").try
+    let config = match JSON.parse("{\"active\":true,\"items\":[1]}").try do
+      fields: {String: Any} => fields
+      _ => {}
+    end
     assert(config["active"] == Just(true))
     assert(config["missing"] == None)
     assert(config["items"] == Just([1]))

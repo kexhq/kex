@@ -1,0 +1,4 @@
+spec/error_stand_in_arity.kex:17:1: [KEXET-0508]: Error, make FakeMailer, implement: Mailer. `send` is required to take 2 argument(s), but takes 1
+   |
+17 | make FakeMailer, implement: Mailer do
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

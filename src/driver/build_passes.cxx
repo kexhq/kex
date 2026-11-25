@@ -197,7 +197,7 @@ auto markReachedUnits(semantic::ImportedInterfaces& below) -> void {
         module.compiledApart = true;
     }
     // A `make` function travels with its receiver unless it was declared for
-    // a type its module does not declare (KexiMethod::foreignTarget).
+    // a type its module does not declare (KexiReceiverFunction::foreignTarget).
     const auto travelsWithReceiver = [](const semantic::ImportedFunction& function) {
         return function.isReceiverMethod && !function.foreignTarget;
     };
@@ -380,7 +380,7 @@ auto LinkAnalysis::run(Unit& unit, UnitAnalysisManager& analyses) -> Result {
     // `make` over a union (`make TypeRef | PatternRef`) owns each member.
     std::map<std::string, std::string> methodOwners;
     for (const auto* module : registry.allLoadedModules()) {
-        for (const auto& method : module->chunk.typeInterface.methods) {
+        for (const auto& method : module->chunk.typeInterface.receiverFunctions) {
             if (method.moduleFunction || method.typeOnly || !method.receiverType) {
                 continue;
             }
@@ -1006,7 +1006,7 @@ auto DescribePass::run(Unit& unit, UnitAnalysisManager& analyses) -> pass::Prese
                 // coreExports reads its source for as long as it is used.
                 const auto header = module.source.substr(0, module.source.find('\n'));
                 const auto exports = beam::coreExports(header);
-                for (auto& method : chunk.typeInterface.methods) {
+                for (auto& method : chunk.typeInterface.receiverFunctions) {
                     if (method.receiverType && method.receiverType->kind == beam::KexiType::Named) {
                         if (auto own = beam::emittedImplementationOf(method, exports);
                             !own.empty()) {

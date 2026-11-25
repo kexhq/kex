@@ -1,6 +1,7 @@
 #include "parser.hxx"
 #include "../lexer/lexer.hxx"
 #include "../ast/function_groups.hxx"
+#include "../ast/walk.hxx"
 #include "../common/signature_params.hxx"
 #include "../common/utf8.hxx"
 #include <algorithm>
@@ -440,6 +441,7 @@ auto Parser::parseModuleDef(bool allowStandalone, const std::string& parentModul
     if (standalone && !allowStandalone) {
         error(diag::Code::StandaloneModuleNotFirst);
     }
+    mod->fileModule = standalone;
     skipNewlines();
 
     while (!atEnd() && (standalone || !check(TokenType::End))) {
@@ -770,11 +772,22 @@ auto Parser::parseTraitDef() -> std::unique_ptr<ast::TraitDef> {
         rejectSingleLetterTypeName(tok.value, diag::Code::SingleLetterTypeNameForTrait);
         def->name = tok.value;
     }
-    // Optional type params: `trait Functor<F> do ...`
+    // Optional type params: `trait Functor<F> do ...`. A parameter that is
+    // itself a type constructor writes its holes, `F<_>` or `F<_, _>`: its
+    // kind, `* -> *` for one (docs/typechecker-hm-plan.md §8.2).
     if (match(TokenType::LessThan)) {
         while (!check(TokenType::GreaterThan) && !atEnd()) {
             def->typeParams.push_back(
                 expect(TokenType::UpperIdent, diag::Code::ExpectedTypeParam).value);
+            std::size_t holes = 0;
+            if (match(TokenType::LessThan)) {
+                do {
+                    expect(TokenType::Underscore, diag::Code::ExpectedToken, {{"expected", "'_'"}});
+                    ++holes;
+                } while (match(TokenType::Comma));
+                expect(TokenType::GreaterThan, diag::Code::ExpectedToken, {{"expected", "'>'"}});
+            }
+            def->typeParamArities.push_back(holes);
             if (!check(TokenType::GreaterThan)) {
                 expect(TokenType::Comma, diag::Code::ExpectedToken, {{"expected", "','"}});
             }
@@ -803,9 +816,13 @@ auto Parser::parseTraitDef() -> std::unique_ptr<ast::TraitDef> {
             }
         } else if (check(TokenType::Let)) {
             def->body.push_back(parseFunctionDef(false));
-        } else if (check(TokenType::LowerIdent) || isOverloadableOperator(peek().type)) {
+        } else if (
+            check(TokenType::LowerIdent) || isOverloadableOperator(peek().type) ||
+            (isKeywordToken(peek().type) && (peekNext().type == TokenType::Colon ||
+                                             peekNext().type == TokenType::TypeAnnotation))) {
             // Required method signature: `methodName : type`, or an operator's,
-            // `+ :> This -> This`, as a make block declares one.
+            // `+ :> This -> This`, as a make block declares one. A keyword may
+            // name one, as in a make block (Applicable's `with`).
             def->body.push_back(parseTypeAnnotation());
         } else {
             error(diag::Code::UnexpectedTokenInTraitBody);
@@ -813,6 +830,7 @@ auto Parser::parseTraitDef() -> std::unique_ptr<ast::TraitDef> {
         skipNewlines();
     }
 
+    inferTraitParamKinds(*def);
     expect(TokenType::End, diag::Code::ExpectedEndToCloseTrait);
     return complete(std::move(def));
 }
@@ -827,6 +845,12 @@ auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
         def->isFinal = true;
     }
 
+    // Bounds on the target's type variables, before it and closed by `=>`
+    // (#651): `make A is Discrete => Range<A>, implement: Enumerable`. The
+    // block applies where each bound holds, its conformances too. `is` is
+    // read as a bound only here, after an uppercase name, so no name is
+    // reserved; `&` joins traits on one variable.
+    parseTypeBounds(def->typeParamBounds, def->typeParamBoundLocations);
     def->target = parseTypeExpr();
     // `make T do ... end` attaches methods to a type parameter, which names no
     // type at all. Caught here rather than left to the checker, where it
@@ -841,6 +865,33 @@ auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
     parseMakeImplements(*def);
     parseMakeBody(*def);
     return complete(std::move(def));
+}
+
+// `A is Comparable, K is Showable & Hashable =>` (#651), when one opens here:
+// an uppercase name followed by `is`. Only in this position is `is` a bound,
+// so it reserves no name.
+auto Parser::parseTypeBounds(
+    std::vector<std::pair<std::string, ast::TypeName>>& into,
+    std::vector<SourceLocation>& traitLocations) -> void {
+    if (!check(TokenType::UpperIdent) || peekNext().type != TokenType::LowerIdent ||
+        peekNext().value != "is") {
+        return;
+    }
+    do {
+        const auto variable = advance().value;
+        advance(); // `is`
+        // Each trait at its last segment (`Pricing` in `Shop.Pricing`), as
+        // `implement:` records it: where a reader points at it.
+        const auto boundTrait = [&] {
+            into.emplace_back(variable, parseTypeName());
+            traitLocations.push_back(m_tokens[m_pos - 1].location);
+        };
+        boundTrait();
+        while (match(TokenType::Amp)) {
+            boundTrait();
+        }
+    } while (match(TokenType::Comma));
+    expect(TokenType::FatArrow, diag::Code::ExpectedToken, {{"expected", "'=>'"}});
 }
 
 auto Parser::parseServingDef() -> std::unique_ptr<ast::MakeDef> {
@@ -894,10 +945,24 @@ auto Parser::parseMakeImplements(ast::MakeDef& into) -> void {
                 }
                 return name;
             };
+            // `Foldable<Char>`: the trait's parameters, as this type fills them.
+            auto implementArgs = [&] {
+                auto& args = def->implementArgs.emplace_back();
+                if (match(TokenType::LessThan)) {
+                    args.push_back(parseTypeExpr());
+                    while (match(TokenType::Comma)) {
+                        args.push_back(parseTypeExpr());
+                    }
+                    expect(
+                        TokenType::GreaterThan, diag::Code::ExpectedToken, {{"expected", "'>'"}});
+                }
+            };
             def->implements.push_back(implementName());
+            implementArgs();
             while (check(TokenType::Comma) && peekNext().type == TokenType::UpperIdent) {
                 advance(); // ","
                 def->implements.push_back(implementName());
+                implementArgs();
             }
         } else {
             m_pos = savedPos; // not an implement clause, backtrack
@@ -1055,6 +1120,7 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
     bool hasParamList = false;
     if (match(TokenType::LParen)) {
         hasParamList = true;
+        parseTypeBounds(clause.typeParamBounds, clause.typeParamBoundLocations);
         if (!check(TokenType::RParen)) {
             clause.params = parseParams();
         }
@@ -1278,6 +1344,8 @@ auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
 
     const bool savedInSignature = m_inTypeSignature;
     m_inTypeSignature = true;
+    // `larger : A is Comparable => A -> A -> A` (#651).
+    parseTypeBounds(ann->typeParamBounds, ann->typeParamBoundLocations);
     ann->type = parseTypeExpr();
     m_inTypeSignature = savedInSignature;
     return complete(std::move(ann));
@@ -1401,6 +1469,13 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
     auto type = std::make_unique<ast::TypeExpr>();
     type->location = currentLocation();
 
+    // `_`: the hole a type lambda leaves, `make Result<_, E>, implement:
+    // Functor` (docs/typechecker-hm-plan.md §8.2).
+    if (match(TokenType::Underscore)) {
+        type->kind = ast::TypeName{{"_"}};
+        return complete(std::move(type));
+    }
+
     // List type: [A]
     if (match(TokenType::LBracket)) {
         auto elem = parseTypeExpr();
@@ -1497,6 +1572,13 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
         std::string upper = name;
         upper[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(upper[0])));
         error(diag::Code::LowercaseTypeParameter, {{"upper", upper}, {"name", name}});
+    }
+
+    // A type a generated declaration splices in: `%{expr}` or `%name`.
+    if (check(TokenType::SpliceIdent) ||
+        (check(TokenType::Percent) && peekNext().type == TokenType::LBrace)) {
+        type->kind = ast::TypeSplice{parseSpliceName()};
+        return complete(std::move(type));
     }
 
     // A compiler-computed type: `Type.returnedBy(f)` / `Type.of(expr)`.
@@ -4134,10 +4216,10 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
             // parseExpr() would treat it as a variable lookup instead.
             if (check(TokenType::LowerIdent) && peekNext().type == TokenType::Colon) {
                 auto keyLoc = currentLocation();
-                auto atomName = advance().value; // consume ident
+                auto literal = advance().value; // consume ident
                 key = std::make_unique<ast::Expr>();
                 key->location = keyLoc;
-                key->kind = ast::AtomLiteral{atomName};
+                key->kind = ast::AtomLiteral{literal};
             } else {
                 key = parseExpr();
             }
@@ -4892,6 +4974,73 @@ auto Parser::parseTryingExpr() -> ast::ExprPtr {
 
     expr->kind = ast::TryingExpr{std::move(body), std::move(rescue)};
     return expr;
+}
+
+} // namespace kex
+
+namespace kex {
+
+auto Parser::inferTraitParamKinds(ast::TraitDef& def) -> void {
+    // Every type expression the trait's signatures write: its requirements'
+    // and its defaults' annotations.
+    std::vector<const ast::TypeExpr*> written;
+    const auto add = [&](const ast::TypeExprPtr& type) {
+        if (type) {
+            ast::forEachTypeExpr(
+                *type, [&](const ast::TypeExpr& node) { written.push_back(&node); });
+        }
+    };
+    for (const auto& item : def.body) {
+        if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item);
+            ann && *ann) {
+            add((*ann)->type);
+        } else if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
+                   fn && *fn) {
+            for (const auto& clause : (*fn)->clauses) {
+                for (const auto& param : clause.params) {
+                    if (param.type) {
+                        add(*param.type);
+                    }
+                }
+                if (clause.returnAnnotation) {
+                    add(*clause.returnAnnotation);
+                }
+            }
+        }
+    }
+    for (std::size_t i = 0; i < def.typeParams.size() && i < def.typeParamArities.size(); ++i) {
+        const auto& param = def.typeParams[i];
+        // Written `F<_>`: its kind is what it says, which the checker holds
+        // its uses to.
+        if (def.typeParamArities[i] > 0) {
+            continue;
+        }
+        std::optional<std::size_t> kind;
+        for (const auto* node : written) {
+            std::size_t arguments = 0;
+            if (const auto* generic = std::get_if<ast::GenericType>(&node->kind);
+                generic && generic->name.parts.size() == 1 && generic->name.parts[0] == param) {
+                arguments = generic->args.size();
+            } else if (const auto* name = std::get_if<ast::TypeName>(&node->kind);
+                       !name || name->parts.size() != 1 || name->parts[0] != param) {
+                continue;
+            }
+            if (!kind) {
+                kind = arguments;
+            } else if (*kind != arguments) {
+                report(
+                    diag::Code::TraitParamKindMismatch, node->location,
+                    {{"param", param},
+                     {"trait", def.name},
+                     {"first", std::to_string(arguments)},
+                     {"second", std::to_string(*kind)}});
+                break;
+            }
+        }
+        if (kind) {
+            def.typeParamArities[i] = *kind;
+        }
+    }
 }
 
 } // namespace kex

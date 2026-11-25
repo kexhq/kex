@@ -1,0 +1,19 @@
+# kex: check-only
+# A result an implementation writes is still the requirement's: `let area ->
+# String` where `Shape` requires `area :> Float` was accepted, the annotation
+# overriding the requirement, and a caller holding a `Shape` got a String
+# (#642, docs/typechecker-hm-plan.md §11 item 2).
+
+trait Shape do
+  area :> Float
+end
+record Square do
+  side : Float
+end
+make Square, implement: Shape do
+  let area -> String = "not a number"
+end
+let total(s: Shape) -> Float = s.area + 1.0
+main do
+  IO.printLine("${total(Square { side: 2.0 })}")
+end

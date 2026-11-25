@@ -1,5 +1,4 @@
 # Cross-file using: resolves Utils.Strings from lib/utils/strings.kex
-# kex: no-check
 
 using Utils.Strings
 

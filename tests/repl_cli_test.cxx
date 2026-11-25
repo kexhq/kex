@@ -229,6 +229,34 @@ int main() {
         });
     });
 
+    describe("the algebra traits in a file and the REPL", []() {
+        // Applicable's `with`, Validation, traverse, Monad's `wrap` and `into`,
+        // `is?`, and a trait parameter's typed default: the same answers
+        // entered statement by statement as run as a file, on both backends.
+        it("answers as a file does", []() {
+            const std::array<std::string, 6> bodies = {
+                "IO.printLine([1, 2].with([10, 20]) { |a, b| a + b }.inspected)\n",
+                "IO.printLine(Valid(1).with(Invalid([\"b\"])) { |a, b| a + b }.inspected)\n",
+                "IO.printLine(traverse([\"1\", \"2\"]) { |s| s.to(Integer) }.inspected)\n",
+                "IO.printLine(\"${3.is?(Discrete)} ${Optional.wrap(1).inspected}\")\n",
+                "IO.printLine(\"hey\".find { |c| c == 'e' }.inspected)\n",
+                "IO.printLine([1, 2].into { |x| [x, x * 10] }.inspected)\n",
+            };
+            for (const auto& body : bodies) {
+                const auto file = "main do\n" + body + "end\n";
+                const auto walker = runWalkerFile(file);
+                const auto beam = runBeamFile(file, "");
+                assertEqual(beam, walker, "file backends disagree: " + body);
+                assertTrue(
+                    runRepl(body).find("\n" + walker) != std::string::npos,
+                    "walker REPL differs from file: " + body);
+                assertTrue(
+                    runBeamRepl(body).find("\n" + beam) != std::string::npos,
+                    "BEAM REPL differs from file: " + body);
+            }
+        });
+    });
+
     describe("CLI — qualified source-module discovery", []() {
         it("loads qualified-only dependencies transitively for BEAM", []() {
             namespace fs = std::filesystem;
@@ -1528,12 +1556,16 @@ int main() {
         it("accesses parsed JSON values in the BEAM REPL", []() {
             auto out = runBeamRepl(
                 "let source = `{ \"active\": true }`\n"
-                "let config = JSON.parse(source)\n"
-                "config.try[\"active\"]\n"
-                "config.try[\"missing\"]\n");
+                // A parsed value is an `Any` until a type pattern narrows it.
+                "let config = match JSON.parse(source).try do\n"
+                "  fields: {String: Any} => fields\n"
+                "  _ => {}\n"
+                "end\n"
+                "config[\"active\"]\n"
+                "config[\"missing\"]\n");
             assertTrue(out.find("if_clause") == std::string::npos, out);
             assertTrue(out.find("Just(true)") != std::string::npos, out);
-            assertTrue(out.find("None : Option") != std::string::npos, out);
+            assertTrue(out.find("None : Optional") != std::string::npos, out);
         });
 
         it("exposes parser combinators on BEAM", []() {

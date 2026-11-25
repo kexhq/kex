@@ -4,7 +4,13 @@ foul readPackageJson(path: String) -> Result<Map<String, Any>, JSON.JSONError> d
   let file = FS.File.open(path, FS.Read).try
   let content = file.read.or("")
 
-  return JSON.parse(content)
+  # A parsed value is an `Any` until a type pattern narrows it.
+  return JSON.parse(content).map do |value|
+    match value do
+      fields: {String: Any} => fields
+      _ => {}
+    end
+  end
 end
 
 main(args) do

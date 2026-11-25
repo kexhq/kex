@@ -1,0 +1,15 @@
+# kex: check-only
+# A sized number is a concrete type of its own (docs/typechecker-hm-plan.md
+# decision 7, §4.5 rule 2). A literal adapts to it, and it widens without
+# loss into an Integer, but a computed Integer never narrows into one
+# silently: it goes through `.to(Byte)`, which can fail.
+main do
+  let literal: Byte = 255
+  let widened: Integer = literal
+  let computed = 200 + 55
+  let narrowed: Byte = computed
+  let converted: Byte = computed.to(Byte).or(0)
+  IO.printLine(widened)
+  IO.printLine(narrowed)
+  IO.printLine(converted)
+end

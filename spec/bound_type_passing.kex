@@ -1,0 +1,31 @@
+# A call through a bounded type variable (docs/typechecker-hm-plan.md §12 step
+# 7): `A.identity` under `A is Monoid` has no value to dispatch on, so the
+# function is passed its type, a record's or a primitive's, and the call
+# dispatches on that. A generic caller hands its own on (`twice`). A type
+# named directly (`Integer.identity`) is the same call.
+
+record Purse do
+  coins : Integer
+end
+
+make Purse, implement: Monoid do
+  let identity -> Purse = Purse { coins: 0 }
+  let combine(other: Purse) -> Purse = Purse { coins: @coins + other.coins }
+end
+
+let total(A is Monoid => xs: [A]) -> A = xs.reduce(A.identity) { |acc, x| acc.combine(x) }
+
+let twice(A is Monoid => xs: [A]) -> A = total(xs).combine(total(xs))
+
+let empty(A is Monoid => sample: A) -> A = A.identity
+
+main do
+  IO.printLine(total([Purse { coins: 2 }, Purse { coins: 5 }]).coins)
+  IO.printLine(total(["a", "b"]))
+  IO.printLine(twice([Purse { coins: 1 }, Purse { coins: 2 }]).coins)
+  IO.printLine(twice(["x"]))
+  IO.printLine(empty(Purse { coins: 9 }).coins)
+  IO.printLine(total([1, 2, 3]))
+  IO.printLine(Integer.identity)
+  IO.printLine("[${String.identity}]")
+end

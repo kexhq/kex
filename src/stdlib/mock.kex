@@ -354,7 +354,7 @@ module Mock do
     # out, +IO.readLine+ answers +Ok(None)+: end of input, exactly as a closed
     # stdin would.
     #
-    # @param lines [[String]] the lines to serve, in order
+    # @param lines [String | [String]] the lines to serve, in order (one line, or a list of them)
     # @return [Void]
     #
     # @example A list of lines
@@ -362,19 +362,19 @@ module Mock do
     #
     # @example The same, as separate arguments
     #   Mock.IO.input("Ada", "42")
-    foul input(lines) -> Void do
+    foul input(lines: String | [String]) -> Void do
       return Kex.Intrinsic.IO.ioMockInput(lines)
     end
 
-    foul input(first, second) -> Void do
+    foul input(first: String, second: String) -> Void do
       return Kex.Intrinsic.IO.ioMockInput([first, second])
     end
 
-    foul input(first, second, third) -> Void do
+    foul input(first: String, second: String, third: String) -> Void do
       return Kex.Intrinsic.IO.ioMockInput([first, second, third])
     end
 
-    foul input(first, second, third, fourth) -> Void do
+    foul input(first: String, second: String, third: String, fourth: String) -> Void do
       return Kex.Intrinsic.IO.ioMockInput([first, second, third, fourth])
     end
   end
@@ -425,6 +425,10 @@ module Mock do
     # the honest answer and the useful one: a test that did not expect a
     # write sees it fail rather than silently succeed.
     foul open(path, mode) = Error(FS.OpenFailed(path))
+    # The block form fails the same way, and a failure to open never runs the
+    # block. Without it the stand-in lacked a member FS.File requires, and
+    # `FS.File.open(path, mode) { … }` under it failed at run time (#793).
+    foul open(path, mode, block) = Error(FS.OpenFailed(path))
     foul write(path, content) = Error(FS.WriteFailed(path))
     foul writeBytes(path, content) = Error(FS.WriteFailed(path))
     foul append(path, content) = Error(FS.WriteFailed(path))

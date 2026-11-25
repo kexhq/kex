@@ -1,0 +1,37 @@
+# A Validation keeps every failure of independent checks, where a Result
+# stops at the first: what a form wants reported. It maps like a container,
+# and converts to a Result holding every failure.
+
+record Signup do
+  name : String
+  email : String
+  age : Integer
+end
+
+let checkedName(name: String) -> Validation<String, String> do
+  return name.empty? then Invalid(["name is empty"]) else Valid(name)
+end
+
+let checkedEmail(email: String) -> Validation<String, String> do
+  return email.contains?("@") then Valid(email) else Invalid(["email has no @"])
+end
+
+let checkedAge(age: Integer) -> Validation<Integer, String> do
+  return age >= 0 then Valid(age) else Invalid(["age is negative"])
+end
+
+let signup(name: String, email: String, age: Integer) -> Validation<Signup, String> do
+  let pair = checkedName(name).with(checkedEmail(email)) { |n, e| (n, e) }
+  return pair.with(checkedAge(age)) do |both, a|
+    match both do
+      (n, e) => Signup { name: n, email: e, age: a }
+    end
+  end
+end
+
+main do
+  IO.printLine(signup("", "x", -1).inspected)
+  IO.printLine(signup("Ada", "x", 36).inspected)
+  IO.printLine(signup("Ada", "ada@example.com", 36).map { |s| s.email }.inspected)
+  IO.printLine(signup("", "ada@example.com", 1).toResult.inspected)
+end

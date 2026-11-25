@@ -1,7 +1,6 @@
 fallback
 guarded
 fallback
-none-ran
 rethrown
 timeout 5
 rethrown

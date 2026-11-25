@@ -11,8 +11,8 @@ main do
   IO.printLine([].min)
   IO.printLine([].max)
 
-  # flatMap
-  IO.printLine([[1, 2], [3, 4], [5]].flatMap { |xs| xs })
-  IO.printLine([1, 2, 3].flatMap { |n| [n, n * 10] })
-  IO.printLine(["hello", "world"].flatMap { |s| s.filter(~alpha?).chars })
+  # into
+  IO.printLine([[1, 2], [3, 4], [5]].into { |xs| xs })
+  IO.printLine([1, 2, 3].into { |n| [n, n * 10] })
+  IO.printLine(["hello", "world"].into { |s| s.filter(~alpha?).chars })
 end

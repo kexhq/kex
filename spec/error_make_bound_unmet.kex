@@ -1,0 +1,42 @@
+# kex: check-only
+# A bounded `make` (#651) holds only where its bound does. A `Span<Float>`
+# has none of `make A is Countable => Span<A>`: not its own `low`, not the
+# `total` it inherits from `Walk`, and it is no `Walk` to pass along.
+record Span<A> do
+  lo : A
+  hi : A
+end
+
+trait Countable do
+end
+make Integer, implement: Countable do
+end
+make Char, implement: Countable do
+end
+
+trait Walk do
+  walked :> [Integer]
+  let total -> Integer = this.walked.length
+end
+
+make Span<A> do
+  let has?(value: A) -> Bool = value >= @lo && value <= @hi
+end
+
+make A is Countable => Span<A>, implement: Walk do
+  let walked -> [Integer] = [1, 2]
+  low :> A
+  let low = @lo
+  visit :> (A -> Void) -> Void
+  let visit(f) = f(@lo)
+end
+
+let sumAll(w: Walk) -> Integer = w.total
+
+main do
+  let span = Span { lo: 1.0, hi: 2.0 }
+  IO.printLine(span.low)
+  IO.printLine(span.total)
+  IO.printLine(sumAll(span))
+  IO.printLine(span.has?(1.5))
+end

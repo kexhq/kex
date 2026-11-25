@@ -191,7 +191,7 @@ module Assert do
   #   Assert.equal("hi".upperCase, "HI")
   #   Assert.equal([1, 2, 3].sum, 6)
   #   Assert.equal(config.get(:port), Just(8080))
-  let equal(actual, expected) = assert(actual == expected, "expected ${expected}, got ${actual}")
+  let equal(actual: A, expected: A) -> Bool = assert(actual == expected, "expected ${expected}, got ${actual}")
 
   # Fails when +actual+ equals +expected+.
   #
@@ -201,7 +201,7 @@ module Assert do
   #
   # @example
   #   Assert.notEqual(newId, oldId)
-  let notEqual(actual, expected) = assert(actual != expected, "expected values to differ, both were ${actual}")
+  let notEqual(actual: A, expected: A) -> Bool = assert(actual != expected, "expected values to differ, both were ${actual}")
 
   # Fails unless +value+ is truthy: anything except +false+, +None+ and
   # +()+.
@@ -211,7 +211,7 @@ module Assert do
   #
   # @example
   #   Assert.truthy("hello".contains?("ell"))
-  let truthy(value) = assert(value, "expected a truthy value")
+  let truthy(value: Truthyable) -> Bool = assert(value.truthy?, "expected a truthy value")
 
   # Fails unless +value+ is falsy: +false+, +None+ or +()+.
   #
@@ -220,7 +220,7 @@ module Assert do
   #
   # @example
   #   Assert.falsy([].any? { |x| x > 0 })
-  let falsy(value) = assert(!value, "expected a falsy value")
+  let falsy(value: Truthyable) -> Bool = assert(value.falsy?, "expected a falsy value")
 
   # Fails unless +value+ is a +Just+.
   #
@@ -230,7 +230,7 @@ module Assert do
   # @example
   #   Assert.some([1, 2].first)
   #   Assert.some(config.get(:host))
-  let some(value) = assert(value.present?, "expected Just, got ${value}")
+  let some(value: A?) -> Bool = assert(value.present?, "expected Just, got ${value}")
 
   # Fails unless +value+ is +None+.
   #
@@ -240,7 +240,7 @@ module Assert do
   # @example
   #   Assert.none([].first)
   #   Assert.none("abc".to(Integer))
-  let none(value) = assert(value.none?, "expected None, got ${value}")
+  let none(value: A?) -> Bool = assert(value.none?, "expected None, got ${value}")
 
   # Fails unless +value+ is an +Ok+.
   #
@@ -249,7 +249,7 @@ module Assert do
   #
   # @example
   #   Assert.ok(Integer.parse("42"))
-  let ok(value) = assert(value.ok?, "expected Ok, got ${value}")
+  let ok(value: Result<A, E>) -> Bool = assert(value.ok?, "expected Ok, got ${value}")
 
   # Fails unless +value+ is an +Error+.
   #
@@ -258,5 +258,5 @@ module Assert do
   #
   # @example
   #   Assert.error(Integer.parse("4x"))
-  let error(value) = assert(value.error?, "expected Error, got ${value}")
+  let error(value: Result<A, E>) -> Bool = assert(value.error?, "expected Error, got ${value}")
 end

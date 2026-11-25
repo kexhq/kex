@@ -2,13 +2,13 @@ spec/error_to_named_argument_type.kex:6:41: [KEXET-0491]: Error, `to` expects ar
 
 to : Atom -> Type<String> -> String?
 
-to : Binary -> Type<String> -> Any
+to : Binary -> Type<String> -> String?
 
 to : Measure<A> -> Type<String> -> String?
 
 to : Showable -> Type<String> -> String?
 
-to : Type -> Type<String> -> String?
+to : Type<A> -> Type<String> -> String?
 
 to : Date -> Type<String> -> Culture.Culture -> String?
 

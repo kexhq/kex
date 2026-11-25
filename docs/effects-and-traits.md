@@ -122,9 +122,9 @@ end
 
 trait Monad<F> do
   wrap : (value: A) -> F<A>
-  flatMap : (f: A -> F<B>) -> F<B>
+  into : (f: A -> F<B>) -> F<B>
   let map(f: A -> B) -> F<B> =
-    this.flatMap { |x| wrap(f(x)) }
+    this.into { |x| wrap(f(x)) }
 end
 ```
 
@@ -136,7 +136,7 @@ end
 ```kex
 make Option implement: Monad do
   let wrap(value: A) -> Option<A> = Just(value)
-  let flatMap(f: A -> Option<B>) -> Option<B> =
+  let into(f: A -> Option<B>) -> Option<B> =
     match this do
       Just(x) => f(x)
       None => None
@@ -145,7 +145,7 @@ end
 
 make Result implement: Monad do
   let wrap(value: A) -> Result<A, E> = Ok(value)
-  let flatMap(f: A -> Result<B, E>) -> Result<B, E> =
+  let into(f: A -> Result<B, E>) -> Result<B, E> =
     match this do
       Ok(x) => f(x)
       Error(e) => Error(e)

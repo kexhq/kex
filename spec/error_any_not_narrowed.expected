@@ -1,0 +1,22 @@
+spec/error_any_not_narrowed.kex:8:50: [KEXET-0509]: Error, `upperCase` doesn't work on every value an `Any` can hold: check the type first with a `match` (`n: Integer => ...`), or convert it with `.to(T)`
+  |
+8 | let shout(value: Any) -> String = value.upperCase
+  |                                   ^^^^^^^^^^^^^^^
+spec/error_any_not_narrowed.kex:9:46: [KEXET-0509]: Error, `*` doesn't work on every value an `Any` can hold: check the type first with a `match` (`n: Integer => ...`), or convert it with `.to(T)`
+  |
+9 | let doubled(value: Any) -> Integer = value * 2
+  |                                      ^^^^^^^^^
+spec/error_any_not_narrowed.kex:10:34: [KEXET-0458]: Error, then/else condition must be Bool, got Any
+   |
+10 | let flag(value: Any) -> String = value then "yes" else "no"
+   |                                  ^^^^^
+spec/error_any_not_narrowed.kex:12:44: [KEXET-0509]: Error, `id` doesn't work on every value an `Any` can hold: check the type first with a `match` (`n: Integer => ...`), or convert it with `.to(T)`
+   |
+12 | let width(value: Any) -> Integer = value.id.length
+   |                                    ^^^^^^^^
+spec/error_any_not_narrowed.kex:30:32: [KEXET-0491]: Error, `construct` expects argument 2 to be {String: Any}, but got Integer
+
+construct : Type<A> -> {String: Any} -> Result<A, String>
+   |
+30 |   IO.printLine(users.construct(5))
+   |                                ^ this has type Integer

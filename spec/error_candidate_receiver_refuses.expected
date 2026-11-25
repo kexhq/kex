@@ -7,6 +7,8 @@ spec/error_candidate_receiver_refuses.kex:15:16: [KEXET-0491]: Error, `min` expe
 min : Range<A> -> A?
 
 min : [A] -> A?
+
+min : Comparable -> This -> This
    |
 15 |   IO.printLine(layer.min(2))
    |                ^^^^^ this has type Layer

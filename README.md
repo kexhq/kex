@@ -728,7 +728,7 @@ Working today:
 - Type checker active by default (`kex run` gates on type checking; `--no-check` to skip)
 - Stdlib type signatures, trait-constrained overload resolution, lambda type inference
 - Arbitrary-precision `Integer` (GMP-backed), numeric tower, match exhaustiveness checking
-- Rich stdlib: `uniq`, `partition`, `indexOf`, `flatMap`, `contains?`, `min`/`max` returning `Optional`, char predicates (`digit?`, `alpha?`, `space?`), and more
+- Rich stdlib: `uniq`, `partition`, `indexOf`, `into`, `contains?`, `min`/`max` returning `Optional`, char predicates (`digit?`, `alpha?`, `space?`), and more
 - Regexes (`using Regex`): PCRE2 in the interpreter, Erlang `re` on BEAM — same PCRE language; `` regex`\d+` `` tag literals validated at compile time (via the `validate<Tag>` companion convention), `regex$`…`` with auto-escaped interpolation, `matches`/`matches?`/`scan`/`replace`/`split`, and a map-like `Match` with numbered and named (`:atom`) captures
 - REPL with optional readline support
 

@@ -1,0 +1,16 @@
+# kex: check-only
+# A bare trait result with several parameters of that trait is checked per
+# call (docs/typechecker-hm-plan.md §14 item 2, decided 2026-11-24): the call
+# is the body's type at its arguments. `combine(1, 2)` is an Integer and
+# `combine(1, 2.5)` a Float, as one parameter's `twice(3)` already was.
+let combine(a: Number, b: Number) -> Number = a + b
+let twice(x: Number) -> Number = x + x
+
+main do
+  let i: String = combine(1, 2)
+  let f: String = combine(1, 2.5)
+  let t: String = twice(3)
+  IO.printLine(i)
+  IO.printLine(f)
+  IO.printLine(t)
+end

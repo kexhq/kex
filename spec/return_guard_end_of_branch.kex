@@ -36,9 +36,13 @@ foul greet(n: Integer) -> Void do
   IO.printLine("hello ${n}")
 end
 
-# And as a function's final statement, where a guard not taken yields None.
+# And before a function's final statement: a guard not taken carries on to
+# it. A guard cannot be the final statement of a function that answers a
+# value, since it has none when not taken (#809,
+# spec/error_if_without_else_value.kex), so the `None` is written out.
 let tail(n: Integer) -> Integer? do
   return Just(n) if n > 1
+  None
 end
 
 main do

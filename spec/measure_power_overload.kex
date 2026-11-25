@@ -1,0 +1,33 @@
+using Units.SI
+
+# `^` on a length is overloaded on its exponent, as `*` and `/` are on the
+# dimensions: a clause written with a literal (`let ^(2)`) takes that value
+# alone, so `^ 2` is an area and `^ 3` a volume, each known to its type.
+
+let floor(side: Measure<Quantity.Length>) -> Measure<Quantity.Area> = side ^ 2
+
+let tank(side: Measure<Quantity.Length>) -> Measure<Quantity.Volume> = side ^ 3
+
+record Grid do
+  n : Integer
+end
+
+record Cells do
+  count : Integer
+end
+
+record Cubes do
+  count : Integer
+end
+
+make Grid do
+  let ^(2) -> Cells = Cells { count: @n * @n }
+  let ^(3) -> Cubes = Cubes { count: @n * @n * @n }
+end
+
+main do
+  IO.printLine(floor(3.meter).to(String).or(""))
+  IO.printLine(tank(2.meter).canonical)
+  IO.printLine((Grid { n: 4 } ^ 2).count)
+  IO.printLine((Grid { n: 4 } ^ 3).count)
+end

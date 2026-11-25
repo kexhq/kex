@@ -4,10 +4,11 @@
 using Units.SI
 
 main do
-  let area = 3.meter ^ 2
-  IO.printLine(area.canonical)
-  IO.printLine(area.value)
-  IO.printLine(area.unit.notation)
+  let doubled = 3.second * 2
+  IO.printLine(doubled.canonical)
+  IO.printLine(doubled.value)
+  IO.printLine(doubled.unit.notation)
+  IO.printLine(3.meter.squared.unit.notation)
 
   let energy = 31544.watt * 1.hour
   IO.printLine(energy.to(String, in: Kilo(Watt * Hour)).or("missing"))

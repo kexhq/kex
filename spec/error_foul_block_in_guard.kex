@@ -1,0 +1,25 @@
+# kex: check-only
+# A block or a capture handed over in a guard may be run there, so its effects
+# are the guard's (#142, decision 6 of docs/typechecker-hm-plan.md): the
+# pure `holds?` ran a foul block while the arms were being matched. A pure
+# block stays allowed.
+
+let holds?(f: Block<Bool>) -> Bool = f()
+
+foul greet(n: Integer) -> Bool do
+  IO.printLine(n)
+  true
+end
+
+foul check(n: Integer, xs: [Integer]) -> String do
+  match n do
+    x when holds? { IO.printLine("side effect"); true } => "yes ${x}"
+    _ when xs.any?(~greet) => "greeted"
+    _ when xs.any? { |y| y > 1 } => "big"
+    _ => "no"
+  end
+end
+
+main do
+  IO.printLine(check(1, [2]))
+end

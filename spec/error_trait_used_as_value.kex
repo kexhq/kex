@@ -1,0 +1,8 @@
+# kex: check-only
+# A trait names what values have; it is not a value itself. Unchecked, BEAM
+# made `Monad` an atom and the walker reported an undefined identifier.
+main do
+  IO.inspect(Monad)
+  let shown: Integer = Showable
+  IO.printLine(shown)
+end

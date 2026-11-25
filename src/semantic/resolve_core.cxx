@@ -149,11 +149,11 @@ auto writtenTargetHead(const TypePtr& type) -> std::optional<TargetHead> {
                     case PrimitiveType::String: return TargetHead{"String"};
                     case PrimitiveType::Bool: return TargetHead{"Bool"};
                     case PrimitiveType::Atom:
-                        if (!node.atomName.empty()) {
+                        if (!node.literal.empty()) {
                             return std::nullopt;
                         }
                         return TargetHead{"Atom"};
-                    case PrimitiveType::Unit: return std::nullopt;
+                    case PrimitiveType::Void: return std::nullopt;
                 }
                 return std::nullopt;
             } else if constexpr (std::is_same_v<T, SizedIntType>) {
@@ -161,7 +161,8 @@ auto writtenTargetHead(const TypePtr& type) -> std::optional<TargetHead> {
             } else if constexpr (std::is_same_v<T, SizedFloatType>) {
                 return std::nullopt;
             } else if constexpr (std::is_same_v<T, NamedType>) {
-                if (node.name.empty() || node.name == "Block" || node.name == "Optional") {
+                if (node.name.empty() || node.name == kex::names::kBlockType ||
+                    node.name == kex::names::kOptionalType) {
                     return std::nullopt;
                 }
                 return TargetHead{node.name, true};
@@ -186,12 +187,12 @@ auto receiverCoversHead(
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, PrimitiveType>) {
                 switch (node.kind) {
-                    case PrimitiveType::Integer: return head == "Integer";
-                    case PrimitiveType::Char: return head == "Char";
-                    case PrimitiveType::String: return head == "String";
-                    case PrimitiveType::Bool: return head == "Bool";
-                    case PrimitiveType::Atom: return head == "Atom";
-                    case PrimitiveType::Unit: return false;
+                    case PrimitiveType::Integer: return head == kex::names::kIntegerType;
+                    case PrimitiveType::Char: return head == kex::names::kCharType;
+                    case PrimitiveType::String: return head == kex::names::kStringType;
+                    case PrimitiveType::Bool: return head == kex::names::kBoolType;
+                    case PrimitiveType::Atom: return head == kex::names::kAtomType;
+                    case PrimitiveType::Void: return false;
                 }
                 return false;
             } else if constexpr (std::is_same_v<T, NamedType>) {
@@ -201,7 +202,7 @@ auto receiverCoversHead(
             } else if constexpr (std::is_same_v<T, MapType>) {
                 return head == kex::names::kMapType;
             } else if constexpr (std::is_same_v<T, OptionalType>) {
-                return head == "Optional";
+                return head == kex::names::kOptionalType;
             } else if constexpr (std::is_same_v<T, RecordType>) {
                 return nominalHeadDeclared(head, ifaces);
             } else {
@@ -255,7 +256,7 @@ auto staticReceiverHead(
         return std::nullopt;
     }
     // A value of that type reaches `name/Head` through the dispatcher, as its
-    // module recorded when it emitted it (KexiMethod::implementation: the
+    // module recorded when it emitted it (KexiReceiverFunction::implementation: the
     // routes lowering laid out, nothing merged in ahead). That one fact
     // replaces the routing clauses (5), (12), (13b), (DS) and the `''` and
     // module-function vetoes, which re-derived it from the overloads.

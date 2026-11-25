@@ -147,23 +147,52 @@ public:
     auto displayTypeOf(const ast::Expr* expr) const -> TypePtr;
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
     auto assignmentTargetTypeOf(const ast::Expr* expr) const -> TypePtr;
-    // Capabilities `name` needs, each mapped to the callee that carried the
-    // requirement in ("" when the function reaches it directly). Nothing is
-    // annotated, so this is the only place a reader can learn what a function
-    // needs — tooling displays it (kexhq/kex#143).
-    auto requiredCapabilities(const std::string& name) const
-        -> const std::map<std::string, std::string>* {
-        auto found = m_requiredCapabilities.find(name);
-        return found == m_requiredCapabilities.end() ? nullptr : &found->second;
+    // Why a function needs a capability: the callee that carried the
+    // requirement in, or none when the function reaches it itself.
+    struct CapabilityReason {
+        std::string via;                          // the callee's name, "" when direct
+        const ast::FunctionDef* viaDef = nullptr; // the callee, when this program's
+    };
+    // Capabilities `def` needs, each with why. Nothing is annotated, so this
+    // is the only place a reader can learn what a function needs: tooling
+    // displays it (kexhq/kex#143). Computed from the checker's decisions
+    // (computeCapabilityRequirements), so a `make` function, a call with a
+    // receiver and an overload are each the function the call reaches.
+    auto requiredCapabilities(const ast::FunctionDef& def) const
+        -> const std::map<std::string, CapabilityReason>* {
+        auto found = m_requiredCapabilities.find(&def);
+        return found == m_requiredCapabilities.end() || found->second.empty() ? nullptr
+                                                                              : &found->second;
+    }
+    // What a caller of `def` needs: its requirements, and the capability
+    // module it is a member of. What a KexI export records.
+    auto capabilitiesToCall(const ast::FunctionDef& def) const -> std::vector<std::string> {
+        std::set<std::string> names;
+        if (const auto* needs = requiredCapabilities(def)) {
+            for (const auto& [capability, _] : *needs) {
+                names.insert(capability);
+            }
+        }
+        if (auto own = m_capabilityOf.find(&def); own != m_capabilityOf.end()) {
+            names.insert(own->second);
+        }
+        return {names.begin(), names.end()};
+    }
+    // The parameters `name` runs, by position: a call is as foul as what it
+    // hands them (#142). Nothing is written, so tooling shows it.
+    auto transparentParams(const std::string& name) const -> const std::set<std::size_t>* {
+        const auto found = m_transparentParams.find(name);
+        return found == m_transparentParams.end() || found->second.empty() ? nullptr
+                                                                           : &found->second;
     }
     // The chain that explains one requirement, innermost first:
     //   {"deep", "stamp"}, {"stamp", ""}   for `deep requires Clock via stamp`.
-    auto capabilityChain(const std::string& name, const std::string& capability) const
+    auto capabilityChain(const ast::FunctionDef& def, const std::string& capability) const
         -> std::vector<std::pair<std::string, std::string>> {
         std::vector<std::pair<std::string, std::string>> chain;
-        std::string at = name;
-        std::set<std::string> seen; // a cyclic call graph must still finish
-        while (!at.empty() && seen.insert(at).second) {
+        const ast::FunctionDef* at = &def;
+        std::set<const ast::FunctionDef*> seen; // a cyclic call graph must still finish
+        while (at && seen.insert(at).second) {
             auto found = m_requiredCapabilities.find(at);
             if (found == m_requiredCapabilities.end()) {
                 break;
@@ -172,8 +201,8 @@ public:
             if (entry == found->second.end()) {
                 break;
             }
-            chain.emplace_back(at, entry->second);
-            at = entry->second;
+            chain.emplace_back(at->name, entry->second.via);
+            at = entry->second.viaDef;
         }
         return chain;
     }
@@ -230,6 +259,30 @@ public:
     auto referencedConstantOf(const ast::Expr& name) const -> std::string {
         const auto found = m_checker.referencedConstants().find(&name);
         return found == m_checker.referencedConstants().end() ? std::string{} : found->second;
+    }
+    // Whether an integer literal is one a Float takes (decision 2), so a
+    // backend emits it as a float.
+    auto literalIsFloat(const ast::Expr& literal) const -> bool {
+        return m_checker.floatLiterals().contains(&literal);
+    }
+    // The letters a function takes its types for, the types a call passes,
+    // and the letter a call goes through (§12 step 7: `A.identity`).
+    auto typeParametersOf(const ast::FunctionDef& def) const -> std::vector<std::string> {
+        const auto found = m_checker.typeParameters().find(&def);
+        return found == m_checker.typeParameters().end() ? std::vector<std::string>{}
+                                                         : found->second;
+    }
+    auto typeArgumentsOf(const ast::Expr& call) const -> const std::vector<TypeArgument>* {
+        const auto found = m_checker.typeArguments().find(&call);
+        return found == m_checker.typeArguments().end() ? nullptr : &found->second;
+    }
+    auto typeArgumentsOf(const ast::MethodCall& call) const -> const std::vector<TypeArgument>* {
+        const auto found = m_checker.methodTypeArguments().find(&call);
+        return found == m_checker.methodTypeArguments().end() ? nullptr : &found->second;
+    }
+    auto typeVariableReceiverOf(const ast::Expr& call) const -> std::string {
+        const auto found = m_checker.typeVariableReceivers().find(&call);
+        return found == m_checker.typeVariableReceivers().end() ? std::string{} : found->second;
     }
     // The function a bare call names, or "".
     auto calledFunctionOf(const ast::Expr& call) const -> std::string {
@@ -329,9 +382,15 @@ private:
     // enough to print the chain that explains an otherwise invisible
     // requirement — nothing is annotated, so the explanation is the only
     // place a reader can learn it.
-    std::map<std::string, std::map<std::string, std::string>> m_requiredCapabilities;
-    // Set only while processFn walks one function's body.
-    std::map<std::string, std::string>* m_capabilityTarget = nullptr;
+    std::unordered_map<const ast::FunctionDef*, std::map<std::string, CapabilityReason>>
+        m_requiredCapabilities;
+    // The capability module each function is a member of, for those that are.
+    std::unordered_map<const ast::FunctionDef*, std::string> m_capabilityOf;
+    auto computeCapabilityRequirements(const ast::Program& program) -> void;
+    auto checkEffectFlow(const ast::Program& program) -> void;
+    // Each function's effect-transparent parameters, by position: the ones
+    // it runs (checkEffectFlow).
+    std::unordered_map<std::string, std::set<std::size_t>> m_transparentParams;
 
     // Loop control
     auto checkLoopControl(SourceLocation loc, const std::string& keyword) -> void;

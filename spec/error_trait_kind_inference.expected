@@ -1,0 +1,4 @@
+spec/error_trait_kind_inference.kex:7:10: [KEXEP-0159]: Error, `F` in trait `Odd` takes 0 type argument(s) here but 1 elsewhere: use it the same way everywhere
+  |
+7 |   bare : F -> F
+  |          ^

@@ -37,17 +37,17 @@ struct CollectOptions {
 auto collectMetadata(const kex::ast::Program& program, const CollectOptions& opts) -> KexiChunk;
 
 // Every bare type name in `chunk` — in its signatures, constants, types,
-// methods and record fields — replaced by what `qualify` makes of it. A
+// functions and record fields — replaced by what `qualify` makes of it. A
 // signature written `deps : [Dependency]` names the module's own
 // `Dependency` or the one a `using` brought in, but read on its own, by
 // another unit, a bare name says neither.
-// `method`'s per-type implementation among `emitted`: `name/Head` (the head
+// `function`'s per-type implementation among `emitted`: `name/Head` (the head
 // its `make` target is written as, qualified or as its module wrote it) at
-// the method's arity, or "".
+// the function's arity, or "".
 auto emittedImplementationOf(
-    const KexiMethod& method,
+    const KexiReceiverFunction& receiverFunction,
     const std::function<bool(const std::string& function, int arity)>& emitted) -> std::string;
-// Records each receiver method's implementation a value of its type reaches
+// Records each receiver function's implementation a value of its type reaches
 // through the dispatcher (`routed`: the emitted module's
 // routedImplementations). One source of truth, the emitted module, for every
 // consumer that devirtualizes.

@@ -9,6 +9,7 @@
 #include "../semantic/analyzer.hxx"
 
 #include <algorithm>
+#include <filesystem>
 #include <cctype>
 #include <iostream>
 #include <map>
@@ -17,6 +18,19 @@
 #include <string_view>
 
 namespace kex::diagnostics {
+
+// A file under the working directory, as relative to it: where a module was
+// loaded from an absolute source root, its diagnostics read the same on every
+// machine.
+static auto displayPath(std::string_view file) -> std::string {
+    std::string path(file);
+    std::error_code failed;
+    static const auto cwd = std::filesystem::current_path(failed).string() + "/";
+    if (!failed && cwd.size() > 1 && path.starts_with(cwd)) {
+        return path.substr(cwd.size());
+    }
+    return path;
+}
 
 auto jsonEscape(const std::string& s) -> std::string {
     std::string out;
@@ -330,8 +344,8 @@ auto printCollapseReport(const std::vector<kex::compiled::CollapseNote>& notes) 
               << "collapse:" << kex::color::apply(kex::color::reset) << " " << collapsed << " of "
               << ordered.size() << " evaluated at compile time\n";
     for (const auto& note : ordered) {
-        std::cerr << "  " << kex::color::apply(kex::color::gray) << note.location.file << ":"
-                  << note.location.line << ":" << note.location.column
+        std::cerr << "  " << kex::color::apply(kex::color::gray) << displayPath(note.location.file)
+                  << ":" << note.location.line << ":" << note.location.column
                   << kex::color::apply(kex::color::reset) << " ";
         if (note.collapsed) {
             std::cerr << kex::color::apply(kex::color::green) << "collapsed"
@@ -670,7 +684,7 @@ auto renderSnippet(std::vector<Mark> marks, const std::string& mainFile, const c
 auto noteHeader(const kex::semantic::DiagnosticNote& note) -> std::string {
     using namespace kex::color;
     std::ostringstream out;
-    out << apply(gray) << note.location.file << ":" << note.location.line << ":"
+    out << apply(gray) << displayPath(note.location.file) << ":" << note.location.line << ":"
         << note.location.column << ":" << apply(reset) << " " << apply(bold) << apply(cyan)
         << "note:" << apply(reset) << " " << colorizeMessage(note.message) << "\n";
     return out.str();
@@ -683,7 +697,7 @@ auto formatDiagnostic(const kex::semantic::Diagnostic& diag) -> std::string {
     const bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
     const auto* tone = isError ? red : yellow;
     std::ostringstream out;
-    out << apply(gray) << diag.location.file << ":" << diag.location.line << ":"
+    out << apply(gray) << displayPath(diag.location.file) << ":" << diag.location.line << ":"
         << diag.location.column;
     if (diag.endLocation) {
         out << "-" << diag.endLocation->line << ":" << diag.endLocation->column;

@@ -1,12 +1,12 @@
-spec/error_float_range_walk.kex:7:32: [KEXET-0502]: Error, `count` walks a range's values, and a Float range has none to walk: use an Integer range, or ask it `contains?`
+spec/error_float_range_walk.kex:9:32: [KEXET-0511]: Error, `count` only works on Range<Float> when Float is Discrete, and Float isn't
   |
-7 |   IO.printLine((1.0..5.0).count)
+9 |   IO.printLine((1.0..5.0).count)
   |                ^^^^^^^^^^^^^^^^
-spec/error_float_range_walk.kex:8:31: [KEXET-0502]: Error, `map` walks a range's values, and a Float range has none to walk: use an Integer range, or ask it `contains?`
-  |
-8 |   IO.printLine((1.0..5.0).map { |x| x })
-  |                ^^^^^^^^^^^^^^^^^^^^^^^^
-spec/error_float_range_walk.kex:9:30: [KEXET-0502]: Error, `sum` walks a range's values, and a Float range has none to walk: use an Integer range, or ask it `contains?`
-  |
-9 |   IO.printLine((1.0..5.0).sum)
-  |                ^^^^^^^^^^^^^^
+spec/error_float_range_walk.kex:10:31: [KEXET-0511]: Error, `map` only works on Range<Float> when Float is Discrete, and Float isn't
+   |
+10 |   IO.printLine((1.0..5.0).map { |x| x })
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^
+spec/error_float_range_walk.kex:11:30: [KEXET-0511]: Error, `sum` only works on Range<Float> when Float is Discrete, and Float isn't
+   |
+11 |   IO.printLine((1.0..5.0).sum)
+   |                ^^^^^^^^^^^^^^

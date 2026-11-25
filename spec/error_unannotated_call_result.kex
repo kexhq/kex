@@ -1,0 +1,16 @@
+# kex: check-only
+# Decision 1 at the call (docs/typechecker-hm-plan.md §5): an unannotated
+# function's call is its body checked with that call's argument types, so
+# the call has the body's type, not an unknown one. `shout("hi")` is a String
+# and `twice(3)` an Integer, and a wrong use of either is reported.
+let shout(s) = s.upperCase
+let twice(x) = x * 2
+
+main do
+  let loud: Integer = shout("hi")
+  let doubled: String = twice(3)
+  IO.printLine(shout("a") + "!")
+  IO.printLine(twice(2) + 1)
+  IO.printLine(loud)
+  IO.printLine(doubled)
+end

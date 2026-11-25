@@ -27,6 +27,10 @@ inline auto moduleAtom(const std::string& path) -> std::string {
 // it applies (TypeChecker::memberCompletions).
 inline const std::string kTryKeyword = "try";
 
+// `value.is?(T)`: the checker's own receiver call
+// (findCompileTimeIntrinsic), offered after a dot on every value.
+inline const std::string kTypeTestCall = "is?";
+
 // `Kex.embed("file")`: the file's contents, read while compiling
 // (compiled/expand.cxx folds it before checking).
 inline const std::string kEmbedFunction = "embed";
@@ -54,10 +58,57 @@ inline const std::string kMapType = "Map";
 inline const std::string kVoidType = "Void";
 inline const std::string kResultType = "Result";
 inline const std::string kOptionalType = "Optional";
+// The hole a type lambda leaves (`make Result<_, E>`, §8.2).
+inline const std::string kTypeHole = "_";
 
 // A trait's self type: in its signatures and default bodies, whatever type
 // claims the trait.
 inline const std::string kThisType = "This";
+
+// Every other type, trait, constructor and module name the compiler decides
+// something by. Each one is here so the decisions can be found, and each is
+// a step of docs/typechecker-hm-plan.md §7: the syntax's own vocabulary stays
+// (§7.2), and the rest should become declarations the stdlib makes.
+//
+// The syntax's vocabulary: literals, conditions and type sugar.
+inline const std::string kBoolType = "Bool";
+inline const std::string kStringType = "String";
+inline const std::string kCharType = "Char";
+inline const std::string kAtomType = "Atom";
+inline const std::string kIntegerType = "Integer";
+inline const std::string kFloatType = "Float";
+inline const std::string kJustConstructor = "Just";
+inline const std::string kNoneConstructor = "None";
+inline const std::string kOkConstructor = "Ok";
+inline const std::string kErrorConstructor = "Error";
+// The type grammar's own forms, spelled as names.
+inline const std::string kNeverType = "Never";
+inline const std::string kTupleType = "Tuple";
+inline const std::string kBlockType = "Block";
+inline const std::string kAnyType = "Any";
+inline const std::string kUnknownType = "Unknown";
+// The numeric tower: §6, and decision 2 of the plan.
+inline const std::string kNumberTrait = "Number";
+inline const std::string kMonadTrait = "Monad";
+inline const std::string kIntAlias = "Int";
+inline const std::string kByteType = "Byte";
+inline const std::string kFloat32Type = "Float32";
+inline const std::string kFloat64Type = "Float64";
+// Traits the compiler derives for every type: never a join's target.
+inline const std::string kInspectableTrait = "Inspectable";
+inline const std::string kEquatableTrait = "Equatable";
+// Stdlib types the checker still knows by name: each is a special case to
+// replace with a declaration (§7.1).
+inline const std::string kRangeType = "Range";
+inline const std::string kFilePathType = "FilePath";
+inline const std::string kServerType = "Server";
+inline const std::string kReplyType = "Reply";
+inline const std::string kNewType = "New";
+// Module names the checker treats specially.
+inline const std::string kPreludeModuleName = "Prelude";
+inline const std::string kErlangModule = "Erlang";
+inline const std::string kElixirModule = "Elixir";
+inline const std::string kGleamModule = "Gleam";
 
 // The two Bool values, spelled as constructors in a pattern.
 inline const std::string kTrue = "True";

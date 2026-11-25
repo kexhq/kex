@@ -36,7 +36,7 @@ end
 foul functionsOf(page: SourcePage) -> [FunctionEntry] = Tey.Docgen.Relations.allFunctions(page.entities)
 
 foul signaturesOf(page: SourcePage, name: String) -> [String] do
-  return functionsOf(page).filter { |f| f.name == name }.flatMap { |f| f.signatures }
+  return functionsOf(page).filter { |f| f.name == name }.into { |f| f.signatures }
 end
 
 let enumerableSource() -> String do
@@ -141,7 +141,7 @@ end
 describe("Tey.Docgen.Extract make blocks") do
   it("folds two blocks for the same receiver in one file into one") do
     let page = parsePage("bag.kex", bagSource())
-    let makes = page.entities.flatMap { |e|
+    let makes = page.entities.into { |e|
       match e do
         MakeDecl(entry) => [entry]
         _ => []
@@ -353,8 +353,8 @@ describe("Tey.Docgen.Relations.withTraitSignatures") do
   it("types an untyped member from the trait it implements") do
     let source = "type Unit = | Nano\n\ntrait Scaled do\n  factor :> Float\n  twin :> This\nend\n\nmake Unit, implement: Scaled do\n  let factor(@Nano) = 0.1\n  let twin = this\nend"
     let page = Tey.Docgen.Relations.withTraitSignatures([parsePage("unit.kex", source)]).first.try
-    let own = page.entities.flatMap { |e| makeFunctions(e) }
-    Assert.equal(own.flatMap { |f| f.signatures }, ["factor -> Float", "twin -> Unit"])
+    let own = page.entities.into { |e| makeFunctions(e) }
+    Assert.equal(own.into { |f| f.signatures }, ["factor -> Float", "twin -> Unit"])
   end
 end
 

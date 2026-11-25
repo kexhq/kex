@@ -12,14 +12,15 @@ let decode(text: String) -> [Operation] or! String do
     Ok(value) => value
   end
   return Error("generator protocol root must be an object") if Kex.Intrinsic.Kex.kind(root) != :map
-  let supported = root["version"].map { |version| Kex.Intrinsic.Kex.kind(version) == :integer && version == 1 }
+  let fields = JSON.fields(root)
+  let supported = fields["version"].map { |version| Kex.Intrinsic.Kex.kind(version) == :integer && version == 1 }
   return Error("unsupported generator protocol version") if supported != Just(true)
-  let values = match root["operations"] do
+  let values = match fields["operations"] do
     None => return Error("generator protocol has no operations")
     Just(items) => items
   end
   return Error("generator protocol operations must be a list") if Kex.Intrinsic.Kex.kind(values) != :list
-  return Tey.Generator.decodeOperations(values, [])
+  return Tey.Generator.decodeOperations(JSON.items(values), [])
 end
 
 foul apply(operations: [Operation], workspaceRoot: String,
@@ -69,10 +70,11 @@ foul safePath(workspaceRoot: String, path: String) -> String or! String do
 end
 
 private do
-  let decodeOperations(values, decoded: [Operation]) -> [Operation] or! String do
+  let decodeOperations(values: [Any], decoded: [Operation]) -> [Operation] or! String do
     return Ok(decoded) if values.empty?
-    let value = values.first.try
-    return Error("generator operation must be an object") if Kex.Intrinsic.Kex.kind(value) != :map
+    let item = values.first.try
+    return Error("generator operation must be an object") if Kex.Intrinsic.Kex.kind(item) != :map
+    let value = JSON.fields(item)
     let kind = "${value["kind"].or("")}"
     let path = match value["path"] do
       Just(rawPath) when Kex.Intrinsic.Kex.kind(rawPath) == :string && "${rawPath}" != "" => "${rawPath}"

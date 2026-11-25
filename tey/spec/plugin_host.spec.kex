@@ -24,16 +24,16 @@ describe("Tey.PluginHost invocation protocol") do
       arguments: ["extra"], options: { "otp": 27 },
       environment: { "CI": "true" }
     }
-    let document = JSON.parse(Tey.PluginHost.encodeInvocation(invocation)).try
+    let document = JSON.fields(JSON.parse(Tey.PluginHost.encodeInvocation(invocation)).try)
     assert("${document["version"].or("")}" == "1")
     assert("${document["kind"].or("")}" == "generator")
-    let context = document["context"].try
+    let context = JSON.fields(document["context"].try)
     assert("${context["workspaceRoot"].or("")}" == "/work")
     assert("${context["currentMember"].or("")}" == "app")
-    assert("${context["toolchain"].try["kex"].or("")}" == "0.5.0")
-    assert("${context["graph"].try.first.try["commit"].or("")}" == "abc")
-    assert("${context["options"].try["otp"].or("")}" == "27")
-    assert("${context["environment"].try["CI"].or("")}" == "true")
+    assert("${JSON.fields(context["toolchain"].try)["kex"].or("")}" == "0.5.0")
+    assert("${JSON.fields(JSON.items(context["graph"].try).first.try)["commit"].or("")}" == "abc")
+    assert("${JSON.fields(context["options"].try)["otp"].or("")}" == "27")
+    assert("${JSON.fields(context["environment"].try)["CI"].or("")}" == "true")
   end
 
 

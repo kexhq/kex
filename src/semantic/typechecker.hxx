@@ -266,6 +266,20 @@ public:
         -> const std::unordered_map<const ast::Expr*, const ast::MethodCall*>& {
         return m_captureCalls;
     }
+    // What a `make` block's conformances are claimed for: the type name, or
+    // each concrete instantiation (`Range<Integer>`), under its bounds (#651).
+    struct MakeConformance {
+        std::vector<std::string> keys;
+        TypeArgBounds bounds;
+    };
+    // The trait each `A is Trait` bound names (#651), where it is written.
+    auto boundTraitSites() const -> const std::vector<std::pair<SourceLocation, std::string>>& {
+        return m_boundTraitSites;
+    }
+    auto makeConformance(const ast::MakeDef* def) const -> const MakeConformance* {
+        const auto found = m_makeConformances.find(def);
+        return found == m_makeConformances.end() ? nullptr : &found->second;
+    }
     auto resolvedTraits() const
         -> const std::unordered_map<const ast::MakeDef*, std::vector<std::string>>& {
         return m_resolvedTraits;
@@ -355,6 +369,10 @@ public:
     auto referencedConstants() const -> const std::unordered_map<const ast::Expr*, std::string>& {
         return m_referencedConstants;
     }
+    // Integer literals a Float takes (noteFloatLiteral, decision 2).
+    auto floatLiterals() const -> const std::unordered_set<const ast::Expr*>& {
+        return m_floatLiterals;
+    }
     // The types each `make` block is for, by identity (makeOwnerNames).
     auto makeTargetIdentities() const
         -> const std::unordered_map<const ast::MakeDef*, std::vector<std::string>>& {
@@ -408,6 +426,20 @@ private:
     auto registerTypeAliasesInModule(const ast::ModuleDef& mod) -> void;
     auto typeDefToType(const ast::TypeDef& def) -> TypePtr;
     auto distinctBacking(const TypePtr& type) const -> TypePtr;
+    // Two members of `type` (a union) the run time cannot tell apart: a
+    // distinct type and what backs it, or two distinct types backed alike
+    // (§14 item 4, decided: an error).
+    auto indistinguishableMembers(const TypePtr& type) const
+        -> std::optional<std::pair<TypePtr, TypePtr>>;
+    auto reportIndistinguishable(const TypePtr& type, SourceLocation location) -> void;
+    // The trait a distinct type implements in its own `make` that `param`
+    // asks for as a value: empty when `arg` is no such case (§14 item 4).
+    auto distinctTraitClash(const TypePtr& arg, const TypePtr& param) const -> std::string;
+    auto innermostDistinct(const TypePtr& type) const -> TypePtr;
+    std::set<std::string> m_reportedIndistinguishable;
+    // While a file module (`module Name` as a file's header) is checked: its
+    // public functions are what other units reach.
+    bool m_inFileModule = false;
     auto resolveDistinctName(const std::string& name) const -> std::string;
     auto representationsCompatible(const TypePtr& from, const TypePtr& to) -> bool;
     auto checkRecordDef(const ast::RecordDef& def) -> void;
@@ -578,6 +610,15 @@ private:
     auto
     checkMatchExhaustiveness(const ast::MatchExpr& node, const TypePtr& subject, SourceLocation loc)
         -> bool;
+    // A match subject's members, named: a union's, or a sum type's variants.
+    auto unionMemberNames(const TypePtr& subject) -> std::vector<std::string>;
+    // Which of `members` a pattern takes whole: all of them for a variable or
+    // a wildcard, its type for a type pattern, its record for a record pattern
+    // that binds every field whole, none for a literal. nullopt when it is not
+    // known (a constructor, a structural record, a list, a tuple). Shared by
+    // the coverage check and the narrowing of a later arm's variable.
+    auto unionMembersTaken(const ast::Pattern& pattern, const std::vector<std::string>& members)
+        -> std::optional<std::vector<bool>>;
     auto checkUnionCoverage(const ast::MatchExpr& node, const TypePtr& subject, SourceLocation loc)
         -> bool;
     auto checkPatternMatrix(const ast::MatchExpr& node, const TypePtr& subject, SourceLocation loc)
@@ -640,6 +681,48 @@ private:
     // so repeated occurrences of the same single-letter generic name (e.g.
     // `zip(a : [A], b : [B])`) resolve to the same TypeVar within that
     // clause, not a fresh one per occurrence.
+    // The name a `make` block's conformances register under: `typeName`, or
+    // each member of a union of instantiations, or
+    // the instantiation in full (`Range<Integer>`) for a target whose type
+    // arguments are all concrete, so only that instantiation conforms.
+    auto conformanceKeys(const ast::MakeDef& def, const std::string& typeName)
+        -> std::vector<std::string>;
+    // The bounds of `make A is Discrete => Range<A>` (#651), as receiver type
+    // argument positions and the traits they must satisfy.
+    // `def` claims `traitName` for `key`: under its bounds, when it has any.
+    auto registerConformance(
+        const ast::MakeDef& def, const std::string& key, const std::string& traitName) -> void;
+    // `let larger(A is Comparable => a: A, b: A)` (#651): the traits each
+    // bounded single-letter type node of a clause names, found before any
+    // signature is built (collectTypeBounds). Its first occurrence in a
+    // signature is a bound placeholder (boundedPlaceholder), shared by the
+    // rest through the clause's variables: one `A`, bound, that a call binds.
+    std::unordered_map<const ast::TypeExpr*, std::vector<std::string>> m_typeNodeBounds;
+    // Each bound's trait where it is written, as resolved: what hover shows.
+    std::vector<std::pair<SourceLocation, std::string>> m_boundTraitSites;
+    auto collectTypeBounds(const ast::Program& program) -> void;
+    // `name` written with `given` type arguments where it declares `declared`
+    // (#648; §8.1 fix 3 for a bare name, which meant any instantiation).
+    auto reportTypeArgumentCount(
+        const ast::TypeExpr& at, const std::string& name, std::size_t declared, std::size_t given)
+        -> void;
+    // The targets of `make` blocks: there a bare generic name means every
+    // instantiation (`make Measure do`), and is not a missing argument.
+    std::unordered_set<const ast::TypeExpr*> m_makeTargetNodes;
+    // The positions each constructor's type lambda leaves open (`Tagged<_, E>`).
+    std::unordered_map<std::string, std::vector<std::size_t>> m_constructorHoles;
+    // The same, from imported conformances; kept apart because m_constructorHoles
+    // is rebuilt from the program on each check.
+    std::unordered_map<std::string, std::vector<std::size_t>> m_importedConstructorHoles;
+    // `application` as one taking `arity` arguments: a constructor's type lambda
+    // (`Tagged<_, E>`) keeps the rest in its head.
+    auto reshapedApplication(Application application, std::size_t arity) const -> Application;
+    auto boundedPlaceholder(const ast::TypeExpr& node, const std::string& letter) -> TypePtr;
+    auto makeReceiverBounds(const ast::MakeDef& def)
+        -> std::vector<std::pair<std::size_t, std::string>>;
+    // The first bound `receiver` fails, as (argument, trait); none when all hold.
+    auto unmetReceiverBound(const Signature& signature, const TypePtr& receiver)
+        -> std::optional<std::pair<TypePtr, std::string>>;
     auto resolveTypeExpr(
         const ast::TypeExpr& typeExpr, std::unordered_map<std::string, TypePtr>& genericVars)
         -> TypePtr;
@@ -656,6 +739,14 @@ private:
 
     // Type inference for expressions
     auto inferExpr(const ast::Expr& expr) -> TypePtr;
+    // Check mode for a condition: infers `condition` and requires Bool,
+    // reporting `code` at the condition itself. Every place the language
+    // decides on a Bool goes through here (`if`, `elif`, `while`, the inline
+    // `then`/`else`, a trailing `if`, a `when` guard, a collection guard), so
+    // none of them can skip the check. An unknown type is not reported: it is
+    // either an error already reported, or unknown for a reason fixed
+    // elsewhere.
+    auto checkCondition(const ast::Expr& condition, diag::Code code) -> void;
     auto inferBody(const std::vector<ast::ExprPtr>& body, const TypePtr& expected = nullptr)
         -> TypePtr;
 
@@ -726,7 +817,7 @@ private:
     auto checkNeverEqual(const TypePtr& lhs, const TypePtr& rhs, SourceLocation loc) -> void;
     // Whether `value` is an atom literal that `expected`, a set of atoms
     // (`:ok | :error`), does not admit (kexhq/kex#641).
-    auto atomOutsideSet(const ast::Expr& value, const TypePtr& expected) const -> bool;
+    auto literalOutsideSet(const ast::Expr& value, const TypePtr& expected) const -> bool;
     auto inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr& right, SourceLocation loc)
         -> TypePtr;
 
@@ -747,11 +838,28 @@ private:
         // A call with neither node (`&.to(Float)`): its arguments,
         // receiver slot first when `isMethodCall`.
         const std::vector<const ast::Expr*>* argumentExprs = nullptr) -> TypePtr;
+    auto checkCallCore(
+        const std::string& name,
+        const std::vector<TypePtr>& argTypes,
+        SourceLocation loc,
+        bool isMethodCall,
+        const ast::MethodCall* methodCall,
+        const ast::Expr* callExpr,
+        const std::vector<const ast::Expr*>* argumentExprs) -> TypePtr;
+    // The one concrete result every function `name` may reach at `arity`
+    // declares (`showValue` is a String whatever it is called on), or null.
+    auto commonCandidateResult(const std::string& name, const std::vector<TypePtr>& argTypes)
+        -> TypePtr;
     auto argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool;
     // Whether `value` is a literal written straight into a distinct type it
     // backs: `1` as a `BookId`, `"t1"` as a `TeamId`, `[1, 2]` as `[BookId]`.
     // Fresh where the type is in view, so it needs no `.as`.
     auto literalCoercesTo(const ast::Expr& value, const TypePtr& target) const -> bool;
+    // Records the integer literals in `value` that `target` takes as floats
+    // (decision 2: `let x: Float = 1`), for both backends to emit as floats.
+    // Called only where the target is final: literalCoercesTo is also asked
+    // while overloads are still being chosen, and must stay a question.
+    auto noteFloatLiteral(const ast::Expr& value, const TypePtr& target) -> void;
     // Whether `send`/`sendFrom` on this receiver is process messaging. A
     // user type with its own `send` (a WebSocket `Connection`, say) goes
     // through ordinary overload resolution instead (kexhq/kex#398).
@@ -810,6 +918,7 @@ private:
     friend auto findCompileTimeIntrinsic(std::string_view, std::size_t)
         -> const CompileTimeIntrinsic*;
     auto checkAs(const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
+    auto checkIs(const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
     auto checkTypeReturnedBy(const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
     auto checkTypeOf(const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
     // Who owns a method call once the overload rules chose its winner — the
@@ -927,6 +1036,10 @@ private:
     auto labelLast(std::string primary, SourceLocation other, std::string otherLabel) -> void;
     // The expression a clause answers with: its last, through a `return`.
     static auto resultExpressionOf(const ast::FunctionClause& clause) -> const ast::Expr*;
+    // A conditional without `else` (`if … end`, `x if cond`): allowed as a
+    // statement, but it has no value, so a place that needs one reports
+    // IfWithoutElseHasNoValue instead of a Void mismatch (#809).
+    static auto hasNoValue(const ast::Expr* expr) -> bool;
     // True, and the check is left until the body answers, when `actual` is a
     // make-block method's result its body has not decided yet
     // (m_pendingResults): `main` above the make block cannot know it.
@@ -1062,6 +1175,17 @@ private:
     // Each trait's default definitions, by trait identity: a type implementing
     // the trait has them as its own methods (registerMakeSignature).
     std::unordered_map<std::string, std::vector<const ast::FunctionDef*>> m_traitDefaults;
+    // A trait default written with its requirement (`into : F<A> -> (A -> F<B>)
+    // -> F<B>` beside `let into(f) = ...`), by trait and name: the declaration
+    // types each implementor's copy, its `F<A>` being the implementing type.
+    std::map<std::pair<std::string, std::string>, const ast::TypeAnnotation*>
+        m_traitDefaultDeclarations;
+    // `signature`, whose receiver is a constructor applied (`F<A>`), at the
+    // implementing type (`[X]`, `Box`): `F` its constructor and the
+    // receiver's letters its arguments throughout. None when it is no such
+    // signature.
+    auto atImplementingType(Signature signature, const TypePtr& implementingType)
+        -> std::optional<Signature>;
     // An inherited default's result, per implementing type, left for the
     // trait's body to answer: that type, and the result's variable.
     std::unordered_multimap<const ast::FunctionClause*, std::pair<TypePtr, int>>
@@ -1088,6 +1212,8 @@ private:
     std::unordered_map<const ast::Expr*, std::string> m_calledFunctions;
     // The module constant each bare name names, as resolved in its scope.
     std::unordered_map<const ast::Expr*, std::string> m_referencedConstants;
+    // Integer literals a Float takes (noteFloatLiteral).
+    std::unordered_set<const ast::Expr*> m_floatLiterals;
     std::unordered_map<const ast::RecordPattern*, std::string> m_recordPatterns;
     std::unordered_map<const ast::TypeExpr*, std::string> m_annotatedRecords;
     // Every declared type (record or not) a written type name means.
@@ -1118,6 +1244,8 @@ private:
     // written names already reported.
     bool m_reportUnknownTypes = true;
     std::unordered_set<const ast::TypeName*> m_reportedUnknownTypes;
+    // Type splices already reported outside a generated declaration (KEXEC-0058).
+    std::unordered_set<const ast::TypeExpr*> m_reportedTypeSplices;
     bool m_declarationsRegistered = false;
     std::vector<std::pair<const ast::TypeName*, SourceLocation>> m_pendingUnknownTypes;
     std::unordered_map<std::string, std::string> m_typeDeclaringModules;
@@ -1240,13 +1368,34 @@ private:
     // registered ADT constructor.
     auto siblingConstructorJoin(const TypePtr& a, const TypePtr& b) const -> TypePtr;
     // The type a collection's elements so far (`joined`) and the next one
-    // (`next`) share: an undetermined one adopts the other, two that match or
-    // share a trait or an ADT join. Two that do not are reported as `code` with
-    // `joined` kept (a list's elements), or with no `code` widen to an unknown
-    // (a map's keys and values, which may be data of several types).
-    auto joinElementType(
-        TypePtr joined, const TypePtr& next, std::optional<diag::Code> code, SourceLocation loc)
-        -> TypePtr;
+    // (`next`) share, for a list's elements and a map's keys and values: an
+    // undetermined one adopts the other, a function type is kept as it is, and
+    // anything else goes through joinBranchType, so `[1, "a"]` is
+    // `[Integer | String]`. No trait is ever picked as the joined type
+    // (docs/typechecker-hm-plan.md, decision 3): a trait type is only written.
+    auto joinElementType(TypePtr joined, const TypePtr& next) -> TypePtr;
+    // `a | b`, flattened and without duplicates.
+    static auto unionOf(const TypePtr& a, const TypePtr& b) -> TypePtr;
+    // The one join for conditional branches and list elements (§4.5 rule 3):
+    // a branch that never returns drops out, an undetermined side adopts the
+    // other, sibling constructors join into their ADT, of two that fit the
+    // wider one wins (whichever comes first), Void beside a value has no
+    // value, and anything else joins into the union.
+    auto joinBranchType(const TypePtr& joined, const TypePtr& next) const -> TypePtr;
+    // A conditional's or a match's branches: each branch's type, and where
+    // its value comes from (for an error at that branch).
+    struct Branch {
+        TypePtr type;
+        SourceLocation location;
+    };
+    // With `expected` (a declared result, a typed `let`), each branch is
+    // checked against it and a wrong one is reported at that branch; the
+    // result is `expected`. Without, the branches join (joinBranchType).
+    auto joinBranches(const std::vector<Branch>& branches, const TypePtr& expected) -> TypePtr;
+    // The type a conditional's branches are checked against: the one expected
+    // of it, unless that is Void. A Void result discards the value, so the
+    // conditional is a statement there and its branches may produce anything.
+    auto branchCheckTarget(const TypePtr& expected) const -> TypePtr;
     // The ADT owning the nullary constructor a NamedType spells, or nullptr.
     // A name that is itself a declared type is that type, never a constructor
     // singleton that happens to share its spelling.
@@ -1303,6 +1452,12 @@ private:
     // The records the checked program itself declares, as opposed to the
     // imported ones seeded into m_recordFields from interfaces.
     std::unordered_set<std::string> m_programRecords;
+    std::unordered_map<const ast::MakeDef*, MakeConformance> m_makeConformances;
+    // The bounds of the `make` block whose bodies are being checked (#651).
+    TypeArgBounds m_currentMakeBounds;
+    // The positions the current `make` target leaves open (`make Tagged<_, E>`),
+    // which `This<B>` fills.
+    std::vector<std::size_t> m_currentMakeHoles;
     // This program's distinct types, by name and by qualified name.
     std::unordered_set<std::string> m_programDistinctTypes;
     // Type variables standing for unannotated FUNCTION PARAMETERS. The
@@ -1334,6 +1489,37 @@ private:
     // The calls of m_demandedCalls whose argument lacks what the function
     // calls on it.
     auto reportUnmetDemands() -> void;
+    // Decision 1: an unannotated function is checked at each call, with the
+    // types that call passes. Its body is checked once with fresh variables
+    // (checkFunctionDef); this checks a copy of it again for each distinct
+    // set of argument types a call settles, keeping only the errors and
+    // leaving every answer as the first check gave it.
+    auto checkUnannotatedCalls(const ast::Program& program) -> void;
+    // Decision 1 at the call: the function a call reaches, when it is one
+    // checked per call, and the type its body has for these arguments.
+    auto unannotatedFunction(const std::string& name) -> const ast::FunctionDef*;
+    auto settledArguments(const ast::FunctionDef& def, const std::vector<TypePtr>& argTypes)
+        -> std::optional<std::vector<TypePtr>>;
+    struct BodyCheck {
+        TypePtr type;
+        std::vector<Diagnostic> diagnostics;
+        std::vector<DemandedCall> calls;
+    };
+    auto checkBodyAt(const ast::FunctionDef& def, const std::vector<TypePtr>& arguments)
+        -> BodyCheck;
+    auto callResultAt(const std::string& name, const std::vector<TypePtr>& argTypes) -> TypePtr;
+    auto traitParameter(const ast::Param& param) const -> bool;
+    auto traitResultFunction(const std::string& name) -> const ast::FunctionDef*;
+    const ast::Program* m_checkedProgram = nullptr;
+    bool m_unannotatedFunctionsReady = false;
+    std::unordered_map<std::string, const ast::FunctionDef*> m_unannotatedFunctions;
+    std::unordered_map<std::string, TypePtr> m_callResults;
+    std::set<std::string> m_bodiesInProgress;
+    // The copies those checks ran on: kept, so no later node reuses an
+    // address a table still names.
+    std::vector<std::unique_ptr<ast::FunctionDef>> m_callChecks;
+    // Drops what checking `copy` recorded for its nodes.
+    auto forgetAnswers(const ast::FunctionDef& copy) -> void;
     // Fields without a default whose declared type is not Optional.
     std::unordered_map<std::string, std::unordered_set<std::string>> m_requiredRecordFields;
     auto registerRecordFields(const ast::Program& program, bool namesOnly = false) -> void;
@@ -1431,6 +1617,55 @@ private:
     // Receiver-aware signatures declared inside `make T do` blocks. Their
     // first parameter is the implicit receiver, matching UFCS call checking.
     std::unordered_map<std::string, std::vector<Signature>> m_methodSignatures;
+    // The requirements of higher-kinded traits (`map` on any `F<A>`, §8.2), by
+    // name: the candidates for a receiver whose head is still a variable, and
+    // for nothing else.
+    std::unordered_map<std::string, std::vector<Signature>> m_higherKindedRequirements;
+    // The type variables of the clause whose body is being checked, by letter:
+    // `A` in `A.identity` (§12 step 7).
+    std::unordered_map<std::string, TypePtr> m_bodyTypeVars;
+    // Calls through a bounded type variable, and the letter each goes through.
+    std::unordered_map<const ast::Expr*, std::string> m_typeVariableReceivers;
+    // `method` through the type variable `variable` (its bound placeholder):
+    // the bound trait's requirement at that type, or none.
+    auto boundTypeCall(const TypePtr& variable, const ast::MethodCall& call) -> TypePtr;
+    // `List.wrap(1)`: a receiverless requirement of a trait over constructors,
+    // called on a type named by its constructor; null when it is not one.
+    auto namedConstructorCall(
+        const std::string& name, const ast::Expr& expr, const ast::MethodCall& call) -> TypePtr;
+    // A call whose receiver is a type, not a value (`A.identity`, `List.wrap(1)`):
+    // dispatched on the type, through the prelude's dispatcher for the name,
+    // which takes a type's atom.
+    auto answerThroughTypeDispatcher(const ast::Expr& expr, const ast::MethodCall& call) -> void;
+    // The functions that need their bounded types passed, each with its letters
+    // in order, and what every call of one passes.
+    std::unordered_map<const ast::FunctionDef*, std::vector<std::string>> m_typeParameters;
+    std::unordered_map<const ast::Expr*, std::vector<TypeArgument>> m_typeArguments;
+    // The same by the method call node, which lowering holds.
+    std::unordered_map<const ast::MethodCall*, std::vector<TypeArgument>> m_methodTypeArguments;
+    // What each call of a function known by its interface bound its letters to.
+    std::unordered_map<const ast::Expr*, std::vector<std::pair<std::string, TypePtr>>>
+        m_importedTypeBindings;
+    auto recordTypeArguments(const ast::Program& program) -> void;
+
+public:
+    auto typeParameters() const
+        -> const std::unordered_map<const ast::FunctionDef*, std::vector<std::string>>& {
+        return m_typeParameters;
+    }
+    auto typeArguments() const
+        -> const std::unordered_map<const ast::Expr*, std::vector<TypeArgument>>& {
+        return m_typeArguments;
+    }
+    auto methodTypeArguments() const
+        -> const std::unordered_map<const ast::MethodCall*, std::vector<TypeArgument>>& {
+        return m_methodTypeArguments;
+    }
+    auto typeVariableReceivers() const -> const std::unordered_map<const ast::Expr*, std::string>& {
+        return m_typeVariableReceivers;
+    }
+
+private:
     // Protocol entry names declared with `slot`, used to recognize the
     // compiler-owned `within:` call option on a Server<X> receiver.
     std::unordered_set<std::string> m_slotMethodNames;
@@ -1515,6 +1750,13 @@ private:
     // Record that TypeVar `id` equals `concrete`.
     // No-op if `id` already has a binding (first writer wins).
     auto unifyVar(int id, TypePtr concrete) -> void;
+    // HM unification: binds inference variables so `a` and `b` are one type,
+    // or binds nothing and answers false.
+    // `bindRight`: whether variables in `b` may be bound too; at a call they
+    // are the callee's own, and only the argument's are the call's to bind.
+    auto unify(const TypePtr& a, const TypePtr& b, bool bindRight = true) -> bool;
+    bool m_unifyBindsRight = true;
+    auto unifyStep(const TypePtr& a, const TypePtr& b) -> bool;
     auto fixNestedVariables(const TypePtr& argument, const TypePtr& parameter) -> void;
     auto resolvedThroughout(const TypePtr& type) const -> TypePtr;
 
@@ -1525,7 +1767,17 @@ private:
     // per-signature generic placeholders (negative ids) that call sites
     // already instantiate afresh. See the definition for why this is the
     // whole of the fix.
-    auto generalizeSignature(Signature& signature, int varMark) -> void;
+    //
+    // With `body` (the type a checked function's body answers), it also ties
+    // a bare trait written as the result to the one parameter written with
+    // the same trait (docs/typechecker-hm-plan.md, decision 4), when the body
+    // answers that parameter's own type or cannot be checked (an intrinsic).
+    // With `declared`, a declared contract (`sum :> Number`, `f : Number ->
+    // Number`) ties it the same way: its body is checked against the tied result
+    // afterwards, which is what keeps it sound.
+    auto generalizeSignature(
+        Signature& signature, int varMark, const TypePtr& body = nullptr, bool declared = false)
+        -> void;
     // The make target's own variables (the `D` of `make Qty<D>`: the free
     // variables of `receiver`) in a signature, as per-call generics: shared
     // across the block, the first call bound them for every other. Only

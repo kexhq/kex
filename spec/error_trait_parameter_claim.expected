@@ -1,0 +1,12 @@
+spec/error_trait_parameter_claim.kex:26:56: [KEXET-0001]: Error, type mismatch: expected String?, got Char?
+   |
+26 |   let first: String? = Word { text: "hey" }.firstWhere { |c| c == 'e' }
+   |              -------   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this has type Char?
+   |              |
+   |              expected because of this annotation
+spec/error_trait_parameter_claim.kex:27:36: [KEXET-0001]: Error, type mismatch: expected Integer?, got Char?
+   |
+27 |   let found: Integer? = "hey".find { |c| c == 'e' }
+   |              --------   ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this has type Char?
+   |              |
+   |              expected because of this annotation

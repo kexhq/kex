@@ -20,15 +20,62 @@
 #   10.downTo(8).items    # => [10, 9, 8]
 #   (1..4).reverse.items  # => [4, 3, 2, 1]
 #
-# It is +Enumerable+ and +Foldable+, so the traversal functions work directly,
-# and the list operations below answer in list terms. Use +items+ when you
-# want a real list to hand to something else.
+# A range of Integers or Chars (a +Discrete+ type) is +Enumerable+ and
+# +Foldable+, so the traversal functions work directly, and the list
+# operations below answer in list terms. A Float range is not: it has
+# +contains?+ only. Use +items+ when you want a real list to hand to something
+# else.
 #
 #   (1..10).items.filter(~even?)   # => [2, 4, 6, 8, 10]
 #   (1..3).items.each { |n| IO.printLine(n) }
 type Range<A>
 
-make Range<A>, implement: Enumerable, Foldable do
+# The element types whose values can be walked one after another, so a
+# range of them can be enumerated: Integer and Char. A Float range has
+# bounds and no next value, so it has +contains?+ and none of the traversal
+# functions (+(0.0..1.0).sum+ is a type error, not a run-time one).
+trait Discrete do
+end
+
+make Integer, implement: Discrete do
+end
+
+make Char, implement: Discrete do
+end
+
+# What any range answers from its endpoints alone, a Float range too.
+make Range<A> do
+  # Returns +true+ when +value+ lies between the endpoints, both included.
+  #
+  # Only the endpoints are compared: nothing is enumerated, so this is cheap
+  # for a range of any size and works for a continuous +Float+ range too. A
+  # range whose lower endpoint exceeds its upper endpoint contains nothing.
+  # A stepped range contains only the values its step reaches.
+  #
+  # @param value [A] the value to test
+  # @return [Bool] +true+ when the value is in range
+  #
+  # @example
+  #   (1..10).contains?(5)          # => true
+  #   (1..10).contains?(11)         # => false
+  #   (0.0..1.0).contains?(0.25)    # => true
+  #   ('a'..'f').contains?('c')     # => true
+  #   (1..10).by(3).contains?(7)    # => true
+  #   (1..10).by(3).contains?(8)    # => false
+  contains? :> A -> Bool
+  let contains?(value) do
+    if Kex.Intrinsic.Range.step(this) == 1
+      let (lo, hi) = Kex.Intrinsic.Range.bounds(this)
+      value >= lo && value <= hi
+    else
+      Kex.Intrinsic.Range.member(this, value)
+    end
+  end
+end
+
+# Walking a range takes an element type with a next value: these exist for
+# ranges of a +Discrete+ type only.
+make A is Discrete => Range<A>, implement: Enumerable, Foldable<A> do
   # Folds over the range's elements in order.
   #
   # This is +Range+'s +Enumerable+ primitive; the traversal functions are built
@@ -99,33 +146,6 @@ make Range<A>, implement: Enumerable, Foldable do
   # @example
   #   (1..5).product   # => 120   (five factorial)
   let product = this.reduce(1) { |acc, n| acc * n }
-
-  # Returns +true+ when +value+ lies between the endpoints, both included.
-  #
-  # Only the endpoints are compared: nothing is enumerated, so this is cheap
-  # for a range of any size and works for a continuous +Float+ range too. A
-  # range whose lower endpoint exceeds its upper endpoint contains nothing.
-  # A stepped range contains only the values its step reaches.
-  #
-  # @param value [A] the value to test
-  # @return [Bool] +true+ when the value is in range
-  #
-  # @example
-  #   (1..10).contains?(5)          # => true
-  #   (1..10).contains?(11)         # => false
-  #   (0.0..1.0).contains?(0.25)    # => true
-  #   ('a'..'f').contains?('c')     # => true
-  #   (1..10).by(3).contains?(7)    # => true
-  #   (1..10).by(3).contains?(8)    # => false
-  contains? :> A -> Bool
-  let contains?(value) do
-    if Kex.Intrinsic.Range.step(this) == 1
-      let (lo, hi) = Kex.Intrinsic.Range.bounds(this)
-      value >= lo && value <= hi
-    else
-      Kex.Intrinsic.Range.member(this, value)
-    end
-  end
 
   # Returns the range enumerated by +step+ from its first endpoint towards
   # its last, instead of by 1. The sign of +step+ is the direction: a

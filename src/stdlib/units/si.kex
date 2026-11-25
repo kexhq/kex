@@ -207,20 +207,25 @@ compiled do
     ("micro", 0.000001, "μ"),
     ("nano", 0.000000001, "n")
   ]
-  # One line per unit, so each prefixed constructor says its dimension: a
-  # template cannot splice a type, only a name.
+  # Each unit with the dimension its prefixed constructors answer, spelled
+  # as the type the splice writes (a dimension named here is its record).
+  let units = [
+    ("meter", Meter, "Quantity.Length"),
+    ("gram", Gram, "Quantity.Mass"),
+    ("kelvin", Kelvin, "Quantity.Temperature"),
+    ("liter", Liter, "Quantity.Volume"),
+    ("newton", Newton, "Quantity.Force"),
+    ("joule", Joule, "Quantity.Energy"),
+    ("watt", Watt, "Quantity.Power"),
+    ("volt", Volt, "Quantity.Voltage"),
+    ("ampere", Ampere, "Quantity.Current"),
+    ("ohm", Ohm, "Quantity.Resistance"),
+    ("coulomb", Coulomb, "Quantity.Charge")
+  ]
   prefixes.each do |prefixName, factor, notation|
-    let %{prefixName + "meter"}(value: Number) -> Measure<Quantity.Length> = prefixedMeasure(value, factor, notation, Meter)
-    let %{prefixName + "gram"}(value: Number) -> Measure<Quantity.Mass> = prefixedMeasure(value, factor, notation, Gram)
-    let %{prefixName + "kelvin"}(value: Number) -> Measure<Quantity.Temperature> = prefixedMeasure(value, factor, notation, Kelvin)
-    let %{prefixName + "liter"}(value: Number) -> Measure<Quantity.Volume> = prefixedMeasure(value, factor, notation, Liter)
-    let %{prefixName + "newton"}(value: Number) -> Measure<Quantity.Force> = prefixedMeasure(value, factor, notation, Newton)
-    let %{prefixName + "joule"}(value: Number) -> Measure<Quantity.Energy> = prefixedMeasure(value, factor, notation, Joule)
-    let %{prefixName + "watt"}(value: Number) -> Measure<Quantity.Power> = prefixedMeasure(value, factor, notation, Watt)
-    let %{prefixName + "volt"}(value: Number) -> Measure<Quantity.Voltage> = prefixedMeasure(value, factor, notation, Volt)
-    let %{prefixName + "ampere"}(value: Number) -> Measure<Quantity.Current> = prefixedMeasure(value, factor, notation, Ampere)
-    let %{prefixName + "ohm"}(value: Number) -> Measure<Quantity.Resistance> = prefixedMeasure(value, factor, notation, Ohm)
-    let %{prefixName + "coulomb"}(value: Number) -> Measure<Quantity.Charge> = prefixedMeasure(value, factor, notation, Coulomb)
+    units.each do |unitName, unit, dimension|
+      let %{prefixName + unitName}(value: Number) -> Measure<%{dimension}> = prefixedMeasure(value, factor, notation, unit)
+    end
   end
 end
 
@@ -274,7 +279,7 @@ make Measure do
 
   private do
     # The measure in a unit of `factor`, or None across dimensions.
-    let rescaled(factor: Float, kind: Atom, symbol: String) -> Measure? do
+    let rescaled(factor: Float, kind: Atom, symbol: String) -> This? do
       return None if this.kind != kind
       return Just(Measure {
         canonical: this.canonical,
@@ -290,9 +295,8 @@ make Measure do
     # prefix factor is exactly representable in binary, so the quotient lands an
     # ulp or two off (5.000000000000001). Round back to 15 significant digits,
     # comfortably inside a double's ~15.95, so prefixed measures read the way
-    # they were written. The result is always a Float; the annotation says
-    # Number because `Integer / Float` infers Integer.
-    let prefixScaled(factor: Float) -> Number do
+    # they were written.
+    let prefixScaled(factor: Float) -> Float do
       let raw: Float = this.canonical / factor
       return raw if raw == 0.0
       # Scaling past the exponent range would overflow to infinity; nothing that
@@ -310,87 +314,98 @@ make Measure do
   end
 end
 
-# Divides one measure by another, naming the resulting dimension.
+# Products and quotients of measures, by dimension.
 #
-# The spelled-out form of +/+: +100.meter.per(10.second)+ and
-# +100.meter / 10.second+ are the same call. Metres over seconds is speed, energy
-# over time is power, force over area is pressure: the dimension table
-# decides, and the symbol follows it.
-#
-# @param measure [Measure] the numerator
-# @param other [Measure] the denominator
-# @return [Measure] the quotient, in its derived unit
-#
-# @example
-#   100.meter.per(10.second).to(String)   # => Just("10.0 m/s")
-per : Measure -> Measure -> Measure
-let per(measure: Measure, other: Measure) = divideMeasures(measure, other)
-
-# Multiplies one measure by another, naming the resulting dimension.
-#
-# The spelled-out form of +*+. Force times distance is energy, voltage times
-# current is power, power times time is energy.
-#
-# @param measure [Measure] the first factor
-# @param other [Measure] the second factor
-# @return [Measure] the product, in its derived unit
+# Each is declared with the dimension it answers, so the checker knows it:
+# `2.newton * 3.meter` is a `Measure<Quantity.Energy>`, and a product that
+# makes no dimension here (`2.meter * 3.second`) is a type error rather than a
+# measure of the wrong kind. The display unit is the value's own, chosen when
+# it runs (`6.0 J`, `10.0 m/s`). `times` and `per` are the spelled-out forms
+# of `*` and `/`: `100.meter.per(10.second)` is `100.meter / 10.second`.
+# A dimension of your own takes its products the same way, in its own module
+# (docs/typechecker-hm-plan.md §8.1).
 #
 # @example
-#   2.newton.times(3.meter).to(String)   # => Just("6.0 J")
-#   (12.volt * 2.ampere).to(String)      # => Just("24.0 W")
-times : Measure -> Measure -> Measure
-let times(measure: Measure, other: Measure) = multiplyMeasures(measure, other)
+#   (2.newton * 3.meter).to(String)         # => Just("6.0 J")
+#   (100.meter / 10.second).to(String)      # => Just("10.0 m/s")
+#   100.meter.per(10.second).to(String)     # => Just("10.0 m/s")
+#   (12.volt * 2.ampere).to(String)         # => Just("24.0 W")
+#   (40.meter * 51.meter).to(String)        # => Just("2040.0 m^2")
+#   (2.meter * (3.meter * 4.meter)).to(String)   # => Just("24.0 m^3")
+make Measure<Quantity.Mass> do
+  let *(other: Measure<Quantity.Acceleration>) -> Measure<Quantity.Force> = multiplyMeasures(this, other)
+  let times(other: Measure<Quantity.Acceleration>) -> Measure<Quantity.Force> = this * other
+end
 
-make Measure do
-  let *(other: Measure) -> Measure = this.product(other)
-  let /(other: Measure) -> Measure = this.quotient(other)
+make Measure<Quantity.Acceleration> do
+  let *(other: Measure<Quantity.Mass>) -> Measure<Quantity.Force> = multiplyMeasures(other, this)
+  let times(other: Measure<Quantity.Mass>) -> Measure<Quantity.Force> = this * other
+end
 
-  private do
-    let product(other) -> Measure do
-      let kind = this.productKind(this.kind, other.kind)
-      let symbol = this.productSymbol(kind, this.symbol, other.symbol)
-      let value = this.canonical * other.canonical
-      return Measure { canonical: value, value: value,
-        unit: UnitDefinition { conversionFactor: 1.0, dimension: kind, notation: symbol } }
-    end
+make Measure<Quantity.Force> do
+  let *(other: Measure<Quantity.Length>) -> Measure<Quantity.Energy> = multiplyMeasures(this, other)
+  let times(other: Measure<Quantity.Length>) -> Measure<Quantity.Energy> = this * other
+  let /(other: Measure<Quantity.Length>) -> Measure<Quantity.Pressure> = divideMeasures(this, other)
+  let per(other: Measure<Quantity.Length>) -> Measure<Quantity.Pressure> = this / other
+end
 
-    let quotient(other) -> Measure do
-      let kind = this.quotientKind(this.kind, other.kind)
-      let symbol = this.quotientSymbol(kind, this.symbol, other.symbol)
-      let value = this.canonical / other.canonical
-      return Measure { canonical: value, value: value,
-        unit: UnitDefinition { conversionFactor: 1.0, dimension: kind, notation: symbol } }
-    end
+make Measure<Quantity.Length> do
+  let *(other: Measure<Quantity.Force>) -> Measure<Quantity.Energy> = multiplyMeasures(other, this)
+  let times(other: Measure<Quantity.Force>) -> Measure<Quantity.Energy> = this * other
+  let *(other: Measure<Quantity.Length>) -> Measure<Quantity.Area> = multiplyMeasures(this, other)
+  let times(other: Measure<Quantity.Length>) -> Measure<Quantity.Area> = this * other
+  let *(other: Measure<Quantity.Area>) -> Measure<Quantity.Volume> = multiplyMeasures(this, other)
+  let times(other: Measure<Quantity.Area>) -> Measure<Quantity.Volume> = this * other
+  let /(other: Measure<Quantity.Time>) -> Measure<Quantity.Speed> = divideMeasures(this, other)
+  let per(other: Measure<Quantity.Time>) -> Measure<Quantity.Speed> = this / other
+end
 
-    let productKind(:mass, :acceleration) = :force
-    let productKind(:force, :length) = :energy
-    let productKind(:voltage, :current) = :power
-    let productKind(:current, :resistance) = :voltage
-    let productKind(:power, :time) = :energy
-    let productKind(:current, :time) = :charge
-    let productKind(left, _) = left
+make Measure<Quantity.Area> do
+  let *(other: Measure<Quantity.Length>) -> Measure<Quantity.Volume> = multiplyMeasures(this, other)
+  let times(other: Measure<Quantity.Length>) -> Measure<Quantity.Volume> = this * other
+end
 
-    let quotientKind(:length, :time) = :speed
-    let quotientKind(:speed, :time) = :acceleration
-    let quotientKind(:energy, :time) = :power
-    let quotientKind(:force, :length) = :pressure
-    let quotientKind(:voltage, :current) = :resistance
-    let quotientKind(left, _) = left
+make Measure<Quantity.Speed> do
+  let /(other: Measure<Quantity.Time>) -> Measure<Quantity.Acceleration> = divideMeasures(this, other)
+  let per(other: Measure<Quantity.Time>) -> Measure<Quantity.Acceleration> = this / other
+end
 
-    let productSymbol(:force, _, _) = "N"
-    let productSymbol(:energy, _, _) = "J"
-    let productSymbol(:power, _, _) = "W"
-    let productSymbol(:voltage, _, _) = "V"
-    let productSymbol(:charge, _, _) = "C"
-    let productSymbol(_, left, right) = "${left}·${right}"
+make Measure<Quantity.Voltage> do
+  let *(other: Measure<Quantity.Current>) -> Measure<Quantity.Power> = multiplyMeasures(this, other)
+  let times(other: Measure<Quantity.Current>) -> Measure<Quantity.Power> = this * other
+  let /(other: Measure<Quantity.Current>) -> Measure<Quantity.Resistance> = divideMeasures(this, other)
+  let per(other: Measure<Quantity.Current>) -> Measure<Quantity.Resistance> = this / other
+end
 
-    let quotientSymbol(:speed, left, _) = "${left}/s"
-    let quotientSymbol(:acceleration, left, _) = "${left}/s"
-    let quotientSymbol(:power, _, _) = "W"
-    let quotientSymbol(:pressure, _, _) = "Pa"
-    let quotientSymbol(:resistance, _, _) = "Ω"
-    let quotientSymbol(_, left, right) = "${left}/${right}"
-  end
+make Measure<Quantity.Current> do
+  let *(other: Measure<Quantity.Voltage>) -> Measure<Quantity.Power> = multiplyMeasures(other, this)
+  let times(other: Measure<Quantity.Voltage>) -> Measure<Quantity.Power> = this * other
+  let *(other: Measure<Quantity.Resistance>) -> Measure<Quantity.Voltage> = multiplyMeasures(this, other)
+  let times(other: Measure<Quantity.Resistance>) -> Measure<Quantity.Voltage> = this * other
+  let *(other: Measure<Quantity.Time>) -> Measure<Quantity.Charge> = multiplyMeasures(this, other)
+  let times(other: Measure<Quantity.Time>) -> Measure<Quantity.Charge> = this * other
+end
+
+make Measure<Quantity.Resistance> do
+  let *(other: Measure<Quantity.Current>) -> Measure<Quantity.Voltage> = multiplyMeasures(other, this)
+  let times(other: Measure<Quantity.Current>) -> Measure<Quantity.Voltage> = this * other
+end
+
+make Measure<Quantity.Power> do
+  let *(other: Measure<Quantity.Time>) -> Measure<Quantity.Energy> = multiplyMeasures(this, other)
+  let times(other: Measure<Quantity.Time>) -> Measure<Quantity.Energy> = this * other
+end
+
+make Measure<Quantity.Time> do
+  let *(other: Measure<Quantity.Power>) -> Measure<Quantity.Energy> = multiplyMeasures(other, this)
+  let times(other: Measure<Quantity.Power>) -> Measure<Quantity.Energy> = this * other
+  let *(other: Measure<Quantity.Current>) -> Measure<Quantity.Charge> = multiplyMeasures(other, this)
+  let times(other: Measure<Quantity.Current>) -> Measure<Quantity.Charge> = this * other
+end
+
+make Measure<Quantity.Energy> do
+  let /(other: Measure<Quantity.Time>) -> Measure<Quantity.Power> = divideMeasures(this, other)
+  let per(other: Measure<Quantity.Time>) -> Measure<Quantity.Power> = this / other
 end
 
 private do
@@ -482,6 +497,17 @@ private do
   let productKind(:current, :resistance) = :voltage
   let productKind(:power, :time) = :energy
   let productKind(:current, :time) = :charge
+  let productKind(:length, :length) = :area
+  let productKind(:length, :area) = :volume
+  let productKind(:area, :length) = :volume
+  # Either order: whichever of a type's `*` clauses runs, the operands'
+  # dimensions decide the product.
+  let productKind(:acceleration, :mass) = :force
+  let productKind(:length, :force) = :energy
+  let productKind(:current, :voltage) = :power
+  let productKind(:resistance, :current) = :voltage
+  let productKind(:time, :power) = :energy
+  let productKind(:time, :current) = :charge
   let productKind(left, _) = left
 
   let quotientKind(:length, :time) = :speed
@@ -496,6 +522,8 @@ private do
   let productSymbol(:power, _, _) = "W"
   let productSymbol(:voltage, _, _) = "V"
   let productSymbol(:charge, _, _) = "C"
+  let productSymbol(:area, _, _) = "m^2"
+  let productSymbol(:volume, _, _) = "m^3"
   let productSymbol(_, left, right) = "${left}·${right}"
 
   let quotientSymbol(:speed, left, _) = "${left}/s"

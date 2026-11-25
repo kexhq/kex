@@ -1,0 +1,35 @@
+# kex: check-only
+# Types the run time cannot tell apart (docs/typechecker-hm-plan.md §14 item 4,
+# decided 2026-11-24: an error). A distinct type and what backs it cannot share
+# a union (KEXET-0512): `BookId | Integer` is an Integer either way. And a
+# distinct type cannot be stored as a trait it implements in its own `make`
+# (KEXET-0513): what dispatches on the stored value later sees the Integer
+# underneath and finds Integer's implementation. A trait-typed parameter is
+# the same, except where the checker shows the value through its own
+# `showValue` (a `Showable` parameter), which both backends honour.
+distinct type BookId = Integer
+
+trait Labeled do
+  label :> String
+end
+
+make BookId, implement: Labeled do
+  let label = "book ${this.as(Integer)}"
+end
+
+make Integer, implement: Labeled do
+  let label = "int ${this}"
+end
+
+let pick(id: BookId | Integer) -> String = "${id}"
+let fine(id: BookId | String) -> String = "${id}"
+let labelOf(value: Labeled) -> String = value.label
+
+main do
+  let id = 7.as(BookId)
+  IO.printLine(labelOf(id))
+  let single: Labeled = id
+  let all: [Labeled] = [id]
+  IO.printLine(single.label)
+  IO.printLine(all.map(&.label).join(", "))
+end

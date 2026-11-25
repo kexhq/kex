@@ -512,7 +512,8 @@ place.
 
 **[F]** `make Type, implement: Trait do` — comma before `implement:`, one space
 after each colon. Multiple traits are comma-separated on one line:
-`make [X], implement: Enumerable, Foldable do`.
+`make [X], implement: Enumerable, Foldable<X> do`. A trait that takes
+parameters is claimed with them, as here.
 
 **[L]** Inside a `make`, reach for the receiver's fields with `@field`, not
 `this.field`. Use `this` only for a whole-receiver reference or to call another
@@ -614,6 +615,19 @@ the checker holds the caller to it (`prefer-trait-param`):
 foul printShape(s: Shape) = ...            # yes — any Shape
 foul printShape(s: Circle) = ...           # no — needlessly narrow
 ```
+
+**[A]** When the arguments must be the same type, or the answer is the
+argument's type, bound a letter instead: `A is Trait =>` before the
+parameters, one type that implements the trait, whichever the call passes.
+A trait-typed parameter takes any implementor, each argument its own:
+
+```kex
+let larger(A is Comparable => a: A, b: A) -> A = ...    # yes — larger(3, 7) is an Integer
+let larger(a: Comparable, b: Comparable) -> Comparable  # no — 3 and "x" would pass
+```
+
+The bound is written once, right after the opening parenthesis (or the
+`make`), and `&` joins traits there too: `A is Showable & Comparable =>`.
 
 **[A]** Two capabilities at once is an intersection: `A & B` means a value
 satisfying both, and it means the same thing in a parameter, a return, a field,

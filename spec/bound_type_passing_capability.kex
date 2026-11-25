@@ -1,0 +1,36 @@
+# Both implicit arguments at once (docs/typechecker-hm-plan.md §12 step 7): a
+# foul bounded function is passed its type (`A.identity`) and the capability
+# context (`Clock.now()`), in one order for a definition and a call alike, so
+# a `with` substitution still reaches it.
+
+capability Clock do
+  foul now() -> Integer = 5
+end
+
+record Purse do
+  coins : Integer
+end
+
+make Purse, implement: Monoid do
+  let identity -> Purse = Purse { coins: 0 }
+  let combine(other: Purse) -> Purse = Purse { coins: @coins + other.coins }
+end
+
+foul stamped(A is Monoid => xs: [A]) -> (A, Integer) = (xs.reduce(A.identity) { |acc, x| acc.combine(x) }, Clock.now())
+
+record FrozenClock do
+  at : Integer
+end
+
+make FrozenClock, implement: Clock do
+  foul now() -> Integer = @at
+end
+
+main do
+  let (total, at) = stamped([Purse { coins: 2 }, Purse { coins: 3 }])
+  IO.printLine("${total.coins} at ${at}")
+  with Clock = FrozenClock { at: 42 } do
+    let (again, later) = stamped(["a", "b"])
+    IO.printLine("${again} at ${later}")
+  end
+end

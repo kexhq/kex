@@ -1,0 +1,18 @@
+spec/error_function_bound_unmet.kex:8:23: [KEXET-0491]: Error, `larger` expects argument 1 to be Comparable, but got {String: Integer}
+
+larger : Comparable -> Comparable -> Comparable
+  |
+5 | let larger(A is Comparable => a: A, b: A) -> A = a > b then a else b
+  |                                  - expected because of this parameter
+ ...
+8 |   IO.printLine(larger({"a": 1}, {"b": 2}))
+  |                       ^^^^^^^^ this has type {String: Integer}
+spec/error_function_bound_unmet.kex:9:26: [KEXET-0491]: Error, `larger` expects argument 2 to be Integer, but got String
+
+larger : Comparable -> Comparable -> Comparable
+  |
+5 | let larger(A is Comparable => a: A, b: A) -> A = a > b then a else b
+  |                                        - expected because of this parameter
+ ...
+9 |   IO.printLine(larger(1, "x"))
+  |                          ^^^ this has type String

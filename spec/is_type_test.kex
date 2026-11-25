@@ -1,0 +1,52 @@
+# `value.is?(T)`: whether a value is a `T`, or, for a trait, of a type that
+# implements it. A trait is known by the types that claim it, so
+# `is?(Discrete)` holds for an Integer or a Char and `is?(Foldable)` for
+# whatever a `make` declares Foldable, a user's trait the same way. It answers
+# a Bool and narrows nothing (a `match` with `x : T` does that).
+
+trait Shape do
+  area :> Float
+end
+
+record Circle do
+  radius : Float
+end
+
+record Square do
+  side : Float
+end
+
+record Label do
+  text : String
+end
+
+make Circle, implement: Shape do
+  let area -> Float = 3.0 * @radius * @radius
+end
+
+make Square, implement: Shape do
+  let area -> Float = @side * @side
+end
+
+let describe(v: Any) -> String = [
+  v.is?(String) then "String" else "",
+  v.is?(Integer) then "Integer" else "",
+  v.is?(Number) then "Number" else "",
+  v.is?(Discrete) then "Discrete" else "",
+  v.is?(Foldable) then "Foldable" else "",
+  v.is?(Shape) then "Shape" else "",
+  v.is?(Label) then "Label" else ""
+].filter { |s| !s.empty? }.join(" ")
+
+main do
+  IO.printLine(describe("text"))
+  IO.printLine(describe(42))
+  IO.printLine(describe('c'))
+  IO.printLine(describe(2.5))
+  IO.printLine(describe([1, 2]))
+  IO.printLine(describe(1..3))
+  IO.printLine(describe(Circle { radius: 1.0 }))
+  IO.printLine(describe(Square { side: 2.0 }))
+  IO.printLine(describe(Label { text: "x" }))
+  IO.printLine("[${describe(:atom)}]")
+end

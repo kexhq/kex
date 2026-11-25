@@ -1,7 +1,9 @@
 # kex: check-only
 # A Float range has bounds and no values to walk. `count`, `map`, `sum` and
 # every other walk failed at run time with "Float ranges cannot be
-# enumerated" (kexhq/kex#778); `contains?` and showing it stay.
+# enumerated" (kexhq/kex#778); `contains?` and showing it stay. The stdlib
+# says so itself: the walking functions are declared on `make A is Discrete =>
+# Range<A>`, and a Float is not Discrete.
 
 main do
   IO.printLine((1.0..5.0).count)

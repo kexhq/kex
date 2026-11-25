@@ -275,6 +275,10 @@ trait  true  type  using  var  when  while
 | `Atom` | Symbolic constant (`:ok`) |
 | `None` | The unit/empty value |
 
+A float literal is a `Float`, as an integer literal is an `Integer`. The sized
+names (`Float32`, `Float64`, `Int32`, ...) are for code that needs a width,
+and show in types only where a program writes them.
+
 ### Type Expressions
 
 | Syntax | Meaning |
@@ -286,6 +290,7 @@ trait  true  type  using  var  when  while
 | `[X]` | List type |
 | `{K: V}` | Map type |
 | `A \| B` | Union type |
+| `A & B` | Intersection type: a value that is both |
 | `T?` | Optional sugar — `Optional<T> = Just(T) \| None` |
 | `T or! E` | Result sugar — `Result<T, E> = Ok(T) \| Error(E)` |
 | `A or B` | Either sugar — `Either<A, B> = Left(A) \| Right(B)` |
@@ -293,6 +298,52 @@ trait  true  type  using  var  when  while
 | `Block<P, X>` | Block handed a `P` (`do \|p\| ... end`); the result is written last |
 
 Generic parameters are uppercase single letters: `<A>`, `<A, E>`.
+
+`Any` is the type of every value. Anything can be passed where an `Any` is
+taken, and what can be done with an `Any` is what can be done with every
+value: show it (`"${value}"`, `IO.printLine`), compare it with `==`, convert
+it (`.to(T)`). Anything else needs it narrowed first, with a `match` on its
+type:
+
+```kex
+let describe(value: Any) -> String = match value do
+  text: String => text.upperCase
+  n: Integer   => "number ${n}"
+  _            => "${value}"
+end
+```
+
+`value.upperCase` on an `Any` is an error: it is not defined for every value
+an `Any` may hold.
+
+`value.is?(T)` asks the question without narrowing: a `Bool`, whether the
+value is a `T`, or, when `T` is a trait, of a type that implements it. A
+trait is known by the types a `make` claims it for, so `is?(Discrete)` holds
+for an Integer or a Char:
+
+```kex
+value.is?(String)      # true for "text"
+value.is?(Discrete)    # true for 3 and 'c'
+```
+
+`T` is written as a name, not passed as a value. A trait that holds by a
+type's shape (`Showable`: every value shows) has no such list, so `is?` on it
+is an error; `Number` is tested directly.
+
+An intersection is a value that is every one of its members at once. Of
+traits, it takes any value implementing all of them, and offers what each
+one does:
+
+```kex
+let describe(value: Showable & Comparable) -> String = "${value} ${value > value}"
+
+describe(3)     # an Integer is both
+describe([1])   # error: a list is not Comparable
+```
+
+Of record types, it has every field of each: `{x: Integer} & {y: Integer}` is
+`{x: Integer, y: Integer}`. An overloaded function's type is the
+intersection of its signatures, which is how the checker shows one.
 
 ### Union Types (Algebraic Data Types)
 
@@ -424,6 +475,24 @@ let empty = []
 let consed = [0 | nums]          # prepend → [0, 1, 2, 3, 4, 5]
 ```
 
+Elements of different types make a list of their **union**: every element is
+of that one type, so the list is still homogeneous. Constructors of one ADT
+make a list of that ADT. A trait is never chosen for you: a list of a trait
+type is one you write.
+
+```kex
+let mixed = [1, "a"]                          # [Integer | String]
+let numbers = [1, 2.0]                        # [Integer | Float]
+let shapes = [Circle { r: 1.0 }, Square { s: 2.0 }]   # [Circle | Square]
+let order = [Less, Equal, Greater]            # [Ordering]
+let written: [Shape] = [Circle { r: 1.0 }, Square { s: 2.0 }]
+```
+
+A function every member has works on a union: `shapes.map(&.area)`. Anything
+else is reached through a `match` with type patterns (`n: Integer => …`).
+Where the list's type is expected, each element is checked against it
+instead, so a wrong element is reported where it is.
+
 ### Tuples
 
 Fixed-size, heterogeneous:
@@ -441,6 +510,11 @@ Key-value stores. `{K: V}` is the map type.
 let scores = { alice: 95, bob: 72 }              # atom keys (:alice, :bob)
 let config = { "host": "localhost", "port": 80 }  # string keys
 ```
+
+Keys or values of different types make a map of their union, as list
+elements do: `config` above is a `{String: String | Integer}`, so
+`config.get("port")` is a `(String | Integer)?`, and using it as an `Integer`
+takes a `match`.
 
 ### Sets
 
@@ -704,6 +778,11 @@ count = count + 1 if line.contains?("ERROR")
 break if done
 ```
 
+A trailing conditional is a statement: when its condition is false it produces
+nothing, so it has no value. `let x = 5 if ready?` is an error, and so is one
+as the last line of a function that returns a value. Write both branches with
+`then`/`else` instead.
+
 ---
 
 ## 7. Operators
@@ -747,6 +826,15 @@ if x > 0 then "yes" else "no" end
 if x > 0 then "big" elif x < 0 then "small" else "zero" end
 ```
 
+Every condition, `if` and `elif` alike, must be a `Bool`.
+
+The value of an `if` is the value of the branch that ran. Branches of different
+types give their union, as list elements do (see Lists). An `if` **without
+`else`** has no value, because when no branch runs it produces nothing. As a
+statement that is fine. Where a value is needed (a function's result, a `let`,
+an argument) it is an error: add an `else`. Nothing is wrapped into an optional
+for you. Write `n > 5 then Just(n) else None` when that is what you mean.
+
 ### Then-Else (Ternary)
 
 A standalone ternary expression — no `if`, no `end`. Both branches are required:
@@ -786,6 +874,8 @@ match n do
   _              => "non-positive"
 end
 ```
+
+A guard must be a `Bool`, in a `match` and on a `rescue` arm alike.
 
 A bare `when` (no pattern) acts as a catch-all guarded clause:
 
@@ -1221,6 +1311,29 @@ make [A] do
 end
 ```
 
+### Bounded Make
+
+A bound before the target, closed by `=>`, limits a block to the
+instantiations whose type arguments satisfy it (#651). Its functions apply
+only there, and so does every trait it implements:
+
+```kex
+make A is Discrete => Range<A>, implement: Enumerable, Foldable<A> do
+  # `A` is the element type, as in any `make Range<A>`
+  each :> (A -> Void) -> Void
+  ...
+end
+```
+
+`(1..5).sum` and `('a'..'e').items` work, since Integer and Char are
+`Discrete`. `(0.0..1.0).sum` is a type error (KEXET-0511), and a Float range
+is not `Enumerable`. A block without a bound still applies to every
+instantiation, so `(0.0..1.0).contains?(0.5)` keeps working.
+
+Several variables are bounded with commas, and `&` joins traits on one:
+`make K is Showable & Comparable, V is Showable => Pair<K, V> do`. `is` is a
+bound only in this position, so it is not a reserved word.
+
 ### Final Make
 
 `make final: Type` seals the make block — it cannot be reopened:
@@ -1317,6 +1430,138 @@ Function parameters may be constrained to a trait:
 ```kex
 foul printShape(s: Shape) do
   IO.printLine(s.describe)
+end
+```
+
+Each `s: Shape` is its own type: two such parameters may hold a Circle and a
+Rectangle. To tie positions to one type that satisfies a trait, bound a type
+variable before the parameters with `is`, closed by `=>` (#651):
+
+```kex
+let larger(A is Comparable => a: A, b: A) -> A = a > b then a else b
+
+larger(3, 7)               # => 7, an Integer
+larger("pear", "apple")    # => "pear", a String
+larger(1, "x")             # type error: one A, an Integer and a String
+```
+
+A standalone signature writes the bound the same way, and `&` joins traits
+on one variable:
+
+```kex
+larger : A is Comparable => A -> A -> A
+let show(K is Showable & Comparable, V is Showable => k: K, v: V) -> String = "${k}=${v}"
+```
+
+An unbounded single letter stays implicit: `let identity(a: A) -> A` needs
+no `=>`. A `make` block takes the same bound (Bounded Make, §14).
+
+### Trait Parameters
+
+A trait may take type parameters of its own, which each implementing type
+fills when it claims the trait. The trait's signatures use them like any
+type, and a default written with one answers in what that type filled in:
+
+```kex
+trait Foldable<T> do
+  reduce :> A -> (A -> T -> A) -> A
+  let find(pred) -> T? = ...
+end
+
+make [X], implement: Foldable<X> do ... end
+make String, implement: Foldable<Char> do ... end
+make Map<K, V>, implement: Foldable<(K, V)> do ... end
+
+"hey".find { |c| c == 'e' }      # a Char?
+[1, 2].find { |n| n > 1 }        # an Integer?
+```
+
+A claim written without arguments (`implement: Foldable`) leaves them open.
+
+### Traits Over Type Constructors
+
+A trait may range over a type constructor rather than a type. Its parameter
+writes its holes, `F<_>`, and a requirement names its receiver `F<A>`:
+
+```kex
+trait Functor<F<_>> do
+  fmap : F<A> -> (A -> B) -> F<B>
+end
+
+make Box, implement: Functor do
+  let fmap(f) -> Box<B> = Box { value: f(@value) }
+end
+```
+
+A requirement with no receiver of its own, such as Monad's `wrap : A ->
+F<A>`, is called on the type: by name for a concrete one (`List.wrap(1)` is
+`[1]`, `Optional.wrap(1)` is `Just(1)`), and through the letter in code
+written once for every implementor. That letter is whichever container the
+arguments are, so it must appear in a parameter's type:
+
+```kex
+let incremented(M is Monad => xs: M<Integer>) -> M<Integer> = xs.into { |x| M.wrap(x + 1) }
+
+incremented([1, 2])    # [2, 3]
+incremented(Just(1))   # Just(2)
+```
+
+`Applicable` combines two independent containers: `a.with(b) { |x, y| ... }`
+applies the function to the values of both. A list combines every pair, an
+Optional or a Result the two values or the first failure, and a `Validation`
+(`Valid(T)` or `Invalid([E])`) every value or every failure, which is what
+checking several independent inputs wants:
+
+```kex
+name.checked.with(email.checked) { |n, e| Signup { name: n, email: e } }
+# Invalid(["name is empty", "email has no @"]), not just the first
+```
+
+`traverse` and `sequence` are written once over it: every result gathered,
+or what the container makes of the failures.
+
+```kex
+traverse(["1", "2"]) { |s| s.to(Integer) }   # Just([1, 2])
+sequence([Ok(1), Error("no")])               # Error("no")
+```
+
+`into` is a Monad's bind, what other languages call `flatMap`:
+`xs.into { |x| ... }` applies the block to each value and joins what it answers. A list gives
+every combination, an `Optional` stops at `None`, a `Result` at its first
+`Error`:
+
+```kex
+[1, 2].into { |x| ["a", "b"].into { |y| [(x, y)] } }   # [(1, "a"), (1, "b"), (2, "a"), (2, "b")]
+Just(8).into { |n| n.even? then Just(n / 2) else None }   # Just(4)
+```
+
+`.try` is the early exit for what can fail, usable anywhere.
+
+The holes may be left out: a parameter's kind follows from how the trait's
+signatures apply it, so `trait Functor<F>` with `fmap : F<A> -> ...` is the
+same trait. Its uses must agree; `F<A>` in one signature and a bare `F` in
+another is an error.
+
+A type of two arguments names the one that varies with `_`, and keeps the
+other: `make Tagged<_, E>, implement: Functor`. A function bounded by the
+trait is written once for every such constructor, and `F` is whichever one it
+is called with:
+
+```kex
+let bumped(F is Functor => xs: F<Integer>) -> F<Integer> = xs.fmap { |x| x + 1 }
+
+bumped(Box { value: 1 })               # a Box<Integer>
+bumped(Tagged { item: 1, tag: "t" })   # a Tagged<Integer, String>
+```
+
+Inside a `make` block, `This<B>` is the target applied again: a whole target
+takes new arguments for its own (`make Box`: `This<B>` is `Box<B>`), and a type
+lambda has its holes filled (`make Tagged<_, E>`: `This<B>` is
+`Tagged<B, E>`):
+
+```kex
+make Box, implement: Functor do
+  let fmap(f) -> This<B> = Box { value: f(@value) }
 end
 ```
 
@@ -1789,7 +2034,7 @@ The prelude is loaded automatically. Prelude functions are **sealed** — user c
 can extend types with new functions but cannot redefine prelude functions.
 
 The prelude is built on several core traits. `Enumerable` provides `map`,
-`filter`, `each`, `reduce`, `find`, `any?`, `all?`, `flatMap`, `collect`, and
+`filter`, `each`, `reduce`, `find`, `any?`, `all?`, `into`, `collect`, and
 `count(pred)` to any type that supplies a `reduce`. `Blankable` provides
 `blank?`/`present?`. `Truthyable` provides `truthy?`/`falsy?`.
 
@@ -1844,7 +2089,7 @@ List implements `Enumerable`, `Blankable`. Numeric lists (`[Number]`) have
 | `map(f)` | `(X -> Y) -> [Y]` | |
 | `filter(pred)` | `(X -> Bool) -> [X]` | |
 | `reject(pred)` | `(X -> Bool) -> [X]` | Inverse of filter |
-| `flatMap(f)` | `(X -> [Y]) -> [Y]` | Map + concat |
+| `into(f)` | `(X -> [Y]) -> [Y]` | Map + concat |
 | `each(f)` | `(X -> Unit) -> Unit` | Side-effect loop |
 | `find(pred)` | `(X -> Bool) -> X?` | First match |
 | `any?(pred)`, `all?(pred)` | `(X -> Bool) -> Bool` | Quantifiers |
@@ -1907,7 +2152,7 @@ Either<L, R> = Left(L) | Right(R)   # sugar: L or R
 | `present?` | Same presence test through `Blankable` |
 | `or(default)` | Unwrap or `default` |
 | `map(f)` | `Just(x).map(f) = Just(f(x))`; `None` passes through |
-| `flatMap(f)` | Chain Optional-returning functions |
+| `into(f)` | Chain Optional-returning functions |
 
 **Result:**
 
@@ -1916,7 +2161,7 @@ Either<L, R> = Left(L) | Right(R)   # sugar: L or R
 | `ok?`, `error?` | Variant tests |
 | `or(default)` | Unwrap `Ok` or `default` |
 | `map(f)` | Apply to `Ok` value; `Error` passes through |
-| `flatMap(f)` | Chain Result-returning functions |
+| `into(f)` | Chain Result-returning functions |
 | `toOptional` | `Ok(x)` → `Just(x)`; `Error(_)` → `None` |
 
 **Either:** marker type; no functions beyond construction and pattern matching.
@@ -1936,8 +2181,9 @@ let safeDiv(_, 0) = Error(DivideByZero)   # also catches a 0.0 divisor
 
 Literal patterns follow `==`, so an integer-literal pattern matches an equal
 `Float` scrutinee and vice versa. Anything else would let `1 <= 1.0` and
-`1 >= 1.0` both hold while `1 == 1.0` was false. Collections stay
-homogeneous — `[1, 2.0]` is still a type error.
+`1 >= 1.0` both hold while `1 == 1.0` was false. Arithmetic promotes, but a
+collection does not: `[1, 2.0]` is an `[Integer | Float]` (see Lists), and a
+`Float` is only what was written as one.
 
 **Integer** (implements `Blankable`, `Monoid`, `Group`):
 
@@ -2314,7 +2560,7 @@ Conformances: String, List, Map, Range, Stream.
 ```
 trait Enumerable do
   reduce :> A -> (A -> T -> A) -> A     # required
-  # defaults: map, filter, each, find, any?, all?, flatMap, collect, count(pred)
+  # defaults: map, filter, each, find, any?, all?, into, collect, count(pred)
 end
 ```
 

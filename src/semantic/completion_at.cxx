@@ -238,7 +238,7 @@ auto receiverTypeOf(const Analyzer& analyzer, const ast::Expr* expression) -> Ty
     if (!expression) {
         return nullptr;
     }
-    // `new.age = ...`: the value written, not the assignment's own Unit.
+    // `new.age = ...`: the value written, not the assignment's own Void.
     if (const auto* assignment = std::get_if<ast::AssignExpr>(&expression->kind);
         assignment && !assignment->path.empty()) {
         return analyzer.assignmentTargetTypeOf(expression);

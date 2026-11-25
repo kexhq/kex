@@ -1,0 +1,19 @@
+spec/error_higher_kinded.kex:18:31: [KEXET-0109]: Error, `F` takes 1 type argument, but 2 are given
+   |
+18 | let pair(F is Mappable => xs: F<Integer, String>) -> Integer = 1
+   |                               ^^^^^^^^^^^^^^^^^^
+spec/error_higher_kinded.kex:21:41: [KEXET-0001]: Error, type mismatch: expected Tagged<Integer, Integer>, got Tagged<Integer, String>
+   |
+21 |   let wrong: Tagged<Integer, Integer> = t
+   |              ------------------------   ^ this has type Tagged<Integer, String>
+   |              |
+   |              expected because of this annotation
+spec/error_higher_kinded.kex:22:23: [KEXET-0491]: Error, `bumped` expects argument 1 to be F<Integer>, but got [Integer]
+
+bumped : F<Integer> -> F<Integer>
+   |
+17 | let bumped(F is Mappable => xs: F<Integer>) -> F<Integer> = xs.fmap { |x| x + 1 }
+   |                                 ---------- expected because of this parameter
+  ...
+22 |   IO.printLine(bumped([1, 2]).length)
+   |                       ^^^^^^ this has type [Integer]

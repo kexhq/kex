@@ -22,7 +22,7 @@ struct ImportedFunction {
     std::string sourceName;
     std::string backendFunction;
     // The receiver type its module emitted a per-type implementation of this
-    // method for (`Date`, read from KexiMethod::implementation), or "".
+    // method for (`Date`, read from KexiReceiverFunction::implementation), or "".
     std::string implementationHead;
     std::string backendModule;
     int backendArity = 0;
@@ -48,7 +48,7 @@ struct ImportedFunction {
     // build, as it is in a program checked whole. The standard library's
     // stay behind their `using`.
     bool visibleByReceiver = false;
-    // As KexiMethod::foreignTarget: a `make` for a type its module does not
+    // As KexiReceiverFunction::foreignTarget: a `make` for a type its module does not
     // declare, so never visible by its receiver alone.
     bool foreignTarget = false;
     // A receiver method declared for a type alias (`FS.Path.join` over
@@ -137,6 +137,10 @@ struct ResolvedCallTarget {
 struct ImportedTraitConformance {
     std::string typeName;
     std::string traitName;
+    // Where it holds (#651): type argument positions and their traits.
+    TypeArgBounds bounds;
+    // The positions its type lambda leaves open (KexiTraitConformance::holes).
+    std::vector<std::size_t> holes;
 };
 
 struct ImportedADT {
@@ -200,6 +204,9 @@ struct ImportedInterfaces {
     // name resolution needs, because a bare type name is a legal value in a
     // type-directed call like `xs.to(List)`.
     std::unordered_set<std::string> typeNames;
+    // How many type parameters each of those declares (`Measure`: 1), so a
+    // name written bare is reported (docs/typechecker-hm-plan.md §8.1 fix 3).
+    std::unordered_map<std::string, std::size_t> typeArities;
     std::unordered_map<std::string, ImportedDistinctType> distinctTypes;
     std::vector<TraitDef> traits;
 };

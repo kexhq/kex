@@ -71,6 +71,10 @@ syn match kexHashKey /\%({\)\@<=\s*\zs[a-z_][A-Za-z0-9_?!]*\ze\s*:\%([:>=]\)\@!/
 syn match kexHashKey /\%(,\)\@<=\s*\zs[a-z_][A-Za-z0-9_?!]*\ze\s*:\%([:>=]\)\@!/
 " `make Foo, implement: Showable do` — the label is part of the declaration.
 syn match kexImplement /\<implement\>\%(\s*:\)\@=/
+" `make A is Discrete =>`, `let larger(A is Comparable =>` (#651): `is` bounds a
+" type variable here only, after a single capital and before a type name,
+" so a function called `is?` stays an ordinary name.
+syn match kexBound /\%(\<[A-Z]\s\+\)\@<=is\>\%(\s\+[A-Z]\)\@=/
 
 " ===== Keywords and types =====
 syn keyword kexKeyword after break compiled do elif else end export final foul if let loop main match next private public receive rescue return slot spawn then timeout try trying using var when while with
@@ -111,6 +115,7 @@ hi def link kexThis Special
 hi def link kexModifier StorageClass
 hi def link kexStorage StorageClass
 hi def link kexImplement Label
+hi def link kexBound Keyword
 hi def link kexFuncDecl Function
 hi def link kexSlotDecl Function
 hi def link kexMethodDecl Function

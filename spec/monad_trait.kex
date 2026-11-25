@@ -1,0 +1,23 @@
+# The Monad trait: `wrap` beside `into`. A concrete one is reached by name
+# (`List.wrap(1)` is `[1]`); code written once for every Monad reaches it
+# through its letter (`M.wrap(x)`), M being whichever container the arguments
+# are, passed to the function as its type.
+
+let incremented(M is Monad => xs: M<Integer>) -> M<Integer> = xs.into { |x| M.wrap(x + 1) }
+
+let pairs(M is Monad => xs: M<Integer>, ys: M<Integer>) -> M<(Integer, Integer)> do
+  return xs.into do |x|
+    ys.into { |y| M.wrap((x, y)) }
+  end
+end
+
+main do
+  IO.printLine(List.wrap(1).inspected)
+  IO.printLine(Optional.wrap(1).inspected)
+  IO.printLine(Result.wrap(1).inspected)
+  IO.printLine(incremented([1, 2]).inspected)
+  IO.printLine(incremented(Just(1)).inspected)
+  IO.printLine(incremented(None).inspected)
+  IO.printLine(pairs([1, 2], [10, 20]).inspected)
+  IO.printLine(pairs(Just(1), Just(2)).inspected)
+end

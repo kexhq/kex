@@ -1,0 +1,31 @@
+# kex: check-only
+# A written `Any` is the top type (docs/typechecker-hm-plan.md, decision 7):
+# what can be done with it is what can be done with every value. A function
+# only some values have is reached by narrowing it first, with a `match` on
+# its type. `value.upperCase` on an Any compiled, and failed at run time on
+# anything but a String.
+
+let shout(value: Any) -> String = value.upperCase
+let doubled(value: Any) -> Integer = value * 2
+let flag(value: Any) -> String = value then "yes" else "no"
+let flagged(value: Any) -> String = value == true then "yes" else "no"
+let width(value: Any) -> Integer = value.id.length
+
+let narrowed(value: Any) -> String do
+  match value do
+    text: String => text.upperCase
+    _ => "${value}"
+  end
+end
+
+record Row do
+  id : String
+end
+
+main do
+  IO.printLine(shout("a"))
+  IO.printLine(narrowed("a"))
+  IO.printLine("${narrowed(1)}")
+  let users = Type.named("Row")
+  IO.printLine(users.construct(5))
+end

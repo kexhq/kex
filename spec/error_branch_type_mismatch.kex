@@ -1,5 +1,7 @@
-# then/else with incompatible branch types is a compile-time error.
-let f(b) = b then 42 else "hello"
+# A then/else branch that does not fit the declared result is an error at that
+# branch. Without a declared result the branches join into their union instead
+# (spec/union_join.kex).
+let f(b: Bool) -> Integer = b then 42 else "hello"
 main do
   IO.printLine(f(true))
 end

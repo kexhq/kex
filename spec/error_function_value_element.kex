@@ -1,0 +1,22 @@
+# kex: check-only
+# A function value passed for a generic function parameter must take what the
+# call passes it. `["a"].map(~inc)` was caught, but a value (`let f = ~inc`,
+# or a partial application `~add(1)`) was matched against `A -> B` while `A`
+# was still open, and the call ran `inc("a")` (docs/typechecker-hm-plan.md,
+# §11 item 3). And a field the record does not have is reported as the field
+# it is, not as an unrelated function of that name (§11 item 9).
+
+let inc(n: Integer) -> Integer = n + 1
+let add(a: Integer, b: Integer) -> Integer = a + b
+
+record Person do
+  age : Integer
+end
+
+main do
+  let f = ~inc
+  IO.printLine(["a"].map(f))
+  IO.printLine(["a"].map(~add(1)))
+  IO.printLine([1, 2].map(f))
+  IO.printLine(Person { age: 1 }.name)
+end

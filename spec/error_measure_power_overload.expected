@@ -1,0 +1,14 @@
+spec/error_measure_power_overload.kex:8:26: [KEXET-0491]: Error, `^` expects argument 2 to be 2, but got Integer
+
+^ : Measure<Quantity.Length> -> 2 -> Measure<Quantity.Area>
+
+^ : Measure<Quantity.Length> -> 3 -> Measure<Quantity.Volume>
+  |
+8 |   let fourth = 3.meter ^ 4
+  |                          ^ this has type Integer
+spec/error_measure_power_overload.kex:9:51: [KEXET-0001]: Error, type mismatch: expected Measure<Quantity.Volume>, got Measure<Quantity.Area>
+  |
+9 |   let wrong: Measure<Quantity.Volume> = 3.meter ^ 2
+  |              ------------------------   ^^^^^^^^^^^ this has type Measure<Quantity.Area>
+  |              |
+  |              expected because of this annotation

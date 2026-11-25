@@ -1,7 +1,7 @@
 #pragma once
 // KexI registry: stores loaded module interfaces for the REPL.
 // Supports loading .kx.beam files (entry + companions), querying
-// exports/methods/types, and reload/replacement.
+// exports/functions/types, and reload/replacement.
 #include "kexi.hxx"
 #include "../ir/lower.hxx"
 #include "../module/package_metadata.hxx"
@@ -45,9 +45,8 @@ public:
 
     auto automaticImportModules() const -> std::vector<const LoadedModule*>;
 
-    auto
-    findMethodsForReceiver(const std::string& methodName, const std::string& receiverTypeName) const
-        -> std::vector<std::pair<std::string, const KexiMethod*>>;
+    auto findReceiverFunctions(const std::string& functionName, const std::string& receiverTypeName)
+        const -> std::vector<std::pair<std::string, const KexiReceiverFunction*>>;
 
     auto getUnit(const std::string& entryAtom) const -> const LoadedUnit*;
 

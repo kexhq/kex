@@ -130,7 +130,7 @@ module Tey.Docgen.Fragments do
   # A module that is only the file's namespace has no section, so what it
   # declares stands at the top level of the rail.
   let tocAt(entities: [Entity], nested: Bool, page: SourcePage, model: PackageModel) -> [TocEntry] do
-    return Tey.Docgen.Html.sectionEntities(entities).flatMap { |e|
+    return Tey.Docgen.Html.sectionEntities(entities).into { |e|
       let own = TocEntry { title: tocTitle(e), anchor: anchorOf(e), kind: kindOf(e), nested?: nested }
       match e do
         ModuleDecl(entry) => do
@@ -149,8 +149,8 @@ module Tey.Docgen.Fragments do
   # them: a type's functions come from the make blocks folded into it.
   let memberToc(e: Entity, entities: [Entity], model: PackageModel) -> [TocEntry] do
     match e do
-      TypeDecl(entry) => Tey.Docgen.Html.receiverOrder(Tey.Docgen.Html.makesFor(entities, entry.name), entry.name).flatMap { |m| functionToc(m.functions, m.target) }
-      RecordDecl(entry) => Tey.Docgen.Html.receiverOrder(Tey.Docgen.Html.makesFor(entities, entry.name), entry.name).flatMap { |m| functionToc(m.functions, m.target) }
+      TypeDecl(entry) => Tey.Docgen.Html.receiverOrder(Tey.Docgen.Html.makesFor(entities, entry.name), entry.name).into { |m| functionToc(m.functions, m.target) }
+      RecordDecl(entry) => Tey.Docgen.Html.receiverOrder(Tey.Docgen.Html.makesFor(entities, entry.name), entry.name).into { |m| functionToc(m.functions, m.target) }
       MakeDecl(entry) => functionToc(entry.functions, entry.target)
       TraitDecl(entry) => do
         let (required, provided) = Tey.Docgen.Relations.traitMethods(model, entry)

@@ -1,0 +1,11 @@
+# kex: check-only
+# `M.wrap(x)` takes M from what the arguments are. With no argument of type
+# `M<...>`, nothing says which container to build, so the result stays an
+# `M<Integer>`, which is no list.
+
+let unit(M is Monad => x: Integer) -> M<Integer> = M.wrap(x)
+
+main do
+  let a: [Integer] = unit(1)
+  IO.printLine(a.inspected)
+end

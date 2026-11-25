@@ -1,5 +1,6 @@
 #include "../ast/function_groups.hxx"
 #include "../common/name_case.hxx"
+#include "../common/well_known.hxx"
 #include <algorithm>
 #include "collect_metadata.hxx"
 #include "../common/type_def_utils.hxx"
@@ -31,13 +32,13 @@ auto qualifyType(
 // How far an interface was filled, so what one module added can be told
 // from the rest of a flattened one.
 struct InterfaceMarks {
-    std::size_t exports = 0, constants = 0, types = 0, methods = 0, records = 0;
+    std::size_t exports = 0, constants = 0, types = 0, receiverFunctions = 0, records = 0;
 };
 
 auto marksOf(const KexiTypeInterface& iface, const KexiStructuralMetadata& meta) -> InterfaceMarks {
     return {
-        iface.exports.size(), iface.constants.size(), iface.types.size(), iface.methods.size(),
-        meta.records.size()};
+        iface.exports.size(), iface.constants.size(), iface.types.size(),
+        iface.receiverFunctions.size(), meta.records.size()};
 }
 
 // Qualifies every signature added since `from`.
@@ -58,13 +59,13 @@ auto qualifyFrom(
     for (auto i = from.types; i < iface.types.size(); ++i) {
         qualifyType(iface.types[i].backingType, qualify);
     }
-    for (auto i = from.methods; i < iface.methods.size(); ++i) {
-        auto& method = iface.methods[i];
-        qualifyType(method.receiverType, qualify);
-        for (auto& param : method.paramTypes) {
+    for (auto i = from.receiverFunctions; i < iface.receiverFunctions.size(); ++i) {
+        auto& receiverFunction = iface.receiverFunctions[i];
+        qualifyType(receiverFunction.receiverType, qualify);
+        for (auto& param : receiverFunction.paramTypes) {
             qualifyType(param, qualify);
         }
-        qualifyType(method.returnType, qualify);
+        qualifyType(receiverFunction.returnType, qualify);
     }
     for (auto i = from.records; i < meta.records.size(); ++i) {
         for (auto& field : meta.records[i].fields) {
@@ -146,8 +147,41 @@ auto moduleTypeQualifier(
 struct TraitExportScope {
     std::set<std::string> identities;
     std::unordered_map<std::string, std::set<std::string>> usings;
+    // The declarations, by identity: what a claim with arguments
+    // (`Foldable<Char>`) reads the defaults from.
+    std::unordered_map<std::string, const kex::ast::TraitDef*> defs;
 };
 thread_local const TraitExportScope* tTraitExportScope = nullptr;
+
+// The trait this unit declares under `identity`, or null.
+auto exportedTraitDef(const std::string& identity) -> const kex::ast::TraitDef* {
+    if (!tTraitExportScope) {
+        return nullptr;
+    }
+    const auto found = tTraitExportScope->defs.find(identity);
+    return found == tTraitExportScope->defs.end() ? nullptr : found->second;
+}
+
+// `type` with each bare name in `filled` replaced: a trait's parameters as one
+// implementor's claim fills them (`T?` is `Char?` under `Foldable<Char>`).
+auto substituteNamed(
+    const KexiTypePtr& type, const std::unordered_map<std::string, KexiTypePtr>& filled)
+    -> KexiTypePtr {
+    if (!type) {
+        return type;
+    }
+    if (type->kind == KexiType::Named && type->typeArgs.empty()) {
+        if (const auto found = filled.find(type->name); found != filled.end()) {
+            return found->second;
+        }
+    }
+    auto copy = std::make_shared<KexiType>(*type);
+    for (auto& arg : copy->typeArgs) {
+        arg = substituteNamed(arg, filled);
+    }
+    copy->result = substituteNamed(copy->result, filled);
+    return copy;
+}
 
 // A trait this unit declares, by its identity; anything else (a stdlib
 // trait, a capability) exactly as written.
@@ -174,6 +208,9 @@ auto convertTypeExprImpl(const kex::ast::TypeExpr& te) -> KexiTypePtr {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, kex::ast::TypeName>) {
                 std::string name = node.dotted();
+                if (name == kex::names::kAnyType) {
+                    return kexiAny(); // as the checker reads it: UnknownType::written
+                }
                 // Primitive exactly when the reader's table knows the name, so
                 // what is written here is what kexi_registry reads back.
                 if (kex::semantic::signatureBuiltinType(name)) {
@@ -265,7 +302,7 @@ auto convertTypeExpr(const kex::ast::TypeExprPtr& te) -> KexiTypePtr {
 }
 
 // `generics`: write a generalized generic as its letter. Only for a function
-// whose every position comes from the checker; a method mixes in its
+// whose every position comes from the checker; a function mixes in its
 // receiver's own letters (`make [X]`), which these would not match.
 auto convertSemanticType(const kex::semantic::TypePtr& type, bool generics = false) -> KexiTypePtr {
     if (!type) {
@@ -276,13 +313,16 @@ auto convertSemanticType(const kex::semantic::TypePtr& type, bool generics = fal
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, kex::semantic::PrimitiveType>) {
                 switch (node.kind) {
-                    case kex::semantic::PrimitiveType::Integer: return kexiPrimitive("Integer");
+                    // A literal parameter's Integer (`let ^(2)`) as its digits, the
+                    // way an atom literal is `:name`.
+                    case kex::semantic::PrimitiveType::Integer:
+                        return kexiPrimitive(node.literal.empty() ? "Integer" : node.literal);
                     case kex::semantic::PrimitiveType::Char: return kexiPrimitive("Char");
                     case kex::semantic::PrimitiveType::String: return kexiPrimitive("String");
                     case kex::semantic::PrimitiveType::Bool: return kexiPrimitive("Bool");
                     case kex::semantic::PrimitiveType::Atom:
-                        return kexiPrimitive(node.atomName.empty() ? "Atom" : ":" + node.atomName);
-                    case kex::semantic::PrimitiveType::Unit: return kexiPrimitive("Void");
+                        return kexiPrimitive(node.literal.empty() ? "Atom" : ":" + node.literal);
+                    case kex::semantic::PrimitiveType::Void: return kexiPrimitive("Void");
                 }
             } else if constexpr (std::is_same_v<T, kex::semantic::SizedIntType>) {
                 return kexiPrimitive(
@@ -347,16 +387,28 @@ auto convertSemanticType(const kex::semantic::TypePtr& type, bool generics = fal
                     types.push_back(convertSemanticType(fieldType, generics));
                 }
                 return kexiRecord(std::move(names), std::move(types));
-            } else if constexpr (std::is_same_v<T, kex::semantic::VoidType>) {
+            } else if constexpr (std::is_same_v<T, kex::semantic::NeverType>) {
                 return kexiNever();
             } else if constexpr (std::is_same_v<T, kex::semantic::ConstrainedType>) {
                 return kexiConstrained(node.varName, node.traitName);
+            } else if constexpr (std::is_same_v<T, kex::semantic::TypeApp>) {
+                std::vector<KexiTypePtr> args;
+                for (const auto& arg : node.args) {
+                    args.push_back(convertSemanticType(arg, generics));
+                }
+                return kexiApp(convertSemanticType(node.head, generics), std::move(args));
             } else if constexpr (std::is_same_v<T, kex::semantic::TypeVar>) {
                 // A generalized generic (`A` is -1, `B` -2, ...) is the
                 // signature's own, numbered per signature: written as its letter,
                 // which the reader turns back into a generic (kexi_registry).
-                if (generics && node.id < 0 && node.id >= -26) {
+                if (generics && isGenericLetter(node) && node.id >= -26) {
                     return kexiNamed(std::string(1, static_cast<char>('A' - node.id - 1)));
+                }
+            }
+            // A written `Any` stays what was written (UnknownType::written).
+            if constexpr (std::is_same_v<T, kex::semantic::UnknownType>) {
+                if (node.written) {
+                    return kexiAny();
                 }
             }
             // Unresolved inference variables and Dynamic/Unknown remain unknown
@@ -386,7 +438,7 @@ auto contractType(const kex::ast::TypeAnnotation& contract, const kex::semantic:
     return convertTypeExpr(contract.type);
 }
 
-auto methodBeamArity(
+auto receiverBeamArity(
     const kex::ast::FunctionDef& fd, bool firstParamIsReceiver = false, size_t clause = 0) -> int {
     if (fd.clauses.empty()) {
         return 1;
@@ -463,6 +515,8 @@ void collectFromFunctionDef(
     exp.name = fd.name;
     exp.beamFunction = fd.name;
     exp.isFoul = fd.isFoul;
+    exp.requiredCapabilities =
+        analysis ? analysis->capabilitiesToCall(fd) : std::vector<std::string>{};
     if (analysis) {
         if (const auto* signatures = analysis->functionSignatures(&fd);
             signatures && !signatures->empty()) {
@@ -523,6 +577,11 @@ void collectFromFunctionDef(
             exp.paramNames.push_back(p.name ? *p.name : "");
         }
     }
+    // The types a caller passes it (§12 step 7), after its other arguments.
+    if (analysis) {
+        exp.typeParameters = analysis->typeParametersOf(fd);
+        exp.beamArity += static_cast<int>(exp.typeParameters.size());
+    }
     if (!fd.clauses.empty()) {
         exp.defaultedParams = trailingDefaults(fd.clauses[clause].params, 0);
         exp.defaultSources = defaultSourcesOf(fd.clauses[clause].params, 0);
@@ -530,13 +589,47 @@ void collectFromFunctionDef(
     iface.exports.push_back(std::move(exp));
 }
 
+// Whether an annotation writes a type letter (`Result<A, String>`): `This`
+// and the other names the checker substitutes are not letters.
+auto writesLetter(const kex::ast::TypeExpr& written) -> bool {
+    const auto any = [](const auto& children) {
+        return std::any_of(children.begin(), children.end(), [](const auto& child) {
+            return child && writesLetter(*child);
+        });
+    };
+    return std::visit(
+        [&](const auto& node) -> bool {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, kex::ast::GenericVar>) {
+                return true;
+            } else if constexpr (std::is_same_v<T, kex::ast::TypeName>) {
+                return node.parts.size() == 1 && node.parts[0].size() == 1 &&
+                       std::isupper(static_cast<unsigned char>(node.parts[0][0]));
+            } else if constexpr (std::is_same_v<T, kex::ast::GenericType>) {
+                return any(node.args);
+            } else if constexpr (std::is_same_v<T, kex::ast::TupleType>) {
+                return any(node.elements);
+            } else if constexpr (std::is_same_v<T, kex::ast::ListType>) {
+                return node.element && writesLetter(*node.element);
+            } else if constexpr (std::is_same_v<T, kex::ast::OptionalType>) {
+                return node.inner && writesLetter(*node.inner);
+            } else if constexpr (std::is_same_v<T, kex::ast::MapType>) {
+                return (node.key && writesLetter(*node.key)) ||
+                       (node.value && writesLetter(*node.value));
+            } else {
+                return false;
+            }
+        },
+        written.kind);
+}
+
 auto receiverFunctionFromDef(
     const kex::ast::FunctionDef& fd,
     KexiTypePtr receiverType,
     const kex::semantic::Analyzer* analysis,
     bool firstParamIsReceiver = false,
-    size_t clause = 0) -> KexiMethod {
-    KexiMethod method;
+    size_t clause = 0) -> KexiReceiverFunction {
+    KexiReceiverFunction receiverFunction;
     std::string receiverTrait;
     if (analysis && receiverType) {
         if (receiverType->kind == KexiType::Constrained) {
@@ -553,12 +646,14 @@ auto receiverFunctionFromDef(
     if (receiverIsTrait && receiverType->kind != KexiType::Constrained) {
         receiverType = kexiConstrained(receiverTrait, receiverTrait);
     }
-    method.name = fd.name;
-    method.receiverType = std::move(receiverType);
-    method.isFoul = fd.isFoul;
-    method.beamArity = methodBeamArity(fd, firstParamIsReceiver, clause);
+    receiverFunction.name = fd.name;
+    receiverFunction.receiverType = std::move(receiverType);
+    receiverFunction.isFoul = fd.isFoul;
+    receiverFunction.requiredCapabilities =
+        analysis ? analysis->capabilitiesToCall(fd) : std::vector<std::string>{};
+    receiverFunction.beamArity = receiverBeamArity(fd, firstParamIsReceiver, clause);
     if (receiverNeedsDictionary) {
-        ++method.beamArity;
+        ++receiverFunction.beamArity;
     }
     // When the first clause uses a receiver pattern (@-pattern) or the
     // first param is the receiver (top-level bare function), skip it
@@ -580,11 +675,38 @@ auto receiverFunctionFromDef(
                 clause < signatures->size() ? (*signatures)[clause] : signatures->front();
             // Same rule as collectFromFunctionDef: the type follows
             // inference, the arity follows the annotations the emitter reads.
+            // A position still holding one of the receiver's own letters (`A` of
+            // `make Type<A>`) is an inference variable to the checker, which no
+            // letter can be written for; the annotation spells it as the
+            // receiver does. So does a position holding the function's own
+            // letter (`Y` of `let wrap(value: Y) -> [Y]`), which converted
+            // alone read back as Unknown. Not a trait's default: its receiver is
+            // exported as the letter `T`, which an element letter written `T`
+            // (Enumerable's `filter -> [T]`) would then name.
+            const bool onTrait = receiverIsTrait;
+            const auto open = [onTrait](const kex::semantic::TypePtr& type) {
+                return kex::semantic::anyType(type, [onTrait](const kex::semantic::TypePtr& node) {
+                    const auto* var = std::get_if<kex::semantic::TypeVar>(&node->kind);
+                    return var && (!onTrait || isInferenceVariable(*var));
+                });
+            };
+            const auto& written =
+                fd.clauses.empty() ? nullptr : &fd.clauses[std::min(clause, fd.clauses.size() - 1)];
             for (size_t i = skipParams; i < signature.params.size(); i++) {
-                method.paramTypes.push_back(convertSemanticType(signature.params[i]));
+                const auto* param =
+                    written && i < written->params.size() ? &written->params[i] : nullptr;
+                receiverFunction.paramTypes.push_back(
+                    open(signature.params[i]) && param && param->type && *param->type &&
+                            writesLetter(**param->type)
+                        ? convertTypeExpr(*param->type)
+                        : convertSemanticType(signature.params[i]));
             }
-            method.returnType = convertSemanticType(signature.result);
-            method.isFoul = signature.isFoul || fd.isFoul;
+            receiverFunction.returnType =
+                open(signature.result) && written && written->returnAnnotation &&
+                        *written->returnAnnotation && writesLetter(**written->returnAnnotation)
+                    ? convertTypeExpr(*written->returnAnnotation)
+                    : convertSemanticType(signature.result);
+            receiverFunction.isFoul = signature.isFoul || fd.isFoul;
         }
     }
     if (analysis && !fd.clauses.empty()) {
@@ -598,22 +720,22 @@ auto receiverFunctionFromDef(
                 !analysis->traitNeedsDictionary(name->parts.front())) {
                 continue;
             }
-            const auto methodIndex = i - skipParams;
-            if (methodIndex < method.paramTypes.size()) {
-                method.paramTypes[methodIndex] =
+            const auto functionIndex = i - skipParams;
+            if (functionIndex < receiverFunction.paramTypes.size()) {
+                receiverFunction.paramTypes[functionIndex] =
                     kexiConstrained(name->parts.front(), name->parts.front());
             }
-            ++method.beamArity;
+            ++receiverFunction.beamArity;
         }
     }
-    if (!method.returnType && !fd.clauses.empty()) {
+    if (!receiverFunction.returnType && !fd.clauses.empty()) {
         auto& params = fd.clauses[clause].params;
         for (size_t i = skipParams; i < params.size(); i++) {
-            method.paramTypes.push_back(
+            receiverFunction.paramTypes.push_back(
                 params[i].type && *params[i].type ? convertTypeExpr(*params[i].type)
                                                   : kexiUnknown());
         }
-        method.returnType =
+        receiverFunction.returnType =
             fd.clauses[clause].returnAnnotation && *fd.clauses[clause].returnAnnotation
                 ? convertTypeExpr(*fd.clauses[clause].returnAnnotation)
                 : kexiUnknown();
@@ -621,14 +743,14 @@ auto receiverFunctionFromDef(
     if (!fd.clauses.empty()) {
         const auto& params = fd.clauses[clause].params;
         for (size_t i = skipParams; i < params.size(); i++) {
-            method.paramNames.push_back(params[i].name ? *params[i].name : "");
+            receiverFunction.paramNames.push_back(params[i].name ? *params[i].name : "");
         }
-        method.defaultedParams = trailingDefaults(params, skipParams);
-        method.defaultSources = defaultSourcesOf(params, skipParams);
+        receiverFunction.defaultedParams = trailingDefaults(params, skipParams);
+        receiverFunction.defaultSources = defaultSourcesOf(params, skipParams);
     }
-    method.beamFunction =
+    receiverFunction.beamFunction =
         receiverIsTrait && !firstParamIsReceiver ? fd.name + "/" + receiverTrait : fd.name;
-    return method;
+    return receiverFunction;
 }
 
 void addReceiverFunction(
@@ -639,11 +761,11 @@ void addReceiverFunction(
     const kex::semantic::Analyzer* analysis,
     bool firstParamIsReceiver = false,
     size_t clause = 0) {
-    auto method = receiverFunctionFromDef(
+    auto receiverFunction = receiverFunctionFromDef(
         fd, std::move(receiverType), analysis, firstParamIsReceiver, clause);
-    method.moduleFunction = firstParamIsReceiver;
-    meta.methodOwnership.push_back({method.name, method.beamFunction});
-    iface.methods.push_back(std::move(method));
+    receiverFunction.moduleFunction = firstParamIsReceiver;
+    meta.functionOwnership.push_back({receiverFunction.name, receiverFunction.beamFunction});
+    iface.receiverFunctions.push_back(std::move(receiverFunction));
 }
 
 // Whether `name` is a type declared by `modulePath` itself, and so imported
@@ -724,41 +846,43 @@ auto mentionsGeneric(const KexiTypePtr& type) -> bool {
     return type->result ? mentionsGeneric(type->result) : false;
 }
 
-// Apply an implicit-this `:>` standalone type annotation to a method whose
+// Apply an implicit-this `:>` standalone type annotation to a function whose
 // syntactic/inferred params or return are still Unknown. `sigType` is the
 // raw converted KexiType from the annotation: a Func means a 1+ param
-// method (`(X -> Bool) -> [X]` is a 1-param method returning [X]); a
-// non-Func means a 0-param method whose return type is the annotation.
+// function (`(X -> Bool) -> [X]` is a 1-param function returning [X]); a
+// non-Func means a 0-param function whose return type is the annotation.
 // Skips entirely when the sig's arity disagrees with the def's arity — a
 // mismatch means the annotation belongs to a different overload.
-void patchMethodWithSig(KexiMethod& method, const KexiTypePtr& sigType) {
+void patchReceiverFunctionWithSig(
+    KexiReceiverFunction& receiverFunction, const KexiTypePtr& sigType) {
     if (!sigType) {
         return;
     }
     if (sigType->kind == KexiType::Func) {
         size_t sigParams = sigType->typeArgs.size();
-        if (sigParams != method.paramTypes.size()) {
+        if (sigParams != receiverFunction.paramTypes.size()) {
             return;
         }
-        if (mentionsUnknown(method.returnType) && !mentionsUnknown(sigType->result)) {
-            method.returnType = sigType->result;
+        if (mentionsUnknown(receiverFunction.returnType) && !mentionsUnknown(sigType->result)) {
+            receiverFunction.returnType = sigType->result;
         }
         for (size_t i = 0; i < sigParams; i++) {
-            if (mentionsUnknown(method.paramTypes[i]) && !mentionsUnknown(sigType->typeArgs[i])) {
-                method.paramTypes[i] = sigType->typeArgs[i];
+            if (mentionsUnknown(receiverFunction.paramTypes[i]) &&
+                !mentionsUnknown(sigType->typeArgs[i])) {
+                receiverFunction.paramTypes[i] = sigType->typeArgs[i];
             }
         }
     } else {
-        if (!method.paramTypes.empty()) {
+        if (!receiverFunction.paramTypes.empty()) {
             return;
         }
-        if (mentionsUnknown(method.returnType) && !mentionsUnknown(sigType)) {
-            method.returnType = sigType;
+        if (mentionsUnknown(receiverFunction.returnType) && !mentionsUnknown(sigType)) {
+            receiverFunction.returnType = sigType;
         }
     }
 }
 
-// Same as patchMethodWithSig but for module-level / top-level KexiExports.
+// Same as patchReceiverFunctionWithSig but for module-level / top-level KexiExports.
 // Standalone sigs at module scope use the full function type
 // (`String -> Result<...>`, params and return together). Skips when the
 // sig's arity disagrees with the def's actual arity.
@@ -876,29 +1000,29 @@ void addPatchedExports(
     }
 }
 
-// Build a standalone-method KexiMethod purely from a `:>` annotation, used
+// Build a standalone-function KexiReceiverFunction purely from a `:>` annotation, used
 // when a make/trait block declares a signature with no implementation
-// (`to :> Y -> Y?`, `second :> X?`). The method has no body but its
+// (`to :> Y -> Y?`, `second :> X?`). The function has no body but its
 // signature is part of the public contract.
-auto methodFromSig(
+auto receiverFunctionFromSig(
     const std::string& name, const KexiTypePtr& receiverType, const KexiTypePtr& sigType)
-    -> KexiMethod {
-    KexiMethod method;
-    method.name = name;
-    method.receiverType = receiverType;
-    method.beamFunction = name;
-    method.typeOnly = true;
-    method.beamArity = 1; // receiver only; bumped if sig adds params
+    -> KexiReceiverFunction {
+    KexiReceiverFunction receiverFunction;
+    receiverFunction.name = name;
+    receiverFunction.receiverType = receiverType;
+    receiverFunction.beamFunction = name;
+    receiverFunction.typeOnly = true;
+    receiverFunction.beamArity = 1; // receiver only; bumped if sig adds params
     if (sigType && sigType->kind == KexiType::Func) {
         for (const auto& arg : sigType->typeArgs) {
-            method.paramTypes.push_back(arg);
+            receiverFunction.paramTypes.push_back(arg);
         }
-        method.returnType = sigType->result;
-        method.beamArity = 1 + static_cast<int>(sigType->typeArgs.size());
+        receiverFunction.returnType = sigType->result;
+        receiverFunction.beamArity = 1 + static_cast<int>(sigType->typeArgs.size());
     } else {
-        method.returnType = sigType ? sigType : kexiUnknown();
+        receiverFunction.returnType = sigType ? sigType : kexiUnknown();
     }
-    return method;
+    return receiverFunction;
 }
 
 // Build a standalone KexiExport purely from a top-level `:` annotation,
@@ -952,30 +1076,42 @@ void collectFromMakeDef(
         owned = true;
         receiverType->name = modulePath + "." + receiverType->name;
     }
-    // A `make` inside a module for a type declared elsewhere: its methods stay
-    // behind a `using` of the module (KexiMethod::foreignTarget).
+    // A `make` inside a module for a type declared elsewhere: its functions stay
+    // behind a `using` of the module (KexiReceiverFunction::foreignTarget).
     const bool foreignTarget = !modulePath.empty() && !owned &&
                                !(receiverType && receiverType->kind == KexiType::Named &&
                                  receiverType->name.starts_with(modulePath + "."));
-    const auto firstMethod = iface.methods.size();
+    const auto firstReceiverFunction = iface.receiverFunctions.size();
+    // What the checker claimed the conformances for: each concrete
+    // instantiation (`Range<Integer>`), and a bounded block's bounds (#651).
+    const auto* conformance = analysis ? analysis->checker().makeConformance(&md) : nullptr;
+    const auto holes = kex::ast::makeTypeLambdaHoles(md);
     for (const auto& trait : md.implements) {
+        const auto traitName = exportedTraitName(trait, modulePath);
+        if (conformance && !conformance->keys.empty() &&
+            (conformance->keys.size() > 1 || conformance->keys.front() != typeName)) {
+            for (const auto& key : conformance->keys) {
+                meta.traitConformances.push_back({key, traitName, conformance->bounds, holes});
+            }
+            continue;
+        }
         if (typeName.empty()) {
             continue;
         }
-        const auto traitName = exportedTraitName(trait, modulePath);
         meta.traitConformances.push_back(
-            {owned ? modulePath + "." + typeName : typeName, traitName});
+            {owned ? modulePath + "." + typeName : typeName, traitName,
+             conformance ? conformance->bounds : decltype(KexiTraitConformance::bounds){}, holes});
         // A make block for a type declared elsewhere may still be naming one
         // of this module's records by a spelling the lookup above missed;
         // the qualified conformance covers it (kexhq/kex#143: `make Files,
         // implement: FS.File` inside `module Mock`).
         if (!owned && !modulePath.empty()) {
-            meta.traitConformances.push_back({modulePath + "." + typeName, traitName});
+            meta.traitConformances.push_back({modulePath + "." + typeName, traitName, {}, holes});
         }
     }
     // Collect standalone type annotations (`:>` sigs) to patch missing
     // types and to surface pure signatures with no implementation.
-    // As written: a receiver method's contract relates its type letters to
+    // As written: a receiver function's contract relates its type letters to
     // the `make` target's (`map :> (A -> B) -> [B]` on `make [A]`), which the
     // checker resolves per contract.
     std::unordered_map<std::string, std::vector<KexiTypePtr>> standaloneSigs;
@@ -988,21 +1124,21 @@ void collectFromMakeDef(
 
     auto addWithSigPatch = [&](const kex::ast::FunctionDef& fd, size_t clause) {
         addReceiverFunction(fd, receiverType, iface, meta, analysis, false, clause);
-        iface.methods.back().isSlot = md.isServing && fd.isSlot;
+        iface.receiverFunctions.back().isSlot = md.isServing && fd.isSlot;
         auto it = standaloneSigs.find(fd.name);
         if (it == standaloneSigs.end()) {
             return;
         }
-        auto method = std::move(iface.methods.back());
-        iface.methods.pop_back();
-        size_t defParams = method.paramTypes.size();
+        auto receiverFunction = std::move(iface.receiverFunctions.back());
+        iface.receiverFunctions.pop_back();
+        size_t defParams = receiverFunction.paramTypes.size();
         // A contract is the clause's whose own annotations agree with it:
         // `get :> Integer -> X?` is `get(i: Integer)`'s, never
         // `get(range: Range<Integer>)`'s. Pairing every contract with every
         // clause of its arity made `[A] -> Range<Integer> -> A?` too.
         const auto agrees = [&](const KexiTypePtr& sig) {
             for (size_t i = 0; i < defParams && i < sig->typeArgs.size(); i++) {
-                const auto& written = method.paramTypes[i];
+                const auto& written = receiverFunction.paramTypes[i];
                 const auto& wanted = sig->typeArgs[i];
                 if (!written || !wanted || mentionsUnknown(written) || mentionsGeneric(written) ||
                     mentionsGeneric(wanted)) {
@@ -1021,14 +1157,14 @@ void collectFromMakeDef(
             }
             size_t sigParams = (sig->kind == KexiType::Func) ? sig->typeArgs.size() : 0;
             if (sigParams == defParams && (sigParams == 0 || agrees(sig))) {
-                auto overload = method;
-                patchMethodWithSig(overload, sig);
-                iface.methods.push_back(std::move(overload));
+                auto overload = receiverFunction;
+                patchReceiverFunctionWithSig(overload, sig);
+                iface.receiverFunctions.push_back(std::move(overload));
                 added = true;
             }
         }
         if (!added) {
-            iface.methods.push_back(std::move(method));
+            iface.receiverFunctions.push_back(std::move(receiverFunction));
         }
     };
 
@@ -1054,20 +1190,64 @@ void collectFromMakeDef(
             }
         }
     }
-    // Add pure signatures (no `let` body) as type-only methods so
+    // Add pure signatures (no `let` body) as type-only functions so
     // the type checker sees them through the imported interface.
-    // No methodOwnership entry — these have no BEAM implementation
+    // No functionOwnership entry — these have no BEAM implementation
     // in this module; the IR lowerer handles them via intrinsic
     // dispatch (e.g. `to` → `kex_io:to_string_optional`).
     for (const auto& [name, sigs] : standaloneSigs) {
         if (!seenImpls.count(name)) {
             for (const auto& sigType : sigs) {
-                iface.methods.push_back(methodFromSig(name, receiverType, sigType));
+                iface.receiverFunctions.push_back(
+                    receiverFunctionFromSig(name, receiverType, sigType));
             }
         }
     }
-    for (auto i = firstMethod; i < iface.methods.size(); ++i) {
-        iface.methods[i].foreignTarget = foreignTarget;
+    // What a claim with arguments (`implement: Foldable<Char>`) makes of the
+    // trait's defaults: each one whose result is written, as this type has
+    // it (`find -> T?` is `Char?` on String). Type-only: the body is the
+    // trait's, which lowering splices in as before.
+    for (std::size_t claim = 0; claim < md.implements.size() && claim < md.implementArgs.size();
+         ++claim) {
+        const auto& args = md.implementArgs[claim];
+        const auto* trait = exportedTraitDef(exportedTraitName(md.implements[claim], modulePath));
+        if (args.empty() || !trait) {
+            continue;
+        }
+        std::unordered_map<std::string, KexiTypePtr> filled;
+        for (std::size_t i = 0; i < args.size() && i < trait->typeParams.size(); ++i) {
+            if (args[i]) {
+                filled[trait->typeParams[i]] = convertTypeExpr(args[i]);
+            }
+        }
+        for (const auto& item : trait->body) {
+            const auto* fd = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item);
+            if (!fd || !*fd || seenImpls.count((*fd)->name) || standaloneSigs.count((*fd)->name)) {
+                continue;
+            }
+            for (const auto* clause : kex::ast::signatureClauses(**fd)) {
+                if (!clause->returnAnnotation || !*clause->returnAnnotation) {
+                    continue;
+                }
+                auto sig = std::make_shared<KexiType>();
+                sig->kind = KexiType::Func;
+                for (const auto& param : clause->params) {
+                    sig->typeArgs.push_back(
+                        param.type && *param.type
+                            ? substituteNamed(convertTypeExpr(*param.type), filled)
+                            : kexiUnknown());
+                }
+                sig->result = substituteNamed(convertTypeExpr(*clause->returnAnnotation), filled);
+                iface.receiverFunctions.push_back(
+                    receiverFunctionFromSig((*fd)->name, receiverType, sig));
+            }
+        }
+    }
+    for (auto i = firstReceiverFunction; i < iface.receiverFunctions.size(); ++i) {
+        iface.receiverFunctions[i].foreignTarget = foreignTarget;
+        if (conformance) {
+            iface.receiverFunctions[i].receiverBounds = conformance->bounds;
+        }
     }
 }
 
@@ -1081,10 +1261,11 @@ void collectFromTraitDef(
     const auto identity = kex::traitIdentity(modulePath, trait.name);
     KexiTraitDef traitMetadata;
     traitMetadata.name = identity;
+    traitMetadata.paramKinds = trait.typeParamArities;
     for (const auto& item : trait.body) {
         if (auto* ann = std::get_if<std::unique_ptr<kex::ast::TypeAnnotation>>(&item);
             ann && *ann) {
-            traitMetadata.requiredMethods.push_back({(*ann)->name, (*ann)->isFoul});
+            traitMetadata.requirements.push_back({(*ann)->name, (*ann)->isFoul});
         }
     }
     for (const auto& item : trait.body) {
@@ -1115,30 +1296,32 @@ void collectFromTraitDef(
                 const auto clause = static_cast<size_t>(declared - (*fd)->clauses.data());
                 // Trait defaults are spliced into every concrete implementor by
                 // lowering; callers enter through the ordinary runtime dispatcher,
-                // not a nonexistent `method/Trait` function.
+                // not a nonexistent `function/Trait` function.
                 addReceiverFunction(**fd, receiverType, iface, meta, analysis, false, clause);
-                iface.methods.back().beamFunction = (*fd)->name;
-                iface.methods.back().beamArity = 1 + static_cast<int>(declared->params.size());
-                meta.methodOwnership.back().beamFunction = (*fd)->name;
+                iface.receiverFunctions.back().beamFunction = (*fd)->name;
+                iface.receiverFunctions.back().beamArity =
+                    1 + static_cast<int>(declared->params.size());
+                meta.functionOwnership.back().beamFunction = (*fd)->name;
                 auto it = standaloneSigs.find((*fd)->name);
                 if (it != standaloneSigs.end()) {
-                    auto method = std::move(iface.methods.back());
-                    iface.methods.pop_back();
+                    auto receiverFunction = std::move(iface.receiverFunctions.back());
+                    iface.receiverFunctions.pop_back();
                     for (const auto& sig : it->second) {
-                        auto overload = method;
-                        patchMethodWithSig(overload, sig);
-                        iface.methods.push_back(std::move(overload));
+                        auto overload = receiverFunction;
+                        patchReceiverFunctionWithSig(overload, sig);
+                        iface.receiverFunctions.push_back(std::move(overload));
                     }
                 }
             }
         }
     }
-    // Add pure signatures (methods declared but not defaulted in this
-    // trait) as type-only methods — no methodOwnership entry.
+    // Add pure signatures (functions declared but not defaulted in this
+    // trait) as type-only functions — no functionOwnership entry.
     for (const auto& [name, sigs] : standaloneSigs) {
         if (!seenImpls.count(name)) {
             for (const auto& sigType : sigs) {
-                iface.methods.push_back(methodFromSig(name, receiverType, sigType));
+                iface.receiverFunctions.push_back(
+                    receiverFunctionFromSig(name, receiverType, sigType));
             }
         }
     }
@@ -1383,8 +1566,8 @@ void collectFromModuleBody(
             }
             addReceiverFunction(fd, std::move(receiver), iface, meta, analysis, true, clause);
             if (it != standaloneSigs.end()) {
-                auto method = std::move(iface.methods.back());
-                iface.methods.pop_back();
+                auto receiverFunction = std::move(iface.receiverFunctions.back());
+                iface.receiverFunctions.pop_back();
                 bool added = false;
                 for (const auto& sig : it->second) {
                     if (!sig || sig->kind != KexiType::Func ||
@@ -1396,7 +1579,7 @@ void collectFromModuleBody(
                     // left unknown — matching every receiver — when the
                     // definition wrote no type of its own, and the rest
                     // types the parameters after it.
-                    auto overload = method;
+                    auto overload = receiverFunction;
                     if (mentionsUnknown(overload.receiverType) && !sig->typeArgs.empty() &&
                         !mentionsUnknown(sig->typeArgs.front())) {
                         overload.receiverType = std::make_shared<KexiType>(*sig->typeArgs.front());
@@ -1411,12 +1594,12 @@ void collectFromModuleBody(
                     if (!rest->typeArgs.empty()) {
                         rest->typeArgs.erase(rest->typeArgs.begin());
                     }
-                    patchMethodWithSig(overload, rest);
-                    iface.methods.push_back(std::move(overload));
+                    patchReceiverFunctionWithSig(overload, rest);
+                    iface.receiverFunctions.push_back(std::move(overload));
                     added = true;
                 }
                 if (!added) {
-                    iface.methods.push_back(std::move(method));
+                    iface.receiverFunctions.push_back(std::move(receiverFunction));
                 }
             }
         }
@@ -1484,7 +1667,7 @@ void collectFromTopLevel(
         // A top-level prelude function is also reachable through UFCS, with its
         // first parameter as the receiver. One parameter is enough — that is
         // the no-argument postfix form (`x.inspect`), which was previously
-        // excluded by requiring two and so failed with "Undefined method" on
+        // excluded by requiring two and so failed with "Undefined function" on
         // BEAM while working in the interpreter.
         if (!fd.clauses.empty() && fd.clauses[clause].params.size() >= 1) {
             KexiTypePtr receiver = kexiUnknown();
@@ -1504,14 +1687,15 @@ void collectFromTopLevel(
             // export does (`1.to(Float, radix: 2)` is a `Float?`). The
             // receiver stays as declared: a generic one made another unit's
             // `to/2` ambiguous with it at run time (spec/stdlib/ast.spec).
-            auto& method = iface.methods.back();
+            auto& receiverFunction = iface.receiverFunctions.back();
             if (it != standaloneSigs.end()) {
                 for (const auto& sig : it->second) {
                     if (sig && sig->kind == KexiType::Func &&
-                        sig->typeArgs.size() == method.paramTypes.size() + 1 &&
+                        sig->typeArgs.size() == receiverFunction.paramTypes.size() + 1 &&
                         mentionsGeneric(sig) && !mentionsUnknown(sig)) {
-                        method.paramTypes.assign(sig->typeArgs.begin() + 1, sig->typeArgs.end());
-                        method.returnType = sig->result;
+                        receiverFunction.paramTypes.assign(
+                            sig->typeArgs.begin() + 1, sig->typeArgs.end());
+                        receiverFunction.returnType = sig->result;
                         break;
                     }
                 }
@@ -1707,20 +1891,20 @@ auto findAndCollectModule(
 } // namespace
 
 auto emittedImplementationOf(
-    const KexiMethod& method,
+    const KexiReceiverFunction& receiverFunction,
     const std::function<bool(const std::string& function, int arity)>& emitted) -> std::string {
-    if (method.moduleFunction || method.typeOnly) {
+    if (receiverFunction.moduleFunction || receiverFunction.typeOnly) {
         return {};
     }
     // The head the emitter names it by: the `make` target as written.
-    const auto receiver = makeTargetName(method.receiverType);
+    const auto receiver = makeTargetName(receiverFunction.receiverType);
     if (receiver.empty()) {
         return {};
     }
     const auto shortReceiver = receiver.substr(receiver.rfind('.') + 1);
     for (const auto& owner : {receiver, shortReceiver}) {
-        if (emitted(method.name + "/" + owner, method.beamArity)) {
-            return method.name + "/" + owner;
+        if (emitted(receiverFunction.name + "/" + owner, receiverFunction.beamArity)) {
+            return receiverFunction.name + "/" + owner;
         }
     }
     return {};
@@ -1729,8 +1913,8 @@ auto emittedImplementationOf(
 auto recordImplementations(
     KexiChunk& chunk, const std::function<bool(const std::string& function, int arity)>& routed)
     -> void {
-    for (auto& method : chunk.typeInterface.methods) {
-        method.implementation = emittedImplementationOf(method, routed);
+    for (auto& receiverFunction : chunk.typeInterface.receiverFunctions) {
+        receiverFunction.implementation = emittedImplementationOf(receiverFunction, routed);
     }
 }
 
@@ -1760,6 +1944,7 @@ auto collectMetadata(const kex::ast::Program& program, const CollectOptions& opt
     kex::forEachTraitDef(
         program.items, [&](const ast::TraitDef& trait, const std::string& modulePath) {
             traitScope.identities.insert(kex::traitIdentity(modulePath, trait.name));
+            traitScope.defs[kex::traitIdentity(modulePath, trait.name)] = &trait;
         });
     kex::collectScopeUsings(program.items, traitScope.usings);
     tTraitExportScope = &traitScope;

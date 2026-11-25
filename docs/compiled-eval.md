@@ -228,6 +228,12 @@ This extends the existing `compiled do...end` mechanism which currently supports
 - **Compile-time constants**: `MAX_RETRIES = 3`
 - **Declaration generation**: `TYPES.each do |name| let %name?(...) = ... end`
 - **Type generation**: `type %name = ...`
+- **Type splicing**: a generated function's signature may splice a type,
+  `let %{prefix + "meter"}(value: Number) -> Measure<%{dimension}> = ...`.
+  The splice runs when the declaration is generated, and its value (a type
+  name, or a String that spells one) becomes the type written there. Outside
+  a generated declaration it is KEXEC-0058; a value that names no type is
+  KEXEC-0059.
 
 The new capability adds:
 

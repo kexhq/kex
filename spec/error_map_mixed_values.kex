@@ -1,8 +1,10 @@
 # kex: check-only
-# A map literal of values of several types is data, a map of `Any`: reading
-# a value gives back an `Any`, not the type of the first one. It took the
-# type of its first entry, so `{ "ada": 36, "bob": "old" }` was a
-# `{String: Integer}` holding a String. And the functions on a map
+# A map literal of values of several types is a map of their union, as a
+# list of several types is: `{ "ada": 36, "bob": "old" }` is a
+# `{String: Integer | String}`, so reading `"bob"` as an Integer is an error
+# (docs/typechecker-hm-plan.md, decision 3). It took the type of its first
+# entry, so it was a `{String: Integer}` holding a String, and then a map of
+# `Any`, which still let the read through. And the functions on a map
 # (declared in `make Map<K, V>`) bound neither `K` nor `V` from a `{K: V}`
 # receiver, so any key or value went in (kexhq/kex#771).
 

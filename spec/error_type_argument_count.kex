@@ -1,7 +1,8 @@
 # kex: check-only
 # A type takes as many type arguments as it declares (kexhq/kex#648):
 # `Optional<Integer, String, Bool>` was read as an Optional of Integer. A
-# bare name stays the type over any arguments.
+# bare name is a missing argument too (docs/typechecker-hm-plan.md §8.1 fix
+# 3): `Result` alone read as a Result of anything.
 
 record Box<A> do
   item : A

@@ -61,7 +61,7 @@ struct ExternalModules {
         // unit calling it: for its own types it comes before
         // the prelude's generic function and its structural `==`.
         bool compiledApart = false;
-        // As KexiMethod::foreignTarget: reached only where its module is
+        // As KexiReceiverFunction::foreignTarget: reached only where its module is
         // `using`-imported.
         bool foreignTarget = false;
     };

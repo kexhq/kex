@@ -1,0 +1,160 @@
+spec/check_every_child.kex:93:17: [KEXET-0463]: Error, cannot add String and Integer
+   |
+93 |   return ("a" + 1) if c
+   |          ^^^^^^^^^
+spec/check_every_child.kex:97:31: [KEXET-0463]: Error, cannot add String and Integer
+   |
+97 | let deflt(a: Integer = ("a" + 1).length) -> Integer = a
+   |                        ^^^^^^^^^
+spec/check_every_child.kex:101:18: [KEXET-0463]: Error, cannot add String and Integer
+    |
+101 |   value + ("a" + 1).length
+    |           ^^^^^^^^^
+spec/check_every_child.kex:103:15: [KEXET-0463]: Error, cannot add String and Integer
+    |
+103 |   _ => ("a" + 1).length
+    |        ^^^^^^^^^
+spec/check_every_child.kex:18:16: [KEXET-0463]: Error, cannot add String and Integer
+   |
+18 |   takes(("a" + 1).length)
+   |         ^^^^^^^^^
+spec/check_every_child.kex:19:15: [KEXET-0463]: Error, cannot add String and Integer
+   |
+19 |   pass(("a" + 1))
+   |        ^^^^^^^^^
+spec/check_every_child.kex:20:10: [KEXET-0463]: Error, cannot add String and Integer
+   |
+20 |   ("a" + 1).length
+   |   ^^^^^^^^^
+spec/check_every_child.kex:21:21: [KEXET-0463]: Error, cannot add String and Integer
+   |
+21 |   Point { x: ("a" + 1).length }
+   |              ^^^^^^^^^
+spec/check_every_child.kex:22:10: [KEXET-0463]: Error, cannot add String and Integer
+   |
+22 |   ("a" + 1).length + 1
+   |   ^^^^^^^^^
+spec/check_every_child.kex:23:12: [KEXET-0463]: Error, cannot add String and Integer
+   |
+23 |   -(("a" + 1).length)
+   |     ^^^^^^^^^
+spec/check_every_child.kex:24:11: [KEXET-0463]: Error, cannot add String and Integer
+   |
+24 |   (("a" + 1), 1)
+   |    ^^^^^^^^^
+spec/check_every_child.kex:25:11: [KEXET-0463]: Error, cannot add String and Integer
+   |
+25 |   [("a" + 1)]
+   |    ^^^^^^^^^
+spec/check_every_child.kex:26:27: [KEXET-0463]: Error, cannot add String and Integer
+   |
+26 |   IO.printLine({k: ("a" + 1)})
+   |                    ^^^^^^^^^
+spec/check_every_child.kex:27:14: [KEXET-0463]: Error, cannot add String and Integer
+   |
+27 |   1..(("a" + 1).length)
+   |       ^^^^^^^^^
+spec/check_every_child.kex:28:12: [KEXET-0463]: Error, cannot add String and Integer
+   |
+28 |   ((("a" + 1).length))..2
+   |     ^^^^^^^^^
+spec/check_every_child.kex:29:13: [KEXET-0463]: Error, cannot add String and Integer
+   |
+29 |   if ("a" + 1).empty?
+   |      ^^^^^^^^^
+spec/check_every_child.kex:35:12: [KEXET-0463]: Error, cannot add String and Integer
+   |
+35 |     ("a" + 1)
+   |     ^^^^^^^^^
+spec/check_every_child.kex:42:12: [KEXET-0463]: Error, cannot add String and Integer
+   |
+42 |     ("a" + 1)
+   |     ^^^^^^^^^
+spec/check_every_child.kex:46:15: [KEXET-0463]: Error, cannot add String and Integer
+   |
+46 |   elif ("a" + 1).empty?
+   |        ^^^^^^^^^
+spec/check_every_child.kex:51:16: [KEXET-0463]: Error, cannot add String and Integer
+   |
+51 |   match ("a" + 1) do
+   |         ^^^^^^^^^
+spec/check_every_child.kex:55:17: [KEXET-0463]: Error, cannot add String and Integer
+   |
+55 |     _ => ("a" + 1)
+   |          ^^^^^^^^^
+spec/check_every_child.kex:58:19: [KEXET-0463]: Error, cannot add String and Integer
+   |
+58 |     m when ("a" + 1).empty? => m
+   |            ^^^^^^^^^
+spec/check_every_child.kex:61:16: [KEXET-0463]: Error, cannot add String and Integer
+   |
+61 |   while ("a" + 1).empty? do
+   |         ^^^^^^^^^
+spec/check_every_child.kex:65:25: [KEXET-0463]: Error, cannot add String and Integer
+   |
+65 |     IO.printLine(("a" + 1))
+   |                  ^^^^^^^^^
+spec/check_every_child.kex:68:25: [KEXET-0463]: Error, cannot add String and Integer
+   |
+68 |     IO.printLine(("a" + 1))
+   |                  ^^^^^^^^^
+spec/check_every_child.kex:71:22: [KEXET-0463]: Error, cannot add String and Integer
+   |
+71 |   let bound = ("a" + 1)
+   |               ^^^^^^^^^
+spec/check_every_child.kex:72:14: [KEXET-0463]: Error, cannot add String and Integer
+   |
+72 |   v = ("a" + 1).length
+   |       ^^^^^^^^^
+spec/check_every_child.kex:73:23: [KEXET-0463]: Error, cannot add String and Integer
+   |
+73 |   xs.map { |e| ("a" + 1) }
+   |                ^^^^^^^^^
+spec/check_every_child.kex:74:23: [KEXET-0463]: Error, cannot add String and Integer
+   |
+74 |   xs.map(&.max(("a" + 1).length))
+   |                ^^^^^^^^^
+spec/check_every_child.kex:75:23: [KEXET-0463]: Error, cannot add String and Integer
+   |
+75 |   IO.printLine(("a" + 1)) if ok
+   |                ^^^^^^^^^
+spec/check_every_child.kex:76:29: [KEXET-0463]: Error, cannot add String and Integer
+   |
+76 |   IO.printLine(1) if ("a" + 1).empty?
+   |                      ^^^^^^^^^
+spec/check_every_child.kex:77:18: [KEXET-0463]: Error, cannot add String and Integer
+   |
+77 |   ok then ("a" + 1) else "b"
+   |           ^^^^^^^^^
+spec/check_every_child.kex:78:27: [KEXET-0463]: Error, cannot add String and Integer
+   |
+78 |   ok then "b" else ("a" + 1)
+   |                    ^^^^^^^^^
+spec/check_every_child.kex:79:10: [KEXET-0463]: Error, cannot add String and Integer
+   |
+79 |   ("a" + 1).empty? then 1 else 2
+   |   ^^^^^^^^^
+spec/check_every_child.kex:80:13: [KEXET-0463]: Error, cannot add String and Integer
+   |
+80 |   "${("a" + 1)}"
+   |      ^^^^^^^^^
+spec/check_every_child.kex:82:25: [KEXET-0463]: Error, cannot add String and Integer
+   |
+82 |     IO.printLine(("a" + 1))
+   |                  ^^^^^^^^^
+spec/check_every_child.kex:84:15: [KEXET-0463]: Error, cannot add String and Integer
+   |
+84 |   Just(("a" + 1))
+   |        ^^^^^^^^^
+spec/check_every_child.kex:85:24: [KEXET-0463]: Error, cannot add String and Integer
+   |
+85 |   var counter = ("a" + 1)
+   |                 ^^^^^^^^^
+spec/check_every_child.kex:86:31: [KEXET-0463]: Error, cannot add String and Integer
+   |
+86 |   let partial = ~takes(("a" + 1).length)
+   |                        ^^^^^^^^^
+spec/check_every_child.kex:88:30: [KEXET-0463]: Error, cannot add String and Integer
+   |
+88 |     _ => IO.printLine(("a" + 1))
+   |                       ^^^^^^^^^

@@ -1,0 +1,4 @@
+Invalid(["name is empty", "email has no @", "age is negative"])
+Invalid(["email has no @"])
+Valid("ada@example.com")
+Error(["name is empty"])

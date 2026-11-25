@@ -1,0 +1,6 @@
+spec/error_unknown_receiver_common_result.kex:8:41: [KEXET-0127]: Error, `greeting` declared to return Integer but body returns String
+  |
+8 | let greeting(name: String) -> Integer = "${echo(name)}!"
+  |                               -------   ^^^^^^^^^^^^^^^^ this has type String
+  |                               |
+  |                               expected because of this return type

@@ -108,6 +108,10 @@ end
 # A parameter typed by a trait takes anything that implements it.
 foul report(shape: Shape) -> Void = IO.printLine(shape.describe)
 
+# A bounded letter: one type, whichever the call passes, that implements the
+# trait. Both arguments are that same type, and so is the answer.
+let larger(A is Comparable => a: A, b: A) -> A = a > b then a else b
+
 main do
   let v = Vector { x: 3.0, y: 4.0 }
   IO.printLine("${v.length} ${v.scaled(2.0).x} ${v.withX(9.0).x} ${v.unit.length}")
@@ -123,6 +127,7 @@ main do
   IO.printLine(tree.size)
   IO.printLine("${21.doubled} ${[1, 2, 3, 4].evens}")
   IO.printLine(Box { value: 2 }.map { |n| n + 1 }.value)
+  IO.printLine("${larger(3, 7)} ${larger("pear", "apple")}")
 end
 ```
 
@@ -231,6 +236,11 @@ end
   implementing `let` needs no declaration of its own.
 - **A trait is a type.** `foul report(shape: Shape)` accepts every type that
   implements `Shape`, and `[Shape]` is a list of any of them.
+- **A bounded letter** is one type that implements the trait:
+  `let larger(A is Comparable => a: A, b: A) -> A` takes two of the same
+  type and answers that type (`larger(3, 7)` is an Integer), where
+  `a: Comparable, b: Comparable` would take any two. A `make` takes a bound
+  the same way: `make A is Discrete => Range<A>, implement: Enumerable`.
 - **Operators** are functions named by the operator:
   `let +(other: This) -> This = ...`.
   Override only the existing ones, with their usual meaning.

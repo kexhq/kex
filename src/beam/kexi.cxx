@@ -79,6 +79,13 @@ auto kexiConstrained(const std::string& var, const std::string& trait) -> KexiTy
     t->traitName = trait;
     return t;
 }
+auto kexiApp(KexiTypePtr head, std::vector<KexiTypePtr> args) -> KexiTypePtr {
+    auto t = std::make_shared<KexiType>();
+    t->kind = KexiType::App;
+    t->result = std::move(head);
+    t->typeArgs = std::move(args);
+    return t;
+}
 auto kexiNever() -> KexiTypePtr {
     auto t = std::make_shared<KexiType>();
     t->kind = KexiType::Never;
@@ -89,10 +96,51 @@ auto kexiUnknown() -> KexiTypePtr {
     t->kind = KexiType::Unknown;
     return t;
 }
+auto kexiAny() -> KexiTypePtr {
+    auto t = std::make_shared<KexiType>();
+    t->kind = KexiType::Any;
+    return t;
+}
 
 // ── ETF encoding helpers ─────────────────────────────────────────────
 
 namespace {
+
+auto stringsToTerm(const std::vector<std::string>& values) -> TermPtr {
+    std::vector<TermPtr> terms;
+    terms.reserve(values.size());
+    for (const auto& value : values) {
+        terms.push_back(Term::binary(value));
+    }
+    return Term::list(std::move(terms));
+}
+
+auto termToStrings(const TermPtr& term) -> std::vector<std::string> {
+    std::vector<std::string> values;
+    for (const auto& value : term->asList()) {
+        values.push_back(value->asBinaryStr());
+    }
+    return values;
+}
+
+// Type argument bounds (#651), as `[{Index, Trait}]`.
+auto boundsToTerm(const std::vector<std::pair<std::size_t, std::string>>& bounds) -> TermPtr {
+    std::vector<TermPtr> terms;
+    for (const auto& [index, trait] : bounds) {
+        terms.push_back(
+            Term::tuple({Term::integer(static_cast<int64_t>(index)), Term::binary(trait)}));
+    }
+    return Term::list(std::move(terms));
+}
+
+auto termToBounds(const TermPtr& term) -> std::vector<std::pair<std::size_t, std::string>> {
+    std::vector<std::pair<std::size_t, std::string>> bounds;
+    for (const auto& bound : term->asList()) {
+        auto& pair = bound->asTuple();
+        bounds.emplace_back(static_cast<std::size_t>(pair[0]->asInt()), pair[1]->asBinaryStr());
+    }
+    return bounds;
+}
 
 auto typeToTerm(const KexiTypePtr& type) -> TermPtr {
     if (!type) {
@@ -176,6 +224,15 @@ auto typeToTerm(const KexiTypePtr& type) -> TermPtr {
                  Term::binary(type->traitName)});
         case KexiType::Never: return Term::tuple({Term::atom("never")});
         case KexiType::Unknown: return Term::tuple({Term::atom("unknown")});
+        case KexiType::Any: return Term::tuple({Term::atom("any")});
+        case KexiType::App: {
+            std::vector<TermPtr> args;
+            for (const auto& arg : type->typeArgs) {
+                args.push_back(typeToTerm(arg));
+            }
+            return Term::tuple(
+                {Term::atom("app"), typeToTerm(type->result), Term::list(std::move(args))});
+        }
     }
     return Term::tuple({Term::atom("unknown")});
 }
@@ -258,8 +315,18 @@ auto termToType(const TermPtr& term) -> KexiTypePtr {
     if (tag == "constrained" && elems.size() >= 3) {
         return kexiConstrained(elems[1]->asBinaryStr(), elems[2]->asBinaryStr());
     }
+    if (tag == "app" && elems.size() >= 3) {
+        std::vector<KexiTypePtr> args;
+        for (const auto& arg : elems[2]->asList()) {
+            args.push_back(termToType(arg));
+        }
+        return kexiApp(termToType(elems[1]), std::move(args));
+    }
     if (tag == "never") {
         return kexiNever();
+    }
+    if (tag == "any") {
+        return kexiAny();
     }
     return kexiUnknown();
 }
@@ -302,6 +369,8 @@ auto exportToTerm(const KexiExport& exp) -> TermPtr {
         defaults.push_back(Term::binary(source));
     }
     fields.push_back(Term::list(std::move(defaults)));
+    fields.push_back(stringsToTerm(exp.requiredCapabilities));
+    fields.push_back(stringsToTerm(exp.typeParameters));
     return Term::tuple(std::move(fields));
 }
 
@@ -326,6 +395,12 @@ auto termToExport(const TermPtr& term) -> KexiExport {
         for (const auto& source : t[8]->asList()) {
             e.defaultSources.push_back(source->asBinaryStr());
         }
+    }
+    if (t.size() > 9) {
+        e.requiredCapabilities = termToStrings(t[9]);
+    }
+    if (t.size() > 10) {
+        e.typeParameters = termToStrings(t[10]);
     }
     return e;
 }
@@ -374,7 +449,7 @@ auto termToTypeExport(const TermPtr& term) -> KexiTypeExport {
     return te;
 }
 
-auto methodToTerm(const KexiMethod& m) -> TermPtr {
+auto receiverFunctionToTerm(const KexiReceiverFunction& m) -> TermPtr {
     std::vector<TermPtr> params;
     for (const auto& p : m.paramTypes) {
         params.push_back(typeToTerm(p));
@@ -400,12 +475,14 @@ auto methodToTerm(const KexiMethod& m) -> TermPtr {
     fields.push_back(Term::list(std::move(defaults)));
     fields.push_back(Term::binary(m.implementation));
     fields.push_back(Term::boolean(m.foreignTarget));
+    fields.push_back(stringsToTerm(m.requiredCapabilities));
+    fields.push_back(boundsToTerm(m.receiverBounds));
     return Term::tuple(std::move(fields));
 }
 
-auto termToMethod(const TermPtr& term) -> KexiMethod {
+auto termToReceiverFunction(const TermPtr& term) -> KexiReceiverFunction {
     auto& t = term->asTuple();
-    KexiMethod m;
+    KexiReceiverFunction m;
     m.name = t[0]->asBinaryStr();
     m.receiverType = termToType(t[1]);
     m.beamArity = static_cast<int>(t[2]->asInt());
@@ -438,6 +515,12 @@ auto termToMethod(const TermPtr& term) -> KexiMethod {
     }
     if (t.size() > 14) {
         m.foreignTarget = t[14]->isAtom("true");
+    }
+    if (t.size() > 15) {
+        m.requiredCapabilities = termToStrings(t[15]);
+    }
+    if (t.size() > 16) {
+        m.receiverBounds = termToBounds(t[16]);
     }
     return m;
 }
@@ -547,39 +630,62 @@ auto termToADT(const TermPtr& term) -> KexiADT {
     return adt;
 }
 
-auto methodOwnershipToTerm(const KexiMethodOwnership& mo) -> TermPtr {
-    return Term::tuple({Term::binary(mo.methodName), Term::binary(mo.beamFunction)});
+auto functionOwnershipToTerm(const KexiFunctionOwnership& mo) -> TermPtr {
+    return Term::tuple({Term::binary(mo.functionName), Term::binary(mo.beamFunction)});
 }
 
-auto termToMethodOwnership(const TermPtr& term) -> KexiMethodOwnership {
+auto termToFunctionOwnership(const TermPtr& term) -> KexiFunctionOwnership {
     auto& t = term->asTuple();
     return {t[0]->asBinaryStr(), t[1]->asBinaryStr()};
 }
 
 auto conformanceToTerm(const KexiTraitConformance& c) -> TermPtr {
-    return Term::tuple({Term::binary(c.typeName), Term::binary(c.traitName)});
+    if (c.bounds.empty() && c.holes.empty()) {
+        return Term::tuple({Term::binary(c.typeName), Term::binary(c.traitName)});
+    }
+    std::vector<TermPtr> holes;
+    for (const auto hole : c.holes) {
+        holes.push_back(Term::integer(static_cast<int64_t>(hole)));
+    }
+    return Term::tuple(
+        {Term::binary(c.typeName), Term::binary(c.traitName), boundsToTerm(c.bounds),
+         Term::list(std::move(holes))});
 }
 
 auto termToConformance(const TermPtr& term) -> KexiTraitConformance {
     auto& t = term->asTuple();
-    return {t[0]->asBinaryStr(), t[1]->asBinaryStr()};
+    KexiTraitConformance c{t[0]->asBinaryStr(), t[1]->asBinaryStr()};
+    if (t.size() > 2) {
+        c.bounds = termToBounds(t[2]);
+    }
+    if (t.size() > 3) {
+        for (const auto& hole : t[3]->asList()) {
+            c.holes.push_back(static_cast<std::size_t>(hole->asInt()));
+        }
+    }
+    return c;
 }
 
 auto traitDefToTerm(const KexiTraitDef& td) -> TermPtr {
-    std::vector<TermPtr> methods;
-    for (const auto& m : td.requiredMethods) {
+    std::vector<TermPtr> receiverFunctions;
+    for (const auto& m : td.requirements) {
         if (m.isFoul) {
-            methods.push_back(Term::tuple({Term::binary(m.name), Term::atom("foul")}));
+            receiverFunctions.push_back(Term::tuple({Term::binary(m.name), Term::atom("foul")}));
         } else {
-            methods.push_back(Term::binary(m.name));
+            receiverFunctions.push_back(Term::binary(m.name));
         }
     }
     std::vector<TermPtr> bodies;
     for (const auto& name : td.defaultBodies) {
         bodies.push_back(Term::binary(name));
     }
+    std::vector<TermPtr> kinds;
+    for (const auto kind : td.paramKinds) {
+        kinds.push_back(Term::integer(static_cast<int64_t>(kind)));
+    }
     return Term::tuple(
-        {Term::binary(td.name), Term::list(std::move(methods)), Term::list(std::move(bodies))});
+        {Term::binary(td.name), Term::list(std::move(receiverFunctions)),
+         Term::list(std::move(bodies)), Term::list(std::move(kinds))});
 }
 
 auto termToTraitDef(const TermPtr& term) -> KexiTraitDef {
@@ -588,9 +694,9 @@ auto termToTraitDef(const TermPtr& term) -> KexiTraitDef {
     td.name = t[0]->asBinaryStr();
     for (const auto& m : t[1]->asList()) {
         if (auto* tup = std::get_if<Term::Tuple>(&m->value); tup && tup->elements.size() == 2) {
-            td.requiredMethods.push_back({tup->elements[0]->asBinaryStr(), true});
+            td.requirements.push_back({tup->elements[0]->asBinaryStr(), true});
         } else {
-            td.requiredMethods.push_back({m->asBinaryStr(), false});
+            td.requirements.push_back({m->asBinaryStr(), false});
         }
     }
     if (t.size() > 2) {
@@ -598,24 +704,12 @@ auto termToTraitDef(const TermPtr& term) -> KexiTraitDef {
             td.defaultBodies.push_back(name->asBinaryStr());
         }
     }
+    if (t.size() > 3) {
+        for (const auto& kind : t[3]->asList()) {
+            td.paramKinds.push_back(static_cast<std::size_t>(kind->asInt()));
+        }
+    }
     return td;
-}
-
-auto stringsToTerm(const std::vector<std::string>& values) -> TermPtr {
-    std::vector<TermPtr> terms;
-    terms.reserve(values.size());
-    for (const auto& value : values) {
-        terms.push_back(Term::binary(value));
-    }
-    return Term::list(std::move(terms));
-}
-
-auto termToStrings(const TermPtr& term) -> std::vector<std::string> {
-    std::vector<std::string> values;
-    for (const auto& value : term->asList()) {
-        values.push_back(value->asBinaryStr());
-    }
-    return values;
 }
 
 auto packageToTerm(const kex::module::PackageMetadata& package) -> TermPtr {
@@ -647,7 +741,7 @@ auto termToPackage(const TermPtr& term) -> kex::module::PackageMetadata {
 // Build the full KexI ETF term WITHOUT the hash field, for hashing.
 auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
     // Type interface
-    std::vector<TermPtr> exports, constants, types, methods;
+    std::vector<TermPtr> exports, constants, types, receiverFunctions;
     for (const auto& e : chunk.typeInterface.exports) {
         exports.push_back(exportToTerm(e));
     }
@@ -657,15 +751,15 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
     for (const auto& t : chunk.typeInterface.types) {
         types.push_back(typeExportToTerm(t));
     }
-    for (const auto& m : chunk.typeInterface.methods) {
-        methods.push_back(methodToTerm(m));
+    for (const auto& m : chunk.typeInterface.receiverFunctions) {
+        receiverFunctions.push_back(receiverFunctionToTerm(m));
     }
 
     auto typeIface = Term::map({
         {Term::atom("exports"), Term::list(std::move(exports))},
         {Term::atom("constants"), Term::list(std::move(constants))},
         {Term::atom("types"), Term::list(std::move(types))},
-        {Term::atom("methods"), Term::list(std::move(methods))},
+        {Term::atom("receiver_functions"), Term::list(std::move(receiverFunctions))},
     });
 
     // Structural metadata
@@ -679,8 +773,8 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
     for (const auto& a : chunk.metadata.adts) {
         adts.push_back(adtToTerm(a));
     }
-    for (const auto& mo : chunk.metadata.methodOwnership) {
-        ownership.push_back(methodOwnershipToTerm(mo));
+    for (const auto& mo : chunk.metadata.functionOwnership) {
+        ownership.push_back(functionOwnershipToTerm(mo));
     }
     for (const auto& e : chunk.metadata.publicExports) {
         pubExports.push_back(Term::binary(e));
@@ -695,7 +789,7 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
         {Term::atom("companions"), Term::list(std::move(companions))},
         {Term::atom("records"), Term::list(std::move(records))},
         {Term::atom("adts"), Term::list(std::move(adts))},
-        {Term::atom("method_ownership"), Term::list(std::move(ownership))},
+        {Term::atom("function_ownership"), Term::list(std::move(ownership))},
         {Term::atom("public_exports"), Term::list(std::move(pubExports))},
         {Term::atom("is_capability"),
          chunk.metadata.isCapability ? Term::atom("true") : Term::atom("false")},
@@ -831,9 +925,9 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
             chunk.typeInterface.types.push_back(termToTypeExport(t));
         }
     }
-    if (auto methods = ti->mapGet("methods")) {
-        for (const auto& m : methods->asList()) {
-            chunk.typeInterface.methods.push_back(termToMethod(m));
+    if (auto receiverFunctions = ti->mapGet("receiver_functions")) {
+        for (const auto& m : receiverFunctions->asList()) {
+            chunk.typeInterface.receiverFunctions.push_back(termToReceiverFunction(m));
         }
     }
 
@@ -870,9 +964,9 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
             chunk.metadata.adts.push_back(termToADT(a));
         }
     }
-    if (auto mo = sm->mapGet("method_ownership")) {
+    if (auto mo = sm->mapGet("function_ownership")) {
         for (const auto& o : mo->asList()) {
-            chunk.metadata.methodOwnership.push_back(termToMethodOwnership(o));
+            chunk.metadata.functionOwnership.push_back(termToFunctionOwnership(o));
         }
     }
     if (auto cap = sm->mapGet("is_capability")) {

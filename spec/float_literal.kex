@@ -1,0 +1,29 @@
+# An integer literal is a Float where a Float is wanted (decision 2 of
+# docs/typechecker-hm-plan.md): a typed `let` or `var`, a field, a default, an
+# argument, a declared result, a list's element. It was rejected ("expected
+# Float, got Integer"), and both backends now build a float for it. Where an
+# overload takes the Integer, the literal stays one.
+
+record Point do
+  x : Float
+  y : Float = 0
+end
+
+let half(x: Float) -> Float = x / 2
+let one -> Float = 1
+let f(n: Integer) -> String = "int ${n}"
+let f(x: Float) -> String = "float ${x}"
+
+main do
+  let x: Float = 1
+  IO.printLine(x)
+  IO.printLine(half(3))
+  IO.printLine(one)
+  IO.printLine(Point { x: 2 })
+  IO.printLine(f(1))
+  let xs: [Float] = [1, 2.5, -3]
+  IO.printLine(xs)
+  var v: Float = 0
+  v = 4
+  IO.printLine(v)
+end

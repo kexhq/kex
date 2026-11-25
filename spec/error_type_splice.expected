@@ -1,0 +1,10 @@
+spec/error_type_splice.kex:7:18: [KEXEC-0058]: Error, a type splice only works inside a declaration that a `compiled do` block generates
+  |
+7 | let stray(value: %{kind}) -> Integer = 1
+  |                  ^^^^^^^
+spec/error_type_splice.kex:11:76: [KEXET-0127]: Error, `wrongOf` declared to return Measure<Quantity.Time> but body returns Measure<Quantity.Length>
+   |
+11 |     let %{name + "Of"}(value: Float) -> Measure<%{dimension}> = value.meter
+   |                                         ---------------------   ^^^^^^^^^^^ this has type Measure<Quantity.Length>
+   |                                         |
+   |                                         expected because of this return type

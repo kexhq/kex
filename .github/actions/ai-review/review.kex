@@ -93,7 +93,7 @@ main(args, env) do
       end
     end
   end
-  let unanchored = published.zip(outcomes).flatMap do |finding, outcome|
+  let unanchored = published.zip(outcomes).into do |finding, outcome|
     outcome == :unanchored then [finding] else []
   end
 
@@ -161,7 +161,7 @@ module Config do
       minimumSeverity: minimum,
       post?: setting(env, "INPUT_COMMENT") != Just("false"),
       repository: repository.or(""),
-      pullRequest: repository.flatMap { |_| setting(env, "GITHUB_PR_NUMBER") },
+      pullRequest: repository.into { |_| setting(env, "GITHUB_PR_NUMBER") },
       headSha: setting(env, "GITHUB_PR_HEAD_SHA"),
       scratch: setting(env, "RUNNER_TEMP").or("/tmp")
     })
@@ -169,7 +169,7 @@ module Config do
 
   private do
     # An environment variable, trimmed, with empty meaning unset.
-    let setting(env, name) = env.get(name).map(&.trim).flatMap(~present)
+    let setting(env, name) = env.get(name).map(&.trim).into(~present)
 
     let present(value) = value.empty? then None else Just(value)
   end
@@ -393,8 +393,8 @@ end
 # and wrote `kex-review` below them, and the whole review was thrown away.
 parseReport : String -> Report or! String
 let parseReport(text) do
-  let strict = text.matches(re`(?s).*\x60{3,}[ \t]*(?:\r?\n)?kex-review[ \t]*\r?\n(.*)\z`).flatMap { |m| m.get(1) }
-  let lazy = text.matches(re`(?s).*\x60{3,}[ \t]*(?:\r?\n)?kex-review[ \t]*\r?\n(.*?)\n\x60{3,}`).flatMap { |m| m.get(1) }
+  let strict = text.matches(re`(?s).*\x60{3,}[ \t]*(?:\r?\n)?kex-review[ \t]*\r?\n(.*)\z`).into { |m| m.get(1) }
+  let lazy = text.matches(re`(?s).*\x60{3,}[ \t]*(?:\r?\n)?kex-review[ \t]*\r?\n(.*?)\n\x60{3,}`).into { |m| m.get(1) }
   # Qualified: the UFCS spelling lowers to String's replace on BEAM
   # (kexhq/kex#560).
   let block = match strict do
@@ -441,8 +441,8 @@ end
 # dropped. When in doubt, a comment is never destroyed.
 parseReconcile : String -> [Marked] -> ([Marked], [Integer]) or! String
 foul parseReconcile(text, previous) do
-  let closed = text.matches(re`(?s).*\x60{3,}[ \t]*(?:\r?\n)?kex-reconcile[ \t]*\r?\n(.*?)\n\x60{3,}`).flatMap { |m| m.get(1) }
-  let open = text.matches(re`(?s).*\x60{3,}[ \t]*(?:\r?\n)?kex-reconcile[ \t]*\r?\n(.*)\z`).flatMap { |m| m.get(1) }
+  let closed = text.matches(re`(?s).*\x60{3,}[ \t]*(?:\r?\n)?kex-reconcile[ \t]*\r?\n(.*?)\n\x60{3,}`).into { |m| m.get(1) }
+  let open = text.matches(re`(?s).*\x60{3,}[ \t]*(?:\r?\n)?kex-reconcile[ \t]*\r?\n(.*)\z`).into { |m| m.get(1) }
   let source = match closed.or(open.or("")) do
     ""    => return Error("the reconciliation does not end with a ```kex-reconcile block")
     found => found
@@ -475,7 +475,7 @@ end
 # severity, so no comment silently overwrites another. Most severe first.
 mergeByLocation : [Finding] -> [Finding]
 let mergeByLocation(findings) do
-  let merged = findings.map(&.key).uniq.flatMap do |key|
+  let merged = findings.map(&.key).uniq.into do |key|
     match findings.filter { |f| f.key == key } do
       [] => []
       [first | _] => do
@@ -529,7 +529,7 @@ let stickyBody(ready, summary, findings, keptUnmatched, unanchored) do
     "- `${c.file}:${c.startLine}` · `${c.severity}` — ${excerpt(c.text, 140)}"
   end)
   let unanchoredHeading = "Findings that could not anchor in the diff"
-  let unanchoredLines = section(unanchoredHeading, unanchored.flatMap do |f|
+  let unanchoredLines = section(unanchoredHeading, unanchored.into do |f|
     ["#### `${f.anchor}` · `${f.severity}`", "", f.comment.trim, ""]
   end)
   let note = "<sub>AI review on a free OpenCode model. It can be wrong; reply on a comment to argue it.</sub>"
@@ -611,7 +611,7 @@ make GitHub do
   markedComments :> [Marked] or! String
   foul markedComments do
     let comments = this.listComments("repos/${@repository}/pulls/${@pullRequest}/comments").try
-    Ok(comments.flatMap { |c| parseMarker(c).map { |m| [m] }.or([]) })
+    Ok(comments.into { |c| parseMarker(c).map { |m| [m] }.or([]) })
   end
 
   # The sticky verdict comment of an earlier round, if one was published.
@@ -760,7 +760,7 @@ end
 
 # One record per line of JSON output; a line that does not fit is skipped.
 objects : String -> String -> [Any]
-let objects(output, name) = output.lines.filter { |line| !line.trim.empty? }.flatMap do |line|
+let objects(output, name) = output.lines.filter { |line| !line.trim.empty? }.into do |line|
   match JSON.parse(line) do
     Ok(value) => construct(name, value).map { |r| [r] }.or([])
     Error(_)  => []
@@ -772,8 +772,8 @@ end
 parseMarker : RawComment -> Marked?
 let parseMarker(comment) do
   let marker = re`^<!-- kex-review:inline ([^|]+)\|(\d+)\|(low|medium|high|critical)(\|file)? -->`
-  comment.body.matches(marker).flatMap do |m|
-    let line = m.get(2).flatMap { |text| text.to(Integer) }.or(0)
+  comment.body.matches(marker).into do |m|
+    let line = m.get(2).into { |text| text.to(Integer) }.or(0)
     line < 1 then None else Just(Marked {
       id: comment.id,
       file: m.get(1).or(""),

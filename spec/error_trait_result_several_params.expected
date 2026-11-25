@@ -1,0 +1,18 @@
+spec/error_trait_result_several_params.kex:10:19: [KEXET-0001]: Error, type mismatch: expected String, got Integer
+   |
+10 |   let i: String = combine(1, 2)
+   |          ------   ^^^^^^^^^^^^^ this has type Integer
+   |          |
+   |          expected because of this annotation
+spec/error_trait_result_several_params.kex:11:19: [KEXET-0001]: Error, type mismatch: expected String, got Float
+   |
+11 |   let f: String = combine(1, 2.5)
+   |          ------   ^^^^^^^^^^^^^^^ this has type Float
+   |          |
+   |          expected because of this annotation
+spec/error_trait_result_several_params.kex:12:19: [KEXET-0001]: Error, type mismatch: expected String, got Integer
+   |
+12 |   let t: String = twice(3)
+   |          ------   ^^^^^^^^ this has type Integer
+   |          |
+   |          expected because of this annotation

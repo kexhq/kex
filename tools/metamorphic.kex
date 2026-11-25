@@ -241,7 +241,9 @@ let braceAndDoBlock(value: String) -> Relation do
 end
 
 let movedIntoModule(value: String) -> Relation do
-  let double = "let double(value: Integer) = value * 2"
+  # Written with its result: an exported function's signature is what other
+  # units see, so it says what it answers (KEXET-0514).
+  let double = "let double(value: Integer) -> Integer = value * 2"
   Relation {
     name: "move function into module",
     original: program(["IO.printLine(double(${value}))"], declarations: [double]),
@@ -503,7 +505,8 @@ end
 # A `return` of a wrapper (`Error`, `Just`) or another type from a function
 # declared to answer the plain type (kexhq/kex#768).
 let returnedWrapper(seed: Integer, pair: (Sample, Sample)) -> Relation do
-  let (first, second) = pair
+  let (first, given) = pair
+  let second = unrelatedTo(first, given)
   let wrongs = ["Error(${first.value})", "Just(${first.value})", second.value]
   let wrong = wrongs.at(variantOf(seed, wrongs.count)).or(second.value)
   let body = ["IO.printLine(pick(false))"]
@@ -836,7 +839,7 @@ end
 
 # Each of +paths+ on the walker and on BEAM, named for the finding.
 foul bothBackends(run: Run, paths: [String], root: String) -> [(String, Outcome)] do
-  paths.flatMap do |path|
+  paths.into do |path|
     let side = path.endsWith?("before.kex") then "before" else "after"
     [("${side} walker", invoke(run, path, "--run-walker", root)),
      ("${side} beam", invoke(run, path, "--run", root))]
@@ -1019,7 +1022,7 @@ end
 # where the text occurs once in the file.
 let sitesIn(source: String, mutation: Mutation) -> [(String, String)] do
   let texts = syntaxTexts(source, mutation.kinds).filter { |text| unique?(source, text) }
-  texts.flatMap do |text|
+  texts.into do |text|
     mutation.rewrite(text)
       .reject { |rewritten| rewritten == text }
       .map { |rewritten| (text, rewritten) }
@@ -1113,7 +1116,7 @@ let processLines(value: ProcessResult) -> [String] do
 end
 
 let detailsOf(steps: [(String, Outcome)]) -> [String] do
-  steps.flatMap { |name, result| ["${name}:", ...outcomeLines(result)] }
+  steps.into { |name, result| ["${name}:", ...outcomeLines(result)] }
 end
 
 succeeded? : Outcome -> Bool
@@ -1159,7 +1162,7 @@ let crashText?(text: String) -> Bool = typeCrashMarkers.any? { |marker| text.con
 # Every node of the lossless tree whose kind is one of +kinds+.
 let nodesOf(node: SyntaxNode, kinds: [String]) -> [SyntaxNode] do
   let own = kinds.contains?(node.kind) then [node] else []
-  [...own, ...node.children.flatMap { |element| nodesUnder(element, kinds) }]
+  [...own, ...node.children.into { |element| nodesUnder(element, kinds) }]
 end
 
 nodesUnder : SyntaxElement -> [String] -> [SyntaxNode]

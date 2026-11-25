@@ -1,4 +1,3 @@
-# kex: no-check
 # A RECORD is not a tuple to spread across a block's parameters.
 #
 # On BEAM a record IS a tuple — `One { a: 1 }` is `{'One', 1}` — so a

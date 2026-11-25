@@ -32,6 +32,9 @@ public:
     // `params:` frontmatter entry's `: Type` half) needs an entry point
     // that isn't the whole program.
     auto parseTypeExpr() -> ast::TypeExprPtr;
+    auto parseTypeBounds(
+        std::vector<std::pair<std::string, ast::TypeName>>& into,
+        std::vector<SourceLocation>& traitLocations) -> void;
     auto diagnostics() const -> const std::vector<ParseDiagnostic>&;
 
     // Every node the parser completed, as its kind and byte span, in the order
@@ -104,6 +107,10 @@ private:
     auto parseRecordDef() -> std::unique_ptr<ast::RecordDef>;
     auto parseRecordBody(ast::RecordDef& into) -> void;
     auto parseTraitDef() -> std::unique_ptr<ast::TraitDef>;
+    // The kind of each parameter written without holes, from how the trait's
+    // signatures apply it: `trait Functor<F>` with `map : F<A> -> ...` is
+    // `Functor<F<_>>`.
+    auto inferTraitParamKinds(ast::TraitDef& def) -> void;
     auto parseMakeDef() -> std::unique_ptr<ast::MakeDef>;
     auto parseServingDef() -> std::unique_ptr<ast::MakeDef>;
     // The two halves of a `make` that `make %name` generation reuses: it has a

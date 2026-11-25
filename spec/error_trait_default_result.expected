@@ -1,0 +1,10 @@
+spec/error_trait_default_result.kex:16:1: [KEXET-0001]: Error, type mismatch: expected String, got Integer
+   |
+16 | let viaTrait(item: Pricing) -> String = item.doubled
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+spec/error_trait_default_result.kex:18:47: [KEXET-0001]: Error, type mismatch: expected String, got Integer
+   |
+18 |   let direct: String = Box { size: 2 }.doubled
+   |               ------   ^^^^^^^^^^^^^^^^^^^^^^^ this has type Integer
+   |               |
+   |               expected because of this annotation

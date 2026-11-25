@@ -14,7 +14,7 @@
 # gradual code, `--no-check`, a value arriving from another process: the
 # value itself is asked instead. That fallback is honest but lossy: an empty
 # list has no element to inspect, and a `Result` only ever holds one side.
-record Type do
+record Type<T> do
   # The type's own name, without its arguments: +"Integer"+, +"List"+,
   # +"Point"+.
   name : String
@@ -40,8 +40,8 @@ module Type do
   # +Type.of(User)+ is +User+'s type. That is how a library takes a type from
   # its caller, typed as the generic parameter it binds.
   #
-  # @param value [Any] the value to inspect
-  # @return [Type] its type
+  # @param value [A] the value to inspect
+  # @return [Type<A>] its type: the checked type where the checker has one
   #
   # @example
   #   Type.of(42)                # => Type { name: "Integer", args: [] }
@@ -56,7 +56,7 @@ module Type do
   #     ...                            # rows decoded with as.construct
   #   end
   #   select(as: User)                 # => Result<[User], String>
-  let of(value: Any) -> Type = Kex.Intrinsic.Type.ofValue(value)
+  let of(value: A) -> Type<A> = Kex.Intrinsic.Type.ofValue(value)
 
   # Builds a type from its name, for comparing against something you already
   # know.
@@ -182,7 +182,7 @@ make Type.Field do
 end
 
 # Reflection functions on runtime type values.
-make Type do
+make Type<T> do
   # Returns a record type's fields, in declaration order: each one's name,
   # declared type, and whether a value may leave it out. Anything that is not
   # a record answers with an empty list.
@@ -272,14 +272,16 @@ make Type do
   # (+"5".to(Integer)+), using +fields+ for the declared types.
   #
   # @param values [{String: Any}] the field values, by field name
-  # @return [Result<Any, String>] the record, or what was wrong
+  # @return [Result<T, String>] the record, or what was wrong: a +User+ for
+  # +Type.of(User)+; for a type found by name at run time (+Type.named+) the
+  # checker cannot know +T+, and the value is checked where it is used
   #
   # @example
   #   Type.named("User").construct({"id": "u1", "email": "ada@example.com"})
   #   # => Ok(User { id: u1, email: ada@example.com, admin?: false })
   #   Type.named("User").construct({"id": "u1", "mail": "x"})
   #   # => Error("unknown field \"mail\" for User")
-  let construct(values: {String: Any}) -> Result<Any, String> = Kex.Intrinsic.Type.construct(this.name, values)
+  let construct(values: {String: Any}) -> Result<T, String> = Kex.Intrinsic.Type.construct(this.name, values)
 
   # Builds the constructor +name+ of this sum type from its arguments: reading
   # +"Direct"+ from a database back into +Direct+. The arguments are checked
@@ -288,14 +290,14 @@ make Type do
   #
   # @param name [String] the constructor's name, as +constructorNames+ lists it
   # @param args [[Any]] its arguments; leave them out for a nullary constructor
-  # @return [Result<Any, String>] the value, or what was wrong
+  # @return [Result<T, String>] the value, or what was wrong
   #
   # @example
   #   Type.named("Kind").variant("Direct")         # => Ok(Direct)
   #   Type.named("Shape").variant("Circle", [2.0]) # => Ok(Circle(2.0))
   #   Type.named("Kind").variant("Nope")           # => Error("Kind has no constructor Nope")
-  let variant(name: String, args: [Any]) -> Result<Any, String> = Kex.Intrinsic.Type.constructVariant(this.name, name, args)
-  let variant(name: String) -> Result<Any, String> = Kex.Intrinsic.Type.constructVariant(this.name, name, [])
+  let variant(name: String, args: [Any]) -> Result<T, String> = Kex.Intrinsic.Type.constructVariant(this.name, name, args)
+  let variant(name: String) -> Result<T, String> = Kex.Intrinsic.Type.constructVariant(this.name, name, [])
 
   # Parses +text+ as a value of this type: what a database cell, a form field
   # or a query parameter holds is text, and +construct+ takes typed values.
@@ -309,13 +311,13 @@ make Type do
   # caller with an absent one leaves it out of +construct+'s map.
   #
   # @param text [String] the text to read
-  # @return [Result<Any, String>] the value, or why +text+ is not one
+  # @return [Result<T, String>] the value, or why +text+ is not one
   #
   # @example
   #   Type.named("Integer").parse("42")    # => Ok(42)
   #   Type.named("Integer").parse("4x")    # => Error("expected Integer, got \"4x\"")
   #   Type.named("Kind").parse("channel")  # => Ok(Channel)
-  let parse(text: String) -> Result<Any, String> do
+  let parse(text: String) -> Result<T, String> do
     match this.name do
       "String" => Ok(text)
       "Integer" => Type.parsed(text.to(Integer), this, text)

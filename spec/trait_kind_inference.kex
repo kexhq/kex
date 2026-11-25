@@ -1,0 +1,25 @@
+# A trait parameter's kind follows from how the trait's signatures apply it:
+# `trait Mappable<F>` with `remap : F<A> -> ...` ranges over constructors of
+# one argument, as `Mappable<F<_>>` would say. Writing the holes stays the
+# explicit form.
+
+trait Mappable<F> do
+  remap : F<A> -> (A -> B) -> F<B>
+end
+
+record Box<A> do
+  value : A
+end
+
+make Box, implement: Mappable do
+  let remap(f) -> Box<B> = Box { value: f(@value) }
+end
+
+let bumped(F is Mappable => xs: F<Integer>) -> F<Integer> = xs.remap { |x| x + 1 }
+
+let described(box: Box<Integer>) -> Box<String> = box.remap { |x| "n=${x}" }
+
+main do
+  IO.printLine(bumped(Box { value: 1 }).value)
+  IO.printLine(described(Box { value: 7 }).value)
+end

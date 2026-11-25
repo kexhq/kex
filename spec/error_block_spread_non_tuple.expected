@@ -10,7 +10,11 @@ map : Result<A, B> -> (A -> C) -> Result<C, B>
 
 map : Stream<A> -> (A -> B) -> Stream<B>
 
+map : Validation<A, B> -> (A -> C) -> Validation<C, B>
+
 map : [A] -> (A -> B) -> [B]
+
+map : {A: B} -> (A -> B -> C) -> [C]
    |
 13 |   IO.printLine(found.map { |x, y| x.a }.or(0))
    |                ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -26,7 +30,11 @@ map : Result<A, B> -> (A -> C) -> Result<C, B>
 
 map : Stream<A> -> (A -> B) -> Stream<B>
 
+map : Validation<A, B> -> (A -> C) -> Validation<C, B>
+
 map : [A] -> (A -> B) -> [B]
+
+map : {A: B} -> (A -> B -> C) -> [C]
    |
 15 |   IO.printLine(got.map { |tag, value| value }.inspect)
    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -42,7 +50,11 @@ map : Result<A, B> -> (A -> C) -> Result<C, B>
 
 map : Stream<A> -> (A -> B) -> Stream<B>
 
+map : Validation<A, B> -> (A -> C) -> Validation<C, B>
+
 map : [A] -> (A -> B) -> [B]
+
+map : {A: B} -> (A -> B -> C) -> [C]
    |
 17 |   IO.printLine(maybes.map { |tag, value| value }.inspect)
    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

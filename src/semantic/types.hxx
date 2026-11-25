@@ -18,14 +18,16 @@ struct PrimitiveType {
     // String is its OWN kind, not `[Char]`. Modelling it as a list of Char
     // made the two indistinguishable to the checker, so `contains? : String ->
     // Bool` silently accepted a Char and `[Char]` reported itself as "String".
-    enum Kind { Integer, Char, String, Bool, Atom, Unit }; // Integer = arbitrary precision
+    enum Kind { Integer, Char, String, Bool, Atom, Void }; // Integer = arbitrary precision
     Kind kind;
-    // For Atom only, and for DISPLAY only: the literal an atom type was
+    // For an Integer, the one value a clause's literal parameter takes (`let
+    // ^(2)`): two of them are two types, and either is still an Integer.
+    // For an Atom, and for DISPLAY only: the literal an atom type was
     // written as (`:macos`), empty for a plain `Atom`. Without it a union of
     // atom literals printed as "Atom | Atom | ...", one indistinguishable
     // member per variant. Every comparison ignores it (typesEqual looks at
     // `kind` alone), so `:macos` stays interchangeable with any other atom.
-    std::string atomName;
+    std::string literal;
 };
 
 struct SizedIntType {
@@ -35,6 +37,10 @@ struct SizedIntType {
 
 struct SizedFloatType {
     int bits; // 32, 64
+    // Whether the program wrote `Float64`. A 64-bit float is a `Float`, as
+    // an integer is an `Integer`: the sized name shows only where it was
+    // written. Display only; equality ignores it.
+    bool written = false;
 };
 
 struct NamedType {
@@ -58,6 +64,11 @@ struct FuncType {
     // in pure code may be passed only where one is expected (#640). Not part
     // of the type's identity: two types differing only here unify.
     bool foul = false;
+    // The capabilities what it runs requires (`FS`, `Clock`), inferred for a
+    // block and never written (§8.3, decided 2026-11-24: shown only). The
+    // block's definer requires them too, so it adds no obligation; hover
+    // shows it. Not part of the type's identity either.
+    std::vector<std::string> capabilities;
 };
 
 struct TupleType {
@@ -89,16 +100,48 @@ struct RecordType {
     std::vector<std::pair<std::string, TypePtr>> fields;
 };
 
+// The two things a TypeVar is (docs/typechecker-hm-plan.md §12 step 2): a
+// signature's own letter (`A` of `first : [A] -> A?`), instantiated afresh at
+// each call; or a variable inference makes for one unknown, which unification
+// binds. Made only by `Type::genericLetter` and `Type::inferenceVariable`.
+enum class TypeVarKind { GenericLetter, Inference };
+
+// Both kinds share one id space, so a map keyed by id never confuses them:
+// letters are numbered -1, -2, ... per signature, inference variables 0, 1,
+// ... per checker.
 struct TypeVar {
     int id;
+    TypeVarKind kind;
 };
 
-struct UnknownType {};
+inline auto isGenericLetter(const TypeVar& var) -> bool {
+    return var.kind == TypeVarKind::GenericLetter;
+}
+inline auto isInferenceVariable(const TypeVar& var) -> bool {
+    return var.kind == TypeVarKind::Inference;
+}
 
-// Bottom type — for expressions that never return (infinite loop, panic, exit).
-// Unifies with any type as a universal subtype: a Never-typed branch is compatible
-// with any other branch type because it never actually produces a value at runtime.
-struct VoidType {
+// The TypeVar an id names where only the id was kept (a serialized interface,
+// `ConstrainedType::genericId`). The one place the numbering is read.
+inline auto typeVarFromId(int id) -> TypeVar {
+    return {id, id < 0 ? TypeVarKind::GenericLetter : TypeVarKind::Inference};
+}
+
+// A type the checker does not know. `written` marks one the source wrote as
+// `Any`: a declared contract, not a gap in inference, so a parameter of it is
+// one the checker learned (mentionsUnknown), and an interface carries it as
+// `any`. Every other comparison treats the two alike for now; `Any` becomes
+// the top type rule by rule (docs/typechecker-hm-plan.md, decision 7).
+struct UnknownType {
+    bool written = false;
+};
+
+// The source's `Never`: the bottom type, for expressions that never return
+// (`return`, an infinite loop, `die`). Unifies with any type as a universal
+// subtype: a Never-typed branch is compatible with any other branch type because
+// it never produces a value at run time. Not the source's `Void`, which is
+// PrimitiveType::Void ("produces nothing useful") and fits nothing else.
+struct NeverType {
     // Empty for ordinary non-returning expressions. Set when Never is the
     // normalization of an intersection of two different nominal records, so
     // a diagnostic can still name them.
@@ -119,6 +162,16 @@ struct ConstrainedType {
     int genericId = 0;
 };
 
+// A type applied to arguments whose head is not a declared type but a type
+// variable: `F<A>` under `trait Functor<F<_>>` (docs/typechecker-hm-plan.md
+// §8.2). Once the head is known (`Box`, `Result<_, E>`), the application is
+// the type it names (applyConstructor); `[X]`, `X?` and `Map<K, V>` read
+// back as applications through applicationOf.
+struct TypeApp {
+    TypePtr head;
+    std::vector<TypePtr> args;
+};
+
 struct Type {
     std::variant<
         PrimitiveType,
@@ -135,18 +188,23 @@ struct Type {
         RecordType,
         TypeVar,
         UnknownType,
-        VoidType,
-        ConstrainedType>
+        NeverType,
+        ConstrainedType,
+        TypeApp>
         kind;
 
     static auto integer() -> TypePtr; // arbitrary precision
     static auto charT() -> TypePtr;
     static auto string() -> TypePtr;
     static auto boolean() -> TypePtr;
-    static auto atom(std::string atomName = "") -> TypePtr;
-    static auto unit() -> TypePtr;
+    static auto atom(std::string literal = "") -> TypePtr;
+    // The Integer a clause's literal parameter takes (`let ^(2)`): itself only.
+    static auto integerLiteral(std::string digits) -> TypePtr;
+    static auto voidType() -> TypePtr;
     static auto unknown() -> TypePtr;
-    static auto voidType(std::string leftRecord = {}, std::string rightRecord = {}) -> TypePtr;
+    // `Any` as written: an UnknownType the source declared (see UnknownType).
+    static auto any() -> TypePtr;
+    static auto never(std::string leftRecord = {}, std::string rightRecord = {}) -> TypePtr;
     static auto named(const std::string& name, std::vector<TypePtr> args = {}) -> TypePtr;
     // The type of the nullary variant `variant` of the ADT `adt` (NamedType::variant).
     static auto variantOf(const std::string& adt, const std::string& variant) -> TypePtr;
@@ -159,7 +217,13 @@ struct Type {
     static auto optional(TypePtr inner) -> TypePtr;
     static auto intersection(std::vector<TypePtr> members) -> TypePtr;
     static auto record(std::vector<std::pair<std::string, TypePtr>> fields) -> TypePtr;
-    static auto typeVar(int id) -> TypePtr;
+    // A signature's letter; `id` is negative (-1 for its first letter).
+    static auto genericLetter(int id) -> TypePtr;
+    // An inference variable; `id` is the checker's counter, from 0.
+    static auto inferenceVariable(int id) -> TypePtr;
+    static auto app(TypePtr head, std::vector<TypePtr> args) -> TypePtr;
+    // The hole of a type lambda: `_` in `make Result<_, E>`.
+    static auto hole() -> TypePtr;
     static auto
     constrained(const std::string& varName, const std::string& traitName, int genericId = 0)
         -> TypePtr;
@@ -180,9 +244,31 @@ struct Type {
     // (it exists only as a trait name in the TraitRegistry).
     static auto float32() -> TypePtr;
     static auto float64() -> TypePtr;
+    static auto float64Written() -> TypePtr;
 };
 
 auto typeToString(const TypePtr& type) -> std::string;
+// What a type passed to a function is (docs/typechecker-hm-plan.md §12 step 7):
+// `letter` (`A`) as a concrete type, or the caller's own type variable (`via`)
+// when the caller is generic too.
+struct TypeArgument {
+    std::string letter;
+    TypePtr type;
+    std::string via;
+};
+// A type as a constructor applied to arguments (§8.2, #342): `[X]` is `List`
+// applied to X, `X?` `Optional`, `Map<K, V>` `Map`, `Box<A>` `Box`, and a
+// `TypeApp` its own head. None for a type that applies nothing.
+struct Application {
+    TypePtr head;
+    std::vector<TypePtr> args;
+};
+auto applicationOf(const TypePtr& type) -> std::optional<Application>;
+// `head` applied to `args`: a constructor's holes filled (`Result<_, E>`), or
+// its arguments given, as the type that names (`[X]` for `List`). A head that
+// is still a variable stays a TypeApp.
+auto applyConstructor(const TypePtr& head, std::vector<TypePtr> args) -> TypePtr;
+auto isTypeHole(const TypePtr& type) -> bool;
 // The name a primitive kind is written with in Kex and printed with by
 // typeToString (`Void` for the unit kind), and the kind a name is. One
 // table, which the interface cache reads too rather than keeping its own.
@@ -263,6 +349,9 @@ auto holdsFailure(const TypePtr& type) -> bool;
 // A trait's `This` left as written (`NamedType("This")`), which only a
 // receiver's type substitutes.
 auto isThisPlaceholder(const TypePtr& type) -> bool;
+// `type` with every `This` in it replaced by `with`: a requirement's `This` is
+// the receiver it is called on (`combine :> This -> This` on an `A` answers A).
+auto substituteThis(const TypePtr& type, const TypePtr& with) -> TypePtr;
 
 // The type a built-in type NAME denotes, or null when the name is not one: the
 // one table every name-to-type lookup reads — the checker's globals, the
@@ -300,6 +389,10 @@ auto isFullyConcrete(const TypePtr& type) -> bool;
 // type somewhere inside. Checks that would otherwise report a mismatch use
 // this to stay quiet rather than invent an error from incomplete information.
 auto containsOpenType(const TypePtr& type) -> bool;
+// A type variable or an unknown somewhere inside: a hole inference has not
+// filled. Unlike containsOpenType, a trait constraint does not count, since a
+// bound is a type a value has, not a missing one.
+auto containsUnsolved(const TypePtr& type) -> bool;
 // A type variable or a trait constraint somewhere inside: a generic type.
 // Unlike containsOpenType, an unknown (`Any`) does not count.
 auto containsTypeVariable(const TypePtr& type) -> bool;

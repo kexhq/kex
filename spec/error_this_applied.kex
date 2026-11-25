@@ -1,0 +1,18 @@
+# kex: check-only
+# `This<B>` is the target applied again (spec/this_applied.kex): it takes as
+# many arguments as the target leaves to fill, and the type it names is
+# checked like any other.
+
+record Box<A> do
+  value : A
+end
+
+make Box do
+  let bad -> This<Integer, String> = this
+  let relabel(text: String) -> This<String> = Box { value: text }
+end
+
+main do
+  let wrong: Box<Integer> = Box { value: 1 }.relabel("x")
+  IO.printLine(wrong.value)
+end

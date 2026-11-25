@@ -1,0 +1,21 @@
+# kex: check-only
+# A generic type written without its argument (docs/typechecker-hm-plan.md
+# §8.1, fix 3) is a missing argument: a bare `Measure` read as
+# `Measure<anything>`, so `half(2.meter) + 1.second` passed. A `make Measure`
+# target still means every instantiation. A power names its dimension too:
+# `squared` and `cubed` on a length, and no generic `^` (`Units.Dynamic`'s
+# `pow` for any other).
+using Units.SI
+
+record Box<T> do
+  item : T
+end
+
+let half(m: Measure) -> Float = m.canonical / 2.0
+let unwrap(box: Box) -> Integer = 1
+
+main do
+  let area: Measure<Quantity.Area> = 3.meter.squared
+  IO.printLine(area.canonical)
+  IO.printLine(2.second ^ 2)
+end

@@ -1,0 +1,37 @@
+# Higher-kinded traits (docs/typechecker-hm-plan.md §8.2, #342): a trait over
+# a type constructor, `trait Mappable<F<_>>`, whose requirement names its
+# receiver `F<A>`. `Box` implements it whole; a two-argument type names the
+# argument that varies with a type lambda, `make Tagged<_, E>`, and keeps the
+# rest (the tag stays a String). `bumped` is written once for every Mappable:
+# `F` binds to the constructor it is called with, and its result is that
+# constructor applied again. Was examples/typesystem_audit/08_hkt_attempt.kex.
+
+trait Mappable<F<_>> do
+  fmap : F<A> -> (A -> B) -> F<B>
+end
+
+record Box<A> do
+  value : A
+end
+
+make Box, implement: Mappable do
+  let fmap(f) -> Box<B> = Box { value: f(@value) }
+end
+
+record Tagged<A, E> do
+  item : A
+  tag : E
+end
+
+make Tagged<_, E>, implement: Mappable do
+  let fmap(f) -> Tagged<B, E> = Tagged { item: f(@item), tag: @tag }
+end
+
+let bumped(F is Mappable => xs: F<Integer>) -> F<Integer> = xs.fmap { |x| x + 1 }
+
+main do
+  IO.printLine(bumped(Box { value: 1 }).value)
+  let t = bumped(Tagged { item: 1, tag: "t" })
+  IO.printLine(t.item)
+  IO.printLine(t.tag)
+end

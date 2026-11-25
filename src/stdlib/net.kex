@@ -54,7 +54,7 @@ module Port do
   # @return [Result<Port, NetError>] the validated port, or +Parse+
   #
   # @example Reading a listen port from the environment
-  #   let number = ENV.get("PORT").flatMap { |text| text.to(Integer) }.or(8080)
+  #   let number = ENV.get("PORT").into { |text| text.to(Integer) }.or(8080)
   #   let port = Port.from(number).try
   from : Integer -> Result<Port, NetError>
   let from(value) = Kex.Intrinsic.Net.port(value)

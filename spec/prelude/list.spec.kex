@@ -130,10 +130,10 @@ describe("List — find, any?, all?") do
   end
 end
 
-describe("List — flatMap and collect") do
-  it("flatMap maps and flattens one level") do
-    assert([1, 2, 3].flatMap { |n| [n, n * 10] } == [1, 10, 2, 20, 3, 30])
-    assert([].flatMap { |n| [n] } == [])
+describe("List — into and collect") do
+  it("into maps and flattens one level") do
+    assert([1, 2, 3].into { |n| [n, n * 10] } == [1, 10, 2, 20, 3, 30])
+    assert([].into { |n| [n] } == [])
   end
 
   it("collect keeps and unwraps Just results") do

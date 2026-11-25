@@ -1,0 +1,17 @@
+# kex: check-only
+# An exported function is annotated (docs/typechecker-hm-plan.md §14 item 5,
+# decided 2026-11-24): another unit sees its signature, which KexI carries,
+# not its body. `Exports.Loose.shout` leaves its parameter untyped
+# (KEXET-0514); `whisper` is annotated, and a private function may be left
+# to inference. A module written in the program's own file is not exported.
+using Exports.Loose
+
+module Local do
+  let echo(value) = value
+end
+
+main do
+  IO.printLine(shout("a"))
+  IO.printLine(whisper("B"))
+  IO.printLine(Local.echo(1))
+end

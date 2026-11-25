@@ -1,3 +1,8 @@
+# kex: no-check
+# Run unchecked: calling a function on a value erased to `Any` is a type
+# error now (decision 7 of docs/typechecker-hm-plan.md), and this tests the
+# backends' dispatch for exactly such a value, which a trait-typed value and
+# an unchecked program still reach.
 # kexhq/kex#247: a `foul` method carries one hidden argument (the capability
 # context) beyond the `let` form, and the dynamic dispatcher used to be built
 # per BEAM arity, so a foul method was unreachable whenever the call site did

@@ -1,0 +1,25 @@
+# kex: check-only
+# A stand-in implements every member a capability requires, with the
+# arguments it requires: `send(to)` standing in for `send(to, body)` passed the
+# name check and failed at run time (#793).
+
+capability Mailer do
+  foul send(to: String, body: String) -> Bool do
+    IO.printLine("sending to ${to}")
+    return true
+  end
+end
+
+record FakeMailer do
+  sent : Integer = 0
+end
+
+make FakeMailer, implement: Mailer do
+  foul send(to: String) -> Bool = true
+end
+
+main do
+  with Mailer = FakeMailer {} do
+    IO.printLine(Mailer.send("ada@example.com", "Welcome!").to(String))
+  end
+end

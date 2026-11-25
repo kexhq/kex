@@ -1,0 +1,17 @@
+spec/error_make_bound_unmet.kex:38:24: [KEXET-0511]: Error, `low` only works on Span<Float> when Float is Countable, and Float isn't
+   |
+38 |   IO.printLine(span.low)
+   |                ^^^^^^^^
+spec/error_make_bound_unmet.kex:39:26: [KEXET-0511]: Error, `total` only works on Span<Float> when Float is Countable, and Float isn't
+   |
+39 |   IO.printLine(span.total)
+   |                ^^^^^^^^^^
+spec/error_make_bound_unmet.kex:40:23: [KEXET-0491]: Error, `sumAll` expects argument 1 to be Walk, but got Span<Float>
+
+sumAll : Walk -> Integer
+   |
+34 | let sumAll(w: Walk) -> Integer = w.total
+   |               ---- expected because of this parameter
+  ...
+40 |   IO.printLine(sumAll(span))
+   |                       ^^^^ this has type Span<Float>

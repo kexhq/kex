@@ -1,0 +1,11 @@
+# kex: check-only
+using Units.SI
+
+# A literal selects the clause written with it, and only that one: `^ 4` has
+# none on a length, and taking `^ 2` as a volume is a mismatch.
+
+main do
+  let fourth = 3.meter ^ 4
+  let wrong: Measure<Quantity.Volume> = 3.meter ^ 2
+  IO.printLine("${fourth} ${wrong}")
+end

@@ -1,4 +1,4 @@
-spec/error_branches_against_binding_type.kex:6:21: [KEXET-0446]: Error, match arm type mismatch: expected Integer but arm returns String
+spec/error_branches_against_binding_type.kex:8:10: [KEXET-0001]: Error, type mismatch: expected Integer, got String
   |
-6 |   let n : Integer = match kind do
-  |                     ^^^^^^^^^^^^^
+8 |     _ => "many"
+  |          ^^^^^^

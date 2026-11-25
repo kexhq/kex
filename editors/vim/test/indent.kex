@@ -127,3 +127,7 @@ end
 
 # Atoms: bare, continued by @, quoted, and a label colon before a string.
 let nodes = (:b@localhost, :"b@host.example.com", label(sep:"x"))
+
+# Bounds (#651): `is` after a type variable; `is?` is an ordinary name.
+let larger(A is Comparable => a: A, b: A) -> A = a > b then a else b
+let same = value.is?(Integer)

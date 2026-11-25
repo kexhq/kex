@@ -57,7 +57,7 @@ end
 #
 # @example
 #   measureKind(5.second)   # => :time
-let measureKind(measure: Measure) -> Atom = measure.unit.dimension
+let measureKind(measure: Measure<D>) -> Atom = measure.unit.dimension
 
 # The symbol a measure displays with.
 #
@@ -66,7 +66,7 @@ let measureKind(measure: Measure) -> Atom = measure.unit.dimension
 #
 # @example
 #   measureSymbol(5.minute)   # => "min"
-let measureSymbol(measure: Measure) -> String = measure.unit.notation
+let measureSymbol(measure: Measure<D>) -> String = measure.unit.notation
 
 # The conversion factor of a measure's unit.
 #
@@ -75,12 +75,12 @@ let measureSymbol(measure: Measure) -> String = measure.unit.notation
 #
 # @example
 #   measureFactor(5.minute)   # => 60.0
-let measureFactor(measure: Measure) -> Float = measure.unit.conversionFactor
+let measureFactor(measure: Measure<D>) -> Float = measure.unit.conversionFactor
 
 # A unit described at run time rather than by a constructor.
 #
 # Runtime-defined units are used for prefixes and units derived by arithmetic:
-# +s^2+ from squaring a duration, a kilo- prefix applied to a base unit.
+# +m^2+ from squaring a length, a kilo- prefix applied to a base unit.
 record UnitDefinition do
   # How many base units one of this unit is.
   conversionFactor : Float
@@ -113,9 +113,9 @@ end
 # constructor says its dimension (+1.second+ is a +Measure<Quantity.Time>+,
 # +1.meter+ a +Measure<Quantity.Length>+), so adding, comparing or ordering
 # measures of different dimensions is a type error. These types have no
-# values; they only tell measures apart. A measure made by unit arithmetic
-# (+1.watt * 1.hour+) is a plain +Measure+: its dimension is known only when
-# it runs.
+# values; they only tell measures apart. A measure made by unit arithmetic has
+# its dimension too: +1.watt * 1.hour+ is a +Measure<Quantity.Energy>+, by the
+# products Units.SI declares, and a product it does not declare is a type error.
 module Quantity do
   record Time do
   end
@@ -142,6 +142,17 @@ module Quantity do
   record Resistance do
   end
   record Charge do
+  end
+  # Derived dimensions, named as the products and quotients in Units.SI make
+  # them: length over time is a speed, speed over time an acceleration, force
+  # over length a pressure, a length squared an area.
+  record Area do
+  end
+  record Speed do
+  end
+  record Acceleration do
+  end
+  record Pressure do
   end
 end
 
@@ -415,10 +426,10 @@ make Measure<D>, implement: Showable do
   #
   # @example
   #   90.second.scaled.to(String, Number.format`#.#`)   # => Just("1.5 min")
-  let scaled -> Measure = this.scaled(false)
+  let scaled -> This = this.scaled(false)
 
   # As +scaled+, using binary scales for data when +binary+ is true.
-  let scaled(binary: Bool) -> Measure do
+  let scaled(binary: Bool) -> This do
     let base = scaledMeasureBase(@unit)
     let family = scaledMeasureFamily(base, binary)
     let magnitude = Math.abs(@canonical)
@@ -453,7 +464,7 @@ make Measure<D>, implement: Showable do
   # @example
   #   2.second.scale(3).to(String)     # => Just("6.0 s")
   #   1.hour.scale(0.5).to(String)  # => Just("0.5 h")
-  let scale(multiplier: Number) -> Measure do
+  let scale(multiplier: Number) -> This do
     let converted = Kex.Intrinsic.Fun.convertTo(multiplier, Float).or(0.0)
     return Measure {
       canonical: this.canonical * converted,
@@ -462,29 +473,18 @@ make Measure<D>, implement: Showable do
     }
   end
 
-  # Raises the measure to a power, recording the derived unit in its notation.
+  # The display unit raised to a power, for the powers declared below
+  # (+squared+, +cubed+): its factor raised, its notation recording the power,
+  # and +dimension+ the dimension the power makes.
   #
-  # Raising a measure preserves its display unit while applying the power to
-  # its canonical value, display value, and conversion factor. The current
-  # Unit trait represents a dimension as one Atom, so the dimension remains
-  # the base kind; the notation records the derived unit (for example `s^2`).
-  #
-  # @param exponent [Number] the power to raise to
-  # @return [Measure] the raised measure
-  #
-  # @example
-  #   (2.second ^ 2).to(String)   # => Just("4.0 s^2")
-  let ^(exponent: Number) -> Measure do
-    return Measure {
-      canonical: Kex.Intrinsic.Math.pow(this.canonical, exponent),
-      value: Kex.Intrinsic.Math.pow(this.value, exponent),
-      unit: UnitDefinition {
-        conversionFactor: Kex.Intrinsic.Math.pow(this.factor, exponent),
-        dimension: this.kind,
-        notation: "${this.symbol}^${exponent}"
-      }
-    }
-  end
+  # @param exponent [Integer] the power
+  # @param dimension [Atom] the resulting dimension (+:area+, +:volume+)
+  # @return [UnitDefinition] the raised unit
+  let raisedUnit(exponent: Integer, dimension: Atom) -> UnitDefinition = UnitDefinition {
+    conversionFactor: Kex.Intrinsic.Math.pow(this.factor, exponent),
+    dimension: dimension,
+    notation: "${this.symbol}^${exponent}"
+  }
 
   # Converts the measure to another unit of the same dimension.
   #
@@ -500,7 +500,7 @@ make Measure<D>, implement: Showable do
   # @example
   #   1.day.convertTo(Hour).map { |m| m.showValue }     # => Ok("24.0 h")
   #   90.minute.convertTo(Hour).map { |m| m.showValue } # => Ok("1.5 h")
-  let convertTo(unit: Unit) -> Result<Measure, String> do
+  let convertTo(unit: Unit) -> Result<This, String> do
     let target = UnitDefinition {
       conversionFactor: unit.factor,
       dimension: unit.kind,
@@ -524,7 +524,7 @@ make Measure<D>, implement: Showable do
   #
   # @example
   #   90.minute.convert(Hour).map { |m| m.showValue }   # => Ok("1.5 h")
-  let convert(unit: TimeUnit) -> Result<Measure, String> do
+  let convert(unit: TimeUnit) -> Result<This, String> do
     return this.convertTo(unit)
   end
 
@@ -566,9 +566,8 @@ make Measure<D>, implement: Showable do
     # representable in binary, so the quotient can land an ulp or two off
     # (5.000000000000001). Round back to 15 significant digits, comfortably
     # inside a double's ~15.95, so converted measures read the way they were
-    # written. The annotation says Number because `Integer / Float` infers
-    # Integer; the result is always a Float.
-    let scaledValue(canonical: Float, factor: Float) -> Number do
+    # written.
+    let scaledValue(canonical: Float, factor: Float) -> Float do
       let raw: Float = canonical / factor
       return raw if raw == 0.0
       # Scaling past the exponent range would overflow to infinity; nothing
@@ -653,6 +652,48 @@ end
 # different dimensions are never equal, and ordering them is a type error
 # (+1.second < 1.meter+). A measure whose dimension is known only at run time
 # (one made by unit arithmetic) is compared by its canonical value alone.
+# The powers of a length that name a dimension, overloaded on the exponent
+# as +*+ and +/+ are on the dimensions: +3.meter ^ 2+ is an area, +2.meter ^
+# 3+ a volume, the literal choosing which. Any other power goes through
+# +Units.Dynamic+'s +pow+, which checks it at run time.
+make Measure<Quantity.Length> do
+  # The length squared, written as a power: +squared+.
+  #
+  # @example
+  #   (3.meter ^ 2).to(String)   # => Just("9.0 m^2")
+  let ^(2) -> Measure<Quantity.Area> = this.squared
+
+  # The length cubed, written as a power: +cubed+.
+  #
+  # @example
+  #   (2.meter ^ 3).canonical   # => 8.0
+  let ^(3) -> Measure<Quantity.Volume> = this.cubed
+
+  # The length squared: an area.
+  #
+  # @return [Measure<Quantity.Area>] the area, displayed as the unit squared
+  #
+  # @example
+  #   3.meter.squared.to(String)   # => Just("9.0 m^2")
+  let squared -> Measure<Quantity.Area> = Measure {
+    canonical: @canonical * @canonical,
+    value: @value * @value,
+    unit: this.raisedUnit(2, :area)
+  }
+
+  # The length cubed: a volume, which converts to litres.
+  #
+  # @return [Measure<Quantity.Volume>] the volume, displayed as the unit cubed
+  #
+  # @example
+  #   2.meter.cubed.canonical   # => 8.0
+  let cubed -> Measure<Quantity.Volume> = Measure {
+    canonical: @canonical * @canonical * @canonical,
+    value: @value * @value * @value,
+    unit: this.raisedUnit(3, :volume)
+  }
+end
+
 make Measure<D>, implement: Comparable do
   # Whether +other+ is the same quantity of the same dimension.
   #

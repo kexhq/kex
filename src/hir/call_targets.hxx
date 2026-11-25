@@ -53,6 +53,8 @@ enum class TargetKind {
     Intrinsic,
     // A function named, not called (owner: its qualified name).
     FunctionReference,
+    // `x.is?(T)`: a type test (owner: the types tested, comma-separated).
+    TypeTest,
     // Nothing recorded: lowering and the walker resolve it themselves.
     Undecided,
 };
@@ -76,7 +78,7 @@ inline constexpr TargetKind kTargetKinds[] = {
     TargetKind::TypeReference, TargetKind::Builtin,         TargetKind::Operator,
     TargetKind::OwnMethod,     TargetKind::ModuleFunction,  TargetKind::Hidden,
     TargetKind::Foreign,       TargetKind::Intrinsic,       TargetKind::FunctionReference,
-    TargetKind::Undecided,
+    TargetKind::TypeTest,      TargetKind::Undecided,
 };
 
 } // namespace kex::hir

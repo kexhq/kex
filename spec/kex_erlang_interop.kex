@@ -1,6 +1,5 @@
 # Kex modules calling Erlang modules and vice versa
 # kex: run-beam — calls Erlang through BEAM.*
-# kex: no-check
 
 module MyList do
   let double_all(xs) = xs.map { |x| x * 2 }

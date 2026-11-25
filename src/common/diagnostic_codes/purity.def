@@ -7,3 +7,5 @@ KEX_DIAGNOSTIC(FoulCallInGuard, "KEXEF-0005", "cannot call foul function '{name}
 KEX_DIAGNOSTIC(FoulTagInGuard, "KEXEF-0006", "cannot call foul tag '{name}' in a guard")
 KEX_DIAGNOSTIC(TransitivelyFoulCallInGuard, "KEXEF-0007", "cannot call function '{name}' in a guard: it transitively calls foul operations")
 KEX_DIAGNOSTIC(TransitivelyFoulTagInGuard, "KEXEF-0008", "cannot call tag '{name}' in a guard: it transitively calls foul operations")
+KEX_DIAGNOSTIC(FoulCaptureInGuard, "KEXEF-0009", "cannot capture foul function '{name}' in a guard: what it is handed to may call it")
+KEX_DIAGNOSTIC(FoulValueInGuard, "KEXEF-0010", "`{name}` runs what it is handed here, and this carries a foul effect: it cannot be called in a guard")

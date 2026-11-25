@@ -43,11 +43,11 @@ rescue |error|
   return ""
 end
 
-# Steps that can each fail chain with `flatMap`; `map` changes the value
+# Steps that can each fail chain with `into`; `map` changes the value
 # inside a success. The first failure is the answer.
 let doubledPort(settings: Map<String, String>) -> Integer or! ConfigError do
   port(settings)
-    .flatMap { |n| n > 0 then Ok(n) else Error(NotANumber("${n}")) }
+    .into { |n| n > 0 then Ok(n) else Error(NotANumber("${n}")) }
     .map { |n| n * 2 }
 end
 
@@ -71,8 +71,8 @@ end
 - `.try` works on optionals and results alike, inside a function that can
   itself fail or that ends in a `rescue`, in a `make` block as anywhere else.
 - `result.map { |x| ... }` changes a success and passes a failure on;
-  `result.flatMap { |x| ... }` runs another step that can fail. Both exist on
-  optionals too. `&.` shortens them: `stock.take("tea", 1).flatMap(&.take("mug", 1))`.
+  `result.into { |x| ... }` runs another step that can fail. Both exist on
+  optionals too. `&.` shortens them: `stock.take("tea", 1).into(&.take("mug", 1))`.
 - `if let Ok(n) = Integer.parse(text)` is for one interesting case; `match` is
   for when both cases do work.
 - `rescue` has three forms: `rescue |error|` followed by lines,

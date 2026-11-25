@@ -316,6 +316,54 @@ auto forEachDeclared(const Program& program, Visit&& visit) -> void {
     items(items, program.items);
 }
 
+// `type` and every type expression nested in it, outermost first.
+template <typename Visit>
+auto forEachTypeExpr(const TypeExpr& type, const Visit& visit) -> void {
+    visit(type);
+    const auto each = [&](const TypeExprPtr& child) {
+        if (child) {
+            forEachTypeExpr(*child, visit);
+        }
+    };
+    std::visit(
+        [&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, GenericType>) {
+                for (const auto& arg : node.args) {
+                    each(arg);
+                }
+            } else if constexpr (std::is_same_v<T, FunctionType>) {
+                each(node.param);
+                each(node.result);
+            } else if constexpr (std::is_same_v<T, TupleType>) {
+                for (const auto& element : node.elements) {
+                    each(element);
+                }
+            } else if constexpr (std::is_same_v<T, ListType>) {
+                each(node.element);
+            } else if constexpr (std::is_same_v<T, MapType>) {
+                each(node.key);
+                each(node.value);
+            } else if constexpr (
+                std::is_same_v<T, UnionType> || std::is_same_v<T, IntersectionType>) {
+                each(node.left);
+                each(node.right);
+            } else if constexpr (std::is_same_v<T, RecordType>) {
+                for (const auto& [_, field] : node.fields) {
+                    each(field);
+                }
+            } else if constexpr (std::is_same_v<T, OptionalType>) {
+                each(node.inner);
+            } else if constexpr (std::is_same_v<T, BlockType>) {
+                each(node.inner);
+                for (const auto& param : node.params) {
+                    each(param);
+                }
+            }
+        },
+        type.kind);
+}
+
 // Every function `program` defines (forEachDeclared).
 template <typename Visit>
 auto forEachFunction(const Program& program, Visit&& visit) -> void {

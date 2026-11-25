@@ -74,6 +74,8 @@ auto clone(const TypeExprPtr& type) -> TypeExprPtr {
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, TypeQuery>) {
                 out->kind = TypeQuery{node.query, clone(node.argument)};
+            } else if constexpr (std::is_same_v<T, TypeSplice>) {
+                out->kind = TypeSplice{clone(node.expr)};
             } else {
                 // TypeName, AtomType, GenericVar — plain values.
                 out->kind = node;
@@ -213,6 +215,12 @@ auto clone(const MakeDef& make) -> std::unique_ptr<MakeDef> {
     out->isFinal = make.isFinal;
     out->isServing = make.isServing;
     out->implements = make.implements;
+    for (const auto& args : make.implementArgs) {
+        auto& copied = out->implementArgs.emplace_back();
+        for (const auto& arg : args) {
+            copied.push_back(clone(arg));
+        }
+    }
     out->implementLocations = make.implementLocations;
     for (const auto& item : make.body) {
         std::visit(
@@ -539,6 +547,7 @@ auto clone(const ModuleDef& module) -> std::unique_ptr<ModuleDef> {
     out->location = module.location;
     out->name = module.name;
     out->isCapability = module.isCapability;
+    out->fileModule = module.fileModule;
     if (!cloneItems(module.body, out->body)) {
         return nullptr;
     }

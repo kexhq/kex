@@ -1,0 +1,10 @@
+# kex: check-only
+# A bounded type variable (#651) is one type, and a type satisfying the bound:
+# a Map is not Comparable, and an Integer and a String are not one `A`.
+
+let larger(A is Comparable => a: A, b: A) -> A = a > b then a else b
+
+main do
+  IO.printLine(larger({"a": 1}, {"b": 2}))
+  IO.printLine(larger(1, "x"))
+end

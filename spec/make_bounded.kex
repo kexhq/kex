@@ -1,0 +1,47 @@
+# A bounded `make` (#651): `make A is Discrete => Span<A>` holds only for a
+# Span of a Discrete type, its functions and its conformance alike, while `A`
+# stays the element type inside it (`visit`'s block gets an Integer). A
+# `Span<Float>` has the unbounded block's `has?` and nothing else
+# (spec/error_make_bound_unmet.kex).
+
+record Span<A> do
+  lo : A
+  hi : A
+end
+
+trait Countable do
+end
+make Integer, implement: Countable do
+end
+make Char, implement: Countable do
+end
+
+trait Walk do
+  walked :> [Integer]
+  let total -> Integer = this.walked.length
+end
+
+make Span<A> do
+  let has?(value: A) -> Bool = value >= @lo && value <= @hi
+end
+
+make A is Countable => Span<A>, implement: Walk do
+  let walked -> [Integer] = [1, 2]
+  low :> A
+  let low = @lo
+  visit :> (A -> Void) -> Void
+  let visit(f) = f(@lo)
+end
+
+let sumAll(w: Walk) -> Integer = w.total
+
+main do
+  let s = Span { lo: 1, hi: 4 }
+  let n: Integer = s.low
+  IO.printLine(n)
+  IO.printLine(Span { lo: 'a', hi: 'c' }.low)
+  IO.printLine(s.total)
+  IO.printLine(sumAll(s))
+  s.visit { |x| IO.printLine(x + 1) }
+  IO.printLine(Span { lo: 1.0, hi: 2.0 }.has?(1.5))
+end

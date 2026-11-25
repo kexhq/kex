@@ -1,37 +1,31 @@
-# Measures are extendable: a program adds a dimension of its own (a marker
-# type for `Measure<D>`) and units for it (the `Unit` trait), and gets the
-# same arithmetic, conversion, equality and ordering as the stdlib's
-# dimensions. Its measures stay apart from every other dimension's: mixing
-# them is a type error, as it is for `Quantity`'s.
-module Money do
-  record Currency do
-  end
+# A program adds a dimension of its own as the stdlib adds its own: a record
+# for the dimension, a unit, and the products it declares, each saying the
+# dimension it answers (docs/typechecker-hm-plan.md §8.1). A `/` on
+# `Measure<Currency>` is an overload beside the prelude's `/` on a Duration,
+# not a second definition of it (KEXET-0128 compared only the name `Measure`).
+
+record Currency do
 end
 
-type CurrencyUnit = Euro | Cent
-
-make CurrencyUnit, implement: Unit do
-  let factor(@Euro) = 1.0
-  let factor(@Cent) = 0.01
-  let kind = :currency
-  let symbol(@Euro) = "EUR"
-  let symbol(@Cent) = "c"
+record Rate do
 end
 
-let money(amount: Float, unit: CurrencyUnit) -> Measure<Money.Currency> = Measure {
-  canonical: amount * unit.factor,
-  value: amount,
-  unit: UnitDefinition {
-    conversionFactor: unit.factor,
-    dimension: unit.kind,
-    notation: unit.symbol
-  }
+let euro(value: Float) -> Measure<Currency> = Measure {
+  canonical: value,
+  value: value,
+  unit: UnitDefinition { conversionFactor: 1.0, dimension: :currency, notation: "EUR" }
 }
 
+make Measure<Currency> do
+  let /(other: Measure<Quantity.Time>) -> Measure<Rate> = Measure {
+    canonical: @canonical / other.canonical,
+    value: @canonical / other.canonical,
+    unit: UnitDefinition { conversionFactor: 1.0, dimension: :rate, notation: "EUR/s" }
+  }
+end
+
 main do
-  let price = money(1.5, Euro)
-  let coins = money(150.0, Cent)
-  IO.printLine("${price == coins} ${money(50.0, Cent) < price} ${[price, money(20.0, Cent)].sort.map { |m| m.showValue }}")
-  IO.printLine((price + money(50.0, Cent)).showValue)
-  IO.printLine(coins.convertTo(Euro).map { |m| m.showValue }.or("?"))
+  let pay: Measure<Rate> = euro(3600.0) / 1.hour
+  IO.printLine(pay.canonical)
+  IO.printLine((euro(1.0) + euro(2.0)).canonical)
 end

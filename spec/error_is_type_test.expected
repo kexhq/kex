@@ -1,0 +1,8 @@
+spec/error_is_type_test.kex:9:22: [KEXET-0515]: Error, `is?` takes a type or trait name, like `x.is?(String)` or `x.is?(Discrete)`
+  |
+9 |   IO.printLine(v.is?(kind))
+  |                      ^^^^
+spec/error_is_type_test.kex:10:21: [KEXET-0516]: Error, `is?(Showable)` can't be checked at run time, because a value can be `Showable` just by having the right functions: check for specific types instead, like `x.is?(Integer)`
+   |
+10 |   IO.printLine(v.is?(Showable))
+   |                ^^^^^^^^^^^^^^^

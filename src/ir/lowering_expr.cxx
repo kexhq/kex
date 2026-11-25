@@ -63,6 +63,10 @@ auto Lowering::lowerNode(const ast::ExprPtr& e) -> ExprPtr {
         [&](const auto& n) -> ExprPtr {
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, ast::IntLiteral>) {
+                // An integer literal a Float takes is a float (decision 2).
+                if (hir->literalIsFloat(*e)) {
+                    return lit(LitKind::Float, n.value + ".0");
+                }
                 return lit(LitKind::Int, n.value);
             } else if constexpr (std::is_same_v<T, ast::FloatLiteral>) {
                 return lit(LitKind::Float, n.value);
@@ -183,6 +187,11 @@ auto Lowering::lowerNode(const ast::ExprPtr& e) -> ExprPtr {
             } else if constexpr (std::is_same_v<T, ast::ThisExpr>) {
                 return var(currentName("this"));
             } else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
+                // A type variable this function was passed (`A` in `A.identity`).
+                if (const auto passed = typeParameterVars.find(n.name);
+                    passed != typeParameterVars.end()) {
+                    return var(passed->second);
+                }
                 // An all-caps top-level constant (e.g. DEFAULT_LEVEL, defined
                 // via `let NAME = value` → a 0-arity function) is a call, not a
                 // nullary ADT constructor. A MODULE's own constant is the same

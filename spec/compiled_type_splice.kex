@@ -1,0 +1,30 @@
+# A generated function's signature splices a type (docs/compiled-eval.md):
+# `-> Measure<%{dimension}>` names the dimension each row of a table gives,
+# where a template could splice only a name before. The value is a type
+# named as a value or a String that spells a type name, and the checker sees
+# the declaration as if the type were written there.
+using Units.SI
+
+record Box<T> do
+  item : T
+end
+
+compiled do
+  let lengths = [
+    ("meters", Quantity.Length, 1.0),
+    ("kilometers", "Quantity.Length", 1000.0)
+  ]
+  lengths.each do |name, dimension, factor|
+    let %{name + "Of"}(value: Float) -> Measure<%{dimension}> = (value * factor).meter
+  end
+  [("ints", Integer), ("texts", String)].each do |name, element|
+    let %{name + "Boxed"}(item: %{element}) -> Box<%{element}> = Box { item: item }
+  end
+end
+
+main do
+  let distance: Measure<Quantity.Length> = 3.0.metersOf + 2.0.kilometersOf
+  IO.printLine(distance.canonical)
+  IO.printLine(intsBoxed(4).item + 1)
+  IO.printLine(textsBoxed("ab").item + "c")
+end

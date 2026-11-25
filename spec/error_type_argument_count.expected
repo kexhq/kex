@@ -1,12 +1,16 @@
-spec/error_type_argument_count.kex:10:10: [KEXET-0109]: Error, `Box` takes 1 type argument, but 2 are given
+spec/error_type_argument_count.kex:11:10: [KEXET-0109]: Error, `Box` takes 1 type argument, but 2 are given
    |
-10 | let f(b: Box<Integer, String>) -> Integer = 1
+11 | let f(b: Box<Integer, String>) -> Integer = 1
    |          ^^^^^^^^^^^^^^^^^^^^
-spec/error_type_argument_count.kex:11:10: [KEXET-0110]: Error, `Map` takes 2 type arguments, but 1 is given
+spec/error_type_argument_count.kex:12:10: [KEXET-0110]: Error, `Map` takes 2 type arguments, but 1 is given
    |
-11 | let g(m: Map<String>) -> Integer = 2
+12 | let g(m: Map<String>) -> Integer = 2
    |          ^^^^^^^^^^^
-spec/error_type_argument_count.kex:12:10: [KEXET-0109]: Error, `Optional` takes 1 type argument, but 2 are given
+spec/error_type_argument_count.kex:13:10: [KEXET-0109]: Error, `Optional` takes 1 type argument, but 2 are given
    |
-12 | let h(o: Optional<Integer, String>) -> Integer = 3
+13 | let h(o: Optional<Integer, String>) -> Integer = 3
    |          ^^^^^^^^^^^^^^^^^^^^^^^^^
+spec/error_type_argument_count.kex:14:13: [KEXET-0111]: Error, `Result` takes 2 type arguments, but 0 are given
+   |
+14 | let bare(r: Result) -> Integer = 4
+   |             ^^^^^^

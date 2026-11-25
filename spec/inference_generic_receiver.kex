@@ -10,6 +10,9 @@
 # about the receiver are now no evidence about it, the same way overloads from
 # different backend modules already were.
 #
+# What every overload answers is still known: each `to(String)` is a
+# `String?`, so the call is one, the receiver left unbound.
+#
 # As with the other inference golden, this records what inference CURRENTLY
 # concludes: `x` stays an unbound variable rather than becoming something
 # usefully general. That is a weaker answer, not a wrong one.

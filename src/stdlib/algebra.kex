@@ -176,3 +176,123 @@ make [A], implement: Monoid do
   #   groups.reduce([]) { |acc, g| acc.combine(g) }
   let combine(other: This) -> This = this + other
 end
+
+# Containers whose values can be transformed in place: a list's elements, an
+# optional's value, a result's success. One trait over the constructor
+# (docs/typechecker-hm-plan.md §8.2), so a function written once works on any
+# of them:
+#
+#   let bumped(F is Functor => xs: F<Integer>) -> F<Integer> = xs.map { |x| x + 1 }
+#
+#   bumped([1, 2])     # => [2, 3]
+#   bumped(Just(1))    # => Just(2)
+#   bumped(Ok(1))      # => Ok(2)
+#
+# Implemented by +List+, +Optional+ and +Result+ (whose error stays as it is).
+trait Functor<F<_>> do
+  # Applies +f+ to each value the container holds, keeping its shape.
+  #
+  # @param f [A -> B] the transformation
+  # @return [F<B>] the container of results
+  map : F<A> -> (A -> B) -> F<B>
+end
+
+# Containers whose values can each produce another container of the same
+# kind, flattened into one: the chaining step of a list, an optional or a
+# result.
+#
+#   let halves(F is Bindable => xs: F<Integer>, f: Integer -> F<Integer>) -> F<Integer> =
+#     xs.into(f)
+#
+# Implemented by +List+, +Optional+ and +Result+.
+trait Bindable<F<_>> do
+  # Applies +f+ to each value and joins what it answers.
+  #
+  # @param f [A -> F<B>] the step
+  # @return [F<B>] the joined result
+  into : F<A> -> (A -> F<B>) -> F<B>
+end
+
+# A container that can also be made from one plain value: +wrap+, beside
+# +into+. Code written once for every such container reaches its
+# constructor through the type, +M.wrap(x)+, as a concrete one is reached by
+# name: +List.wrap(1)+ is +[1]+, +Optional.wrap(1)+ is +Just(1)+, and
+# +Result.wrap(1)+ is +Ok(1)+.
+#
+#   let incremented(M is Monad => xs: M<Integer>) -> M<Integer> = xs.into { |x| M.wrap(x + 1) }
+#
+#   incremented([1, 2])   # => [2, 3]
+#   incremented(Just(1))  # => Just(2)
+#
+# Implemented by +List+, +Optional+ and +Result+ (whose error stays as it is).
+trait Monad<F> do
+  # The container holding just +value+.
+  #
+  # @param value [A] the value to hold
+  # @return [F<A>] the container
+  wrap : A -> F<A>
+
+  # Applies +f+ to each value and joins what it answers.
+  #
+  # @param f [A -> F<B>] the step
+  # @return [F<B>] the joined result
+  into : F<A> -> (A -> F<B>) -> F<B>
+end
+
+# Containers whose values can be combined with another's when neither depends
+# on the other: +with+ applies a function to the values of both. A list
+# combines every pair, an Optional or a Result the two values or the first
+# failure, and a +Validation+ every value or every failure, all of them, which
+# is what checking several independent inputs wants.
+#
+#   [1, 2].with([10, 20]) { |a, b| a + b }       # => [11, 21, 12, 22]
+#   Just(1).with(Just(2)) { |a, b| a + b }       # => Just(3)
+#   name.checked.with(email.checked) do |n, e|
+#     Signup { name: n, email: e }               # every failed check, or a Signup
+#   end
+#
+# +traverse+ and +sequence+ are written once for every one of them.
+#
+# Implemented by +List+, +Optional+, +Result+ and +Validation+.
+trait Applicable<F> do
+  # The container holding just +value+.
+  #
+  # @param value [A] the value to hold
+  # @return [F<A>] the container
+  wrap : A -> F<A>
+
+  # Applies +f+ to this container's values and +other+'s.
+  #
+  # @param other [F<B>] the other container
+  # @param f [A -> B -> C] what the two values make
+  # @return [F<C>] the results
+  with : F<A> -> F<B> -> (A -> B -> C) -> F<C>
+end
+
+# Applies +f+ to every element and gathers what it answers into one container:
+# every result, or what the container makes of the failures (the first for a
+# +Result+, all of them for a +Validation+).
+#
+#  xs [[A]] the elements
+#  f [A -> F<B>] the step for one element
+#  [F<[B]>] the results, gathered
+#
+# 
+#   traverse(["1", "2"]) { |s| s.to(Integer) }   # => Just([1, 2])
+#   traverse(["1", "x"]) { |s| s.to(Integer) }   # => None
+let traverse(F is Applicable => xs: [A], f: A -> F<B>) -> F<[B]> do
+  return xs.reduce(F.wrap([])) do |gathered, x|
+    gathered.with(f(x)) { |done, item| done + [item] }
+  end
+end
+
+# Turns a list of containers into one container of the list: +traverse+ with
+# nothing to apply.
+#
+#  xs [[F<A>]] the containers
+#  [F<[A]>] their values, gathered
+#
+# 
+#   sequence([Ok(1), Ok(2)])           # => Ok([1, 2])
+#   sequence([Ok(1), Error("no")])     # => Error("no")
+let sequence(F is Applicable => xs: [F<A>]) -> F<[A]> = traverse(xs) { |x| x }

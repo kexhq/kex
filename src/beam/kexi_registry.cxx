@@ -3,6 +3,7 @@
 #include "beam_file.hxx"
 #include "../common/artifact_versions.hxx"
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <optional>
 #include <unordered_set>
@@ -71,6 +72,13 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
             if (type->name.size() > 1 && type->name[0] == ':') {
                 return Type::atom(type->name.substr(1));
             }
+            // An Integer literal's digits: what a clause written `let ^(2)` takes.
+            if (!type->name.empty() &&
+                std::all_of(type->name.begin(), type->name.end(), [](unsigned char c) {
+                    return std::isdigit(c) != 0;
+                })) {
+                return Type::integerLiteral(type->name);
+            }
             // The checker's own table, so `Int` reads back as the Integer it was
             // checked as (this reader once made it Int64).
             if (auto builtin = kex::semantic::signatureBuiltinType(type->name)) {
@@ -84,7 +92,7 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
             if (type->typeArgs.empty() && type->name.size() == 1 && type->name[0] >= 'A' &&
                 type->name[0] <= 'Z') {
                 auto [it, _] = vars.try_emplace(type->name, -static_cast<int>(vars.size() + 1));
-                return Type::typeVar(it->second);
+                return Type::genericLetter(it->second);
             }
             // Prelude make targets name these compound types (`make Map<K, V>`,
             // `make Optional<X>`); values of them carry the compound semantic
@@ -93,8 +101,8 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
                 return Type::optional(semanticType(type->typeArgs[0], vars));
             }
             if (type->name == kex::names::kMapType && type->typeArgs.size() == 2) {
-                return Type::map(
-                    semanticType(type->typeArgs[0], vars), semanticType(type->typeArgs[1], vars));
+                auto key = semanticType(type->typeArgs[0], vars);
+                return Type::map(std::move(key), semanticType(type->typeArgs[1], vars));
             }
             if (type->name == kex::names::kListType && type->typeArgs.size() == 1) {
                 return Type::list(semanticType(type->typeArgs[0], vars));
@@ -122,7 +130,12 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
             }
             return Type::named(type->name, convertAll(type->typeArgs));
         case KexiType::Func: {
-            auto func = Type::func(convertAll(type->typeArgs), semanticType(type->result, vars));
+            // Each read in order, left to right as the type is written: a letter's
+            // id is the order it is first read in, and the order a call's
+            // arguments are evaluated in is the compiler's choice (GCC's and
+            // Clang's differ), which named `B` `C` on Linux.
+            auto params = convertAll(type->typeArgs);
+            auto func = Type::func(std::move(params), semanticType(type->result, vars));
             std::get<kex::semantic::FuncType>(func->kind).foul = type->foul;
             return func;
         }
@@ -130,11 +143,13 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
         case KexiType::List:
             return Type::list(
                 type->typeArgs.empty() ? Type::unknown() : semanticType(type->typeArgs[0], vars));
-        case KexiType::Map:
+        case KexiType::Map: {
+            auto key =
+                type->typeArgs.size() > 0 ? semanticType(type->typeArgs[0], vars) : Type::unknown();
             return Type::map(
-                type->typeArgs.size() > 0 ? semanticType(type->typeArgs[0], vars) : Type::unknown(),
-                type->typeArgs.size() > 1 ? semanticType(type->typeArgs[1], vars)
-                                          : Type::unknown());
+                std::move(key), type->typeArgs.size() > 1 ? semanticType(type->typeArgs[1], vars)
+                                                          : Type::unknown());
+        }
         case KexiType::Optional:
             return Type::optional(
                 type->typeArgs.empty() ? Type::unknown() : semanticType(type->typeArgs[0], vars));
@@ -159,10 +174,24 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
             }
             return Type::constrained(type->name, type->traitName, genericId);
         }
-        case KexiType::Never: return Type::voidType();
+        case KexiType::Never: return Type::never();
         case KexiType::Unknown: return Type::unknown();
+        case KexiType::Any: return Type::any();
+        case KexiType::App: {
+            auto head = semanticType(type->result, vars);
+            return Type::app(std::move(head), convertAll(type->typeArgs));
+        }
     }
     return Type::unknown();
+}
+
+// An interface writes a tied `Number` (decision 4) as the `Number` it was
+// written as, so it is tied again here, by the rule the checker used: the
+// signature was checked against the tie where it was compiled.
+auto tieImportedTraitResult(kex::semantic::Signature& signature) -> void {
+    kex::semantic::tieTraitResult(
+        signature, [](const kex::semantic::TypePtr& type) { return type; },
+        [](const kex::semantic::Type*) { return true; });
 }
 
 auto importedFunction(
@@ -183,7 +212,10 @@ auto importedFunction(
     }
     result.signature = {
         exported.name, std::move(params), semanticType(exported.returnType, vars), exported.isFoul};
+    tieImportedTraitResult(result.signature);
     result.signature.paramNames = exported.paramNames;
+    result.signature.requiredCapabilities = exported.requiredCapabilities;
+    result.signature.typeParameters = exported.typeParameters;
     if (exported.defaultedParams > 0) {
         result.signature.requiredParams = result.signature.params.size() - exported.defaultedParams;
     }
@@ -219,14 +251,14 @@ auto namesAlias(const KexiTypePtr& type, std::string module, const ModuleTypes& 
 }
 
 auto importedReceiverFunction(
-    const KexiMethod& receiver,
+    const KexiReceiverFunction& receiver,
     const std::string& backendModule,
     const std::string& sourceModule,
     const ModuleTypes& types = {}) -> kex::semantic::ImportedFunction {
     kex::semantic::ImportedFunction result;
     result.sourceName = receiver.name;
     result.backendFunction = receiver.beamFunction;
-    // `name/Head` is the BEAM spelling of the method's implementation for
+    // `name/Head` is the BEAM spelling of the function's implementation for
     // `Head`; the interface keeps only which type that is.
     if (const auto prefix = receiver.name + "/"; receiver.implementation.starts_with(prefix)) {
         result.implementationHead = receiver.implementation.substr(prefix.size());
@@ -253,7 +285,10 @@ auto importedReceiverFunction(
     }
     result.signature = {
         receiver.name, std::move(params), semanticType(receiver.returnType, vars), receiver.isFoul};
+    tieImportedTraitResult(result.signature);
     result.signature.paramNames = receiver.paramNames;
+    result.signature.requiredCapabilities = receiver.requiredCapabilities;
+    result.signature.receiverBounds = receiver.receiverBounds;
     if (receiver.defaultedParams > 0) {
         result.signature.requiredParams = result.signature.params.size() - receiver.defaultedParams;
     }
@@ -265,31 +300,61 @@ auto importedTrait(const KexiTraitDef& trait, const KexiTypeInterface& interface
     kex::semantic::TraitDef result;
     result.name = trait.name;
     result.defaultBodies = trait.defaultBodies;
+    result.paramKinds = trait.paramKinds;
     // Every overload the trait received under a required name: a capability
     // can require `take(text: String)` beside `take(count: Integer)`, and
     // keeping the first alone held the Integer implementation to the String
     // one (kexhq/kex#623).
     std::unordered_set<std::string> requiredNames;
-    for (const auto& required : trait.requiredMethods) {
+    for (const auto& required : trait.requirements) {
         if (!requiredNames.insert(required.name).second) {
             continue;
         }
         bool found = false;
-        for (const auto& method : interface.methods) {
-            if (method.name != required.name || !method.receiverType ||
-                method.receiverType->kind != KexiType::Constrained ||
-                method.receiverType->traitName != trait.name) {
+        for (const auto& receiverFunction : interface.receiverFunctions) {
+            if (receiverFunction.name != required.name || !receiverFunction.receiverType ||
+                receiverFunction.receiverType->kind != KexiType::Constrained ||
+                receiverFunction.receiverType->traitName != trait.name) {
                 continue;
             }
             found = true;
-            auto imported = importedReceiverFunction(method, {}, {});
+            auto imported = importedReceiverFunction(receiverFunction, {}, {});
             auto params = std::move(imported.signature.params);
             if (!params.empty()) {
                 params.erase(params.begin());
             }
+            auto requiredResult = imported.signature.result;
+            // Under `trait Functor<F<_>>` an `F<A>` reads back as a type named
+            // F: it is the trait's parameter applied (§8.2), one variable per
+            // letter across the signature.
+            if (!trait.paramKinds.empty()) {
+                std::unordered_map<std::string, kex::semantic::TypePtr> heads;
+                int next = -1000;
+                std::function<kex::semantic::TypePtr(const kex::semantic::TypePtr&)> applied =
+                    [&](const kex::semantic::TypePtr& type) -> kex::semantic::TypePtr {
+                    auto rebuilt = kex::semantic::mapTypeChildren(type, applied);
+                    const auto* named =
+                        rebuilt ? std::get_if<kex::semantic::NamedType>(&rebuilt->kind) : nullptr;
+                    if (!named || named->name.size() != 1 || named->typeArgs.empty() ||
+                        !kex::startsUppercase(named->name)) {
+                        return rebuilt;
+                    }
+                    auto head = heads.find(named->name);
+                    if (head == heads.end()) {
+                        head =
+                            heads.emplace(named->name, kex::semantic::Type::genericLetter(next--))
+                                .first;
+                    }
+                    return kex::semantic::Type::app(head->second, named->typeArgs);
+                };
+                for (auto& param : params) {
+                    param = applied(param);
+                }
+                requiredResult = applied(requiredResult);
+            }
             result.requiredMethods.push_back(
                 kex::semantic::Signature{
-                    required.name, std::move(params), imported.signature.result, required.isFoul});
+                    required.name, std::move(params), requiredResult, required.isFoul});
         }
         if (!found) {
             result.requiredMethods.push_back(
@@ -297,22 +362,23 @@ auto importedTrait(const KexiTraitDef& trait, const KexiTypeInterface& interface
                     required.name, {}, kex::semantic::Type::unknown(), required.isFoul});
         }
     }
-    // The methods the trait defines a body for are in the interface too,
+    // The functions the trait defines a body for are in the interface too,
     // received by the trait itself. Without them a prebuilt trait had no
     // defaults at all: `Comparable`'s `<`, declared in comparable.kex, was
     // unknown to the checker, which then had to know it by name instead.
-    for (const auto& method : interface.methods) {
-        if (!method.receiverType || method.receiverType->kind != KexiType::Constrained ||
-            method.receiverType->traitName != trait.name) {
+    for (const auto& receiverFunction : interface.receiverFunctions) {
+        if (!receiverFunction.receiverType ||
+            receiverFunction.receiverType->kind != KexiType::Constrained ||
+            receiverFunction.receiverType->traitName != trait.name) {
             continue;
         }
         const bool required = std::any_of(
-            trait.requiredMethods.begin(), trait.requiredMethods.end(),
-            [&](const KexiTraitRequiredMethod& r) { return r.name == method.name; });
-        if (!required &&
-            std::find(result.defaultMethods.begin(), result.defaultMethods.end(), method.name) ==
-                result.defaultMethods.end()) {
-            result.defaultMethods.push_back(method.name);
+            trait.requirements.begin(), trait.requirements.end(),
+            [&](const KexiTraitRequirement& r) { return r.name == receiverFunction.name; });
+        if (!required && std::find(
+                             result.defaultMethods.begin(), result.defaultMethods.end(),
+                             receiverFunction.name) == result.defaultMethods.end()) {
+            result.defaultMethods.push_back(receiverFunction.name);
         }
     }
     return result;
@@ -567,10 +633,10 @@ auto KexiRegistry::automaticImportModules() const -> std::vector<const LoadedMod
     return result;
 }
 
-auto KexiRegistry::findMethodsForReceiver(
-    const std::string& methodName, const std::string& receiverTypeName) const
-    -> std::vector<std::pair<std::string, const KexiMethod*>> {
-    std::vector<std::pair<std::string, const KexiMethod*>> results;
+auto KexiRegistry::findReceiverFunctions(
+    const std::string& functionName, const std::string& receiverTypeName) const
+    -> std::vector<std::pair<std::string, const KexiReceiverFunction*>> {
+    std::vector<std::pair<std::string, const KexiReceiverFunction*>> results;
     for (const auto& [_, package] : m_packages) {
         std::unordered_set<std::string> units(package.unitIds.begin(), package.unitIds.end());
         std::unordered_set<std::string> providers(
@@ -581,10 +647,10 @@ auto KexiRegistry::findMethodsForReceiver(
                     !providers.count(mod.chunk.metadata.sourceModule)) {
                     continue;
                 }
-                for (const auto& method : mod.chunk.typeInterface.methods) {
-                    if (method.name == methodName &&
-                        typeNameStr(method.receiverType) == receiverTypeName) {
-                        results.emplace_back(mod.beamAtom, &method);
+                for (const auto& receiverFunction : mod.chunk.typeInterface.receiverFunctions) {
+                    if (receiverFunction.name == functionName &&
+                        typeNameStr(receiverFunction.receiverType) == receiverTypeName) {
+                        results.emplace_back(mod.beamAtom, &receiverFunction);
                     }
                 }
             }
@@ -634,10 +700,10 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
     for (const auto& [_, unit] : m_units) {
         for (const auto& mod : unit.modules) {
             for (const auto& trait : mod.chunk.metadata.traitDefs) {
-                auto& methods = ext.traitMethods[trait.name];
-                for (const auto& required : trait.requiredMethods) {
+                auto& requirements = ext.traitMethods[trait.name];
+                for (const auto& required : trait.requirements) {
                     int arity = 1;
-                    for (const auto& candidate : mod.chunk.typeInterface.methods) {
+                    for (const auto& candidate : mod.chunk.typeInterface.receiverFunctions) {
                         if (candidate.name == required.name && candidate.receiverType &&
                             candidate.receiverType->kind == KexiType::Constrained &&
                             candidate.receiverType->traitName == trait.name) {
@@ -645,7 +711,7 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                             break;
                         }
                     }
-                    methods.push_back({required.name, arity});
+                    requirements.push_back({required.name, arity});
                 }
             }
         }
@@ -665,19 +731,20 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                 ext.capabilityMembers[shortName].insert(member);
             }
 
-            for (const auto& method : mod.chunk.typeInterface.methods) {
-                if (!method.isSlot || !method.receiverType) {
+            for (const auto& receiverFunction : mod.chunk.typeInterface.receiverFunctions) {
+                if (!receiverFunction.isSlot || !receiverFunction.receiverType) {
                     continue;
                 }
-                const auto type = typeNameStr(method.receiverType);
+                const auto type = typeNameStr(receiverFunction.receiverType);
                 if (type.empty()) {
                     continue;
                 }
                 auto& serving = ext.servingSlots[type];
                 serving.first = mod.beamAtom;
-                if (std::find(serving.second.begin(), serving.second.end(), method.name) ==
+                if (std::find(
+                        serving.second.begin(), serving.second.end(), receiverFunction.name) ==
                     serving.second.end()) {
-                    serving.second.push_back(method.name);
+                    serving.second.push_back(receiverFunction.name);
                 }
             }
 
@@ -713,7 +780,7 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                     !providers.count(mod.chunk.metadata.sourceModule)) {
                     continue;
                 }
-                for (const auto& receiverFn : mod.chunk.typeInterface.methods) {
+                for (const auto& receiverFn : mod.chunk.typeInterface.receiverFunctions) {
                     if (receiverFn.typeOnly) {
                         continue;
                     }
@@ -800,7 +867,7 @@ auto KexiRegistry::buildSemanticInterfaces() const -> kex::semantic::ImportedInt
                     std::vector<kex::semantic::TypePtr> typeArgs;
                     for (size_t i = 0; i < adt.typeParams.size(); ++i) {
                         typeArgs.push_back(
-                            kex::semantic::Type::typeVar(-(static_cast<int>(i) + 1)));
+                            kex::semantic::Type::genericLetter(-(static_cast<int>(i) + 1)));
                     }
                     function.signature.result =
                         ctor.arity == 0 ? kex::semantic::Type::named(ctor.name)
@@ -810,7 +877,7 @@ auto KexiRegistry::buildSemanticInterfaces() const -> kex::semantic::ImportedInt
                                              ? ctor.typeParamSlots[i]
                                              : -1;
                         function.signature.params.push_back(
-                            slot >= 0 ? kex::semantic::Type::typeVar(-(slot + 1))
+                            slot >= 0 ? kex::semantic::Type::genericLetter(-(slot + 1))
                                       : kex::semantic::Type::unknown());
                     }
                     function.backendModule = module.beamAtom;
@@ -843,8 +910,18 @@ auto KexiRegistry::buildSemanticInterfaces() const -> kex::semantic::ImportedInt
                     !providers.count(module.chunk.metadata.sourceModule)) {
                     continue;
                 }
-                for (const auto& receiver : module.chunk.typeInterface.methods) {
-                    if (receiver.typeOnly) {
+                for (const auto& receiver : module.chunk.typeInterface.receiverFunctions) {
+                    // A declared-only function on a type (`find :> (K -> V -> Bool) ->
+                    // (K, V)?` in `make Map<K, V>`, whose body is Foldable's default)
+                    // is part of that type's contract: without it a program typed
+                    // `m.find` by the trait default alone, and left it Unknown. One
+                    // on a trait is that trait's requirement (`showValue :> String`
+                    // in `trait Showable`), which the trait carries (importedTrait);
+                    // as a function too it stood beside the prelude's
+                    // `showValue(value: Showable)` and made every call ambiguous.
+                    // Lowering skips both (buildExternalModules): no body here.
+                    if (receiver.typeOnly && receiver.receiverType &&
+                        receiver.receiverType->kind == KexiType::Constrained) {
                         continue;
                     }
                     auto function = importedReceiverFunction(
@@ -863,7 +940,7 @@ auto KexiRegistry::buildSemanticInterfaces() const -> kex::semantic::ImportedInt
                                 ? kex::semantic::Type::named(
                                       "Result", {reply->typeArgs.front(),
                                                  kex::semantic::Type::named("CallError")})
-                                : kex::semantic::Type::unit();
+                                : kex::semantic::Type::voidType();
                         signature.isFoul = true;
                         remote.remoteSlot = true;
                         interfaces.receiverFunctions[receiver.name].push_back(std::move(remote));
@@ -958,6 +1035,7 @@ auto KexiRegistry::buildSemanticInterfaces() const -> kex::semantic::ImportedInt
                 }
                 for (const auto& name : names) {
                     interfaces.typeNames.insert(name);
+                    interfaces.typeArities[name] = te.genericParams.size();
                     if (te.isDistinct && te.backingType) {
                         TypeVarMap vars;
                         interfaces.distinctTypes[name] = {
@@ -1014,7 +1092,8 @@ auto KexiRegistry::buildSemanticInterfaces() const -> kex::semantic::ImportedInt
     for (const auto& [_, unit] : m_units) {
         for (const auto& module : unit.modules) {
             for (const auto& c : module.chunk.metadata.traitConformances) {
-                interfaces.traitConformances.push_back({c.typeName, c.traitName});
+                interfaces.traitConformances.push_back(
+                    {c.typeName, c.traitName, c.bounds, c.holes});
                 if (auto it = adtConstructors.find(c.typeName); it != adtConstructors.end()) {
                     for (const auto& ctorName : it->second) {
                         interfaces.traitConformances.push_back({ctorName, c.traitName});
@@ -1170,14 +1249,14 @@ auto KexiRegistry::generateCompletionStubs(const LoadedUnit& unit) const -> std:
             stubs += ") = ()\n";
         }
 
-        // Methods as module-level functions for completion
+        // Functions as module-level functions for completion
         std::unordered_set<std::string> seen;
-        for (const auto& method : mod.chunk.typeInterface.methods) {
-            if (!seen.insert(method.name).second) {
+        for (const auto& receiverFunction : mod.chunk.typeInterface.receiverFunctions) {
+            if (!seen.insert(receiverFunction.name).second) {
                 continue;
             }
-            stubs += "  let " + method.name + "(";
-            for (int i = 0; i < method.beamArity; i++) {
+            stubs += "  let " + receiverFunction.name + "(";
+            for (int i = 0; i < receiverFunction.beamArity; i++) {
                 if (i) {
                     stubs += ", ";
                 }

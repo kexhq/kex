@@ -28,7 +28,7 @@ foul socketRoute(request: Request<Binary>, _context: Context) -> Response<Binary
 end
 
 main do
-  let port = ENV.get("PORT").flatMap { |text| text.to(Integer) }.or(8080)
+  let port = ENV.get("PORT").into { |text| text.to(Integer) }.or(8080)
   let router = Router.build.get("/hello", ~hello).get("/ws", ~socketRoute)
   let options = ServerOptions { maximumHandlers: 10000 }
   let endpoint = TCP.Endpoint.loopback(Net.Port.from(port).try)

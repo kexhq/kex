@@ -116,7 +116,7 @@ module UnorderedSet do
   let empty -> UnorderedSet<A> = UnorderedSet { slots: {} }
 end
 
-make Set<A>, implement: Enumerable, Foldable, Monoid, Showable do
+make Set<A>, implement: Enumerable, Foldable<A>, Monoid, Showable do
   # Folds over the elements in ascending order.
   #
   # This is +Set+'s +Enumerable+ primitive; +each+, +find+, +any?+ and the
@@ -408,7 +408,7 @@ make Set<A>, implement: Enumerable, Foldable, Monoid, Showable do
   # @example
   #   Set.from([2, 1]).showValue   # => "Set(1, 2)"
   showValue :> String
-  let showValue = "Set(${@items.map { |x| x.showValue }.join(", ")})"
+  let showValue -> String = "Set(${@items.map { |x| x.showValue }.join(", ")})"
 end
 
 make Set<A>, implement: Blankable do
@@ -424,7 +424,7 @@ make Set<A>, implement: Blankable do
   let blank? = @items.empty?
 end
 
-make UnorderedSet<A>, implement: Enumerable, Foldable, Monoid, Showable do
+make UnorderedSet<A>, implement: Enumerable, Foldable<A>, Monoid, Showable do
   # Folds over the elements.
   #
   # The order is whatever the underlying map hands back: unspecified, and not
@@ -661,7 +661,7 @@ make UnorderedSet<A>, implement: Enumerable, Foldable, Monoid, Showable do
   #   UnorderedSet.from([2, 1]).showValue    # => "UnorderedSet(1, 2)"
   #   UnorderedSet.from([10, 2]).showValue   # => "UnorderedSet(2, 10)"
   showValue :> String
-  let showValue = "UnorderedSet(${@slots.keys.sort.map { |x| x.showValue }.join(", ")})"
+  let showValue -> String = "UnorderedSet(${@slots.keys.sort.map { |x| x.showValue }.join(", ")})"
 end
 
 make UnorderedSet<A>, implement: Blankable do

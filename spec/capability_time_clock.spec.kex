@@ -10,7 +10,7 @@
 # `Time` is in the prelude and `Clock` is nested in it, so this also pins the
 # route a nested prelude capability takes through the compiled interface.
 
-type Msg = | Ask(Process)
+type Msg = | Ask(Process<String | Bool>)
 
 # A hand-written stand-in: one member is the whole interface.
 record NoonClock do

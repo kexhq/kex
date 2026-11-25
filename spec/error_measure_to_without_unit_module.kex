@@ -12,7 +12,7 @@ main do
   # is ALSO defined by `Units.SI` (a `make` for a type declared elsewhere), so
   # without the import that now fails first — which is the same rule this spec
   # is about, one operator earlier.
-  let power: Measure = Units.SI.watt(11_111)
+  let power: Measure<Quantity.Power> = Units.SI.watt(11_111)
   # The prelude's own `in:` still works next to the unimported module.
   IO.printLine(90.minute.to(String, in: Hour).or("none"))
   IO.printLine(power.to(String, in: Units.SI.Kilo(Units.SI.Watt)))

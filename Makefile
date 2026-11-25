@@ -108,6 +108,36 @@ format:
 format-check:
 	@$(FORMAT_FILES) | xargs -0 $(CLANG_FORMAT) --dry-run --Werror
 
+# Decisions the compiler takes by comparing a type's name as a string
+# (`== "Optional"`). docs/typechecker-hm-plan.md §7: the names live in
+# src/common/well_known.hxx, and every remaining literal comparison is listed in
+# TYPE_NAMES_ALLOW with its count, per file and name. check-type-names fails
+# when a count rises (a new site: use the registry, or make it a declaration)
+# and when one falls without the list following (regenerate it with
+# `make type-names-allowlist`), so the list only ever shrinks.
+TYPE_NAMES_ALLOW := tools/type-name-comparisons.allow
+TYPE_NAME_SITES = grep -rnoE '(==|!=) *"[A-Z][A-Za-z0-9.]*"' src --include='*.cxx' --include='*.hxx' \
+	| grep -v '^src/common/well_known.hxx:' \
+	| sed -E 's/^([^:]+):[0-9]+:.*"(.*)"$$/\1 \2/' | LC_ALL=C sort | uniq -c | awk '{print $$2, $$3, $$1}'
+
+.PHONY: check-type-names type-names-allowlist
+check-type-names:
+	@current=$$(mktemp); $(TYPE_NAME_SITES) > "$$current"; \
+	if ! diff -u "$(TYPE_NAMES_ALLOW)" "$$current" > "$$current.diff"; then \
+		echo "error: type-name comparisons differ from $(TYPE_NAMES_ALLOW) (file name count):"; \
+		grep -E '^[-+][^-+]' "$$current.diff"; \
+		echo ""; \
+		echo "A '+' line is a new comparison against a type name: use src/common/well_known.hxx,"; \
+		echo "or make the decision a declaration (docs/typechecker-hm-plan.md §7)."; \
+		echo "A '-' line is one that went away: run 'make type-names-allowlist'."; \
+		rm -f "$$current" "$$current.diff"; exit 1; \
+	fi; \
+	rm -f "$$current" "$$current.diff"
+
+type-names-allowlist:
+	@$(TYPE_NAME_SITES) > $(TYPE_NAMES_ALLOW)
+	@echo "$(TYPE_NAMES_ALLOW): $$(wc -l < $(TYPE_NAMES_ALLOW) | tr -d ' ') entries"
+
 test: build
 	@ctest --test-dir $(BUILD_DIR) --output-on-failure
 

@@ -1,0 +1,44 @@
+# A trait's type parameter is filled by each implementing type's claim:
+# `implement: Folds<X>` on a generic type, `implement: Folds<Char>` on a
+# concrete one. A default written with the parameter (`-> T?`) answers in
+# what the claim filled in, so `firstWhere` is a `String?` on a Box<String>
+# and a `Char?` on a Word. Foldable is declared the same way in the stdlib.
+
+trait Folds<T> do
+  fold :> A -> (A -> T -> A) -> A
+
+  let firstWhere(pred) -> T? = this.fold(None) do |acc, item|
+    match acc do
+      Just(_) => acc
+      None    => pred(item) then Just(item) else None
+    end
+  end
+end
+
+record Box<X> do
+  items : [X]
+end
+
+make Box<X>, implement: Folds<X> do
+  let fold(acc, f) = this.items.reduce(acc, f)
+end
+
+record Word do
+  text : String
+end
+
+make Word, implement: Folds<Char> do
+  let fold(acc, f) = this.text.chars.reduce(acc, f)
+end
+
+let longest(box: Box<String>) -> String? = box.firstWhere { |s| s.length > 1 }
+
+let vowel(word: Word) -> Char? = word.firstWhere { |c| "aeiou".chars.contains?(c) }
+
+main do
+  IO.printLine(longest(Box { items: ["x", "yy"] }).inspected)
+  IO.printLine(vowel(Word { text: "hey" }).inspected)
+  IO.printLine((2..9).find { |d| d > 4 }.inspected)
+  IO.printLine("hey".find { |c| c == 'e' }.inspected)
+  IO.printLine({ "a": 1 }.find { |k, v| v > 0 }.inspected)
+end

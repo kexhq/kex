@@ -165,7 +165,7 @@ module Tey.Docgen.Html do
   # scope, none of which prelude.kex names. So the split is by page, not by
   # module name.
   let preludePaths(model: PackageModel) -> [String] do
-    return model.preludeModules.flatMap { |name| preludePath(model, name) }
+    return model.preludeModules.into { |name| preludePath(model, name) }
   end
 
   let preludePath(model: PackageModel, name: String) -> [String] do
@@ -198,7 +198,7 @@ module Tey.Docgen.Html do
   # One package's versions, highest first by semantic version.
   let versionsNewestFirst(packageName: String, versions: [VersionEntry]) -> [VersionEntry] do
     let mine = versions.filter { |v| v.package == packageName }
-    return Tey.Semver.newestFirst(mine.map { |v| v.id }).flatMap { |id|
+    return Tey.Semver.newestFirst(mine.map { |v| v.id }).into { |id|
       mine.filter { |v| v.id == id }
     }
   end
@@ -359,7 +359,7 @@ module Tey.Docgen.Html do
   # where the page already starts. A page whose first declaration is a type or
   # record has no such module.
   let firstModulesOfPages(pages: [SourcePage]) -> [String] do
-    return pages.flatMap { |p|
+    return pages.into { |p|
       match p.entities.first do
         Just(ModuleDecl(entry)) => [entry.qualifiedName]
         _ => []
@@ -411,7 +411,7 @@ module Tey.Docgen.Html do
   end
 
   let declaredTypeNames(entities: [Entity]) -> [String] do
-    return entities.flatMap { |e|
+    return entities.into { |e|
       match e do
         TypeDecl(entry) => [entry.name]
         RecordDecl(entry) => [entry.name]
@@ -423,7 +423,7 @@ module Tey.Docgen.Html do
   # A `make <Trait>` beside its trait is the trait's defaults, rendered in
   # the trait's own section (Relations.traitMethods).
   let declaredTraitNames(entities: [Entity]) -> [String] do
-    return entities.flatMap { |e|
+    return entities.into { |e|
       match e do
         TraitDecl(entry) => [entry.name]
         _ => []
@@ -432,7 +432,7 @@ module Tey.Docgen.Html do
   end
 
   let makesFor(entities: [Entity], name: String) -> [MakeEntry] do
-    return entities.flatMap { |e|
+    return entities.into { |e|
       match e do
         MakeDecl(entry) => baseTypeOf(entry.target) == name then [entry] else []
         _ => []
@@ -514,7 +514,7 @@ module Tey.Docgen.Html do
     let ordered = receiverOrder(makes, name)
     let groups = ordered.map { |m| makeGroupHtml(m, name, page, model) }.join("\n")
     let related = "${providedHtml(name, page, model)}${elsewhereHtml(name, page, model)}"
-    if !indexed?(ordered.flatMap { |m| m.functions })
+    if !indexed?(ordered.into { |m| m.functions })
       return "${implementsHtml(name, page, model)}${groups}${related}"
     end
     let indexes = ordered.map { |m| makeIndexHtml(m, name) }.join("")
@@ -537,7 +537,7 @@ module Tey.Docgen.Html do
   end
 
   let modulesIn(entities: [Entity]) -> [ModuleEntry] do
-    return entities.flatMap { |e| moduleAndNested(e) }
+    return entities.into { |e| moduleAndNested(e) }
   end
 
   let moduleAndNested(e: Entity) -> [ModuleEntry] do
@@ -638,7 +638,7 @@ module Tey.Docgen.Html do
     match Tey.Docgen.Relations.typeFactsFor(model, name) do
       None => return ""
       Just(facts) => do
-        let own = facts.extensions.flatMap { |x| x.names }
+        let own = facts.extensions.into { |x| x.names }
         return facts.traits.map { |t| providedFromHtml(t, own, page, model) }.join("")
       end
     end
@@ -948,7 +948,7 @@ module Tey.Docgen.Html do
   # "from Enumerable": this member is the type's own version of a function the
   # trait declares, linked to the trait's description of it.
   let traitTag(name: String, implements: [String], page: SourcePage, model: PackageModel) -> String do
-    let hits = implements.flatMap { |t|
+    let hits = implements.into { |t|
       match Tey.Docgen.Relations.traitFactsFor(model, t) do
         None => []
         Just(facts) => match Tey.Docgen.Relations.traitEntryFor(model, facts) do

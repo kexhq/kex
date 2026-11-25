@@ -57,6 +57,6 @@ make Atom do
   #
   # @example
   #   :hello.to(String)                       # => Just("hello")
-  #   "hello".to(Atom).flatMap { |a| a.to(String) }   # => Just("hello")
-  let to(String) = Just(this.string)
+  #   "hello".to(Atom).into { |a| a.to(String) }   # => Just("hello")
+  let to(String) -> String? = Just(this.string)
 end

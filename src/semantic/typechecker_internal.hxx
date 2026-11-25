@@ -6,6 +6,7 @@
 // across several .cxx files does not copy them.
 
 #include "../ast/ast.hxx"
+#include "../common/well_known.hxx"
 #include "imported_interfaces.hxx"
 #include "types.hxx"
 
@@ -20,6 +21,32 @@
 #include <vector>
 
 namespace kex::semantic::detail {
+
+// The type of a clause parameter written as an Integer literal, in a clause
+// that writes its result (`let ^(2) -> Measure<Area>`): that value alone, so a
+// call passing `2` selects this clause and a `3` the next. A clause that
+// leaves its result to the body (`let fib(0) = 0`) answers like its siblings,
+// and its literal stays an Integer. Null for any other parameter.
+inline auto literalParameterType(const ast::FunctionClause& clause, const ast::Param& param)
+    -> TypePtr {
+    if (!clause.returnAnnotation || param.type || !param.pattern || !*param.pattern) {
+        return nullptr;
+    }
+    const auto* literal = std::get_if<ast::LiteralPattern>(&(*param.pattern)->kind);
+    if (!literal || literal->literal.type != TokenType::Integer) {
+        return nullptr;
+    }
+    return Type::integerLiteral(literal->literal.value);
+}
+
+// The receivers a call adds to a trait requirement's parameters: none for a
+// higher-kinded trait's, which writes its receiver (`map : F<A> -> (A -> B) ->
+// F<B>`), one for any other, whose receiver is implicit (`price :> Integer`).
+inline auto implicitReceivers(const Signature& required) -> std::size_t {
+    const bool written = !required.params.empty() && required.params.front() &&
+                         std::holds_alternative<TypeApp>(required.params.front()->kind);
+    return written ? 0 : 1;
+}
 
 // The name in `candidates` a misspelt `name` most likely meant: one differing
 // only in case (a renamed `whereis` is now `whereIs`) first, then the closest
@@ -117,7 +144,7 @@ inline auto substituteInterfaceGenerics(const TypePtr& type, const std::vector<T
         return type;
     }
     if (auto* var = std::get_if<TypeVar>(&type->kind)) {
-        if (var->id < 0) {
+        if (isGenericLetter(*var)) {
             auto index = static_cast<size_t>(-var->id - 1);
             if (index < args.size()) {
                 return args[index];
@@ -143,7 +170,7 @@ inline auto recordTypeParamCount(const std::unordered_map<std::string, TypePtr>&
             return;
         }
         if (auto* var = std::get_if<TypeVar>(&type->kind)) {
-            if (var->id < 0) {
+            if (isGenericLetter(*var)) {
                 count = std::max(count, static_cast<size_t>(-var->id));
             }
             return;
@@ -167,7 +194,7 @@ inline auto bindRecordTypeParams(
         return;
     }
     if (auto* var = std::get_if<TypeVar>(&declared->kind)) {
-        if (var->id >= 0) {
+        if (isInferenceVariable(*var)) {
             return;
         }
         // An open actual says nothing about the slot — `Box { items: [] }`
@@ -239,7 +266,8 @@ inline auto bindRecordTypeParams(
 // operators. Every other trait gives a value exactly the operators the trait
 // itself declares, and nothing more by being named here.
 inline auto primitiveNumberTrait(const std::string& trait) -> bool {
-    return trait == "Number" || trait == "Integer" || trait == "Float";
+    return trait == kex::names::kNumberTrait || trait == kex::names::kIntegerType ||
+           trait == kex::names::kFloatType;
 }
 
 // Whether `known` already offers `function`'s parameters: the prelude serves
@@ -324,6 +352,16 @@ auto bindHintVars(
             argNamed->typeArgs.size() == named->typeArgs.size()) {
             for (size_t i = 0; i < named->typeArgs.size(); i++) {
                 bindHintVars(named->typeArgs[i], argNamed->typeArgs[i], sub, resolve);
+            }
+        }
+    } else if (auto* app = std::get_if<TypeApp>(&sigP->kind)) {
+        // A higher-kinded requirement's `F<A>` against what the receiver
+        // applies: `M<Integer>` (or a `[Integer]`) makes the block's A an
+        // Integer, where `xs.into { |x| ... }` had left it to the body.
+        if (const auto applied = applicationOf(argT);
+            applied && applied->args.size() == app->args.size()) {
+            for (size_t i = 0; i < app->args.size(); i++) {
+                bindHintVars(app->args[i], applied->args[i], sub, resolve);
             }
         }
     }

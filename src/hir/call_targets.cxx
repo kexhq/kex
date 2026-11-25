@@ -22,6 +22,7 @@ auto targetKindName(TargetKind kind) -> std::string_view {
         case TargetKind::Foreign: return "foreign";
         case TargetKind::Intrinsic: return "intrinsic";
         case TargetKind::FunctionReference: return "function";
+        case TargetKind::TypeTest: return "type test";
         case TargetKind::Undecided: return "undecided";
     }
     return "undecided";

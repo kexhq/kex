@@ -7,7 +7,7 @@
 # is written exactly as it would be in production. The substitution still
 # reaches them.
 
-type Msg = | Ask(Process)
+type Msg = | Ask(Process<String>)
 
 capability Clock do
   foul now() -> Integer do

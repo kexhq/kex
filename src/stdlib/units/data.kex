@@ -119,7 +119,7 @@ end
 # @example
 #   1.gibibyte.convertTo(MiB).map { |m| m.showValue }   # => Ok("1024.0 MiB")
 #   2.gigabyte.convertTo(MB).map { |m| m.showValue }    # => Ok("2000.0 MB")
-let convertTo(measure: Measure, unit: DataUnit) -> Result<Measure, String> do
+let convertTo(measure: Measure<D>, unit: DataUnit) -> Result<Measure<D>, String> do
   let target = definition(unit)
   match measure.kind == target.dimension do
     true => return Ok(Measure {
@@ -270,10 +270,10 @@ let tebibyte(value: Number) -> Measure<Quantity.Data> = size(value, TiB)
 # @example Checking a payload
 #   Binary.fromBytes([104, 105]).length < 1.kibibyte  # => true
 make Integer do
-  let <(other: Measure) -> Bool = this < byteThreshold(other)
-  let >(other: Measure) -> Bool = this > byteThreshold(other)
-  let <=(other: Measure) -> Bool = this <= byteThreshold(other)
-  let >=(other: Measure) -> Bool = this >= byteThreshold(other)
+  let <(other: Measure<D>) -> Bool = this < byteThreshold(other)
+  let >(other: Measure<D>) -> Bool = this > byteThreshold(other)
+  let <=(other: Measure<D>) -> Bool = this <= byteThreshold(other)
+  let >=(other: Measure<D>) -> Bool = this >= byteThreshold(other)
 end
 
 # The same comparison with the data-size threshold on the left.
@@ -285,7 +285,7 @@ make Measure do
 end
 
 private do
-  let byteThreshold(measure: Measure) -> Float do
+  let byteThreshold(measure: Measure<D>) -> Float do
     assert(measure.kind == :data, "Byte counts require a data-size threshold")
     return measure.canonical
   end

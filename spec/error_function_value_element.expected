@@ -1,0 +1,12 @@
+spec/error_function_value_element.kex:18:26: [KEXET-0491]: Error, `map` expects argument 2 to be String -> Integer, but got Integer -> Integer
+   |
+18 |   IO.printLine(["a"].map(f))
+   |                          ^
+spec/error_function_value_element.kex:19:26: [KEXET-0491]: Error, `map` expects argument 2 to be String -> Integer, but got Integer -> Integer
+   |
+19 |   IO.printLine(["a"].map(~add(1)))
+   |                          ^^^^^^^
+spec/error_function_value_element.kex:21:16: [KEXET-0452]: Error, record `Person` has no field `name`. It has age
+   |
+21 |   IO.printLine(Person { age: 1 }.name)
+   |                ^^^^^^

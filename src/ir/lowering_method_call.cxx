@@ -46,6 +46,7 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
             return names::isIntrinsicPath(target.owner) ? lowerRuntimeCall(n, target.owner)
                                                         : lowerProcessSpawn(n, target.owner);
         case hir::TargetKind::Conversion: return lowerConversion(n, target.owner);
+        case hir::TargetKind::TypeTest: return lowerTypeTest(n, target.owner);
         case hir::TargetKind::Intrinsic:
             if (const auto* answer = hir->typeOfAnswer(n)) {
                 return lowerTypeOf(n, *answer);
@@ -69,7 +70,13 @@ auto Lowering::lowerMethodCallImpl(const ast::MethodCall& n) -> ExprPtr {
     // The module a call written on a module path names, as the checker
     // decided it (`Util` of `Util.double(21)`).
     std::vector<std::string> path;
-    const auto calledModule = modulePath(*n.receiver, path) ? checkedCallModule(n) : std::string{};
+    // A type variable the function was passed (`A.identity`, §12 step 7) is a
+    // value, the type's atom, and no module.
+    const auto* letter = std::get_if<ast::UpperIdentifier>(&n.receiver->kind);
+    const bool throughTypeVariable = letter && typeParameterVars.contains(letter->name);
+    const auto calledModule = !throughTypeVariable && modulePath(*n.receiver, path)
+                                  ? checkedCallModule(n)
+                                  : std::string{};
     if (const auto* resolved = hir->resolvedTargetOf(n)) {
         if (!resolved->localDispatchTypes.empty() &&
             resolved->localDispatchTypes.front().starts_with("Server<")) {
@@ -661,6 +668,36 @@ auto Lowering::lowerModuleFunctionCall(
 // path calls.
 auto Lowering::lowerTypeNamespaceCall(const ast::MethodCall& n, const ast::UpperIdentifier& type)
     -> ExprPtr {
+    // A type variable this function was passed (`A.identity`, §12 step 7) is a
+    // value: the call dispatches on it like any other.
+    if (typeParameterVars.contains(type.name)) {
+        return nullptr;
+    }
+    // A primitive type named as the receiver (`String.identity`): the
+    // prelude's function for the name, given the type's atom, as a type
+    // passed to a bounded function is (§12 step 7).
+    if (primGuardBifs().count(type.name) && externalModules) {
+        const int arity = static_cast<int>(n.args.size()) + 1;
+        if (const auto providers = externalModules->receiverFunctions.find(n.method);
+            providers != externalModules->receiverFunctions.end() && n.namedArgs.empty() &&
+            !n.block) {
+            for (const auto& provider : providers->second) {
+                if (provider.moduleAtom != names::kPreludeModule || provider.beamArity != arity ||
+                    provider.isFoul) {
+                    continue;
+                }
+                std::vector<Binding> binds;
+                std::vector<ExprPtr> args;
+                args.push_back(lit(LitKind::Atom, type.name));
+                for (const auto& a : n.args) {
+                    args.push_back(atomize(a, binds));
+                }
+                return wrapLets(
+                    binds,
+                    callE(provider.moduleAtom, provider.beamFunction, arity, std::move(args)));
+            }
+        }
+    }
     std::vector<Binding> binds;
     // The arguments run before whatever this call turns out to be.
     for (const auto& a : n.args) {
@@ -782,6 +819,23 @@ auto Lowering::lowerConversion(const ast::MethodCall& n, const std::string& targ
         }
     }
     return lower(n.receiver);
+}
+
+auto Lowering::lowerTypeTest(const ast::MethodCall& n, const std::string& tested) -> ExprPtr {
+    const auto value = fresh("Tested");
+    ExprPtr test;
+    std::size_t start = 0;
+    while (start < tested.size()) {
+        auto end = tested.find(',', start);
+        if (end == std::string::npos) {
+            end = tested.size();
+        }
+        auto guard = typeGuard(tested.substr(start, end - start), var(value));
+        test = test ? callE("erlang", "or", 2, two(std::move(test), std::move(guard)))
+                    : std::move(guard);
+        start = end + 1;
+    }
+    return makeLet(value, lower(n.receiver), test ? std::move(test) : litBool(false));
 }
 
 // `Process.spawn(state)`, the checker naming the state's type: the server

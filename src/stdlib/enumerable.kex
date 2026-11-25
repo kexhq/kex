@@ -12,7 +12,7 @@
 # Blocks are applied via Kex.Intrinsic.Fun.applyItem, which auto-splats a pair
 # item into a two-argument block. That is what lets a +Map+ traversal be
 # written +{ |key, value| ... }+ even though the fold hands over one tuple.
-trait Foldable do
+trait Foldable<T> do
   # Folds the collection from the left. The one operation a +Foldable+ type
   # must define; everything else here is written in terms of it.
   #
@@ -93,7 +93,7 @@ trait Foldable do
   #
   # @example Validating every field of a form
   #   fields.all? { |name, value| !value.blank? }
-  let all?(pred) = this.reduce(true) do |acc, item|
+  let all?(pred) -> Bool = this.reduce(true) do |acc, item|
     acc && Kex.Intrinsic.Fun.applyItem(pred, item)
   end
 
@@ -109,7 +109,7 @@ trait Foldable do
   #
   # @example Detecting a flag among arguments
   #   args.any? { |a| a == "--verbose" }
-  let any?(pred) = this.reduce(false) do |acc, item|
+  let any?(pred) -> Bool = this.reduce(false) do |acc, item|
     acc || Kex.Intrinsic.Fun.applyItem(pred, item)
   end
 
@@ -122,7 +122,7 @@ trait Foldable do
   # @example
   #   [1, 2, 3].none? { |n| n > 9 }   # => true
   #   [1, 2, 3].none? { |n| n > 2 }   # => false
-  let none?(pred) = !this.any?(pred)
+  let none?(pred) -> Bool = !this.any?(pred)
 
   # Returns +true+ when exactly one item satisfies +pred+.
   #
@@ -132,7 +132,7 @@ trait Foldable do
   # @example
   #   [1, 2, 3].one? { |n| n > 2 }   # => true
   #   [1, 2, 3].one? { |n| n > 1 }   # => false
-  let one?(pred) = this.count(pred) == 1
+  let one?(pred) -> Bool = this.count(pred) == 1
 
   # Returns the first item satisfying +pred+, or +None+ when nothing does.
   #
@@ -145,7 +145,7 @@ trait Foldable do
   #
   # @example Looking a record up by one of its fields
   #   users.find { |u| u.email == target }.map { |u| u.name }.or("unknown")
-  let find(pred) = this.reduce(None) do |acc, item|
+  let find(pred) -> T? = this.reduce(None) do |acc, item|
     match acc do
       Just(_) => acc
       None    => Kex.Intrinsic.Fun.applyItem(pred, item) then Just(item) else None
@@ -162,7 +162,7 @@ trait Foldable do
   #
   # @example How many lines are comments
   #   text.lines.count { |line| line.trim.startsWith?("#") }
-  let count(pred) = this.reduce(0) do |acc, item|
+  let count(pred) -> Integer = this.reduce(0) do |acc, item|
     Kex.Intrinsic.Fun.applyItem(pred, item) then acc + 1 else acc
   end
 end
@@ -262,12 +262,12 @@ trait Enumerable do
   # @return [[B]] all the results, concatenated
   #
   # @example
-  #   [[1, 2], [3]].flatMap { |xs| xs }            # => [1, 2, 3]
-  #   ["a b", "c"].flatMap { |s| s.split(" ") }    # => ["a", "b", "c"]
+  #   [[1, 2], [3]].into { |xs| xs }            # => [1, 2, 3]
+  #   ["a b", "c"].into { |s| s.split(" ") }    # => ["a", "b", "c"]
   #
   # @example Every tag used across a list of posts
-  #   posts.flatMap { |p| p.tags }
-  let flatMap(f: T -> [B]) -> [B] = this.reduce([]) do |acc, item|
+  #   posts.into { |p| p.tags }
+  let into(f: T -> [B]) -> [B] = this.reduce([]) do |acc, item|
     acc + Kex.Intrinsic.Fun.applyItem(f, item)
   end
 

@@ -1,6 +1,7 @@
 #include "types.hxx"
 #include "../common/well_known.hxx"
 #include <algorithm>
+#include <cassert>
 #include <functional>
 
 namespace kex::semantic {
@@ -21,20 +22,28 @@ auto Type::boolean() -> TypePtr {
     return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::Bool}});
 }
 
-auto Type::atom(std::string atomName) -> TypePtr {
-    return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::Atom, std::move(atomName)}});
+auto Type::atom(std::string literal) -> TypePtr {
+    return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::Atom, std::move(literal)}});
 }
 
-auto Type::unit() -> TypePtr {
-    return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::Unit}});
+auto Type::integerLiteral(std::string digits) -> TypePtr {
+    return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::Integer, std::move(digits)}});
+}
+
+auto Type::voidType() -> TypePtr {
+    return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::Void}});
 }
 
 auto Type::unknown() -> TypePtr {
     return std::make_shared<Type>(Type{UnknownType{}});
 }
 
-auto Type::voidType(std::string leftRecord, std::string rightRecord) -> TypePtr {
-    return std::make_shared<Type>(Type{VoidType{std::move(leftRecord), std::move(rightRecord)}});
+auto Type::any() -> TypePtr {
+    return std::make_shared<Type>(Type{UnknownType{true}});
+}
+
+auto Type::never(std::string leftRecord, std::string rightRecord) -> TypePtr {
+    return std::make_shared<Type>(Type{NeverType{std::move(leftRecord), std::move(rightRecord)}});
 }
 
 auto Type::named(const std::string& name, std::vector<TypePtr> args) -> TypePtr {
@@ -103,8 +112,8 @@ auto Type::intersection(std::vector<TypePtr> members) -> TypePtr {
     flattened = std::move(nonRows);
     std::vector<TypePtr> normalized;
     for (auto& member : flattened) {
-        if (std::holds_alternative<VoidType>(member->kind)) {
-            return Type::voidType();
+        if (std::holds_alternative<NeverType>(member->kind)) {
+            return Type::never();
         }
         if (std::holds_alternative<UnknownType>(member->kind)) {
             continue; // Unknown is the gradual top/escape hatch.
@@ -113,11 +122,11 @@ auto Type::intersection(std::vector<TypePtr> members) -> TypePtr {
             const auto* left = std::get_if<PrimitiveType>(&existing->kind);
             const auto* right = std::get_if<PrimitiveType>(&member->kind);
             if (left && right && left->kind != right->kind) {
-                return Type::voidType();
+                return Type::never();
             }
-            if (left && right && left->kind == PrimitiveType::Atom && !left->atomName.empty() &&
-                !right->atomName.empty() && left->atomName != right->atomName) {
-                return Type::voidType();
+            if (left && right && left->kind == PrimitiveType::Atom && !left->literal.empty() &&
+                !right->literal.empty() && left->literal != right->literal) {
+                return Type::never();
             }
         }
         if (std::none_of(normalized.begin(), normalized.end(), [&](const TypePtr& existing) {
@@ -137,15 +146,21 @@ auto Type::intersection(std::vector<TypePtr> members) -> TypePtr {
 
 auto Type::record(std::vector<std::pair<std::string, TypePtr>> fields) -> TypePtr {
     for (const auto& [_, fieldType] : fields) {
-        if (fieldType && std::holds_alternative<VoidType>(fieldType->kind)) {
-            return Type::voidType();
+        if (fieldType && std::holds_alternative<NeverType>(fieldType->kind)) {
+            return Type::never();
         }
     }
     return std::make_shared<Type>(Type{RecordType{std::move(fields)}});
 }
 
-auto Type::typeVar(int id) -> TypePtr {
-    return std::make_shared<Type>(Type{TypeVar{id}});
+auto Type::genericLetter(int id) -> TypePtr {
+    assert(id < 0);
+    return std::make_shared<Type>(Type{TypeVar{id, TypeVarKind::GenericLetter}});
+}
+
+auto Type::inferenceVariable(int id) -> TypePtr {
+    assert(id >= 0);
+    return std::make_shared<Type>(Type{TypeVar{id, TypeVarKind::Inference}});
 }
 
 auto Type::byte() -> TypePtr {
@@ -192,6 +207,10 @@ auto Type::float64() -> TypePtr {
     return std::make_shared<Type>(Type{SizedFloatType{64}});
 }
 
+auto Type::float64Written() -> TypePtr {
+    return std::make_shared<Type>(Type{SizedFloatType{64, true}});
+}
+
 auto Type::constrained(const std::string& varName, const std::string& traitName, int genericId)
     -> TypePtr {
     return std::make_shared<Type>(Type{ConstrainedType{varName, traitName, genericId}});
@@ -215,7 +234,7 @@ constexpr BuiltinTypeEntry kBuiltinTypes[] = {
     {"Byte", &Type::byte},       {"Int8", &Type::int8},       {"Int16", &Type::int16},
     {"Int32", &Type::int32},     {"Int64", &Type::int64},     {"UInt8", &Type::uint8},
     {"UInt16", &Type::uint16},   {"UInt32", &Type::uint32},   {"UInt64", &Type::uint64},
-    {"Float32", &Type::float32}, {"Float64", &Type::float64},
+    {"Float", &Type::float64},   {"Float32", &Type::float32}, {"Float64", &Type::float64Written},
 };
 
 } // namespace
@@ -241,11 +260,11 @@ auto signatureBuiltinType(std::string_view name) -> TypePtr {
     if (auto type = builtinType(name)) {
         return type;
     }
-    if (name == "Number" || name == "Float") {
+    if (name == kex::names::kNumberTrait || name == kex::names::kFloatType) {
         return Type::constrained(std::string(name), std::string(name));
     }
-    if (name == "Void") {
-        return Type::unit();
+    if (name == kex::names::kVoidType) {
+        return Type::voidType();
     }
     return nullptr;
 }
@@ -256,15 +275,15 @@ auto isPrimitiveTypeName(const std::string& name) -> bool {
     // as List or Map only appears here if the stdlib does not declare it —
     // `type List<X> = [X]` in list.kex means `List` resolves as a declared
     // type name and needs no entry.
-    return signatureBuiltinType(name) != nullptr || name == "Any" || name == "Tuple" ||
-           name == "Block";
+    return signatureBuiltinType(name) != nullptr || name == kex::names::kAnyType ||
+           name == kex::names::kTupleType || name == kex::names::kBlockType;
 }
 
 namespace {
 constexpr std::pair<PrimitiveType::Kind, std::string_view> kPrimitiveKindNames[] = {
     {PrimitiveType::Integer, "Integer"}, {PrimitiveType::Char, "Char"},
     {PrimitiveType::String, "String"},   {PrimitiveType::Bool, "Bool"},
-    {PrimitiveType::Atom, "Atom"},       {PrimitiveType::Unit, "Void"},
+    {PrimitiveType::Atom, "Atom"},       {PrimitiveType::Void, "Void"},
 };
 } // namespace
 
@@ -296,8 +315,11 @@ auto typeToString(const TypePtr& type) -> std::string {
             using T = std::decay_t<decltype(t)>;
 
             if constexpr (std::is_same_v<T, PrimitiveType>) {
-                if (t.kind == PrimitiveType::Atom && !t.atomName.empty()) {
-                    return ":" + t.atomName;
+                if (t.kind == PrimitiveType::Atom && !t.literal.empty()) {
+                    return ":" + t.literal;
+                }
+                if (t.kind == PrimitiveType::Integer && !t.literal.empty()) {
+                    return t.literal;
                 }
                 return std::string(primitiveKindName(t.kind));
             } else if constexpr (std::is_same_v<T, SizedIntType>) {
@@ -320,7 +342,7 @@ auto typeToString(const TypePtr& type) -> std::string {
             } else if constexpr (std::is_same_v<T, SizedFloatType>) {
                 switch (t.bits) {
                     case 32: return "Float32";
-                    case 64: return "Float64";
+                    case 64: return t.written ? "Float64" : "Float";
                 }
                 return "?";
             } else if constexpr (std::is_same_v<T, NamedType>) {
@@ -419,16 +441,28 @@ auto typeToString(const TypePtr& type) -> std::string {
                 }
                 return result + "}";
             } else if constexpr (std::is_same_v<T, TypeVar>) {
-                if (t.id < 0) {
+                if (isGenericLetter(t)) {
                     // Table-level generic placeholder: -1 -> 'A', -2 -> 'B', ...
                     int idx = (-t.id - 1) % 26;
                     return std::string(1, static_cast<char>('A' + idx));
                 }
                 return "T" + std::to_string(t.id);
-            } else if constexpr (std::is_same_v<T, VoidType>) {
+            } else if constexpr (std::is_same_v<T, NeverType>) {
                 return "Never";
             } else if constexpr (std::is_same_v<T, ConstrainedType>) {
                 return t.varName;
+            } else if constexpr (std::is_same_v<T, TypeApp>) {
+                std::string text = typeToString(t.head) + "<";
+                for (std::size_t i = 0; i < t.args.size(); ++i) {
+                    text += (i ? ", " : "") + typeToString(t.args[i]);
+                }
+                return text + ">";
+            } else if constexpr (std::is_same_v<T, UnknownType>) {
+                // Capitalised like every other type name: it appears in hovers and
+                // type dumps beside `Integer`/`String`, where a lowercase word read
+                // as prose rather than as the type it is. A written `Any` reads as
+                // what the source wrote.
+                return t.written ? kex::names::kAnyType : std::string{"Unknown"};
             } else {
                 // Capitalised like every other type name: it appears in hovers and
                 // type dumps beside `Integer`/`String`, where a lowercase word read
@@ -516,7 +550,7 @@ auto isFullyConcrete(const TypePtr& type) -> bool {
 }
 
 auto isConcreteValue(const TypePtr& type) -> bool {
-    return !std::holds_alternative<VoidType>(type->kind) && isFullyConcrete(type);
+    return !std::holds_alternative<NeverType>(type->kind) && isFullyConcrete(type);
 }
 
 auto isConcreteOrBound(const TypePtr& type) -> bool {
@@ -540,6 +574,16 @@ auto containsTypeVariable(const TypePtr& type) -> bool {
         NullType::Unknown);
 }
 
+auto containsUnsolved(const TypePtr& type) -> bool {
+    return anyType(
+        type,
+        [](const TypePtr& t) {
+            return std::holds_alternative<TypeVar>(t->kind) ||
+                   std::holds_alternative<UnknownType>(t->kind);
+        },
+        NullType::Unknown);
+}
+
 auto containsOpenType(const TypePtr& type) -> bool {
     return anyType(
         type,
@@ -552,14 +596,14 @@ auto containsOpenType(const TypePtr& type) -> bool {
 }
 
 // TupleType{} (empty tuple, from parsing `()` in a type annotation) and
-// PrimitiveType{Unit} (from Type::unit() in compiled signatures) represents
+// PrimitiveType{Void} (from Type::voidType() in compiled signatures) represents
 // the same concept. Normalize both representations before comparing.
-static auto isUnit(const TypePtr& t) -> bool {
+static auto isVoid(const TypePtr& t) -> bool {
     if (!t) {
         return false;
     }
     if (auto* p = std::get_if<PrimitiveType>(&t->kind)) {
-        return p->kind == PrimitiveType::Unit;
+        return p->kind == PrimitiveType::Void;
     }
     if (auto* tup = std::get_if<TupleType>(&t->kind)) {
         return tup->elements.empty();
@@ -592,7 +636,7 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
     if (a.get() == b.get()) {
         return true;
     }
-    if (isUnit(a) && isUnit(b)) {
+    if (isVoid(a) && isVoid(b)) {
         return true;
     }
 
@@ -605,6 +649,13 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
             }
 
             if constexpr (std::is_same_v<AT, PrimitiveType>) {
+                // Two Integer literals are two types (`^(2)` and `^(3)` are two
+                // overloads); a literal is still an Integer, and an atom's literal
+                // is for display.
+                if (at.kind == PrimitiveType::Integer && bt->kind == PrimitiveType::Integer &&
+                    !at.literal.empty() && !bt->literal.empty()) {
+                    return at.literal == bt->literal;
+                }
                 return at.kind == bt->kind;
             } else if constexpr (std::is_same_v<AT, SizedIntType>) {
                 return at.bits == bt->bits && at.isSigned == bt->isSigned;
@@ -657,7 +708,7 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
                 return typesEqual(at.inner, bt->inner);
             } else if constexpr (std::is_same_v<AT, TypeVar>) {
                 return at.id == bt->id;
-            } else if constexpr (std::is_same_v<AT, VoidType>) {
+            } else if constexpr (std::is_same_v<AT, NeverType>) {
                 return true; // Never == Never
             } else if constexpr (std::is_same_v<AT, ConstrainedType>) {
                 return at.varName == bt->varName && at.traitName == bt->traitName;
@@ -789,6 +840,11 @@ auto forEachTypeChild(const TypePtr& type, const std::function<void(const TypePt
                 for (const auto& field : part.fields) {
                     visit(field.second);
                 }
+            } else if constexpr (std::is_same_v<Part, TypeApp>) {
+                visit(part.head);
+                for (const auto& arg : part.args) {
+                    visit(arg);
+                }
             }
         },
         type->kind);
@@ -837,9 +893,12 @@ auto mapTypeChildren(const TypePtr& type, const std::function<TypePtr(const Type
             } else if constexpr (std::is_same_v<Part, FuncType>) {
                 auto params = mappedAll(part.params);
                 auto result = mapped(part.result);
-                return same ? type
-                            : Type::func(
-                                  std::move(params), std::move(result), part.block, part.foul);
+                if (same) {
+                    return type;
+                }
+                auto copy = Type::func(std::move(params), std::move(result), part.block, part.foul);
+                std::get<FuncType>(copy->kind).capabilities = part.capabilities;
+                return copy;
             } else if constexpr (std::is_same_v<Part, NamedType>) {
                 auto args = mappedAll(part.typeArgs);
                 if (same) {
@@ -860,6 +919,12 @@ auto mapTypeChildren(const TypePtr& type, const std::function<TypePtr(const Type
                     fields.emplace_back(name, mapped(fieldType));
                 }
                 return same ? type : Type::record(std::move(fields));
+            } else if constexpr (std::is_same_v<Part, TypeApp>) {
+                auto head = mapped(part.head);
+                auto args = mappedAll(part.args);
+                // Once the head is a constructor the application is the type it
+                // names: `F<Integer>` with F bound to `Box` is `Box<Integer>`.
+                return same ? type : applyConstructor(head, std::move(args));
             } else {
                 return type;
             }
@@ -883,8 +948,15 @@ auto anyType(
 }
 
 auto mentionsUnknown(const TypePtr& type, NullType nullType) -> bool {
+    // A written `Any` is a contract, not a gap (UnknownType::written): a
+    // parameter of `Map<String, Any>` is learned, and the call's other
+    // arguments are still checked (the plan's §11, item 11).
     return anyType(
-        type, [](const TypePtr& t) { return std::holds_alternative<UnknownType>(t->kind); },
+        type,
+        [](const TypePtr& t) {
+            const auto* unknown = std::get_if<UnknownType>(&t->kind);
+            return unknown && !unknown->written;
+        },
         nullType);
 }
 
@@ -919,6 +991,92 @@ auto isNumericType(const TypePtr& type) -> bool {
     }
     return std::holds_alternative<SizedIntType>(type->kind) ||
            std::holds_alternative<SizedFloatType>(type->kind);
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto Type::app(TypePtr head, std::vector<TypePtr> args) -> TypePtr {
+    return std::make_shared<Type>(Type{TypeApp{std::move(head), std::move(args)}});
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// The hole a type lambda leaves in a constructor (`Result<_, E>`).
+auto Type::hole() -> TypePtr {
+    return named(kex::names::kTypeHole);
+}
+
+auto isTypeHole(const TypePtr& type) -> bool {
+    const auto* named = type ? std::get_if<NamedType>(&type->kind) : nullptr;
+    return named && named->name == kex::names::kTypeHole;
+}
+
+auto applyConstructor(const TypePtr& head, std::vector<TypePtr> args) -> TypePtr {
+    const auto* constructor = head ? std::get_if<NamedType>(&head->kind) : nullptr;
+    if (!constructor) {
+        return Type::app(head, std::move(args)); // still a variable, or unknown
+    }
+    // Fill the holes a type lambda left in order, or give a bare constructor
+    // its arguments.
+    std::vector<TypePtr> filled = constructor->typeArgs;
+    std::size_t next = 0;
+    for (auto& arg : filled) {
+        if (isTypeHole(arg) && next < args.size()) {
+            arg = args[next++];
+        }
+    }
+    if (filled.empty()) {
+        filled = std::move(args);
+    }
+    const auto& name = constructor->name;
+    if (name == kex::names::kListType && filled.size() == 1) {
+        return Type::list(filled[0]);
+    }
+    if (name == kex::names::kOptionalType && filled.size() == 1) {
+        return Type::optional(filled[0]);
+    }
+    if (name == kex::names::kMapType && filled.size() == 2) {
+        return Type::map(filled[0], filled[1]);
+    }
+    return Type::named(name, std::move(filled));
+}
+
+auto applicationOf(const TypePtr& type) -> std::optional<Application> {
+    if (!type) {
+        return std::nullopt;
+    }
+    if (const auto* list = std::get_if<ListType>(&type->kind)) {
+        return Application{Type::named(kex::names::kListType), {list->element}};
+    }
+    if (const auto* optional = std::get_if<OptionalType>(&type->kind)) {
+        return Application{Type::named(kex::names::kOptionalType), {optional->inner}};
+    }
+    if (const auto* map = std::get_if<MapType>(&type->kind)) {
+        return Application{Type::named(kex::names::kMapType), {map->key, map->value}};
+    }
+    if (const auto* named = std::get_if<NamedType>(&type->kind);
+        named && !named->typeArgs.empty() && named->variant.empty()) {
+        return Application{Type::named(named->name), named->typeArgs};
+    }
+    if (const auto* app = std::get_if<TypeApp>(&type->kind)) {
+        return Application{app->head, app->args};
+    }
+    return std::nullopt;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+auto substituteThis(const TypePtr& type, const TypePtr& with) -> TypePtr {
+    if (isThisPlaceholder(type)) {
+        return with;
+    }
+    return mapTypeChildren(type, [&](const TypePtr& child) { return substituteThis(child, with); });
 }
 
 } // namespace kex::semantic

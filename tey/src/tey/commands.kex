@@ -228,7 +228,7 @@ foul reinstallProgram(name: String, options: InstallOptions) -> Integer do
     return Tey.Commands.fail("`${name}` was installed from ${receipt.sourcePath}, which no longer exists")
   end
   if !options.rebuild? && receipt.sourceDigest != ""
-    let unchanged = Tey.Workspace.discover(receipt.sourcePath).flatMap do |context|
+    let unchanged = Tey.Workspace.discover(receipt.sourcePath).into do |context|
       Tey.Snapshot.contentDigest(context.workspaceRoot)
     end == Ok(receipt.sourceDigest)
     if unchanged
@@ -426,7 +426,7 @@ foul installStaged(context: Context, member: Member, staging: String,
   # The program's committed `tey.lock` is used when it still fits — the
   # dependency versions its author tested. `--fresh` resolves anew instead.
   let locked = if options.fresh?
-    Tey.Toolchain.activeInfo.flatMap do |toolchain|
+    Tey.Toolchain.activeInfo.into do |toolchain|
       Tey.Resolver.resolveWorkspaceWithInfo(context, toolchain)
     end
   else
@@ -636,7 +636,7 @@ foul installMemberTargetsFrom(member: Member, force?: Bool, origin: Receipt,
     let teyBuilt? = exists? && Tey.Programs.teyBuilt?(path)
     (target.name, Tey.Programs.claim(target.name, package.name, receipts, exists?, teyBuilt?))
   end
-  let refusals = claims.flatMap do |name, claim|
+  let refusals = claims.into do |name, claim|
     match Tey.Programs.refusal(name, claim, FS.Path.join(binDirectory, name), force?) do
       Just(reason) => [reason]
       None => []
@@ -1702,7 +1702,7 @@ private do
   # `HelloWorld` — capitalizing the string whole produced `module Hello-world`,
   # a file that does not parse, in a package that had just been created.
   let moduleNameFor(name: String) -> String do
-    let words = name.split("-").flatMap { |part| part.split("_") }
+    let words = name.split("-").into { |part| part.split("_") }
     return words.filter { |word| word != "" }.map { |word| word.capitalize }.join("")
   end
 

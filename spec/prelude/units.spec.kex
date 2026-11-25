@@ -78,12 +78,20 @@ describe("Measure arithmetic") do
     assert(measure.to(String) == Just("10.0 s"))
   end
 
-  it("raises a measure and its display unit to a power") do
-    let squared = 2.second ^ 2
+  it("squares and cubes a length into an area and a volume") do
+    let length: Measure<Quantity.Length> = Measure {
+      canonical: 2.0,
+      value: 2.0,
+      unit: UnitDefinition { conversionFactor: 1.0, dimension: :length, notation: "m" }
+    }
+    let squared = length.squared
     assert(squared.canonical == 4.0)
     assert(squared.value == 4.0)
     assert(squared.factor == 1.0)
-    assert(squared.symbol == "s^2")
+    assert(squared.symbol == "m^2")
+    assert(squared.kind == :area)
+    assert(length.cubed.canonical == 8.0)
+    assert(length.cubed.kind == :volume)
   end
 end
 

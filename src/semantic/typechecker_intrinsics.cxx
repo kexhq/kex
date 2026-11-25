@@ -18,6 +18,7 @@ auto findCompileTimeIntrinsic(std::string_view name, std::size_t arity)
         {"Type.of", 1, &TypeChecker::checkTypeOf, &TypeChecker::foldTypeOf},
         {"Process.spawn", 1, &TypeChecker::checkProcessSpawn, &TypeChecker::foldProcessSpawn},
         {"as", 1, &TypeChecker::checkAs, nullptr},
+        {names::kTypeTestCall, 1, &TypeChecker::checkIs, nullptr},
     };
     for (const auto& intrinsic : intrinsics) {
         if (intrinsic.name == name && intrinsic.arity == arity) {
@@ -85,7 +86,7 @@ auto TypeChecker::checkTypeOf(const ast::Expr& expr, const ast::MethodCall& call
     if (auto referenced = typeNameReference(*node.args[0])) {
         if (auto structured = structuredTypeOf(referenced)) {
             m_staticTypeOfCalls[&node] = {std::move(*structured), /*evaluateArgument=*/false};
-            return Type::named(kex::names::kTypeRecord);
+            return Type::named(kex::names::kTypeRecord, {referenced});
         }
     }
     // An imported nullary constructor is also represented by a
@@ -237,7 +238,7 @@ auto TypeChecker::checkAs(const ast::Expr& expr, const ast::MethodCall& node) ->
     // so only from text the compiler can see. Atoms are never freed;
     // run-time text goes through `Atom.from` (makes one) or
     // `.to(Atom)` (finds an existing one), both explicit about it.
-    if (typeToString(target) == "Atom") {
+    if (typeToString(target) == kex::names::kAtomType) {
         const auto* literal =
             node.receiver ? std::get_if<ast::StringLiteral>(&node.receiver->kind) : nullptr;
         if (!literal || !literal->values.empty()) {
@@ -260,6 +261,70 @@ auto TypeChecker::checkAs(const ast::Expr& expr, const ast::MethodCall& node) ->
         error(diag::Code::AsNarrowsToByte, expr.location);
     }
     return target;
+}
+
+} // namespace kex::semantic
+
+namespace kex::semantic {
+
+// `value.is?(T)`: whether the value is a `T`, or, for a trait, of a type that
+// implements it. A trait is known by the types that claim it (`Discrete` is
+// whichever types a `make` says are), so the test is one per implementor,
+// decided here; both backends test those as a type pattern (`_ : T`) would.
+// It narrows nothing: a `match` with a type pattern does that.
+auto TypeChecker::checkIs(const ast::Expr& expr, const ast::MethodCall& node) -> TypePtr {
+    if (!node.args[0] || !node.namedArgs.empty() || node.block) {
+        return nullptr;
+    }
+    if (node.receiver) {
+        inferExpr(*node.receiver);
+    }
+    std::string written;
+    if (const auto* name = std::get_if<ast::UpperIdentifier>(&node.args[0]->kind)) {
+        written = name->name;
+    } else if (const auto* path = std::get_if<ast::MethodCall>(&node.args[0]->kind);
+               path && path->args.empty() && path->receiver && !path->block) {
+        if (const auto scope = ast::writtenModulePath(*path->receiver)) {
+            written = kex::mangle::qualify(*scope, path->method);
+        }
+    }
+    if (written.empty()) {
+        error(diag::Code::IsNeedsTypeOrTrait, node.args[0]->location);
+        return Type::boolean();
+    }
+    std::vector<std::string> tested;
+    const auto traitIdentity = resolveTraitReference(written, m_currentModulePath, nullptr);
+    const auto* trait = m_traits.get(traitIdentity);
+    if (!trait) {
+        trait = m_traits.lookup(written);
+    }
+    // `Integer` and `Float` are types as well as the traits their sized forms
+    // share, and a value is tested against the type. Number has its own test
+    // on both backends.
+    const bool namesType =
+        trait && (trait->name == kex::names::kIntegerType || trait->name == kex::names::kFloatType);
+    if (trait && trait->name == kex::names::kNumberTrait) {
+        tested = {trait->name};
+    } else if (trait && !namesType) {
+        // The other built-in traits hold by a type's shape (every value is
+        // Showable), which the types claiming them in a `make` do not cover.
+        if (TraitRegistry::isStructural(trait->name)) {
+            error(diag::Code::IsTraitWithoutImplementors, expr.location, {{"trait", written}});
+            return Type::boolean();
+        }
+        tested = m_traits.implementorsOf(trait->name);
+    } else if (namesType || typeNamed(written, node.args[0]->location)) {
+        tested = {written};
+    } else {
+        error(diag::Code::IsNeedsTypeOrTrait, node.args[0]->location);
+        return Type::boolean();
+    }
+    std::string owner;
+    for (const auto& type : tested) {
+        owner += (owner.empty() ? "" : ",") + type;
+    }
+    m_decidedCalls[&expr] = {CallKind::TypeTest, owner};
+    return Type::boolean();
 }
 
 } // namespace kex::semantic

@@ -2,7 +2,7 @@ using Digest
 
 describe "Binary" do
   it "stores arbitrary bytes without exposing text" do
-    let all: [Byte] = (0..255).items
+    let all: [Byte] = (0..255).items.map { |n| n.to(Byte).or(0) }
     let data = Binary.fromBytes(all)
     assert(data.length == 256)
     assert(data.bytes == all)
@@ -56,7 +56,7 @@ describe "Binary" do
 
 
   it "keeps large payloads in binary storage" do
-    let bytes: [Byte] = (0..65535).items.map { |n| n % 256 }
+    let bytes: [Byte] = (0..65535).items.map { |n| (n % 256).to(Byte).or(0) }
     let data = Binary.fromBytes(bytes)
     assert(data.length == 65536)
     assert(data.take(32768).length == 32768)

@@ -145,6 +145,17 @@ public:
     // The module constant a bare name (`LIMIT`) names, as resolved in its
     // scope; "" otherwise, and for a loaded program.
     auto referencedConstantOf(const ast::Expr& name) const -> std::string;
+    // Whether an integer literal is a Float (`let x: Float = 1`, decision 2):
+    // both backends emit it as a float.
+    auto literalIsFloat(const ast::Expr& literal) const -> bool;
+    // §12 step 7: the letters a function takes its types for (`A` in
+    // `total(A is Monoid => …)` when its body says `A.identity`), the types a
+    // call of one passes, and the letter a call goes through.
+    auto typeParametersOf(const ast::FunctionDef& def) const -> std::vector<std::string>;
+    auto typeArgumentsOf(const ast::Expr& call) const -> const std::vector<semantic::TypeArgument>*;
+    auto typeArgumentsOf(const ast::MethodCall& call) const
+        -> const std::vector<semantic::TypeArgument>*;
+    auto typeVariableReceiverOf(const ast::Expr& call) const -> std::string;
     // The record `expr` builds (a construction), as the checker typed it; "".
     auto recordOf(const ast::Expr& expr) const -> std::string;
     auto recordOfPattern(const ast::RecordPattern& pattern) const -> std::string;
@@ -255,6 +266,9 @@ public:
     auto typeOf(const ast::Expr& expr) const -> semantic::TypePtr;
     auto typeValueOf(const ast::Expr& expr) const -> std::optional<semantic::StructuredType>;
     auto receiverTypeOf(const ast::Expr& call) const -> std::string;
+    auto literalIsFloat(const ast::Expr& literal) const -> bool;
+    auto typeArgumentsOf(const ast::Expr& call) const -> const std::vector<semantic::TypeArgument>*;
+    auto typeVariableReceiverOf(const ast::Expr& call) const -> std::string;
     auto typeOfAnswer(const ast::MethodCall& call) const -> const semantic::StaticTypeAnswer*;
     auto selectedSignatureOf(const ast::Expr& call) const -> const semantic::Signature*;
     auto shownThroughOf(const ast::Expr& call, std::size_t index) const -> const std::string*;

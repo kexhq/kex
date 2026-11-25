@@ -9,7 +9,7 @@ source that is consumed once.
 Lists, strings, maps, and ranges implement `Foldable` and `Enumerable` by
 providing `reduce`. `Foldable` supplies traversal functions such as `each`,
 `find`, `all?`, and `any?`. `Enumerable` supplies transformations such as
-`map`, `filter`, and `flatMap`.
+`map`, `filter`, and `into`.
 
 ```kex
 [1, 2, 3].reduce(0) { |sum, n| sum + n }   # => 6

@@ -17,6 +17,7 @@ module Console do
   #
   # @example
   #   "${Console.BOLD}important${Console.RESET}"
+  RESET : String
   let RESET = Kex.Intrinsic.Console.Reset
 
   # Renders following text in bold.
@@ -25,6 +26,7 @@ module Console do
   #
   # @example
   #   IO.printLine("${Console.BOLD}Summary${Console.RESET}")
+  BOLD : String
   let BOLD = Kex.Intrinsic.Console.Bold
 
   # Renders following text dimmed. Useful for secondary detail that should
@@ -34,6 +36,7 @@ module Console do
   #
   # @example
   #   IO.printLine("done ${Console.DIM}(0.4s)${Console.RESET}")
+  DIM : String
   let DIM = Kex.Intrinsic.Console.Dim
 
   # Renders following text in italics, where the terminal supports it.
@@ -42,6 +45,7 @@ module Console do
   #
   # @example Setting apart a book or command name
   #   IO.printLine("run ${Console.colorize("kex check", Console.ITALIC)} next")
+  ITALIC : String
   let ITALIC = Kex.Intrinsic.Console.Italic
 
   # Underlines following text.
@@ -50,6 +54,7 @@ module Console do
   #
   # @example
   #   Console.colorize("https://kex.run", Console.UNDERLINE)
+  UNDERLINE : String
   let UNDERLINE = Kex.Intrinsic.Console.Underline
 
   # Makes following text blink, where the terminal supports it. Most do not,
@@ -59,6 +64,7 @@ module Console do
   #
   # @example A deliberately attention-grabbing emergency indicator
   #   IO.printError(Console.colorize("DATABASE OFFLINE", Console.BLINK))
+  BLINK : String
   let BLINK = Kex.Intrinsic.Console.Blink
 
   # Swaps the foreground and background colors of following text.
@@ -67,6 +73,7 @@ module Console do
   #
   # @example Highlighting a selected row
   #   Console.colorize(row, Console.REVERSE)
+  REVERSE : String
   let REVERSE = Kex.Intrinsic.Console.Reverse
 
   # Hides following text: it occupies space but is not drawn.
@@ -75,6 +82,7 @@ module Console do
   #
   # @example Reserving space so changing status text does not shift a table
   #   let padding = Console.colorize("..........", Console.HIDDEN)
+  HIDDEN : String
   let HIDDEN = Kex.Intrinsic.Console.Hidden
 
   # Strikes through following text.
@@ -83,6 +91,7 @@ module Console do
   #
   # @example Showing a completed item
   #   Console.colorize(task, Console.STRIKETHROUGH)
+  STRIKETHROUGH : String
   let STRIKETHROUGH = Kex.Intrinsic.Console.Strikethrough
 
   # Red. Conventionally: errors and failures.
@@ -91,6 +100,7 @@ module Console do
   #
   # @example
   #   IO.printError(Console.colorize("error: ${message}", Console.RED))
+  RED : String
   let RED = Kex.Intrinsic.Console.Red
 
   # Green. Conventionally: success.
@@ -99,6 +109,7 @@ module Console do
   #
   # @example
   #   IO.printLine(Console.colorize("all tests passed", Console.GREEN))
+  GREEN : String
   let GREEN = Kex.Intrinsic.Console.Green
 
   # Yellow. Conventionally: warnings.
@@ -107,6 +118,7 @@ module Console do
   #
   # @example
   #   IO.printError(Console.colorize("deprecated option", Console.YELLOW))
+  YELLOW : String
   let YELLOW = Kex.Intrinsic.Console.Yellow
 
   # Blue. Useful for informational labels and links.
@@ -115,6 +127,7 @@ module Console do
   #
   # @example
   #   IO.printLine(Console.colorize("info:", Console.BLUE) + " cache refreshed")
+  BLUE : String
   let BLUE = Kex.Intrinsic.Console.Blue
 
   # Magenta. Useful for highlighting a category distinct from status colors.
@@ -123,6 +136,7 @@ module Console do
   #
   # @example
   #   IO.printLine(Console.colorize("migration", Console.MAGENTA) + " 20260830")
+  MAGENTA : String
   let MAGENTA = Kex.Intrinsic.Console.Magenta
 
   # Cyan. Useful for identifiers, paths, and other values inside prose.
@@ -131,6 +145,7 @@ module Console do
   #
   # @example
   #   IO.printLine("wrote ${Console.colorize(path, Console.CYAN)}")
+  CYAN : String
   let CYAN = Kex.Intrinsic.Console.Cyan
 
   # White. Useful for primary text on a dark terminal.
@@ -139,6 +154,7 @@ module Console do
   #
   # @example
   #   IO.printLine(Console.colorize("Build summary", Console.WHITE))
+  WHITE : String
   let WHITE = Kex.Intrinsic.Console.White
 
   # Gray. Conventionally: de-emphasised detail, like +DIM+ but as a color.
@@ -147,6 +163,7 @@ module Console do
   #
   # @example
   #   IO.printLine(Console.colorize(timestamp, Console.GRAY))
+  GRAY : String
   let GRAY = Kex.Intrinsic.Console.Gray
 
   # Purple. An alternative accent when magenta is already in use.
@@ -155,6 +172,7 @@ module Console do
   #
   # @example
   #   IO.printLine(Console.colorize("plugin", Console.PURPLE) + ": formatter")
+  PURPLE : String
   let PURPLE = Kex.Intrinsic.Console.Purple
 
   # Erases the screen and moves the cursor to the top-left corner.
@@ -166,6 +184,7 @@ module Console do
   #
   # @example
   #   IO.print(Console.CLEAR)
+  CLEAR : String
   let CLEAR = Kex.Intrinsic.Console.Clear
 
   # Moves the cursor to the top-left corner without erasing anything.
@@ -180,6 +199,7 @@ module Console do
   #     IO.print(Console.HOME)
   #     IO.print(frame)
   #   end
+  HOME : String
   let HOME = Kex.Intrinsic.Console.Home
 
   # Erases the current line and returns the cursor to its start.
@@ -194,6 +214,7 @@ module Console do
   #     IO.print("${Console.CLEARLINE}processing ${n}/100")
   #   end
   #   IO.printLine("")
+  CLEARLINE : String
   let CLEARLINE = Kex.Intrinsic.Console.ClearLine
 
   # Wraps +text+ in +color+ and appends a reset, so the style ends where the

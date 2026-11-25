@@ -271,11 +271,11 @@ end
 
 describe("Tey.Docgen.Rdoc.parseDoc") do
   it("preserves bullet lists and their continuation lines") do
-    let doc = parseDoc("Choose:\n\n- +map+ transforms a value\n  without unwrapping it.\n- +flatMap+ flattens the result.").or(emptyDoc())
+    let doc = parseDoc("Choose:\n\n- +map+ transforms a value\n  without unwrapping it.\n- +into+ flattens the result.").or(emptyDoc())
     let html = Tey.Docgen.Html.plainDocHtml(doc)
     assert(html.contains?("<ul>"))
     assert(html.contains?("<li><code>map</code> transforms a value without unwrapping it.</li>"))
-    assert(html.contains?("<li><code>flatMap</code> flattens the result.</li>"))
+    assert(html.contains?("<li><code>into</code> flattens the result.</li>"))
   end
 
   it("keeps directive descriptions and their continuation lines") do

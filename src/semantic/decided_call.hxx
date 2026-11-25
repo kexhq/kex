@@ -53,6 +53,9 @@ enum class CallKind {
     // A function NAMED, not called (`Type.of(Date.parse)`): owner is its
     // qualified name.
     FunctionReference,
+    // `x.is?(T)`: whether the value is of a type, or of a type implementing a
+    // trait. owner: the types tested, comma-separated (a trait's implementors).
+    TypeTest,
 };
 
 struct DecidedCall {

@@ -198,7 +198,7 @@ int main() {
         });
         it("rejects atom literals, unit, and sized numerics", []() {
             assertFalse(writtenTargetHead(Type::atom("ok")).has_value());
-            assertFalse(writtenTargetHead(Type::unit()).has_value());
+            assertFalse(writtenTargetHead(Type::voidType()).has_value());
             assertFalse(writtenTargetHead(Type::int64()).has_value());
             assertFalse(writtenTargetHead(Type::uint8()).has_value());
             assertFalse(writtenTargetHead(Type::float64()).has_value());
@@ -225,7 +225,7 @@ int main() {
             assertFalse(writtenTargetHead(Type::tuple({})).has_value());
             assertFalse(writtenTargetHead(Type::func({}, Type::integer())).has_value());
             assertFalse(writtenTargetHead(Type::record({})).has_value());
-            assertFalse(writtenTargetHead(Type::typeVar(-1)).has_value());
+            assertFalse(writtenTargetHead(Type::genericLetter(-1)).has_value());
             assertFalse(writtenTargetHead(Type::unknown()).has_value());
             assertFalse(writtenTargetHead(Type::constrained("T", "Showable")).has_value());
         });
@@ -237,7 +237,7 @@ int main() {
             assertTrue(receiverCoversHead(Type::integer(), "Integer", ifaces));
             assertFalse(receiverCoversHead(Type::integer(), "String", ifaces));
             assertTrue(receiverCoversHead(Type::atom("ok"), "Atom", ifaces));
-            assertFalse(receiverCoversHead(Type::unit(), "Void", ifaces));
+            assertFalse(receiverCoversHead(Type::voidType(), "Void", ifaces));
             assertFalse(receiverCoversHead(Type::int64(), "Int64", ifaces));
         });
         it("matches nominals exactly or by last segment", []() {
@@ -265,7 +265,7 @@ int main() {
         });
         it("covers nothing for unions, vars, and the unknown", []() {
             const ImportedInterfaces ifaces;
-            assertFalse(receiverCoversHead(Type::typeVar(3), "List", ifaces));
+            assertFalse(receiverCoversHead(Type::inferenceVariable(3), "List", ifaces));
             assertFalse(receiverCoversHead(Type::unknown(), "List", ifaces));
         });
     });
@@ -275,7 +275,8 @@ int main() {
         // wider guards, definitions merged ahead) is the emitter's record now
         // (`implementationHead`), tested in codegen_test's "dispatcher routes".
         it("fires for a sole covering head in a collision", []() {
-            auto winner = receiverFn("first", "kex_prelude", 1, Type::list(Type::typeVar(-1)));
+            auto winner =
+                receiverFn("first", "kex_prelude", 1, Type::list(Type::genericLetter(-1)));
             // Its module emitted `first/List`, its implementation for List
             // (recordImplementations).
             winner.implementationHead = "List";
@@ -345,7 +346,7 @@ int main() {
         });
         it("skips gradual receivers (0b)", []() {
             const auto winner =
-                receiverFn("first", "kex_prelude", 1, Type::list(Type::typeVar(-1)));
+                receiverFn("first", "kex_prelude", 1, Type::list(Type::genericLetter(-1)));
             const std::vector<ImportedFunction> candidates = {
                 winner,
                 receiverFn("first", "kex_prelude", 1, Type::integer()),
@@ -389,7 +390,8 @@ int main() {
             assertFalse(staticReceiverHead(winner, Type::named("Client"), ifaces, {}).has_value());
         });
         it("fires when the winner's module emitted name/Head", []() {
-            auto winner = receiverFn("first", "kex_prelude", 1, Type::list(Type::typeVar(-1)));
+            auto winner =
+                receiverFn("first", "kex_prelude", 1, Type::list(Type::genericLetter(-1)));
             // Its module emitted `first/List` (recordImplementations).
             winner.implementationHead = "List";
             const std::vector<ImportedFunction> candidates = {
@@ -403,7 +405,8 @@ int main() {
             assertEqual(*spelling, std::string("List"));
         });
         it("keeps the dispatcher when no name/Head was emitted", []() {
-            const auto winner = receiverFn("first", "mod_a", 1, Type::list(Type::typeVar(-1)));
+            const auto winner =
+                receiverFn("first", "mod_a", 1, Type::list(Type::genericLetter(-1)));
             const std::vector<ImportedFunction> candidates = {
                 winner,
                 receiverFn("first", "mod_b", 1, Type::integer()),

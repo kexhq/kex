@@ -156,6 +156,12 @@ jobs:
       - name: Check formatting
         run: make format-check CLANG_FORMAT=clang-format-20
 
+      # No new decision taken by comparing a type's name as a string
+      # (docs/typechecker-hm-plan.md §7). Run `make type-names-allowlist`
+      # after removing one.
+      - name: Check type-name comparisons
+        run: make check-type-names
+
   vim-runtime:
     needs: changes
     if: needs.changes.outputs.vim == 'true'

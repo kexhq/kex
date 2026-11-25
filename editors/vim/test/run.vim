@@ -78,6 +78,8 @@ let s:cases = [
       \ ['@localhost', 'kexAtom'],
       \ [':"b@host', 'kexAtom'],
       \ ['sep:\zs"x"', 'kexString'],
+      \ ['A \zsis Comparable', 'kexBound'],
+      \ ['\.\zsis?(Integer', ''],
       \ ]
 for s:case in s:cases
   keepjumps normal! gg

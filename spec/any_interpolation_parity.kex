@@ -1,0 +1,11 @@
+# An `Any` interpolated is shown by its value, as the walker shows it: the
+# module's dispatcher decides, not the Showable default's own body, which
+# printed None as "None" on BEAM where the walker printed nothing.
+let viaAny(x: Any) -> String = "${x}"
+let viaOpt(x: String?) -> String = "${x}"
+main do
+  IO.printLine("[" + viaAny(None) + "]")
+  IO.printLine("[" + viaOpt(None) + "]")
+  let xs: [Any] = [None, 1]
+  IO.printLine(xs.map { |v| "<${v}>" }.join(","))
+end

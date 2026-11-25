@@ -244,7 +244,7 @@ module FS do
     #   FS.File.writeBytes("out.bin", Binary.fromBytes([0, 255])).ok?   # => true
     #
     # @example Copying a file without decoding it
-    #   FS.File.readBytes(source).flatMap { |data| FS.File.writeBytes(target, data) }
+    #   FS.File.readBytes(source).into { |data| FS.File.writeBytes(target, data) }
     writeBytes : FilePath -> Binary -> Result<Void, FileError>
     foul writeBytes(path, content) = Kex.Intrinsic.File.writeBytes(path, content)
 

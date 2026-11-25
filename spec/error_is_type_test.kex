@@ -1,0 +1,12 @@
+# kex: check-only
+# `is?` takes a type or a trait, named as written: a value is no type to test
+# against (KEXET-0515). A trait that holds by a type's shape (Showable: every
+# value shows) has no list of types to test, so it is refused too (KEXET-0516).
+
+main do
+  let kind = "String"
+  let v = 3
+  IO.printLine(v.is?(kind))
+  IO.printLine(v.is?(Showable))
+  IO.printLine(v.is?(String))
+end
