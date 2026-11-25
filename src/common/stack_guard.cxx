@@ -90,12 +90,11 @@ auto setFloor(std::uintptr_t lowest) -> void {
 // heap-allocated fake stack, far from the real one. A check probing a local
 // said the stack was spent; a fiber marking its top by one put its floor
 // somewhere in the heap.
-// Emscripten's floor is its shadow stack's, where locals live, and it has no
-// ASan.
+// On Emscripten, the shadow stack pointer: its floor is that stack's, where
+// locals live, and it has no ASan.
 __attribute__((noinline)) auto here() -> std::uintptr_t {
 #if defined(__EMSCRIPTEN__)
-    char probe = 0;
-    return reinterpret_cast<std::uintptr_t>(&probe);
+    return emscripten_stack_get_current();
 #else
     return reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
 #endif
