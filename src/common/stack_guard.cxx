@@ -5,8 +5,13 @@
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/stack.h>
-#elif defined(__APPLE__) || defined(__linux__)
+#elif defined(__APPLE__)
 #include <pthread.h>
+#elif defined(__linux__)
+#include <pthread.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #endif
 
 namespace kex::stack {
@@ -39,6 +44,27 @@ auto threadFloor() -> std::uintptr_t {
             lowest = reinterpret_cast<std::uintptr_t>(address);
         }
         pthread_attr_destroy(&attributes);
+    }
+    // The main thread's stack grows on demand up to RLIMIT_STACK. glibc reports
+    // that whole extent; musl (Alpine) only what is mapped so far, a few pages
+    // early on, which put the floor just below where the program started and
+    // refused the prelude as nested too deeply. Measured from the top, both
+    // agree. Other threads have a fixed stack, reported the same by both.
+    if (lowest != 0 && getpid() == static_cast<pid_t>(syscall(SYS_gettid))) {
+        struct rlimit limit{};
+        // Unlimited: at least the usual 8 MB, which a stack that may grow
+        // without end certainly has.
+        constexpr std::size_t kUnlimited = 8 * 1024 * 1024;
+        if (getrlimit(RLIMIT_STACK, &limit) == 0) {
+            const auto extent = limit.rlim_cur == RLIM_INFINITY
+                                    ? kUnlimited
+                                    : static_cast<std::size_t>(limit.rlim_cur);
+            if (extent > size) {
+                const auto top = lowest + size;
+                size = extent;
+                lowest = top - size;
+            }
+        }
     }
 #endif
     if (lowest == 0 || size == 0) {
