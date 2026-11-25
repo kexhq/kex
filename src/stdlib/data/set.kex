@@ -116,7 +116,7 @@ module UnorderedSet do
   let empty -> UnorderedSet<A> = UnorderedSet { slots: {} }
 end
 
-make Set<A>, implement: Enumerable, Foldable<A>, Monoid, Showable do
+make Set<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   # Folds over the elements in ascending order.
   #
   # This is +Set+'s +Enumerable+ primitive; +each+, +find+, +any?+ and the
@@ -424,7 +424,7 @@ make Set<A>, implement: Blankable do
   let blank? = @items.empty?
 end
 
-make UnorderedSet<A>, implement: Enumerable, Foldable<A>, Monoid, Showable do
+make UnorderedSet<A>, implement: Enumerable<A>, Foldable<A>, Monoid, Showable do
   # Folds over the elements.
   #
   # The order is whatever the underlying map hands back: unspecified, and not

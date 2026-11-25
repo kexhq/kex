@@ -60,7 +60,7 @@ spec/error_measure_products.kex:17:24: [KEXET-0491]: Error, `*` expects argument
 
 * : Period -> Integer -> Period
 
-* : Units.SI.SIUnit -> Any -> UnitDefinition
+* : Units.SI.SIUnit -> TimeUnit -> UnitDefinition
    |
 17 |   let odd = 2.second * 3.meter
    |             ^^^^^^^^^^^^^^^^^^

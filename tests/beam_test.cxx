@@ -888,7 +888,7 @@ int main() {
             test::assertEqual(method.beamFunction, std::string("map"));
             test::assertEqual(method.beamArity, 2);
             test::assertTrue(method.receiverType->kind == KexiType::Constrained);
-            test::assertEqual(method.receiverType->name, std::string("T"));
+            test::assertEqual(method.receiverType->name, std::string("_"));
             test::assertEqual(method.receiverType->traitName, std::string("Enumerable"));
             test::assertEqual(chunk.metadata.functionOwnership.size(), size_t(1));
             test::assertEqual(chunk.metadata.functionOwnership[0].functionName, std::string("map"));

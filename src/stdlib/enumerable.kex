@@ -93,7 +93,7 @@ trait Foldable<T> do
   #
   # @example Validating every field of a form
   #   fields.all? { |name, value| !value.blank? }
-  let all?(pred) -> Bool = this.reduce(true) do |acc, item|
+  let all?(pred: T -> Bool) -> Bool = this.reduce(true) do |acc, item|
     acc && Kex.Intrinsic.Fun.applyItem(pred, item)
   end
 
@@ -109,7 +109,7 @@ trait Foldable<T> do
   #
   # @example Detecting a flag among arguments
   #   args.any? { |a| a == "--verbose" }
-  let any?(pred) -> Bool = this.reduce(false) do |acc, item|
+  let any?(pred: T -> Bool) -> Bool = this.reduce(false) do |acc, item|
     acc || Kex.Intrinsic.Fun.applyItem(pred, item)
   end
 
@@ -122,7 +122,7 @@ trait Foldable<T> do
   # @example
   #   [1, 2, 3].none? { |n| n > 9 }   # => true
   #   [1, 2, 3].none? { |n| n > 2 }   # => false
-  let none?(pred) -> Bool = !this.any?(pred)
+  let none?(pred: T -> Bool) -> Bool = !this.any?(pred)
 
   # Returns +true+ when exactly one item satisfies +pred+.
   #
@@ -132,7 +132,7 @@ trait Foldable<T> do
   # @example
   #   [1, 2, 3].one? { |n| n > 2 }   # => true
   #   [1, 2, 3].one? { |n| n > 1 }   # => false
-  let one?(pred) -> Bool = this.count(pred) == 1
+  let one?(pred: T -> Bool) -> Bool = this.count(pred) == 1
 
   # Returns the first item satisfying +pred+, or +None+ when nothing does.
   #
@@ -145,7 +145,7 @@ trait Foldable<T> do
   #
   # @example Looking a record up by one of its fields
   #   users.find { |u| u.email == target }.map { |u| u.name }.or("unknown")
-  let find(pred) -> T? = this.reduce(None) do |acc, item|
+  let find(pred: T -> Bool) -> T? = this.reduce(None) do |acc, item|
     match acc do
       Just(_) => acc
       None    => Kex.Intrinsic.Fun.applyItem(pred, item) then Just(item) else None
@@ -162,7 +162,7 @@ trait Foldable<T> do
   #
   # @example How many lines are comments
   #   text.lines.count { |line| line.trim.startsWith?("#") }
-  let count(pred) -> Integer = this.reduce(0) do |acc, item|
+  let count(pred: T -> Bool) -> Integer = this.reduce(0) do |acc, item|
     Kex.Intrinsic.Fun.applyItem(pred, item) then acc + 1 else acc
   end
 end
@@ -178,7 +178,7 @@ end
 #   [1, 2, 3].map { |n| n * 2 }              # => [2, 4, 6]
 #   "a1b2".filter(~digit?)                   # => "12"
 #   { a: 1, b: 2 }.filter { |k, v| v > 1 }   # => { :b: 2 }
-trait Enumerable do
+trait Enumerable<T> do
   # Folds the collection from the left. The one operation an +Enumerable+ type
   # must define.
   #
@@ -204,7 +204,7 @@ trait Enumerable do
   #
   # @example Extracting one field from a list of records
   #   users.map { |u| u.email }
-  let map(f) do
+  let map(f: T -> B) -> [B] do
     let acc = this.reduce([]) do |a, item|
       [Kex.Intrinsic.Fun.applyItem(f, item) | a]
     end

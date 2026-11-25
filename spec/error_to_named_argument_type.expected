@@ -1,5 +1,7 @@
 spec/error_to_named_argument_type.kex:6:41: [KEXET-0491]: Error, `to` expects argument 3 to be TimeUnit, but got Integer
 
+to : Any -> Type<A> -> A?
+
 to : Atom -> Type<String> -> String?
 
 to : Binary -> Type<String> -> String?
@@ -9,6 +11,8 @@ to : Measure<A> -> Type<String> -> String?
 to : Showable -> Type<String> -> String?
 
 to : Type<A> -> Type<String> -> String?
+
+to : Any -> Type<A> -> Integer -> A?
 
 to : Date -> Type<String> -> Culture.Culture -> String?
 
@@ -32,7 +36,7 @@ to : Time -> Type<String> -> Culture.Culture -> String?
 
 to : Time -> Type<String> -> DateFormat -> String?
 
-to : Any -> Type<A> -> Integer -> A?
+to : Any -> Type<String> -> NumberFormat -> Culture.Culture -> String?
 
 to : Date -> Type<String> -> DateFormat -> Culture.Culture -> String?
 

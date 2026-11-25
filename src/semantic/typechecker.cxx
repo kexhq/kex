@@ -2453,17 +2453,73 @@ auto TypeChecker::registerCapabilityTraits(const ast::Program& program) -> void 
                             if (!mn->isFoul) {
                                 return;
                             }
-                            Signature sig;
-                            sig.name = mn->name;
-                            sig.isFoul = mn->isFoul;
-                            // Arity matters for conformance; the parameter types
-                            // stay permissive here because the capability's own
-                            // bodies are checked like any other module's.
-                            for (size_t i = 0; i < mn->clauses.front().params.size(); i++) {
-                                sig.params.push_back(Type::unknown());
+                            // What the member writes, read in its module, one
+                            // requirement per overload (`take(text: String)`
+                            // beside `take(count: Integer)`): an implementation
+                            // in a stand-in (Net.Socket's Mock) takes its
+                            // parameters from here, as one of a capability
+                            // another unit declares does from its interface.
+                            // Unwritten stays permissive.
+                            const auto outerPath = std::exchange(m_currentModulePath, module.name);
+                            std::size_t declarationsTaken = 0;
+                            for (const auto* clausePtr : ast::signatureClauses(*mn)) {
+                                const auto& clause = *clausePtr;
+                                Signature sig;
+                                sig.name = mn->name;
+                                sig.isFoul = mn->isFoul;
+                                const int varMark = m_nextTypeVar;
+                                const bool writesTypes =
+                                    clause.returnAnnotation ||
+                                    std::any_of(
+                                        clause.params.begin(), clause.params.end(),
+                                        [](const ast::Param& p) { return p.type.has_value(); });
+                                // Or a declaration of its name and arity
+                                // (`connect : Endpoint -> Result<...>`), the
+                                // next one not taken by an earlier overload.
+                                bool declaredApart = false;
+                                std::size_t seen = 0;
+                                for (const auto& other : module.body) {
+                                    if (writesTypes) {
+                                        break;
+                                    }
+                                    const auto* ann =
+                                        std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&other);
+                                    if (!ann || !*ann || (*ann)->name != mn->name) {
+                                        continue;
+                                    }
+                                    auto declared = annotationToSignature(**ann, nullptr);
+                                    if (!declared ||
+                                        declared->params.size() != clause.params.size() ||
+                                        seen++ < declarationsTaken) {
+                                        continue;
+                                    }
+                                    sig.params = declared->params;
+                                    sig.result = declared->result;
+                                    declaredApart = true;
+                                    ++declarationsTaken;
+                                    break;
+                                }
+                                std::unordered_map<std::string, TypePtr> letters;
+                                for (std::size_t i = 0; !declaredApart && i < clause.params.size();
+                                     ++i) {
+                                    const auto& param = clause.params[i];
+                                    sig.params.push_back(
+                                        param.type && *param.type
+                                            ? resolveTypeExprNode(**param.type, letters)
+                                            : Type::unknown());
+                                }
+                                if (!declaredApart) {
+                                    sig.result = clause.returnAnnotation && *clause.returnAnnotation
+                                                     ? resolveTypeExprNode(
+                                                           **clause.returnAnnotation, letters)
+                                                     : Type::unknown();
+                                }
+                                // Its letters are each implementation's own (`A` of
+                                // `(TCPListener -> A) -> Result<A, NetError>`).
+                                generalizeSignature(sig, varMark, nullptr, true);
+                                td.requiredMethods.push_back(std::move(sig));
                             }
-                            sig.result = Type::unknown();
-                            td.requiredMethods.push_back(std::move(sig));
+                            m_currentModulePath = outerPath;
                         }
                     },
                     mi);
@@ -2578,7 +2634,10 @@ auto TypeChecker::registerLocalConformances(const ast::Program& program) -> void
     };
     std::function<void(const ast::ModuleDef&, const std::string&)> walkModule =
         [&](const ast::ModuleDef& module, const std::string& prefix) {
-            const std::string path = prefix.empty() ? module.name : prefix + "." + module.name;
+            // A module nested in a file-header one arrives qualified already
+            // (`Net.Socket.Mock`); prefixing it again registered its claims
+            // under `Net.Socket.Net.Socket.Mock`, which no lookup asks for.
+            const std::string path = ast::nestedModulePath(prefix, module.name);
             for (const auto& mi : module.body) {
                 std::visit(
                     [&](const auto& mn) {
@@ -5069,6 +5128,11 @@ auto TypeChecker::resolveTypeExprNode(
                     node.inner ? resolveTypeExpr(*node.inner, genericVars) : Type::unknown();
                 return Type::func(std::move(params), std::move(result), true);
             } else if constexpr (std::is_same_v<T, ast::TupleType>) {
+                // `()` written as a type is the unit, Void: what `IO.printLine`
+                // answers is a `()`, so a `Block<[()]>` collects it.
+                if (node.elements.empty()) {
+                    return Type::voidType();
+                }
                 std::vector<TypePtr> elements;
                 for (const auto& elem : node.elements) {
                     elements.push_back(
@@ -6007,14 +6071,23 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     // the first, the Integer overload was "required to take String"
     // (kexhq/kex#623).
     const Signature* requirement = nullptr;
+    // A clause written with its receiver as a pattern (`let kind(@Kilo(unit))`)
+    // answers a requirement with the parameters after it.
+    std::size_t requirementOffset = 0;
     if (!declared && m_inMakeBlock && m_currentMakeType && !def.clauses.empty()) {
         const auto& params = def.clauses.front().params;
+        requirementOffset =
+            !params.empty() && params.front().pattern && *params.front().pattern &&
+                    std::holds_alternative<ast::ThisPattern>((*params.front().pattern)->kind)
+                ? 1
+                : 0;
         auto genericVars = m_currentMakeTargetVars;
         auto answers = [&](const Signature& required) {
-            for (size_t pi = 0; pi < params.size(); ++pi) {
+            for (size_t pi = requirementOffset; pi < params.size(); ++pi) {
                 if (params[pi].type &&
                     !argMatchesParam(
-                        resolve(bindThis(required.params[pi], m_currentMakeType)),
+                        resolve(
+                            bindThis(required.params[pi - requirementOffset], m_currentMakeType)),
                         resolveTypeExpr(**params[pi].type, genericVars))) {
                     return false;
                 }
@@ -6022,7 +6095,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             return true;
         };
         for (const auto* required : m_traits.requiredOverloads(m_currentMakeType, def.name)) {
-            if (required->params.size() == params.size() &&
+            if (required->params.size() + requirementOffset == params.size() &&
                 (!requirement || (!answers(*requirement) && answers(*required)))) {
                 requirement = required;
             }
@@ -6046,9 +6119,13 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         }
     }
     if (requirement && !inlineReturnType) {
+        // Letters included: `bind(address, block)` implementing `bind : String ->
+        // (TCPListener -> A) -> Result<A, NetError>` answers the `A` its block
+        // does, the parameters having taken the requirement's letters too.
         if (auto result = bindThis(requirement->result, m_currentMakeType);
             result && !typesEqual(resolve(result), Type::voidType()) &&
-            isConcreteOrBound(resolve(result))) {
+            !std::holds_alternative<UnknownType>(resolve(result)->kind) &&
+            (isConcreteOrBound(resolve(result)) || containsTypeVariable(resolve(result)))) {
             requiredResult = std::move(result);
         }
     }
@@ -6195,6 +6272,16 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             TypePtr paramType;
             if (contract && pi < contract->params.size() && !param.type) {
                 paramType = contract->params[pi];
+            } else if (
+                requirement && pi >= requirementOffset &&
+                pi - requirementOffset < requirement->params.size() && !param.type &&
+                !param.pattern && param.name) {
+                // A trait's requirement types what its implementation leaves
+                // unwritten: `foul read(path)` implementing FS.File's
+                // `read : FilePath -> ...` takes a FilePath, as the guide says
+                // ("the trait already types them").
+                paramType = resolve(
+                    bindThis(requirement->params[pi - requirementOffset], m_currentMakeType));
             } else if (auto literal = literalParameterType(clause, param)) {
                 paramType = std::move(literal);
             } else if (
@@ -6206,6 +6293,19 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 // `respond(JSON { status, body }, route)` a JSON beside a
                 // `respond(reply: String, route)`.
                 paramType = siblingParamContracts[pi];
+            } else if (!param.type && pi > 0 && param.pattern && [&] {
+                           // `@Hour` after the receiver (`let *(@Watt, @Hour)`): a value
+                           // of the type its constructor builds, TimeUnit's Hour here.
+                           const auto* at = std::get_if<ast::ThisPattern>(&(*param.pattern)->kind);
+                           const auto* ctor =
+                               at && at->inner
+                                   ? std::get_if<ast::ConstructorPattern>(&at->inner->kind)
+                                   : nullptr;
+                           return ctor && m_adtOfConstructor.contains(ctor->name);
+                       }()) {
+                const auto& at = std::get<ast::ThisPattern>((*param.pattern)->kind);
+                paramType = Type::named(
+                    m_adtOfConstructor.at(std::get<ast::ConstructorPattern>(at.inner->kind).name));
             } else if (
                 !param.type && pi == 0 && receiverIsFirstParam && m_currentMakeType &&
                 param.pattern &&
@@ -6221,9 +6321,10 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 paramType = m_currentMakeType;
             } else if (param.type) {
                 paramType = resolveTypeExpr(**param.type, genericVars);
-                if (requirement && pi < requirement->params.size()) {
-                    if (const auto passed =
-                            resolve(bindThis(requirement->params[pi], m_currentMakeType));
+                if (requirement && pi >= requirementOffset &&
+                    pi - requirementOffset < requirement->params.size()) {
+                    if (const auto passed = resolve(bindThis(
+                            requirement->params[pi - requirementOffset], m_currentMakeType));
                         passed && isConcreteOrBound(passed) &&
                         !isUndetermined(resolve(paramType)) &&
                         !argMatchesParam(passed, paramType)) {
@@ -6725,9 +6826,13 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         // using the inferred body type would expose internal TypeVars to call
         // sites, which can be incorrectly constrained by the first call.
         auto concrete = [](const TypePtr& t) { return !std::holds_alternative<TypeVar>(t->kind); };
-        auto resultType = (effectiveReturnType && concrete(effectiveReturnType))
-                              ? effectiveReturnType
-                              : resolve(bodyType);
+        // A written letter (`-> A`) over a body whose type is not known is the
+        // contract still: Map's `reduce` answers its accumulator's A.
+        auto resultType =
+            (effectiveReturnType && (concrete(effectiveReturnType) ||
+                                     std::holds_alternative<UnknownType>(resolve(bodyType)->kind)))
+                ? effectiveReturnType
+                : resolve(bodyType);
         if (!effectiveReturnType && !clause.rescue && !clauseTries.empty() &&
             !clause.body.empty()) {
             resultType =

@@ -382,7 +382,7 @@ module Mock do
   make Files, implement: FS.File do
     # Named apart from `read`: `this.read(path)` would bind to the
     # capability's own `read : FilePath -> String?`, not to this function.
-    foul cannedRead(path) = match @onRead do
+    foul cannedRead(path: FS.FilePath) -> String? = match @onRead do
       Just(reader) => reader(path)
       None         => @files.get(path)
     end
@@ -442,7 +442,7 @@ module Mock do
   make Env, implement: ENV do
     # Named apart from `get`: `this.get(key)` would bind to the capability's
     # own `get`, not to this function.
-    foul lookup(key) = match @onGet do
+    foul lookup(key: String) -> String? = match @onGet do
       Just(reader) => reader(key)
       None         => @vars.get(key)
     end

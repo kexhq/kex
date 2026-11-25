@@ -3263,7 +3263,7 @@ int main() {
                 "  show : This -> String\n"
                 "end\n"
                 "make Integer, implement: Printable do\n"
-                "  let show(n) = n.to_s()\n"
+                "  let show(n) = n.to(String).or(\"\")\n"
                 "end\n"
                 "show : Integer -> String\n"
                 "let show(n: Integer) = \"number\"\n"

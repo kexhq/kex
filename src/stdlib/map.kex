@@ -31,7 +31,7 @@
 # the collected interfaces rather than needing to be known to the compiler.
 type Map<K, V> = {K: V}
 
-make Map<K, V>, implement: Enumerable, Foldable<(K, V)>, Monoid do
+make Map<K, V>, implement: Enumerable<(K, V)>, Foldable<(K, V)>, Monoid do
   # Folds over the map's +(key, value)+ pairs in canonical key order.
   #
   # This is +Map+'s +Enumerable+ primitive: +map+, +filter+, +find+, +any?+
@@ -51,7 +51,7 @@ make Map<K, V>, implement: Enumerable, Foldable<(K, V)>, Monoid do
   #
   # @example Rendering the map as a query string
   #   { a: 1, b: 2 }.entries.map { |k, v| "${k}=${v}" }.join("&")
-  let reduce(acc, g) = this.entries.reduce(acc, g)
+  let reduce(acc: A, g: A -> (K, V) -> A) -> A = this.entries.reduce(acc, g)
 
   # The empty map: the identity element of the +Monoid+ instance, so
   # +m.combine({})+ is +m+.
@@ -60,7 +60,7 @@ make Map<K, V>, implement: Enumerable, Foldable<(K, V)>, Monoid do
   #
   # @example
   #   Map.identity   # => {}
-  let identity = {}
+  let identity -> This = {}
 
   # Combines two maps by merging them, with +other+'s values winning on a key
   # conflict. The +Monoid+ operation, and the same thing +merge+ does.
@@ -202,6 +202,7 @@ make Map<K, V>, implement: Enumerable, Foldable<(K, V)>, Monoid do
   # @example How many settings are still at their default
   #   config.count { |k, v| v == defaults.get(k, v) }
   count :> (K -> V -> Bool) -> Integer
+  let count(pred) = this.matching(pred).count
 
   # Returns the map's keys as a list, in canonical key order.
   #
@@ -396,6 +397,7 @@ make Map<K, V>, implement: Enumerable, Foldable<(K, V)>, Monoid do
   #   { a: 1, b: 2 }.any? { |k, v| v > 1 }   # => true
   #   { a: 1, b: 2 }.any? { |k, v| v > 9 }   # => false
   any? :> (K -> V -> Bool) -> Bool
+  let any?(pred) = !this.matching(pred).empty?
 
   # Returns +true+ when every entry satisfies +pred+. The empty map answers
   # +true+.
@@ -410,6 +412,7 @@ make Map<K, V>, implement: Enumerable, Foldable<(K, V)>, Monoid do
   # @example Validating a form
   #   fields.all? { |name, value| !value.blank? }
   all? :> (K -> V -> Bool) -> Bool
+  let all?(pred) = this.matching(pred).count == this.count
 
   # Returns the first entry satisfying +pred+ as a +(key, value)+ tuple, or
   # +None+ when nothing matches.
@@ -426,6 +429,32 @@ make Map<K, V>, implement: Enumerable, Foldable<(K, V)>, Monoid do
   # @example Locating a value without knowing its key
   #   users.find { |id, user| user.email == target }
   find :> (K -> V -> Bool) -> (K, V)?
+  let find(pred) = this.matching(pred).first
+
+  # Returns +true+ when no entry satisfies +pred+.
+  #
+  # @example
+  #   { a: 1, b: 2 }.none? { |k, v| v > 5 }   # => true
+  none? :> (K -> V -> Bool) -> Bool
+  let none?(pred) = this.matching(pred).empty?
+
+  # Returns +true+ when exactly one entry satisfies +pred+.
+  #
+  # @example
+  #   { a: 1, b: 2 }.one? { |k, v| v > 1 }   # => true
+  one? :> (K -> V -> Bool) -> Bool
+  let one?(pred) = this.matching(pred).count == 1
+
+  private do
+    # The entries +pred+ holds for, as (key, value) pairs.
+    let matching(pred: K -> V -> Bool) -> [(K, V)] do
+      return this.entries.filter do |entry|
+        match entry do
+          (k, v) => pred(k, v)
+        end
+      end
+    end
+  end
 end
 
 make Map<K,V>, implement: Blankable do

@@ -557,8 +557,7 @@ make Measure<D>, implement: Showable do
   let -(other) = this.inOwnUnit(this.canonical - other.canonical)
 
   # The canonical quantity +total+, displayed in this measure's unit.
-  inOwnUnit :> Float -> Measure<D>
-  let inOwnUnit(total) = Measure { canonical: total, value: total / this.unit.factor, unit: this.unit }
+  let inOwnUnit(total: Float) -> This = Measure { canonical: total, value: total / this.unit.factor, unit: this.unit }
 
   private do
     # Divides a canonical value by a unit factor. The conversion is exact in

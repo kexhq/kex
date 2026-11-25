@@ -543,7 +543,17 @@ else()
     message(STATUS "Runtime beams: skipped (erlc not found); BEAM modes require prebuilt runtime artifacts")
 endif()
 
-add_executable(kex src/main.cxx src/repl/input.cxx src/repl/session.cxx src/driver/toolchain.cxx src/driver/prelude_build.cxx src/driver/compile.cxx src/driver/program_support.cxx src/driver/build_passes.cxx src/driver/stdlib_interfaces.cxx src/driver/iam_ai.cxx)
+# The driver: what `kex` builds programs with. stdlib_interface_test links it
+# too, to read the standard library as the compiler describes it.
+set(KEX_DRIVER_SOURCES
+    src/driver/toolchain.cxx
+    src/driver/prelude_build.cxx
+    src/driver/compile.cxx
+    src/driver/program_support.cxx
+    src/driver/build_passes.cxx
+    src/driver/stdlib_interfaces.cxx)
+add_executable(kex src/main.cxx src/repl/input.cxx src/repl/session.cxx ${KEX_DRIVER_SOURCES}
+    src/driver/iam_ai.cxx)
 target_link_libraries(kex PRIVATE kex_lib)
 target_compile_definitions(kex PRIVATE KEX_RUNTIME_OTP_FLOOR=${KEX_RUNTIME_OTP_FLOOR})
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
@@ -760,6 +770,16 @@ add_executable(module_resolver_test tests/module_resolver_test.cxx)
 target_link_libraries(module_resolver_test PRIVATE kex_lib)
 target_include_directories(module_resolver_test PRIVATE tests)
 add_test(NAME module_resolver_test COMMAND module_resolver_test)
+
+add_executable(stdlib_interface_test tests/stdlib_interface_test.cxx ${KEX_DRIVER_SOURCES})
+target_link_libraries(stdlib_interface_test PRIVATE kex_lib)
+target_include_directories(stdlib_interface_test PRIVATE tests)
+if(TARGET kex_prelude_beam)
+    target_compile_definitions(stdlib_interface_test PRIVATE
+        KEX_RUNTIME_BEAM_DIR="${KEX_RUNTIME_BEAM_DIR}")
+    add_dependencies(stdlib_interface_test kex_prelude_beam)
+    add_test(NAME stdlib_interface_test COMMAND stdlib_interface_test)
+endif()
 
 add_executable(semantic_test tests/semantic_test.cxx)
 target_link_libraries(semantic_test PRIVATE kex_lib)
